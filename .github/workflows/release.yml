@@ -59,7 +59,6 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Simple Table v${{ github.ref_name }}'
-          releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
