@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import type { CellValue } from '@/types';
+import EditableCell from './EditableCell.vue';
+import RowNumberCell from './RowNumberCell.vue';
 
 const props = defineProps<{
   data: CellValue[][];
@@ -14,6 +16,34 @@ const emit = defineEmits<{
 
 // 本地编辑状态
 const editingValue = ref<Record<string, string>>({});
+const editingCell = ref<string | null>(null);
+
+// 容器尺寸
+const containerRef = ref<HTMLElement | null>(null);
+const tableSize = ref({ width: 800, height: 600 });
+
+// 监听容器尺寸变化
+let resizeObserver: ResizeObserver | null = null;
+
+onMounted(() => {
+  if (containerRef.value) {
+    const updateSize = () => {
+      tableSize.value = {
+        width: containerRef.value!.clientWidth,
+        height: containerRef.value!.clientHeight
+      };
+    };
+    updateSize();
+    resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(containerRef.value);
+  }
+});
+
+onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
+});
 
 function getCellValue(cell: CellValue): string {
   if (cell === null || cell === undefined) return '';
@@ -37,8 +67,8 @@ function handleBlur(rowIndex: number, colIndex: number, value: string) {
     emit('cell-change', rowIndex, colIndex, value);
   }
 
-  // 清空本地状态
   delete editingValue.value[key];
+  editingCell.value = null;
 }
 
 function handleDeleteRow(index: number) {
@@ -52,74 +82,104 @@ function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValu
   }
   return getCellValue(cellValue);
 }
+
+function isEditing(rowIndex: number, colIndex: number): boolean {
+  return editingCell.value === getKey(rowIndex, colIndex);
+}
+
+function startEditing(rowIndex: number, colIndex: number) {
+  editingCell.value = getKey(rowIndex, colIndex);
+}
+
+// 列配置
+const columns = computed(() => {
+  const cols: any[] = [
+    {
+      key: 'row-number',
+      title: '#',
+      width: 60,
+      fixed: 'left',
+    }
+  ];
+
+  props.columns.forEach((col, colIndex) => {
+    cols.push({
+      key: `col-${colIndex}`,
+      title: col,
+      dataKey: colIndex,
+      width: 120,
+    });
+  });
+
+  return cols;
+});
+
+// 行高固定
+const rowHeight = 40;
 </script>
 
 <template>
-  <el-table
-    :data="props.data"
-    border
-    stripe
-    style="width: 100%; height: 100%"
-  >
-    <el-table-column type="index" width="60" fixed="left">
-      <template #header>
-        <span>#</span>
-      </template>
-      <template #default="{ $index }">
-        <div class="row-index">
-          <span>{{ $index + 1 }}</span>
-          <el-button
-            type="danger"
-            size="small"
-            text
-            @click.stop="handleDeleteRow($index)"
-          >
-            ×
-          </el-button>
-        </div>
-      </template>
-    </el-table-column>
-
-    <el-table-column
-      v-for="(col, colIndex) in props.columns"
-      :key="colIndex"
-      :label="col"
-      min-width="120"
+  <div ref="containerRef" class="table-container">
+    <el-table-v2
+      :columns="columns"
+      :data="props.data"
+      :row-height="rowHeight"
+      :width="tableSize.width"
+      :height="tableSize.height"
+      fixed
     >
-      <template #default="{ row, $index }">
-        <el-input
-          :model-value="getDisplayValue($index, colIndex, row[colIndex])"
-          @input="handleInput($index, colIndex, $event as string)"
-          @blur="handleBlur($index, colIndex, ($event.target as HTMLInputElement).value)"
-          size="small"
-        />
+      <template #cell="{ column, rowData, rowIndex }">
+        <!-- 行号列 -->
+        <template v-if="column.key === 'row-number'">
+          <RowNumberCell
+            :row-index="rowIndex"
+            @delete="handleDeleteRow"
+          />
+        </template>
+
+        <!-- 数据列 -->
+        <template v-else>
+          <div
+            v-if="!isEditing(rowIndex, column.dataKey)"
+            class="cell-text"
+            @click="startEditing(rowIndex, column.dataKey)"
+          >
+            {{ getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey]) }}
+          </div>
+          <EditableCell
+            v-else
+            :model-value="editingValue[getKey(rowIndex, column.dataKey)] ?? getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey])"
+            @update:model-value="(val: string) => handleInput(rowIndex, column.dataKey, val)"
+            @blur="handleBlur(rowIndex, column.dataKey, editingValue[getKey(rowIndex, column.dataKey)] ?? getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey]))"
+          />
+        </template>
       </template>
-    </el-table-column>
-  </el-table>
+    </el-table-v2>
+  </div>
 </template>
 
 <style scoped>
-.row-index {
+.table-container {
+  width: 100%;
+  height: 100%;
+}
+
+:deep(.el-table-v2) {
+  font-size: 14px;
+}
+
+:deep(.el-table-v2__row-cell) {
+  padding: 0 8px;
+}
+
+.cell-text {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.row-index .el-button {
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-:deep(.el-table__row:hover) .row-index .el-button {
-  opacity: 1;
-}
-
-:deep(.el-table .el-input__wrapper) {
-  box-shadow: none;
-}
-
-:deep(.el-table .el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #409eff inset;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

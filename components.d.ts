@@ -11,15 +11,16 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    EditableCell: typeof import('./src/components/EditableCell.vue')['default']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElIcon: typeof import('element-plus/es')['ElIcon']
     ElInput: typeof import('element-plus/es')['ElInput']
     ElOption: typeof import('element-plus/es')['ElOption']
     ElSelect: typeof import('element-plus/es')['ElSelect']
-    ElTable: typeof import('element-plus/es')['ElTable']
-    ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
+    ElTableV2: typeof import('element-plus/es')['ElTableV2']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    RowNumberCell: typeof import('./src/components/RowNumberCell.vue')['default']
     StatusBar: typeof import('./src/components/StatusBar.vue')['default']
     TableEditor: typeof import('./src/components/TableEditor.vue')['default']
     Toolbar: typeof import('./src/components/Toolbar.vue')['default']
