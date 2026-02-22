@@ -19,6 +19,8 @@ declare module 'vue' {
     ElTable: typeof import('element-plus/es')['ElTable']
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
     EmptyState: typeof import('./src/components/EmptyState.vue')['default']
+    RouterLink: typeof import('vue-router')['RouterLink']
+    RouterView: typeof import('vue-router')['RouterView']
     StatusBar: typeof import('./src/components/StatusBar.vue')['default']
     TableEditor: typeof import('./src/components/TableEditor.vue')['default']
     Toolbar: typeof import('./src/components/Toolbar.vue')['default']

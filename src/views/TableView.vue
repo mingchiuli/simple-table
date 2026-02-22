@@ -1,18 +1,23 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus";
 import type { FileData, CellValue } from "@/types";
+import { useFileDataStore } from "@/stores/fileData";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
 import StatusBar from "@/components/StatusBar.vue";
-import EmptyState from "@/components/EmptyState.vue";
 
-const fileData = ref<FileData | null>(null);
+const router = useRouter();
+const fileDataStore = useFileDataStore();
+
 const currentSheetIndex = ref(0);
 const hasChanges = ref(false);
 const isLoading = ref(false);
+
+const fileData = computed(() => fileDataStore.data);
 
 const currentSheet = computed(() => {
   if (!fileData.value || !fileData.value.sheets.length) return null;
@@ -62,7 +67,7 @@ async function handleOpenFile() {
     if (selected) {
       isLoading.value = true;
       const result = await invoke<FileData>("read_file", { path: selected });
-      fileData.value = result;
+      fileDataStore.set(result);
       currentSheetIndex.value = 0;
       hasChanges.value = false;
       ElMessage.success("File loaded successfully");
@@ -141,6 +146,11 @@ function handleDeleteColumn() {
   }
   hasChanges.value = true;
 }
+
+function handleBack() {
+  fileDataStore.clear();
+  router.push({ name: "home" });
+}
 </script>
 
 <template>
@@ -159,9 +169,7 @@ function handleDeleteColumn() {
     />
 
     <main class="content">
-      <EmptyState v-if="!fileData" @open-file="handleOpenFile" />
-
-      <div v-else class="table-wrapper">
+      <div class="table-wrapper">
         <TableEditor
           :data="tableData"
           :columns="columns"
@@ -176,27 +184,20 @@ function handleDeleteColumn() {
       :file-name="fileData.file_name"
       :has-changes="hasChanges"
     />
+
+    <el-button class="back-btn" circle @click="handleBack">
+      <el-icon><HomeFilled /></el-icon>
+    </el-button>
   </div>
 </template>
 
-<style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
-  background-color: #f5f7fa;
-}
-
+<style scoped>
 .app-container {
   display: flex;
   flex-direction: column;
   height: 100vh;
   background-color: #fff;
+  position: relative;
 }
 
 .content {
@@ -217,5 +218,12 @@ body {
 
 .el-table {
   font-size: 14px;
+}
+
+.back-btn {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  z-index: 100;
 }
 </style>
