@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import type { CellValue } from '@/types';
 
 const props = defineProps<{
@@ -11,17 +12,45 @@ const emit = defineEmits<{
   (e: 'delete-row', index: number): void;
 }>();
 
+// 本地编辑状态
+const editingValue = ref<Record<string, string>>({});
+
 function getCellValue(cell: CellValue): string {
   if (cell === null || cell === undefined) return '';
   return String(cell);
 }
 
-function handleCellChange(rowIndex: number, colIndex: number, value: string) {
-  emit('cell-change', rowIndex, colIndex, value);
+function getKey(rowIndex: number, colIndex: number): string {
+  return `${rowIndex}-${colIndex}`;
+}
+
+function handleInput(rowIndex: number, colIndex: number, value: string) {
+  const key = getKey(rowIndex, colIndex);
+  editingValue.value[key] = value;
+}
+
+function handleBlur(rowIndex: number, colIndex: number, value: string) {
+  const key = getKey(rowIndex, colIndex);
+  const originalValue = getCellValue(props.data[rowIndex]?.[colIndex]);
+
+  if (value !== originalValue) {
+    emit('cell-change', rowIndex, colIndex, value);
+  }
+
+  // 清空本地状态
+  delete editingValue.value[key];
 }
 
 function handleDeleteRow(index: number) {
   emit('delete-row', index);
+}
+
+function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValue): string {
+  const key = getKey(rowIndex, colIndex);
+  if (editingValue.value[key] !== undefined) {
+    return editingValue.value[key];
+  }
+  return getCellValue(cellValue);
 }
 </script>
 
@@ -59,10 +88,10 @@ function handleDeleteRow(index: number) {
     >
       <template #default="{ row, $index }">
         <el-input
-          :model-value="getCellValue(row[colIndex])"
-          @update:model-value="(val: string) => handleCellChange($index, colIndex, val)"
+          :model-value="getDisplayValue($index, colIndex, row[colIndex])"
+          @input="handleInput($index, colIndex, $event as string)"
+          @blur="handleBlur($index, colIndex, ($event.target as HTMLInputElement).value)"
           size="small"
-          borderless
         />
       </template>
     </el-table-column>

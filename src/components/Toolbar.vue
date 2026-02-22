@@ -6,6 +6,8 @@ const props = defineProps<{
   sheetNames: string[];
   currentSheetIndex: number;
   columnCount: number;
+  canUndo: boolean;
+  canRedo: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -15,6 +17,8 @@ const emit = defineEmits<{
   (e: 'add-row'): void;
   (e: 'add-column'): void;
   (e: 'delete-column'): void;
+  (e: 'undo'): void;
+  (e: 'redo'): void;
 }>();
 </script>
 
@@ -48,6 +52,12 @@ const emit = defineEmits<{
       </el-select>
     </div>
     <div class="toolbar-right" v-if="props.fileData">
+      <el-button @click="emit('undo')" :disabled="!props.canUndo">
+        Undo
+      </el-button>
+      <el-button @click="emit('redo')" :disabled="!props.canRedo">
+        Redo
+      </el-button>
       <el-button @click="emit('add-row')">+ Row</el-button>
       <el-button @click="emit('add-column')">+ Column</el-button>
       <el-button @click="emit('delete-column')" :disabled="props.columnCount <= 1">
@@ -66,17 +76,20 @@ const emit = defineEmits<{
   background: #fff;
   border-bottom: 1px solid #e4e7ed;
   gap: 16px;
+  overflow-x: auto;
 }
 
 .toolbar-left,
 .toolbar-right {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .toolbar-center {
   flex: 1;
   display: flex;
   justify-content: center;
+  flex-shrink: 0;
 }
 </style>

@@ -35,7 +35,7 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                             .write_boolean(row_u32, col_u16, *b, None)
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
-                    CellValue::Empty => {
+                    CellValue::Null => {
                         worksheet
                             .write_blank(row_u32, col_u16, None)
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
@@ -63,7 +63,7 @@ fn write_csv(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                     CellValue::String(s) => s.clone(),
                     CellValue::Number(n) => n.to_string(),
                     CellValue::Boolean(b) => b.to_string(),
-                    CellValue::Empty => String::new(),
+                    CellValue::Null => String::new(),
                 })
                 .collect();
             writer

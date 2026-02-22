@@ -15,7 +15,7 @@ fn cell_to_value(cell: Data) -> CellValue {
         Data::DateTimeIso(s) => CellValue::String(s),
         Data::DurationIso(s) => CellValue::String(s),
         Data::Error(e) => CellValue::String(format!("{:?}", e)),
-        Data::Empty => CellValue::Empty,
+        Data::Empty => CellValue::Null,
     }
 }
 
@@ -134,7 +134,7 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
             .iter()
             .map(|field| {
                 if field.is_empty() {
-                    CellValue::Empty
+                    CellValue::Null
                 } else if let Ok(num) = field.parse::<f64>() {
                     CellValue::Number(num)
                 } else if field.to_lowercase() == "true" {

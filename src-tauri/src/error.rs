@@ -9,6 +9,8 @@ pub enum AppError {
     WriteError(String),
     #[error("Unsupported file format")]
     UnsupportedFormat,
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 impl Serialize for AppError {
