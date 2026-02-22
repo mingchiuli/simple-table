@@ -23,10 +23,8 @@ Download the latest release from the [Releases](https://github.com/mingchiuli/si
 If you see "The file is damaged and cannot be opened" error on macOS after installation, run the following command in terminal:
 
 ```bash
-sudo xattr -rd com.apple.quarantine "/Applications/simple-table.app"
+sudo xattr -rd com.apple.quarantine "/Applications/Simple Table.app"
 ```
-
-This is required because the app is not signed/notarized. For a permanent solution, you'll need an Apple Developer account to sign and notarize the app.
 
 ### From Source
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "simple-table",
+  "productName": "Simple Table",
   "version": "0.1.0",
   "identifier": "org.chiu.simple-table",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "simple-table",
+        "title": "Simple Table",
         "width": 800,
         "height": 600
       }
