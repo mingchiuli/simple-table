@@ -1,11 +1,18 @@
-mod tauri_commands;
 mod command;
 mod error;
 mod reader;
 mod types;
 mod writer;
 
-use tauri_commands::{get_default_save_path, read_file, save_file, undo, redo, set_cell, add_row, delete_row, add_column, delete_column, get_editor_state};
+// Command modules
+mod state;
+mod file_ops;
+mod editor_ops;
+mod cell_ops;
+mod search_ops;
+mod tauri_commands;
+
+use tauri_commands::{get_default_save_path, read_file, save_file, undo, redo, set_cell, add_row, delete_row, add_column, delete_column, get_editor_state, search};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,7 +31,8 @@ pub fn run() {
             delete_row,
             add_column,
             delete_column,
-            get_editor_state
+            get_editor_state,
+            search
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

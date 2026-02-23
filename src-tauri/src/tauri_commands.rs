@@ -1,102 +1,54 @@
-use std::path::Path;
-use std::sync::{Mutex, OnceLock};
-
-use crate::command::{EditorState, Operation};
 use crate::error::AppError;
-use crate::reader;
-use crate::types::{CellValue, FileData, OperationResult};
-use crate::writer;
+use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope};
 
-/// 全局编辑器状态
-static EDITOR_STATE: OnceLock<Mutex<Option<EditorState>>> = OnceLock::new();
+/// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）
+static EDITOR_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<Option<crate::command::EditorState>>>> = std::sync::OnceLock::new();
 
-fn get_state() -> &'static Mutex<Option<EditorState>> {
-    EDITOR_STATE.get_or_init(|| Mutex::new(None))
+pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::command::EditorState>>> {
+    EDITOR_STATE.get_or_init(|| std::sync::Arc::new(std::sync::RwLock::new(None))).clone()
 }
 
+// ==================== File Operations ====================
+
+/// 读取文件
 #[tauri::command]
 pub fn read_file(path: String) -> Result<FileData, AppError> {
-    let path = Path::new(&path);
-    let file_data = reader::read_file(path)?;
-
-    // 初始化编辑器状态
-    let mut state = get_state().lock().unwrap();
-    *state = Some(EditorState::new(file_data.clone()));
-
-    Ok(file_data)
+    crate::file_ops::do_read_file(path)
 }
 
+/// 保存文件
 #[tauri::command]
 pub fn save_file(path: String, file_data: FileData) -> Result<(), AppError> {
-    let path = Path::new(&path);
-    writer::save_file(path, &file_data)?;
-
-    // 更新编辑器状态中的文件数据
-    let mut state = get_state().lock().unwrap();
-    if let Some(editor_state) = state.as_mut() {
-        editor_state.file_data = file_data;
-    }
-
-    Ok(())
+    crate::file_ops::do_save_file(path, file_data)
 }
 
+/// 获取默认保存路径
 #[tauri::command]
 pub fn get_default_save_path(file_name: String) -> String {
-    if let Some(dot_pos) = file_name.rfind('.') {
-        let name = &file_name[..dot_pos];
-        format!("{}_edited.xlsx", name)
-    } else {
-        format!("{}_edited.xlsx", file_name)
-    }
+    crate::file_ops::do_get_default_save_path(file_name)
 }
+
+// ==================== Editor Operations ====================
 
 /// 获取编辑器状态（包含能否撤销/重做）
-#[derive(serde::Serialize)]
-pub struct EditorStateInfo {
-    pub can_undo: bool,
-    pub can_redo: bool,
-}
-
 #[tauri::command]
-pub fn get_editor_state() -> Result<Option<EditorStateInfo>, AppError> {
-    let state = get_state().lock().unwrap();
-    Ok(state.as_ref().map(|s| EditorStateInfo {
-        can_undo: s.can_undo,
-        can_redo: s.can_redo,
-    }))
+pub fn get_editor_state() -> Result<Option<crate::state::EditorStateInfo>, AppError> {
+    crate::editor_ops::do_get_editor_state(get_state())
 }
 
 /// 撤销操作
 #[tauri::command]
 pub fn undo() -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            if let Some(result) = editor_state.undo() {
-                Ok(result)
-            } else {
-                Err(AppError::Internal("Nothing to undo".to_string()))
-            }
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::editor_ops::do_undo(get_state())
 }
 
 /// 重做操作
 #[tauri::command]
 pub fn redo() -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            if let Some(result) = editor_state.redo() {
-                Ok(result)
-            } else {
-                Err(AppError::Internal("Nothing to redo".to_string()))
-            }
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::editor_ops::do_redo(get_state())
 }
+
+// ==================== Cell Operations ====================
 
 /// 设置单元格值
 #[tauri::command]
@@ -107,80 +59,41 @@ pub fn set_cell(
     old_value: CellValue,
     new_value: CellValue,
 ) -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            let operation = Operation::SetCell {
-                sheet_index,
-                row,
-                col,
-                old_value,
-                new_value,
-            };
-            Ok(editor_state.execute(operation))
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::cell_ops::do_set_cell(get_state(), sheet_index, row, col, old_value, new_value)
 }
 
 /// 添加行
 #[tauri::command]
 pub fn add_row(sheet_index: usize, row_index: usize) -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            let operation = Operation::AddRow {
-                sheet_index,
-                row_index,
-            };
-            Ok(editor_state.execute(operation))
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::cell_ops::do_add_row(get_state(), sheet_index, row_index)
 }
 
 /// 删除行
 #[tauri::command]
 pub fn delete_row(sheet_index: usize, row_index: usize, row_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            let operation = Operation::DeleteRow {
-                sheet_index,
-                row_index,
-                row_data,
-            };
-            Ok(editor_state.execute(operation))
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::cell_ops::do_delete_row(get_state(), sheet_index, row_index, row_data)
 }
 
 /// 添加列
 #[tauri::command]
 pub fn add_column(sheet_index: usize) -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            let operation = Operation::AddColumn { sheet_index };
-            Ok(editor_state.execute(operation))
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::cell_ops::do_add_column(get_state(), sheet_index)
 }
 
 /// 删除列
 #[tauri::command]
 pub fn delete_column(sheet_index: usize, col_index: usize) -> Result<OperationResult, AppError> {
-    let mut state = get_state().lock().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            let operation = Operation::DeleteColumn {
-                sheet_index,
-                col_index,
-            };
-            Ok(editor_state.execute(operation))
-        }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    crate::cell_ops::do_delete_column(get_state(), sheet_index, col_index)
+}
+
+// ==================== Search Operations ====================
+
+/// 搜索单元格
+#[tauri::command]
+pub fn search(
+    query: String,
+    scope: SearchScope,
+    current_sheet_index: Option<usize>,
+) -> Result<Vec<SearchResult>, AppError> {
+    crate::search_ops::do_search(get_state(), query, scope, current_sheet_index)
 }

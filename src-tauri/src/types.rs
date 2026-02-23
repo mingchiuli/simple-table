@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(untagged)]
 pub enum CellValue {
     Null,
@@ -9,10 +10,44 @@ pub enum CellValue {
     Boolean(bool),
 }
 
+/// 单元格位置
+#[derive(Serialize, Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct CellPosition {
+    pub row: usize,
+    pub col: usize,
+}
+
+/// 搜索结果
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SearchResult {
+    pub sheet_index: usize,
+    pub sheet_name: String,
+    pub row: usize,
+    pub col: usize,
+    pub value: String,
+    pub cell_position: String,
+}
+
+/// 搜索范围
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchScope {
+    CurrentSheet,
+    AllSheets,
+}
+
+/// Sheet 索引（不序列化）
+#[derive(Clone, Debug, Default)]
+pub struct SheetIndex {
+    pub inverted_index: HashMap<String, Vec<CellPosition>>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SheetData {
     pub name: String,
     pub rows: Vec<Vec<CellValue>>,
+    #[serde(skip)]
+    pub index: SheetIndex,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

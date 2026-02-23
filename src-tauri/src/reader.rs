@@ -1,9 +1,11 @@
 use calamine::{open_workbook, Reader, Xlsx, Xls, Ods, Data};
 
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, SheetData};
+use crate::types::{CellValue, FileData, SheetData, SheetIndex};
 use csv::ReaderBuilder;
 use std::path::Path;
+
+
 
 fn cell_to_value(cell: Data) -> CellValue {
     match cell {
@@ -58,9 +60,11 @@ fn read_xlsx(path: &Path) -> Result<Vec<SheetData>, AppError> {
                         .collect()
                 })
                 .collect();
+            let index = SheetIndex::default();
             Some(SheetData {
                 name: sheet_name.clone(),
                 rows,
+                index,
             })
         })
         .collect())
@@ -82,9 +86,11 @@ fn read_xls(path: &Path) -> Result<Vec<SheetData>, AppError> {
                         .collect()
                 })
                 .collect();
+            let index = SheetIndex::default();
             Some(SheetData {
                 name: sheet_name.clone(),
                 rows,
+                index,
             })
         })
         .collect())
@@ -106,9 +112,11 @@ fn read_ods(path: &Path) -> Result<Vec<SheetData>, AppError> {
                         .collect()
                 })
                 .collect();
+            let index = SheetIndex::default();
             Some(SheetData {
                 name: sheet_name.clone(),
                 rows,
+                index,
             })
         })
         .collect())
@@ -149,11 +157,13 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
         rows.push(row);
     }
 
+    let index = SheetIndex::default();
     Ok(FileData {
         file_name,
         sheets: vec![SheetData {
             name: "Sheet1".to_string(),
             rows,
+            index,
         }],
     })
 }

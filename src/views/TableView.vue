@@ -4,7 +4,8 @@ import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus";
-import type { FileData, CellValue, OperationResult } from "@/types";
+import { HomeFilled, Close } from "@element-plus/icons-vue";
+import type { FileData, CellValue, OperationResult, SearchResult } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
@@ -18,6 +19,9 @@ const hasChanges = ref(false);
 const isLoading = ref(false);
 const canUndo = ref(false);
 const canRedo = ref(false);
+const searchResults = ref<SearchResult[]>([]);
+const isSearching = ref(false);
+const selectedCell = ref<{ row: number; col: number } | null>(null);
 
 const fileData = computed(() => fileDataStore.data);
 
@@ -320,6 +324,37 @@ function handleBack() {
   fileDataStore.clear();
   router.push({ name: "home" });
 }
+
+async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
+  if (!fileData.value) return;
+
+  try {
+    isSearching.value = true;
+    const results = await invoke<SearchResult[]>("search", {
+      query,
+      scope,
+      currentSheetIndex: scope === "currentSheet" ? currentSheetIndex.value : null,
+    });
+    searchResults.value = results;
+  } catch (error) {
+    ElMessage.error(`Search failed: ${error}`);
+  } finally {
+    isSearching.value = false;
+  }
+}
+
+function handleSearchResultClick(result: SearchResult) {
+  // 切换到对应的 sheet
+  if (result.sheet_index !== currentSheetIndex.value) {
+    currentSheetIndex.value = result.sheet_index;
+  }
+  // 选中对应的单元格
+  selectedCell.value = { row: result.row, col: result.col };
+}
+
+function handleClearSearch() {
+  searchResults.value = [];
+}
 </script>
 
 <template>
@@ -331,6 +366,8 @@ function handleBack() {
       :column-count="columns.length"
       :can-undo="canUndo"
       :can-redo="canRedo"
+      :search-results="searchResults"
+      :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"
       @sheet-change="(i) => (currentSheetIndex = i)"
@@ -339,6 +376,9 @@ function handleBack() {
       @delete-column="handleDeleteColumn"
       @undo="handleUndo"
       @redo="handleRedo"
+      @search="handleSearch"
+      @search-result-click="handleSearchResultClick"
+      @clear-search="handleClearSearch"
     />
 
     <main class="content">
@@ -346,9 +386,32 @@ function handleBack() {
         <TableEditor
           :data="tableData"
           :columns="columns"
+          :selected-cell="selectedCell"
           @cell-change="handleCellChange"
           @delete-row="handleDeleteRow"
         />
+      </div>
+
+      <!-- Search Results Panel -->
+      <div v-if="searchResults.length > 0" class="search-panel">
+        <div class="search-panel-header">
+          <span>Found {{ searchResults.length }} result(s)</span>
+          <el-button text @click="handleClearSearch">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
+        <div class="search-panel-list">
+          <div
+            v-for="(result, index) in searchResults"
+            :key="index"
+            class="search-result-item"
+            @click="handleSearchResultClick(result)"
+          >
+            <span class="cell-position">{{ result.cell_position }}</span>
+            <span class="cell-value">{{ result.value }}</span>
+            <span v-if="result.sheet_name" class="sheet-name">{{ result.sheet_name }}</span>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -378,7 +441,7 @@ function handleBack() {
   overflow: auto;
   padding: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
 .table-wrapper {
@@ -389,8 +452,59 @@ function handleBack() {
   overflow: hidden;
 }
 
-.el-table {
+.search-panel {
+  width: 280px;
+  background: #fff;
+  border-left: 1px solid #e4e7ed;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.search-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #e4e7ed;
   font-size: 14px;
+  color: #606266;
+}
+
+.search-panel-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  cursor: pointer;
+  gap: 8px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.search-result-item:hover {
+  background: #f5f7fa;
+}
+
+.cell-position {
+  font-weight: bold;
+  color: #409eff;
+  min-width: 40px;
+}
+
+.cell-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-name {
+  font-size: 12px;
+  color: #909399;
 }
 
 .back-btn {

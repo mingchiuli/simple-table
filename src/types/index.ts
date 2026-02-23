@@ -33,3 +33,14 @@ export type OperationResult =
   | { type: 'AddColumn'; data: { sheet_index: number; column: ColumnChange } }
   | { type: 'DeleteColumn'; data: { sheet_index: number; column_index: number } }
   | { type: 'Batch'; data: { sheet_index: number; changes: CellChange[] } };
+
+export interface SearchResult {
+  sheet_index: number;
+  sheet_name: string;
+  row: number;
+  col: number;
+  value: string;
+  cell_position: string;
+}
+
+export type SearchScope = 'currentSheet' | 'allSheets';

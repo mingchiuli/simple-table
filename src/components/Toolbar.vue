@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import type { FileData } from '@/types';
+import FileButtons from './FileButtons.vue';
+import SheetSelector from './SheetSelector.vue';
+import SearchBox from './SearchBox.vue';
+import EditButtons from './EditButtons.vue';
 
 const props = defineProps<{
   fileData: FileData | null;
@@ -8,6 +12,7 @@ const props = defineProps<{
   columnCount: number;
   canUndo: boolean;
   canRedo: boolean;
+  isSearching: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -19,51 +24,44 @@ const emit = defineEmits<{
   (e: 'delete-column'): void;
   (e: 'undo'): void;
   (e: 'redo'): void;
+  (e: 'search', query: string, scope: 'currentSheet' | 'allSheets'): void;
+  (e: 'clear-search'): void;
 }>();
 </script>
 
 <template>
   <header class="toolbar">
-    <div class="toolbar-left">
-      <el-button type="primary" @click="emit('open-file')">
-        Open File
-      </el-button>
-      <el-button
-        type="success"
-        @click="emit('save-file')"
-        :disabled="!props.fileData"
-      >
-        Save
-      </el-button>
-    </div>
+    <FileButtons
+      :file-data="props.fileData"
+      @open-file="emit('open-file')"
+      @save-file="emit('save-file')"
+    />
+
     <div class="toolbar-center" v-if="props.fileData">
-      <el-select
-        :model-value="props.currentSheetIndex"
-        @update:model-value="(val: number) => emit('sheet-change', val)"
-        placeholder="Select sheet"
-        style="width: 150px"
-      >
-        <el-option
-          v-for="(name, index) in props.sheetNames"
-          :key="index"
-          :label="name"
-          :value="index"
-        />
-      </el-select>
+      <SheetSelector
+        :sheet-names="props.sheetNames"
+        :current-sheet-index="props.currentSheetIndex"
+        @sheet-change="emit('sheet-change', $event)"
+      />
+
+      <SearchBox
+        :is-searching="props.isSearching"
+        @search="(query, scope) => emit('search', query, scope)"
+        @clear-search="emit('clear-search')"
+      />
     </div>
-    <div class="toolbar-right" v-if="props.fileData">
-      <el-button @click="emit('undo')" :disabled="!props.canUndo">
-        Undo
-      </el-button>
-      <el-button @click="emit('redo')" :disabled="!props.canRedo">
-        Redo
-      </el-button>
-      <el-button @click="emit('add-row')">+ Row</el-button>
-      <el-button @click="emit('add-column')">+ Column</el-button>
-      <el-button @click="emit('delete-column')" :disabled="props.columnCount <= 1">
-        - Column
-      </el-button>
-    </div>
+
+    <EditButtons
+      v-if="props.fileData"
+      :can-undo="props.canUndo"
+      :can-redo="props.canRedo"
+      :column-count="props.columnCount"
+      @undo="emit('undo')"
+      @redo="emit('redo')"
+      @add-row="emit('add-row')"
+      @add-column="emit('add-column')"
+      @delete-column="emit('delete-column')"
+    />
   </header>
 </template>
 
@@ -79,17 +77,12 @@ const emit = defineEmits<{
   overflow-x: auto;
 }
 
-.toolbar-left,
-.toolbar-right {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
 .toolbar-center {
   flex: 1;
   display: flex;
   justify-content: center;
+  align-items: center;
   flex-shrink: 0;
+  gap: 16px;
 }
 </style>

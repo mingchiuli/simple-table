@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import type { CellValue } from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
@@ -7,6 +7,7 @@ import RowNumberCell from './RowNumberCell.vue';
 const props = defineProps<{
   data: CellValue[][];
   columns: string[];
+  selectedCell?: { row: number; col: number } | null;
 }>();
 
 const emit = defineEmits<{
@@ -20,7 +21,33 @@ const editingCell = ref<string | null>(null);
 
 // 容器尺寸
 const containerRef = ref<HTMLElement | null>(null);
+const tableRef = ref<any>(null);
 const tableSize = ref({ width: 800, height: 600 });
+
+// 监听选中单元格变化，自动滚动到该位置（居中显示）
+watch(() => props.selectedCell, async (newCell) => {
+  if (newCell && tableRef.value) {
+    await nextTick();
+    // 延迟执行滚动，等待虚拟列表初始化
+    setTimeout(() => {
+      // 垂直滚动：行高40
+      const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
+
+      // 水平滚动：row-number列宽60，之后每列宽120
+      const rowNumberWidth = 60;
+      const colWidth = 120;
+      const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
+
+      // 分别调用 scrollToTop 和 scrollToLeft
+      if (typeof tableRef.value.scrollToTop === 'function') {
+        tableRef.value.scrollToTop(Math.max(0, scrollTop));
+      }
+      if (typeof tableRef.value.scrollToLeft === 'function') {
+        tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
+      }
+    }, 60);
+  }
+}, { deep: true });
 
 // 监听容器尺寸变化
 let resizeObserver: ResizeObserver | null = null;
@@ -87,7 +114,8 @@ function isEditing(rowIndex: number, colIndex: number): boolean {
   return editingCell.value === getKey(rowIndex, colIndex);
 }
 
-function startEditing(rowIndex: number, colIndex: number) {
+function handleCellClick(rowIndex: number, colIndex: number) {
+  // 单击进入编辑模式
   editingCell.value = getKey(rowIndex, colIndex);
 }
 
@@ -121,6 +149,7 @@ const rowHeight = 40;
 <template>
   <div ref="containerRef" class="table-container">
     <el-table-v2
+      ref="tableRef"
       :columns="columns"
       :data="props.data"
       :row-height="rowHeight"
@@ -142,7 +171,7 @@ const rowHeight = 40;
           <div
             v-if="!isEditing(rowIndex, column.dataKey)"
             class="cell-text"
-            @click="startEditing(rowIndex, column.dataKey)"
+            @click="handleCellClick(rowIndex, column.dataKey)"
           >
             {{ getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey]) }}
           </div>

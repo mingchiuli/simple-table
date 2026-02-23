@@ -1,5 +1,70 @@
 use serde::{Deserialize, Serialize};
-use crate::types::{CellChange, CellValue, ColumnChange, FileData, OperationResult, RowChange};
+use std::collections::HashMap;
+use crate::types::{CellChange, CellPosition, CellValue, ColumnChange, FileData, OperationResult, RowChange};
+
+/// 将单元格值转换为字符串
+fn cell_to_string(cell: &CellValue) -> String {
+    match cell {
+        CellValue::Null => String::new(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Number(n) => n.to_string(),
+        CellValue::Boolean(b) => b.to_string(),
+    }
+}
+
+/// 重建单个 sheet 的索引（公开给 tauri_commands 调用）
+pub fn rebuild_sheet_index(sheet: &mut crate::types::SheetData) {
+    let mut inverted_index: HashMap<String, Vec<CellPosition>> = HashMap::new();
+
+    for (row_idx, row) in sheet.rows.iter().enumerate() {
+        for (col_idx, cell) in row.iter().enumerate() {
+            let text = cell_to_string(cell);
+            if !text.is_empty() {
+                let token = text.to_lowercase();
+                inverted_index
+                    .entry(token)
+                    .or_default()
+                    .push(CellPosition {
+                        row: row_idx,
+                        col: col_idx,
+                    });
+            }
+        }
+    }
+
+    sheet.index.inverted_index = inverted_index;
+}
+
+/// 更新单个单元格的索引
+fn update_cell_index(sheet: &mut crate::types::SheetData, row: usize, col: usize, old_value: &CellValue, new_value: &CellValue) {
+    let old_text = cell_to_string(old_value);
+    let new_text = cell_to_string(new_value);
+
+    // 如果值没变，不需要更新
+    if old_text.to_lowercase() == new_text.to_lowercase() {
+        return;
+    }
+
+    // 删除旧值的索引
+    if !old_text.is_empty() {
+        let old_token = old_text.to_lowercase();
+        if let Some(positions) = sheet.index.inverted_index.get_mut(&old_token) {
+            positions.retain(|p| !(p.row == row && p.col == col));
+            if positions.is_empty() {
+                sheet.index.inverted_index.remove(&old_token);
+            }
+        }
+    }
+
+    // 添加新值的索引
+    if !new_text.is_empty() {
+        let new_token = new_text.to_lowercase();
+        sheet.index.inverted_index
+            .entry(new_token)
+            .or_default()
+            .push(CellPosition { row, col });
+    }
+}
 
 /// 操作类型 - 用于撤销/重做
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,13 +101,23 @@ pub enum Operation {
 
 impl Operation {
     /// 执行操作，返回增量结果
+    /// 注意：此方法不再同步重建索引，索引重建由调用方异步处理
     pub fn execute(&self, file_data: &mut FileData) -> OperationResult {
         match self {
-            Operation::SetCell { sheet_index, row, col, old_value: _, new_value } => {
+            Operation::SetCell { sheet_index, row, col, new_value, .. } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    // 先获取旧值
+                    let old_val = sheet.rows.get(*row)
+                        .and_then(|r| r.get(*col))
+                        .cloned()
+                        .unwrap_or(CellValue::Null);
+
                     if let Some(row_data) = sheet.rows.get_mut(*row) {
                         if *col < row_data.len() {
+                            // 先更新值
                             row_data[*col] = new_value.clone();
+                            // 增量更新索引（同步执行，因为是单单元格操作，开销小）
+                            update_cell_index(sheet, *row, *col, &old_val, new_value);
                         }
                     }
                 }
@@ -60,6 +135,7 @@ impl Operation {
                     let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                     let new_row = vec![CellValue::Null; col_count];
                     sheet.rows.insert(*row_index, new_row);
+                    // 索引重建由调用方异步处理
                 }
                 OperationResult::AddRow {
                     sheet_index: *sheet_index,
@@ -74,6 +150,7 @@ impl Operation {
                     if *row_index < sheet.rows.len() {
                         sheet.rows.remove(*row_index);
                     }
+                    // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteRow {
                     sheet_index: *sheet_index,
@@ -85,6 +162,7 @@ impl Operation {
                     for row in &mut sheet.rows {
                         row.push(CellValue::Null);
                     }
+                    // 索引重建由调用方异步处理
                 }
                 let col_index = file_data.sheets
                     .get(*sheet_index)
@@ -103,6 +181,7 @@ impl Operation {
                             row.remove(*col_index);
                         }
                     }
+                    // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteColumn {
                     sheet_index: *sheet_index,
