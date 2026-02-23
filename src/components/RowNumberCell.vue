@@ -25,6 +25,9 @@ function handleDelete(index: number) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 0 4px;
 }
 
 .delete-btn {
@@ -33,11 +36,17 @@ function handleDelete(index: number) {
   background: none;
   color: #f56c6c;
   cursor: pointer;
-  font-size: 14px;
-  transition: opacity 0.2s;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: opacity 0.2s, background-color 0.2s;
 }
 
-:deep(.el-table-v2__row:hover) .delete-btn {
+.delete-btn:hover {
+  background-color: #fef0f0;
+}
+
+.row-number:hover .delete-btn {
   opacity: 1;
 }
 </style>

@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus";
-import { HomeFilled, Close } from "@element-plus/icons-vue";
+import { HomeFilled } from "@element-plus/icons-vue";
 import type { FileData, CellValue, OperationResult, SearchResult } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
 import StatusBar from "@/components/StatusBar.vue";
+import CellEditor from "@/components/CellEditor.vue";
+import SearchPanel from "@/components/SearchPanel.vue";
 
 const router = useRouter();
 const fileDataStore = useFileDataStore();
@@ -22,6 +24,8 @@ const canRedo = ref(false);
 const searchResults = ref<SearchResult[]>([]);
 const isSearching = ref(false);
 const selectedCell = ref<{ row: number; col: number } | null>(null);
+const cellEditorValue = ref<string>("");
+const autoScroll = ref(false);
 
 const fileData = computed(() => fileDataStore.data);
 
@@ -61,6 +65,51 @@ function parseCellValue(value: string): CellValue {
 function toRustCellValue(value: CellValue): string | number | boolean | null {
   return value;
 }
+
+// 获取当前选中单元格的值
+const currentCellValue = computed(() => {
+  if (!selectedCell.value || !currentSheet.value) return null;
+  const { row, col } = selectedCell.value;
+  return currentSheet.value.rows[row]?.[col] ?? null;
+});
+
+// 监听选中单元格变化，更新编辑输入框
+watch(
+  () => selectedCell.value,
+  (newCell) => {
+    if (newCell) {
+      const value = currentCellValue.value;
+      cellEditorValue.value = value !== null ? String(value) : "";
+    } else {
+      cellEditorValue.value = "";
+    }
+  },
+  { immediate: true }
+);
+
+// 监听编辑输入框变化，实时更新单元格
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+watch(cellEditorValue, (newValue) => {
+  if (!selectedCell.value || !currentSheet.value) return;
+
+  const { row, col } = selectedCell.value;
+  const originalValue = currentSheet.value.rows[row]?.[col];
+
+  // 清除之前的定时器
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+
+  // 防抖处理，避免每次输入都调用 API
+  debounceTimer = setTimeout(() => {
+    const newValueStr = newValue;
+    const originalValueStr = originalValue !== null ? String(originalValue) : "";
+
+    if (newValueStr !== originalValueStr) {
+      handleCellChange(row, col, newValueStr);
+    }
+  }, 300);
+});
 
 // 根据增量结果更新本地数据（直接修改，避免深拷贝）
 // Rust 使用 #[serde(tag = "type", content = "data")]，所以需要从 result.data 获取内容
@@ -348,12 +397,20 @@ function handleSearchResultClick(result: SearchResult) {
   if (result.sheet_index !== currentSheetIndex.value) {
     currentSheetIndex.value = result.sheet_index;
   }
-  // 选中对应的单元格
+  // 选中对应的单元格，并触发滚动到中央
+  autoScroll.value = true;
   selectedCell.value = { row: result.row, col: result.col };
 }
 
 function handleClearSearch() {
   searchResults.value = [];
+}
+
+// 按下回车或失焦时提交编辑
+function handleCellEditorSubmit() {
+  if (!selectedCell.value) return;
+  const { row, col } = selectedCell.value;
+  handleCellChange(row, col, cellEditorValue.value);
 }
 </script>
 
@@ -383,36 +440,30 @@ function handleClearSearch() {
 
     <main class="content">
       <div class="table-wrapper">
+        <CellEditor
+          v-if="selectedCell && fileData"
+          v-model="cellEditorValue"
+          :cell-position="selectedCell"
+          @submit="handleCellEditorSubmit"
+        />
+
         <TableEditor
           :data="tableData"
           :columns="columns"
           :selected-cell="selectedCell"
+          :auto-scroll="autoScroll"
           @cell-change="handleCellChange"
           @delete-row="handleDeleteRow"
+          @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
         />
       </div>
 
       <!-- Search Results Panel -->
-      <div v-if="searchResults.length > 0" class="search-panel">
-        <div class="search-panel-header">
-          <span>Found {{ searchResults.length }} result(s)</span>
-          <el-button text @click="handleClearSearch">
-            <el-icon><Close /></el-icon>
-          </el-button>
-        </div>
-        <div class="search-panel-list">
-          <div
-            v-for="(result, index) in searchResults"
-            :key="index"
-            class="search-result-item"
-            @click="handleSearchResultClick(result)"
-          >
-            <span class="cell-position">{{ result.cell_position }}</span>
-            <span class="cell-value">{{ result.value }}</span>
-            <span v-if="result.sheet_name" class="sheet-name">{{ result.sheet_name }}</span>
-          </div>
-        </div>
-      </div>
+      <SearchPanel
+        :results="searchResults"
+        @result-click="handleSearchResultClick"
+        @clear="handleClearSearch"
+      />
     </main>
 
     <StatusBar
@@ -450,61 +501,6 @@ function handleClearSearch() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.search-panel {
-  width: 280px;
-  background: #fff;
-  border-left: 1px solid #e4e7ed;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.search-panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px;
-  border-bottom: 1px solid #e4e7ed;
-  font-size: 14px;
-  color: #606266;
-}
-
-.search-panel-list {
-  flex: 1;
-  overflow-y: auto;
-}
-
-.search-result-item {
-  display: flex;
-  align-items: center;
-  padding: 10px 12px;
-  cursor: pointer;
-  gap: 8px;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.search-result-item:hover {
-  background: #f5f7fa;
-}
-
-.cell-position {
-  font-weight: bold;
-  color: #409eff;
-  min-width: 40px;
-}
-
-.cell-value {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sheet-name {
-  font-size: 12px;
-  color: #909399;
 }
 
 .back-btn {

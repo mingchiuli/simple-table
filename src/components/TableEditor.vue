@@ -8,11 +8,13 @@ const props = defineProps<{
   data: CellValue[][];
   columns: string[];
   selectedCell?: { row: number; col: number } | null;
+  autoScroll?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'cell-change', rowIndex: number, colIndex: number, value: string): void;
   (e: 'delete-row', index: number): void;
+  (e: 'select-cell', rowIndex: number, colIndex: number): void;
 }>();
 
 // 本地编辑状态
@@ -26,7 +28,7 @@ const tableSize = ref({ width: 800, height: 600 });
 
 // 监听选中单元格变化，自动滚动到该位置（居中显示）
 watch(() => props.selectedCell, async (newCell) => {
-  if (newCell && tableRef.value) {
+  if (newCell && tableRef.value && props.autoScroll) {
     await nextTick();
     // 延迟执行滚动，等待虚拟列表初始化
     setTimeout(() => {
@@ -115,8 +117,17 @@ function isEditing(rowIndex: number, colIndex: number): boolean {
 }
 
 function handleCellClick(rowIndex: number, colIndex: number) {
-  // 单击进入编辑模式
-  editingCell.value = getKey(rowIndex, colIndex);
+  // 单击选中单元格并显示编辑栏
+  emit('select-cell', rowIndex, colIndex);
+
+  // 双击进入编辑模式（通过检查是否已选中来判断）
+  const key = getKey(rowIndex, colIndex);
+  if (editingCell.value === key) {
+    // 已经是编辑状态，保持
+  } else {
+    // 选中单元格，进入编辑模式
+    editingCell.value = key;
+  }
 }
 
 // 列配置
