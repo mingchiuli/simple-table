@@ -1,8 +1,16 @@
 export type CellValue = string | number | boolean | null;
 
+export interface MergeRange {
+  start_row: number;
+  start_col: number;
+  end_row: number;
+  end_col: number;
+}
+
 export interface SheetData {
   name: string;
   rows: CellValue[][];
+  merges: MergeRange[];
 }
 
 export interface FileData {
@@ -32,6 +40,8 @@ export type OperationResult =
   | { type: 'DeleteRow'; data: { sheet_index: number; row_index: number } }
   | { type: 'AddColumn'; data: { sheet_index: number; column: ColumnChange } }
   | { type: 'DeleteColumn'; data: { sheet_index: number; column_index: number } }
+  | { type: 'AddSheet'; data: { sheet_index: number; name: string } }
+  | { type: 'DeleteSheet'; data: { sheet_index: number } }
   | { type: 'Batch'; data: { sheet_index: number; changes: CellChange[] } };
 
 export interface SearchResult {

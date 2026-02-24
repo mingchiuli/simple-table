@@ -1,7 +1,7 @@
 use calamine::{open_workbook, Reader, Xlsx, Xls, Ods, Data};
 
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, SheetData, SheetIndex};
+use crate::types::{CellValue, FileData, MergeRange, SheetData, SheetIndex};
 use csv::ReaderBuilder;
 use std::path::Path;
 
@@ -47,27 +47,68 @@ fn read_excel(path: &Path) -> Result<FileData, AppError> {
 fn read_xlsx(path: &Path) -> Result<Vec<SheetData>, AppError> {
     let mut workbook: Xlsx<std::io::BufReader<std::fs::File>> =
         open_workbook(path).map_err(|e: calamine::XlsxError| AppError::ReadError(e.to_string()))?;
+
+    // Load merged regions first
+    workbook
+        .load_merged_regions()
+        .map_err(|e| AppError::ReadError(e.to_string()))?;
+
     let sheet_names = workbook.sheet_names().to_vec();
-    Ok(sheet_names
+
+    // Collect merged regions data to avoid borrowing issues
+    let merged_data: Vec<(String, u32, u16, u32, u16)> = workbook
+        .merged_regions()
         .iter()
-        .filter_map(|sheet_name| {
-            let range = workbook.worksheet_range(sheet_name).ok()?;
-            let rows: Vec<Vec<CellValue>> = range
-                .rows()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| cell_to_value(cell.clone()))
-                        .collect()
-                })
-                .collect();
-            let index = SheetIndex::default();
-            Some(SheetData {
-                name: sheet_name.clone(),
-                rows,
-                index,
-            })
+        .flat_map(|(name, _, dims)| {
+            std::iter::once((
+                name.clone(),
+                dims.start.0,
+                dims.start.1 as u16,
+                dims.end.0,
+                dims.end.1 as u16,
+            ))
         })
-        .collect())
+        .collect();
+
+    let mut sheets: Vec<SheetData> = Vec::new();
+
+    for sheet_name in &sheet_names {
+        let range = match workbook.worksheet_range(sheet_name) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let rows: Vec<Vec<CellValue>> = range
+            .rows()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell_to_value(cell.clone()))
+                    .collect()
+            })
+            .collect();
+
+        // Read merged cells for this sheet
+        let merges: Vec<MergeRange> = merged_data
+            .iter()
+            .filter(|(name, _, _, _, _)| name == sheet_name)
+            .map(|(_, start_r, start_c, end_r, end_c)| MergeRange {
+                start_row: *start_r,
+                start_col: *start_c,
+                end_row: *end_r,
+                end_col: *end_c,
+            })
+            .collect();
+
+        let index = SheetIndex::default();
+        sheets.push(SheetData {
+            name: sheet_name.clone(),
+            rows,
+            merges,
+            index,
+        });
+    }
+
+    Ok(sheets)
 }
 
 fn read_xls(path: &Path) -> Result<Vec<SheetData>, AppError> {
@@ -86,10 +127,15 @@ fn read_xls(path: &Path) -> Result<Vec<SheetData>, AppError> {
                         .collect()
                 })
                 .collect();
+
+            // Read merged cells (Xlsx only, other formats not supported)
+            let merges: Vec<MergeRange> = Vec::new();
+
             let index = SheetIndex::default();
             Some(SheetData {
                 name: sheet_name.clone(),
                 rows,
+                merges,
                 index,
             })
         })
@@ -112,10 +158,15 @@ fn read_ods(path: &Path) -> Result<Vec<SheetData>, AppError> {
                         .collect()
                 })
                 .collect();
+
+            // Read merged cells (Xlsx only, other formats not supported)
+            let merges: Vec<MergeRange> = Vec::new();
+
             let index = SheetIndex::default();
             Some(SheetData {
                 name: sheet_name.clone(),
                 rows,
+                merges,
                 index,
             })
         })
@@ -163,6 +214,7 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
         sheets: vec![SheetData {
             name: "Sheet1".to_string(),
             rows,
+            merges: vec![],
             index,
         }],
     })

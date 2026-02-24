@@ -42,10 +42,21 @@ pub struct SheetIndex {
     pub inverted_index: HashMap<String, Vec<CellPosition>>,
 }
 
+/// 合并范围
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MergeRange {
+    pub start_row: u32,
+    pub start_col: u16,
+    pub end_row: u32,
+    pub end_col: u16,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SheetData {
     pub name: String,
     pub rows: Vec<Vec<CellValue>>,
+    /// 合并范围
+    pub merges: Vec<MergeRange>,
     #[serde(skip)]
     pub index: SheetIndex,
 }
@@ -105,6 +116,15 @@ pub enum OperationResult {
     DeleteColumn {
         sheet_index: usize,
         column_index: usize,
+    },
+    /// 添加 Sheet
+    AddSheet {
+        sheet_index: usize,
+        name: String,
+    },
+    /// 删除 Sheet
+    DeleteSheet {
+        sheet_index: usize,
     },
     /// 批量变化（用于 undo/redo）
     Batch {

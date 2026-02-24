@@ -27,16 +27,25 @@ pub fn do_read_file(path: String) -> Result<FileData, AppError> {
     let file_data = reader::read_file(path)?;
 
     // 初始化编辑器状态
+    init_editor_state(file_data.clone());
+
+    Ok(file_data)
+}
+
+/// 初始化编辑器状态（用于新建文件）
+pub fn do_init_file(file_data: FileData) -> Result<(), AppError> {
+    init_editor_state(file_data);
+    Ok(())
+}
+
+fn init_editor_state(file_data: FileData) {
     let state = crate::tauri_commands::get_state();
     {
         let mut state_guard = state.write().unwrap();
         *state_guard = Some(EditorState::new(file_data.clone()));
     }
-
     // 异步构建索引（后台线程）
     spawn_index_build(file_data.clone(), state.clone());
-
-    Ok(file_data)
 }
 
 /// 保存文件

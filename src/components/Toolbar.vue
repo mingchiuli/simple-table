@@ -2,6 +2,7 @@
 import type { FileData } from '@/types';
 import FileButtons from './FileButtons.vue';
 import SheetSelector from './SheetSelector.vue';
+import SheetButtons from './SheetButtons.vue';
 import SearchBox from './SearchBox.vue';
 import EditButtons from './EditButtons.vue';
 
@@ -9,7 +10,6 @@ const props = defineProps<{
   fileData: FileData | null;
   sheetNames: string[];
   currentSheetIndex: number;
-  columnCount: number;
   canUndo: boolean;
   canRedo: boolean;
   isSearching: boolean;
@@ -19,9 +19,10 @@ const emit = defineEmits<{
   (e: 'open-file'): void;
   (e: 'save-file'): void;
   (e: 'sheet-change', value: number): void;
+  (e: 'add-sheet'): void;
+  (e: 'delete-sheet'): void;
   (e: 'add-row'): void;
   (e: 'add-column'): void;
-  (e: 'delete-column'): void;
   (e: 'undo'): void;
   (e: 'redo'): void;
   (e: 'search', query: string, scope: 'currentSheet' | 'allSheets'): void;
@@ -44,6 +45,12 @@ const emit = defineEmits<{
         @sheet-change="emit('sheet-change', $event)"
       />
 
+      <SheetButtons
+        :sheet-count="props.sheetNames.length"
+        @add-sheet="emit('add-sheet')"
+        @delete-sheet="emit('delete-sheet')"
+      />
+
       <SearchBox
         :is-searching="props.isSearching"
         @search="(query, scope) => emit('search', query, scope)"
@@ -55,12 +62,10 @@ const emit = defineEmits<{
       v-if="props.fileData"
       :can-undo="props.canUndo"
       :can-redo="props.canRedo"
-      :column-count="props.columnCount"
       @undo="emit('undo')"
       @redo="emit('redo')"
       @add-row="emit('add-row')"
       @add-column="emit('add-column')"
-      @delete-column="emit('delete-column')"
     />
   </header>
 </template>

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue';
 import type { CellValue } from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
+import ColumnHeaderCell from './ColumnHeaderCell.vue';
 
 const props = defineProps<{
   data: CellValue[][];
@@ -14,7 +15,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'cell-change', rowIndex: number, colIndex: number, value: string): void;
   (e: 'delete-row', index: number): void;
+  (e: 'delete-column', index: number): void;
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
+  (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
 }>();
 
 // 本地编辑状态
@@ -26,28 +29,40 @@ const containerRef = ref<HTMLElement | null>(null);
 const tableRef = ref<any>(null);
 const tableSize = ref({ width: 800, height: 600 });
 
-// 监听选中单元格变化，自动滚动到该位置（居中显示）
+// 监听选中单元格变化，进入编辑模式
 watch(() => props.selectedCell, async (newCell) => {
-  if (newCell && tableRef.value && props.autoScroll) {
-    await nextTick();
-    // 延迟执行滚动，等待虚拟列表初始化
-    setTimeout(() => {
-      // 垂直滚动：行高40
-      const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
+  // Clear edit state when switching sheets (selectedCell becomes null)
+  if (newCell === null) {
+    editingCell.value = null;
+    editingValue.value = {};
+    return;
+  }
 
-      // 水平滚动：row-number列宽60，之后每列宽120
-      const rowNumberWidth = 60;
-      const colWidth = 120;
-      const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
+  // Enter edit mode when a cell is selected
+  if (newCell) {
+    const key = getKey(newCell.row, newCell.col);
+    editingCell.value = key;
+    editingValue.value = {};
+    editingValue.value[key] = getCellValue(props.data[newCell.row]?.[newCell.col]) || '';
 
-      // 分别调用 scrollToTop 和 scrollToLeft
-      if (typeof tableRef.value.scrollToTop === 'function') {
-        tableRef.value.scrollToTop(Math.max(0, scrollTop));
-      }
-      if (typeof tableRef.value.scrollToLeft === 'function') {
-        tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
-      }
-    }, 60);
+    // Only scroll when autoScroll is true (e.g., from search results)
+    if (props.autoScroll && tableRef.value) {
+      await nextTick();
+      setTimeout(() => {
+        const rowHeight = 40;
+        const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
+        const rowNumberWidth = 60;
+        const colWidth = 120;
+        const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
+
+        if (typeof tableRef.value.scrollToTop === 'function') {
+          tableRef.value.scrollToTop(Math.max(0, scrollTop));
+        }
+        if (typeof tableRef.value.scrollToLeft === 'function') {
+          tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
+        }
+      }, 60);
+    }
   }
 }, { deep: true });
 
@@ -86,6 +101,8 @@ function getKey(rowIndex: number, colIndex: number): string {
 function handleInput(rowIndex: number, colIndex: number, value: string) {
   const key = getKey(rowIndex, colIndex);
   editingValue.value[key] = value;
+  // 实时同步到上方编辑栏
+  emit('cell-editing', rowIndex, colIndex, value);
 }
 
 function handleBlur(rowIndex: number, colIndex: number, value: string) {
@@ -102,6 +119,10 @@ function handleBlur(rowIndex: number, colIndex: number, value: string) {
 
 function handleDeleteRow(index: number) {
   emit('delete-row', index);
+}
+
+function handleDeleteColumn(index: number) {
+  emit('delete-column', index);
 }
 
 function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValue): string {
@@ -147,6 +168,11 @@ const columns = computed(() => {
       title: col,
       dataKey: colIndex,
       width: 120,
+      headerCellRenderer: () => h(ColumnHeaderCell, {
+        columnIndex: colIndex,
+        title: col,
+        onDelete: handleDeleteColumn
+      })
     });
   });
 

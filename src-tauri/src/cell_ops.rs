@@ -114,7 +114,7 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 }
 
 /// 删除列
-pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, col_index: usize) -> Result<OperationResult, AppError> {
+pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, col_index: usize, col_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
@@ -122,6 +122,7 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
                 let operation = crate::command::Operation::DeleteColumn {
                     sheet_index,
                     col_index,
+                    col_data,
                 };
                 Ok(editor_state.execute(operation))
             }
@@ -133,6 +134,40 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
     if result.is_ok() {
         spawn_rebuild_sheet_index(sheet_index, state.clone());
     }
+
+    result
+}
+
+/// 添加 Sheet
+pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResult, AppError> {
+    let result = {
+        let mut state_guard = state.write().unwrap();
+        match state_guard.as_mut() {
+            Some(editor_state) => {
+                let operation = crate::command::Operation::AddSheet;
+                Ok(editor_state.execute(operation))
+            }
+            None => Err(AppError::Internal("No file loaded".to_string())),
+        }
+    };
+
+    // Note: Adding a sheet doesn't require index rebuild since it's a new empty sheet
+
+    result
+}
+
+/// 删除 Sheet
+pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<OperationResult, AppError> {
+    let result = {
+        let mut state_guard = state.write().unwrap();
+        match state_guard.as_mut() {
+            Some(editor_state) => {
+                let operation = crate::command::Operation::DeleteSheet { sheet_index };
+                Ok(editor_state.execute(operation))
+            }
+            None => Err(AppError::Internal("No file loaded".to_string())),
+        }
+    };
 
     result
 }

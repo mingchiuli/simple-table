@@ -12,7 +12,7 @@ mod cell_ops;
 mod search_ops;
 mod tauri_commands;
 
-use tauri_commands::{get_default_save_path, read_file, save_file, undo, redo, set_cell, add_row, delete_row, add_column, delete_column, get_editor_state, search};
+use tauri_commands::{get_default_save_path, read_file, save_file, init_file, get_file_data, undo, redo, set_cell, add_row, delete_row, add_column, delete_column, add_sheet, delete_sheet, get_editor_state, search};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,6 +24,8 @@ pub fn run() {
             read_file,
             save_file,
             get_default_save_path,
+            init_file,
+            get_file_data,
             undo,
             redo,
             set_cell,
@@ -31,6 +33,8 @@ pub fn run() {
             delete_row,
             add_column,
             delete_column,
+            add_sheet,
+            delete_sheet,
             get_editor_state,
             search
         ])

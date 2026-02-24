@@ -31,6 +31,32 @@ async function handleOpenFile() {
     ElMessage.error(`Failed to open file: ${error}`);
   }
 }
+
+async function handleNewFile() {
+  const newFileData: FileData = {
+    file_name: "untitled.xlsx",
+    sheets: [
+      {
+        name: "Sheet1",
+        rows: [
+          [null, null, null, null, null],
+          [null, null, null, null, null],
+          [null, null, null, null, null],
+          [null, null, null, null, null],
+          [null, null, null, null, null],
+        ],
+        merges: [],
+      },
+    ],
+  };
+
+  // 初始化后端编辑器状态
+  await invoke("init_file", { fileData: newFileData });
+
+  fileDataStore.set(newFileData);
+  router.push({ name: "table" });
+  ElMessage.success("New table created");
+}
 </script>
 
 <template>
@@ -38,9 +64,14 @@ async function handleOpenFile() {
     <div class="empty-state">
       <el-icon class="empty-icon"><Document /></el-icon>
       <p>No file opened</p>
-      <el-button type="primary" @click="handleOpenFile">
-        Open Excel or CSV file
-      </el-button>
+      <div class="button-group">
+        <el-button type="primary" @click="handleNewFile">
+          New Table
+        </el-button>
+        <el-button @click="handleOpenFile">
+          Open Excel or CSV file
+        </el-button>
+      </div>
     </div>
   </div>
 </template>
@@ -71,5 +102,10 @@ async function handleOpenFile() {
 .empty-state p {
   font-size: 16px;
   margin-bottom: 20px;
+}
+
+.button-group {
+  display: flex;
+  gap: 12px;
 }
 </style>

@@ -2,7 +2,6 @@
 defineProps<{
   canUndo: boolean;
   canRedo: boolean;
-  columnCount: number;
 }>();
 
 const emit = defineEmits<{
@@ -10,7 +9,6 @@ const emit = defineEmits<{
   (e: 'redo'): void;
   (e: 'add-row'): void;
   (e: 'add-column'): void;
-  (e: 'delete-column'): void;
 }>();
 </script>
 
@@ -24,9 +22,6 @@ const emit = defineEmits<{
     </el-button>
     <el-button @click="emit('add-row')">+ Row</el-button>
     <el-button @click="emit('add-column')">+ Column</el-button>
-    <el-button @click="emit('delete-column')" :disabled="columnCount <= 1">
-      - Column
-    </el-button>
   </div>
 </template>
 

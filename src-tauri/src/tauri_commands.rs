@@ -28,7 +28,24 @@ pub fn get_default_save_path(file_name: String) -> String {
     crate::file_ops::do_get_default_save_path(file_name)
 }
 
+/// 初始化文件（用于新建文件时初始化编辑器状态）
+#[tauri::command]
+pub fn init_file(file_data: FileData) -> Result<(), AppError> {
+    crate::file_ops::do_init_file(file_data)
+}
+
 // ==================== Editor Operations ====================
+
+/// 获取当前文件数据
+#[tauri::command]
+pub fn get_file_data() -> Result<FileData, AppError> {
+    let state = get_state();
+    let guard = state.read().unwrap();
+    match guard.as_ref() {
+        Some(editor_state) => Ok(editor_state.file_data.clone()),
+        None => Err(AppError::Internal("No file loaded".to_string())),
+    }
+}
 
 /// 获取编辑器状态（包含能否撤销/重做）
 #[tauri::command]
@@ -82,8 +99,22 @@ pub fn add_column(sheet_index: usize) -> Result<OperationResult, AppError> {
 
 /// 删除列
 #[tauri::command]
-pub fn delete_column(sheet_index: usize, col_index: usize) -> Result<OperationResult, AppError> {
-    crate::cell_ops::do_delete_column(get_state(), sheet_index, col_index)
+pub fn delete_column(sheet_index: usize, col_index: usize, col_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
+    crate::cell_ops::do_delete_column(get_state(), sheet_index, col_index, col_data)
+}
+
+// ==================== Sheet Operations ====================
+
+/// 添加 Sheet
+#[tauri::command]
+pub fn add_sheet() -> Result<OperationResult, AppError> {
+    crate::cell_ops::do_add_sheet(get_state())
+}
+
+/// 删除 Sheet
+#[tauri::command]
+pub fn delete_sheet(sheet_index: usize) -> Result<OperationResult, AppError> {
+    crate::cell_ops::do_delete_sheet(get_state(), sheet_index)
 }
 
 // ==================== Search Operations ====================

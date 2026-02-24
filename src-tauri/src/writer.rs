@@ -15,6 +15,7 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
             .add_worksheet(Some(&sheet.name))
             .map_err(|e| AppError::WriteError(e.to_string()))?;
 
+        // Write cells without formats (for now, formats will be added later)
         for (row_idx, row) in sheet.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
                 let row_u32 = row_idx as u32;
@@ -22,7 +23,7 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                 match cell {
                     CellValue::String(s) => {
                         worksheet
-                            .write_string(row_u32, col_u16, s, None)
+                            .write_string(row_u32, col_u16, s.as_str(), None)
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                     CellValue::Number(n) => {
@@ -42,6 +43,35 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                     }
                 }
             }
+        }
+
+        // Write merged cells
+        for merge in &sheet.merges {
+            let value = sheet
+                .rows
+                .get(merge.start_row as usize)
+                .and_then(|r| r.get(merge.start_col as usize))
+                .cloned()
+                .unwrap_or(CellValue::Null);
+
+            // Convert value to string for merge_range (xlsxwriter only supports strings)
+            let s = match value {
+                CellValue::String(s) => s,
+                CellValue::Number(n) => n.to_string(),
+                CellValue::Boolean(b) => b.to_string(),
+                CellValue::Null => String::new(),
+            };
+
+            worksheet
+                .merge_range(
+                    merge.start_row,
+                    merge.start_col,
+                    merge.end_row,
+                    merge.end_col,
+                    &s,
+                    None,
+                )
+                .map_err(|e| AppError::WriteError(e.to_string()))?;
         }
     }
 

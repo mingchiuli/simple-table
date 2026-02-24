@@ -27,6 +27,9 @@ const selectedCell = ref<{ row: number; col: number } | null>(null);
 const cellEditorValue = ref<string>("");
 const autoScroll = ref(false);
 
+// Store selected cell for each sheet
+const sheetSelectedCells = ref<Map<number, { row: number; col: number }>>(new Map());
+
 const fileData = computed(() => fileDataStore.data);
 
 const currentSheet = computed(() => {
@@ -153,6 +156,14 @@ function applyOperation(result: OperationResult) {
       }
       break;
     }
+    case "AddSheet": {
+      // Sheet is already added via get_file_data, no need to modify
+      break;
+    }
+    case "DeleteSheet": {
+      // Sheet is already deleted via get_file_data, no need to modify
+      break;
+    }
     case "Batch": {
       for (const change of resultData.changes) {
         if (sheet.rows[change.row]) {
@@ -208,15 +219,29 @@ async function handleSaveFile() {
   if (!fileData.value) return;
 
   try {
-    const extension = fileData.value.file_name.split(".").pop() || "xlsx";
-    const defaultName = fileData.value.file_name.replace(/\.[^.]+$/, "_edited");
+    const originalExtension = fileData.value.file_name.split(".").pop() || "xlsx";
+    const isNewFile = fileData.value.file_name.startsWith("untitled");
+    const defaultName = isNewFile
+      ? "untitled"
+      : fileData.value.file_name.replace(/\.[^.]+$/, "");
+
+    // Determine available extensions based on file type
+    let extensions: string[];
+    if (isNewFile) {
+      // New file: allow选择 xlsx or csv
+      extensions = ["xlsx", "csv"];
+    } else if (originalExtension === "csv") {
+      extensions = ["csv"];
+    } else {
+      extensions = ["xlsx"];
+    }
 
     const savePath = await save({
-      defaultPath: `${defaultName}.${extension}`,
+      defaultPath: `${defaultName}.${extensions[0]}`,
       filters: [
         {
           name: "Spreadsheet",
-          extensions: [extension === "csv" ? "csv" : "xlsx"],
+          extensions,
         },
       ],
     });
@@ -240,6 +265,9 @@ async function handleCellChange(rowIndex: number, colIndex: number, value: strin
   const oldValue = currentSheet.value.rows[rowIndex][colIndex];
   const newValue = parseCellValue(value);
 
+  // 检查是否是当前选中的单元格，如果是则同步更新上方编辑栏
+  const isCurrentCell = selectedCell.value?.row === rowIndex && selectedCell.value?.col === colIndex;
+
   try {
     isLoading.value = true;
     const result = await invoke<OperationResult>("set_cell", {
@@ -250,6 +278,12 @@ async function handleCellChange(rowIndex: number, colIndex: number, value: strin
       newValue: toRustCellValue(newValue),
     });
     applyOperation(result);
+
+    // 同步更新上方编辑栏的值
+    if (isCurrentCell) {
+      cellEditorValue.value = value;
+    }
+
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -318,20 +352,77 @@ async function handleAddColumn() {
   }
 }
 
-async function handleDeleteColumn() {
-  if (!currentSheet.value || !currentSheet.value.rows.length) return;
+async function handleDeleteColumn(index: number) {
+  if (!currentSheet.value) return;
+
+  const colData = currentSheet.value.rows.map(row => row[index]);
 
   try {
     isLoading.value = true;
     const result = await invoke<OperationResult>("delete_column", {
       sheetIndex: currentSheetIndex.value,
-      colIndex: currentSheet.value.rows[0].length - 1,
+      colIndex: index,
+      colData: colData.map(toRustCellValue),
     });
     applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
     ElMessage.error(`Failed to delete column: ${error}`);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function handleAddSheet() {
+  if (!fileData.value) return;
+
+  try {
+    isLoading.value = true;
+    const result = await invoke<OperationResult>("add_sheet");
+    // Get the updated file data from backend to avoid duplication
+    const updatedData = await invoke<FileData>("get_file_data");
+    fileDataStore.set(updatedData);
+    // Switch to the new sheet
+    const resultData = (result as any).data;
+    if (resultData && resultData.sheet_index !== undefined) {
+      // Clear selected cell and editor when switching to new sheet
+      selectedCell.value = null;
+      cellEditorValue.value = "";
+      currentSheetIndex.value = resultData.sheet_index;
+    }
+    hasChanges.value = true;
+    await updateEditorState();
+  } catch (error) {
+    ElMessage.error(`Failed to add sheet: ${error}`);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function handleDeleteSheet() {
+  if (!fileData.value || fileData.value.sheets.length <= 1) {
+    ElMessage.warning("Cannot delete the last sheet");
+    return;
+  }
+
+  try {
+    isLoading.value = true;
+    const result = await invoke<OperationResult>("delete_sheet", {
+      sheetIndex: currentSheetIndex.value,
+    });
+    // Get the updated file data from backend to avoid mismatch
+    const updatedData = await invoke<FileData>("get_file_data");
+    fileDataStore.set(updatedData);
+    // Switch to the new current sheet
+    const resultData = (result as any).data;
+    if (resultData && resultData.sheet_index !== undefined) {
+      currentSheetIndex.value = resultData.sheet_index;
+    }
+    hasChanges.value = true;
+    await updateEditorState();
+  } catch (error) {
+    ElMessage.error(`Failed to delete sheet: ${error}`);
   } finally {
     isLoading.value = false;
   }
@@ -406,6 +497,32 @@ function handleClearSearch() {
   searchResults.value = [];
 }
 
+function handleSheetChange(index: number) {
+  // Save current selected cell for the current sheet
+  if (selectedCell.value !== null) {
+    sheetSelectedCells.value.set(currentSheetIndex.value, selectedCell.value);
+  }
+
+  // Clear cell editor when switching sheets
+  cellEditorValue.value = "";
+  currentSheetIndex.value = index;
+
+  // Restore selected cell for the new sheet if it was previously saved
+  const savedCell = sheetSelectedCells.value.get(index);
+  if (savedCell) {
+    selectedCell.value = savedCell;
+    // Update cell editor value with the new sheet's cell value
+    const sheet = fileData.value?.sheets[index];
+    if (sheet && sheet.rows[savedCell.row] && sheet.rows[savedCell.row][savedCell.col] !== null) {
+      cellEditorValue.value = String(sheet.rows[savedCell.row][savedCell.col]);
+    }
+    // Trigger auto scroll to the selected cell
+    autoScroll.value = true;
+  } else {
+    selectedCell.value = null;
+  }
+}
+
 // 按下回车或失焦时提交编辑
 function handleCellEditorSubmit() {
   if (!selectedCell.value) return;
@@ -420,17 +537,17 @@ function handleCellEditorSubmit() {
       :file-data="fileData"
       :sheet-names="sheetNames"
       :current-sheet-index="currentSheetIndex"
-      :column-count="columns.length"
       :can-undo="canUndo"
       :can-redo="canRedo"
       :search-results="searchResults"
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"
-      @sheet-change="(i) => (currentSheetIndex = i)"
+      @sheet-change="handleSheetChange"
+      @add-sheet="handleAddSheet"
+      @delete-sheet="handleDeleteSheet"
       @add-row="handleAddRow"
       @add-column="handleAddColumn"
-      @delete-column="handleDeleteColumn"
       @undo="handleUndo"
       @redo="handleRedo"
       @search="handleSearch"
@@ -453,7 +570,9 @@ function handleCellEditorSubmit() {
           :selected-cell="selectedCell"
           :auto-scroll="autoScroll"
           @cell-change="handleCellChange"
+          @cell-editing="(row, col, value) => { if (selectedCell?.row === row && selectedCell?.col === col) cellEditorValue = value }"
           @delete-row="handleDeleteRow"
+          @delete-column="handleDeleteColumn"
           @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
         />
       </div>

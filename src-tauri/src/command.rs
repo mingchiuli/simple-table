@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::types::{CellChange, CellPosition, CellValue, ColumnChange, FileData, OperationResult, RowChange};
+use crate::types::{CellChange, CellPosition, CellValue, ColumnChange, FileData, OperationResult, RowChange, SheetData, SheetIndex};
 
 /// 将单元格值转换为字符串
 fn cell_to_string(cell: &CellValue) -> String {
@@ -96,6 +96,13 @@ pub enum Operation {
     DeleteColumn {
         sheet_index: usize,
         col_index: usize,
+        col_data: Vec<CellValue>,
+    },
+    /// 添加 Sheet
+    AddSheet,
+    /// 删除 Sheet
+    DeleteSheet {
+        sheet_index: usize,
     },
 }
 
@@ -174,7 +181,7 @@ impl Operation {
                     column: ColumnChange { index: col_index },
                 }
             }
-            Operation::DeleteColumn { sheet_index, col_index } => {
+            Operation::DeleteColumn { sheet_index, col_index, .. } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     for row in &mut sheet.rows {
                         if *col_index < row.len() {
@@ -186,6 +193,55 @@ impl Operation {
                 OperationResult::DeleteColumn {
                     sheet_index: *sheet_index,
                     column_index: *col_index,
+                }
+            }
+            Operation::AddSheet => {
+                // 生成新 sheet 名称
+                let sheet_count = file_data.sheets.len();
+                let new_sheet_name = format!("Sheet{}", sheet_count + 1);
+
+                // 创建新的空 sheet
+                let new_sheet = SheetData {
+                    name: new_sheet_name.clone(),
+                    rows: vec![
+                        vec![CellValue::Null; 5],
+                        vec![CellValue::Null; 5],
+                        vec![CellValue::Null; 5],
+                        vec![CellValue::Null; 5],
+                        vec![CellValue::Null; 5],
+                    ],
+                    merges: vec![],
+                    index: SheetIndex::default(),
+                };
+
+                let new_sheet_index = file_data.sheets.len();
+                file_data.sheets.push(new_sheet);
+
+                OperationResult::AddSheet {
+                    sheet_index: new_sheet_index,
+                    name: new_sheet_name,
+                }
+            }
+            Operation::DeleteSheet { sheet_index } => {
+                // Don't allow deleting the last sheet
+                if file_data.sheets.len() <= 1 {
+                    return OperationResult::AddSheet {
+                        sheet_index: 0,
+                        name: "Error".to_string(),
+                    };
+                }
+
+                let _removed_sheet = file_data.sheets.remove(*sheet_index);
+
+                // Adjust current sheet index if needed
+                let new_current_index = if *sheet_index >= file_data.sheets.len() {
+                    file_data.sheets.len() - 1
+                } else {
+                    *sheet_index
+                };
+
+                OperationResult::DeleteSheet {
+                    sheet_index: new_current_index,
                 }
             }
         }
@@ -220,12 +276,21 @@ impl Operation {
                 Operation::DeleteColumn {
                     sheet_index: *sheet_index,
                     col_index: 0,
+                    col_data: vec![],
                 }
             }
             Operation::DeleteColumn { sheet_index, .. } => {
                 Operation::AddColumn {
                     sheet_index: *sheet_index,
                 }
+            }
+            Operation::AddSheet => {
+                // Undo for add sheet not supported in this simplified version
+                Operation::AddSheet
+            }
+            Operation::DeleteSheet { .. } => {
+                // Undo for delete sheet not supported in this simplified version
+                Operation::AddSheet
             }
         }
     }
