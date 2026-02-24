@@ -8,9 +8,17 @@ A cross-platform desktop application for viewing and editing Excel/CSV files, bu
 
 - Open and edit Excel files (.xlsx, .xls, .ods)
 - Open and edit CSV files
-- Multi-sheet support
+- Multi-sheet support (add/delete sheets)
 - Add/delete rows and columns
 - Save changes to file
+- Search functionality
+- Virtual scrolling for large datasets
+- Undo/Redo support
+- Preserve merged cells
+
+## Limitations
+
+- **Does not support Excel styles**: Font colors, background colors, borders, cell alignment, and other formatting styles are not preserved. Only cell values and merged cell information are maintained.
 
 ## Installation
 
