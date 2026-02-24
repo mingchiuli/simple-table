@@ -75,45 +75,45 @@ pub fn set_cell(
     col: usize,
     old_value: CellValue,
     new_value: CellValue,
-) -> Result<OperationResult, AppError> {
+) -> Result<(), AppError> {
     crate::cell_ops::do_set_cell(get_state(), sheet_index, row, col, old_value, new_value)
 }
 
 /// 添加行
 #[tauri::command]
-pub fn add_row(sheet_index: usize, row_index: usize) -> Result<OperationResult, AppError> {
+pub fn add_row(sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     crate::cell_ops::do_add_row(get_state(), sheet_index, row_index)
 }
 
 /// 删除行
 #[tauri::command]
-pub fn delete_row(sheet_index: usize, row_index: usize, row_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
-    crate::cell_ops::do_delete_row(get_state(), sheet_index, row_index, row_data)
+pub fn delete_row(sheet_index: usize, row_index: usize) -> Result<(), AppError> {
+    crate::cell_ops::do_delete_row(get_state(), sheet_index, row_index)
 }
 
 /// 添加列
 #[tauri::command]
-pub fn add_column(sheet_index: usize) -> Result<OperationResult, AppError> {
+pub fn add_column(sheet_index: usize) -> Result<(), AppError> {
     crate::cell_ops::do_add_column(get_state(), sheet_index)
 }
 
 /// 删除列
 #[tauri::command]
-pub fn delete_column(sheet_index: usize, col_index: usize, col_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
-    crate::cell_ops::do_delete_column(get_state(), sheet_index, col_index, col_data)
+pub fn delete_column(sheet_index: usize, col_index: usize) -> Result<(), AppError> {
+    crate::cell_ops::do_delete_column(get_state(), sheet_index, col_index)
 }
 
 // ==================== Sheet Operations ====================
 
 /// 添加 Sheet
 #[tauri::command]
-pub fn add_sheet() -> Result<OperationResult, AppError> {
+pub fn add_sheet() -> Result<(), AppError> {
     crate::cell_ops::do_add_sheet(get_state())
 }
 
 /// 删除 Sheet
 #[tauri::command]
-pub fn delete_sheet(sheet_index: usize) -> Result<OperationResult, AppError> {
+pub fn delete_sheet(sheet_index: usize) -> Result<(), AppError> {
     crate::cell_ops::do_delete_sheet(get_state(), sheet_index)
 }
 

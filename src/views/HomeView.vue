@@ -69,7 +69,7 @@ async function handleNewFile() {
           New Table
         </el-button>
         <el-button @click="handleOpenFile">
-          Open Excel or CSV file
+          Open File
         </el-button>
       </div>
     </div>

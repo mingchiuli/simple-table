@@ -3,7 +3,7 @@ use std::sync::RwLock;
 
 use crate::editor_state::EditorState;
 use crate::error::AppError;
-use crate::types::{CellValue, OperationResult, SheetData};
+use crate::types::{CellValue, SheetData};
 
 /// 异步重建指定 sheet 的索引
 fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<EditorState>>>) {
@@ -26,7 +26,7 @@ pub fn do_set_cell(
     col: usize,
     old_value: CellValue,
     new_value: CellValue,
-) -> Result<OperationResult, AppError> {
+) -> Result<(), AppError> {
     let mut state = state.write().unwrap();
     match state.as_mut() {
         Some(editor_state) => {
@@ -37,14 +37,15 @@ pub fn do_set_cell(
                 old_value,
                 new_value,
             };
-            Ok(editor_state.execute(operation))
+            editor_state.execute(operation);
+            Ok(())
         }
         None => Err(AppError::Internal("No file loaded".to_string())),
     }
 }
 
 /// 添加行
-pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<OperationResult, AppError> {
+pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
@@ -53,7 +54,8 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
                     sheet_index,
                     row_index,
                 };
-                Ok(editor_state.execute(operation))
+                editor_state.execute(operation);
+                Ok(())
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
         }
@@ -68,17 +70,20 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
 }
 
 /// 删除行
-pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize, row_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
+pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
+                // 从文件数据中获取行数据（用于撤销）
+                let row_data = editor_state.file_data.sheets[sheet_index].rows[row_index].clone();
                 let operation = crate::editor_state::Operation::DeleteRow {
                     sheet_index,
                     row_index,
                     row_data,
                 };
-                Ok(editor_state.execute(operation))
+                editor_state.execute(operation);
+                Ok(())
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
         }
@@ -93,14 +98,15 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 }
 
 /// 添加列
-pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<OperationResult, AppError> {
+pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<(), AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // col_index 会在 execute 中自动计算
                 let operation = crate::editor_state::Operation::AddColumn { sheet_index, col_index: None };
-                Ok(editor_state.execute(operation))
+                editor_state.execute(operation);
+                Ok(())
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
         }
@@ -115,17 +121,24 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 }
 
 /// 删除列
-pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, col_index: usize, col_data: Vec<CellValue>) -> Result<OperationResult, AppError> {
+pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, col_index: usize) -> Result<(), AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
+                // 从文件数据中获取列数据（用于撤销）
+                let col_data: Vec<CellValue> = editor_state.file_data.sheets[sheet_index]
+                    .rows
+                    .iter()
+                    .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
+                    .collect();
                 let operation = crate::editor_state::Operation::DeleteColumn {
                     sheet_index,
                     col_index,
                     col_data,
                 };
-                Ok(editor_state.execute(operation))
+                editor_state.execute(operation);
+                Ok(())
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
         }
@@ -140,7 +153,7 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
 }
 
 /// 添加 Sheet
-pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResult, AppError> {
+pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
@@ -150,7 +163,8 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<Operation
                     name: String::new(),
                     sheet_data: None,
                 };
-                Ok(editor_state.execute(operation))
+                editor_state.execute(operation);
+                Ok(())
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
         }
@@ -162,7 +176,7 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<Operation
 }
 
 /// 删除 Sheet
-pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<OperationResult, AppError> {
+pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<(), AppError> {
     let result = {
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
@@ -172,7 +186,8 @@ pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usi
                     sheet_index,
                     sheet_data: SheetData::default(),
                 };
-                Ok(editor_state.execute(operation))
+                editor_state.execute(operation);
+                Ok(())
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
         }

@@ -20,6 +20,7 @@ declare module 'vue' {
     ElInput: typeof import('element-plus/es')['ElInput']
     ElOption: typeof import('element-plus/es')['ElOption']
     ElSelect: typeof import('element-plus/es')['ElSelect']
+    ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
     ElTableV2: typeof import('element-plus/es')['ElTableV2']
     FileButtons: typeof import('./src/components/FileButtons.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

@@ -24,6 +24,17 @@ const emit = defineEmits<{
 const editingValue = ref<Record<string, string>>({});
 const editingCell = ref<string | null>(null);
 
+// 监听 data 变化，更新当前编辑单元格的值（实现实时同步）
+watch(() => props.data, () => {
+  if (props.selectedCell) {
+    const key = getKey(props.selectedCell.row, props.selectedCell.col);
+    if (editingValue.value[key] !== undefined) {
+      // 外部数据变化时，同步更新 editingValue
+      editingValue.value[key] = getCellValue(props.data[props.selectedCell.row]?.[props.selectedCell.col]) || '';
+    }
+  }
+}, { deep: true });
+
 // 容器尺寸
 const containerRef = ref<HTMLElement | null>(null);
 const tableRef = ref<any>(null);

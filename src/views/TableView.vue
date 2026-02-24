@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
-import { useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { ElMessage } from "element-plus";
-import { HomeFilled } from "@element-plus/icons-vue";
-import type { FileData, CellValue, OperationResult, SearchResult } from "@/types";
-import { useFileDataStore } from "@/stores/fileData";
+import {computed, ref, watch} from "vue";
+import {useRouter} from "vue-router";
+import {invoke} from "@tauri-apps/api/core";
+import {open, save} from "@tauri-apps/plugin-dialog";
+import {ElMessage} from "element-plus";
+import {HomeFilled} from "@element-plus/icons-vue";
+import type {CellValue, FileData, OperationResult, SearchResult} from "@/types";
+import {useFileDataStore} from "@/stores/fileData";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
 import StatusBar from "@/components/StatusBar.vue";
@@ -19,6 +19,7 @@ const fileDataStore = useFileDataStore();
 const currentSheetIndex = ref(0);
 const hasChanges = ref(false);
 const isLoading = ref(false);
+const isFileLoading = ref(false);
 const canUndo = ref(false);
 const canRedo = ref(false);
 const searchResults = ref<SearchResult[]>([]);
@@ -58,6 +59,8 @@ const sheetNames = computed(() => {
 
 function parseCellValue(value: string): CellValue {
   if (value === "") return null;
+  // 保留前导零和特殊数字格式（如 0908）
+  if (/^0\d/.test(value)) return value;
   const num = Number(value);
   if (!isNaN(num)) return num;
   if (value.toLowerCase() === "true") return true;
@@ -90,32 +93,66 @@ watch(
   { immediate: true }
 );
 
-// 监听编辑输入框变化，实时更新单元格
+// 防抖定时器
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let debounceValue = { row: -1, col: -1, value: '' };
+
+// 统一的防抖保存函数
+function debouncedSave() {
+  if (debounceValue.row >= 0) {
+    handleCellChange(debounceValue.row, debounceValue.col, debounceValue.value);
+    debounceValue = { row: -1, col: -1, value: '' };
+  }
+}
+
+// 监听编辑输入框变化，实时更新单元格
 watch(cellEditorValue, (newValue) => {
   if (!selectedCell.value || !currentSheet.value) return;
 
   const { row, col } = selectedCell.value;
   const originalValue = currentSheet.value.rows[row]?.[col];
+  const newValueStr = newValue;
+  const originalValueStr = originalValue !== null ? String(originalValue) : "";
 
-  // 清除之前的定时器
+  // 立即更新本地数据，实现实时回显
+  if (newValueStr !== originalValueStr) {
+    currentSheet.value.rows[row][col] = newValue;
+  }
+
+  // 防抖处理，延迟调用 API 保存
+  debounceValue = { row, col, value: newValueStr };
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
-
-  // 防抖处理，避免每次输入都调用 API
-  debounceTimer = setTimeout(() => {
-    const newValueStr = newValue;
-    const originalValueStr = originalValue !== null ? String(originalValue) : "";
-
-    if (newValueStr !== originalValueStr) {
-      handleCellChange(row, col, newValueStr);
-    }
-  }, 300);
+  debounceTimer = setTimeout(debouncedSave, 500);
 });
 
-// 根据增量结果更新本地数据（直接修改，避免深拷贝）
-// Rust 使用 #[serde(tag = "type", content = "data")]，所以需要从 result.data 获取内容
+// 处理单元格直接编辑（也需要防抖保存）
+function handleCellEditing(row: number, col: number, value: string) {
+  if (selectedCell?.value?.row === row && selectedCell?.value?.col === col) {
+    cellEditorValue.value = value;
+  }
+
+  if (!currentSheet.value) return;
+
+  const originalValue = currentSheet.value.rows[row]?.[col];
+  const originalValueStr = originalValue !== null ? String(originalValue) : "";
+
+  // 立即更新本地数据
+  if (value !== originalValueStr) {
+    currentSheet.value.rows[row][col] = value;
+  }
+
+  // 防抖处理，延迟调用 API 保存
+  debounceValue = { row, col, value };
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+  debounceTimer = setTimeout(debouncedSave, 500);
+}
+
+// 根据增量结果更新本地数据
+// 用于 undo/redo 操作，前端已先更新的操作会跳过
 function applyOperation(result: OperationResult) {
   const data = fileData.value;
   if (!data) return;
@@ -127,10 +164,16 @@ function applyOperation(result: OperationResult) {
   if (!sheet) return;
 
   switch (result.type) {
-    case "SetCell": {
-      const { row, col, value } = resultData.cell;
-      if (sheet.rows[row]) {
-        sheet.rows[row][col] = value;
+    case "SetCell":
+    case "AddSheet":
+    case "DeleteSheet":
+      // 前端已实时更新，不需要二次赋值
+      break;
+    case "Batch": {
+      for (const change of resultData.changes) {
+        if (sheet.rows[change.row]) {
+          sheet.rows[change.row][change.col] = change.value;
+        }
       }
       break;
     }
@@ -156,25 +199,7 @@ function applyOperation(result: OperationResult) {
       }
       break;
     }
-    case "AddSheet": {
-      // Sheet is already added via get_file_data, no need to modify
-      break;
-    }
-    case "DeleteSheet": {
-      // Sheet is already deleted via get_file_data, no need to modify
-      break;
-    }
-    case "Batch": {
-      for (const change of resultData.changes) {
-        if (sheet.rows[change.row]) {
-          sheet.rows[change.row][change.col] = change.value;
-        }
-      }
-      break;
-    }
   }
-
-  // 直接修改 in-place，Vue 响应式会自动检测到变化
 }
 
 async function updateEditorState() {
@@ -201,6 +226,7 @@ async function handleOpenFile() {
 
     if (selected) {
       isLoading.value = true;
+      isFileLoading.value = true;
       const result = await invoke<FileData>("read_file", { path: selected });
       fileDataStore.set(result);
       currentSheetIndex.value = 0;
@@ -212,6 +238,7 @@ async function handleOpenFile() {
     ElMessage.error(`Failed to open file: ${error}`);
   } finally {
     isLoading.value = false;
+    isFileLoading.value = false;
   }
 }
 
@@ -269,15 +296,14 @@ async function handleCellChange(rowIndex: number, colIndex: number, value: strin
   const isCurrentCell = selectedCell.value?.row === rowIndex && selectedCell.value?.col === colIndex;
 
   try {
-    isLoading.value = true;
-    const result = await invoke<OperationResult>("set_cell", {
+    // 前端已实时更新本地数据，后端只需保存，不需要返回结果再赋值
+    await invoke("set_cell", {
       sheetIndex: currentSheetIndex.value,
       row: rowIndex,
       col: colIndex,
       oldValue: toRustCellValue(oldValue),
       newValue: toRustCellValue(newValue),
     });
-    applyOperation(result);
 
     // 同步更新上方编辑栏的值
     if (isCurrentCell) {
@@ -296,13 +322,16 @@ async function handleCellChange(rowIndex: number, colIndex: number, value: strin
 async function handleAddRow() {
   if (!currentSheet.value) return;
 
+  // 前端先更新数据
+  const colCount = currentSheet.value.rows[0]?.length || 0;
+  currentSheet.value.rows.push(Array(colCount).fill(null));
+
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("add_row", {
+    await invoke("add_row", {
       sheetIndex: currentSheetIndex.value,
-      rowIndex: currentSheet.value.rows.length,
+      rowIndex: currentSheet.value.rows.length - 1,
     });
-    applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -315,16 +344,15 @@ async function handleAddRow() {
 async function handleDeleteRow(index: number) {
   if (!currentSheet.value) return;
 
-  const rowData = currentSheet.value.rows[index];
+  // 前端先更新数据
+  currentSheet.value.rows.splice(index, 1);
 
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("delete_row", {
+    await invoke("delete_row", {
       sheetIndex: currentSheetIndex.value,
       rowIndex: index,
-      rowData: rowData.map(toRustCellValue),
     });
-    applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -337,12 +365,16 @@ async function handleDeleteRow(index: number) {
 async function handleAddColumn() {
   if (!currentSheet.value) return;
 
+  // 前端先更新数据
+  for (const row of currentSheet.value.rows) {
+    row.push(null);
+  }
+
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("add_column", {
+    await invoke("add_column", {
       sheetIndex: currentSheetIndex.value,
     });
-    applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -355,16 +387,17 @@ async function handleAddColumn() {
 async function handleDeleteColumn(index: number) {
   if (!currentSheet.value) return;
 
-  const colData = currentSheet.value.rows.map(row => row[index]);
+  // 前端先更新数据
+  for (const row of currentSheet.value.rows) {
+    row.splice(index, 1);
+  }
 
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("delete_column", {
+    await invoke("delete_column", {
       sheetIndex: currentSheetIndex.value,
       colIndex: index,
-      colData: colData.map(toRustCellValue),
     });
-    applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -377,20 +410,27 @@ async function handleDeleteColumn(index: number) {
 async function handleAddSheet() {
   if (!fileData.value) return;
 
+  // 前端先更新数据
+  const newSheetIndex = fileData.value.sheets.length;
+  fileData.value.sheets.push({
+    name: `Sheet${newSheetIndex + 1}`,
+    rows: [
+      [null, null, null, null, null],
+      [null, null, null, null, null],
+      [null, null, null, null, null],
+      [null, null, null, null, null],
+      [null, null, null, null, null],
+    ],
+    merges: [],
+  });
+
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("add_sheet");
-    // Get the updated file data from backend to avoid duplication
-    const updatedData = await invoke<FileData>("get_file_data");
-    fileDataStore.set(updatedData);
-    // Switch to the new sheet
-    const resultData = (result as any).data;
-    if (resultData && resultData.sheet_index !== undefined) {
-      // Clear selected cell and editor when switching to new sheet
-      selectedCell.value = null;
-      cellEditorValue.value = "";
-      currentSheetIndex.value = resultData.sheet_index;
-    }
+    await invoke("add_sheet");
+    // Clear selected cell and editor when switching to new sheet
+    selectedCell.value = null;
+    cellEditorValue.value = "";
+    currentSheetIndex.value = newSheetIndex;
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -406,19 +446,18 @@ async function handleDeleteSheet() {
     return;
   }
 
+  // 前端先更新数据
+  const deletedIndex = currentSheetIndex.value;
+  fileData.value.sheets.splice(deletedIndex, 1);
+  // 切换到前一个 sheet（如果删的是第一个就切换到下一个）
+  const newIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
+  currentSheetIndex.value = newIndex;
+
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("delete_sheet", {
-      sheetIndex: currentSheetIndex.value,
+    await invoke("delete_sheet", {
+      sheetIndex: deletedIndex,
     });
-    // Get the updated file data from backend to avoid mismatch
-    const updatedData = await invoke<FileData>("get_file_data");
-    fileDataStore.set(updatedData);
-    // Switch to the new current sheet
-    const resultData = (result as any).data;
-    if (resultData && resultData.sheet_index !== undefined) {
-      currentSheetIndex.value = resultData.sheet_index;
-    }
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -470,12 +509,11 @@ async function handleSearch(query: string, scope: "currentSheet" | "allSheets") 
 
   try {
     isSearching.value = true;
-    const results = await invoke<SearchResult[]>("search", {
+    searchResults.value = await invoke<SearchResult[]>("search", {
       query,
       scope,
       currentSheetIndex: scope === "currentSheet" ? currentSheetIndex.value : null,
     });
-    searchResults.value = results;
   } catch (error) {
     ElMessage.error(`Search failed: ${error}`);
   } finally {
@@ -557,24 +595,34 @@ function handleCellEditorSubmit() {
 
     <main class="content">
       <div class="table-wrapper">
-        <CellEditor
-          v-if="selectedCell && fileData"
-          v-model="cellEditorValue"
-          :cell-position="selectedCell"
-          @submit="handleCellEditorSubmit"
-        />
+        <!-- 骨架屏 -->
+        <div v-if="isFileLoading" class="skeleton-container">
+          <div class="skeleton-header">
+            <el-skeleton :rows="1" animated />
+          </div>
+          <el-skeleton :rows="10" animated />
+        </div>
 
-        <TableEditor
-          :data="tableData"
-          :columns="columns"
-          :selected-cell="selectedCell"
-          :auto-scroll="autoScroll"
-          @cell-change="handleCellChange"
-          @cell-editing="(row, col, value) => { if (selectedCell?.row === row && selectedCell?.col === col) cellEditorValue = value }"
-          @delete-row="handleDeleteRow"
-          @delete-column="handleDeleteColumn"
-          @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
-        />
+        <template v-else>
+          <CellEditor
+            v-if="selectedCell && fileData"
+            v-model="cellEditorValue"
+            :cell-position="selectedCell"
+            @submit="handleCellEditorSubmit"
+          />
+
+          <TableEditor
+            :data="tableData"
+            :columns="columns"
+            :selected-cell="selectedCell"
+            :auto-scroll="autoScroll"
+            @cell-change="handleCellChange"
+            @cell-editing="handleCellEditing"
+            @delete-row="handleDeleteRow"
+            @delete-column="handleDeleteColumn"
+            @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
+          />
+        </template>
       </div>
 
       <!-- Search Results Panel -->
@@ -620,6 +668,17 @@ function handleCellEditorSubmit() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.skeleton-container {
+  padding: 20px;
+  background: #fff;
+}
+
+.skeleton-header {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #ebeef5;
 }
 
 .back-btn {
