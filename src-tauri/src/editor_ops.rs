@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::command::EditorState;
+use crate::editor_state::EditorState;
 use crate::error::AppError;
 use crate::types::OperationResult;
 use crate::state::EditorStateInfo;

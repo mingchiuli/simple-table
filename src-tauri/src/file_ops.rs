@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::command::EditorState;
+use crate::editor_state::EditorState;
 use crate::error::AppError;
 use crate::reader;
 use crate::types::FileData;
@@ -14,7 +14,7 @@ fn spawn_index_build(_file_data: FileData, state: Arc<RwLock<Option<EditorState>
         if let Ok(mut guard) = state.write() {
             if let Some(ref mut editor_state) = *guard {
                 for sheet in &mut editor_state.file_data.sheets {
-                    crate::command::rebuild_sheet_index(sheet);
+                    crate::editor_state::rebuild_sheet_index(sheet);
                 }
             }
         }
@@ -39,7 +39,7 @@ pub fn do_init_file(file_data: FileData) -> Result<(), AppError> {
 }
 
 fn init_editor_state(file_data: FileData) {
-    let state = crate::tauri_commands::get_state();
+    let state = crate::commands::get_state();
     {
         let mut state_guard = state.write().unwrap();
         *state_guard = Some(EditorState::new(file_data.clone()));
@@ -54,7 +54,7 @@ pub fn do_save_file(path: String, file_data: FileData) -> Result<(), AppError> {
     writer::save_file(path, &file_data)?;
 
     // 更新编辑器状态中的文件数据
-    let state = crate::tauri_commands::get_state();
+    let state = crate::commands::get_state();
     let mut state_guard = state.write().unwrap();
     if let Some(editor_state) = state_guard.as_mut() {
         editor_state.file_data = file_data;

@@ -2,9 +2,9 @@ use crate::error::AppError;
 use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope};
 
 /// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）
-static EDITOR_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<Option<crate::command::EditorState>>>> = std::sync::OnceLock::new();
+static EDITOR_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<Option<crate::editor_state::EditorState>>>> = std::sync::OnceLock::new();
 
-pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::command::EditorState>>> {
+pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::editor_state::EditorState>>> {
     EDITOR_STATE.get_or_init(|| std::sync::Arc::new(std::sync::RwLock::new(None))).clone()
 }
 

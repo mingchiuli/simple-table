@@ -1,4 +1,4 @@
-mod command;
+mod editor_state;
 mod error;
 mod reader;
 mod types;
@@ -10,9 +10,9 @@ mod file_ops;
 mod editor_ops;
 mod cell_ops;
 mod search_ops;
-mod tauri_commands;
+mod commands;
 
-use tauri_commands::{get_default_save_path, read_file, save_file, init_file, get_file_data, undo, redo, set_cell, add_row, delete_row, add_column, delete_column, add_sheet, delete_sheet, get_editor_state, search};
+use commands::{get_default_save_path, read_file, save_file, init_file, get_file_data, undo, redo, set_cell, add_row, delete_row, add_column, delete_column, add_sheet, delete_sheet, get_editor_state, search};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

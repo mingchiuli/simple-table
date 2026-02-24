@@ -51,7 +51,7 @@ pub struct MergeRange {
     pub end_col: u16,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct SheetData {
     pub name: String,
     pub rows: Vec<Vec<CellValue>>,
@@ -59,6 +59,13 @@ pub struct SheetData {
     pub merges: Vec<MergeRange>,
     #[serde(skip)]
     pub index: SheetIndex,
+}
+
+impl SheetData {
+    /// 判断是否为空的 sheet（用于判断是否需要保存数据）
+    pub fn is_empty(&self) -> bool {
+        self.name.is_empty()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

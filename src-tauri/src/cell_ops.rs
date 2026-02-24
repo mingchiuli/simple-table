@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::command::EditorState;
+use crate::editor_state::EditorState;
 use crate::error::AppError;
-use crate::types::{CellValue, OperationResult};
+use crate::types::{CellValue, OperationResult, SheetData};
 
 /// 异步重建指定 sheet 的索引
 fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<EditorState>>>) {
@@ -11,7 +11,7 @@ fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<Editor
         if let Ok(mut guard) = state.write() {
             if let Some(ref mut editor_state) = *guard {
                 if let Some(sheet) = editor_state.file_data.sheets.get_mut(sheet_index) {
-                    crate::command::rebuild_sheet_index(sheet);
+                    crate::editor_state::rebuild_sheet_index(sheet);
                 }
             }
         }
@@ -30,7 +30,7 @@ pub fn do_set_cell(
     let mut state = state.write().unwrap();
     match state.as_mut() {
         Some(editor_state) => {
-            let operation = crate::command::Operation::SetCell {
+            let operation = crate::editor_state::Operation::SetCell {
                 sheet_index,
                 row,
                 col,
@@ -49,7 +49,7 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::command::Operation::AddRow {
+                let operation = crate::editor_state::Operation::AddRow {
                     sheet_index,
                     row_index,
                 };
@@ -73,7 +73,7 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::command::Operation::DeleteRow {
+                let operation = crate::editor_state::Operation::DeleteRow {
                     sheet_index,
                     row_index,
                     row_data,
@@ -98,7 +98,8 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::command::Operation::AddColumn { sheet_index };
+                // col_index 会在 execute 中自动计算
+                let operation = crate::editor_state::Operation::AddColumn { sheet_index, col_index: None };
                 Ok(editor_state.execute(operation))
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
@@ -119,7 +120,7 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::command::Operation::DeleteColumn {
+                let operation = crate::editor_state::Operation::DeleteColumn {
                     sheet_index,
                     col_index,
                     col_data,
@@ -144,7 +145,11 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<Operation
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::command::Operation::AddSheet;
+                // 传入空字符串和 None，让 execute 生成名称并创建空 sheet
+                let operation = crate::editor_state::Operation::AddSheet {
+                    name: String::new(),
+                    sheet_data: None,
+                };
                 Ok(editor_state.execute(operation))
             }
             None => Err(AppError::Internal("No file loaded".to_string())),
@@ -162,7 +167,11 @@ pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usi
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::command::Operation::DeleteSheet { sheet_index };
+                // sheet_data 为空，会在 execute 中自动保存
+                let operation = crate::editor_state::Operation::DeleteSheet {
+                    sheet_index,
+                    sheet_data: SheetData::default(),
+                };
                 Ok(editor_state.execute(operation))
             }
             None => Err(AppError::Internal("No file loaded".to_string())),

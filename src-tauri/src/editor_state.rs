@@ -13,7 +13,7 @@ fn cell_to_string(cell: &CellValue) -> String {
 }
 
 /// 重建单个 sheet 的索引（公开给 tauri_commands 调用）
-pub fn rebuild_sheet_index(sheet: &mut crate::types::SheetData) {
+pub fn rebuild_sheet_index(sheet: &mut SheetData) {
     let mut inverted_index: HashMap<String, Vec<CellPosition>> = HashMap::new();
 
     for (row_idx, row) in sheet.rows.iter().enumerate() {
@@ -91,6 +91,8 @@ pub enum Operation {
     /// 添加列
     AddColumn {
         sheet_index: usize,
+        /// 记录添加的列索引，用于撤销
+        col_index: Option<usize>,
     },
     /// 删除列
     DeleteColumn {
@@ -98,11 +100,17 @@ pub enum Operation {
         col_index: usize,
         col_data: Vec<CellValue>,
     },
-    /// 添加 Sheet
-    AddSheet,
-    /// 删除 Sheet
+    /// 添加 Sheet（带数据，用于撤销时恢复）
+    AddSheet {
+        /// sheet 名称（新建时使用）
+        name: String,
+        /// 完整的 sheet 数据（用于撤销恢复时）
+        sheet_data: Option<SheetData>,
+    },
+    /// 删除 Sheet（带完整数据，用于撤销时恢复）
     DeleteSheet {
         sheet_index: usize,
+        sheet_data: SheetData,
     },
 }
 
@@ -164,21 +172,24 @@ impl Operation {
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn { sheet_index } => {
+            Operation::AddColumn { sheet_index, col_index } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     for row in &mut sheet.rows {
                         row.push(CellValue::Null);
                     }
                     // 索引重建由调用方异步处理
                 }
-                let col_index = file_data.sheets
-                    .get(*sheet_index)
-                    .and_then(|s| s.rows.first())
-                    .map(|r| r.len().saturating_sub(1))
-                    .unwrap_or(0);
+                // 使用传入的 col_index 或计算最后一列的索引
+                let actual_col_index = col_index.unwrap_or_else(|| {
+                    file_data.sheets
+                        .get(*sheet_index)
+                        .and_then(|s| s.rows.first())
+                        .map(|r| r.len().saturating_sub(1))
+                        .unwrap_or(0)
+                });
                 OperationResult::AddColumn {
                     sheet_index: *sheet_index,
-                    column: ColumnChange { index: col_index },
+                    column: ColumnChange { index: actual_col_index },
                 }
             }
             Operation::DeleteColumn { sheet_index, col_index, .. } => {
@@ -195,23 +206,33 @@ impl Operation {
                     column_index: *col_index,
                 }
             }
-            Operation::AddSheet => {
-                // 生成新 sheet 名称
-                let sheet_count = file_data.sheets.len();
-                let new_sheet_name = format!("Sheet{}", sheet_count + 1);
+            Operation::AddSheet { name, sheet_data } => {
+                // 如果有完整的 sheet_data，直接插入；否则创建空 sheet
+                let (new_sheet, sheet_name) = if let Some(data) = sheet_data {
+                    (data.clone(), data.name.clone())
+                } else {
+                    // 生成新 sheet 名称
+                    let final_name = if name.is_empty() {
+                        let sheet_count = file_data.sheets.len();
+                        format!("Sheet{}", sheet_count + 1)
+                    } else {
+                        name.clone()
+                    };
 
-                // 创建新的空 sheet
-                let new_sheet = SheetData {
-                    name: new_sheet_name.clone(),
-                    rows: vec![
-                        vec![CellValue::Null; 5],
-                        vec![CellValue::Null; 5],
-                        vec![CellValue::Null; 5],
-                        vec![CellValue::Null; 5],
-                        vec![CellValue::Null; 5],
-                    ],
-                    merges: vec![],
-                    index: SheetIndex::default(),
+                    // 创建新的空 sheet
+                    let new_sheet = SheetData {
+                        name: final_name.clone(),
+                        rows: vec![
+                            vec![CellValue::Null; 5],
+                            vec![CellValue::Null; 5],
+                            vec![CellValue::Null; 5],
+                            vec![CellValue::Null; 5],
+                            vec![CellValue::Null; 5],
+                        ],
+                        merges: vec![],
+                        index: SheetIndex::default(),
+                    };
+                    (new_sheet, final_name)
                 };
 
                 let new_sheet_index = file_data.sheets.len();
@@ -219,25 +240,32 @@ impl Operation {
 
                 OperationResult::AddSheet {
                     sheet_index: new_sheet_index,
-                    name: new_sheet_name,
+                    name: sheet_name,
                 }
             }
-            Operation::DeleteSheet { sheet_index } => {
-                // Don't allow deleting the last sheet
-                if file_data.sheets.len() <= 1 {
+            Operation::DeleteSheet { sheet_index, sheet_data } => {
+                // Don't allow deleting the last sheet (仅对正常删除操作)
+                if file_data.sheets.len() <= 1 && sheet_data.is_empty() {
                     return OperationResult::AddSheet {
                         sheet_index: 0,
                         name: "Error".to_string(),
                     };
                 }
 
-                let _removed_sheet = file_data.sheets.remove(*sheet_index);
-
-                // Adjust current sheet index if needed
-                let new_current_index = if *sheet_index >= file_data.sheets.len() {
-                    file_data.sheets.len() - 1
+                // 如果 sheet_index 是 MAX，说明这是 AddSheet 的撤销操作，需要删除最后一个 sheet
+                let actual_index = if *sheet_index == usize::MAX {
+                    file_data.sheets.len().saturating_sub(1)
                 } else {
                     *sheet_index
+                };
+
+                let _removed_sheet = file_data.sheets.remove(actual_index);
+
+                // Adjust current sheet index if needed
+                let new_current_index = if actual_index >= file_data.sheets.len() {
+                    file_data.sheets.len().saturating_sub(1)
+                } else {
+                    actual_index
                 };
 
                 OperationResult::DeleteSheet {
@@ -263,7 +291,7 @@ impl Operation {
                 Operation::DeleteRow {
                     sheet_index: *sheet_index,
                     row_index: *row_index,
-                    row_data: vec![],
+                    row_data: vec![], // AddRow 没有原始数据，DeleteRow 执行时从 file_data 获取
                 }
             }
             Operation::DeleteRow { sheet_index, row_index, .. } => {
@@ -272,25 +300,33 @@ impl Operation {
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn { sheet_index } => {
+            Operation::AddColumn { sheet_index, col_index } => {
                 Operation::DeleteColumn {
                     sheet_index: *sheet_index,
-                    col_index: 0,
+                    // 使用添加列时记录的索引
+                    col_index: col_index.unwrap_or(0),
                     col_data: vec![],
                 }
             }
             Operation::DeleteColumn { sheet_index, .. } => {
                 Operation::AddColumn {
                     sheet_index: *sheet_index,
+                    col_index: None,
                 }
             }
-            Operation::AddSheet => {
-                // Undo for add sheet not supported in this simplified version
-                Operation::AddSheet
+            Operation::AddSheet { .. } => {
+                // AddSheet 的撤销：删除最后添加的 sheet（新建的 sheet 是空的，不需要保存数据）
+                Operation::DeleteSheet {
+                    sheet_index: usize::MAX,
+                    sheet_data: SheetData::default(),
+                }
             }
-            Operation::DeleteSheet { .. } => {
-                // Undo for delete sheet not supported in this simplified version
-                Operation::AddSheet
+            Operation::DeleteSheet { sheet_index: _, sheet_data } => {
+                // DeleteSheet 的撤销：恢复被删除的 sheet（使用保存的完整数据）
+                Operation::AddSheet {
+                    name: sheet_data.name.clone(),
+                    sheet_data: Some(sheet_data.clone()),
+                }
             }
         }
     }
@@ -320,7 +356,65 @@ impl EditorState {
     }
 
     /// 执行操作并记录到历史，返回增量结果
-    pub fn execute(&mut self, operation: Operation) -> OperationResult {
+    pub fn execute(&mut self, mut operation: Operation) -> OperationResult {
+        // 在执行操作前，先准备好需要的数据，以便撤销/重做
+        match &operation {
+            Operation::DeleteRow { sheet_index, row_index, row_data } => {
+                if row_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
+                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
+                        if let Some(deleted_row) = sheet.rows.get(*row_index) {
+                            operation = Operation::DeleteRow {
+                                sheet_index: *sheet_index,
+                                row_index: *row_index,
+                                row_data: deleted_row.clone(),
+                            };
+                        }
+                    }
+                }
+            }
+            Operation::DeleteColumn { sheet_index, col_index, col_data } => {
+                if col_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
+                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
+                        let deleted_col: Vec<CellValue> = sheet.rows
+                            .iter()
+                            .map(|row| row.get(*col_index).cloned().unwrap_or(CellValue::Null))
+                            .collect();
+                        operation = Operation::DeleteColumn {
+                            sheet_index: *sheet_index,
+                            col_index: *col_index,
+                            col_data: deleted_col,
+                        };
+                    }
+                }
+            }
+            Operation::AddColumn { sheet_index, col_index } => {
+                // AddColumn 添加列到末尾，需要记录正确的列索引用于撤销
+                if col_index.is_none() && *sheet_index < self.file_data.sheets.len() {
+                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
+                        let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                        if col_count > 0 {
+                            operation = Operation::AddColumn {
+                                sheet_index: *sheet_index,
+                                col_index: Some(col_count - 1), // 记录添加的列索引
+                            };
+                        }
+                    }
+                }
+            }
+            Operation::DeleteSheet { sheet_index, sheet_data } => {
+                // 如果 sheet_data 为空，说明是正常的删除操作，需要保存完整的 sheet 数据
+                if sheet_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
+                    if let Some(removed_sheet) = self.file_data.sheets.get(*sheet_index) {
+                        operation = Operation::DeleteSheet {
+                            sheet_index: *sheet_index,
+                            sheet_data: removed_sheet.clone(),
+                        };
+                    }
+                }
+            }
+            _ => {}
+        }
+
         let result = operation.execute(&mut self.file_data);
         self.history.push(operation);
         self.redo_stack.clear();
