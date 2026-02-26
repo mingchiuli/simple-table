@@ -93,6 +93,8 @@ pub enum Operation {
         sheet_index: usize,
         /// 记录添加的列索引，用于撤销
         col_index: Option<usize>,
+        /// 添加的列数据（用于撤销时恢复）
+        col_data: Vec<CellValue>,
     },
     /// 删除列
     DeleteColumn {
@@ -172,7 +174,7 @@ impl Operation {
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn { sheet_index, col_index } => {
+            Operation::AddColumn { sheet_index, col_index, .. } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     for row in &mut sheet.rows {
                         row.push(CellValue::Null);
@@ -300,18 +302,19 @@ impl Operation {
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn { sheet_index, col_index } => {
+            Operation::AddColumn { sheet_index, col_index, col_data } => {
                 Operation::DeleteColumn {
                     sheet_index: *sheet_index,
                     // 使用添加列时记录的索引
                     col_index: col_index.unwrap_or(0),
-                    col_data: vec![],
+                    col_data: col_data.clone(),
                 }
             }
-            Operation::DeleteColumn { sheet_index, .. } => {
+            Operation::DeleteColumn { sheet_index, col_index, col_data } => {
                 Operation::AddColumn {
                     sheet_index: *sheet_index,
-                    col_index: None,
+                    col_index: Some(*col_index),
+                    col_data: col_data.clone(),
                 }
             }
             Operation::AddSheet { .. } => {
@@ -359,6 +362,30 @@ impl EditorState {
     pub fn execute(&mut self, mut operation: Operation) -> OperationResult {
         // 在执行操作前，先准备好需要的数据，以便撤销/重做
         match &operation {
+            // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
+            Operation::SetCell { sheet_index, row, col, old_value, new_value } => {
+                if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
+                    if let Some(real_old) = sheet.rows.get(*row).and_then(|r| r.get(*col)) {
+                        // 如果新值和旧值相同，不需要记录到 history
+                        if real_old == new_value {
+                            // 返回结果但不记录到 history
+                            let result = operation.execute(&mut self.file_data);
+                            self.update_flags();
+                            return result;
+                        }
+                        // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
+                        if real_old != old_value {
+                            operation = Operation::SetCell {
+                                sheet_index: *sheet_index,
+                                row: *row,
+                                col: *col,
+                                old_value: real_old.clone(),
+                                new_value: new_value.clone(),
+                            };
+                        }
+                    }
+                }
+            }
             Operation::DeleteRow { sheet_index, row_index, row_data } => {
                 if row_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
@@ -387,15 +414,21 @@ impl EditorState {
                     }
                 }
             }
-            Operation::AddColumn { sheet_index, col_index } => {
-                // AddColumn 添加列到末尾，需要记录正确的列索引用于撤销
+            Operation::AddColumn { sheet_index, col_index, .. } => {
+                // AddColumn 添加列到末尾，需要记录正确的列索引和列数据用于撤销
                 if col_index.is_none() && *sheet_index < self.file_data.sheets.len() {
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
                         let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                         if col_count > 0 {
+                            // 获取添加的列数据（全是 Null）
+                            let added_col: Vec<CellValue> = sheet.rows
+                                .iter()
+                                .map(|row| row.last().cloned().unwrap_or(CellValue::Null))
+                                .collect();
                             operation = Operation::AddColumn {
                                 sheet_index: *sheet_index,
                                 col_index: Some(col_count - 1), // 记录添加的列索引
+                                col_data: added_col,
                             };
                         }
                     }

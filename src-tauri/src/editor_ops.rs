@@ -6,6 +6,33 @@ use crate::error::AppError;
 use crate::types::OperationResult;
 use crate::state::EditorStateInfo;
 
+/// 异步重建指定 sheet 的索引
+fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<EditorState>>>) {
+    std::thread::spawn(move || {
+        if let Ok(mut guard) = state.write() {
+            if let Some(ref mut editor_state) = *guard {
+                if let Some(sheet) = editor_state.file_data.sheets.get_mut(sheet_index) {
+                    crate::editor_state::rebuild_sheet_index(sheet);
+                }
+            }
+        }
+    });
+}
+
+/// 从 OperationResult 中提取 sheet_index
+fn extract_sheet_index(result: &OperationResult) -> usize {
+    match result {
+        OperationResult::SetCell { sheet_index, .. } => *sheet_index,
+        OperationResult::AddRow { sheet_index, .. } => *sheet_index,
+        OperationResult::DeleteRow { sheet_index, .. } => *sheet_index,
+        OperationResult::AddColumn { sheet_index, .. } => *sheet_index,
+        OperationResult::DeleteColumn { sheet_index, .. } => *sheet_index,
+        OperationResult::AddSheet { sheet_index, .. } => *sheet_index,
+        OperationResult::DeleteSheet { sheet_index } => *sheet_index,
+        OperationResult::Batch { sheet_index, .. } => *sheet_index,
+    }
+}
+
 /// 获取编辑器状态信息
 fn get_editor_state_info(state: &Arc<RwLock<Option<EditorState>>>) -> Option<EditorStateInfo> {
     let state = state.read().unwrap();
@@ -22,30 +49,46 @@ pub fn do_get_editor_state(state: Arc<RwLock<Option<EditorState>>>) -> Result<Op
 
 /// 撤销操作
 pub fn do_undo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResult, AppError> {
-    let mut state = state.write().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            if let Some(result) = editor_state.undo() {
-                Ok(result)
-            } else {
-                Err(AppError::Internal("Nothing to undo".to_string()))
+    let sheet_index = {
+        let mut state = state.write().unwrap();
+        match state.as_mut() {
+            Some(editor_state) => {
+                if let Some(result) = editor_state.undo() {
+                    let idx = extract_sheet_index(&result);
+                    (result, idx)
+                } else {
+                    return Err(AppError::Internal("Nothing to undo".to_string()));
+                }
             }
+            None => return Err(AppError::Internal("No file loaded".to_string())),
         }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    };
+
+    // 异步重建索引
+    spawn_rebuild_sheet_index(sheet_index.1, state);
+
+    Ok(sheet_index.0)
 }
 
 /// 重做操作
 pub fn do_redo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResult, AppError> {
-    let mut state = state.write().unwrap();
-    match state.as_mut() {
-        Some(editor_state) => {
-            if let Some(result) = editor_state.redo() {
-                Ok(result)
-            } else {
-                Err(AppError::Internal("Nothing to redo".to_string()))
+    let sheet_index = {
+        let mut state = state.write().unwrap();
+        match state.as_mut() {
+            Some(editor_state) => {
+                if let Some(result) = editor_state.redo() {
+                    let idx = extract_sheet_index(&result);
+                    (result, idx)
+                } else {
+                    return Err(AppError::Internal("Nothing to redo".to_string()));
+                }
             }
+            None => return Err(AppError::Internal("No file loaded".to_string())),
         }
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
+    };
+
+    // 异步重建索引
+    spawn_rebuild_sheet_index(sheet_index.1, state);
+
+    Ok(sheet_index.0)
 }

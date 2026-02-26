@@ -103,8 +103,8 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                // col_index 会在 execute 中自动计算
-                let operation = crate::editor_state::Operation::AddColumn { sheet_index, col_index: None };
+                // col_index 和 col_data 会在 execute 中自动计算和保存
+                let operation = crate::editor_state::Operation::AddColumn { sheet_index, col_index: None, col_data: vec![] };
                 editor_state.execute(operation);
                 Ok(())
             }

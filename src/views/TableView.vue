@@ -95,14 +95,20 @@ watch(
 
 // 防抖定时器
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let debounceValue = { row: -1, col: -1, value: '' };
+// 使用 Map 存储每个单元格的待保存值
+let pendingChanges = new Map<string, { row: number; col: number; value: string }>();
+
+// 生成单元格 key
+function getCellKey(row: number, col: number) {
+  return `${row},${col}`;
+}
 
 // 统一的防抖保存函数
 function debouncedSave() {
-  if (debounceValue.row >= 0) {
-    handleCellChange(debounceValue.row, debounceValue.col, debounceValue.value);
-    debounceValue = { row: -1, col: -1, value: '' };
+  for (const { row, col, value } of pendingChanges.values()) {
+    handleCellChange(row, col, value);
   }
+  pendingChanges.clear();
 }
 
 // 监听编辑输入框变化，实时更新单元格
@@ -120,7 +126,7 @@ watch(cellEditorValue, (newValue) => {
   }
 
   // 防抖处理，延迟调用 API 保存
-  debounceValue = { row, col, value: newValueStr };
+  pendingChanges.set(getCellKey(row, col), { row, col, value: newValueStr });
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
@@ -144,7 +150,7 @@ function handleCellEditing(row: number, col: number, value: string) {
   }
 
   // 防抖处理，延迟调用 API 保存
-  debounceValue = { row, col, value };
+  pendingChanges.set(getCellKey(row, col), { row, col, value });
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
@@ -164,11 +170,27 @@ function applyOperation(result: OperationResult) {
   if (!sheet) return;
 
   switch (result.type) {
-    case "SetCell":
-    case "AddSheet":
-    case "DeleteSheet":
-      // 前端已实时更新，不需要二次赋值
+    case "SetCell": {
+      // 需要同步后端返回的值，确保数据一致
+      if (sheet.rows[resultData.cell.row]) {
+        sheet.rows[resultData.cell.row][resultData.cell.col] = resultData.cell.value;
+      }
       break;
+    }
+    case "AddSheet": {
+      // AddSheet: 前端已添加，后端也添加了，需要更新 sheet 名称（可能不同步）
+      sheet.name = resultData.name;
+      break;
+    }
+    case "DeleteSheet": {
+      // DeleteSheet: 需要删除前端的 sheet
+      data.sheets.splice(resultData.sheet_index, 1);
+      // 如果当前 sheet 索引超出范围，调整到最后一个
+      if (currentSheetIndex.value >= data.sheets.length) {
+        currentSheetIndex.value = Math.max(0, data.sheets.length - 1);
+      }
+      break;
+    }
     case "Batch": {
       for (const change of resultData.changes) {
         if (sheet.rows[change.row]) {
@@ -189,7 +211,7 @@ function applyOperation(result: OperationResult) {
     case "AddColumn": {
       const colIndex = resultData.column.index;
       for (const row of sheet.rows) {
-        row.splice(colIndex + 1, 0, null);
+        row.splice(colIndex, 0, null);
       }
       break;
     }
