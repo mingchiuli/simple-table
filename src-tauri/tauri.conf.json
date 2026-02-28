@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Simple Table",
-  "version": "0.3.4",
-  "identifier": "org.chiu.simple-table",
+  "version": "0.3.5",
+  "identifier": "wiki.chiu.simple-table",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

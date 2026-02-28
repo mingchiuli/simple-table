@@ -1,16 +1,32 @@
 <script setup lang="ts">
-defineProps<{
+import { nextTick, ref, watch } from 'vue';
+
+const props = withDefaults(defineProps<{
   modelValue: string;
-}>();
+  autoFocus?: boolean;
+}>(), {
+  autoFocus: true
+});
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void;
   (e: 'blur'): void;
 }>();
+
+const inputRef = ref<InstanceType<typeof import('element-plus').ElInput> | null>(null);
+
+watch(() => props.autoFocus, (newVal) => {
+  if (newVal) {
+    nextTick(() => {
+      inputRef.value?.focus();
+    });
+  }
+});
 </script>
 
 <template>
   <el-input
+    ref="inputRef"
     :model-value="modelValue"
     size="small"
     class="cell-input"

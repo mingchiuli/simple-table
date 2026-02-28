@@ -23,6 +23,7 @@ const emit = defineEmits<{
 // 本地编辑状态
 const editingValue = ref<Record<string, string>>({});
 const editingCell = ref<string | null>(null);
+const isManualClick = ref(false); // 是否手动点击触发的编辑
 
 // 监听 data 变化，更新当前编辑单元格的值（实现实时同步）
 watch(() => props.data, () => {
@@ -46,8 +47,12 @@ watch(() => props.selectedCell, async (newCell) => {
   if (newCell === null) {
     editingCell.value = null;
     editingValue.value = {};
+    isManualClick.value = false;
     return;
   }
+
+  // 外部触发（如搜索侧边栏），不自动聚焦
+  isManualClick.value = false;
 
   // Enter edit mode when a cell is selected
   if (newCell) {
@@ -58,21 +63,18 @@ watch(() => props.selectedCell, async (newCell) => {
 
     // Only scroll when autoScroll is true (e.g., from search results)
     if (props.autoScroll && tableRef.value) {
-      await nextTick();
-      setTimeout(() => {
-        const rowHeight = 40;
-        const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
-        const rowNumberWidth = 60;
-        const colWidth = 120;
-        const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
+      const rowHeight = 40;
+      const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
+      const rowNumberWidth = 60;
+      const colWidth = 120;
+      const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
 
-        if (typeof tableRef.value.scrollToTop === 'function') {
-          tableRef.value.scrollToTop(Math.max(0, scrollTop));
-        }
-        if (typeof tableRef.value.scrollToLeft === 'function') {
-          tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
-        }
-      }, 60);
+      if (typeof tableRef.value.scrollToTop === 'function') {
+        tableRef.value.scrollToTop(Math.max(0, scrollTop));
+      }
+      if (typeof tableRef.value.scrollToLeft === 'function') {
+        tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
+      }
     }
   }
 }, { deep: true });
@@ -160,6 +162,11 @@ function handleCellClick(rowIndex: number, colIndex: number) {
     // 选中单元格，进入编辑模式
     editingCell.value = key;
   }
+
+  // 标记为手动点击，启用自动聚焦（在 watch 之后执行）
+  nextTick(() => {
+    isManualClick.value = true;
+  });
 }
 
 // 列配置
@@ -225,6 +232,7 @@ const rowHeight = 40;
           </div>
           <EditableCell
             v-else
+            :auto-focus="isManualClick"
             :model-value="editingValue[getKey(rowIndex, column.dataKey)] ?? getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey])"
             @update:model-value="(val: string) => handleInput(rowIndex, column.dataKey, val)"
             @blur="handleBlur(rowIndex, column.dataKey, editingValue[getKey(rowIndex, column.dataKey)] ?? getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey]))"
