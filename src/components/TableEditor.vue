@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue';
 import type { CellValue } from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
@@ -44,10 +44,15 @@ const tableSize = ref({ width: 800, height: 600 });
 // 监听选中单元格变化，进入编辑模式
 watch(() => props.selectedCell, async (newCell) => {
   // Clear edit state when switching sheets (selectedCell becomes null)
-  if (newCell === null) {
+  if (!newCell) {
     editingCell.value = null;
     editingValue.value = {};
-    isManualClick.value = false;
+    return;
+  }
+
+  // 如果是本地点击触发的（selectedCell 变化但 editingCell 已同步），不重复处理
+  const newKey = getKey(newCell.row, newCell.col);
+  if (editingCell.value === newKey) {
     return;
   }
 
@@ -55,26 +60,24 @@ watch(() => props.selectedCell, async (newCell) => {
   isManualClick.value = false;
 
   // Enter edit mode when a cell is selected
-  if (newCell) {
-    const key = getKey(newCell.row, newCell.col);
-    editingCell.value = key;
-    editingValue.value = {};
-    editingValue.value[key] = getCellValue(props.data[newCell.row]?.[newCell.col]) || '';
+  const key = getKey(newCell.row, newCell.col);
+  editingCell.value = key;
+  editingValue.value = {};
+  editingValue.value[key] = getCellValue(props.data[newCell.row]?.[newCell.col]) || '';
 
-    // Only scroll when autoScroll is true (e.g., from search results)
-    if (props.autoScroll && tableRef.value) {
-      const rowHeight = 40;
-      const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
-      const rowNumberWidth = 60;
-      const colWidth = 120;
-      const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
+  // Only scroll when autoScroll is true (e.g., from search results)
+  if (props.autoScroll && tableRef.value) {
+    const rowHeight = 40;
+    const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
+    const rowNumberWidth = 60;
+    const colWidth = 120;
+    const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
 
-      if (typeof tableRef.value.scrollToTop === 'function') {
-        tableRef.value.scrollToTop(Math.max(0, scrollTop));
-      }
-      if (typeof tableRef.value.scrollToLeft === 'function') {
-        tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
-      }
+    if (typeof tableRef.value.scrollToTop === 'function') {
+      tableRef.value.scrollToTop(Math.max(0, scrollTop));
+    }
+    if (typeof tableRef.value.scrollToLeft === 'function') {
+      tableRef.value.scrollToLeft(Math.max(0, scrollLeft));
     }
   }
 }, { deep: true });
@@ -161,12 +164,9 @@ function handleCellClick(rowIndex: number, colIndex: number) {
   } else {
     // 选中单元格，进入编辑模式
     editingCell.value = key;
-  }
-
-  // 标记为手动点击，启用自动聚焦（在 watch 之后执行）
-  nextTick(() => {
+    // 标记为手动点击，启用自动聚焦
     isManualClick.value = true;
-  });
+  }
 }
 
 // 列配置

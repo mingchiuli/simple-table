@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { ref, onMounted } from 'vue';
 
 const props = withDefaults(defineProps<{
   modelValue: string;
@@ -15,11 +15,9 @@ const emit = defineEmits<{
 
 const inputRef = ref<InstanceType<typeof import('element-plus').ElInput> | null>(null);
 
-watch(() => props.autoFocus, (newVal) => {
-  if (newVal) {
-    nextTick(() => {
-      inputRef.value?.focus();
-    });
+onMounted(() => {
+  if (props.autoFocus) {
+    inputRef.value?.focus();
   }
 });
 </script>
