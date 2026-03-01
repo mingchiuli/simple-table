@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::editor_state::EditorState;
+use crate::state::editor_state::EditorState;
 use crate::error::AppError;
-use crate::types::{SearchResult, SearchScope};
+use crate::types::{SearchResult, SearchScope, CellValue};
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -18,12 +18,12 @@ fn col_to_letter(col: usize) -> String {
 }
 
 /// 将单元格值转换为字符串
-fn cell_to_string(cell: &crate::types::CellValue) -> String {
+fn cell_to_string(cell: &CellValue) -> String {
     match cell {
-        crate::types::CellValue::Null => String::new(),
-        crate::types::CellValue::String(s) => s.clone(),
-        crate::types::CellValue::Number(n) => n.to_string(),
-        crate::types::CellValue::Boolean(b) => b.to_string(),
+        CellValue::Null => String::new(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Number(n) => n.to_string(),
+        CellValue::Boolean(b) => b.to_string(),
     }
 }
 

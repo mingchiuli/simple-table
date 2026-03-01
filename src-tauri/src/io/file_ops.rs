@@ -1,16 +1,12 @@
-use std::path::Path;
-
-use crate::editor_state::EditorState;
 use crate::error::AppError;
-use crate::index_ops::spawn_rebuild_all_sheets_index;
-use crate::reader;
+use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
+use crate::state::editor_state::EditorState;
 use crate::types::FileData;
-use crate::writer;
 
 /// 读取文件
 pub fn do_read_file(path: String) -> Result<FileData, AppError> {
-    let path = Path::new(&path);
-    let file_data = reader::read_file(path)?;
+    let path = std::path::Path::new(&path);
+    let file_data = super::reader::read_file(path)?;
 
     // 初始化编辑器状态
     init_editor_state(file_data.clone());
@@ -36,8 +32,8 @@ fn init_editor_state(file_data: FileData) {
 
 /// 保存文件
 pub fn do_save_file(path: String, file_data: FileData) -> Result<(), AppError> {
-    let path = Path::new(&path);
-    writer::save_file(path, &file_data)?;
+    let path = std::path::Path::new(&path);
+    super::writer::save_file(path, &file_data)?;
 
     // 更新编辑器状态中的文件数据
     let state = crate::commands::get_state();

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::editor_state::EditorState;
-use crate::index_ops::spawn_rebuild_sheet_index;
+use crate::ops::index_ops::spawn_rebuild_sheet_index;
 use crate::error::AppError;
+use crate::state::editor_state::{EditorState, Operation};
 use crate::types::{CellValue, SheetData};
 
 /// 设置单元格值
@@ -18,7 +18,7 @@ pub fn do_set_cell(
     let mut state = state.write().unwrap();
     match state.as_mut() {
         Some(editor_state) => {
-            let operation = crate::editor_state::Operation::SetCell {
+            let operation = Operation::SetCell {
                 sheet_index,
                 row,
                 col,
@@ -38,7 +38,7 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let operation = crate::editor_state::Operation::AddRow {
+                let operation = Operation::AddRow {
                     sheet_index,
                     row_index,
                 };
@@ -65,7 +65,7 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
             Some(editor_state) => {
                 // 从文件数据中获取行数据（用于撤销）
                 let row_data = editor_state.file_data.sheets[sheet_index].rows[row_index].clone();
-                let operation = crate::editor_state::Operation::DeleteRow {
+                let operation = Operation::DeleteRow {
                     sheet_index,
                     row_index,
                     row_data,
@@ -92,7 +92,7 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // col_index 和 col_data 会在 execute 中自动计算和保存
-                let operation = crate::editor_state::Operation::AddColumn { sheet_index, col_index: None, col_data: vec![] };
+                let operation = Operation::AddColumn { sheet_index, col_index: None, col_data: vec![] };
                 editor_state.execute(operation);
                 Ok(())
             }
@@ -120,7 +120,7 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
                     .iter()
                     .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
                     .collect();
-                let operation = crate::editor_state::Operation::DeleteColumn {
+                let operation = Operation::DeleteColumn {
                     sheet_index,
                     col_index,
                     col_data,
@@ -147,7 +147,7 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppEr
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // 传入空字符串和 None，让 execute 生成名称并创建空 sheet
-                let operation = crate::editor_state::Operation::AddSheet {
+                let operation = Operation::AddSheet {
                     name: String::new(),
                     sheet_data: None,
                 };
@@ -170,7 +170,7 @@ pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usi
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // sheet_data 为空，会在 execute 中自动保存
-                let operation = crate::editor_state::Operation::DeleteSheet {
+                let operation = Operation::DeleteSheet {
                     sheet_index,
                     sheet_data: SheetData::default(),
                 };

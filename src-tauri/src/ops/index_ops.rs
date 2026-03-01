@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::editor_state::EditorState;
+use crate::state::editor_state::EditorState;
 use crate::types::{CellPosition, CellValue, SheetData};
 
 /// 将单元格值转换为字符串

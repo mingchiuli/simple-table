@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use crate::editor_state::EditorState;
-use crate::index_ops::spawn_rebuild_sheet_index;
+use crate::ops::index_ops::spawn_rebuild_sheet_index;
 use crate::error::AppError;
+use crate::state::editor_state::EditorState;
+use crate::state::state::EditorStateInfo;
 use crate::types::OperationResult;
-use crate::state::EditorStateInfo;
 
 /// 从 OperationResult 中提取 sheet_index
 fn extract_sheet_index(result: &OperationResult) -> usize {
