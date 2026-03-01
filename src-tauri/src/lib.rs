@@ -1,14 +1,15 @@
 mod editor_state;
 mod error;
+mod index_ops;
 mod reader;
 mod types;
 mod writer;
 
-// Command modules
+// Command modules (depends on index_ops)
 mod state;
-mod file_ops;
 mod editor_ops;
 mod cell_ops;
+mod file_ops;
 mod search_ops;
 mod commands;
 

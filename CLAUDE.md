@@ -42,6 +42,25 @@ npm run preview  # Preview production build
 ### Backend Structure (`src-tauri/`)
 - Rust backend for file I/O and Excel processing using calamine and xlsxwriter
 
+## Compilation Check
+
+**Priority**: Use IDE MCP interface for compilation checks first, fallback to actual compilation only when MCP is unavailable.
+
+### IDE MCP (Recommended)
+```bash
+# Use mcp__ide__getDiagnostics to check for compilation errors
+mcp__ide__getDiagnostics({ uri: "file:///path/to/file.rs" })
+```
+- Returns `[]` if no errors, otherwise returns diagnostic messages
+- Faster and provides real-time feedback from the IDE's language server
+
+### Fallback: Cargo
+```bash
+# Only use when IDE MCP is unavailable
+cargo check
+cargo build
+```
+
 ## Commit Standards
 
 ### Commit Message Format

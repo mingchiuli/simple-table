@@ -1,25 +1,11 @@
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::RwLock;
 
 use crate::editor_state::EditorState;
 use crate::error::AppError;
+use crate::index_ops::spawn_rebuild_all_sheets_index;
 use crate::reader;
 use crate::types::FileData;
 use crate::writer;
-
-/// 异步构建索引（后台线程）
-fn spawn_index_build(_file_data: FileData, state: Arc<RwLock<Option<EditorState>>>) {
-    std::thread::spawn(move || {
-        if let Ok(mut guard) = state.write() {
-            if let Some(ref mut editor_state) = *guard {
-                for sheet in &mut editor_state.file_data.sheets {
-                    crate::editor_state::rebuild_sheet_index(sheet);
-                }
-            }
-        }
-    });
-}
 
 /// 读取文件
 pub fn do_read_file(path: String) -> Result<FileData, AppError> {
@@ -45,7 +31,7 @@ fn init_editor_state(file_data: FileData) {
         *state_guard = Some(EditorState::new(file_data.clone()));
     }
     // 异步构建索引（后台线程）
-    spawn_index_build(file_data.clone(), state.clone());
+    spawn_rebuild_all_sheets_index(state.clone());
 }
 
 /// 保存文件

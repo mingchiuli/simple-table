@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::types::{CellChange, CellPosition, CellValue, ColumnChange, FileData, OperationResult, RowChange, SheetData, SheetIndex};
 
 /// 将单元格值转换为字符串
@@ -12,31 +11,8 @@ fn cell_to_string(cell: &CellValue) -> String {
     }
 }
 
-/// 重建单个 sheet 的索引（公开给 tauri_commands 调用）
-pub fn rebuild_sheet_index(sheet: &mut SheetData) {
-    let mut inverted_index: HashMap<String, Vec<CellPosition>> = HashMap::new();
-
-    for (row_idx, row) in sheet.rows.iter().enumerate() {
-        for (col_idx, cell) in row.iter().enumerate() {
-            let text = cell_to_string(cell);
-            if !text.is_empty() {
-                let token = text.to_lowercase();
-                inverted_index
-                    .entry(token)
-                    .or_default()
-                    .push(CellPosition {
-                        row: row_idx,
-                        col: col_idx,
-                    });
-            }
-        }
-    }
-
-    sheet.index.inverted_index = inverted_index;
-}
-
 /// 更新单个单元格的索引
-fn update_cell_index(sheet: &mut crate::types::SheetData, row: usize, col: usize, old_value: &CellValue, new_value: &CellValue) {
+fn update_cell_index(sheet: &mut SheetData, row: usize, col: usize, old_value: &CellValue, new_value: &CellValue) {
     let old_text = cell_to_string(old_value);
     let new_text = cell_to_string(new_value);
 

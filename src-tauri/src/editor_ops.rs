@@ -2,22 +2,10 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::editor_state::EditorState;
+use crate::index_ops::spawn_rebuild_sheet_index;
 use crate::error::AppError;
 use crate::types::OperationResult;
 use crate::state::EditorStateInfo;
-
-/// 异步重建指定 sheet 的索引
-fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<EditorState>>>) {
-    std::thread::spawn(move || {
-        if let Ok(mut guard) = state.write() {
-            if let Some(ref mut editor_state) = *guard {
-                if let Some(sheet) = editor_state.file_data.sheets.get_mut(sheet_index) {
-                    crate::editor_state::rebuild_sheet_index(sheet);
-                }
-            }
-        }
-    });
-}
 
 /// 从 OperationResult 中提取 sheet_index
 fn extract_sheet_index(result: &OperationResult) -> usize {
