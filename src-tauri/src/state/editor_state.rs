@@ -53,51 +53,31 @@ impl EditorState {
                     }
                 }
             }
-            Operation::DeleteRow { sheet_index, row_index, row_data } => {
-                if row_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
-                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
-                        if let Some(deleted_row) = sheet.rows.get(*row_index) {
-                            operation = Operation::DeleteRow {
-                                sheet_index: *sheet_index,
-                                row_index: *row_index,
-                                row_data: deleted_row.clone(),
-                            };
-                        }
-                    }
-                }
-            }
-            Operation::DeleteColumn { sheet_index, col_index, col_data } => {
-                if col_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
-                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
-                        let deleted_col: Vec<CellValue> = sheet.rows
-                            .iter()
-                            .map(|row| row.get(*col_index).cloned().unwrap_or(CellValue::Null))
-                            .collect();
-                        operation = Operation::DeleteColumn {
-                            sheet_index: *sheet_index,
-                            col_index: *col_index,
-                            col_data: deleted_col,
-                        };
-                    }
-                }
-            }
+            // AddColumn: 添加空列，需要补充列索引
             Operation::AddColumn { sheet_index, col_index, .. } => {
-                // AddColumn 添加列到末尾，需要记录正确的列索引和列数据用于撤销
                 if col_index.is_none() && *sheet_index < self.file_data.sheets.len() {
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
                         let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                         if col_count > 0 {
-                            // 获取添加的列数据（全是 Null）
-                            let added_col: Vec<CellValue> = sheet.rows
-                                .iter()
-                                .map(|row| row.last().cloned().unwrap_or(CellValue::Null))
-                                .collect();
                             operation = Operation::AddColumn {
                                 sheet_index: *sheet_index,
-                                col_index: Some(col_count - 1), // 记录添加的列索引
-                                col_data: added_col,
+                                col_index: Some(col_count - 1),
+                                col_data: vec![],
                             };
                         }
+                    }
+                }
+            }
+            // AddRow: 添加空行，需要补充行数据
+            Operation::AddRow { sheet_index, row_index, .. } => {
+                if *sheet_index < self.file_data.sheets.len() {
+                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
+                        let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                        operation = Operation::AddRow {
+                            sheet_index: *sheet_index,
+                            row_index: *row_index,
+                            row_data: vec![CellValue::Null; col_count],
+                        };
                     }
                 }
             }

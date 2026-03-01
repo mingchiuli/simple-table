@@ -191,14 +191,6 @@ function applyOperation(result: OperationResult) {
       }
       break;
     }
-    case "Batch": {
-      for (const change of resultData.changes) {
-        if (sheet.rows[change.row]) {
-          sheet.rows[change.row][change.col] = change.value;
-        }
-      }
-      break;
-    }
     case "AddRow": {
       const colCount = sheet.rows[0]?.length || 0;
       sheet.rows.splice(resultData.row.index, 0, Array(colCount).fill(null));

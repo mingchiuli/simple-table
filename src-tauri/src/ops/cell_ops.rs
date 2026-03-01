@@ -38,9 +38,11 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
         let mut state_guard = state.write().unwrap();
         match state_guard.as_mut() {
             Some(editor_state) => {
+                // 直接计算 row_data（空行数据）
                 let operation = Operation::AddRow {
                     sheet_index,
                     row_index,
+                    row_data: vec![],
                 };
                 editor_state.execute(operation);
                 Ok(())

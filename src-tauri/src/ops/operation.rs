@@ -57,6 +57,8 @@ pub enum Operation {
     AddRow {
         sheet_index: usize,
         row_index: usize,
+        /// 被恢复的行数据（用于撤销 DeleteRow）
+        row_data: Vec<CellValue>,
     },
     /// 删除行
     DeleteRow {
@@ -125,10 +127,15 @@ impl Operation {
                     },
                 }
             }
-            Operation::AddRow { sheet_index, row_index } => {
+            Operation::AddRow { sheet_index, row_index, row_data } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
-                    let new_row = vec![CellValue::Null; col_count];
+                    // 使用传入的 row_data，如果为空则创建空行
+                    let new_row = if row_data.is_empty() {
+                        let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                        vec![CellValue::Null; col_count]
+                    } else {
+                        row_data.clone()
+                    };
                     sheet.rows.insert(*row_index, new_row);
                     // 索引重建由调用方异步处理
                 }
@@ -136,7 +143,7 @@ impl Operation {
                     sheet_index: *sheet_index,
                     row: RowChange {
                         index: *row_index,
-                        values: vec![],
+                        values: row_data.clone(),
                     },
                 }
             }
@@ -267,17 +274,18 @@ impl Operation {
                     new_value: old_value.clone(),
                 }
             }
-            Operation::AddRow { sheet_index, row_index } => {
+            Operation::AddRow { sheet_index, row_index, row_data } => {
                 Operation::DeleteRow {
                     sheet_index: *sheet_index,
                     row_index: *row_index,
-                    row_data: vec![], // AddRow 没有原始数据，DeleteRow 执行时从 file_data 获取
+                    row_data: row_data.clone(), // 保留添加的行数据，用于撤销 DeleteRow 时恢复
                 }
             }
-            Operation::DeleteRow { sheet_index, row_index, .. } => {
+            Operation::DeleteRow { sheet_index, row_index, row_data } => {
                 Operation::AddRow {
                     sheet_index: *sheet_index,
                     row_index: *row_index,
+                    row_data: row_data.clone(),
                 }
             }
             Operation::AddColumn { sheet_index, col_index, col_data } => {
