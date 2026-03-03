@@ -181,7 +181,7 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
         .to_string();
 
     let mut reader = ReaderBuilder::new()
-        .has_headers(true)
+        .has_headers(false)
         .from_path(path)
         .map_err(|e| AppError::ReadError(e.to_string()))?;
 
