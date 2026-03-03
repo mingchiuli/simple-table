@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::types::{CellPosition, CellValue, ColumnChange, OperationResult, RowChange, SheetData};
+use crate::types::{CellPosition, CellValue, ColumnChange, OperationResult, RowChange, SheetData, SortState};
 
 /// 将单元格值转换为字符串
 fn cell_to_string(cell: &CellValue) -> String {
@@ -39,6 +39,65 @@ fn update_cell_index(sheet: &mut SheetData, row: usize, col: usize, old_value: &
             .entry(new_token)
             .or_default()
             .push(CellPosition { row, col });
+    }
+}
+
+/// 对 sheet 按指定列排序
+fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
+    if sheet.rows.is_empty() || col_index >= sheet.rows.first().map(|r| r.len()).unwrap_or(0) {
+        return;
+    }
+
+    // 获取列值用于排序
+    let col_values: Vec<(usize, &CellValue)> = sheet.rows.iter()
+        .enumerate()
+        .map(|(i, row)| (i, row.get(col_index).unwrap_or(&CellValue::Null)))
+        .collect();
+
+    // 创建索引数组
+    let mut indices: Vec<usize> = (0..sheet.rows.len()).collect();
+
+    // 排序
+    indices.sort_by(|&a, &b| {
+        let val_a = col_values[a].1;
+        let val_b = col_values[b].1;
+        let cmp = compare_cell_values(val_a, val_b);
+        if ascending { cmp } else { cmp.reverse() }
+    });
+
+    // 根据排序后的索引重新排列行
+    let mut new_rows = Vec::with_capacity(sheet.rows.len());
+    for idx in indices {
+        new_rows.push(sheet.rows[idx].clone());
+    }
+    sheet.rows = new_rows;
+}
+
+/// 比较两个单元格值（用于排序）
+fn compare_cell_values(a: &CellValue, b: &CellValue) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        // Null 排在最后
+        (CellValue::Null, CellValue::Null) => Ordering::Equal,
+        (CellValue::Null, _) => Ordering::Greater,
+        (_, CellValue::Null) => Ordering::Less,
+        // 数字
+        (CellValue::Number(na), CellValue::Number(nb)) => {
+            na.partial_cmp(nb).unwrap_or(Ordering::Equal)
+        }
+        (CellValue::Number(_), _) => Ordering::Greater,
+        (_, CellValue::Number(_)) => Ordering::Less,
+        // 布尔值：true < false
+        (CellValue::Boolean(ba), CellValue::Boolean(bb)) => {
+            ba.cmp(bb)
+        }
+        (CellValue::Boolean(_), _) => Ordering::Greater,
+        (_, CellValue::Boolean(_)) => Ordering::Less,
+        // 字符串：按字典序
+        (CellValue::String(sa), CellValue::String(sb)) => {
+            // 忽略大小写排序
+            sa.to_lowercase().cmp(&sb.to_lowercase())
+        }
     }
 }
 
@@ -91,6 +150,16 @@ pub enum Operation {
     DeleteSheet {
         sheet_index: usize,
         sheet_data: SheetData,
+    },
+    /// 列排序（保存完整的 sheet 数据用于 undo）
+    SortColumn {
+        sheet_index: usize,
+        col_index: usize,
+        ascending: bool,
+        /// 排序前的完整 sheet 数据（用于 undo 恢复）
+        old_sheet_data: SheetData,
+        /// 排序前的 sort_state（用于 undo 时恢复箭头状态）
+        previous_sort_state: Option<SortState>,
     },
 }
 
@@ -259,6 +328,47 @@ impl Operation {
                     sheet_index: new_current_index,
                 }
             }
+            Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data, previous_sort_state } => {
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    // 比较 old_sheet_data 与当前 sheet 是否相同
+                    // 如果相同：说明是正常排序操作（redo 时会走到这里）
+                    // 如果不同：说明是 undo 恢复操作，需要用 old_sheet_data 替换
+                    let is_restore = sheet.rows != old_sheet_data.rows;
+
+                    if is_restore {
+                        // undo 恢复：用 old_sheet_data 替换当前 sheet
+                        *sheet = old_sheet_data.clone();
+                        // 返回之前的 sort_state（用于恢复箭头显示）
+                        eprintln!("[execute] is_restore=true, previous_sort_state: {:?}", previous_sort_state);
+                        OperationResult::SortColumn {
+                            sheet_index: *sheet_index,
+                            sheet_data: sheet.clone(),
+                            sort_state: previous_sort_state.clone(),
+                        }
+                    } else {
+                        // 正常排序：执行排序
+                        sort_sheet(sheet, *col_index, *ascending);
+
+                        let sort_state = SortState {
+                            col_index: *col_index,
+                            ascending: *ascending,
+                        };
+
+                        // 返回排序后的完整数据
+                        OperationResult::SortColumn {
+                            sheet_index: *sheet_index,
+                            sheet_data: sheet.clone(),
+                            sort_state: Some(sort_state),
+                        }
+                    }
+                } else {
+                    OperationResult::SortColumn {
+                        sheet_index: *sheet_index,
+                        sheet_data: old_sheet_data.clone(),
+                        sort_state: previous_sort_state.clone(),
+                    }
+                }
+            }
         }
     }
 
@@ -315,6 +425,19 @@ impl Operation {
                 Operation::AddSheet {
                     name: sheet_data.name.clone(),
                     sheet_data: Some(sheet_data.clone()),
+                }
+            }
+            // SortColumn 的 undo：用排序前的数据恢复（不需要反向操作，因为已保存原始数据）
+            Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data, previous_sort_state } => {
+                // undo: 用 old_sheet_data 恢复排序前的状态
+                // 返回一个新的 Operation，用 old_sheet_data 替换
+                eprintln!("[undo method] creating undo op with previous_sort_state = None");
+                Operation::SortColumn {
+                    sheet_index: *sheet_index,
+                    col_index: *col_index,
+                    ascending: *ascending,
+                    old_sheet_data: old_sheet_data.clone(),
+                    previous_sort_state: previous_sort_state.clone(),
                 }
             }
         }

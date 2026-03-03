@@ -95,6 +95,13 @@ pub struct ColumnChange {
     pub index: usize,
 }
 
+/// 排序状态
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SortState {
+    pub col_index: usize,
+    pub ascending: bool,
+}
+
 /// 操作结果（增量数据）
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
@@ -133,9 +140,10 @@ pub enum OperationResult {
     DeleteSheet {
         sheet_index: usize,
     },
-    /// 批量变化（用于 undo/redo）
-    Batch {
+    /// 列排序
+    SortColumn {
         sheet_index: usize,
-        changes: Vec<CellChange>,
+        sheet_data: SheetData,
+        sort_state: Option<SortState>,
     },
 }

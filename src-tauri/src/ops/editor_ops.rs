@@ -17,7 +17,7 @@ fn extract_sheet_index(result: &OperationResult) -> usize {
         OperationResult::DeleteColumn { sheet_index, .. } => *sheet_index,
         OperationResult::AddSheet { sheet_index, .. } => *sheet_index,
         OperationResult::DeleteSheet { sheet_index } => *sheet_index,
-        OperationResult::Batch { sheet_index, .. } => *sheet_index,
+        OperationResult::SortColumn { sheet_index, .. } => *sheet_index,
     }
 }
 

@@ -26,7 +26,7 @@ impl EditorState {
     }
 
     /// 执行操作并记录到历史，返回增量结果
-    pub fn execute(&mut self, mut operation: Operation) {
+    pub fn execute(&mut self, mut operation: Operation) -> crate::types::OperationResult {
         // 在执行操作前，先准备好需要的数据，以便撤销/重做
         match &operation {
             // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
@@ -36,9 +36,9 @@ impl EditorState {
                         // 如果新值和旧值相同，不需要记录到 history
                         if real_old == new_value {
                             // 返回结果但不记录到 history
-                            operation.execute(&mut self.file_data);
+                            let result = operation.execute(&mut self.file_data);
                             self.update_flags();
-                            return;
+                            return result;
                         }
                         // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
                         if real_old != old_value {
@@ -95,10 +95,11 @@ impl EditorState {
             _ => {}
         }
 
-        operation.execute(&mut self.file_data);
+        let result = operation.execute(&mut self.file_data);
         self.history.push(operation);
         self.redo_stack.clear();
         self.update_flags();
+        result
     }
 
     /// 撤销上一个操作
@@ -108,6 +109,19 @@ impl EditorState {
             let original_op = operation.clone();
             let undo_op = operation.undo();
             let result = undo_op.execute(&mut self.file_data);
+
+            // 对于 SortColumn，需要更新 redo_stack 中原始操作的 old_sheet_data 和 previous_sort_state
+            // 这样 redo 时才能恢复到排序后的状态 
+            if let Operation::SortColumn { sheet_index, .. } = &original_op {
+                if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
+                    if let Some(redo_op) = self.redo_stack.last_mut() {
+                        if let Operation::SortColumn { old_sheet_data, .. } = redo_op {
+                            *old_sheet_data = sheet.clone();
+                        }
+                    }
+                }
+            }
+
             self.redo_stack.push(original_op);
             self.update_flags();
             Some(result)

@@ -5,7 +5,7 @@ import {invoke} from "@tauri-apps/api/core";
 import {open, save} from "@tauri-apps/plugin-dialog";
 import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
-import type {CellValue, FileData, OperationResult, SearchResult} from "@/types";
+import type {CellValue, FileData, OperationResult, SearchResult, SortState} from "@/types";
 import {useFileDataStore} from "@/stores/fileData";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
@@ -27,6 +27,7 @@ const isSearching = ref(false);
 const selectedCell = ref<{ row: number; col: number } | null>(null);
 const cellEditorValue = ref<string>("");
 const autoScroll = ref(false);
+const currentSortColumn = ref<SortState | null>(null);
 
 // Store selected cell for each sheet
 const sheetSelectedCells = ref<Map<number, { row: number; col: number }>>(new Map());
@@ -169,6 +170,11 @@ function applyOperation(result: OperationResult) {
   const sheet = data.sheets[resultData.sheet_index];
   if (!sheet) return;
 
+  //清除排序状态，如果上个操作是排序会在下方重新设置
+  if (currentSortColumn.value) {
+    currentSortColumn.value = null;
+  }
+
   switch (result.type) {
     case "SetCell": {
       // 需要同步后端返回的值，确保数据一致
@@ -211,6 +217,13 @@ function applyOperation(result: OperationResult) {
       for (const row of sheet.rows) {
         row.splice(resultData.column_index, 1);
       }
+      break;
+    }
+    case "SortColumn": {
+      // 用完整数据替换当前 sheet
+      data.sheets[resultData.sheet_index] = resultData.sheet_data;
+      // 更新排序状态
+      currentSortColumn.value = resultData.sort_state;
       break;
     }
   }
@@ -302,6 +315,9 @@ async function handleSaveFile() {
 
 async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
   if (!fileData.value || !currentSheet.value) return;
+
+  // 编辑单元格时清除排序状态
+  currentSortColumn.value = null;
 
   const oldValue = currentSheet.value.rows[rowIndex][colIndex];
   const newValue = parseCellValue(value);
@@ -518,6 +534,32 @@ function handleBack() {
   router.push({ name: "home" });
 }
 
+async function handleSortColumn(colIndex: number, ascending: boolean) {
+  if (!fileData.value) return;
+
+  try {
+    isLoading.value = true;
+    // 先保存当前的排序状态，用于记录排序前的状态
+    const prevSortState = currentSortColumn.value;
+    // 清除当前的排序状态（当对其他列排序时）
+    currentSortColumn.value = null;
+
+    const result = await invoke<OperationResult>("sort_column", {
+      sheetIndex: currentSheetIndex.value,
+      colIndex,
+      ascending,
+      previousSortState: prevSortState,
+    });
+    applyOperation(result);
+    hasChanges.value = true;
+    await updateEditorState();
+  } catch (error) {
+    ElMessage.error(`Failed to sort column: ${error}`);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
 async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
   if (!fileData.value) return;
 
@@ -630,11 +672,13 @@ function handleCellEditorSubmit() {
             :columns="columns"
             :selected-cell="selectedCell"
             :auto-scroll="autoScroll"
+            :sort-state="currentSortColumn"
             @cell-change="handleCellChange"
             @cell-editing="handleCellEditing"
             @delete-row="handleDeleteRow"
             @delete-column="handleDeleteColumn"
             @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
+            @sort-column="handleSortColumn"
           />
         </template>
       </div>

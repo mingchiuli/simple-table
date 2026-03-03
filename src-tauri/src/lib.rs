@@ -7,7 +7,7 @@ mod types;
 
 use commands::{
     add_column, add_row, add_sheet, delete_column, delete_row, delete_sheet, get_default_save_path,
-    get_editor_state, get_file_data, init_file, read_file, redo, save_file, search, set_cell, undo,
+    get_editor_state, get_file_data, init_file, read_file, redo, save_file, search, set_cell, sort_column, undo,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,6 +31,7 @@ pub fn run() {
             delete_column,
             add_sheet,
             delete_sheet,
+            sort_column,
             get_editor_state,
             search
         ])

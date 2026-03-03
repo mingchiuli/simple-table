@@ -33,6 +33,11 @@ export interface ColumnChange {
   index: number;
 }
 
+export interface SortState {
+  col_index: number;
+  ascending: boolean;
+}
+
 // Rust 使用 #[serde(tag = "type", content = "data")]，所以格式是 { type: 'SetCell', data: {...} }
 export type OperationResult =
   | { type: 'SetCell'; data: { sheet_index: number; cell: CellChange } }
@@ -42,7 +47,7 @@ export type OperationResult =
   | { type: 'DeleteColumn'; data: { sheet_index: number; column_index: number } }
   | { type: 'AddSheet'; data: { sheet_index: number; name: string } }
   | { type: 'DeleteSheet'; data: { sheet_index: number } }
-  | { type: 'Batch'; data: { sheet_index: number; changes: CellChange[] } };
+  | { type: 'SortColumn'; data: { sheet_index: number; sheet_data: SheetData; sort_state: SortState | null } };
 
 export interface SearchResult {
   sheet_index: number;

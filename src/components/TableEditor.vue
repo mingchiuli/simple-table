@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue';
-import type { CellValue } from '@/types';
+import type { CellValue, SortState } from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
 import ColumnHeaderCell from './ColumnHeaderCell.vue';
@@ -10,6 +10,7 @@ const props = defineProps<{
   columns: string[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
+  sortState?: SortState | null;
 }>();
 
 const emit = defineEmits<{
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   (e: 'delete-column', index: number): void;
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
+  (e: 'sort-column', colIndex: number, ascending: boolean): void;
 }>();
 
 // 本地编辑状态
@@ -189,7 +191,9 @@ const columns = computed(() => {
       headerCellRenderer: () => h(ColumnHeaderCell, {
         columnIndex: colIndex,
         title: col,
-        onDelete: handleDeleteColumn
+        sortState: props.sortState,
+        onDelete: handleDeleteColumn,
+        onSort: (ascending: boolean) => emit('sort-column', colIndex, ascending)
       })
     });
   });

@@ -117,6 +117,21 @@ pub fn delete_sheet(sheet_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_sheet(get_state(), sheet_index)
 }
 
+// ==================== Sort Operations ====================
+
+use crate::types::SortState;
+
+/// 对指定列排序
+#[tauri::command]
+pub fn sort_column(
+    sheet_index: usize,
+    col_index: usize,
+    ascending: bool,
+    previous_sort_state: Option<SortState>,
+) -> Result<OperationResult, AppError> {
+    crate::ops::sort_ops::do_sort_column(get_state(), sheet_index, col_index, ascending, previous_sort_state)
+}
+
 // ==================== Search Operations ====================
 
 /// 搜索单元格
