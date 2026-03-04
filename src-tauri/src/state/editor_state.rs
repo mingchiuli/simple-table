@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::types::{CellValue, FileData, OperationResult};
-pub use crate::ops::operation::Operation;
+pub use crate::ops::operation::{Operation, Undoable};
 
 /// 编辑器状态管理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,24 +105,13 @@ impl EditorState {
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Option<OperationResult> {
         if let Some(operation) = self.history.pop() {
-            // 保存原始操作到 redo_stack，以便 redo 时能恢复
-            let original_op = operation.clone();
-            let undo_op = operation.undo();
-            let result = undo_op.execute(&mut self.file_data);
+            // 执行 undo 操作
+            let result = operation.undo(&mut self.file_data);
 
-            // 对于 SortColumn，需要更新 redo_stack 中原始操作的 old_sheet_data 和 previous_sort_state
-            // 这样 redo 时才能恢复到排序后的状态 
-            if let Operation::SortColumn { sheet_index, .. } = &original_op {
-                if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
-                    if let Some(redo_op) = self.redo_stack.last_mut() {
-                        if let Operation::SortColumn { old_sheet_data, .. } = redo_op {
-                            *old_sheet_data = sheet.clone();
-                        }
-                    }
-                }
-            }
+            // 获取 redo 操作（使用 trait 方法，让操作自己决定 redo 行为）
+            let redo_op = operation.get_redo_operation(&mut self.file_data);
+            self.redo_stack.push(redo_op);
 
-            self.redo_stack.push(original_op);
             self.update_flags();
             Some(result)
         } else {
@@ -145,11 +134,5 @@ impl EditorState {
     fn update_flags(&mut self) {
         self.can_undo = !self.history.is_empty();
         self.can_redo = !self.redo_stack.is_empty();
-    }
-
-    #[allow(dead_code)]
-    /// 获取文件数据
-    pub fn get_file_data(&self) -> &FileData {
-        &self.file_data
     }
 }

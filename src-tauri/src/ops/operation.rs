@@ -163,6 +163,49 @@ pub enum Operation {
     },
 }
 
+/// Trait for operations that can be undone/redone
+/// Each operation can define its own behavior for creating redo operations
+pub trait Undoable {
+    /// Execute the undo operation on file_data
+    fn undo(&self, file_data: &mut crate::types::FileData) -> OperationResult;
+
+    /// Get the operation to be pushed to redo_stack after undo
+    /// This allows operations to customize their redo behavior
+    fn get_redo_operation(&self, file_data: &mut crate::types::FileData) -> Operation;
+}
+
+impl Undoable for Operation {
+    /// Execute undo operation
+    fn undo(&self, file_data: &mut crate::types::FileData) -> OperationResult {
+        let undo_op = self.create_undo_op();
+        undo_op.execute(file_data)
+    }
+
+    /// Get the redo operation after undo
+    /// Default implementation returns self.clone()
+    /// SortColumn overrides this to update old_sheet_data to current state
+    fn get_redo_operation(&self, file_data: &mut crate::types::FileData) -> Operation {
+        match self {
+            // SortColumn: update old_sheet_data to current (sorted) state for redo
+            Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data: _, previous_sort_state } => {
+                if let Some(sheet) = file_data.sheets.get(*sheet_index) {
+                    Operation::SortColumn {
+                        sheet_index: *sheet_index,
+                        col_index: *col_index,
+                        ascending: *ascending,
+                        old_sheet_data: sheet.clone(), // Current state becomes old for redo
+                        previous_sort_state: previous_sort_state.clone(),
+                    }
+                } else {
+                    self.clone()
+                }
+            }
+            // Default: return self unchanged
+            _ => self.clone()
+        }
+    }
+}
+
 impl Operation {
     /// 执行操作
     /// 注意：此方法不再同步重建索引，索引重建由调用方异步处理
@@ -372,8 +415,8 @@ impl Operation {
         }
     }
 
-    /// 撤销操作（返回反向操作）
-    pub fn undo(&self) -> Operation {
+    /// 创建撤销操作（返回反向操作）
+    pub fn create_undo_op(&self) -> Operation {
         match self {
             Operation::SetCell { sheet_index, row, col, old_value, new_value } => {
                 Operation::SetCell {
