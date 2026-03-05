@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue';
-import type { CellValue, SortState } from '@/types';
+import type { CellValue, MergeRange, SortState } from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
 import ColumnHeaderCell from './ColumnHeaderCell.vue';
@@ -8,6 +8,7 @@ import ColumnHeaderCell from './ColumnHeaderCell.vue';
 const props = defineProps<{
   data: CellValue[][];
   columns: string[];
+  merges?: MergeRange[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
   sortState?: SortState | null;
@@ -116,6 +117,48 @@ function getKey(rowIndex: number, colIndex: number): string {
   return `${rowIndex}-${colIndex}`;
 }
 
+// 获取单元格所在的合并区域信息
+function getMergeInfo(rowIndex: number, colIndex: number): MergeRange | null {
+  if (!props.merges) return null;
+
+  for (const merge of props.merges) {
+    if (
+      rowIndex >= merge.start_row &&
+      rowIndex <= merge.end_row &&
+      colIndex >= merge.start_col &&
+      colIndex <= merge.end_col
+    ) {
+      return merge;
+    }
+  }
+  return null;
+}
+
+// el-table-v2 的 span-method
+function spanMethod({ rowIndex, columnIndex }: { rowIndex: number; columnIndex: number }): { rowspan: number; colspan: number } | false {
+  // columnIndex 0 是行号列，不参与合并
+  if (columnIndex === 0) return { rowspan: 1, colspan: 1 };
+
+  const dataColIndex = columnIndex - 1; // 数据列索引（从0开始）
+  const merge = getMergeInfo(rowIndex, dataColIndex);
+
+  // 没有合并区域，正常显示
+  if (!merge) {
+    return { rowspan: 1, colspan: 1 };
+  }
+
+  // 是合并区域的起始单元格，返回合并范围
+  if (merge.start_row === rowIndex && merge.start_col === dataColIndex) {
+    return {
+      rowspan: merge.end_row - merge.start_row + 1,
+      colspan: merge.end_col - merge.start_col + 1
+    };
+  }
+
+  // 非起始单元格，隐藏
+  return false;
+}
+
 function handleInput(rowIndex: number, colIndex: number, value: string) {
   const key = getKey(rowIndex, colIndex);
   editingValue.value[key] = value;
@@ -156,6 +199,13 @@ function isEditing(rowIndex: number, colIndex: number): boolean {
 }
 
 function handleCellClick(rowIndex: number, colIndex: number) {
+  // 检查是否点击在合并区域内，如果是则跳转到起始单元格
+  const merge = getMergeInfo(rowIndex, colIndex);
+  if (merge) {
+    rowIndex = merge.start_row;
+    colIndex = merge.start_col;
+  }
+
   // 单击选中单元格并显示编辑栏
   emit('select-cell', rowIndex, colIndex);
 
@@ -214,6 +264,7 @@ const rowHeight = 40;
       :row-height="rowHeight"
       :width="tableSize.width"
       :height="tableSize.height"
+      :span-method="spanMethod"
       fixed
     >
       <template #cell="{ column, rowData, rowIndex }">

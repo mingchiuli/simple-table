@@ -670,6 +670,7 @@ function handleCellEditorSubmit() {
           <TableEditor
             :data="tableData"
             :columns="columns"
+            :merges="currentSheet?.merges"
             :selected-cell="selectedCell"
             :auto-scroll="autoScroll"
             :sort-state="currentSortColumn"
