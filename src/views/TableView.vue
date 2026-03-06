@@ -184,8 +184,11 @@ function applyOperation(result: OperationResult) {
       break;
     }
     case "AddSheet": {
-      // AddSheet: 前端已添加，后端也添加了，需要更新 sheet 名称（可能不同步）
-      sheet.name = resultData.name;
+      // AddSheet: 使用后端返回的完整 sheet_data 来添加/恢复 sheet
+      // 使用后端返回的 sheet_index 插入到正确位置（用于撤销 DeleteSheet 时恢复到原始位置）
+      const sheetData = resultData.sheet_data;
+      const sheetIndex = resultData.sheet_index;
+      data.sheets.splice(sheetIndex, 0, sheetData);
       break;
     }
     case "DeleteSheet": {
@@ -198,8 +201,9 @@ function applyOperation(result: OperationResult) {
       break;
     }
     case "AddRow": {
-      const colCount = sheet.rows[0]?.length || 0;
-      sheet.rows.splice(resultData.row.index, 0, Array(colCount).fill(null));
+      // 使用后端返回的行数据，而不是空行
+      const rowValues = resultData.row?.values || [];
+      sheet.rows.splice(resultData.row.index, 0, rowValues);
       break;
     }
     case "DeleteRow": {
@@ -208,8 +212,10 @@ function applyOperation(result: OperationResult) {
     }
     case "AddColumn": {
       const colIndex = resultData.column.index;
-      for (const row of sheet.rows) {
-        row.splice(colIndex, 0, null);
+      const colData = resultData.col_data || [];
+      for (let i = 0; i < sheet.rows.length; i++) {
+        const value = i < colData.length ? colData[i] : null;
+        sheet.rows[i].splice(colIndex, 0, value);
       }
       break;
     }

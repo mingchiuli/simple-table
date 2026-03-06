@@ -26,7 +26,7 @@ impl EditorState {
     }
 
     /// 执行操作并记录到历史，返回增量结果
-    pub fn execute(&mut self, mut operation: Operation) -> crate::types::OperationResult {
+    pub fn execute(&mut self, mut operation: Operation) -> OperationResult {
         // 在执行操作前，先准备好需要的数据，以便撤销/重做
         match &operation {
             // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
@@ -53,9 +53,11 @@ impl EditorState {
                     }
                 }
             }
-            // AddColumn: 添加空列，需要补充列索引
-            Operation::AddColumn { sheet_index, col_index, .. } => {
+            // AddColumn: 添加空列，需要补充列索引（只当 col_data 为空时）
+            Operation::AddColumn { sheet_index, col_index, col_data: _ } => {
+                // 如果 col_data 已有数据（撤销操作），保留原数据
                 if col_index.is_none() && *sheet_index < self.file_data.sheets.len() {
+                    // 正常添加列，补充列索引
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
                         let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                         if col_count > 0 {
@@ -68,9 +70,10 @@ impl EditorState {
                     }
                 }
             }
-            // AddRow: 添加空行，需要补充行数据
-            Operation::AddRow { sheet_index, row_index, .. } => {
-                if *sheet_index < self.file_data.sheets.len() {
+            // AddRow: 添加空行，需要补充行数据（只当 row_data 为空时）
+            Operation::AddRow { sheet_index, row_index, row_data } => {
+                // 如果 row_data 已有数据（撤销操作），保留原数据
+                if row_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
                         let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                         operation = Operation::AddRow {
@@ -107,7 +110,6 @@ impl EditorState {
         if let Some(operation) = self.history.pop() {
             // 执行 undo 操作
             let result = operation.undo(&mut self.file_data);
-
             // 获取 redo 操作（使用 trait 方法，让操作自己决定 redo 行为）
             let redo_op = operation.get_redo_operation(&mut self.file_data);
             self.redo_stack.push(redo_op);

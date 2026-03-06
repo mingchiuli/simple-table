@@ -63,8 +63,9 @@ pub struct SheetData {
 
 impl SheetData {
     /// 判断是否为空的 sheet（用于判断是否需要保存数据）
+    /// 只有当 name 为空且 rows 也为空时，才认为是空的 sheet
     pub fn is_empty(&self) -> bool {
-        self.name.is_empty()
+        self.name.is_empty() && self.rows.is_empty()
     }
 }
 
@@ -125,6 +126,8 @@ pub enum OperationResult {
     AddColumn {
         sheet_index: usize,
         column: ColumnChange,
+        /// 添加的列数据（用于撤销时恢复）
+        col_data: Vec<CellValue>,
     },
     /// 删除列
     DeleteColumn {
@@ -135,10 +138,14 @@ pub enum OperationResult {
     AddSheet {
         sheet_index: usize,
         name: String,
+        /// 完整的 sheet 数据（用于撤销时恢复）
+        sheet_data: SheetData,
     },
     /// 删除 Sheet
     DeleteSheet {
         sheet_index: usize,
+        /// 被删除的 sheet 数据（用于撤销时恢复）
+        sheet_data: SheetData,
     },
     /// 列排序
     SortColumn {

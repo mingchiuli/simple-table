@@ -152,6 +152,7 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppEr
                 let operation = Operation::AddSheet {
                     name: String::new(),
                     sheet_data: None,
+                    sheet_index: None,
                 };
                 editor_state.execute(operation);
                 Ok(())

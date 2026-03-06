@@ -43,10 +43,10 @@ export type OperationResult =
   | { type: 'SetCell'; data: { sheet_index: number; cell: CellChange } }
   | { type: 'AddRow'; data: { sheet_index: number; row: RowChange } }
   | { type: 'DeleteRow'; data: { sheet_index: number; row_index: number } }
-  | { type: 'AddColumn'; data: { sheet_index: number; column: ColumnChange } }
+  | { type: 'AddColumn'; data: { sheet_index: number; column: ColumnChange; col_data: CellValue[] } }
   | { type: 'DeleteColumn'; data: { sheet_index: number; column_index: number } }
-  | { type: 'AddSheet'; data: { sheet_index: number; name: string } }
-  | { type: 'DeleteSheet'; data: { sheet_index: number } }
+  | { type: 'AddSheet'; data: { sheet_index: number; name: string; sheet_data: SheetData } }
+  | { type: 'DeleteSheet'; data: { sheet_index: number; sheet_data: SheetData } }
   | { type: 'SortColumn'; data: { sheet_index: number; sheet_data: SheetData; sort_state: SortState | null } };
 
 export interface SearchResult {

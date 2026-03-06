@@ -145,6 +145,8 @@ pub enum Operation {
         name: String,
         /// 完整的 sheet 数据（用于撤销恢复时）
         sheet_data: Option<SheetData>,
+        /// 恢复时的原始索引（用于撤销 DeleteSheet 时恢复到正确位置）
+        sheet_index: Option<usize>,
     },
     /// 删除 Sheet（带完整数据，用于撤销时恢复）
     DeleteSheet {
@@ -271,10 +273,21 @@ impl Operation {
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn { sheet_index, col_index, .. } => {
+            Operation::AddColumn { sheet_index, col_index, col_data } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    for row in &mut sheet.rows {
-                        row.push(CellValue::Null);
+                    // 使用传入的 col_data，如果为空则创建空列
+                    let new_col_data = if col_data.is_empty() {
+                        vec![CellValue::Null; sheet.rows.len()]
+                    } else {
+                        col_data.clone()
+                    };
+                    // 添加列数据到每一行
+                    for (i, row) in sheet.rows.iter_mut().enumerate() {
+                        if i < new_col_data.len() {
+                            row.push(new_col_data[i].clone());
+                        } else {
+                            row.push(CellValue::Null);
+                        }
                     }
                     // 索引重建由调用方异步处理
                 }
@@ -289,6 +302,7 @@ impl Operation {
                 OperationResult::AddColumn {
                     sheet_index: *sheet_index,
                     column: ColumnChange { index: actual_col_index },
+                    col_data: col_data.clone(),
                 }
             }
             Operation::DeleteColumn { sheet_index, col_index, .. } => {
@@ -305,7 +319,7 @@ impl Operation {
                     column_index: *col_index,
                 }
             }
-            Operation::AddSheet { name, sheet_data } => {
+            Operation::AddSheet { name, sheet_data, sheet_index } => {
                 // 如果有完整的 sheet_data，直接插入；否则创建空 sheet
                 let (new_sheet, sheet_name) = if let Some(data) = sheet_data {
                     (data.clone(), data.name.clone())
@@ -334,12 +348,14 @@ impl Operation {
                     (new_sheet, final_name)
                 };
 
-                let new_sheet_index = file_data.sheets.len();
-                file_data.sheets.push(new_sheet);
+                // 如果提供了 sheet_index，插入到指定位置；否则添加到末尾
+                let actual_index = sheet_index.unwrap_or(file_data.sheets.len());
+                file_data.sheets.insert(actual_index, new_sheet.clone());
 
                 OperationResult::AddSheet {
-                    sheet_index: new_sheet_index,
+                    sheet_index: actual_index,
                     name: sheet_name,
+                    sheet_data: new_sheet,
                 }
             }
             Operation::DeleteSheet { sheet_index, sheet_data } => {
@@ -348,6 +364,7 @@ impl Operation {
                     return OperationResult::AddSheet {
                         sheet_index: 0,
                         name: "Error".to_string(),
+                        sheet_data: SheetData::default(),
                     };
                 }
 
@@ -358,7 +375,7 @@ impl Operation {
                     *sheet_index
                 };
 
-                let _removed_sheet = file_data.sheets.remove(actual_index);
+                let removed_sheet = file_data.sheets.remove(actual_index);
 
                 // Adjust current sheet index if needed
                 let new_current_index = if actual_index >= file_data.sheets.len() {
@@ -369,6 +386,7 @@ impl Operation {
 
                 OperationResult::DeleteSheet {
                     sheet_index: new_current_index,
+                    sheet_data: removed_sheet,
                 }
             }
             Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data, previous_sort_state } => {
@@ -463,11 +481,12 @@ impl Operation {
                     sheet_data: SheetData::default(),
                 }
             }
-            Operation::DeleteSheet { sheet_index: _, sheet_data } => {
+            Operation::DeleteSheet { sheet_index, sheet_data } => {
                 // DeleteSheet 的撤销：恢复被删除的 sheet（使用保存的完整数据）
                 Operation::AddSheet {
                     name: sheet_data.name.clone(),
                     sheet_data: Some(sheet_data.clone()),
+                    sheet_index: Some(*sheet_index), // 恢复到原始位置
                 }
             }
             // SortColumn 的 undo：用排序前的数据恢复（不需要反向操作，因为已保存原始数据）
