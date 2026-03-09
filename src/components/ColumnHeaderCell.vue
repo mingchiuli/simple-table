@@ -6,12 +6,14 @@ import type { SortState } from '@/types';
 const props = defineProps<{
   columnIndex: number;
   title: string;
+  width?: number;
   sortState?: SortState | null;
 }>();
 
 const emit = defineEmits<{
   (e: 'delete', index: number): void;
   (e: 'sort', ascending: boolean): void;
+  (e: 'resize-start', event: MouseEvent, colIndex: number): void;
 }>();
 
 function handleDelete(index: number) {
@@ -45,6 +47,10 @@ const isCurrentSorting = computed(() => props.sortState?.col_index === props.col
         <el-icon :size="12"><Close /></el-icon>
       </button>
     </div>
+    <div
+      class="resize-handle"
+      @mousedown.stop="(e) => emit('resize-start', e, columnIndex)"
+    />
   </div>
 </template>
 
@@ -56,6 +62,7 @@ const isCurrentSorting = computed(() => props.sortState?.col_index === props.col
   width: 100%;
   height: 100%;
   padding: 0 4px;
+  position: relative;
 }
 
 .title {
@@ -91,5 +98,19 @@ const isCurrentSorting = computed(() => props.sortState?.col_index === props.col
 .column-header:hover .sort-btn,
 .column-header:hover .delete-btn {
   opacity: 1;
+}
+
+.resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.resize-handle:hover {
+  background-color: #409eff;
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue';
-import type { CellValue, MergeRange, SortState } from '@/types';
+import {computed, h, onMounted, onUnmounted, ref, watch} from 'vue';
+import type {CellValue, MergeRange, SortState} from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
 import ColumnHeaderCell from './ColumnHeaderCell.vue';
@@ -12,6 +12,7 @@ const props = defineProps<{
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
   sortState?: SortState | null;
+  columnWidths?: Record<number, number>;
 }>();
 
 const emit = defineEmits<{
@@ -21,12 +22,64 @@ const emit = defineEmits<{
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
   (e: 'sort-column', colIndex: number, ascending: boolean): void;
+  (e: 'column-resize', colIndex: number, width: number): void;
 }>();
 
 // 本地编辑状态
 const editingValue = ref<Record<string, string>>({});
 const editingCell = ref<string | null>(null);
 const isManualClick = ref(false); // 是否手动点击触发的编辑
+
+// 列宽状态
+const columnWidths = ref<Record<number, number>>({});
+const resizingColumn = ref<number | null>(null);
+const startX = ref(0);
+const startWidth = ref(0);
+
+// 初始化列宽
+function initColumnWidths() {
+  if (props.columnWidths) {
+    columnWidths.value = { ...props.columnWidths };
+  } else {
+    columnWidths.value = {};
+  }
+}
+
+initColumnWidths();
+
+// 监听 columnWidths 变化
+watch(() => props.columnWidths, initColumnWidths, { deep: true });
+
+// 获取列宽
+function getColumnWidth(colIndex: number): number {
+  return columnWidths.value[colIndex] || 120;
+}
+
+// 开始调整列宽
+function startResize(event: MouseEvent, colIndex: number) {
+  resizingColumn.value = colIndex;
+  startX.value = event.clientX;
+  startWidth.value = getColumnWidth(colIndex);
+  document.addEventListener('mousemove', onResize);
+  document.addEventListener('mouseup', stopResize);
+}
+
+// 调整列宽中
+function onResize(event: MouseEvent) {
+  if (resizingColumn.value === null) return;
+  const delta = event.clientX - startX.value;
+  columnWidths.value[resizingColumn.value] = Math.max(40, startWidth.value + delta);
+}
+
+// 结束调整列宽
+function stopResize() {
+  if (resizingColumn.value !== null) {
+    emit('column-resize', resizingColumn.value, columnWidths.value[resizingColumn.value]);
+  }
+  resizingColumn.value = null;
+  document.removeEventListener('mousemove', onResize);
+  document.removeEventListener('mouseup', stopResize);
+}
 
 // 监听 data 变化，更新当前编辑单元格的值（实现实时同步）
 watch(() => props.data, () => {
@@ -237,13 +290,15 @@ const columns = computed(() => {
       key: `col-${colIndex}`,
       title: col,
       dataKey: colIndex,
-      width: 120,
+      width: getColumnWidth(colIndex),
       headerCellRenderer: () => h(ColumnHeaderCell, {
         columnIndex: colIndex,
         title: col,
+        width: getColumnWidth(colIndex),
         sortState: props.sortState,
         onDelete: handleDeleteColumn,
-        onSort: (ascending: boolean) => emit('sort-column', colIndex, ascending)
+        onSort: (ascending: boolean) => emit('sort-column', colIndex, ascending),
+        onResizeStart: startResize
       })
     });
   });

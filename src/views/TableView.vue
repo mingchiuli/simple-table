@@ -629,6 +629,16 @@ function handleCellEditorSubmit() {
   const { row, col } = selectedCell.value;
   handleCellChange(row, col, cellEditorValue.value);
 }
+
+// 处理列宽调整
+function handleColumnResize(colIndex: number, width: number) {
+  if (!currentSheet.value) return;
+  if (!currentSheet.value.columnWidths) {
+    currentSheet.value.columnWidths = {};
+  }
+  currentSheet.value.columnWidths[colIndex] = width;
+  hasChanges.value = true;
+}
 </script>
 
 <template>
@@ -680,12 +690,14 @@ function handleCellEditorSubmit() {
             :selected-cell="selectedCell"
             :auto-scroll="autoScroll"
             :sort-state="currentSortColumn"
+            :column-widths="currentSheet?.columnWidths"
             @cell-change="handleCellChange"
             @cell-editing="handleCellEditing"
             @delete-row="handleDeleteRow"
             @delete-column="handleDeleteColumn"
             @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
             @sort-column="handleSortColumn"
+            @column-resize="handleColumnResize"
           />
         </template>
       </div>

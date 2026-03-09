@@ -11,6 +11,7 @@ export interface SheetData {
   name: string;
   rows: CellValue[][];
   merges: MergeRange[];
+  columnWidths?: Record<number, number>;
 }
 
 export interface FileData {
