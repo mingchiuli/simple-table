@@ -4,6 +4,7 @@ import { computed } from "vue";
 const props = defineProps<{
   modelValue: string;
   cellPosition: { row: number; col: number } | null;
+  width?: number;
 }>();
 
 const emit = defineEmits<{
@@ -27,7 +28,7 @@ function handleEnter() {
 </script>
 
 <template>
-  <div v-if="cellPosition" class="cell-editor-bar">
+  <div v-if="cellPosition" class="cell-editor-bar" :style="{ width: width ? width + 'px' : '100%' }">
     <span class="cell-position">{{ displayPosition }}</span>
     <el-input
       :model-value="modelValue"

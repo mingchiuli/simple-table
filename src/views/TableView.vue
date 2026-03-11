@@ -53,6 +53,16 @@ const columns = computed(() => {
   });
 });
 
+// 计算表格总宽度
+const totalWidth = computed(() => {
+  const rowNumberWidth = 60;
+  const columnWidths = currentSheet.value?.columnWidths || {};
+  const columnsWidth = columns.value.reduce((sum, _, colIndex) => {
+    return sum + (columnWidths[colIndex] || 120);
+  }, 0);
+  return rowNumberWidth + columnsWidth;
+});
+
 const sheetNames = computed(() => {
   if (!fileData.value) return [];
   return fileData.value.sheets.map((s) => s.name);
@@ -680,6 +690,7 @@ function handleColumnResize(colIndex: number, width: number) {
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
             :cell-position="selectedCell"
+            :width="totalWidth"
             @submit="handleCellEditorSubmit"
           />
 
@@ -744,7 +755,8 @@ function handleColumnResize(colIndex: number, width: number) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .skeleton-container {

@@ -306,6 +306,15 @@ const columns = computed(() => {
   return cols;
 });
 
+// 计算表格总宽度（用于横向滚动）
+const totalWidth = computed(() => {
+  const rowNumberWidth = 60;
+  const columnsWidth = props.columns.reduce((sum, _, colIndex) => {
+    return sum + getColumnWidth(colIndex);
+  }, 0);
+  return rowNumberWidth + columnsWidth;
+});
+
 // 行高固定
 const rowHeight = 40;
 </script>
@@ -317,10 +326,10 @@ const rowHeight = 40;
       :columns="columns"
       :data="props.data"
       :row-height="rowHeight"
-      :width="tableSize.width"
+      :width="totalWidth"
       :height="tableSize.height"
       :span-method="spanMethod"
-      fixed
+      :fixed="false"
     >
       <template #cell="{ column, rowData, rowIndex }">
         <!-- 行号列 -->
