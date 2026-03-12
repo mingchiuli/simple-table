@@ -10,10 +10,10 @@ use std::path::Path;
 fn cell_to_value(cell: Data) -> CellValue {
     match cell {
         Data::String(s) => CellValue::String(s),
-        Data::Float(f) => CellValue::Number(f),
-        Data::Int(i) => CellValue::Number(i as f64),
+        Data::Float(f) => CellValue::Number(format!("{}", f)),  // 转为字符串
+        Data::Int(i) => CellValue::Number(format!("{}", i)),   // 转为字符串（精确）
         Data::Bool(b) => CellValue::Boolean(b),
-        Data::DateTime(dt) => CellValue::Number(dt.as_f64()),
+        Data::DateTime(dt) => CellValue::Number(format!("{}", dt.as_f64())),
         Data::DateTimeIso(s) => CellValue::String(s),
         Data::DurationIso(s) => CellValue::String(s),
         Data::Error(e) => CellValue::String(format!("{:?}", e)),
@@ -194,8 +194,12 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
             .map(|field| {
                 if field.is_empty() {
                     CellValue::Null
+                } else if let Ok(int_val) = field.parse::<i64>() {
+                    // 优先解析为整数（保持精度）
+                    CellValue::Number(format!("{}", int_val))
                 } else if let Ok(num) = field.parse::<f64>() {
-                    CellValue::Number(num)
+                    // 尝试解析为浮点数
+                    CellValue::Number(format!("{}", num))
                 } else if field.to_lowercase() == "true" {
                     CellValue::Boolean(true)
                 } else if field.to_lowercase() == "false" {

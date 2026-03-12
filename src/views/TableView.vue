@@ -72,8 +72,13 @@ function parseCellValue(value: string): CellValue {
   if (value === "") return null;
   // 保留前导零和特殊数字格式（如 0908）
   if (/^0\d/.test(value)) return value;
+  // 尝试解析为整数或浮点数，如果成功则保持为字符串（避免精度丢失）
+  if (/^-?\d+$/.test(value) || /^-?\d+\.\d+$/.test(value)) {
+    return value;  // 保持为字符串
+  }
+  // 尝试解析为浮点数
   const num = Number(value);
-  if (!isNaN(num)) return num;
+  if (!isNaN(num)) return value;  // 也保持为字符串
   if (value.toLowerCase() === "true") return true;
   if (value.toLowerCase() === "false") return false;
   return value;

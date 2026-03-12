@@ -6,7 +6,7 @@ fn cell_to_string(cell: &CellValue) -> String {
     match cell {
         CellValue::Null => String::new(),
         CellValue::String(s) => s.clone(),
-        CellValue::Number(n) => n.to_string(),
+        CellValue::Number(n) => n.clone(),  // 现在是字符串
         CellValue::Boolean(b) => b.to_string(),
     }
 }
@@ -74,6 +74,7 @@ fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
 }
 
 /// 比较两个单元格值（用于排序）
+/// 数字和字符串都支持按数值排序
 fn compare_cell_values(a: &CellValue, b: &CellValue) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
@@ -81,23 +82,63 @@ fn compare_cell_values(a: &CellValue, b: &CellValue) -> std::cmp::Ordering {
         (CellValue::Null, CellValue::Null) => Ordering::Equal,
         (CellValue::Null, _) => Ordering::Greater,
         (_, CellValue::Null) => Ordering::Less,
-        // 数字
-        (CellValue::Number(na), CellValue::Number(nb)) => {
-            na.partial_cmp(nb).unwrap_or(Ordering::Equal)
+
+        // Number 和 String 类型都支持数值排序
+        // Number vs Number: 按数值排序
+        (CellValue::Number(sa), CellValue::Number(sb)) => {
+            // 优先尝试解析为整数
+            if let (Ok(ia), Ok(ib)) = (sa.parse::<i128>(), sb.parse::<i128>()) {
+                ia.cmp(&ib)
+            } else if let (Ok(fa), Ok(fb)) = (sa.parse::<f64>(), sb.parse::<f64>()) {
+                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+            } else {
+                // 如果无法解析为数字，按字典序比较
+                sa.to_lowercase().cmp(&sb.to_lowercase())
+            }
         }
-        (CellValue::Number(_), _) => Ordering::Greater,
-        (_, CellValue::Number(_)) => Ordering::Less,
+        // Number vs String: 统一按字符串处理
+        (CellValue::Number(sa), CellValue::String(sb)) => {
+            let a = sa.as_str();
+            let b = sb.as_str();
+            // 尝试数值比较
+            if let (Ok(ia), Ok(ib)) = (a.parse::<i128>(), b.parse::<i128>()) {
+                ia.cmp(&ib)
+            } else if let (Ok(fa), Ok(fb)) = (a.parse::<f64>(), b.parse::<f64>()) {
+                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+            } else {
+                a.to_lowercase().cmp(&b.to_lowercase())
+            }
+        }
+        (CellValue::String(sa), CellValue::Number(sb)) => {
+            let a = sa.as_str();
+            let b = sb.as_str();
+            if let (Ok(ia), Ok(ib)) = (a.parse::<i128>(), b.parse::<i128>()) {
+                ia.cmp(&ib)
+            } else if let (Ok(fa), Ok(fb)) = (a.parse::<f64>(), b.parse::<f64>()) {
+                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+            } else {
+                a.to_lowercase().cmp(&b.to_lowercase())
+            }
+        }
+        // String vs String: 尝试按数值排序，失败则按字典序
+        (CellValue::String(sa), CellValue::String(sb)) => {
+            // 优先尝试解析为整数
+            if let (Ok(ia), Ok(ib)) = (sa.parse::<i128>(), sb.parse::<i128>()) {
+                ia.cmp(&ib)
+            } else if let (Ok(fa), Ok(fb)) = (sa.parse::<f64>(), sb.parse::<f64>()) {
+                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+            } else {
+                // 忽略大小写排序
+                sa.to_lowercase().cmp(&sb.to_lowercase())
+            }
+        }
+
         // 布尔值：true < false
         (CellValue::Boolean(ba), CellValue::Boolean(bb)) => {
             ba.cmp(bb)
         }
         (CellValue::Boolean(_), _) => Ordering::Greater,
         (_, CellValue::Boolean(_)) => Ordering::Less,
-        // 字符串：按字典序
-        (CellValue::String(sa), CellValue::String(sb)) => {
-            // 忽略大小写排序
-            sa.to_lowercase().cmp(&sb.to_lowercase())
-        }
     }
 }
 

@@ -27,9 +27,17 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                     CellValue::Number(n) => {
-                        worksheet
-                            .write_number(row_u32, col_u16, *n, None)
-                            .map_err(|e| AppError::WriteError(e.to_string()))?;
+                        // 尝试解析字符串为数字
+                        if let Ok(num) = n.parse::<f64>() {
+                            worksheet
+                                .write_number(row_u32, col_u16, num, None)
+                                .map_err(|e| AppError::WriteError(e.to_string()))?;
+                        } else {
+                            // 如果不是有效数字，写入字符串
+                            worksheet
+                                .write_string(row_u32, col_u16, n.as_str(), None)
+                                .map_err(|e| AppError::WriteError(e.to_string()))?;
+                        }
                     }
                     CellValue::Boolean(b) => {
                         worksheet
@@ -56,8 +64,8 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
 
             // Convert value to string for merge_range (xlsxwriter only supports strings)
             let s = match value {
-                CellValue::String(s) => s,
-                CellValue::Number(n) => n.to_string(),
+                CellValue::String(s) => s.clone(),
+                CellValue::Number(n) => n.clone(),  // 现在是字符串
                 CellValue::Boolean(b) => b.to_string(),
                 CellValue::Null => String::new(),
             };
@@ -91,7 +99,7 @@ fn write_csv(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                 .iter()
                 .map(|cell| match cell {
                     CellValue::String(s) => s.clone(),
-                    CellValue::Number(n) => n.to_string(),
+                    CellValue::Number(n) => n.clone(),  // 现在是字符串
                     CellValue::Boolean(b) => b.to_string(),
                     CellValue::Null => String::new(),
                 })

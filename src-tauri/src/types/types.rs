@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub enum CellValue {
     Null,
     String(String),
-    Number(f64),
+    Number(String),  // 改为字符串存储，避免精度丢失
     Boolean(bool),
 }
 
