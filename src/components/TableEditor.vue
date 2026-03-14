@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed, h, onMounted, onUnmounted, ref, watch} from 'vue';
-import type {CellValue, MergeRange, SortState} from '@/types';
+import type {CellValue, ColumnConfig, MergeRange, SortState} from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
 import ColumnHeaderCell from './ColumnHeaderCell.vue';
@@ -175,10 +175,10 @@ function getMergeInfo(rowIndex: number, colIndex: number): MergeRange | null {
 
   for (const merge of props.merges) {
     if (
-      rowIndex >= merge.start_row &&
-      rowIndex <= merge.end_row &&
-      colIndex >= merge.start_col &&
-      colIndex <= merge.end_col
+      rowIndex >= merge.startRow &&
+      rowIndex <= merge.endRow &&
+      colIndex >= merge.startCol &&
+      colIndex <= merge.endCol
     ) {
       return merge;
     }
@@ -200,10 +200,10 @@ function spanMethod({ rowIndex, columnIndex }: { rowIndex: number; columnIndex: 
   }
 
   // 是合并区域的起始单元格，返回合并范围
-  if (merge.start_row === rowIndex && merge.start_col === dataColIndex) {
+  if (merge.startRow === rowIndex && merge.startCol === dataColIndex) {
     return {
-      rowspan: merge.end_row - merge.start_row + 1,
-      colspan: merge.end_col - merge.start_col + 1
+      rowspan: merge.endRow - merge.startRow + 1,
+      colspan: merge.endCol - merge.startCol + 1
     };
   }
 
@@ -254,8 +254,8 @@ function handleCellClick(rowIndex: number, colIndex: number) {
   // 检查是否点击在合并区域内，如果是则跳转到起始单元格
   const merge = getMergeInfo(rowIndex, colIndex);
   if (merge) {
-    rowIndex = merge.start_row;
-    colIndex = merge.start_col;
+    rowIndex = merge.startRow;
+    colIndex = merge.startCol;
   }
 
   // 单击选中单元格并显示编辑栏
@@ -275,7 +275,7 @@ function handleCellClick(rowIndex: number, colIndex: number) {
 
 // 列配置
 const columns = computed(() => {
-  const cols: any[] = [
+  const cols: ColumnConfig[] = [
     {
       key: 'row-number',
       title: '#',

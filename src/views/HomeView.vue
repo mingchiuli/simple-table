@@ -34,7 +34,7 @@ async function handleOpenFile() {
 
 async function handleNewFile() {
   const newFileData: FileData = {
-    file_name: "untitled.xlsx",
+    fileName: "untitled.xlsx",
     sheets: [
       {
         name: "Sheet1",

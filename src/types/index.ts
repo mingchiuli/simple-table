@@ -1,10 +1,10 @@
 export type CellValue = string | number | boolean | null;
 
 export interface MergeRange {
-  start_row: number;
-  start_col: number;
-  end_row: number;
-  end_col: number;
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
 }
 
 export interface SheetData {
@@ -15,7 +15,7 @@ export interface SheetData {
 }
 
 export interface FileData {
-  file_name: string;
+  fileName: string;
   sheets: SheetData[];
 }
 
@@ -35,28 +35,38 @@ export interface ColumnChange {
 }
 
 export interface SortState {
-  col_index: number;
+  colIndex: number;
   ascending: boolean;
 }
 
 // Rust 使用 #[serde(tag = "type", content = "data")]，所以格式是 { type: 'SetCell', data: {...} }
 export type OperationResult =
-  | { type: 'SetCell'; data: { sheet_index: number; cell: CellChange } }
-  | { type: 'AddRow'; data: { sheet_index: number; row: RowChange } }
-  | { type: 'DeleteRow'; data: { sheet_index: number; row_index: number } }
-  | { type: 'AddColumn'; data: { sheet_index: number; column: ColumnChange; col_data: CellValue[] } }
-  | { type: 'DeleteColumn'; data: { sheet_index: number; column_index: number } }
-  | { type: 'AddSheet'; data: { sheet_index: number; name: string; sheet_data: SheetData } }
-  | { type: 'DeleteSheet'; data: { sheet_index: number; sheet_data: SheetData } }
-  | { type: 'SortColumn'; data: { sheet_index: number; sheet_data: SheetData; sort_state: SortState | null } };
+  | { type: 'SetCell'; data: { sheetIndex: number; cell: CellChange } }
+  | { type: 'AddRow'; data: { sheetIndex: number; row: RowChange } }
+  | { type: 'DeleteRow'; data: { sheetIndex: number; rowIndex: number } }
+  | { type: 'AddColumn'; data: { sheetIndex: number; column: ColumnChange; colData: CellValue[] } }
+  | { type: 'DeleteColumn'; data: { sheetIndex: number; columnIndex: number } }
+  | { type: 'AddSheet'; data: { sheetIndex: number; name: string; sheetData: SheetData } }
+  | { type: 'DeleteSheet'; data: { sheetIndex: number; sheetData: SheetData } }
+  | { type: 'SortColumn'; data: { sheetIndex: number; sheetData: SheetData; sortState: SortState | null } };
 
 export interface SearchResult {
-  sheet_index: number;
-  sheet_name: string;
+  sheetIndex: number;
+  sheetName: string;
   row: number;
   col: number;
   value: string;
-  cell_position: string;
+  cellPosition: string;
 }
 
-export type SearchScope = 'currentSheet' | 'allSheets';
+// Element Plus 表格列配置类型
+import type { VNode } from 'vue';
+
+export interface ColumnConfig {
+  key: string;
+  title: string;
+  width?: number;
+  fixed?: 'left' | 'right';
+  dataKey?: number;
+  headerCellRenderer?: () => VNode;
+}

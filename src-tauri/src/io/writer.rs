@@ -27,15 +27,30 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                     CellValue::Number(n) => {
-                        // 尝试解析字符串为数字
-                        if let Ok(num) = n.parse::<f64>() {
+                        // 从 serde_json::Value 提取数字
+                        if let Some(num) = n.as_f64() {
                             worksheet
                                 .write_number(row_u32, col_u16, num, None)
                                 .map_err(|e| AppError::WriteError(e.to_string()))?;
+                        } else if let Some(num) = n.as_i64() {
+                            // 检查是否在 f64 精确整数范围内
+                            const F64_SAFE_MAX: i64 = 9_007_199_254_740_991; // 2^53 - 1
+                            const F64_SAFE_MIN: i64 = -9_007_199_254_740_991; // -(2^53 - 1)
+                            if num >= F64_SAFE_MIN && num <= F64_SAFE_MAX {
+                                // 在安全范围内，写为数字
+                                worksheet
+                                    .write_number(row_u32, col_u16, num as f64, None)
+                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+                            } else {
+                                // 超出安全范围，写为字符串以保留精度
+                                worksheet
+                                    .write_string(row_u32, col_u16, &num.to_string(), None)
+                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+                            }
                         } else {
                             // 如果不是有效数字，写入字符串
                             worksheet
-                                .write_string(row_u32, col_u16, n.as_str(), None)
+                                .write_string(row_u32, col_u16, &n.to_string(), None)
                                 .map_err(|e| AppError::WriteError(e.to_string()))?;
                         }
                     }
@@ -65,7 +80,7 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
             // Convert value to string for merge_range (xlsxwriter only supports strings)
             let s = match value {
                 CellValue::String(s) => s.clone(),
-                CellValue::Number(n) => n.clone(),  // 现在是字符串
+                CellValue::Number(n) => n.to_string(),
                 CellValue::Boolean(b) => b.to_string(),
                 CellValue::Null => String::new(),
             };
@@ -99,7 +114,7 @@ fn write_csv(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                 .iter()
                 .map(|cell| match cell {
                     CellValue::String(s) => s.clone(),
-                    CellValue::Number(n) => n.clone(),  // 现在是字符串
+                    CellValue::Number(n) => n.to_string(),
                     CellValue::Boolean(b) => b.to_string(),
                     CellValue::Null => String::new(),
                 })

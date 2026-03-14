@@ -21,14 +21,14 @@ function handleDelete(index: number) {
 }
 
 function handleSort() {
-  const isCurrentColumn = props.sortState !== null && props.sortState?.col_index === props.columnIndex;
+  const isCurrentColumn = props.sortState !== null && props.sortState?.colIndex === props.columnIndex;
   // 如果当前列已排序，切换升序/降序；否则默认升序
   const newAscending = isCurrentColumn && props.sortState ? !props.sortState.ascending : true;
   emit('sort', newAscending);
 }
 
 // 判断当前列是否正在排序
-const isCurrentSorting = computed(() => props.sortState?.col_index === props.columnIndex);
+const isCurrentSorting = computed(() => props.sortState?.colIndex === props.columnIndex);
 </script>
 
 <template>

@@ -3,6 +3,7 @@ use calamine::{open_workbook, Reader, Xlsx, Xls, Ods, Data};
 use crate::error::AppError;
 use crate::types::{CellValue, FileData, MergeRange, SheetData, SheetIndex};
 use csv::ReaderBuilder;
+use serde_json::Value;
 use std::path::Path;
 
 
@@ -10,10 +11,11 @@ use std::path::Path;
 fn cell_to_value(cell: Data) -> CellValue {
     match cell {
         Data::String(s) => CellValue::String(s),
-        Data::Float(f) => CellValue::Number(format!("{}", f)),  // 转为字符串
-        Data::Int(i) => CellValue::Number(format!("{}", i)),   // 转为字符串（精确）
+        // 使用 serde_json::Value 来精确存储整数
+        Data::Float(f) => CellValue::Number(Value::from(f)),
+        Data::Int(i) => CellValue::Number(Value::from(i)),
         Data::Bool(b) => CellValue::Boolean(b),
-        Data::DateTime(dt) => CellValue::Number(format!("{}", dt.as_f64())),
+        Data::DateTime(dt) => CellValue::Number(Value::from(dt.as_f64())),
         Data::DateTimeIso(s) => CellValue::String(s),
         Data::DurationIso(s) => CellValue::String(s),
         Data::Error(e) => CellValue::String(format!("{:?}", e)),
@@ -105,6 +107,7 @@ fn read_xlsx(path: &Path) -> Result<Vec<SheetData>, AppError> {
             rows,
             merges,
             index,
+            ..Default::default()
         });
     }
 
@@ -137,6 +140,7 @@ fn read_xls(path: &Path) -> Result<Vec<SheetData>, AppError> {
                 rows,
                 merges,
                 index,
+                ..Default::default()
             })
         })
         .collect())
@@ -168,6 +172,7 @@ fn read_ods(path: &Path) -> Result<Vec<SheetData>, AppError> {
                 rows,
                 merges,
                 index,
+                ..Default::default()
             })
         })
         .collect())
@@ -195,11 +200,15 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
                 if field.is_empty() {
                     CellValue::Null
                 } else if let Ok(int_val) = field.parse::<i64>() {
-                    // 优先解析为整数（保持精度）
-                    CellValue::Number(format!("{}", int_val))
+                    // 超出 JS 安全范围的整数保持为字符串
+                    if int_val > 9007199254740991 || int_val < -9007199254740991 {
+                        return CellValue::String(field.to_string());
+                    }
+                    // 使用 serde_json::Value 精确存储整数
+                    CellValue::Number(Value::from(int_val))
                 } else if let Ok(num) = field.parse::<f64>() {
                     // 尝试解析为浮点数
-                    CellValue::Number(format!("{}", num))
+                    CellValue::Number(Value::from(num))
                 } else if field.to_lowercase() == "true" {
                     CellValue::Boolean(true)
                 } else if field.to_lowercase() == "false" {
@@ -220,6 +229,7 @@ fn read_csv(path: &Path) -> Result<FileData, AppError> {
             rows,
             merges: vec![],
             index,
+            ..Default::default()
         }],
     })
 }

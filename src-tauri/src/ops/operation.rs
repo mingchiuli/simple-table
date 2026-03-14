@@ -6,7 +6,7 @@ fn cell_to_string(cell: &CellValue) -> String {
     match cell {
         CellValue::Null => String::new(),
         CellValue::String(s) => s.clone(),
-        CellValue::Number(n) => n.clone(),  // 现在是字符串
+        CellValue::Number(n) => n.to_string(),
         CellValue::Boolean(b) => b.to_string(),
     }
 }
@@ -83,41 +83,40 @@ fn compare_cell_values(a: &CellValue, b: &CellValue) -> std::cmp::Ordering {
         (CellValue::Null, _) => Ordering::Greater,
         (_, CellValue::Null) => Ordering::Less,
 
-        // Number 和 String 类型都支持数值排序
-        // Number vs Number: 按数值排序
-        (CellValue::Number(sa), CellValue::Number(sb)) => {
-            // 优先尝试解析为整数
-            if let (Ok(ia), Ok(ib)) = (sa.parse::<i128>(), sb.parse::<i128>()) {
+        // Number vs Number: 从 Value 中提取数字比较
+        (CellValue::Number(na), CellValue::Number(nb)) => {
+            // 优先尝试比较整数
+            if let (Some(ia), Some(ib)) = (na.as_i64(), nb.as_i64()) {
                 ia.cmp(&ib)
-            } else if let (Ok(fa), Ok(fb)) = (sa.parse::<f64>(), sb.parse::<f64>()) {
+            } else if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
                 fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
             } else {
-                // 如果无法解析为数字，按字典序比较
-                sa.to_lowercase().cmp(&sb.to_lowercase())
+                // 无法比较，按字符串比较
+                na.to_string().to_lowercase().cmp(&nb.to_string().to_lowercase())
             }
         }
-        // Number vs String: 统一按字符串处理
-        (CellValue::Number(sa), CellValue::String(sb)) => {
-            let a = sa.as_str();
-            let b = sb.as_str();
-            // 尝试数值比较
-            if let (Ok(ia), Ok(ib)) = (a.parse::<i128>(), b.parse::<i128>()) {
-                ia.cmp(&ib)
-            } else if let (Ok(fa), Ok(fb)) = (a.parse::<f64>(), b.parse::<f64>()) {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+        // Number vs String: 尝试将 String 转为数字比较
+        (CellValue::Number(na), CellValue::String(sb)) => {
+            if let Ok(nb) = sb.parse::<f64>() {
+                if let Some(fa) = na.as_f64() {
+                    fa.partial_cmp(&nb).unwrap_or(Ordering::Equal)
+                } else {
+                    Ordering::Equal
+                }
             } else {
-                a.to_lowercase().cmp(&b.to_lowercase())
+                // 无法转为数字，按字符串比较
+                na.to_string().to_lowercase().cmp(&sb.to_lowercase())
             }
         }
-        (CellValue::String(sa), CellValue::Number(sb)) => {
-            let a = sa.as_str();
-            let b = sb.as_str();
-            if let (Ok(ia), Ok(ib)) = (a.parse::<i128>(), b.parse::<i128>()) {
-                ia.cmp(&ib)
-            } else if let (Ok(fa), Ok(fb)) = (a.parse::<f64>(), b.parse::<f64>()) {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+        (CellValue::String(sa), CellValue::Number(nb)) => {
+            if let Ok(na) = sa.parse::<f64>() {
+                if let Some(fb) = nb.as_f64() {
+                    na.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+                } else {
+                    Ordering::Equal
+                }
             } else {
-                a.to_lowercase().cmp(&b.to_lowercase())
+                sa.to_lowercase().cmp(&nb.to_string().to_lowercase())
             }
         }
         // String vs String: 尝试按数值排序，失败则按字典序
@@ -385,6 +384,7 @@ impl Operation {
                         ],
                         merges: vec![],
                         index: crate::types::SheetIndex::default(),
+                        ..Default::default()
                     };
                     (new_sheet, final_name)
                 };

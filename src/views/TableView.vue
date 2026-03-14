@@ -179,12 +179,6 @@ function applyOperation(result: OperationResult) {
   const data = fileData.value;
   if (!data) return;
 
-  const resultData = (result as any).data;
-  if (!resultData) return;
-
-  const sheet = data.sheets[resultData.sheet_index];
-  if (!sheet) return;
-
   //清除排序状态，如果上个操作是排序会在下方重新设置
   if (currentSortColumn.value) {
     currentSortColumn.value = null;
@@ -192,6 +186,9 @@ function applyOperation(result: OperationResult) {
 
   switch (result.type) {
     case "SetCell": {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
       // 需要同步后端返回的值，确保数据一致
       if (sheet.rows[resultData.cell.row]) {
         sheet.rows[resultData.cell.row][resultData.cell.col] = resultData.cell.value;
@@ -199,16 +196,18 @@ function applyOperation(result: OperationResult) {
       break;
     }
     case "AddSheet": {
+      const resultData = result.data;
       // AddSheet: 使用后端返回的完整 sheet_data 来添加/恢复 sheet
       // 使用后端返回的 sheet_index 插入到正确位置（用于撤销 DeleteSheet 时恢复到原始位置）
-      const sheetData = resultData.sheet_data;
-      const sheetIndex = resultData.sheet_index;
+      const sheetData = resultData.sheetData;
+      const sheetIndex = resultData.sheetIndex;
       data.sheets.splice(sheetIndex, 0, sheetData);
       break;
     }
     case "DeleteSheet": {
+      const resultData = result.data;
       // DeleteSheet: 需要删除前端的 sheet
-      data.sheets.splice(resultData.sheet_index, 1);
+      data.sheets.splice(resultData.sheetIndex, 1);
       // 如果当前 sheet 索引超出范围，调整到最后一个
       if (currentSheetIndex.value >= data.sheets.length) {
         currentSheetIndex.value = Math.max(0, data.sheets.length - 1);
@@ -216,18 +215,27 @@ function applyOperation(result: OperationResult) {
       break;
     }
     case "AddRow": {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
       // 使用后端返回的行数据，而不是空行
       const rowValues = resultData.row?.values || [];
       sheet.rows.splice(resultData.row.index, 0, rowValues);
       break;
     }
     case "DeleteRow": {
-      sheet.rows.splice(resultData.row_index, 1);
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
+      sheet.rows.splice(resultData.rowIndex, 1);
       break;
     }
     case "AddColumn": {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
       const colIndex = resultData.column.index;
-      const colData = resultData.col_data || [];
+      const colData = resultData.colData || [];
       for (let i = 0; i < sheet.rows.length; i++) {
         const value = i < colData.length ? colData[i] : null;
         sheet.rows[i].splice(colIndex, 0, value);
@@ -235,16 +243,20 @@ function applyOperation(result: OperationResult) {
       break;
     }
     case "DeleteColumn": {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
       for (const row of sheet.rows) {
-        row.splice(resultData.column_index, 1);
+        row.splice(resultData.columnIndex, 1);
       }
       break;
     }
     case "SortColumn": {
+      const resultData = result.data;
       // 用完整数据替换当前 sheet
-      data.sheets[resultData.sheet_index] = resultData.sheet_data;
+      data.sheets[resultData.sheetIndex] = resultData.sheetData;
       // 更新排序状态
-      currentSortColumn.value = resultData.sort_state;
+      currentSortColumn.value = resultData.sortState;
       break;
     }
   }
@@ -294,11 +306,11 @@ async function handleSaveFile() {
   if (!fileData.value) return;
 
   try {
-    const originalExtension = fileData.value.file_name.split(".").pop() || "xlsx";
-    const isNewFile = fileData.value.file_name.startsWith("untitled");
+    const originalExtension = fileData.value.fileName.split(".").pop() || "xlsx";
+    const isNewFile = fileData.value.fileName.startsWith("untitled");
     const defaultName = isNewFile
       ? "untitled"
-      : fileData.value.file_name.replace(/\.[^.]+$/, "");
+      : fileData.value.fileName.replace(/\.[^.]+$/, "");
 
     // Determine available extensions based on file type
     let extensions: string[];
@@ -600,8 +612,8 @@ async function handleSearch(query: string, scope: "currentSheet" | "allSheets") 
 
 function handleSearchResultClick(result: SearchResult) {
   // 切换到对应的 sheet
-  if (result.sheet_index !== currentSheetIndex.value) {
-    currentSheetIndex.value = result.sheet_index;
+  if (result.sheetIndex !== currentSheetIndex.value) {
+    currentSheetIndex.value = result.sheetIndex;
   }
   // 选中对应的单元格，并触发滚动到中央
   autoScroll.value = true;
@@ -728,7 +740,7 @@ function handleColumnResize(colIndex: number, width: number) {
 
     <StatusBar
       v-if="fileData"
-      :file-name="fileData.file_name"
+      :file-name="fileData.fileName"
       :has-changes="hasChanges"
     />
 

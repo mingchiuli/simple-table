@@ -35,9 +35,9 @@ function handleClear() {
         class="search-result-item"
         @click="handleResultClick(result)"
       >
-        <span class="cell-position">{{ result.cell_position }}</span>
+        <span class="cell-position">{{ result.cellPosition }}</span>
         <span class="cell-value">{{ result.value }}</span>
-        <span v-if="result.sheet_name" class="sheet-name">{{ result.sheet_name }}</span>
+        <span v-if="result.sheetName" class="sheet-name">{{ result.sheetName }}</span>
       </div>
     </div>
   </div>
