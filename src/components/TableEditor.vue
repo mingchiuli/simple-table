@@ -123,8 +123,7 @@ watch(() => props.selectedCell, async (newCell) => {
 
   // Only scroll when autoScroll is true (e.g., from search results)
   if (props.autoScroll && tableRef.value) {
-    const rowHeight = 40;
-    const scrollTop = newCell.row * rowHeight - tableSize.value.height / 2 + rowHeight / 2;
+    const scrollTop = newCell.row * ROW_HEIGHT - tableSize.value.height / 2 + ROW_HEIGHT / 2;
     const rowNumberWidth = 60;
     const colWidth = 120;
     const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
@@ -316,7 +315,7 @@ const totalWidth = computed(() => {
 });
 
 // 行高固定
-const rowHeight = 40;
+const ROW_HEIGHT = 60;
 </script>
 
 <template>
@@ -325,7 +324,7 @@ const rowHeight = 40;
       ref="tableRef"
       :columns="columns"
       :data="props.data"
-      :row-height="rowHeight"
+      :row-height="ROW_HEIGHT"
       :width="totalWidth"
       :height="tableSize.height"
       :span-method="spanMethod"

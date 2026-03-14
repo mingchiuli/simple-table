@@ -32,6 +32,8 @@ function handleEnter() {
     <span class="cell-position">{{ displayPosition }}</span>
     <el-input
       :model-value="modelValue"
+      type="textarea"
+      :autosize="{ minRows: 2, maxRows: 4 }"
       class="cell-editor-input"
       placeholder="Edit cell value..."
       @input="handleInput"
