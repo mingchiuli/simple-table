@@ -59,7 +59,7 @@ const emit = defineEmits<{
         v-if="!isMobile"
         class="search-box"
         :is-searching="props.isSearching"
-        @search="(query: string, scope: Function) => emit('search', query, scope)"
+        @search="(query: string, scope: 'currentSheet' | 'allSheets') => emit('search', query, scope)"
         @clear-search="emit('clear-search')"
       />
     </div>
