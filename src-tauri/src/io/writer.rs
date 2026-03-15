@@ -1,18 +1,18 @@
 use crate::error::AppError;
 use crate::types::{CellValue, FileData};
 use std::path::Path;
-use xlsxwriter::*;
+use rust_xlsxwriter::*;
 
 fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
     let path_str = path
         .to_str()
         .ok_or(AppError::WriteError("Invalid path".to_string()))?;
-    let workbook =
-        Workbook::new(path_str).map_err(|e| AppError::WriteError(e.to_string()))?;
+    let mut workbook = Workbook::new();
 
     for sheet in &file_data.sheets {
-        let mut worksheet = workbook
-            .add_worksheet(Some(&sheet.name))
+        let worksheet = workbook.add_worksheet();
+        worksheet
+            .set_name(&sheet.name)
             .map_err(|e| AppError::WriteError(e.to_string()))?;
 
         // Write cells without formats (for now, formats will be added later)
@@ -23,14 +23,14 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                 match cell {
                     CellValue::String(s) => {
                         worksheet
-                            .write_string(row_u32, col_u16, s.as_str(), None)
+                            .write(row_u32, col_u16, s.as_str())
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                     CellValue::Number(n) => {
                         // 从 serde_json::Value 提取数字
                         if let Some(num) = n.as_f64() {
                             worksheet
-                                .write_number(row_u32, col_u16, num, None)
+                                .write(row_u32, col_u16, num)
                                 .map_err(|e| AppError::WriteError(e.to_string()))?;
                         } else if let Some(num) = n.as_i64() {
                             // 检查是否在 f64 精确整数范围内
@@ -39,29 +39,29 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                             if num >= F64_SAFE_MIN && num <= F64_SAFE_MAX {
                                 // 在安全范围内，写为数字
                                 worksheet
-                                    .write_number(row_u32, col_u16, num as f64, None)
+                                    .write(row_u32, col_u16, num as f64)
                                     .map_err(|e| AppError::WriteError(e.to_string()))?;
                             } else {
                                 // 超出安全范围，写为字符串以保留精度
                                 worksheet
-                                    .write_string(row_u32, col_u16, &num.to_string(), None)
+                                    .write(row_u32, col_u16, &num.to_string())
                                     .map_err(|e| AppError::WriteError(e.to_string()))?;
                             }
                         } else {
                             // 如果不是有效数字，写入字符串
                             worksheet
-                                .write_string(row_u32, col_u16, &n.to_string(), None)
+                                .write(row_u32, col_u16, &n.to_string())
                                 .map_err(|e| AppError::WriteError(e.to_string()))?;
                         }
                     }
                     CellValue::Boolean(b) => {
                         worksheet
-                            .write_boolean(row_u32, col_u16, *b, None)
+                            .write(row_u32, col_u16, *b)
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                     CellValue::Null => {
                         worksheet
-                            .write_blank(row_u32, col_u16, None)
+                            .write_blank(row_u32, col_u16, &Format::new())
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                 }
@@ -92,14 +92,14 @@ fn write_excel(path: &Path, file_data: &FileData) -> Result<(), AppError> {
                     merge.end_row,
                     merge.end_col,
                     &s,
-                    None,
+                    &Format::new(),
                 )
                 .map_err(|e| AppError::WriteError(e.to_string()))?;
         }
     }
 
     workbook
-        .close()
+        .save(path_str)
         .map_err(|e| AppError::WriteError(e.to_string()))?;
     Ok(())
 }

@@ -25,6 +25,6 @@ tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 calamine = "0.34"
-xlsxwriter = "0.6"
+rust_xlsxwriter = "0.94"
 csv = "1.4"
 thiserror = "2"
