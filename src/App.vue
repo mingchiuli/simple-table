@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { RouterView } from "vue-router";
+import { usePlatform } from "./composables/usePlatform";
+import "./styles/desktop.css";
+import "./styles/mobile.css";
+
+const { platform } = usePlatform();
 </script>
 
 <template>
-  <RouterView />
+  <div :class="platform">
+    <RouterView />
+  </div>
 </template>
 
 <style>

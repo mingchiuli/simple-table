@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { FileData } from '@/types';
+import { usePlatform } from '@/composables/usePlatform';
 import FileButtons from './FileButtons.vue';
 import SheetSelector from './SheetSelector.vue';
 import SheetButtons from './SheetButtons.vue';
 import SearchBox from './SearchBox.vue';
 import EditButtons from './EditButtons.vue';
+
+const { isMobile } = usePlatform();
 
 const props = defineProps<{
   fileData: FileData | null;
@@ -46,14 +49,17 @@ const emit = defineEmits<{
       />
 
       <SheetButtons
+        class="sheet-buttons"
         :sheet-count="props.sheetNames.length"
         @add-sheet="emit('add-sheet')"
         @delete-sheet="emit('delete-sheet')"
       />
 
       <SearchBox
+        v-if="!isMobile"
+        class="search-box"
         :is-searching="props.isSearching"
-        @search="(query, scope) => emit('search', query, scope)"
+        @search="(query: string, scope: Function) => emit('search', query, scope)"
         @clear-search="emit('clear-search')"
       />
     </div>
@@ -75,10 +81,8 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
   background: #fff;
   border-bottom: 1px solid #e4e7ed;
-  gap: 16px;
   overflow-x: auto;
 }
 
@@ -88,6 +92,5 @@ const emit = defineEmits<{
   justify-content: center;
   align-items: center;
   flex-shrink: 0;
-  gap: 16px;
 }
 </style>

@@ -1,0 +1,12 @@
+/* Mobile styles */
+@media (max-width: 767px) {
+  .toolbar {
+    height: 60px;
+    padding: 6px 12px;
+    gap: 8px;
+  }
+
+  .toolbar-center {
+    gap: 8px;
+  }
+}
