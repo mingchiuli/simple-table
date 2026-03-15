@@ -60,6 +60,7 @@ jobs:
           args: ${{ matrix.args }}
 
   build-android:
+    needs: build-desktop
     runs-on: ubuntu-latest
 
     steps:
@@ -93,9 +94,13 @@ jobs:
           npx tauri android init
           npx tauri android build --apk
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: android-apk
-          path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          tag_name: ${{ github.ref_name }}
+          name: 'Simple Table ${{ github.ref_name }}'
+          draft: true
+          prerelease: false
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
