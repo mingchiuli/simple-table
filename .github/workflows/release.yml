@@ -89,7 +89,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Setup signing
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > keystore.jks
+
       - name: Init and build Android
+        env:
+          TAURI_ANDROID_KEYSTORE: ${{ github.workspace }}/keystore.jks
+          TAURI_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          TAURI_ANDROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           npx tauri android init
           npx tauri android build --apk
