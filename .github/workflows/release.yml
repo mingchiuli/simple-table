@@ -94,13 +94,10 @@ jobs:
           npx tauri android init
           npx tauri android build --apk
 
-      - name: Upload APK to Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload APK to existing Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: 'Simple Table ${{ github.ref_name }}'
-          draft: true
-          prerelease: false
-          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+        run: |
+          # 找到所有 APK 文件并上传到 tauri-action 已创建的 release
+          find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec \
+            gh release upload ${{ github.ref_name }} {} \;
