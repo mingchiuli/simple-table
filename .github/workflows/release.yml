@@ -135,16 +135,23 @@ jobs:
         run: |
           GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
 
-          sed -i '1s/^/import java.io.FileInputStream\nimport java.util.Properties\n/' "$GRADLE_FILE"
+          # Add import only if not already present
+          grep -q 'import java.io.FileInputStream' "$GRADLE_FILE" \
+            || sed -i '1s/^/import java.io.FileInputStream\n/' "$GRADLE_FILE"
 
+          # Load keystore properties BEFORE `android {` (java.util is NOT shadowed here)
+          sed -i '/^android {/i\
+          val keystorePropertiesFile = rootProject.file("keystore.properties")\
+          val keystoreProperties = java.util.Properties()\
+          if (keystorePropertiesFile.exists()) {\
+              keystoreProperties.load(FileInputStream(keystorePropertiesFile))\
+          }\
+          ' "$GRADLE_FILE"
+
+          # Add signingConfigs INSIDE android {}, before buildTypes
           sed -i '/buildTypes {/i\
               signingConfigs {\
                   create("release") {\
-                      val keystorePropertiesFile = rootProject.file("keystore.properties")\
-                      val keystoreProperties = Properties()\
-                      if (keystorePropertiesFile.exists()) {\
-                          keystoreProperties.load(FileInputStream(keystorePropertiesFile))\
-                      }\
                       keyAlias = keystoreProperties["keyAlias"] as String\
                       keyPassword = keystoreProperties["password"] as String\
                       storeFile = file(keystoreProperties["storeFile"] as String)\
@@ -152,7 +159,7 @@ jobs:
                   }\
               }' "$GRADLE_FILE"
 
-          # 在 release buildType 中引用签名配置
+          # Reference signing config in release buildType
           sed -i '/getByName("release") {/a\
                       signingConfig = signingConfigs.getByName("release")' "$GRADLE_FILE"
 
