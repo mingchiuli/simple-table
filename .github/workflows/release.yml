@@ -121,79 +121,55 @@ jobs:
       - name: Init Android project
         run: npx tauri android init
 
-      # 配置签名 - 写入 keystore.properties
       - name: Setup Android signing
         run: |
           cd src-tauri/gen/android
-          cat > keystore.properties << EOF
-          storePassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          storeFile=$RUNNER_TEMP/keystore.jks
-          EOF
+          echo "storePassword=${{ secrets.ANDROID_KEY_PASSWORD }}" > keystore.properties
+          echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> keystore.properties
+          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> keystore.properties
+          echo "storeFile=$RUNNER_TEMP/keystore.jks" >> keystore.properties
           echo "${{ secrets.ANDROID_KEY_BASE64 }}" | base64 -d > $RUNNER_TEMP/keystore.jks
 
-      # 修改 build.gradle.kts - 用 Python 精确控制
       - name: Configure Gradle signing
         run: |
-          python3 << 'PYEOF'
-          gradle_file = "src-tauri/gen/android/app/build.gradle.kts"
+          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
 
-          with open(gradle_file, "r") as f:
-              lines = f.readlines()
+          # Step 1: 先读出原文件内容
+          ORIGINAL=$(cat "$GRADLE_FILE")
 
-          result = []
-          imports_added = False
-          signing_config_added = False
+          # Step 2: 重写文件 — 强制把两个 import 写在最前面
+          cat > "$GRADLE_FILE" << 'HEADER'
+          import java.util.Properties
+          import java.io.FileInputStream
+          HEADER
 
-          for i, line in enumerate(lines):
-              # Step 1: Add imports at the very top (before first non-import, non-blank line)
-              if not imports_added and not line.strip().startswith("import") and line.strip() != "":
-                  # Check if imports already exist
-                  header = "".join(lines[:i])
-                  if "java.util.Properties" not in header:
-                      result.append("import java.util.Properties\n")
-                      result.append("import java.io.FileInputStream\n")
-                      result.append("\n")
-                  imports_added = True
+          # Step 3: 把原内容追加回去（去掉可能已有的重复 import）
+          echo "$ORIGINAL" | grep -v '^import java.util.Properties' | grep -v '^import java.io.FileInputStream' >> "$GRADLE_FILE"
 
-              # Step 2: Before buildTypes, insert signingConfigs
-              if not signing_config_added and line.strip().startswith("buildTypes"):
-                  result.append("        signingConfigs {\n")
-                  result.append('            create("release") {\n')
-                  result.append('                val keystorePropertiesFile = rootProject.file("keystore.properties")\n')
-                  result.append("                val keystoreProperties = Properties()\n")
-                  result.append("                if (keystorePropertiesFile.exists()) {\n")
-                  result.append("                    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n")
-                  result.append("                }\n")
-                  result.append("\n")
-                  result.append('                keyAlias = keystoreProperties["keyAlias"] as String\n')
-                  result.append('                keyPassword = keystoreProperties["keyPassword"] as String\n')
-                  result.append('                storeFile = file(keystoreProperties["storeFile"] as String)\n')
-                  result.append('                storePassword = keystoreProperties["storePassword"] as String\n')
-                  result.append("            }\n")
-                  result.append("        }\n")
-                  result.append("\n")
-                  signing_config_added = True
+          # Step 4: 在 buildTypes 前插入 signingConfigs
+          sed -i '/buildTypes {/i\
+          \        signingConfigs {\
+          \            create("release") {\
+          \                val keystorePropertiesFile = rootProject.file("keystore.properties")\
+          \                val keystoreProperties = Properties()\
+          \                if (keystorePropertiesFile.exists()) {\
+          \                    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\
+          \                }\
+          \                keyAlias = keystoreProperties["keyAlias"] as String\
+          \                keyPassword = keystoreProperties["keyPassword"] as String\
+          \                storeFile = file(keystoreProperties["storeFile"] as String)\
+          \                storePassword = keystoreProperties["storePassword"] as String\
+          \            }\
+          \        }' "$GRADLE_FILE"
 
-              # Step 3: Add signingConfig to release buildType
-              if 'getByName("release")' in line:
-                  result.append(line)
-                  result.append('                signingConfig = signingConfigs.getByName("release")\n')
-                  continue
+          # Step 5: 在 release buildType 中添加签名引用
+          sed -i '/getByName("release") {/a\
+          \                signingConfig = signingConfigs.getByName("release")' "$GRADLE_FILE"
 
-              result.append(line)
-
-          with open(gradle_file, "w") as f:
-              f.writelines(result)
-
-          # Debug output
-          print("✅ Modified build.gradle.kts:")
-          with open(gradle_file, "r") as f:
-              for i, line in enumerate(f.readlines()[:60], 1):
-                  print(f"  {i:3}: {line}", end="")
-          PYEOF
-
+          # Debug: 打印前50行验证
+          echo "✅ build.gradle.kts 前50行:"
+          head -50 "$GRADLE_FILE" | cat -n
+                    
       # 关键修复 5: 单独执行 build
       - name: Build Android APK
         run: npx tauri android build --apk
