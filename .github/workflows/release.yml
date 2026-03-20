@@ -124,11 +124,11 @@ jobs:
       - name: Setup Android signing
         run: |
           cd src-tauri/gen/android
-          echo "storePassword=${{ secrets.ANDROID_KEY_PASSWORD }}" > keystore.properties
-          echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> keystore.properties
-          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> keystore.properties
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > keystore.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
           echo "storeFile=$RUNNER_TEMP/keystore.jks" >> keystore.properties
-          echo "${{ secrets.ANDROID_KEY_BASE64 }}" | base64 -d > $RUNNER_TEMP/keystore.jks
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > $RUNNER_TEMP/keystore.jks
 
       - name: Configure Gradle signing
         run: |
