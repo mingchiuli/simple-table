@@ -135,15 +135,13 @@ jobs:
         run: |
           GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
 
-          # 在文件开头添加 import
-          sed -i '1s/^/import java.io.FileInputStream\n/' "$GRADLE_FILE"
+          sed -i '1s/^/import java.io.FileInputStream\nimport java.util.Properties\n/' "$GRADLE_FILE"
 
-          # 在 buildTypes 之前添加 signingConfigs
           sed -i '/buildTypes {/i\
               signingConfigs {\
                   create("release") {\
                       val keystorePropertiesFile = rootProject.file("keystore.properties")\
-                      val keystoreProperties = java.util.Properties()\
+                      val keystoreProperties = Properties()\
                       if (keystorePropertiesFile.exists()) {\
                           keystoreProperties.load(FileInputStream(keystorePropertiesFile))\
                       }\
