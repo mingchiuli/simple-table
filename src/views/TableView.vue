@@ -764,8 +764,6 @@ function handleColumnResize(colIndex: number, width: number) {
   height: 100vh;
   background-color: #fff;
   position: relative;
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .content {

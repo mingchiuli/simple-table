@@ -4,10 +4,12 @@
 
 .mobile.app-root {
   padding-top: max(20px, env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .tablet.app-root {
   padding-top: max(20px, env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .desktop.app-root {
