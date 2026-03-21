@@ -311,7 +311,12 @@ const totalWidth = computed(() => {
   const columnsWidth = props.columns.reduce((sum, _, colIndex) => {
     return sum + getColumnWidth(colIndex);
   }, 0);
-  return rowNumberWidth + columnsWidth;
+  const calculatedWidth = rowNumberWidth + columnsWidth;
+  // 空数据时使用容器宽度，确保"No Data"居中显示
+  if (props.data.length === 0) {
+    return Math.max(calculatedWidth, tableSize.value.width);
+  }
+  return calculatedWidth;
 });
 
 // 行高固定

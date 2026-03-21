@@ -1,0 +1,46 @@
+/* ==================== Platform-Specific Styles ==================== */
+
+/* ==================== App Root Padding ==================== */
+
+.mobile.app-root {
+  padding-top: max(20px, env(safe-area-inset-top));
+}
+
+.tablet.app-root {
+  padding-top: max(20px, env(safe-area-inset-top));
+}
+
+.desktop.app-root {
+  padding-top: 0;
+}
+
+/* ==================== Table Container ==================== */
+
+.mobile .table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tablet .table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ==================== Back Button ==================== */
+
+.mobile .back-btn {
+  bottom: 16px;
+  left: 16px;
+  width: 40px;
+  height: 40px;
+}
+
+.tablet .back-btn {
+  bottom: 20px;
+  left: 20px;
+}
+
+.desktop .back-btn {
+  bottom: 24px;
+  left: 24px;
+}

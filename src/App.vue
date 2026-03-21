@@ -1,28 +1,22 @@
 <script setup lang="ts">
 import { RouterView } from "vue-router";
 import { usePlatform } from "./composables/usePlatform";
-import "./styles/desktop.css";
-import "./styles/mobile.css";
+import "./styles/base.css";
+import "./styles/platform.css";
 
 const { platform } = usePlatform();
 </script>
 
 <template>
-  <div :class="platform">
+  <div :class="['app-root', platform]">
     <RouterView />
   </div>
 </template>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
-  background-color: #f5f7fa;
+.app-root {
+  padding-top: 0;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 </style>

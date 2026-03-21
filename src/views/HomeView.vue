@@ -86,8 +86,13 @@ async function handleNewFile() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
+  min-height: 100dvh;
+  min-height: 100vh; /* Fallback */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
   background-color: #fff;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .empty-state {
