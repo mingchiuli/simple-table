@@ -121,6 +121,12 @@ jobs:
       - name: Init Android project
         run: npx tauri android init
 
+      # 复制自定义图标到 Android 项目
+      - name: Copy custom icons to Android project
+        run: |
+          cp -r src-tauri/icons/android/mipmap-* src-tauri/gen/android/app/src/main/res/
+          cp -r src-tauri/icons/android/values src-tauri/gen/android/app/src/main/res/
+
       - name: Setup Android signing
         run: |
           cd src-tauri/gen/android
