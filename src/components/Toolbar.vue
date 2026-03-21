@@ -97,34 +97,31 @@ const emit = defineEmits<{
         :disabled="!props.canUndo"
         @click="emit('undo')"
         size="small"
-        circle
         title="Undo"
       >
-        ↶
+        Undo
       </el-button>
       <el-button
         :disabled="!props.canRedo"
         @click="emit('redo')"
         size="small"
-        circle
         title="Redo"
       >
-        ↷
+        Redo
       </el-button>
-      <el-button @click="emit('add-row')" size="small" circle title="Add Row">
+      <el-button @click="emit('add-row')" size="small" title="Add Row">
         +R
       </el-button>
-      <el-button @click="emit('add-column')" size="small" circle title="Add Column">
+      <el-button @click="emit('add-column')" size="small" title="Add Column">
         +C
       </el-button>
-      <el-button @click="emit('add-sheet')" size="small" circle title="Add Sheet">
+      <el-button @click="emit('add-sheet')" size="small" title="Add Sheet">
         +S
       </el-button>
       <el-button
         :disabled="props.sheetNames.length <= 1"
         @click="emit('delete-sheet')"
         size="small"
-        circle
         title="Delete Sheet"
       >
         -S

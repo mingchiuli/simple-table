@@ -88,8 +88,6 @@ async function handleNewFile() {
   justify-content: center;
   min-height: 100dvh;
   min-height: 100vh; /* Fallback */
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
   background-color: #fff;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
