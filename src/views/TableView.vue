@@ -3,6 +3,7 @@ import {computed, ref, watch} from "vue";
 import {useRouter} from "vue-router";
 import {invoke} from "@tauri-apps/api/core";
 import {open, save} from "@tauri-apps/plugin-dialog";
+import {readFile, writeFile} from "@tauri-apps/plugin-fs";
 import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
 import type {CellValue, FileData, OperationResult, SearchResult, SortState} from "@/types";
@@ -287,7 +288,10 @@ async function handleOpenFile() {
     if (selected) {
       isLoading.value = true;
       isFileLoading.value = true;
-      const result = await invoke<FileData>("read_file", { path: selected });
+      // Read file content as bytes first, then pass to backend
+      // This works on all platforms including Android with content:// URIs
+      const bytes = await readFile(selected);
+      const result = await invoke<FileData>("read_file_bytes", { path: selected, bytes: Array.from(bytes) });
       fileDataStore.set(result);
       currentSheetIndex.value = 0;
       hasChanges.value = false;
@@ -335,7 +339,10 @@ async function handleSaveFile() {
 
     if (savePath) {
       isLoading.value = true;
-      await invoke("save_file", { path: savePath, fileData: fileData.value });
+      // Generate file bytes first, then write to path using fs plugin
+      // This works on all platforms including Android with content:// URIs
+      const [, bytes] = await invoke<[string, number[]]>("generate_file_bytes", { fileData: fileData.value });
+      await writeFile(savePath, new Uint8Array(bytes));
       hasChanges.value = false;
       ElMessage.success("File saved successfully");
     }

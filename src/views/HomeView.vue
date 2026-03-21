@@ -2,6 +2,7 @@
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 import { ElMessage } from "element-plus";
 import type { FileData } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
@@ -22,7 +23,10 @@ async function handleOpenFile() {
     });
 
     if (selected) {
-      const result = await invoke<FileData>("read_file", { path: selected });
+      // Read file content as bytes first, then pass to backend
+      // This works on all platforms including Android with content:// URIs
+      const bytes = await readFile(selected);
+      const result = await invoke<FileData>("read_file_bytes", { path: selected, bytes: Array.from(bytes) });
       fileDataStore.set(result);
       router.push({ name: "table" });
       ElMessage.success("File loaded successfully");

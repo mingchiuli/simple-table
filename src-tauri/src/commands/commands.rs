@@ -16,10 +16,22 @@ pub fn read_file(path: String) -> Result<FileData, AppError> {
     crate::io::file_ops::do_read_file(path)
 }
 
+/// 从字节读取文件（用于 Android content:// URI 场景）
+#[tauri::command]
+pub fn read_file_bytes(path: String, bytes: Vec<u8>) -> Result<FileData, AppError> {
+    crate::io::file_ops::do_read_file_bytes(path, bytes)
+}
+
 /// 保存文件
 #[tauri::command]
 pub fn save_file(path: String, file_data: FileData) -> Result<(), AppError> {
     crate::io::file_ops::do_save_file(path, file_data)
+}
+
+/// 生成文件字节（用于 Android content:// URI 场景）
+#[tauri::command]
+pub fn generate_file_bytes(file_data: FileData) -> Result<(String, Vec<u8>), AppError> {
+    crate::io::file_ops::do_generate_file_bytes(file_data)
 }
 
 /// 获取默认保存路径
