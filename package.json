@@ -23,7 +23,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/node": "^25.5.0",
-    "@vitejs/plugin-vue": "^6.0.4",
+    "@vitejs/plugin-vue": "^6.0.5",
     "typescript": "^5.9.3",
     "unplugin-auto-import": "^21.0.0",
     "unplugin-vue-components": "^31.0.0",
