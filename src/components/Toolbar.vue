@@ -157,7 +157,6 @@ const emit = defineEmits<{
   display: flex;
   flex-direction: column;
   padding: 8px 12px;
-  padding-top: max(8px, env(safe-area-inset-top));
   gap: 8px;
   border-bottom: 1px solid #e4e7ed;
 }
