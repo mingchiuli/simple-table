@@ -51,6 +51,7 @@ function handleEnter() {
   background: #f5f7fa;
   border-bottom: 1px solid #e4e7ed;
   gap: 12px;
+  overflow: visible;
 }
 
 .cell-position {
@@ -63,5 +64,6 @@ function handleEnter() {
 .cell-editor-input {
   flex: 1;
   max-width: 500px;
+  max-width: min(100vw - 80px, 100%);
 }
 </style>
