@@ -185,52 +185,75 @@ pub struct SortState {
 
 /// 操作结果（增量数据）
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+#[serde(tag = "type", content = "data")]
 pub enum OperationResult {
     /// 单元格修改
+    #[serde(rename = "SetCell")]
     SetCell {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
         cell: CellChange,
     },
     /// 添加行
+    #[serde(rename = "AddRow")]
     AddRow {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
         row: RowChange,
     },
     /// 删除行
+    #[serde(rename = "DeleteRow")]
     DeleteRow {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
+        #[serde(rename = "rowIndex")]
         row_index: usize,
     },
     /// 添加列
+    #[serde(rename = "AddColumn")]
     AddColumn {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
         column: ColumnChange,
         /// 添加的列数据（用于撤销时恢复）
+        #[serde(rename = "colData")]
         col_data: Vec<CellValue>,
     },
     /// 删除列
+    #[serde(rename = "DeleteColumn")]
     DeleteColumn {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
+        #[serde(rename = "columnIndex")]
         column_index: usize,
     },
     /// 添加 Sheet
+    #[serde(rename = "AddSheet")]
     AddSheet {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
         name: String,
         /// 完整的 sheet 数据（用于撤销时恢复）
+        #[serde(rename = "sheetData")]
         sheet_data: SheetData,
     },
     /// 删除 Sheet
+    #[serde(rename = "DeleteSheet")]
     DeleteSheet {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
         /// 被删除的 sheet 数据（用于撤销时恢复）
+        #[serde(rename = "sheetData")]
         sheet_data: SheetData,
     },
     /// 列排序
+    #[serde(rename = "SortColumn")]
     SortColumn {
+        #[serde(rename = "sheetIndex")]
         sheet_index: usize,
+        #[serde(rename = "sheetData")]
         sheet_data: SheetData,
+        #[serde(rename = "sortState")]
         sort_state: Option<SortState>,
     },
 }

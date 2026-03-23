@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope};
+use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope, SortState};
 
 /// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）
 static EDITOR_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<Option<crate::state::editor_state::EditorState>>>> = std::sync::OnceLock::new();
@@ -80,7 +80,7 @@ pub fn redo() -> Result<OperationResult, AppError> {
 // ==================== Cell Operations ====================
 
 /// 设置单元格值
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn set_cell(
     sheet_index: usize,
     row: usize,
@@ -92,25 +92,25 @@ pub fn set_cell(
 }
 
 /// 添加行
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn add_row(sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_add_row(get_state(), sheet_index, row_index)
 }
 
 /// 删除行
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn delete_row(sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_row(get_state(), sheet_index, row_index)
 }
 
 /// 添加列
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn add_column(sheet_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_add_column(get_state(), sheet_index)
 }
 
 /// 删除列
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn delete_column(sheet_index: usize, col_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_column(get_state(), sheet_index, col_index)
 }
@@ -124,17 +124,15 @@ pub fn add_sheet() -> Result<(), AppError> {
 }
 
 /// 删除 Sheet
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn delete_sheet(sheet_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_sheet(get_state(), sheet_index)
 }
 
 // ==================== Sort Operations ====================
 
-use crate::types::SortState;
-
 /// 对指定列排序
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn sort_column(
     sheet_index: usize,
     col_index: usize,
@@ -147,7 +145,7 @@ pub fn sort_column(
 // ==================== Search Operations ====================
 
 /// 搜索单元格
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn search(
     query: String,
     scope: SearchScope,
