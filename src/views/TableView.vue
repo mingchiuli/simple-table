@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import {computed, ref, watch} from "vue";
-import {useRouter} from "vue-router";
+import {computed, ref, watch, onMounted} from "vue";
+import {useRouter, useRoute} from "vue-router";
 import {invoke} from "@tauri-apps/api/core";
 import {open, save} from "@tauri-apps/plugin-dialog";
 import {readFile, writeFile} from "@tauri-apps/plugin-fs";
@@ -15,7 +15,36 @@ import CellEditor from "@/components/CellEditor.vue";
 import SearchPanel from "@/components/SearchPanel.vue";
 
 const router = useRouter();
+const route = useRoute();
 const fileDataStore = useFileDataStore();
+
+// Handle file opened via deep link or CLI
+onMounted(async () => {
+  const filePath = route.query.file as string;
+  if (filePath) {
+    console.log("Loading file from path:", filePath);
+    await loadFileFromPath(filePath);
+  }
+});
+
+async function loadFileFromPath(filePath: string) {
+  try {
+    isLoading.value = true;
+    isFileLoading.value = true;
+    const bytes = await readFile(filePath);
+    const result = await invoke<FileData>("read_file_bytes", { path: filePath, bytes: Array.from(bytes) });
+    fileDataStore.set(result);
+    currentSheetIndex.value = 0;
+    hasChanges.value = false;
+    await updateEditorState();
+    ElMessage.success("File loaded successfully");
+  } catch (error) {
+    ElMessage.error(`Failed to open file: ${error}`);
+  } finally {
+    isLoading.value = false;
+    isFileLoading.value = false;
+  }
+}
 
 const currentSheetIndex = ref(0);
 const hasChanges = ref(false);

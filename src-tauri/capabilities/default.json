@@ -9,6 +9,16 @@
     "dialog:default",
     "fs:default",
     "fs:allow-write-file",
-    "fs:allow-write-text-file"
+    "fs:allow-write-text-file",
+    "deep-link:default",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    }
   ]
 }

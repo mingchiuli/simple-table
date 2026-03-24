@@ -11,13 +11,35 @@ use commands::{
     get_editor_state, get_file_data, init_file, read_file, read_file_bytes,
     redo, save_file, search, set_cell, sort_column, undo,
 };
-
+use tauri::Emitter;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            println!("new app instance opened with {argv:?}");
+            // argv[0] is the app path, argv[1+] are the arguments
+            if argv.len() > 1 {
+                let url = &argv[1];
+                if url.starts_with("simpletable://") {
+                    if let Err(e) = app.emit("deep-link-received", url.clone()) {
+                        eprintln!("Failed to emit deep link: {}", e);
+                    }
+                }
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .setup(|_app| {
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_file,
             read_file_bytes,

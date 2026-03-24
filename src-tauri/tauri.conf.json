@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Simple Table",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "identifier": "wiki.chiu.simple-table",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,6 +26,19 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": ["simpletable"],
+          "appLink": false
+        }
+      ],
+      "desktop": {
+        "schemes": ["simpletable"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -35,6 +48,26 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["xlsx", "xls"],
+        "name": "Excel",
+        "description": "Microsoft Excel Spreadsheet",
+        "role": "Editor"
+      },
+      {
+        "ext": ["csv"],
+        "name": "CSV",
+        "description": "Comma-separated Values",
+        "role": "Editor"
+      },
+      {
+        "ext": ["ods"],
+        "name": "ODS",
+        "description": "OpenDocument Spreadsheet",
+        "role": "Editor"
+      }
     ]
   }
 }
