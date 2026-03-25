@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { RouterView, useRouter } from "vue-router";
 import { usePlatform } from "./composables/usePlatform";
-import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import "./styles/base.css";
 import "./styles/platform.css";
 import { onMounted } from "vue";
@@ -11,20 +12,21 @@ const { platform } = usePlatform();
 const router = useRouter();
 
 onMounted(async () => {
-  // Check if app was started via deep link
+  // Check if app was started via deep link (getCurrent works for initial startup)
   const startUrls = await getCurrent();
   if (startUrls && startUrls.length > 0) {
     handleDeepLink(startUrls[0]);
+    return;
   }
 
-  // Listen for deep links from onOpenUrl (mobile)
-  await onOpenUrl((urls) => {
-    if (urls.length > 0) {
-      handleDeepLink(urls[0]);
-    }
-  });
+  // Check for pending deep link from macOS file association (stored in Rust state)
+  const pendingUrl = await invoke<string | null>("get_pending_deep_link");
+  if (pendingUrl) {
+    handleDeepLink(pendingUrl);
+    return;
+  }
 
-  // Listen for deep links from single_instance (desktop)
+  // Listen for deep links from single_instance (desktop - Windows/Linux)
   await listen<string>("deep-link-received", (event) => {
     handleDeepLink(event.payload);
   });
@@ -33,23 +35,23 @@ onMounted(async () => {
 function handleDeepLink(url: string) {
   console.log("Deep link received:", url);
   console.log("Platform:", platform);
-  // Parse simpletable://open?file=/path/to/file
   try {
     const parsed = new URL(url);
     console.log("Protocol:", parsed.protocol);
     console.log("Host:", parsed.host);
     console.log("Search params:", Object.fromEntries(parsed.searchParams));
+
     if (parsed.protocol === "simpletable:") {
       const filePath = parsed.searchParams.get("file");
-      const content = parsed.searchParams.get("content");
       console.log("File path:", filePath);
-      console.log("Content:", content);
       if (filePath) {
         router.push({ name: "table", query: { file: filePath } });
-      } else if (content) {
-        // Mobile might pass content directly (base64 or raw)
-        router.push({ name: "table", query: { content } });
       }
+    } else if (parsed.protocol === "file:") {
+      // macOS file association: file:///path/to/file.xlsx → /path/to/file.xlsx
+      const filePath = decodeURIComponent(parsed.pathname);
+      console.log("File path from association:", filePath);
+      router.push({ name: "table", query: { file: filePath } });
     }
   } catch (e) {
     console.error("Failed to parse deep link:", e);

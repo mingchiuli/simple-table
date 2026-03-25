@@ -18,3 +18,9 @@ body {
   position: absolute;
   z-index: 100;
 }
+
+/* ==================== ElMessage Position ==================== */
+
+.el-message {
+  top: 80px !important;
+}

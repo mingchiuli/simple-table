@@ -28,12 +28,6 @@
   },
   "plugins": {
     "deep-link": {
-      "mobile": [
-        {
-          "scheme": ["simpletable"],
-          "appLink": false
-        }
-      ],
       "desktop": {
         "schemes": ["simpletable"]
       }
