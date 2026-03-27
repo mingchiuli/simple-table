@@ -7,9 +7,9 @@ mod types;
 
 use commands::{
     add_column, add_row, add_sheet, delete_column, delete_row, delete_sheet,
-    generate_file_bytes, get_default_save_path,
-    get_editor_state, get_file_data, init_file, read_file, read_file_bytes,
-    redo, save_file, search, set_cell, sort_column, undo,
+    generate_file_bytes,
+    get_editor_state, init_file, read_file_bytes,
+    redo, search, set_cell, sort_column, undo,
 };
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
@@ -69,13 +69,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            read_file,
             read_file_bytes,
-            save_file,
             generate_file_bytes,
-            get_default_save_path,
             init_file,
-            get_file_data,
             undo,
             redo,
             set_cell,

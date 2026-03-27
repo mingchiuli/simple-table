@@ -10,34 +10,16 @@ pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::state::edit
 
 // ==================== File Operations ====================
 
-/// 读取文件
-#[tauri::command]
-pub fn read_file(path: String) -> Result<FileData, AppError> {
-    crate::io::file_ops::do_read_file(path)
-}
-
-/// 从字节读取文件（用于 Android content:// URI 场景）
+/// 从字节读取文件
 #[tauri::command]
 pub fn read_file_bytes(path: String, bytes: Vec<u8>) -> Result<FileData, AppError> {
     crate::io::file_ops::do_read_file_bytes(path, bytes)
 }
 
-/// 保存文件
-#[tauri::command]
-pub fn save_file(path: String, file_data: FileData) -> Result<(), AppError> {
-    crate::io::file_ops::do_save_file(path, file_data)
-}
-
-/// 生成文件字节（用于 Android content:// URI 场景）
+/// 生成文件字节
 #[tauri::command]
 pub fn generate_file_bytes(file_data: FileData) -> Result<(String, Vec<u8>), AppError> {
     crate::io::file_ops::do_generate_file_bytes(file_data)
-}
-
-/// 获取默认保存路径
-#[tauri::command]
-pub fn get_default_save_path(file_name: String) -> String {
-    crate::io::file_ops::do_get_default_save_path(file_name)
 }
 
 /// 初始化文件（用于新建文件时初始化编辑器状态）
@@ -47,17 +29,6 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 }
 
 // ==================== Editor Operations ====================
-
-/// 获取当前文件数据
-#[tauri::command]
-pub fn get_file_data() -> Result<FileData, AppError> {
-    let state = get_state();
-    let guard = state.read().expect("Editor state lock poisoned");
-    match guard.as_ref() {
-        Some(editor_state) => Ok(editor_state.file_data.clone()),
-        None => Err(AppError::Internal("No file loaded".to_string())),
-    }
-}
 
 /// 获取编辑器状态（包含能否撤销/重做）
 #[tauri::command]
