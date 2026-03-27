@@ -1,46 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::types::{CellPosition, CellValue, ColumnChange, OperationResult, RowChange, SheetData, SortState};
-
-/// 将单元格值转换为字符串
-fn cell_to_string(cell: &CellValue) -> String {
-    match cell {
-        CellValue::Null => String::new(),
-        CellValue::String(s) => s.clone(),
-        CellValue::Number(n) => n.to_string(),
-        CellValue::Boolean(b) => b.to_string(),
-    }
-}
-
-/// 更新单个单元格的索引
-fn update_cell_index(sheet: &mut SheetData, row: usize, col: usize, old_value: &CellValue, new_value: &CellValue) {
-    let old_text = cell_to_string(old_value);
-    let new_text = cell_to_string(new_value);
-
-    // 如果值没变，不需要更新
-    if old_text.to_lowercase() == new_text.to_lowercase() {
-        return;
-    }
-
-    // 删除旧值的索引
-    if !old_text.is_empty() {
-        let old_token = old_text.to_lowercase();
-        if let Some(positions) = sheet.index.inverted_index.get_mut(&old_token) {
-            positions.retain(|p| !(p.row == row && p.col == col));
-            if positions.is_empty() {
-                sheet.index.inverted_index.remove(&old_token);
-            }
-        }
-    }
-
-    // 添加新值的索引
-    if !new_text.is_empty() {
-        let new_token = new_text.to_lowercase();
-        sheet.index.inverted_index
-            .entry(new_token)
-            .or_default()
-            .push(CellPosition { row, col });
-    }
-}
+use crate::types::{CellValue, ColumnChange, OperationResult, RowChange, SheetData, SortState};
 
 /// 对 sheet 按指定列排序
 fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
@@ -257,18 +216,11 @@ impl Operation {
         match self {
             Operation::SetCell { sheet_index, row, col, new_value, .. } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    // 先获取旧值
-                    let old_val = sheet.rows.get(*row)
-                        .and_then(|r| r.get(*col))
-                        .cloned()
-                        .unwrap_or(CellValue::Null);
-
                     if let Some(row_data) = sheet.rows.get_mut(*row) {
                         if *col < row_data.len() {
                             // 先更新值
                             row_data[*col] = new_value.clone();
-                            // 增量更新索引（同步执行，因为是单单元格操作，开销小）
-                            update_cell_index(sheet, *row, *col, &old_val, new_value);
+                            // 索引重建由调用方异步处理
                         }
                     }
                 }

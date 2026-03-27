@@ -109,7 +109,12 @@ pub enum SearchScope {
 /// Sheet 索引（不序列化）
 #[derive(Clone, Debug, Default)]
 pub struct SheetIndex {
-    pub inverted_index: HashMap<String, Vec<CellPosition>>,
+    /// 全文搜索索引
+    pub search_index: Option<tantivy::Index>,
+    /// Schema
+    pub search_schema: Option<tantivy::schema::Schema>,
+    /// 文本字段
+    pub text_field: Option<tantivy::schema::Field>,
 }
 
 /// 合并范围

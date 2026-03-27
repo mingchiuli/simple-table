@@ -4,6 +4,7 @@ use std::sync::RwLock;
 use crate::state::editor_state::EditorState;
 use crate::error::AppError;
 use crate::types::{SearchResult, SearchScope, CellValue};
+use crate::ops::index_ops::search_cells;
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -40,7 +41,6 @@ pub fn do_search(
         return Ok(vec![]);
     }
 
-    let token = query.to_lowercase();
     let state = state.read().expect("Editor state lock poisoned");
 
     let editor_state = match state.as_ref() {
@@ -54,43 +54,41 @@ pub fn do_search(
         SearchScope::CurrentSheet => {
             let sheet_idx = current_sheet_index.unwrap_or(0);
             if let Some(sheet) = editor_state.file_data.sheets.get(sheet_idx) {
-                if let Some(positions) = sheet.index.inverted_index.get(&token) {
-                    for pos in positions {
-                        let value = sheet.rows.get(pos.row)
-                            .and_then(|r| r.get(pos.col))
-                            .map(|c| cell_to_string(c))
-                            .unwrap_or_default();
+                let positions = search_cells(sheet, &query, 1000);
+                for pos in positions {
+                    let value = sheet.rows.get(pos.row)
+                        .and_then(|r| r.get(pos.col))
+                        .map(|c| cell_to_string(c))
+                        .unwrap_or_default();
 
-                        results.push(SearchResult {
-                            sheet_index: sheet_idx,
-                            sheet_name: sheet.name.clone(),
-                            row: pos.row,
-                            col: pos.col,
-                            value,
-                            cell_position: format!("{}{}", col_to_letter(pos.col), pos.row + 1),
-                        });
-                    }
+                    results.push(SearchResult {
+                        sheet_index: sheet_idx,
+                        sheet_name: sheet.name.clone(),
+                        row: pos.row,
+                        col: pos.col,
+                        value,
+                        cell_position: format!("{}{}", col_to_letter(pos.col), pos.row + 1),
+                    });
                 }
             }
         }
         SearchScope::AllSheets => {
             for (sheet_idx, sheet) in editor_state.file_data.sheets.iter().enumerate() {
-                if let Some(positions) = sheet.index.inverted_index.get(&token) {
-                    for pos in positions {
-                        let value = sheet.rows.get(pos.row)
-                            .and_then(|r| r.get(pos.col))
-                            .map(|c| cell_to_string(c))
-                            .unwrap_or_default();
+                let positions = search_cells(sheet, &query, 1000);
+                for pos in positions {
+                    let value = sheet.rows.get(pos.row)
+                        .and_then(|r| r.get(pos.col))
+                        .map(|c| cell_to_string(c))
+                        .unwrap_or_default();
 
-                        results.push(SearchResult {
-                            sheet_index: sheet_idx,
-                            sheet_name: sheet.name.clone(),
-                            row: pos.row,
-                            col: pos.col,
-                            value,
-                            cell_position: format!("{}{}", col_to_letter(pos.col), pos.row + 1),
-                        });
-                    }
+                    results.push(SearchResult {
+                        sheet_index: sheet_idx,
+                        sheet_name: sheet.name.clone(),
+                        row: pos.row,
+                        col: pos.col,
+                        value,
+                        cell_position: format!("{}{}", col_to_letter(pos.col), pos.row + 1),
+                    });
                 }
             }
         }

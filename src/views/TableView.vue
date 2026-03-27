@@ -53,6 +53,7 @@ const isFileLoading = ref(false);
 const canUndo = ref(false);
 const canRedo = ref(false);
 const searchResults = ref<SearchResult[]>([]);
+const searchQuery = ref("");
 const isSearching = ref(false);
 const selectedCell = ref<{ row: number; col: number } | null>(null);
 const cellEditorValue = ref<string>("");
@@ -632,6 +633,7 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
 async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
   if (!fileData.value) return;
 
+  searchQuery.value = query;
   try {
     isSearching.value = true;
     searchResults.value = await invoke<SearchResult[]>("search", {
@@ -658,6 +660,7 @@ function handleSearchResultClick(result: SearchResult) {
 
 function handleClearSearch() {
   searchResults.value = [];
+  searchQuery.value = "";
 }
 
 function handleSheetChange(index: number) {
@@ -769,6 +772,7 @@ function handleColumnResize(colIndex: number, width: number) {
       <!-- Search Results Panel -->
       <SearchPanel
         :results="searchResults"
+        :query="searchQuery"
         @result-click="handleSearchResultClick"
         @clear="handleClearSearch"
       />
