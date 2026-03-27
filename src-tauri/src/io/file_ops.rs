@@ -46,8 +46,8 @@ pub fn do_init_file(file_data: FileData) -> Result<(), AppError> {
 fn init_editor_state(file_data: FileData) {
     let state = crate::commands::get_state();
     {
-        let mut state_guard = state.write().unwrap();
-        *state_guard = Some(EditorState::new(file_data.clone()));
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
+        *state_guard = Some(EditorState::new(file_data));
     }
     // 异步构建索引（后台线程）
     spawn_rebuild_all_sheets_index(state.clone());

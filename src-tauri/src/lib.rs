@@ -19,7 +19,7 @@ struct PendingDeepLink(Mutex<Option<String>>);
 
 #[tauri::command]
 fn get_pending_deep_link(app: tauri::AppHandle) -> Option<String> {
-    app.state::<PendingDeepLink>().0.lock().unwrap().take()
+    app.state::<PendingDeepLink>().0.lock().expect("PendingDeepLink lock poisoned").take()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -60,7 +60,7 @@ pub fn run() {
 
                         // Store URL in app state for frontend to retrieve
                         if let Some(state) = handle.try_state::<PendingDeepLink>() {
-                            let mut pending = state.0.lock().unwrap();
+                            let mut pending = state.0.lock().expect("PendingDeepLink lock poisoned");
                             *pending = Some(url_str);
                         }
                     }

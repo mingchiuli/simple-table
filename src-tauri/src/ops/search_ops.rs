@@ -10,10 +10,12 @@ fn col_to_letter(col: usize) -> String {
     let mut result = String::new();
     let mut n = col;
     while n >= 26 {
-        result.insert(0, char::from_u32((n % 26) as u32 + 65).unwrap());
+        // Safety: math guarantees result is ASCII uppercase letter (65-90)
+        result.insert(0, char::from_u32((n % 26) as u32 + 65).expect("Invalid ASCII letter"));
         n = n / 26 - 1;
     }
-    result.insert(0, char::from_u32(n as u32 + 65).unwrap());
+    // Safety: math guarantees result is ASCII uppercase letter (65-90)
+    result.insert(0, char::from_u32(n as u32 + 65).expect("Invalid ASCII letter"));
     result
 }
 
@@ -39,7 +41,7 @@ pub fn do_search(
     }
 
     let token = query.to_lowercase();
-    let state = state.read().unwrap();
+    let state = state.read().expect("Editor state lock poisoned");
 
     let editor_state = match state.as_ref() {
         Some(s) => s,

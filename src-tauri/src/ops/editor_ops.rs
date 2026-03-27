@@ -23,7 +23,7 @@ fn extract_sheet_index(result: &OperationResult) -> usize {
 
 /// 获取编辑器状态信息
 fn get_editor_state_info(state: &Arc<RwLock<Option<EditorState>>>) -> Option<EditorStateInfo> {
-    let state = state.read().unwrap();
+    let state = state.read().expect("Editor state lock poisoned");
     state.as_ref().map(|s| EditorStateInfo {
         can_undo: s.can_undo,
         can_redo: s.can_redo,
@@ -38,7 +38,7 @@ pub fn do_get_editor_state(state: Arc<RwLock<Option<EditorState>>>) -> Result<Op
 /// 撤销操作
 pub fn do_undo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResult, AppError> {
     let sheet_index = {
-        let mut state = state.write().unwrap();
+        let mut state = state.write().expect("Editor state lock poisoned");
         match state.as_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.undo() {
@@ -61,7 +61,7 @@ pub fn do_undo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResul
 /// 重做操作
 pub fn do_redo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResult, AppError> {
     let sheet_index = {
-        let mut state = state.write().unwrap();
+        let mut state = state.write().expect("Editor state lock poisoned");
         match state.as_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.redo() {

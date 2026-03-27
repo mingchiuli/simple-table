@@ -52,7 +52,7 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 #[tauri::command]
 pub fn get_file_data() -> Result<FileData, AppError> {
     let state = get_state();
-    let guard = state.read().unwrap();
+    let guard = state.read().expect("Editor state lock poisoned");
     match guard.as_ref() {
         Some(editor_state) => Ok(editor_state.file_data.clone()),
         None => Err(AppError::Internal("No file loaded".to_string())),

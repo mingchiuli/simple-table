@@ -15,7 +15,7 @@ pub fn do_sort_column(
     previous_sort_state: Option<SortState>,
 ) -> Result<OperationResult, AppError> {
     let (result, needs_rebuild) = {
-        let mut state = state.write().unwrap();
+        let mut state = state.write().expect("Editor state lock poisoned");
         match state.as_mut() {
             Some(editor_state) => {
                 // 获取当前 sheet 数据（排序前）

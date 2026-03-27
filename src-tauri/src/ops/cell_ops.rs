@@ -15,7 +15,7 @@ pub fn do_set_cell(
     old_value: CellValue,
     new_value: CellValue,
 ) -> Result<(), AppError> {
-    let mut state = state.write().unwrap();
+    let mut state = state.write().expect("Editor state lock poisoned");
     match state.as_mut() {
         Some(editor_state) => {
             let operation = Operation::SetCell {
@@ -35,7 +35,7 @@ pub fn do_set_cell(
 /// 添加行
 pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     let result = {
-        let mut state_guard = state.write().unwrap();
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // 直接计算 row_data（空行数据）
@@ -62,7 +62,7 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
 /// 删除行
 pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     let result = {
-        let mut state_guard = state.write().unwrap();
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // 从文件数据中获取行数据（用于撤销）
@@ -90,7 +90,7 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 /// 添加列
 pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<(), AppError> {
     let result = {
-        let mut state_guard = state.write().unwrap();
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // col_index 和 col_data 会在 execute 中自动计算和保存
@@ -113,7 +113,7 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 /// 删除列
 pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, col_index: usize) -> Result<(), AppError> {
     let result = {
-        let mut state_guard = state.write().unwrap();
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // 从文件数据中获取列数据（用于撤销）
@@ -145,7 +145,7 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
 /// 添加 Sheet
 pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppError> {
     let result = {
-        let mut state_guard = state.write().unwrap();
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // 传入空字符串和 None，让 execute 生成名称并创建空 sheet
@@ -169,7 +169,7 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppEr
 /// 删除 Sheet
 pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<(), AppError> {
     let result = {
-        let mut state_guard = state.write().unwrap();
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // sheet_data 为空，会在 execute 中自动保存
