@@ -305,20 +305,6 @@ const columns = computed(() => {
   return cols;
 });
 
-// 计算表格总宽度（用于横向滚动）
-const totalWidth = computed(() => {
-  const rowNumberWidth = 60;
-  const columnsWidth = props.columns.reduce((sum, _, colIndex) => {
-    return sum + getColumnWidth(colIndex);
-  }, 0);
-  const calculatedWidth = rowNumberWidth + columnsWidth;
-  // 空数据时使用容器宽度，确保"No Data"居中显示
-  if (props.data.length === 0) {
-    return Math.max(calculatedWidth, tableSize.value.width);
-  }
-  return calculatedWidth;
-});
-
 // 行高固定
 const ROW_HEIGHT = 60;
 </script>
@@ -330,10 +316,10 @@ const ROW_HEIGHT = 60;
       :columns="columns"
       :data="props.data"
       :row-height="ROW_HEIGHT"
-      :width="totalWidth"
+      :width="tableSize.width"
       :height="tableSize.height"
       :span-method="spanMethod"
-      :fixed="false"
+      fixed
     >
       <template #cell="{ column, rowData, rowIndex }">
         <!-- 行号列 -->
