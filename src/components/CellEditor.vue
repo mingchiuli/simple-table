@@ -65,5 +65,6 @@ function handleEnter() {
   flex: 1;
   max-width: 500px;
   max-width: min(100vw - 80px, 100%);
+  font-size: 16px;
 }
 </style>

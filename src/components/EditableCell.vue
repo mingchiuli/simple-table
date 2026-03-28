@@ -26,7 +26,6 @@ onMounted(() => {
   <el-input
     ref="inputRef"
     :model-value="modelValue"
-    size="small"
     class="cell-input"
     @input="emit('update:modelValue', $event)"
     @blur="emit('blur')"
@@ -36,6 +35,7 @@ onMounted(() => {
 <style scoped>
 .cell-input {
   width: 100%;
+  font-size: 16px;
 }
 
 :deep(.cell-input .el-input__wrapper) {
