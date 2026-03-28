@@ -84,16 +84,6 @@ const columns = computed(() => {
   });
 });
 
-// 计算表格总宽度
-const totalWidth = computed(() => {
-  const rowNumberWidth = 60;
-  const columnWidths = currentSheet.value?.columnWidths || {};
-  const columnsWidth = columns.value.reduce((sum, _, colIndex) => {
-    return sum + (columnWidths[colIndex] || 120);
-  }, 0);
-  return rowNumberWidth + columnsWidth;
-});
-
 const sheetNames = computed(() => {
   if (!fileData.value) return [];
   return fileData.value.sheets.map((s) => s.name);
@@ -732,7 +722,8 @@ function handleColumnResize(colIndex: number, width: number) {
     />
 
     <main class="content">
-      <div class="table-wrapper">
+      <!-- 新增包裹层：CellEditor 在滚动区域外部 -->
+      <div class="editor-column">
         <!-- 骨架屏 -->
         <div v-if="isFileLoading" class="skeleton-container">
           <div class="skeleton-header">
@@ -742,30 +733,33 @@ function handleColumnResize(colIndex: number, width: number) {
         </div>
 
         <template v-else>
+          <!-- CellEditor 在 table-wrapper 外部，不随水平滚动 -->
           <CellEditor
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
             :cell-position="selectedCell"
-            :width="totalWidth"
             @submit="handleCellEditorSubmit"
           />
 
-          <TableEditor
-            :data="tableData"
-            :columns="columns"
-            :merges="currentSheet?.merges"
-            :selected-cell="selectedCell"
-            :auto-scroll="autoScroll"
-            :sort-state="currentSortColumn"
-            :column-widths="currentSheet?.columnWidths"
-            @cell-change="handleCellChange"
-            @cell-editing="handleCellEditing"
-            @delete-row="handleDeleteRow"
-            @delete-column="handleDeleteColumn"
-            @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
-            @sort-column="handleSortColumn"
-            @column-resize="handleColumnResize"
-          />
+          <!-- 只有 TableEditor 在可水平滚动的容器内 -->
+          <div class="table-wrapper">
+            <TableEditor
+              :data="tableData"
+              :columns="columns"
+              :merges="currentSheet?.merges"
+              :selected-cell="selectedCell"
+              :auto-scroll="autoScroll"
+              :sort-state="currentSortColumn"
+              :column-widths="currentSheet?.columnWidths"
+              @cell-change="handleCellChange"
+              @cell-editing="handleCellEditing"
+              @delete-row="handleDeleteRow"
+              @delete-column="handleDeleteColumn"
+              @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
+              @sort-column="handleSortColumn"
+              @column-resize="handleColumnResize"
+            />
+          </div>
         </template>
       </div>
 
@@ -801,10 +795,19 @@ function handleColumnResize(colIndex: number, width: number) {
 
 .content {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;           /* 改为 hidden，由子元素控制滚动 */
   padding: 0;
   display: flex;
   flex-direction: row;
+}
+
+/* 新增：纵向布局容器，CellEditor + table-wrapper */
+.editor-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;               /* 允许 flex 收缩 */
 }
 
 .table-wrapper {
@@ -812,7 +815,7 @@ function handleColumnResize(colIndex: number, width: number) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-x: auto;
+  overflow-x: auto;           /* 只有这里水平滚动 */
   overflow-y: hidden;
 }
 
