@@ -10,9 +10,31 @@ permissions:
 
 jobs:
   # ============================================
+  # 第一步：统一创建 Draft Release
+  # ============================================
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+
+    steps:
+      - name: Create Draft Release
+        id: create
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: 'Simple Table ${{ github.ref_name }}'
+          body: 'See the assets to download this version and install.'
+          draft: true
+          prerelease: false
+
+  # ============================================
   # Desktop 构建 (macOS / Linux / Windows)
   # ============================================
   build-desktop:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -61,18 +83,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Simple Table ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
-          prerelease: false
+          # 使用已创建的 Release ID，不再自行创建 Release
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
   # ============================================
   # Android 构建
   # ============================================
   build-android:
-    needs: build-desktop
+    needs: [create-release, build-desktop]
     runs-on: ubuntu-latest
 
     steps:
@@ -90,12 +109,11 @@ jobs:
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
           ndk-version: r26d
           add-to-path: true
-        id: setup-ndk
 
-      # 关键修复 1: 必须显式设置 NDK_HOME 环境变量
       - name: Set NDK_HOME
         run: echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
 
@@ -117,11 +135,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # 关键修复 2: 拆分步骤 — 先 init
       - name: Init Android project
         run: npx tauri android init
 
-      # 复制自定义图标到 Android 项目
       - name: Copy custom icons to Android project
         run: |
           cp -r src-tauri/icons/android/mipmap-* src-tauri/gen/android/app/src/main/res/
@@ -175,12 +191,10 @@ jobs:
           # Debug: 打印前50行验证
           echo "✅ build.gradle.kts 前50行:"
           head -50 "$GRADLE_FILE" | cat -n
-                    
-      # 关键修复 5: 单独执行 build
+
       - name: Build Android APK
         run: npx tauri android build --apk
 
-      # 关键修复 6: 精确上传签名后的 APK
       - name: Upload APK to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
