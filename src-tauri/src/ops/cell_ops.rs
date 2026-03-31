@@ -66,7 +66,11 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // 从文件数据中获取行数据（用于撤销）
-                let row_data = editor_state.file_data.sheets[sheet_index].rows[row_index].clone();
+                let row_data = editor_state.file_data.sheets
+                    .get(sheet_index)
+                    .and_then(|sheet| sheet.rows.get(row_index))
+                    .cloned()
+                    .ok_or_else(|| AppError::Internal("Row not found".to_string()))?;
                 let operation = Operation::DeleteRow {
                     sheet_index,
                     row_index,

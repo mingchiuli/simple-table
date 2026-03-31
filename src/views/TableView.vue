@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, ref, watch, onMounted} from "vue";
+import {computed, ref, watch, onMounted, onUnmounted} from "vue";
 import {useRouter, useRoute} from "vue-router";
 import {invoke} from "@tauri-apps/api/core";
 import {open, save} from "@tauri-apps/plugin-dialog";
@@ -24,6 +24,14 @@ onMounted(async () => {
   if (filePath) {
     console.log("Loading file from path:", filePath);
     await loadFileFromPath(filePath);
+  }
+});
+
+// 清理 debounce timer
+onUnmounted(() => {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
   }
 });
 
@@ -132,8 +140,8 @@ watch(
 
 // 防抖定时器
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-// 使用 Map 存储每个单元格的待保存值
-let pendingChanges = new Map<string, { row: number; col: number; value: string }>();
+// 使用 Map 存储每个单元格的待保存值（包含原始值用于回滚）
+let pendingChanges = new Map<string, { row: number; col: number; value: string; oldValue: CellValue }>();
 
 // 生成单元格 key
 function getCellKey(row: number, col: number) {
@@ -141,11 +149,22 @@ function getCellKey(row: number, col: number) {
 }
 
 // 统一的防抖保存函数
-function debouncedSave() {
-  for (const { row, col, value } of pendingChanges.values()) {
-    handleCellChange(row, col, value);
-  }
+async function debouncedSave() {
+  // 复制一份避免在循环中修改
+  const changes = Array.from(pendingChanges.values());
   pendingChanges.clear();
+
+  for (const { row, col, value, oldValue } of changes) {
+    try {
+      await handleCellChange(row, col, value);
+    } catch (error) {
+      // 回滚本地数据
+      if (currentSheet.value) {
+        currentSheet.value.rows[row][col] = oldValue;
+      }
+      ElMessage.error(`Failed to save cell: ${error}`);
+    }
+  }
 }
 
 // 监听编辑输入框变化，实时更新单元格
@@ -162,8 +181,8 @@ watch(cellEditorValue, (newValue) => {
     currentSheet.value.rows[row][col] = newValue;
   }
 
-  // 防抖处理，延迟调用 API 保存
-  pendingChanges.set(getCellKey(row, col), { row, col, value: newValueStr });
+  // 防抖处理，延迟调用 API 保存（保存原始值用于回滚）
+  pendingChanges.set(getCellKey(row, col), { row, col, value: newValueStr, oldValue: originalValue });
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
@@ -186,8 +205,8 @@ function handleCellEditing(row: number, col: number, value: string) {
     currentSheet.value.rows[row][col] = value;
   }
 
-  // 防抖处理，延迟调用 API 保存
-  pendingChanges.set(getCellKey(row, col), { row, col, value });
+  // 防抖处理，延迟调用 API 保存（保存原始值用于回滚）
+  pendingChanges.set(getCellKey(row, col), { row, col, value, oldValue: originalValue });
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
@@ -414,17 +433,20 @@ async function handleAddRow() {
 
   // 前端先更新数据
   const colCount = currentSheet.value.rows[0]?.length || 0;
+  const newRowIndex = currentSheet.value.rows.length;
   currentSheet.value.rows.push(Array(colCount).fill(null));
 
   try {
     isLoading.value = true;
     await invoke("add_row", {
       sheetIndex: currentSheetIndex.value,
-      rowIndex: currentSheet.value.rows.length - 1,
+      rowIndex: newRowIndex,
     });
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
+    // 回滚前端数据
+    currentSheet.value.rows.pop();
     ElMessage.error(`Failed to add row: ${error}`);
   } finally {
     isLoading.value = false;
@@ -433,6 +455,9 @@ async function handleAddRow() {
 
 async function handleDeleteRow(index: number) {
   if (!currentSheet.value) return;
+
+  // 保存删除的行数据用于回滚
+  const deletedRow = currentSheet.value.rows[index];
 
   // 前端先更新数据
   currentSheet.value.rows.splice(index, 1);
@@ -446,6 +471,8 @@ async function handleDeleteRow(index: number) {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
+    // 回滚前端数据
+    currentSheet.value.rows.splice(index, 0, deletedRow);
     ElMessage.error(`Failed to delete row: ${error}`);
   } finally {
     isLoading.value = false;
@@ -468,6 +495,10 @@ async function handleAddColumn() {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
+    // 回滚前端数据
+    for (const row of currentSheet.value.rows) {
+      row.pop();
+    }
     ElMessage.error(`Failed to add column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -477,10 +508,8 @@ async function handleAddColumn() {
 async function handleDeleteColumn(index: number) {
   if (!currentSheet.value) return;
 
-  // 前端先更新数据
-  for (const row of currentSheet.value.rows) {
-    row.splice(index, 1);
-  }
+  // 保存删除的列数据用于回滚
+  const deletedCols: CellValue[][] = currentSheet.value.rows.map(row => row.splice(index, 1));
 
   try {
     isLoading.value = true;
@@ -491,6 +520,10 @@ async function handleDeleteColumn(index: number) {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
+    // 回滚前端数据
+    for (let i = 0; i < currentSheet.value.rows.length; i++) {
+      currentSheet.value.rows[i].splice(index, 0, ...deletedCols[i]);
+    }
     ElMessage.error(`Failed to delete column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -502,7 +535,7 @@ async function handleAddSheet() {
 
   // 前端先更新数据
   const newSheetIndex = fileData.value.sheets.length;
-  fileData.value.sheets.push({
+  const newSheet = {
     name: `Sheet${newSheetIndex + 1}`,
     rows: [
       [null, null, null, null, null],
@@ -512,7 +545,8 @@ async function handleAddSheet() {
       [null, null, null, null, null],
     ],
     merges: [],
-  });
+  };
+  fileData.value.sheets.push(newSheet);
 
   try {
     isLoading.value = true;
@@ -524,6 +558,8 @@ async function handleAddSheet() {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
+    // 回滚前端数据
+    fileData.value.sheets.pop();
     ElMessage.error(`Failed to add sheet: ${error}`);
   } finally {
     isLoading.value = false;
@@ -538,6 +574,7 @@ async function handleDeleteSheet() {
 
   // 前端先更新数据
   const deletedIndex = currentSheetIndex.value;
+  const deletedSheet = fileData.value.sheets[deletedIndex];
   fileData.value.sheets.splice(deletedIndex, 1);
   // 切换到前一个 sheet（如果删的是第一个就切换到下一个）
   const newIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
@@ -551,6 +588,9 @@ async function handleDeleteSheet() {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
+    // 回滚前端数据
+    fileData.value.sheets.splice(deletedIndex, 0, deletedSheet);
+    currentSheetIndex.value = deletedIndex;
     ElMessage.error(`Failed to delete sheet: ${error}`);
   } finally {
     isLoading.value = false;

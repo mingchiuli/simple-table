@@ -6,10 +6,12 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import "./styles/base.css";
 import "./styles/platform.css";
-import { onMounted } from "vue";
+import { onMounted, onUnmounted } from "vue";
 
 const { platform } = usePlatform();
 const router = useRouter();
+
+let unlistenDeepLink: (() => void) | null = null;
 
 onMounted(async () => {
   // Check if app was started via deep link (getCurrent works for initial startup)
@@ -27,9 +29,17 @@ onMounted(async () => {
   }
 
   // Listen for deep links from single_instance (desktop - Windows/Linux)
-  await listen<string>("deep-link-received", (event) => {
+  const unlisten = await listen<string>("deep-link-received", (event) => {
     handleDeepLink(event.payload);
   });
+  unlistenDeepLink = unlisten;
+});
+
+onUnmounted(() => {
+  if (unlistenDeepLink) {
+    unlistenDeepLink();
+    unlistenDeepLink = null;
+  }
 });
 
 function handleDeepLink(url: string) {

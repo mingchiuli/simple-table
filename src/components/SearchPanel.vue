@@ -20,16 +20,33 @@ function handleClear() {
   emit("clear");
 }
 
+// 转义 HTML 特殊字符，防止 XSS
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// 转义正则特殊字符
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // 高亮显示查询词在文本中的匹配，文本过长时以匹配词为中心截断
 function getHighlightedSnippet(text: string, query: string, maxLen: number = 10): string {
-  if (!query) return text;
+  if (!query) return escapeHtml(text);
 
-  const pos = text.toLowerCase().indexOf(query.toLowerCase());
+  // 转义正则特殊字符，防止 regex 错误
+  const escapedQuery = escapeRegex(query);
+  const lowerText = text.toLowerCase();
+  const lowerQuery = escapedQuery.toLowerCase();
+
+  const pos = lowerText.indexOf(lowerQuery);
 
   // 文本足够短或没找到匹配，返回完整高亮
   if (pos === -1 || text.length <= maxLen) {
-    const regex = new RegExp(`(${query})`, "gi");
-    return text.replace(regex, '<mark>$1</mark>');
+    const regex = new RegExp(`(${escapedQuery})`, "gi");
+    return escapeHtml(text).replace(regex, '<mark>$1</mark>');
   }
 
   // 计算截断范围，以匹配词为中心
@@ -42,7 +59,7 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
   if (end < text.length) start = Math.max(0, end - maxLen);
 
   const snippet = (start > 0 ? '...' : '') + text.slice(start, end) + (end < text.length ? '...' : '');
-  return snippet.replace(new RegExp(`(${query})`, "gi"), '<mark>$1</mark>');
+  return escapeHtml(snippet).replace(new RegExp(`(${escapedQuery})`, "gi"), '<mark>$1</mark>');
 }
 </script>
 
