@@ -856,9 +856,11 @@ function handleColumnResize(colIndex: number, width: number) {
 }
 
 .back-btn {
-  position: absolute;
+  position: fixed;
   bottom: max(20px, env(safe-area-inset-bottom));
   left: max(20px, env(safe-area-inset-left));
+  width: 36px;
+  height: 36px;
   z-index: 100;
 }
 </style>
