@@ -91,7 +91,7 @@ jobs:
   # Android 构建
   # ============================================
   build-android:
-    needs: [create-release, build-desktop]
+    needs: create-release
     runs-on: ubuntu-latest
 
     steps:
