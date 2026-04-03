@@ -1,14 +1,24 @@
 <script setup lang="ts">
+import { onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { basename } from "@tauri-apps/api/path";
 import { ElMessage } from "element-plus";
+import { Document } from "@element-plus/icons-vue";
 import type { FileData } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
+import { useRecentFilesStore } from "@/stores/recentFiles";
+import RecentFilesSection from "@/components/RecentFilesSection.vue";
+import * as api from "@/api";
 
 const router = useRouter();
 const fileDataStore = useFileDataStore();
+const recentFilesStore = useRecentFilesStore();
+
+onMounted(() => {
+  recentFilesStore.load();
+});
 
 async function handleOpenFile() {
   try {
@@ -23,13 +33,18 @@ async function handleOpenFile() {
     });
 
     if (selected) {
-      // Read file content as bytes first, then pass to backend
-      // This works on all platforms including Android with content:// URIs
       const bytes = await readFile(selected);
-      const result = await invoke<FileData>("read_file_bytes", { path: selected, bytes: Array.from(bytes) });
+      const bytesArray = Array.from(bytes);
+      const result = await api.readFileBytes(selected, bytesArray);
       fileDataStore.set(result);
+
+      // 使用 bytes 版本添加最近文件（支持所有平台）
+      const fileName = await basename(selected);
+      const extension = fileName.split(".").pop() || "";
+      await api.addRecentFileWithThumbnail(selected, fileName, bytes.byteLength, bytesArray, extension);
+
+      await recentFilesStore.load();
       router.push({ name: "table" });
-      ElMessage.success("File loaded successfully");
     }
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
@@ -54,18 +69,19 @@ async function handleNewFile() {
     ],
   };
 
-  // 初始化后端编辑器状态
-  await invoke("init_file", { fileData: newFileData });
-
+  await api.initFile(newFileData);
   fileDataStore.set(newFileData);
   router.push({ name: "table" });
-  ElMessage.success("New table created");
+}
+
+function handleNavigate() {
+  router.push({ name: "table" });
 }
 </script>
 
 <template>
   <div class="home-view">
-    <div class="empty-state">
+    <div v-if="recentFilesStore.files.length === 0" class="empty-state">
       <el-icon class="empty-icon"><Document /></el-icon>
       <p>No file opened</p>
       <div class="button-group">
@@ -77,6 +93,15 @@ async function handleNewFile() {
         </el-button>
       </div>
     </div>
+
+    <RecentFilesSection v-else @open="handleNavigate">
+      <template #actions>
+        <div class="header-actions">
+          <el-button @click="handleOpenFile">Open File</el-button>
+          <el-button type="primary" @click="handleNewFile">New Table</el-button>
+        </div>
+      </template>
+    </RecentFilesSection>
   </div>
 </template>
 
@@ -87,10 +112,11 @@ async function handleNewFile() {
   align-items: center;
   justify-content: center;
   min-height: 100dvh;
-  min-height: 100vh; /* Fallback */
+  min-height: 100vh;
   background-color: #fff;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  padding: 40px 20px;
 }
 
 .empty-state {

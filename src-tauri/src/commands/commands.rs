@@ -1,5 +1,7 @@
 use crate::error::AppError;
+use crate::ops::recent_ops::RecentFile;
 use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope, SortState};
+use tauri::AppHandle;
 
 /// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）
 static EDITOR_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<Option<crate::state::editor_state::EditorState>>>> = std::sync::OnceLock::new();
@@ -10,19 +12,16 @@ pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::state::edit
 
 // ==================== File Operations ====================
 
-/// 从字节读取文件
 #[tauri::command]
 pub fn read_file_bytes(path: String, bytes: Vec<u8>) -> Result<FileData, AppError> {
     crate::io::file_ops::do_read_file_bytes(path, bytes)
 }
 
-/// 生成文件字节
 #[tauri::command]
 pub fn generate_file_bytes(file_data: FileData) -> Result<(String, Vec<u8>), AppError> {
     crate::io::file_ops::do_generate_file_bytes(file_data)
 }
 
-/// 初始化文件（用于新建文件时初始化编辑器状态）
 #[tauri::command]
 pub fn init_file(file_data: FileData) -> Result<(), AppError> {
     crate::io::file_ops::do_init_file(file_data)
@@ -30,19 +29,16 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 
 // ==================== Editor Operations ====================
 
-/// 获取编辑器状态（包含能否撤销/重做）
 #[tauri::command]
 pub fn get_editor_state() -> Result<Option<crate::state::state::EditorStateInfo>, AppError> {
     crate::ops::editor_ops::do_get_editor_state(get_state())
 }
 
-/// 撤销操作
 #[tauri::command]
 pub fn undo() -> Result<OperationResult, AppError> {
     crate::ops::editor_ops::do_undo(get_state())
 }
 
-/// 重做操作
 #[tauri::command]
 pub fn redo() -> Result<OperationResult, AppError> {
     crate::ops::editor_ops::do_redo(get_state())
@@ -50,7 +46,6 @@ pub fn redo() -> Result<OperationResult, AppError> {
 
 // ==================== Cell Operations ====================
 
-/// 设置单元格值
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_cell(
     sheet_index: usize,
@@ -62,25 +57,21 @@ pub fn set_cell(
     crate::ops::cell_ops::do_set_cell(get_state(), sheet_index, row, col, old_value, new_value)
 }
 
-/// 添加行
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_row(sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_add_row(get_state(), sheet_index, row_index)
 }
 
-/// 删除行
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_row(sheet_index: usize, row_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_row(get_state(), sheet_index, row_index)
 }
 
-/// 添加列
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_column(sheet_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_add_column(get_state(), sheet_index)
 }
 
-/// 删除列
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_column(sheet_index: usize, col_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_column(get_state(), sheet_index, col_index)
@@ -88,13 +79,11 @@ pub fn delete_column(sheet_index: usize, col_index: usize) -> Result<(), AppErro
 
 // ==================== Sheet Operations ====================
 
-/// 添加 Sheet
 #[tauri::command]
 pub fn add_sheet() -> Result<(), AppError> {
     crate::ops::cell_ops::do_add_sheet(get_state())
 }
 
-/// 删除 Sheet
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_sheet(sheet_index: usize) -> Result<(), AppError> {
     crate::ops::cell_ops::do_delete_sheet(get_state(), sheet_index)
@@ -102,7 +91,6 @@ pub fn delete_sheet(sheet_index: usize) -> Result<(), AppError> {
 
 // ==================== Sort Operations ====================
 
-/// 对指定列排序
 #[tauri::command(rename_all = "camelCase")]
 pub fn sort_column(
     sheet_index: usize,
@@ -115,7 +103,6 @@ pub fn sort_column(
 
 // ==================== Search Operations ====================
 
-/// 搜索单元格
 #[tauri::command(rename_all = "camelCase")]
 pub fn search(
     query: String,
@@ -123,4 +110,45 @@ pub fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
     crate::ops::search_ops::do_search(get_state(), query, scope, current_sheet_index)
+}
+
+// ==================== Recent Files Operations ====================
+
+#[tauri::command]
+pub fn get_recent_files(app: AppHandle) -> Vec<RecentFile> {
+    crate::ops::recent_ops::do_get_recent_files(&app)
+}
+
+#[tauri::command]
+pub fn remove_recent_file(app: AppHandle, id: String) -> Result<(), String> {
+    crate::ops::recent_ops::do_remove_recent_file(&app, id)
+}
+
+#[tauri::command]
+pub fn check_file_exists(path: String) -> bool {
+    crate::ops::recent_ops::do_check_file_exists(path)
+}
+
+#[tauri::command]
+pub fn update_recent_file_path(app: AppHandle, id: String, new_path: String) -> Result<(), String> {
+    crate::ops::recent_ops::do_update_recent_file_path(&app, id, new_path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn add_recent_file_with_thumbnail(
+    app: AppHandle,
+    path: String,
+    file_name: String,
+    file_size: i64,
+    bytes: Vec<u8>,
+    extension: String,
+) -> Result<RecentFile, String> {
+    crate::ops::recent_ops::do_add_recent_file_with_thumbnail(
+        &app,
+        path,
+        file_name,
+        file_size,
+        bytes,
+        extension,
+    )
 }

@@ -11,6 +11,7 @@
     "fs:allow-write-file",
     "fs:allow-write-text-file",
     "deep-link:default",
+    "store:default",
     {
       "identifier": "fs:allow-read-file",
       "allow": [

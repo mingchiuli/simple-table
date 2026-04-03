@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import {computed, ref, watch, onMounted, onUnmounted} from "vue";
 import {useRouter, useRoute} from "vue-router";
-import {invoke} from "@tauri-apps/api/core";
 import {open, save} from "@tauri-apps/plugin-dialog";
 import {readFile, writeFile} from "@tauri-apps/plugin-fs";
 import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
-import type {CellValue, FileData, OperationResult, SearchResult, SortState} from "@/types";
+import type {CellValue, OperationResult, SearchResult, SortState} from "@/types";
 import {useFileDataStore} from "@/stores/fileData";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
 import StatusBar from "@/components/StatusBar.vue";
 import CellEditor from "@/components/CellEditor.vue";
 import SearchPanel from "@/components/SearchPanel.vue";
+import * as api from "@/api";
 
 const router = useRouter();
 const route = useRoute();
@@ -40,12 +40,11 @@ async function loadFileFromPath(filePath: string) {
     isLoading.value = true;
     isFileLoading.value = true;
     const bytes = await readFile(filePath);
-    const result = await invoke<FileData>("read_file_bytes", { path: filePath, bytes: Array.from(bytes) });
+    const result = await api.readFileBytes(filePath, Array.from(bytes));
     fileDataStore.set(result);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
     await updateEditorState();
-    ElMessage.success("File loaded successfully");
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
   } finally {
@@ -304,9 +303,9 @@ function applyOperation(result: OperationResult) {
 
 async function updateEditorState() {
   try {
-    const state = await invoke<{ can_undo: boolean; can_redo: boolean }>("get_editor_state");
-    canUndo.value = state.can_undo;
-    canRedo.value = state.can_redo;
+    const state = await api.getEditorState();
+    canUndo.value = state.canUndo;
+    canRedo.value = state.canRedo;
   } catch (error) {
     console.error("Failed to get editor state:", error);
   }
@@ -330,12 +329,11 @@ async function handleOpenFile() {
       // Read file content as bytes first, then pass to backend
       // This works on all platforms including Android with content:// URIs
       const bytes = await readFile(selected);
-      const result = await invoke<FileData>("read_file_bytes", { path: selected, bytes: Array.from(bytes) });
+      const result = await api.readFileBytes(selected, Array.from(bytes));
       fileDataStore.set(result);
       currentSheetIndex.value = 0;
       hasChanges.value = false;
       await updateEditorState();
-      ElMessage.success("File loaded successfully");
     }
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
@@ -380,7 +378,7 @@ async function handleSaveFile() {
       isLoading.value = true;
       // Generate file bytes first, then write to path using fs plugin
       // This works on all platforms including Android with content:// URIs
-      const [, bytes] = await invoke<[string, number[]]>("generate_file_bytes", { fileData: fileData.value });
+      const [, bytes] = await api.generateFileBytes(fileData.value);
       await writeFile(savePath, new Uint8Array(bytes));
       hasChanges.value = false;
       ElMessage.success("File saved successfully");
@@ -406,13 +404,13 @@ async function handleCellChange(rowIndex: number, colIndex: number, value: strin
 
   try {
     // 前端已实时更新本地数据，后端只需保存，不需要返回结果再赋值
-    await invoke("set_cell", {
-      sheetIndex: currentSheetIndex.value,
-      row: rowIndex,
-      col: colIndex,
-      oldValue: toRustCellValue(oldValue),
-      newValue: toRustCellValue(newValue),
-    });
+    await api.setCell(
+      currentSheetIndex.value,
+      rowIndex,
+      colIndex,
+      toRustCellValue(oldValue),
+      toRustCellValue(newValue)
+    );
 
     // 同步更新上方编辑栏的值
     if (isCurrentCell) {
@@ -438,10 +436,7 @@ async function handleAddRow() {
 
   try {
     isLoading.value = true;
-    await invoke("add_row", {
-      sheetIndex: currentSheetIndex.value,
-      rowIndex: newRowIndex,
-    });
+    await api.addRow(currentSheetIndex.value, newRowIndex);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -464,10 +459,7 @@ async function handleDeleteRow(index: number) {
 
   try {
     isLoading.value = true;
-    await invoke("delete_row", {
-      sheetIndex: currentSheetIndex.value,
-      rowIndex: index,
-    });
+    await api.deleteRow(currentSheetIndex.value, index);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -489,9 +481,7 @@ async function handleAddColumn() {
 
   try {
     isLoading.value = true;
-    await invoke("add_column", {
-      sheetIndex: currentSheetIndex.value,
-    });
+    await api.addColumn(currentSheetIndex.value);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -513,10 +503,7 @@ async function handleDeleteColumn(index: number) {
 
   try {
     isLoading.value = true;
-    await invoke("delete_column", {
-      sheetIndex: currentSheetIndex.value,
-      colIndex: index,
-    });
+    await api.deleteColumn(currentSheetIndex.value, index);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -550,7 +537,7 @@ async function handleAddSheet() {
 
   try {
     isLoading.value = true;
-    await invoke("add_sheet");
+    await api.addSheet();
     // Clear selected cell and editor when switching to new sheet
     selectedCell.value = null;
     cellEditorValue.value = "";
@@ -582,9 +569,7 @@ async function handleDeleteSheet() {
 
   try {
     isLoading.value = true;
-    await invoke("delete_sheet", {
-      sheetIndex: deletedIndex,
-    });
+    await api.deleteSheet(deletedIndex);
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
@@ -602,7 +587,7 @@ async function handleUndo() {
 
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("undo");
+    const result = await api.undo();
     applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
@@ -618,7 +603,7 @@ async function handleRedo() {
 
   try {
     isLoading.value = true;
-    const result = await invoke<OperationResult>("redo");
+    const result = await api.redo();
     applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
@@ -644,12 +629,12 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
     // 清除当前的排序状态（当对其他列排序时）
     currentSortColumn.value = null;
 
-    const result = await invoke<OperationResult>("sort_column", {
-      sheetIndex: currentSheetIndex.value,
+    const result = await api.sortColumn(
+      currentSheetIndex.value,
       colIndex,
       ascending,
-      previousSortState: prevSortState,
-    });
+      prevSortState
+    );
     applyOperation(result);
     hasChanges.value = true;
     await updateEditorState();
@@ -666,11 +651,11 @@ async function handleSearch(query: string, scope: "currentSheet" | "allSheets") 
   searchQuery.value = query;
   try {
     isSearching.value = true;
-    searchResults.value = await invoke<SearchResult[]>("search", {
+    searchResults.value = await api.search(
       query,
       scope,
-      currentSheetIndex: scope === "currentSheet" ? currentSheetIndex.value : null,
-    });
+      scope === "currentSheet" ? currentSheetIndex.value : null
+    );
   } catch (error) {
     ElMessage.error(`Search failed: ${error}`);
   } finally {

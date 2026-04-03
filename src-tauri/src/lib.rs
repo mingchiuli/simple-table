@@ -6,10 +6,11 @@ mod state;
 mod types;
 
 use commands::{
-    add_column, add_row, add_sheet, delete_column, delete_row, delete_sheet,
-    generate_file_bytes,
-    get_editor_state, init_file, read_file_bytes,
-    redo, search, set_cell, sort_column, undo,
+    add_column, add_recent_file_with_thumbnail, add_row, add_sheet,
+    check_file_exists, delete_column, delete_row, delete_sheet,
+    generate_file_bytes, get_editor_state, get_recent_files, init_file,
+    read_file_bytes, redo, remove_recent_file, search, set_cell, sort_column, undo,
+    update_recent_file_path,
 };
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
@@ -47,6 +48,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(PendingDeepLink(Mutex::new(None)))
         .setup(|app| {
             // Register on_open_url for macOS file associations (double-click in Finder)
@@ -84,7 +86,12 @@ pub fn run() {
             sort_column,
             get_editor_state,
             search,
-            get_pending_deep_link
+            get_pending_deep_link,
+            get_recent_files,
+            add_recent_file_with_thumbnail,
+            remove_recent_file,
+            check_file_exists,
+            update_recent_file_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,0 +1,216 @@
+<script setup lang="ts">
+import { Document, Delete } from "@element-plus/icons-vue";
+import type { RecentFile } from "@/types";
+import { useRecentFilesStore } from "@/stores/recentFiles";
+
+const recentFilesStore = useRecentFilesStore();
+
+const emit = defineEmits<{
+  (e: "open"): void;
+}>();
+
+async function handleOpenRecent(file: RecentFile) {
+  const result = await recentFilesStore.openFile(file.path);
+  if (result.needsRelocate) {
+    const success = await recentFilesStore.relocateAndOpen(file);
+    if (success) {
+      emit("open");
+    }
+  } else if (result.success) {
+    emit("open");
+  }
+}
+
+async function handleDeleteRecent(id: string, event: Event) {
+  event.stopPropagation();
+  await recentFilesStore.remove(id);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  return date.toLocaleDateString();
+}
+</script>
+
+<template>
+  <div class="recent-section">
+    <div class="recent-header">
+      <h3>Recent Files</h3>
+      <slot name="actions" />
+    </div>
+
+    <div class="recent-grid">
+      <div
+        v-for="file in recentFilesStore.files"
+        :key="file.id"
+        class="recent-card"
+        @click="handleOpenRecent(file)"
+      >
+        <div class="thumbnail">
+          <el-image
+            v-if="file.thumbnail"
+            :src="file.thumbnail"
+            fit="cover"
+            class="thumbnail-img"
+          >
+            <template #error>
+              <el-icon size="48"><Document /></el-icon>
+            </template>
+          </el-image>
+          <el-icon v-else size="48"><Document /></el-icon>
+        </div>
+        <div class="info">
+          <div class="filename" :title="file.path">{{ file.fileName }}</div>
+          <div class="meta">
+            {{ formatFileSize(file.fileSize) }} · {{ formatDate(file.lastOpened) }}
+          </div>
+        </div>
+        <el-icon class="delete-btn" @click="handleDeleteRecent(file.id, $event)">
+          <Delete />
+        </el-icon>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.recent-section {
+  width: 100%;
+  max-width: 900px;
+}
+
+.recent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.recent-header h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.recent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 20px;
+}
+
+.recent-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.recent-card:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+}
+
+.thumbnail {
+  width: 100%;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f7fa;
+  color: #909399;
+}
+
+.thumbnail-img {
+  width: 100%;
+  height: 100%;
+}
+
+.info {
+  padding: 12px;
+}
+
+.filename {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.meta {
+  font-size: 12px;
+  color: #909399;
+}
+
+.delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 4px;
+  color: #909399;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+.recent-card:hover .delete-btn {
+  opacity: 1;
+}
+
+.delete-btn:hover {
+  color: #f56c6c;
+}
+
+/* 移动端：总是显示删除按钮 */
+@media (hover: none) and (pointer: coarse) {
+  .delete-btn {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  .recent-card:active {
+    border-color: #409eff;
+    box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+  }
+}
+
+/* 移动端卡片网格调整 */
+@media (max-width: 480px) {
+  .recent-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+  }
+
+  .thumbnail {
+    height: 100px;
+  }
+
+  .recent-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+</style>

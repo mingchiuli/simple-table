@@ -70,3 +70,12 @@ export interface ColumnConfig {
   dataKey?: number;
   headerCellRenderer?: () => VNode;
 }
+
+export interface RecentFile {
+  id: string;
+  path: string;
+  fileName: string;
+  lastOpened: number;
+  fileSize: number;
+  thumbnail?: string;
+}
