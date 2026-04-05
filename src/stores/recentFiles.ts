@@ -6,6 +6,7 @@ import { ElMessage } from "element-plus";
 import type { FileData, RecentFile } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
 import * as api from "@/api";
+import { isAndroid } from "@/utils/platform";
 
 export const useRecentFilesStore = defineStore("recentFiles", {
   state: () => ({
@@ -24,6 +25,39 @@ export const useRecentFilesStore = defineStore("recentFiles", {
     },
 
     async openFile(path: string): Promise<{ success: boolean; file?: FileData; needsRelocate?: boolean }> {
+      // Android: 使用持久化 URI 读取
+      if (await isAndroid()) {
+        try {
+          const bytes = await api.readFileAndroid(path);
+          const fileData = await api.readFileBytes(path, bytes);
+
+          const fileDataStore = useFileDataStore();
+          fileDataStore.set(fileData);
+
+          // 获取文件名和大小
+          const fileName = path.split("/").pop()?.split("?")[0] || "unknown";
+          const extension = fileName.split(".").pop() || "";
+          const fileSize = bytes.length;
+
+          await api.addRecentFileWithThumbnail(
+            path,
+            fileName,
+            fileSize,
+            bytes,
+            extension,
+            'androidUri'
+          );
+          await this.load();
+
+          return { success: true, file: fileData };
+        } catch (e) {
+          // 权限可能被撤销，需要重新选择文件
+          ElMessage.error(`Failed to open file: ${e}`);
+          return { success: false, needsRelocate: true };
+        }
+      }
+
+      // 桌面端/iOS: 现有逻辑
       const exists = await api.checkFileExists(path);
       if (!exists) {
         return { success: false, needsRelocate: true };
@@ -70,6 +104,35 @@ export const useRecentFilesStore = defineStore("recentFiles", {
     },
 
     async relocateAndOpen(file: RecentFile): Promise<boolean> {
+      // Android: 使用专用文件选择器
+      if (await isAndroid()) {
+        try {
+          const result = await api.pickFileAndroid();
+          // 更新路径
+          await this.updatePath(file.id, result.path);
+          // 读取文件
+          const fileData = await api.readFileBytes(result.path, result.bytes);
+          const fileDataStore = useFileDataStore();
+          fileDataStore.set(fileData);
+
+          const extension = result.fileName.split(".").pop() || "";
+          await api.addRecentFileWithThumbnail(
+            result.path,
+            result.fileName,
+            result.bytes.length,
+            result.bytes,
+            extension,
+            'androidUri'
+          );
+          await this.load();
+          return true;
+        } catch (e) {
+          ElMessage.error(`Failed to open file: ${e}`);
+          return false;
+        }
+      }
+
+      // 桌面端/iOS: 现有逻辑
       const selected = await open({
         multiple: false,
         filters: [

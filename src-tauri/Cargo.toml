@@ -38,3 +38,7 @@ base64 = "0.22"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+
+# Android 专用文件系统插件（支持持久化 URI 权限）
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-android-fs = "28"

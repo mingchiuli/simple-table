@@ -78,4 +78,6 @@ export interface RecentFile {
   lastOpened: number;
   fileSize: number;
   thumbnail?: string;
+  storageType?: 'androidUri' | 'iosPrivate' | 'desktopPath';
+  originalPath?: string;
 }

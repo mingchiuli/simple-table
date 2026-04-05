@@ -104,7 +104,9 @@ export async function addRecentFileWithThumbnail(
   fileName: string,
   fileSize: number,
   bytes: number[],
-  extension: string
+  extension: string,
+  storageType?: 'androidUri' | 'iosPrivate' | 'desktopPath',
+  originalPath?: string
 ): Promise<RecentFile> {
   return invoke<RecentFile>("add_recent_file_with_thumbnail", {
     path,
@@ -112,6 +114,8 @@ export async function addRecentFileWithThumbnail(
     fileSize,
     bytes,
     extension,
+    storageType,
+    originalPath,
   });
 }
 
@@ -125,4 +129,40 @@ export async function checkFileExists(path: string): Promise<boolean> {
 
 export async function updateRecentFilePath(id: string, newPath: string): Promise<void> {
   return invoke<void>("update_recent_file_path", { id, newPath });
+}
+
+// ==================== Android File Operations ====================
+
+export interface PickedFile {
+  path: string;
+  fileName: string;
+  bytes: number[];
+}
+
+/**
+ * Android: 打开文件选择器并持久化 URI 权限
+ */
+export async function pickFileAndroid(): Promise<PickedFile> {
+  return invoke<PickedFile>("pick_file_android");
+}
+
+/**
+ * Android: 从持久化 URI 读取文件
+ */
+export async function readFileAndroid(uri: string): Promise<number[]> {
+  return invoke<number[]>("read_file_android", { uri });
+}
+
+/**
+ * Android: 保存文件到指定 URI
+ */
+export async function saveFileAndroid(uri: string, bytes: number[]): Promise<void> {
+  return invoke<void>("save_file_android", { uri, bytes });
+}
+
+/**
+ * Android: 选择保存位置
+ */
+export async function pickSaveLocationAndroid(defaultName: string): Promise<string | null> {
+  return invoke<string | null>("pick_save_location_android", { defaultName });
 }

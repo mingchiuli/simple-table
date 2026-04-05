@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::ops::recent_ops::RecentFile;
+use crate::ops::recent_ops::{RecentFile, StorageType};
 use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope, SortState};
 use tauri::AppHandle;
 
@@ -142,7 +142,17 @@ pub fn add_recent_file_with_thumbnail(
     file_size: i64,
     bytes: Vec<u8>,
     extension: String,
+    storage_type: Option<String>,
+    original_path: Option<String>,
 ) -> Result<RecentFile, String> {
+    // 将字符串转换为 StorageType 枚举
+    let st = storage_type.and_then(|s| match s.as_str() {
+        "androidUri" => Some(StorageType::AndroidUri),
+        "iosPrivate" => Some(StorageType::IosPrivate),
+        "desktopPath" => Some(StorageType::DesktopPath),
+        _ => None,
+    });
+
     crate::ops::recent_ops::do_add_recent_file_with_thumbnail(
         &app,
         path,
@@ -150,5 +160,7 @@ pub fn add_recent_file_with_thumbnail(
         file_size,
         bytes,
         extension,
+        st,
+        original_path,
     )
 }

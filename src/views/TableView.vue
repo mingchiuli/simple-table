@@ -13,6 +13,7 @@ import StatusBar from "@/components/StatusBar.vue";
 import CellEditor from "@/components/CellEditor.vue";
 import SearchPanel from "@/components/SearchPanel.vue";
 import * as api from "@/api";
+import {isAndroid} from "@/utils/platform";
 
 const router = useRouter();
 const route = useRoute();
@@ -313,6 +314,32 @@ async function updateEditorState() {
 
 async function handleOpenFile() {
   try {
+    // Android: 使用专用文件选择器（支持持久化权限）
+    if (await isAndroid()) {
+      isLoading.value = true;
+      isFileLoading.value = true;
+      const result = await api.pickFileAndroid();
+      const fileData = await api.readFileBytes(result.path, result.bytes);
+      fileDataStore.set(fileData);
+      currentSheetIndex.value = 0;
+      hasChanges.value = false;
+
+      // 添加到最近文件（标记为 Android URI 类型）
+      const extension = result.fileName.split(".").pop() || "";
+      await api.addRecentFileWithThumbnail(
+        result.path,
+        result.fileName,
+        result.bytes.length,
+        result.bytes,
+        extension,
+        'androidUri'
+      );
+
+      await updateEditorState();
+      return;
+    }
+
+    // 桌面端/iOS: 使用标准文件选择器
     const selected = await open({
       multiple: false,
       filters: [
@@ -364,6 +391,23 @@ async function handleSaveFile() {
       extensions = ["xlsx"];
     }
 
+    // Android: 使用专用保存位置选择器
+    if (await isAndroid()) {
+      isLoading.value = true;
+      const [, bytes] = await api.generateFileBytes(fileData.value);
+
+      // 对于新文件或需要选择新位置的情况
+      const saveUri = await api.pickSaveLocationAndroid(`${defaultName}.${extensions[0]}`);
+
+      if (saveUri) {
+        await api.saveFileAndroid(saveUri, bytes);
+        hasChanges.value = false;
+        ElMessage.success("File saved successfully");
+      }
+      return;
+    }
+
+    // 桌面端/iOS: 使用标准保存对话框
     const savePath = await save({
       defaultPath: `${defaultName}.${extensions[0]}`,
       filters: [

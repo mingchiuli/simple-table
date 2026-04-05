@@ -153,7 +153,7 @@ pub fn search_cells(sheet: &SheetData, query: &str, limit: usize) -> Vec<CellPos
 
     let top_docs = match parsed_query {
         Ok(q) => {
-            match searcher.search(&q, &TopDocs::with_limit(limit)) {
+            match searcher.search(&q, &TopDocs::with_limit(limit).order_by_score()) {
                 Ok(docs) => docs,
                 Err(e) => {
                     eprintln!("Search failed: {:?}", e);
@@ -165,7 +165,7 @@ pub fn search_cells(sheet: &SheetData, query: &str, limit: usize) -> Vec<CellPos
             // 如果解析失败，尝试作为词项查询
             let term = Term::from_field_text(text_field, &query.to_lowercase());
             let term_query = tantivy::query::TermQuery::new(term, IndexRecordOption::Basic);
-            match searcher.search(&term_query, &TopDocs::with_limit(limit)) {
+            match searcher.search(&term_query, &TopDocs::with_limit(limit).order_by_score()) {
                 Ok(docs) => docs,
                 Err(e) => {
                     eprintln!("Term search failed: {:?}", e);

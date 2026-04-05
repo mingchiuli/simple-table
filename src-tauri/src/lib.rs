@@ -1,6 +1,7 @@
 mod commands;
 mod error;
 mod io;
+mod mobile;
 mod ops;
 mod state;
 mod types;
@@ -12,6 +13,7 @@ use commands::{
     read_file_bytes, redo, remove_recent_file, search, set_cell, sort_column, undo,
     update_recent_file_path,
 };
+use mobile::{pick_file_android, pick_save_location_android, read_file_android, save_file_android};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -41,6 +43,12 @@ pub fn run() {
                 }
             }
         }));
+    }
+
+    // Android 专用文件系统插件（支持持久化 URI 权限）
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_android_fs::init());
     }
 
     builder
@@ -91,7 +99,12 @@ pub fn run() {
             add_recent_file_with_thumbnail,
             remove_recent_file,
             check_file_exists,
-            update_recent_file_path
+            update_recent_file_path,
+            // Android 专用命令
+            pick_file_android,
+            read_file_android,
+            save_file_android,
+            pick_save_location_android
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

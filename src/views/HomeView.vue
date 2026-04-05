@@ -11,6 +11,7 @@ import { useFileDataStore } from "@/stores/fileData";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import RecentFilesSection from "@/components/RecentFilesSection.vue";
 import * as api from "@/api";
+import { isAndroid } from "@/utils/platform";
 
 const router = useRouter();
 const fileDataStore = useFileDataStore();
@@ -22,6 +23,28 @@ onMounted(() => {
 
 async function handleOpenFile() {
   try {
+    // Android: 使用专用文件选择器
+    if (await isAndroid()) {
+      const result = await api.pickFileAndroid();
+      const fileData = await api.readFileBytes(result.path, result.bytes);
+      fileDataStore.set(fileData);
+
+      const extension = result.fileName.split(".").pop() || "";
+      await api.addRecentFileWithThumbnail(
+        result.path,
+        result.fileName,
+        result.bytes.length,
+        result.bytes,
+        extension,
+        'androidUri'
+      );
+
+      await recentFilesStore.load();
+      router.push({ name: "table" });
+      return;
+    }
+
+    // 桌面端/iOS: 使用标准文件选择器
     const selected = await open({
       multiple: false,
       filters: [
@@ -38,7 +61,7 @@ async function handleOpenFile() {
       const result = await api.readFileBytes(selected, bytesArray);
       fileDataStore.set(result);
 
-      // 使用 bytes 版本添加最近文件（支持所有平台）
+      // 使用 bytes 版本添加最近文件（桌面端默认类型）
       const fileName = await basename(selected);
       const extension = fileName.split(".").pop() || "";
       await api.addRecentFileWithThumbnail(selected, fileName, bytes.byteLength, bytesArray, extension);
