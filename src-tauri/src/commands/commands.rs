@@ -12,9 +12,9 @@ pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::state::edit
 
 // ==================== File Operations ====================
 
-#[tauri::command]
-pub fn read_file_bytes(path: String, bytes: Vec<u8>) -> Result<FileData, AppError> {
-    crate::io::file_ops::do_read_file_bytes(path, bytes)
+#[tauri::command(rename_all = "camelCase")]
+pub fn read_file_bytes(path: String, bytes: Vec<u8>, file_name: Option<String>) -> Result<FileData, AppError> {
+    crate::io::file_ops::do_read_file_bytes(path, bytes, file_name)
 }
 
 #[tauri::command]

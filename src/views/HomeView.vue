@@ -26,7 +26,7 @@ async function handleOpenFile() {
     // Android: 使用专用文件选择器
     if (await isAndroid()) {
       const result = await api.pickFileAndroid();
-      const fileData = await api.readFileBytes(result.path, result.bytes);
+      const fileData = await api.readFileBytes(result.path, result.bytes, result.fileName);
       fileDataStore.set(fileData);
 
       const extension = result.fileName.split(".").pop() || "";

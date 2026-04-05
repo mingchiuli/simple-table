@@ -28,16 +28,17 @@ export const useRecentFilesStore = defineStore("recentFiles", {
       // Android: 使用持久化 URI 读取
       if (await isAndroid()) {
         try {
+          // 获取文件名（从已有记录取，避免从 content:// URI 解析出错）
+          const existingFile = this.files.find(f => f.path === path);
+          const fileName = existingFile?.fileName || path.split("/").pop()?.split("?")[0] || "unknown";
+          const extension = fileName.split(".").pop() || "";
+
           const bytes = await api.readFileAndroid(path);
-          const fileData = await api.readFileBytes(path, bytes);
+          const fileData = await api.readFileBytes(path, bytes, fileName);
 
           const fileDataStore = useFileDataStore();
           fileDataStore.set(fileData);
 
-          // 获取文件名和大小（从已有记录取，避免从 content:// URI 解析出错）
-          const existingFile = this.files.find(f => f.path === path);
-          const fileName = existingFile?.fileName || path.split("/").pop()?.split("?")[0] || "unknown";
-          const extension = fileName.split(".").pop() || "";
           const fileSize = bytes.length;
 
           await api.addRecentFileWithThumbnail(
@@ -111,8 +112,8 @@ export const useRecentFilesStore = defineStore("recentFiles", {
           const result = await api.pickFileAndroid();
           // 更新路径
           await this.updatePath(file.id, result.path);
-          // 读取文件
-          const fileData = await api.readFileBytes(result.path, result.bytes);
+          // 读取文件（传入正确的文件名）
+          const fileData = await api.readFileBytes(result.path, result.bytes, result.fileName);
           const fileDataStore = useFileDataStore();
           fileDataStore.set(fileData);
 

@@ -7,6 +7,7 @@ import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
 import type {CellValue, OperationResult, SearchResult, SortState} from "@/types";
 import {useFileDataStore} from "@/stores/fileData";
+import {usePlatform} from "@/composables/usePlatform";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
 import StatusBar from "@/components/StatusBar.vue";
@@ -18,6 +19,7 @@ import {isAndroid} from "@/utils/platform";
 const router = useRouter();
 const route = useRoute();
 const fileDataStore = useFileDataStore();
+const { isMobileOrTablet } = usePlatform();
 
 // Handle file opened via deep link or CLI
 onMounted(async () => {
@@ -319,7 +321,7 @@ async function handleOpenFile() {
       isLoading.value = true;
       isFileLoading.value = true;
       const result = await api.pickFileAndroid();
-      const fileData = await api.readFileBytes(result.path, result.bytes);
+      const fileData = await api.readFileBytes(result.path, result.bytes, result.fileName);
       fileDataStore.set(fileData);
       currentSheetIndex.value = 0;
       hasChanges.value = false;
@@ -842,7 +844,7 @@ function handleColumnResize(colIndex: number, width: number) {
     </main>
 
     <StatusBar
-      v-if="fileData"
+      v-if="fileData && !isMobileOrTablet"
       :file-name="fileData.fileName"
       :has-changes="hasChanges"
     />

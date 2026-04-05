@@ -3,8 +3,8 @@ import type { FileData, RecentFile, CellValue, OperationResult, SearchResult, So
 
 // ==================== File Operations ====================
 
-export async function readFileBytes(path: string, bytes: number[]): Promise<FileData> {
-  return invoke<FileData>("read_file_bytes", { path, bytes });
+export async function readFileBytes(path: string, bytes: number[], fileName?: string): Promise<FileData> {
+  return invoke<FileData>("read_file_bytes", { path, bytes, fileName });
 }
 
 export async function generateFileBytes(fileData: FileData): Promise<[string, number[]]> {

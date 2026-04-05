@@ -4,7 +4,7 @@ use crate::state::editor_state::EditorState;
 use crate::types::FileData;
 
 /// 从字节读取文件（用于 Android content:// URI 场景）
-pub fn do_read_file_bytes(path: String, bytes: Vec<u8>) -> Result<FileData, AppError> {
+pub fn do_read_file_bytes(path: String, bytes: Vec<u8>, file_name: Option<String>) -> Result<FileData, AppError> {
     let path_obj = std::path::Path::new(&path);
     let extension = path_obj
         .extension()
@@ -12,13 +12,17 @@ pub fn do_read_file_bytes(path: String, bytes: Vec<u8>) -> Result<FileData, AppE
         .map(|e| e.to_lowercase())
         .unwrap_or_else(|| "xlsx".to_string());
 
-    let file_name = path_obj
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    // 如果传入了文件名（Android 场景），直接使用；否则从路径解析
+    let resolved_file_name = file_name
+        .unwrap_or_else(|| {
+            path_obj
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        });
 
-    let file_data = super::reader::read_file_from_bytes(&extension, bytes, file_name)?;
+    let file_data = super::reader::read_file_from_bytes(&extension, bytes, resolved_file_name)?;
 
     // 初始化编辑器状态
     init_editor_state(file_data.clone());

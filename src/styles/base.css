@@ -15,7 +15,7 @@ body {
 /* ==================== Back Button ==================== */
 
 .back-btn {
-  position: absolute;
+  position: fixed;
   z-index: 100;
 }
 
