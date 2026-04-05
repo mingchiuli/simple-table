@@ -86,7 +86,7 @@ async function handleOpenFile() {
       fileDataStore.set(result);
 
       // 使用 bytes 版本添加最近文件（桌面端默认类型）
-      const fileName = await basename(selected);
+      const fileName = decodeURIComponent(await basename(selected));
       const extension = fileName.split(".").pop() || "";
       await api.addRecentFileWithThumbnail(selected, fileName, bytes.byteLength, bytesArray, extension);
 

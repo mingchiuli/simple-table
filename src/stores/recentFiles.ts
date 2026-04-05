@@ -109,7 +109,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         fileDataStore.set(fileData);
 
         // 获取文件扩展名
-        const fileName = await basename(path);
+        const fileName = decodeURIComponent(await basename(path));
         const extension = fileName.split(".").pop() || "";
         const fileSize = bytes.byteLength;
 
