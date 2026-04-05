@@ -30,15 +30,16 @@ pub async fn pick_file_ios(app: AppHandle) -> Result<PickedFile, AppError> {
         .dialog()
         .file()
         .add_filter("Spreadsheet", &["xlsx", "xls", "csv", "ods"])
-        .blocking_pick_file();
-
-    let source_path = file_path
+        .blocking_pick_file()
         .ok_or_else(|| AppError::ReadError("No file selected".to_string()))?;
+
+    let source_path: PathBuf = file_path.into_path()
+        .map_err(|e| AppError::ReadError(format!("Failed to get path: {}", e)))?;
 
     // 获取文件名
     let file_name = source_path
         .file_name()
-        .and_then(|n| n.to_str())
+        .and_then(|n: &std::ffi::OsStr| n.to_str())
         .unwrap_or("unknown")
         .to_string();
 
@@ -58,7 +59,8 @@ pub async fn pick_file_ios(app: AppHandle) -> Result<PickedFile, AppError> {
     let extension = PathBuf::from(&file_name)
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
     let private_file_name = format!("{}.{}", uuid, extension);
     let private_path = private_dir.join(&private_file_name);
 
@@ -94,7 +96,8 @@ pub async fn create_private_file_ios(app: AppHandle, file_name: String) -> Resul
     let extension = PathBuf::from(&file_name)
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("xlsx");
+        .unwrap_or("xlsx")
+        .to_string();
     let private_file_name = format!("{}.{}", uuid, extension);
     let private_path = private_dir.join(&private_file_name);
 
@@ -111,7 +114,7 @@ pub async fn create_private_file_ios(app: AppHandle, file_name: String) -> Resul
 
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn save_file_ios(app: AppHandle, path: String, bytes: Vec<u8>) -> Result<(), AppError> {
+pub async fn save_file_ios(_app: AppHandle, path: String, bytes: Vec<u8>) -> Result<(), AppError> {
     // 写入私有目录中的文件
     fs::write(&path, bytes)
         .map_err(|e| AppError::WriteError(format!("Failed to save file: {}", e)))?;
@@ -137,6 +140,8 @@ pub async fn export_file_ios(
 
     match save_path {
         Some(dest_path) => {
+            let dest_path: PathBuf = dest_path.into_path()
+                .map_err(|e| AppError::WriteError(format!("Failed to get path: {}", e)))?;
             // 复制私有目录文件到用户选择的位置
             fs::copy(&source_path, &dest_path)
                 .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;

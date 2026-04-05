@@ -19,6 +19,7 @@ use mobile::{pick_file_android, pick_save_location_android, read_file_android, s
 use mobile::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+#[cfg(desktop)]
 use tauri_plugin_deep_link::DeepLinkExt;
 
 struct PendingDeepLink(Mutex<Option<String>>);
