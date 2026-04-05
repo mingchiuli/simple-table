@@ -31,7 +31,7 @@ rust_xlsxwriter = "0.94"
 csv = "1.4"
 thiserror = "2"
 tantivy = "0.26.0"
-tantivy-jieba = "0.18.0"
+tantivy-jieba = "0.19.0"
 image = "0.25"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
