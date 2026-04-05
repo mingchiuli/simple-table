@@ -57,6 +57,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_os::init())
         .manage(PendingDeepLink(Mutex::new(None)))
         .setup(|app| {
             // Register on_open_url for macOS file associations (double-click in Finder)

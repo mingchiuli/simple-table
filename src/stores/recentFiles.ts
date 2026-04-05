@@ -34,8 +34,9 @@ export const useRecentFilesStore = defineStore("recentFiles", {
           const fileDataStore = useFileDataStore();
           fileDataStore.set(fileData);
 
-          // 获取文件名和大小
-          const fileName = path.split("/").pop()?.split("?")[0] || "unknown";
+          // 获取文件名和大小（从已有记录取，避免从 content:// URI 解析出错）
+          const existingFile = this.files.find(f => f.path === path);
+          const fileName = existingFile?.fileName || path.split("/").pop()?.split("?")[0] || "unknown";
           const extension = fileName.split(".").pop() || "";
           const fileSize = bytes.length;
 
