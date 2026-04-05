@@ -7,6 +7,7 @@ import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
 import type {CellValue, OperationResult, SearchResult, SortState} from "@/types";
 import {useFileDataStore} from "@/stores/fileData";
+import {useRecentFilesStore} from "@/stores/recentFiles";
 import {usePlatform} from "@/composables/usePlatform";
 import Toolbar from "@/components/Toolbar.vue";
 import TableEditor from "@/components/TableEditor.vue";
@@ -14,7 +15,7 @@ import StatusBar from "@/components/StatusBar.vue";
 import CellEditor from "@/components/CellEditor.vue";
 import SearchPanel from "@/components/SearchPanel.vue";
 import * as api from "@/api";
-import {isAndroid} from "@/utils/platform";
+import {isAndroid, isIOS} from "@/utils/platform";
 
 const router = useRouter();
 const route = useRoute();
@@ -341,7 +342,34 @@ async function handleOpenFile() {
       return;
     }
 
-    // 桌面端/iOS: 使用标准文件选择器
+    // iOS: 使用专用文件选择器并复制到私有目录
+    if (await isIOS()) {
+      isLoading.value = true;
+      isFileLoading.value = true;
+      const result = await api.pickFileIOS();
+      const bytes = await readFile(result.path);
+      const bytesArray = Array.from(bytes);
+      const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
+      fileDataStore.set(fileData);
+      currentSheetIndex.value = 0;
+      hasChanges.value = false;
+
+      const extension = result.fileName.split(".").pop() || "";
+      await api.addRecentFileWithThumbnail(
+        result.path,
+        result.fileName,
+        bytesArray.length,
+        bytesArray,
+        extension,
+        'iosPrivate',
+        result.originalPath
+      );
+
+      await updateEditorState();
+      return;
+    }
+
+    // 桌面端: 使用标准文件选择器
     const selected = await open({
       multiple: false,
       filters: [
@@ -409,7 +437,60 @@ async function handleSaveFile() {
       return;
     }
 
-    // 桌面端/iOS: 使用标准保存对话框
+    // iOS: 保存到私有目录，然后可选导出
+    if (await isIOS()) {
+      isLoading.value = true;
+      const [, bytes] = await api.generateFileBytes(fileData.value);
+
+      // 获取当前文件的私有路径（从最近文件记录中）
+      const recentFilesStore = useRecentFilesStore();
+      const currentFileName = fileData.value?.fileName || "";
+      const currentFile = recentFilesStore.files.find(f =>
+        f.fileName === currentFileName || f.originalPath?.includes(currentFileName)
+      );
+      const privatePath = currentFile?.path;
+
+      if (privatePath) {
+        // 保存到私有目录
+        await api.saveFileIOS(privatePath, bytes);
+        hasChanges.value = false;
+
+        // 弹出导出对话框让用户选择是否导出
+        const exportPath = await api.exportFileIOS(privatePath, `${defaultName}.${extensions[0]}`);
+        if (exportPath) {
+          ElMessage.success("File saved and exported successfully");
+        } else {
+          ElMessage.success("File saved to private directory");
+        }
+      } else {
+        // 新文件：创建新的私有目录文件
+        const newFile = await api.createPrivateFileIOS(`${defaultName}.${extensions[0]}`);
+        await api.saveFileIOS(newFile.path, bytes);
+        hasChanges.value = false;
+
+        // 添加到最近文件
+        await api.addRecentFileWithThumbnail(
+          newFile.path,
+          newFile.fileName,
+          bytes.length,
+          bytes,
+          extensions[0],
+          'iosPrivate'
+        );
+        await recentFilesStore.load();
+
+        // 弹出导出对话框让用户选择是否导出
+        const exportPath = await api.exportFileIOS(newFile.path, `${defaultName}.${extensions[0]}`);
+        if (exportPath) {
+          ElMessage.success("File saved and exported successfully");
+        } else {
+          ElMessage.success("File saved to private directory");
+        }
+      }
+      return;
+    }
+
+    // 桌面端: 使用标准保存对话框
     const savePath = await save({
       defaultPath: `${defaultName}.${extensions[0]}`,
       filters: [

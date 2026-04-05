@@ -6,7 +6,7 @@ import { ElMessage } from "element-plus";
 import type { FileData, RecentFile } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
 import * as api from "@/api";
-import { isAndroid } from "@/utils/platform";
+import { isAndroid, isIOS } from "@/utils/platform";
 
 export const useRecentFilesStore = defineStore("recentFiles", {
   state: () => ({
@@ -59,7 +59,42 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         }
       }
 
-      // 桌面端/iOS: 现有逻辑
+      // iOS: 从私有目录读取
+      if (await isIOS()) {
+        const existingFile = this.files.find(f => f.path === path);
+        const fileName = existingFile?.fileName || path.split("/").pop() || "unknown";
+        const extension = fileName.split(".").pop() || "";
+
+        try {
+          const bytes = await readFile(path);
+          const bytesArray = Array.from(bytes);
+          const fileData = await api.readFileBytes(path, bytesArray, fileName);
+
+          const fileDataStore = useFileDataStore();
+          fileDataStore.set(fileData);
+
+          const fileSize = bytes.byteLength;
+          const originalPath = existingFile?.originalPath;
+
+          await api.addRecentFileWithThumbnail(
+            path,
+            fileName,
+            fileSize,
+            bytesArray,
+            extension,
+            'iosPrivate',
+            originalPath
+          );
+          await this.load();
+
+          return { success: true, file: fileData };
+        } catch (e) {
+          ElMessage.error(`Failed to open file: ${e}`);
+          return { success: false, needsRelocate: true };
+        }
+      }
+
+      // 桌面端: 现有逻辑
       const exists = await api.checkFileExists(path);
       if (!exists) {
         return { success: false, needsRelocate: true };
@@ -134,7 +169,41 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         }
       }
 
-      // 桌面端/iOS: 现有逻辑
+      // iOS: 使用专用文件选择器并复制到私有目录
+      if (await isIOS()) {
+        try {
+          const result = await api.pickFileIOS();
+
+          // 从私有路径读取文件
+          const bytes = await readFile(result.path);
+          const bytesArray = Array.from(bytes);
+          const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
+          const fileDataStore = useFileDataStore();
+          fileDataStore.set(fileData);
+
+          // 直接添加/更新最近文件记录（使用新的私有路径）
+          const extension = result.fileName.split(".").pop() || "";
+          await api.addRecentFileWithThumbnail(
+            result.path,
+            result.fileName,
+            bytesArray.length,
+            bytesArray,
+            extension,
+            'iosPrivate',
+            result.originalPath
+          );
+
+          // 删除旧记录
+          await api.removeRecentFile(file.id);
+          await this.load();
+          return true;
+        } catch (e) {
+          ElMessage.error(`Failed to open file: ${e}`);
+          return false;
+        }
+      }
+
+      // 桌面端: 现有逻辑
       const selected = await open({
         multiple: false,
         filters: [

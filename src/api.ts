@@ -166,3 +166,39 @@ export async function saveFileAndroid(uri: string, bytes: number[]): Promise<voi
 export async function pickSaveLocationAndroid(defaultName: string): Promise<string | null> {
   return invoke<string | null>("pick_save_location_android", { defaultName });
 }
+
+// ==================== iOS File Operations ====================
+
+export interface PickedFileIOS {
+  path: string;
+  originalPath: string;
+  fileName: string;
+}
+
+/**
+ * iOS: 打开文件选择器并复制到私有目录
+ */
+export async function pickFileIOS(): Promise<PickedFileIOS> {
+  return invoke<PickedFileIOS>("pick_file_ios");
+}
+
+/**
+ * iOS: 在私有目录创建新文件
+ */
+export async function createPrivateFileIOS(fileName: string): Promise<PickedFileIOS> {
+  return invoke<PickedFileIOS>("create_private_file_ios", { fileName });
+}
+
+/**
+ * iOS: 保存文件到私有目录
+ */
+export async function saveFileIOS(path: string, bytes: number[]): Promise<void> {
+  return invoke<void>("save_file_ios", { path, bytes });
+}
+
+/**
+ * iOS: 导出文件到用户选择的位置
+ */
+export async function exportFileIOS(sourcePath: string, defaultName: string): Promise<string | null> {
+  return invoke<string | null>("export_file_ios", { sourcePath, defaultName });
+}

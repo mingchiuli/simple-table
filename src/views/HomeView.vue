@@ -11,7 +11,7 @@ import { useFileDataStore } from "@/stores/fileData";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import RecentFilesSection from "@/components/RecentFilesSection.vue";
 import * as api from "@/api";
-import { isAndroid } from "@/utils/platform";
+import { isAndroid, isIOS } from "@/utils/platform";
 
 const router = useRouter();
 const fileDataStore = useFileDataStore();
@@ -44,7 +44,31 @@ async function handleOpenFile() {
       return;
     }
 
-    // 桌面端/iOS: 使用标准文件选择器
+    // iOS: 使用专用文件选择器并复制到私有目录
+    if (await isIOS()) {
+      const result = await api.pickFileIOS();
+      const bytes = await readFile(result.path);
+      const bytesArray = Array.from(bytes);
+      const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
+      fileDataStore.set(fileData);
+
+      const extension = result.fileName.split(".").pop() || "";
+      await api.addRecentFileWithThumbnail(
+        result.path,
+        result.fileName,
+        bytesArray.length,
+        bytesArray,
+        extension,
+        'iosPrivate',
+        result.originalPath
+      );
+
+      await recentFilesStore.load();
+      router.push({ name: "table" });
+      return;
+    }
+
+    // 桌面端: 使用标准文件选择器
     const selected = await open({
       multiple: false,
       filters: [

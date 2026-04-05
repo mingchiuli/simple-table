@@ -13,7 +13,10 @@ use commands::{
     read_file_bytes, redo, remove_recent_file, search, set_cell, sort_column, undo,
     update_recent_file_path,
 };
+#[cfg(target_os = "android")]
 use mobile::{pick_file_android, pick_save_location_android, read_file_android, save_file_android};
+#[cfg(target_os = "ios")]
+use mobile::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -102,10 +105,23 @@ pub fn run() {
             check_file_exists,
             update_recent_file_path,
             // Android 专用命令
+            #[cfg(target_os = "android")]
             pick_file_android,
+            #[cfg(target_os = "android")]
             read_file_android,
+            #[cfg(target_os = "android")]
             save_file_android,
-            pick_save_location_android
+            #[cfg(target_os = "android")]
+            pick_save_location_android,
+            // iOS 专用命令
+            #[cfg(target_os = "ios")]
+            pick_file_ios,
+            #[cfg(target_os = "ios")]
+            create_private_file_ios,
+            #[cfg(target_os = "ios")]
+            save_file_ios,
+            #[cfg(target_os = "ios")]
+            export_file_ios
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
