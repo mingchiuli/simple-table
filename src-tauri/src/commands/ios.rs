@@ -2,12 +2,16 @@
 use std::fs;
 #[cfg(target_os = "ios")]
 use std::path::PathBuf;
-use crate::error::AppError;
+#[cfg(target_os = "ios")]
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "ios")]
 use tauri::AppHandle;
+#[cfg(target_os = "ios")]
+use crate::error::AppError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(target_os = "ios")]
 pub struct PickedFile {
     /// 私有目录路径（实际文件存储位置）
     pub path: String,
@@ -151,32 +155,3 @@ pub async fn export_file_ios(
     }
 }
 
-// ==================== Non-iOS Stub Commands ====================
-
-#[cfg(not(target_os = "ios"))]
-#[tauri::command]
-pub async fn pick_file_ios(_app: AppHandle) -> Result<PickedFile, AppError> {
-    Err(AppError::Internal("iOS file picker only available on iOS".to_string()))
-}
-
-#[cfg(not(target_os = "ios"))]
-#[tauri::command]
-pub async fn create_private_file_ios(_app: AppHandle, _file_name: String) -> Result<PickedFile, AppError> {
-    Err(AppError::Internal("iOS file creator only available on iOS".to_string()))
-}
-
-#[cfg(not(target_os = "ios"))]
-#[tauri::command]
-pub async fn save_file_ios(_app: AppHandle, _path: String, _bytes: Vec<u8>) -> Result<(), AppError> {
-    Err(AppError::Internal("iOS file saver only available on iOS".to_string()))
-}
-
-#[cfg(not(target_os = "ios"))]
-#[tauri::command]
-pub async fn export_file_ios(
-    _app: AppHandle,
-    _source_path: String,
-    _default_name: String,
-) -> Result<Option<String>, AppError> {
-    Err(AppError::Internal("iOS file exporter only available on iOS".to_string()))
-}

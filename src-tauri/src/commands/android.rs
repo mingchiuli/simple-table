@@ -1,9 +1,13 @@
+#[cfg(target_os = "android")]
 use crate::error::AppError;
+#[cfg(target_os = "android")]
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "android")]
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(target_os = "android")]
 pub struct PickedFile {
     pub path: String,
     pub file_name: String,
@@ -79,7 +83,7 @@ pub async fn save_file_android(app: AppHandle, uri: String, bytes: Vec<u8>) -> R
 #[cfg(target_os = "android")]
 #[tauri::command]
 pub async fn pick_save_location_android(app: AppHandle, default_name: String) -> Result<Option<String>, AppError> {
-    use tauri_plugin_android_fs::{AndroidFsExt, FileUri};
+    use tauri_plugin_android_fs::{AndroidFsExt};
 
     let api = app.android_fs();
 
@@ -100,28 +104,3 @@ pub async fn pick_save_location_android(app: AppHandle, default_name: String) ->
     }
 }
 
-// ==================== Non-Android Stub Commands ====================
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn pick_file_android(_app: AppHandle) -> Result<PickedFile, AppError> {
-    Err(AppError::Internal("Android file picker only available on Android".to_string()))
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn read_file_android(_app: AppHandle, _uri: String) -> Result<Vec<u8>, AppError> {
-    Err(AppError::Internal("Android file reader only available on Android".to_string()))
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn save_file_android(_app: AppHandle, _uri: String, _bytes: Vec<u8>) -> Result<(), AppError> {
-    Err(AppError::Internal("Android file saver only available on Android".to_string()))
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn pick_save_location_android(_app: AppHandle, _default_name: String) -> Result<Option<String>, AppError> {
-    Err(AppError::Internal("Android file saver only available on Android".to_string()))
-}

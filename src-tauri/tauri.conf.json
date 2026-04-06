@@ -26,13 +26,7 @@
       "csp": null
     }
   },
-  "plugins": {
-    "deep-link": {
-      "desktop": {
-        "schemes": ["simpletable"]
-      }
-    }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
     "targets": "all",

@@ -1,7 +1,6 @@
 mod commands;
 mod error;
 mod io;
-mod mobile;
 mod ops;
 mod state;
 mod types;
@@ -14,9 +13,9 @@ use commands::{
     update_recent_file_path,
 };
 #[cfg(target_os = "android")]
-use mobile::{pick_file_android, pick_save_location_android, read_file_android, save_file_android};
+use commands::android::{pick_file_android, pick_save_location_android, read_file_android, save_file_android};
 #[cfg(target_os = "ios")]
-use mobile::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios};
+use commands::ios::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 #[cfg(desktop)]
@@ -37,13 +36,10 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             println!("new app instance opened with {argv:?}");
-            // argv[0] is the app path, argv[1+] are the arguments
+            // File path is passed as argv[1], emit event for frontend to handle
             if argv.len() > 1 {
-                let url = &argv[1];
-                if url.starts_with("simpletable://") {
-                    if let Err(e) = app.emit("deep-link-received", url.clone()) {
-                        eprintln!("Failed to emit deep link: {}", e);
-                    }
+                if let Err(e) = app.emit("deep-link-received", argv[1].clone()) {
+                    eprintln!("Failed to emit deep link: {}", e);
                 }
             }
         }));

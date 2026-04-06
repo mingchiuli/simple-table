@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::types::{CellValue, FileData, OperationResult};
-pub use crate::ops::operation::{Operation, Undoable};
+pub use crate::ops::undo_ops::{Operation, Undoable};
 
 /// 编辑器状态管理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
