@@ -37,7 +37,7 @@ pub fn do_init_file(file_data: FileData) -> Result<(), AppError> {
 }
 
 fn init_editor_state(file_data: FileData) {
-    let state = crate::commands::get_state();
+    let state = crate::commands::common::get_state();
     {
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         *state_guard = Some(EditorState::new(file_data));
