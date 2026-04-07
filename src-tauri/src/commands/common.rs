@@ -131,7 +131,7 @@ pub fn check_file_exists(path: String) -> bool {
     crate::ops::recent_ops::do_check_file_exists(path)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn update_recent_file_path(app: AppHandle, id: String, new_path: String) -> Result<(), String> {
     crate::ops::recent_ops::do_update_recent_file_path(&app, id, new_path)
 }
