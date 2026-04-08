@@ -16,9 +16,24 @@ const emit = defineEmits<{
 const inputRef = ref<InstanceType<typeof import('element-plus').ElInput> | null>(null);
 
 onMounted(() => {
-  if (props.autoFocus) {
-    inputRef.value?.focus();
-  }
+  if (!props.autoFocus) return;
+
+  // 获取 ElInput 内部原生 input 元素，而非通过 querySelector 查找
+  // 这样可以避免 ElInput 封装层干扰 preventScroll 选项
+  const nativeInput = inputRef.value?.ref as HTMLInputElement | undefined;
+  if (!nativeInput) return;
+
+  // 记录当前滚动位置，focus 后恢复
+  // 原因：虚拟列表滚动时可能触发 EditableCell 重建，focus 会导致浏览器自动滚动
+  const scrollContainer = nativeInput.closest('.el-table-v2__body') ?? document.documentElement;
+  const { scrollTop, scrollLeft } = scrollContainer;
+
+  nativeInput.focus({ preventScroll: true });
+
+  // requestAnimationFrame 确保在浏览器完成 focus 滚动后再恢复位置
+  requestAnimationFrame(() => {
+    scrollContainer.scrollTo({ top: scrollTop, left: scrollLeft, behavior: 'instant' });
+  });
 });
 </script>
 
