@@ -322,6 +322,12 @@ async function handleOpenFile() {
       isLoading.value = true;
       isFileLoading.value = true;
       const result = await api.pickFileAndroid();
+      if (!result) {
+        // 用户取消选择
+        isLoading.value = false;
+        isFileLoading.value = false;
+        return;
+      }
       const fileData = await api.readFileBytes(result.path, result.bytes, result.fileName);
       fileDataStore.set(fileData);
       currentSheetIndex.value = 0;
@@ -347,6 +353,12 @@ async function handleOpenFile() {
       isLoading.value = true;
       isFileLoading.value = true;
       const result = await api.pickFileIOS();
+      if (!result) {
+        // 用户取消选择
+        isLoading.value = false;
+        isFileLoading.value = false;
+        return;
+      }
       const bytes = await readFile(result.path);
       const bytesArray = Array.from(bytes);
       const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);

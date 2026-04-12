@@ -25,17 +25,20 @@ pub struct PickedFile {
 
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn pick_file_ios(app: AppHandle) -> Result<PickedFile, AppError> {
+pub async fn pick_file_ios(app: AppHandle) -> Result<Option<PickedFile>, AppError> {
     use tauri::Manager;
     use tauri_plugin_dialog::DialogExt;
 
     // 1. 打开文件选择器
-    let file_path = app
+    let file_path = match app
         .dialog()
         .file()
         .add_filter("Spreadsheet", &["xlsx", "xls", "csv", "ods"])
         .blocking_pick_file()
-        .ok_or_else(|| AppError::ReadError("No file selected".to_string()))?;
+    {
+        Some(path) => path,
+        None => return Ok(None),
+    };
 
     let source_path: PathBuf = file_path.into_path()
         .map_err(|e| AppError::ReadError(format!("Failed to get path: {}", e)))?;
@@ -72,11 +75,11 @@ pub async fn pick_file_ios(app: AppHandle) -> Result<PickedFile, AppError> {
     fs::copy(&source_path, &private_path)
         .map_err(|e| AppError::WriteError(format!("Failed to copy file: {}", e)))?;
 
-    Ok(PickedFile {
+    Ok(Some(PickedFile {
         path: private_path.to_string_lossy().to_string(),
         original_path: source_path.to_string_lossy().to_string(),
         file_name,
-    })
+    }))
 }
 
 #[cfg(target_os = "ios")]

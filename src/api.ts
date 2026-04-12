@@ -141,9 +141,10 @@ export interface PickedFile {
 
 /**
  * Android: 打开文件选择器并持久化 URI 权限
+ * @returns 文件信息，如果用户取消则返回 null
  */
-export async function pickFileAndroid(): Promise<PickedFile> {
-  return invoke<PickedFile>("pick_file_android");
+export async function pickFileAndroid(): Promise<PickedFile | null> {
+  return invoke<PickedFile | null>("pick_file_android");
 }
 
 /**
@@ -177,9 +178,10 @@ export interface PickedFileIOS {
 
 /**
  * iOS: 打开文件选择器并复制到私有目录
+ * @returns 文件信息，如果用户取消则返回 null
  */
-export async function pickFileIOS(): Promise<PickedFileIOS> {
-  return invoke<PickedFileIOS>("pick_file_ios");
+export async function pickFileIOS(): Promise<PickedFileIOS | null> {
+  return invoke<PickedFileIOS | null>("pick_file_ios");
 }
 
 /**

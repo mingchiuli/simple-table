@@ -145,6 +145,10 @@ export const useRecentFilesStore = defineStore("recentFiles", {
       if (await isAndroid()) {
         try {
           const result = await api.pickFileAndroid();
+          if (!result) {
+            // 用户取消选择
+            return false;
+          }
           // 更新路径
           await this.updatePath(file.id, result.path);
           // 读取文件（传入正确的文件名）
@@ -173,6 +177,10 @@ export const useRecentFilesStore = defineStore("recentFiles", {
       if (await isIOS()) {
         try {
           const result = await api.pickFileIOS();
+          if (!result) {
+            // 用户取消选择
+            return false;
+          }
 
           // 从私有路径读取文件
           const bytes = await readFile(result.path);
