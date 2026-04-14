@@ -33,12 +33,12 @@ function clearSearch() {
       @keyup.enter="handleSearch"
       clearable
       @clear="clearSearch"
-      style="width: 300px"
+      class="search-input"
     >
       <template #prepend>
-        <el-select v-model="searchScope" style="width: 120px">
-          <el-option label="Current Sheet" value="currentSheet" />
-          <el-option label="All Sheets" value="allSheets" />
+        <el-select v-model="searchScope" class="scope-select">
+          <el-option label="Current" value="currentSheet" />
+          <el-option label="All" value="allSheets" />
         </el-select>
       </template>
       <template #append>
@@ -53,5 +53,16 @@ function clearSearch() {
 <style scoped>
 .search-box {
   position: relative;
+  width: 100%;
+}
+
+.search-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.scope-select {
+  width: auto;
+  min-width: 80px;
 }
 </style>

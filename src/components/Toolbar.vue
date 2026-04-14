@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { FileData } from '@/types';
+import { ref } from 'vue';
 import { usePlatform } from '@/composables/usePlatform';
+import { Search } from '@element-plus/icons-vue';
 import FileButtons from './FileButtons.vue';
 import SheetSelector from './SheetSelector.vue';
 import SheetButtons from './SheetButtons.vue';
@@ -8,6 +10,7 @@ import SearchBox from './SearchBox.vue';
 import EditButtons from './EditButtons.vue';
 
 const { isMobileOrTablet } = usePlatform();
+const searchPopoverVisible = ref(false);
 
 const props = defineProps<{
   fileData: FileData | null;
@@ -93,6 +96,24 @@ const emit = defineEmits<{
     </div>
 
     <div class="mobile-toolbar-actions" v-if="props.fileData">
+      <el-popover
+        :visible="searchPopoverVisible"
+        placement="bottom"
+        :width="280"
+        trigger="click"
+        @update:visible="searchPopoverVisible = $event"
+      >
+        <template #reference>
+          <el-button size="small" title="Search">
+            <el-icon><Search /></el-icon>
+          </el-button>
+        </template>
+        <SearchBox
+          :is-searching="props.isSearching"
+          @search="(query, scope) => { emit('search', query, scope); searchPopoverVisible = false; }"
+          @clear-search="emit('clear-search')"
+        />
+      </el-popover>
       <el-button
         :disabled="!props.canUndo"
         @click="emit('undo')"
