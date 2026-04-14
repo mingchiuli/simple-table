@@ -204,3 +204,10 @@ export async function saveFileIOS(path: string, bytes: number[]): Promise<void> 
 export async function exportFileIOS(sourcePath: string, defaultName: string): Promise<string | null> {
   return invoke<string | null>("export_file_ios", { sourcePath, defaultName });
 }
+
+/**
+ * iOS: 静默导出文件到已知路径（不弹对话框）
+ */
+export async function silentExportFileIOS(sourcePath: string, destPath: string): Promise<void> {
+  return invoke<void>("silent_export_file_ios", { sourcePath, destPath });
+}

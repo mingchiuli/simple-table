@@ -158,3 +158,15 @@ pub async fn export_file_ios(
     }
 }
 
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn silent_export_file_ios(
+    source_path: String,
+    dest_path: String,
+) -> Result<(), AppError> {
+    // 静默导出：直接复制文件到已知路径，不弹对话框
+    fs::copy(&source_path, &dest_path)
+        .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;
+    Ok(())
+}
+

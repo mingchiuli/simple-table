@@ -15,7 +15,7 @@ use commands::{
 #[cfg(target_os = "android")]
 use commands::android::{pick_file_android, pick_save_location_android, read_file_android, save_file_android};
 #[cfg(target_os = "ios")]
-use commands::ios::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios};
+use commands::ios::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios, silent_export_file_ios};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 #[cfg(desktop)]
@@ -118,7 +118,9 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             save_file_ios,
             #[cfg(target_os = "ios")]
-            export_file_ios
+            export_file_ios,
+            #[cfg(target_os = "ios")]
+            silent_export_file_ios
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -507,7 +507,7 @@ async function handleSaveFile() {
 
         if (originalPath) {
           // 有原始路径：静默导出到原始位置（用户已选择过位置）
-          await api.exportFileIOS(privatePath, `${defaultName}.${extensions[0]}`);
+          await api.silentExportFileIOS(privatePath, originalPath);
           ElMessage.success("File saved successfully");
         } else {
           // 无原始路径（如新建文件第一次保存）：让用户选择位置
