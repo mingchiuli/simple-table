@@ -8,10 +8,26 @@
     "opener:default",
     "dialog:default",
     "fs:default",
-    "fs:allow-write-file",
-    "fs:allow-write-text-file",
     "deep-link:default",
     "store:default",
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
     {
       "identifier": "fs:allow-read-file",
       "allow": [
