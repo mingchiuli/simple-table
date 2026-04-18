@@ -45,4 +45,16 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: (id: string) => {
+          if (id.includes('platform/android')) return 'platform-android';
+          if (id.includes('platform/ios')) return 'platform-ios';
+          if (id.includes('platform/desktop')) return 'platform-desktop';
+        },
+      },
+    },
+  },
 }));

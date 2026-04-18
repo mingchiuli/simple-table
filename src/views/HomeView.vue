@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { open } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
-import { basename } from "@tauri-apps/api/path";
 import { ElMessage } from "element-plus";
 import { Document } from "@element-plus/icons-vue";
 import type { FileData } from "@/types";
@@ -11,7 +8,7 @@ import { useFileDataStore } from "@/stores/fileData";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import RecentFilesSection from "@/components/RecentFilesSection.vue";
 import * as api from "@/api";
-import { isAndroid, isIOS } from "@/utils/platform";
+import { pickFile, readFile, getStorageType } from "@/platform";
 
 const router = useRouter();
 const fileDataStore = useFileDataStore();
@@ -23,84 +20,31 @@ onMounted(() => {
 
 async function handleOpenFile() {
   try {
-    // Android: 使用专用文件选择器
-    if (await isAndroid()) {
-      const result = await api.pickFileAndroid();
-      if (!result) {
-        // 用户取消选择
-        return;
-      }
-      const fileData = await api.readFileBytes(result.path, result.bytes, result.fileName);
-      fileDataStore.set(fileData);
-
-      const extension = result.fileName.split(".").pop() || "";
-      await api.addRecentFileWithThumbnail(
-        result.path,
-        result.fileName,
-        result.bytes.length,
-        result.bytes,
-        extension,
-        'androidUri'
-      );
-
-      await recentFilesStore.load();
-      router.push({ name: "table" });
+    const result = await pickFile();
+    if (!result) {
+      // 用户取消选择
       return;
     }
 
-    // iOS: 使用专用文件选择器并复制到私有目录
-    if (await isIOS()) {
-      const result = await api.pickFileIOS();
-      if (!result) {
-        // 用户取消选择
-        return;
-      }
-      const bytes = await readFile(result.path);
-      const bytesArray = Array.from(bytes);
-      const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
-      fileDataStore.set(fileData);
+    const bytes = result.bytes && result.bytes.length > 0
+      ? result.bytes
+      : Array.from(await readFile(result.path));
+    const fileData = await api.readFileBytes(result.path, bytes, result.fileName);
+    fileDataStore.set(fileData);
 
-      const extension = result.fileName.split(".").pop() || "";
-      await api.addRecentFileWithThumbnail(
-        result.path,
-        result.fileName,
-        bytesArray.length,
-        bytesArray,
-        extension,
-        'iosPrivate',
-        result.originalPath
-      );
+    const extension = result.fileName.split(".").pop() || "";
+    const storageType = await getStorageType();
+    await api.addRecentFileWithThumbnail(
+      result.path,
+      result.fileName,
+      bytes.length,
+      bytes,
+      extension,
+      storageType
+    );
 
-      await recentFilesStore.load();
-      router.push({ name: "table" });
-      return;
-    }
-
-    // 桌面端: 使用标准文件选择器
-    const selected = await open({
-      multiple: false,
-      filters: [
-        {
-          name: "Spreadsheet",
-          extensions: ["xlsx", "xls", "csv", "ods"],
-        },
-      ],
-    });
-
-    if (selected) {
-      const bytes = await readFile(selected);
-      const bytesArray = Array.from(bytes);
-      const result = await api.readFileBytes(selected, bytesArray);
-      fileDataStore.set(result);
-
-      // 使用 bytes 版本添加最近文件（桌面端默认类型）
-      const fileName = decodeURIComponent(await basename(selected));
-      const extension = fileName.split(".").pop() || "";
-      await api.addRecentFileWithThumbnail(selected, fileName, bytes.byteLength, bytesArray, extension);
-
-      await recentFilesStore.load();
-      router.push({ name: "table" });
-    }
+    await recentFilesStore.load();
+    router.push({ name: "table" });
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
   }

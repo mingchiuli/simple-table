@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import {computed, ref, watch, onMounted, onUnmounted} from "vue";
 import {useRouter, useRoute} from "vue-router";
-import {open, save} from "@tauri-apps/plugin-dialog";
-import {readFile, writeFile} from "@tauri-apps/plugin-fs";
+
 import {basename} from "@tauri-apps/api/path";
 import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
@@ -16,7 +15,7 @@ import StatusBar from "@/components/StatusBar.vue";
 import CellEditor from "@/components/CellEditor.vue";
 import SearchPanel from "@/components/SearchPanel.vue";
 import * as api from "@/api";
-import {isAndroid, isIOS} from "@/utils/platform";
+import {pickFile, readFile, saveFile, pickSaveLocation, getStorageType} from "@/platform";
 
 const router = useRouter();
 const route = useRoute();
@@ -54,7 +53,7 @@ async function loadFileFromPath(filePath: string) {
     const recentFilesStore = useRecentFilesStore();
     const fileName = decodeURIComponent(await basename(filePath));
     const extension = fileName.split(".").pop() || "";
-    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.byteLength, bytesArray, extension);
+    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.length, bytesArray, extension);
     await recentFilesStore.load();
 
     await updateEditorState();
@@ -338,93 +337,33 @@ async function updateEditorState() {
 
 async function handleOpenFile() {
   try {
-    // Android: 使用专用文件选择器（支持持久化权限）
-    if (await isAndroid()) {
-      isLoading.value = true;
-      isFileLoading.value = true;
-      const result = await api.pickFileAndroid();
-      if (!result) {
-        // 用户取消选择
-        isLoading.value = false;
-        isFileLoading.value = false;
-        return;
-      }
-      const fileData = await api.readFileBytes(result.path, result.bytes, result.fileName);
-      fileDataStore.set(fileData);
-      currentSheetIndex.value = 0;
-      hasChanges.value = false;
-
-      // 添加到最近文件（标记为 Android URI 类型）
-      const extension = result.fileName.split(".").pop() || "";
-      await api.addRecentFileWithThumbnail(
-        result.path,
-        result.fileName,
-        result.bytes.length,
-        result.bytes,
-        extension,
-        'androidUri'
-      );
-
-      await updateEditorState();
+    isLoading.value = true;
+    isFileLoading.value = true;
+    const result = await pickFile();
+    if (!result) {
+      // 用户取消选择
+      isLoading.value = false;
+      isFileLoading.value = false;
       return;
     }
+    const bytes = result.bytes && result.bytes.length > 0 ? result.bytes : Array.from(await readFile(result.path));
+    const fileData = await api.readFileBytes(result.path, bytes, result.fileName);
+    fileDataStore.set(fileData);
+    currentSheetIndex.value = 0;
+    hasChanges.value = false;
 
-    // iOS: 使用专用文件选择器并复制到私有目录
-    if (await isIOS()) {
-      isLoading.value = true;
-      isFileLoading.value = true;
-      const result = await api.pickFileIOS();
-      if (!result) {
-        // 用户取消选择
-        isLoading.value = false;
-        isFileLoading.value = false;
-        return;
-      }
-      const bytes = await readFile(result.path);
-      const bytesArray = Array.from(bytes);
-      const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
-      fileDataStore.set(fileData);
-      currentSheetIndex.value = 0;
-      hasChanges.value = false;
+    const extension = result.fileName.split(".").pop() || "";
+    const storageType = await getStorageType();
+    await api.addRecentFileWithThumbnail(
+      result.path,
+      result.fileName,
+      bytes.length,
+      bytes,
+      extension,
+      storageType
+    );
 
-      const extension = result.fileName.split(".").pop() || "";
-      await api.addRecentFileWithThumbnail(
-        result.path,
-        result.fileName,
-        bytesArray.length,
-        bytesArray,
-        extension,
-        'iosPrivate',
-        result.originalPath
-      );
-
-      await updateEditorState();
-      return;
-    }
-
-    // 桌面端: 使用标准文件选择器
-    const selected = await open({
-      multiple: false,
-      filters: [
-        {
-          name: "Spreadsheet",
-          extensions: ["xlsx", "xls", "csv", "ods"],
-        },
-      ],
-    });
-
-    if (selected) {
-      isLoading.value = true;
-      isFileLoading.value = true;
-      // Read file content as bytes first, then pass to backend
-      // This works on all platforms including Android with content:// URIs
-      const bytes = await readFile(selected);
-      const result = await api.readFileBytes(selected, Array.from(bytes));
-      fileDataStore.set(result);
-      currentSheetIndex.value = 0;
-      hasChanges.value = false;
-      await updateEditorState();
-    }
+    await updateEditorState();
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
   } finally {
@@ -446,7 +385,6 @@ async function handleSaveFile() {
     // Determine available extensions based on file type
     let extensions: string[];
     if (isNewFile) {
-      // New file: allow选择 xlsx or csv
       extensions = ["xlsx", "csv"];
     } else if (originalExtension === "csv") {
       extensions = ["csv"];
@@ -454,161 +392,27 @@ async function handleSaveFile() {
       extensions = ["xlsx"];
     }
 
-    // Android: 保存到已有 URI 或让用户选择新位置
-    if (await isAndroid()) {
-      isLoading.value = true;
-      const [, bytes] = await api.generateFileBytes(fileData.value);
-
-      // 获取当前文件的 URI（从最近文件记录中）
-      const recentFilesStore = useRecentFilesStore();
-      const currentFileName = fileData.value?.fileName || "";
-      const currentFile = recentFilesStore.files.find(f =>
-        f.fileName === currentFileName || f.originalPath?.includes(currentFileName)
-      );
-      const existingUri = currentFile?.path;
-
-      if (existingUri) {
-        // 已有文件：直接保存到原 URI
-        await api.saveFileAndroid(existingUri, bytes);
-        hasChanges.value = false;
-        ElMessage.success("File saved successfully");
-      } else {
-        // 新文件：让用户选择保存位置
-        const saveUri = await api.pickSaveLocationAndroid(`${defaultName}.${extensions[0]}`);
-        if (saveUri) {
-          await api.saveFileAndroid(saveUri, bytes);
-          hasChanges.value = false;
-
-          // 添加到最近文件
-          const extension = extensions[0];
-          await api.addRecentFileWithThumbnail(
-            saveUri,
-            `${defaultName}.${extension}`,
-            bytes.length,
-            bytes,
-            extension,
-            'androidUri'
-          );
-          await recentFilesStore.load();
-          ElMessage.success("File saved successfully");
-        }
-      }
-      return;
-    }
-
-    // iOS: 保存到私有目录，导出到 originalPath（如果有）
-    if (await isIOS()) {
-      isLoading.value = true;
-      const [, bytes] = await api.generateFileBytes(fileData.value);
-
-      // 获取当前文件的私有路径和原始路径（从最近文件记录中）
-      const recentFilesStore = useRecentFilesStore();
-      const currentFileName = fileData.value?.fileName || "";
-      const currentFile = recentFilesStore.files.find(f =>
-        f.fileName === currentFileName || f.originalPath?.includes(currentFileName)
-      );
-      const privatePath = currentFile?.path;
-      const originalPath = currentFile?.originalPath;
-
-      if (privatePath) {
-        // 保存到私有目录
-        await api.saveFileIOS(privatePath, bytes);
-
-        if (originalPath) {
-          // 有原始路径：静默导出到原始位置（用户已选择过位置）
-          await api.silentExportFileIOS(privatePath, originalPath);
-          ElMessage.success("File saved successfully");
-        } else {
-          // 无原始路径（如新建文件第一次保存）：让用户选择位置
-          const exportPath = await api.exportFileIOS(privatePath, `${defaultName}.${extensions[0]}`);
-          if (exportPath) {
-            // 更新最近文件的 originalPath
-            const extension = extensions[0];
-            await api.addRecentFileWithThumbnail(
-              privatePath,
-              `${defaultName}.${extension}`,
-              bytes.length,
-              bytes,
-              extension,
-              'iosPrivate',
-              exportPath
-            );
-            await recentFilesStore.load();
-            ElMessage.success("File saved and exported successfully");
-          } else {
-            hasChanges.value = false;
-            ElMessage.warning("File saved to app storage. Use 'Export' to save to a location you can access.");
-          }
-        }
-        hasChanges.value = false;
-      } else {
-        // 新文件：让用户选择保存位置
-        const newFile = await api.createPrivateFileIOS(`${defaultName}.${extensions[0]}`);
-        await api.saveFileIOS(newFile.path, bytes);
-        hasChanges.value = false;
-
-        const exportPath = await api.exportFileIOS(newFile.path, `${defaultName}.${extensions[0]}`);
-        if (exportPath) {
-          // 添加到最近文件（同时记录私有路径和原始路径）
-          await api.addRecentFileWithThumbnail(
-            newFile.path,
-            newFile.fileName,
-            bytes.length,
-            bytes,
-            extensions[0],
-            'iosPrivate',
-            exportPath
-          );
-          await recentFilesStore.load();
-          ElMessage.success("File saved successfully");
-        } else {
-          // 添加到最近文件（只有私有路径）
-          await api.addRecentFileWithThumbnail(
-            newFile.path,
-            newFile.fileName,
-            bytes.length,
-            bytes,
-            extensions[0],
-            'iosPrivate'
-          );
-          await recentFilesStore.load();
-          ElMessage.warning("File saved to app storage. Use 'Export' to save to a location you can access.");
-        }
-      }
-      return;
-    }
-
-    // 桌面端: 保存到已有路径或让用户选择新位置
+    const [, bytes] = await api.generateFileBytes(fileData.value);
     const recentFilesStore = useRecentFilesStore();
     const currentFileName = fileData.value?.fileName || "";
     const currentFile = recentFilesStore.files.find(f =>
       f.fileName === currentFileName || f.originalPath?.includes(currentFileName)
     );
     const existingPath = currentFile?.path;
+    const storageType = await getStorageType();
 
     if (existingPath) {
       // 已有文件：直接保存到原路径
       isLoading.value = true;
-      const [, bytes] = await api.generateFileBytes(fileData.value);
-      await writeFile(existingPath, new Uint8Array(bytes));
+      await saveFile(existingPath, bytes);
       hasChanges.value = false;
       ElMessage.success("File saved successfully");
     } else {
       // 新文件：让用户选择保存位置
-      const savePath = await save({
-        defaultPath: `${defaultName}.${extensions[0]}`,
-        filters: [
-          {
-            name: "Spreadsheet",
-            extensions,
-          },
-        ],
-      });
-
+      const savePath = await pickSaveLocation(`${defaultName}.${extensions[0]}`);
       if (savePath) {
         isLoading.value = true;
-        const [, bytes] = await api.generateFileBytes(fileData.value);
-        await writeFile(savePath, new Uint8Array(bytes));
+        await saveFile(savePath, bytes);
         hasChanges.value = false;
 
         // 添加到最近文件
@@ -619,7 +423,7 @@ async function handleSaveFile() {
           bytes.length,
           bytes,
           extension,
-          'desktopPath'
+          storageType
         );
         await recentFilesStore.load();
         ElMessage.success("File saved successfully");
