@@ -38,6 +38,7 @@ npm run preview  # Preview production build
 - `stores/` - Pinia state management
 - `types/` - TypeScript type definitions
 - `router/` - Vue Router configuration
+- `platform/` - Platform-specific file operations (desktop, android, ios)
 
 ### Backend Structure (`src-tauri/`)
 - Rust backend for file I/O and Excel processing using calamine and xlsxwriter

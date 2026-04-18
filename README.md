@@ -18,7 +18,7 @@
 
 ### Platform Support
 - **Desktop**: macOS, Linux, Windows
-- **Mobile**: Android (APK builds available via GitHub Releases)
+- Platform detection via `src/stores/platform.ts` (isMobile, isTablet, isDesktop)
 
 ### Limitations
 
@@ -69,7 +69,11 @@ src/                      # Frontend source
 ├── types/                # TypeScript types
 ├── router/               # Vue Router config
 ├── composables/          # Vue composables
-└── styles/               # Platform-specific styles
+├── platform/             # Platform-specific file operations
+│   ├── desktop/         # Desktop (macOS/Linux/Windows)
+│   ├── android/         # Android
+│   └── ios/             # iOS
+└── styles/              # Platform-specific styles
 
 src-tauri/                # Rust backend
 ├── src/
@@ -79,6 +83,18 @@ src-tauri/                # Rust backend
 │   ├── types/            # Rust types
 │   └── state/            # Editor state management
 ```
+
+## Platform Architecture
+
+File operations are abstracted through `src/platform/` which provides a unified API:
+
+```ts
+import { pickFile, readFile, saveFile, pickSaveLocation, getPlatformAPI } from '@/platform';
+```
+
+Platform modules are **dynamically loaded** at runtime based on the current OS. Vite code-splits each platform into separate chunks for optimal bundle size.
+
+**Important**: When adding a new platform, implement all methods in `PlatformFileOps` interface in `src/platform/types.ts`.
 
 ## License
 
