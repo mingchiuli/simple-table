@@ -3,6 +3,7 @@ import {computed, ref, watch, onMounted, onUnmounted} from "vue";
 import {useRouter, useRoute} from "vue-router";
 import {open, save} from "@tauri-apps/plugin-dialog";
 import {readFile, writeFile} from "@tauri-apps/plugin-fs";
+import {basename} from "@tauri-apps/api/path";
 import {ElMessage} from "element-plus";
 import {HomeFilled} from "@element-plus/icons-vue";
 import type {CellValue, OperationResult, SearchResult, SortState} from "@/types";
@@ -44,10 +45,18 @@ async function loadFileFromPath(filePath: string) {
     isLoading.value = true;
     isFileLoading.value = true;
     const bytes = await readFile(filePath);
-    const result = await api.readFileBytes(filePath, Array.from(bytes));
+    const bytesArray = Array.from(bytes);
+    const result = await api.readFileBytes(filePath, bytesArray);
     fileDataStore.set(result);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
+
+    const recentFilesStore = useRecentFilesStore();
+    const fileName = decodeURIComponent(await basename(filePath));
+    const extension = fileName.split(".").pop() || "";
+    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.byteLength, bytesArray, extension);
+    await recentFilesStore.load();
+
     await updateEditorState();
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
