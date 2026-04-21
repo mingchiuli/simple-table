@@ -60,13 +60,12 @@ impl EditorState {
                     // 正常添加列，补充列索引
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
                         let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
-                        if col_count > 0 {
-                            operation = Operation::AddColumn {
-                                sheet_index: *sheet_index,
-                                col_index: Some(col_count - 1),
-                                col_data: vec![],
-                            };
-                        }
+                        // 新列被添加到末尾，索引就是当前列数（添加前）
+                        operation = Operation::AddColumn {
+                            sheet_index: *sheet_index,
+                            col_index: Some(col_count),
+                            col_data: vec![],
+                        };
                     }
                 }
             }
