@@ -45,10 +45,10 @@ pub fn do_undo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResul
                     let idx = extract_sheet_index(&result);
                     (result, idx)
                 } else {
-                    return Err(AppError::Internal("Nothing to undo".to_string()));
+                    return Err(AppError::NothingToUndo);
                 }
             }
-            None => return Err(AppError::Internal("No file loaded".to_string())),
+            None => return Err(AppError::NoFileLoaded),
         }
     };
 
@@ -68,10 +68,10 @@ pub fn do_redo(state: Arc<RwLock<Option<EditorState>>>) -> Result<OperationResul
                     let idx = extract_sheet_index(&result);
                     (result, idx)
                 } else {
-                    return Err(AppError::Internal("Nothing to redo".to_string()));
+                    return Err(AppError::NothingToRedo);
                 }
             }
-            None => return Err(AppError::Internal("No file loaded".to_string())),
+            None => return Err(AppError::NoFileLoaded),
         }
     };
 

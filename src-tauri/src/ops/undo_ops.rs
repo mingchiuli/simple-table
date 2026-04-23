@@ -370,15 +370,8 @@ impl Operation {
 
                 let removed_sheet = file_data.sheets.remove(actual_index);
 
-                // Adjust current sheet index if needed
-                let new_current_index = if actual_index >= file_data.sheets.len() {
-                    file_data.sheets.len().saturating_sub(1)
-                } else {
-                    actual_index
-                };
-
                 OperationResult::DeleteSheet {
-                    sheet_index: new_current_index,
+                    sheet_index: actual_index,
                     sheet_data: removed_sheet,
                 }
             }

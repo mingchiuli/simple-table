@@ -78,10 +78,14 @@ src/                      # Frontend source
 src-tauri/                # Rust backend
 ├── src/
 │   ├── commands/         # Tauri commands
-│   ├── ops/              # Operations (cell, sheet, sort, search)
-│   ├── io/               # File I/O (reader, writer)
+│   ├── ops/              # Operations (cell, sheet, sort, search, undo)
+│   ├── io/               # File I/O (reader, writer, file_ops)
+│   ├── recent/           # Recent files management (types, store, thumbnail, ops)
+│   ├── utils/            # Utility functions (cell_utils)
 │   ├── types/            # Rust types
-│   └── state/            # Editor state management
+│   ├── state/            # Editor state management
+│   └── error/            # Error handling (AppError)
+│   └── lib.rs            # App setup and command registration
 ```
 
 ## Platform Architecture

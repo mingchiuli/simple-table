@@ -15,21 +15,30 @@ pub fn do_set_cell(
     old_value: CellValue,
     new_value: CellValue,
 ) -> Result<(), AppError> {
-    let mut state = state.write().expect("Editor state lock poisoned");
-    match state.as_mut() {
-        Some(editor_state) => {
-            let operation = Operation::SetCell {
-                sheet_index,
-                row,
-                col,
-                old_value,
-                new_value,
-            };
-            editor_state.execute(operation);
-            Ok(())
+    let result = {
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
+        match state_guard.as_mut() {
+            Some(editor_state) => {
+                let operation = Operation::SetCell {
+                    sheet_index,
+                    row,
+                    col,
+                    old_value,
+                    new_value,
+                };
+                editor_state.execute(operation);
+                Ok(())
+            }
+            None => Err(AppError::NoFileLoaded),
         }
-        None => Err(AppError::Internal("No file loaded".to_string())),
+    };
+
+    // 异步重建索引（单元格内容变化需要更新搜索索引）
+    if result.is_ok() {
+        spawn_rebuild_sheet_index(sheet_index, state.clone());
     }
+
+    result
 }
 
 /// 添加行
@@ -47,7 +56,7 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
                 editor_state.execute(operation);
                 Ok(())
             }
-            None => Err(AppError::Internal("No file loaded".to_string())),
+            None => Err(AppError::NoFileLoaded),
         }
     };
 
@@ -70,7 +79,7 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
                     .get(sheet_index)
                     .and_then(|sheet| sheet.rows.get(row_index))
                     .cloned()
-                    .ok_or_else(|| AppError::Internal("Row not found".to_string()))?;
+                    .ok_or_else(|| AppError::RowNotFound(row_index))?;
                 let operation = Operation::DeleteRow {
                     sheet_index,
                     row_index,
@@ -79,7 +88,7 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
                 editor_state.execute(operation);
                 Ok(())
             }
-            None => Err(AppError::Internal("No file loaded".to_string())),
+            None => Err(AppError::NoFileLoaded),
         }
     };
 
@@ -102,7 +111,7 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
                 editor_state.execute(operation);
                 Ok(())
             }
-            None => Err(AppError::Internal("No file loaded".to_string())),
+            None => Err(AppError::NoFileLoaded),
         }
     };
 
@@ -134,7 +143,7 @@ pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: us
                 editor_state.execute(operation);
                 Ok(())
             }
-            None => Err(AppError::Internal("No file loaded".to_string())),
+            None => Err(AppError::NoFileLoaded),
         }
     };
 
@@ -161,7 +170,7 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppEr
                 editor_state.execute(operation);
                 Ok(())
             }
-            None => Err(AppError::Internal("No file loaded".to_string())),
+            None => Err(AppError::NoFileLoaded),
         }
     };
 
@@ -184,7 +193,7 @@ pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usi
                 editor_state.execute(operation);
                 Ok(())
             }
-            None => Err(AppError::Internal("No file loaded".to_string())),
+            None => Err(AppError::NoFileLoaded),
         }
     };
 

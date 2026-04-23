@@ -1,87 +1,42 @@
 <script setup lang="ts">
-import {computed, ref, watch, onMounted, onUnmounted} from "vue";
-import {useRouter, useRoute} from "vue-router";
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
+import { HomeFilled } from '@element-plus/icons-vue';
+import { usePlatform } from '@/composables/usePlatform';
+import { useFileDataStore } from '@/stores/fileData';
+import Toolbar from '@/components/Toolbar.vue';
+import TableEditor from '@/components/TableEditor.vue';
+import StatusBar from '@/components/StatusBar.vue';
+import CellEditor from '@/components/CellEditor.vue';
+import SearchPanel from '@/components/SearchPanel.vue';
+import * as api from '@/api';
+import type { CellValue, SortState, SheetData, OperationResult, SearchResult } from '@/types';
 
-import {basename} from "@tauri-apps/api/path";
-import {ElMessage} from "element-plus";
-import {HomeFilled} from "@element-plus/icons-vue";
-import type {CellValue, OperationResult, SearchResult, SortState} from "@/types";
-import {useFileDataStore} from "@/stores/fileData";
-import {useRecentFilesStore} from "@/stores/recentFiles";
-import {usePlatform} from "@/composables/usePlatform";
-import Toolbar from "@/components/Toolbar.vue";
-import TableEditor from "@/components/TableEditor.vue";
-import StatusBar from "@/components/StatusBar.vue";
-import CellEditor from "@/components/CellEditor.vue";
-import SearchPanel from "@/components/SearchPanel.vue";
-import * as api from "@/api";
-import {pickFile, readFile, saveFile, pickSaveLocation, getStorageType} from "@/platform";
-
-const router = useRouter();
 const route = useRoute();
 const fileDataStore = useFileDataStore();
 const { isMobileOrTablet } = usePlatform();
 
-// Handle file opened via deep link or CLI
-onMounted(async () => {
-  const filePath = route.query.file as string;
-  if (filePath) {
-    console.log("Loading file from path:", filePath);
-    await loadFileFromPath(filePath);
-  }
-});
-
-// 清理 debounce timer
-onUnmounted(() => {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
-});
-
-async function loadFileFromPath(filePath: string) {
-  try {
-    isLoading.value = true;
-    isFileLoading.value = true;
-    const bytes = await readFile(filePath);
-    const bytesArray = Array.from(bytes);
-    const result = await api.readFileBytes(filePath, bytesArray);
-    fileDataStore.set(result);
-    currentSheetIndex.value = 0;
-    hasChanges.value = false;
-
-    const recentFilesStore = useRecentFilesStore();
-    const fileName = decodeURIComponent(await basename(filePath));
-    const extension = fileName.split(".").pop() || "";
-    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.length, bytesArray, extension);
-    await recentFilesStore.load();
-
-    await updateEditorState();
-  } catch (error) {
-    ElMessage.error(`Failed to open file: ${error}`);
-  } finally {
-    isLoading.value = false;
-    isFileLoading.value = false;
-  }
-}
-
-const currentSheetIndex = ref(0);
-const hasChanges = ref(false);
+// ========== State refs (must be declared before composables use them) ==========
 const isLoading = ref(false);
 const isFileLoading = ref(false);
+const currentSheetIndex = ref(0);
+const hasChanges = ref(false);
 const canUndo = ref(false);
 const canRedo = ref(false);
-const searchResults = ref<SearchResult[]>([]);
-const searchQuery = ref("");
-const isSearching = ref(false);
-const selectedCell = ref<{ row: number; col: number } | null>(null);
-const cellEditorValue = ref<string>("");
-const autoScroll = ref(false);
 const currentSortColumn = ref<SortState | null>(null);
-
-// Store selected cell for each sheet
+const selectedCell = ref<{ row: number; col: number } | null>(null);
+const cellEditorValue = ref<string>('');
+const autoScroll = ref(false);
+const searchResults = ref<SearchResult[]>([]);
+const searchQuery = ref('');
+const isSearching = ref(false);
 const sheetSelectedCells = ref<Map<number, { row: number; col: number }>>(new Map());
 
+// Debounce timer and pending changes
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingChanges = new Map<string, { row: number; col: number; value: string; oldValue: CellValue }>();
+
+// ========== Computed values ==========
 const fileData = computed(() => fileDataStore.data);
 
 const currentSheet = computed(() => {
@@ -108,19 +63,53 @@ const sheetNames = computed(() => {
   return fileData.value.sheets.map((s) => s.name);
 });
 
-function parseCellValue(value: string): CellValue {
-  if (value === "") return null;
-  // 保留前导零和特殊数字格式（如 0908）
-  if (/^0\d/.test(value)) return value;
-  // 尝试解析为整数或浮点数，如果成功则保持为字符串（避免精度丢失）
-  if (/^-?\d+$/.test(value) || /^-?\d+\.\d+$/.test(value)) {
-    return value;  // 保持为字符串
+// ========== Watch: Sync cellEditorValue with selectedCell ==========
+watch(selectedCell, (newCell) => {
+  if (newCell && currentSheet.value) {
+    const value = currentSheet.value.rows[newCell.row]?.[newCell.col];
+    cellEditorValue.value = value !== null ? String(value) : '';
+  } else {
+    cellEditorValue.value = '';
   }
-  // 尝试解析为浮点数
+}, { immediate: true });
+
+// ========== Watch: Sync input to cell (with debounce) ==========
+watch(cellEditorValue, (newValue) => {
+  if (!selectedCell.value || !currentSheet.value) return;
+
+  const { row, col } = selectedCell.value;
+  const originalValue = currentSheet.value.rows[row]?.[col];
+  const newValueStr = newValue;
+  const originalValueStr = originalValue !== null ? String(originalValue) : '';
+
+  // Only update if value changed
+  if (newValueStr !== originalValueStr) {
+    currentSheet.value.rows[row][col] = newValueStr;
+  }
+
+  // Trigger debounce save
+  pendingChanges.set(getCellKey(row, col), { row, col, value: newValueStr, oldValue: originalValue });
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+  debounceTimer = setTimeout(debouncedSave, 500);
+});
+
+// ========== Utility functions ==========
+function getCellKey(row: number, col: number) {
+  return `${row},${col}`;
+}
+
+function parseCellValue(value: string): CellValue {
+  if (value === '') return null;
+  if (/^0\d/.test(value)) return value;
+  if (/^-?\d+$/.test(value) || /^-?\d+\.\d+$/.test(value)) {
+    return value;
+  }
   const num = Number(value);
-  if (!isNaN(num)) return value;  // 也保持为字符串
-  if (value.toLowerCase() === "true") return true;
-  if (value.toLowerCase() === "false") return false;
+  if (!isNaN(num)) return value;
+  if (value.toLowerCase() === 'true') return true;
+  if (value.toLowerCase() === 'false') return false;
   return value;
 }
 
@@ -128,42 +117,99 @@ function toRustCellValue(value: CellValue): string | number | boolean | null {
   return value;
 }
 
-// 获取当前选中单元格的值
-const currentCellValue = computed(() => {
-  if (!selectedCell.value || !currentSheet.value) return null;
-  const { row, col } = selectedCell.value;
-  return currentSheet.value.rows[row]?.[col] ?? null;
-});
-
-// 监听选中单元格变化，更新编辑输入框
-watch(
-  () => selectedCell.value,
-  (newCell) => {
-    if (newCell) {
-      const value = currentCellValue.value;
-      cellEditorValue.value = value !== null ? String(value) : "";
-    } else {
-      cellEditorValue.value = "";
-    }
-  },
-  { immediate: true }
-);
-
-// 防抖定时器
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-// 使用 Map 存储每个单元格的待保存值（包含原始值用于回滚）
-let pendingChanges = new Map<string, { row: number; col: number; value: string; oldValue: CellValue }>();
-
-// 生成单元格 key
-function getCellKey(row: number, col: number) {
-  return `${row},${col}`;
+// ========== Update editor state ==========
+async function updateEditorState() {
+  try {
+    const state = await api.getEditorState();
+    canUndo.value = state.canUndo;
+    canRedo.value = state.canRedo;
+  } catch (error) {
+    console.error('Failed to get editor state:', error);
+  }
 }
 
-// 统一的防抖保存函数
-async function debouncedSave() {
-  // 先保存原始值快照，失败时回滚整个批次而非单个单元格
-  const originalSnapshot = new Map<string, CellValue>();
+// ========== Apply operation (for undo/redo) ==========
+function applyOperation(result: OperationResult) {
+  const data = fileData.value;
+  if (!data) return;
 
+  if (currentSortColumn.value) {
+    currentSortColumn.value = null;
+  }
+
+  switch (result.type) {
+    case 'SetCell': {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
+      if (sheet.rows[resultData.cell.row]) {
+        sheet.rows[resultData.cell.row][resultData.cell.col] = resultData.cell.value;
+      }
+      break;
+    }
+    case 'AddSheet': {
+      const resultData = result.data;
+      const sheetData = resultData.sheetData;
+      const sheetIndex = resultData.sheetIndex;
+      data.sheets.splice(sheetIndex, 0, sheetData);
+      break;
+    }
+    case 'DeleteSheet': {
+      const resultData = result.data;
+      data.sheets.splice(resultData.sheetIndex, 1);
+      if (currentSheetIndex.value >= data.sheets.length) {
+        currentSheetIndex.value = Math.max(0, data.sheets.length - 1);
+      }
+      break;
+    }
+    case 'AddRow': {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
+      const rowValues = resultData.row?.values || [];
+      sheet.rows.splice(resultData.row.index, 0, rowValues);
+      break;
+    }
+    case 'DeleteRow': {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
+      sheet.rows.splice(resultData.rowIndex, 1);
+      break;
+    }
+    case 'AddColumn': {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
+      const colIndex = resultData.column.index;
+      const colData = resultData.colData || [];
+      for (let i = 0; i < sheet.rows.length; i++) {
+        const value = i < colData.length ? colData[i] : null;
+        sheet.rows[i].splice(colIndex, 0, value);
+      }
+      break;
+    }
+    case 'DeleteColumn': {
+      const resultData = result.data;
+      const sheet = data.sheets[resultData.sheetIndex];
+      if (!sheet) break;
+      for (const row of sheet.rows) {
+        row.splice(resultData.columnIndex, 1);
+      }
+      break;
+    }
+    case 'SortColumn': {
+      const resultData = result.data;
+      data.sheets[resultData.sheetIndex] = resultData.sheetData;
+      currentSortColumn.value = resultData.sortState;
+      break;
+    }
+  }
+}
+
+// ========== Cell operations ==========
+async function debouncedSave() {
+  const originalSnapshot = new Map<string, CellValue>();
   for (const [key, { row, col }] of pendingChanges) {
     if (currentSheet.value) {
       originalSnapshot.set(key, currentSheet.value.rows[row]?.[col]);
@@ -177,7 +223,6 @@ async function debouncedSave() {
     try {
       await handleCellChange(row, col, value);
     } catch (error) {
-      // 回滚整个快照，恢复所有待保存单元格到原始值
       if (currentSheet.value) {
         for (const [key, originalValue] of originalSnapshot) {
           const [r, c] = key.split(',').map(Number);
@@ -190,29 +235,43 @@ async function debouncedSave() {
   }
 }
 
-// 监听编辑输入框变化，实时更新单元格
-watch(cellEditorValue, (newValue) => {
-  if (!selectedCell.value || !currentSheet.value) return;
+import { ElMessage } from 'element-plus';
+import { useRouter } from 'vue-router';
+import { basename } from '@tauri-apps/api/path';
+import { pickFile, readFile, saveFile, pickSaveLocation, getStorageType } from '@/platform';
+import { useRecentFilesStore } from '@/stores/recentFiles';
 
-  const { row, col } = selectedCell.value;
-  const originalValue = currentSheet.value.rows[row]?.[col];
-  const newValueStr = newValue;
-  const originalValueStr = originalValue !== null ? String(originalValue) : "";
+const router = useRouter();
+const recentFilesStore = useRecentFilesStore();
 
-  // 立即更新本地数据，实现实时回显
-  if (newValueStr !== originalValueStr) {
-    currentSheet.value.rows[row][col] = newValue;
+async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
+  if (!fileData.value || !currentSheet.value) return;
+
+  currentSortColumn.value = null;
+  const oldValue = currentSheet.value.rows[rowIndex][colIndex];
+  const newValue = parseCellValue(value);
+  const isCurrentCell = selectedCell.value?.row === rowIndex && selectedCell.value?.col === colIndex;
+
+  try {
+    await api.setCell(
+      currentSheetIndex.value,
+      rowIndex,
+      colIndex,
+      toRustCellValue(oldValue),
+      toRustCellValue(newValue)
+    );
+
+    if (isCurrentCell) {
+      cellEditorValue.value = value;
+    }
+
+    hasChanges.value = true;
+    await updateEditorState();
+  } catch (error) {
+    ElMessage.error(`Failed to set cell: ${error}`);
   }
+}
 
-  // 防抖处理，延迟调用 API 保存（保存原始值用于回滚）
-  pendingChanges.set(getCellKey(row, col), { row, col, value: newValueStr, oldValue: originalValue });
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
-  debounceTimer = setTimeout(debouncedSave, 500);
-});
-
-// 处理单元格直接编辑（也需要防抖保存）
 function handleCellEditing(row: number, col: number, value: string) {
   if (selectedCell?.value?.row === row && selectedCell?.value?.col === col) {
     cellEditorValue.value = value;
@@ -221,14 +280,12 @@ function handleCellEditing(row: number, col: number, value: string) {
   if (!currentSheet.value) return;
 
   const originalValue = currentSheet.value.rows[row]?.[col];
-  const originalValueStr = originalValue !== null ? String(originalValue) : "";
+  const originalValueStr = originalValue !== null ? String(originalValue) : '';
 
-  // 立即更新本地数据
   if (value !== originalValueStr) {
     currentSheet.value.rows[row][col] = value;
   }
 
-  // 防抖处理，延迟调用 API 保存（保存原始值用于回滚）
   pendingChanges.set(getCellKey(row, col), { row, col, value, oldValue: originalValue });
   if (debounceTimer) {
     clearTimeout(debounceTimer);
@@ -236,102 +293,35 @@ function handleCellEditing(row: number, col: number, value: string) {
   debounceTimer = setTimeout(debouncedSave, 500);
 }
 
-// 根据增量结果更新本地数据
-// 用于 undo/redo 操作，前端已先更新的操作会跳过
-function applyOperation(result: OperationResult) {
-  const data = fileData.value;
-  if (!data) return;
-
-  //清除排序状态，如果上个操作是排序会在下方重新设置
-  if (currentSortColumn.value) {
-    currentSortColumn.value = null;
-  }
-
-  switch (result.type) {
-    case "SetCell": {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      // 需要同步后端返回的值，确保数据一致
-      if (sheet.rows[resultData.cell.row]) {
-        sheet.rows[resultData.cell.row][resultData.cell.col] = resultData.cell.value;
-      }
-      break;
-    }
-    case "AddSheet": {
-      const resultData = result.data;
-      // AddSheet: 使用后端返回的完整 sheet_data 来添加/恢复 sheet
-      // 使用后端返回的 sheet_index 插入到正确位置（用于撤销 DeleteSheet 时恢复到原始位置）
-      const sheetData = resultData.sheetData;
-      const sheetIndex = resultData.sheetIndex;
-      data.sheets.splice(sheetIndex, 0, sheetData);
-      break;
-    }
-    case "DeleteSheet": {
-      const resultData = result.data;
-      // DeleteSheet: 需要删除前端的 sheet
-      data.sheets.splice(resultData.sheetIndex, 1);
-      // 如果当前 sheet 索引超出范围，调整到最后一个
-      if (currentSheetIndex.value >= data.sheets.length) {
-        currentSheetIndex.value = Math.max(0, data.sheets.length - 1);
-      }
-      break;
-    }
-    case "AddRow": {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      // 使用后端返回的行数据，而不是空行
-      const rowValues = resultData.row?.values || [];
-      sheet.rows.splice(resultData.row.index, 0, rowValues);
-      break;
-    }
-    case "DeleteRow": {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      sheet.rows.splice(resultData.rowIndex, 1);
-      break;
-    }
-    case "AddColumn": {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      const colIndex = resultData.column.index;
-      const colData = resultData.colData || [];
-      for (let i = 0; i < sheet.rows.length; i++) {
-        const value = i < colData.length ? colData[i] : null;
-        sheet.rows[i].splice(colIndex, 0, value);
-      }
-      break;
-    }
-    case "DeleteColumn": {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      for (const row of sheet.rows) {
-        row.splice(resultData.columnIndex, 1);
-      }
-      break;
-    }
-    case "SortColumn": {
-      const resultData = result.data;
-      // 用完整数据替换当前 sheet
-      data.sheets[resultData.sheetIndex] = resultData.sheetData;
-      // 更新排序状态
-      currentSortColumn.value = resultData.sortState;
-      break;
-    }
-  }
+function handleCellEditorSubmit() {
+  if (!selectedCell.value) return;
+  const { row, col } = selectedCell.value;
+  handleCellChange(row, col, cellEditorValue.value);
 }
 
-async function updateEditorState() {
+// ========== File operations ==========
+async function loadFileFromPath(filePath: string) {
   try {
-    const state = await api.getEditorState();
-    canUndo.value = state.canUndo;
-    canRedo.value = state.canRedo;
+    isLoading.value = true;
+    isFileLoading.value = true;
+    const bytes = await readFile(filePath);
+    const bytesArray = Array.from(bytes);
+    const result = await api.readFileBytes(filePath, bytesArray);
+    fileDataStore.set(result);
+    currentSheetIndex.value = 0;
+    hasChanges.value = false;
+
+    const fileName = decodeURIComponent(await basename(filePath));
+    const extension = fileName.split('.').pop() || '';
+    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.length, bytesArray, extension);
+    await recentFilesStore.load();
+
+    await updateEditorState();
   } catch (error) {
-    console.error("Failed to get editor state:", error);
+    ElMessage.error(`Failed to open file: ${error}`);
+  } finally {
+    isLoading.value = false;
+    isFileLoading.value = false;
   }
 }
 
@@ -341,18 +331,17 @@ async function handleOpenFile() {
     isFileLoading.value = true;
     const result = await pickFile();
     if (!result) {
-      // 用户取消选择
       isLoading.value = false;
       isFileLoading.value = false;
       return;
     }
     const bytes = result.bytes && result.bytes.length > 0 ? result.bytes : Array.from(await readFile(result.path));
-    const fileData = await api.readFileBytes(result.path, bytes, result.fileName);
-    fileDataStore.set(fileData);
+    const fileDataResult = await api.readFileBytes(result.path, bytes, result.fileName);
+    fileDataStore.set(fileDataResult);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
 
-    const extension = result.fileName.split(".").pop() || "";
+    const extension = result.fileName.split('.').pop() || '';
     const storageType = await getStorageType();
     await api.addRecentFileWithThumbnail(
       result.path,
@@ -376,25 +365,23 @@ async function handleSaveFile() {
   if (!fileData.value) return;
 
   try {
-    const originalExtension = fileData.value.fileName.split(".").pop() || "xlsx";
-    const isNewFile = fileData.value.fileName.startsWith("untitled");
+    const originalExtension = fileData.value.fileName.split('.').pop() || 'xlsx';
+    const isNewFile = fileData.value.fileName.startsWith('untitled');
     const defaultName = isNewFile
-      ? "untitled"
-      : fileData.value.fileName.replace(/\.[^.]+$/, "");
+      ? 'untitled'
+      : fileData.value.fileName.replace(/\.[^.]+$/, '');
 
-    // Determine available extensions based on file type
     let extensions: string[];
     if (isNewFile) {
-      extensions = ["xlsx", "csv"];
-    } else if (originalExtension === "csv") {
-      extensions = ["csv"];
+      extensions = ['xlsx', 'csv'];
+    } else if (originalExtension === 'csv') {
+      extensions = ['csv'];
     } else {
-      extensions = ["xlsx"];
+      extensions = ['xlsx'];
     }
 
     const [, bytes] = await api.generateFileBytes(fileData.value);
-    const recentFilesStore = useRecentFilesStore();
-    const currentFileName = fileData.value?.fileName || "";
+    const currentFileName = fileData.value?.fileName || '';
     const currentFile = recentFilesStore.files.find(f =>
       f.fileName === currentFileName || f.originalPath?.includes(currentFileName)
     );
@@ -402,20 +389,17 @@ async function handleSaveFile() {
     const storageType = await getStorageType();
 
     if (existingPath) {
-      // 已有文件：直接保存到原路径
       isLoading.value = true;
       await saveFile(existingPath, bytes);
       hasChanges.value = false;
-      ElMessage.success("File saved successfully");
+      ElMessage.success('File saved successfully');
     } else {
-      // 新文件：让用户选择保存位置
       const savePath = await pickSaveLocation(`${defaultName}.${extensions[0]}`);
       if (savePath) {
         isLoading.value = true;
         await saveFile(savePath, bytes);
         hasChanges.value = false;
 
-        // 添加到最近文件
         const extension = extensions[0];
         await api.addRecentFileWithThumbnail(
           savePath,
@@ -426,7 +410,7 @@ async function handleSaveFile() {
           storageType
         );
         await recentFilesStore.load();
-        ElMessage.success("File saved successfully");
+        ElMessage.success('File saved successfully');
       }
     }
   } catch (error) {
@@ -436,46 +420,14 @@ async function handleSaveFile() {
   }
 }
 
-async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
-  if (!fileData.value || !currentSheet.value) return;
-
-  // 编辑单元格时清除排序状态
-  currentSortColumn.value = null;
-
-  const oldValue = currentSheet.value.rows[rowIndex][colIndex];
-  const newValue = parseCellValue(value);
-
-  // 检查是否是当前选中的单元格，如果是则同步更新上方编辑栏
-  const isCurrentCell = selectedCell.value?.row === rowIndex && selectedCell.value?.col === colIndex;
-
-  try {
-    // 前端已实时更新本地数据，后端只需保存，不需要返回结果再赋值
-    await api.setCell(
-      currentSheetIndex.value,
-      rowIndex,
-      colIndex,
-      toRustCellValue(oldValue),
-      toRustCellValue(newValue)
-    );
-
-    // 同步更新上方编辑栏的值
-    if (isCurrentCell) {
-      cellEditorValue.value = value;
-    }
-
-    hasChanges.value = true;
-    await updateEditorState();
-  } catch (error) {
-    ElMessage.error(`Failed to set cell: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
+function handleBack() {
+  fileDataStore.clear();
+  router.push({ name: 'home' });
 }
 
+// ========== Row/Column operations ==========
 async function handleAddRow() {
   if (!currentSheet.value) return;
-
-  // 前端先更新数据
   const colCount = currentSheet.value.rows[0]?.length || 0;
   const newRowIndex = currentSheet.value.rows.length;
   currentSheet.value.rows.push(Array(colCount).fill(null));
@@ -486,7 +438,6 @@ async function handleAddRow() {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
-    // 回滚前端数据
     currentSheet.value.rows.pop();
     ElMessage.error(`Failed to add row: ${error}`);
   } finally {
@@ -496,11 +447,7 @@ async function handleAddRow() {
 
 async function handleDeleteRow(index: number) {
   if (!currentSheet.value) return;
-
-  // 保存删除的行数据用于回滚
   const deletedRow = currentSheet.value.rows[index];
-
-  // 前端先更新数据
   currentSheet.value.rows.splice(index, 1);
 
   try {
@@ -509,7 +456,6 @@ async function handleDeleteRow(index: number) {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
-    // 回滚前端数据
     currentSheet.value.rows.splice(index, 0, deletedRow);
     ElMessage.error(`Failed to delete row: ${error}`);
   } finally {
@@ -519,8 +465,6 @@ async function handleDeleteRow(index: number) {
 
 async function handleAddColumn() {
   if (!currentSheet.value) return;
-
-  // 前端先更新数据
   for (const row of currentSheet.value.rows) {
     row.push(null);
   }
@@ -531,7 +475,6 @@ async function handleAddColumn() {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
-    // 回滚前端数据
     for (const row of currentSheet.value.rows) {
       row.pop();
     }
@@ -543,8 +486,6 @@ async function handleAddColumn() {
 
 async function handleDeleteColumn(index: number) {
   if (!currentSheet.value) return;
-
-  // 保存删除的列数据用于回滚
   const deletedCols: CellValue[][] = currentSheet.value.rows.map(row => row.splice(index, 1));
 
   try {
@@ -553,7 +494,6 @@ async function handleDeleteColumn(index: number) {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
-    // 回滚前端数据
     for (let i = 0; i < currentSheet.value.rows.length; i++) {
       currentSheet.value.rows[i].splice(index, 0, ...deletedCols[i]);
     }
@@ -563,12 +503,11 @@ async function handleDeleteColumn(index: number) {
   }
 }
 
+// ========== Sheet operations ==========
 async function handleAddSheet() {
   if (!fileData.value) return;
-
-  // 前端先更新数据
   const newSheetIndex = fileData.value.sheets.length;
-  const newSheet = {
+  const newSheet: SheetData = {
     name: `Sheet${newSheetIndex + 1}`,
     rows: [
       [null, null, null, null, null],
@@ -584,14 +523,12 @@ async function handleAddSheet() {
   try {
     isLoading.value = true;
     await api.addSheet();
-    // Clear selected cell and editor when switching to new sheet
     selectedCell.value = null;
-    cellEditorValue.value = "";
+    cellEditorValue.value = '';
     currentSheetIndex.value = newSheetIndex;
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
-    // 回滚前端数据
     fileData.value.sheets.pop();
     ElMessage.error(`Failed to add sheet: ${error}`);
   } finally {
@@ -601,15 +538,13 @@ async function handleAddSheet() {
 
 async function handleDeleteSheet() {
   if (!fileData.value || fileData.value.sheets.length <= 1) {
-    ElMessage.warning("Cannot delete the last sheet");
+    ElMessage.warning('Cannot delete the last sheet');
     return;
   }
 
-  // 前端先更新数据
   const deletedIndex = currentSheetIndex.value;
   const deletedSheet = fileData.value.sheets[deletedIndex];
   fileData.value.sheets.splice(deletedIndex, 1);
-  // 切换到前一个 sheet（如果删的是第一个就切换到下一个）
   const newIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
   currentSheetIndex.value = newIndex;
 
@@ -619,7 +554,6 @@ async function handleDeleteSheet() {
     hasChanges.value = true;
     await updateEditorState();
   } catch (error) {
-    // 回滚前端数据
     fileData.value.sheets.splice(deletedIndex, 0, deletedSheet);
     currentSheetIndex.value = deletedIndex;
     ElMessage.error(`Failed to delete sheet: ${error}`);
@@ -628,6 +562,28 @@ async function handleDeleteSheet() {
   }
 }
 
+function handleSheetChange(index: number) {
+  if (selectedCell.value !== null) {
+    sheetSelectedCells.value.set(currentSheetIndex.value, selectedCell.value);
+  }
+
+  cellEditorValue.value = '';
+  currentSheetIndex.value = index;
+
+  const savedCell = sheetSelectedCells.value.get(index);
+  if (savedCell) {
+    selectedCell.value = savedCell;
+    const sheet = fileData.value?.sheets[index];
+    if (sheet && sheet.rows[savedCell.row] && sheet.rows[savedCell.row][savedCell.col] !== null) {
+      cellEditorValue.value = String(sheet.rows[savedCell.row][savedCell.col]);
+    }
+    autoScroll.value = true;
+  } else {
+    selectedCell.value = null;
+  }
+}
+
+// ========== Undo/Redo ==========
 async function handleUndo() {
   if (!canUndo.value) return;
 
@@ -660,19 +616,50 @@ async function handleRedo() {
   }
 }
 
-function handleBack() {
-  fileDataStore.clear();
-  router.push({ name: "home" });
+// ========== Search ==========
+async function handleSearch(query: string, scope: 'currentSheet' | 'allSheets') {
+  if (!fileData.value) return;
+
+  searchQuery.value = query;
+  try {
+    isSearching.value = true;
+    searchResults.value = await api.search(
+      query,
+      scope,
+      scope === 'currentSheet' ? currentSheetIndex.value : null
+    );
+  } catch (error) {
+    ElMessage.error(`Search failed: ${error}`);
+  } finally {
+    isSearching.value = false;
+  }
 }
 
+function handleSearchResultClick(result: SearchResult) {
+  if (result.sheetIndex !== currentSheetIndex.value) {
+    currentSheetIndex.value = result.sheetIndex;
+  }
+  autoScroll.value = true;
+  selectedCell.value = { row: result.row, col: result.col };
+
+  const sheet = fileData.value?.sheets[result.sheetIndex];
+  if (sheet && sheet.rows[result.row]?.[result.col] !== null) {
+    cellEditorValue.value = String(sheet.rows[result.row][result.col]);
+  }
+}
+
+function handleClearSearch() {
+  searchResults.value = [];
+  searchQuery.value = '';
+}
+
+// ========== Sort ==========
 async function handleSortColumn(colIndex: number, ascending: boolean) {
   if (!fileData.value) return;
 
   try {
     isLoading.value = true;
-    // 先保存当前的排序状态，用于记录排序前的状态
     const prevSortState = currentSortColumn.value;
-    // 清除当前的排序状态（当对其他列排序时）
     currentSortColumn.value = null;
 
     const result = await api.sortColumn(
@@ -691,73 +678,7 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
   }
 }
 
-async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
-  if (!fileData.value) return;
-
-  searchQuery.value = query;
-  try {
-    isSearching.value = true;
-    searchResults.value = await api.search(
-      query,
-      scope,
-      scope === "currentSheet" ? currentSheetIndex.value : null
-    );
-  } catch (error) {
-    ElMessage.error(`Search failed: ${error}`);
-  } finally {
-    isSearching.value = false;
-  }
-}
-
-function handleSearchResultClick(result: SearchResult) {
-  // 切换到对应的 sheet
-  if (result.sheetIndex !== currentSheetIndex.value) {
-    currentSheetIndex.value = result.sheetIndex;
-  }
-  // 选中对应的单元格，并触发滚动到中央
-  autoScroll.value = true;
-  selectedCell.value = { row: result.row, col: result.col };
-}
-
-function handleClearSearch() {
-  searchResults.value = [];
-  searchQuery.value = "";
-}
-
-function handleSheetChange(index: number) {
-  // Save current selected cell for the current sheet
-  if (selectedCell.value !== null) {
-    sheetSelectedCells.value.set(currentSheetIndex.value, selectedCell.value);
-  }
-
-  // Clear cell editor when switching sheets
-  cellEditorValue.value = "";
-  currentSheetIndex.value = index;
-
-  // Restore selected cell for the new sheet if it was previously saved
-  const savedCell = sheetSelectedCells.value.get(index);
-  if (savedCell) {
-    selectedCell.value = savedCell;
-    // Update cell editor value with the new sheet's cell value
-    const sheet = fileData.value?.sheets[index];
-    if (sheet && sheet.rows[savedCell.row] && sheet.rows[savedCell.row][savedCell.col] !== null) {
-      cellEditorValue.value = String(sheet.rows[savedCell.row][savedCell.col]);
-    }
-    // Trigger auto scroll to the selected cell
-    autoScroll.value = true;
-  } else {
-    selectedCell.value = null;
-  }
-}
-
-// 按下回车或失焦时提交编辑
-function handleCellEditorSubmit() {
-  if (!selectedCell.value) return;
-  const { row, col } = selectedCell.value;
-  handleCellChange(row, col, cellEditorValue.value);
-}
-
-// 处理列宽调整
+// ========== Column resize ==========
 function handleColumnResize(colIndex: number, width: number) {
   if (!currentSheet.value) return;
   if (!currentSheet.value.columnWidths) {
@@ -766,6 +687,22 @@ function handleColumnResize(colIndex: number, width: number) {
   currentSheet.value.columnWidths[colIndex] = width;
   hasChanges.value = true;
 }
+
+// ========== Lifecycle ==========
+onMounted(async () => {
+  const filePath = route.query.file as string;
+  if (filePath) {
+    console.log('Loading file from path:', filePath);
+    await loadFileFromPath(filePath);
+  }
+});
+
+onUnmounted(() => {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+});
 </script>
 
 <template>
@@ -793,9 +730,7 @@ function handleColumnResize(colIndex: number, width: number) {
     />
 
     <main class="content">
-      <!-- 新增包裹层：CellEditor 在滚动区域外部 -->
       <div class="editor-column">
-        <!-- 骨架屏 -->
         <div v-if="isFileLoading" class="skeleton-container">
           <div class="skeleton-header">
             <el-skeleton :rows="1" animated />
@@ -804,7 +739,6 @@ function handleColumnResize(colIndex: number, width: number) {
         </div>
 
         <template v-else>
-          <!-- CellEditor 在 table-wrapper 外部，不随水平滚动 -->
           <CellEditor
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
@@ -812,7 +746,6 @@ function handleColumnResize(colIndex: number, width: number) {
             @submit="handleCellEditorSubmit"
           />
 
-          <!-- 只有 TableEditor 在可水平滚动的容器内 -->
           <div class="table-wrapper">
             <TableEditor
               :data="tableData"
@@ -834,7 +767,6 @@ function handleColumnResize(colIndex: number, width: number) {
         </template>
       </div>
 
-      <!-- Search Results Panel -->
       <SearchPanel
         :results="searchResults"
         :query="searchQuery"
@@ -866,19 +798,18 @@ function handleColumnResize(colIndex: number, width: number) {
 
 .content {
   flex: 1;
-  overflow: hidden;           /* 改为 hidden，由子元素控制滚动 */
+  overflow: hidden;
   padding: 0;
   display: flex;
   flex-direction: row;
 }
 
-/* 新增：纵向布局容器，CellEditor + table-wrapper */
 .editor-column {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-width: 0;               /* 允许 flex 收缩 */
+  min-width: 0;
 }
 
 .table-wrapper {
@@ -886,7 +817,7 @@ function handleColumnResize(colIndex: number, width: number) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-x: auto;           /* 只有这里水平滚动 */
+  overflow-x: auto;
   overflow-y: hidden;
 }
 

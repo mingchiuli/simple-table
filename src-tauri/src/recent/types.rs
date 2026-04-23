@@ -1,0 +1,67 @@
+use serde::{Deserialize, Serialize};
+
+/// 文件存储类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StorageType {
+    /// Android content:// URI（通过 persist_uri_permission 持久化）
+    AndroidUri,
+    /// iOS 私有目录副本（原始文件复制到私有目录）
+    IosPrivate,
+    /// 桌面端普通文件路径
+    DesktopPath,
+}
+
+impl Default for StorageType {
+    fn default() -> Self {
+        Self::DesktopPath
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentFile {
+    pub id: String,
+    pub path: String,
+    pub file_name: String,
+    pub last_opened: i64,
+    pub file_size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// 存储类型（用于区分不同平台的文件处理方式）
+    #[serde(default)]
+    pub storage_type: StorageType,
+    /// iOS: 原始文件路径（用于显示）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_path: Option<String>,
+}
+
+impl RecentFile {
+    pub fn new(path: String, file_name: String, file_size: i64) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            path,
+            file_name,
+            last_opened: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64,
+            file_size,
+            thumbnail: None,
+            storage_type: StorageType::default(),
+            original_path: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_storage_type(mut self, storage_type: StorageType) -> Self {
+        self.storage_type = storage_type;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_original_path(mut self, original_path: String) -> Self {
+        self.original_path = Some(original_path);
+        self
+    }
+}

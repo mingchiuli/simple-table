@@ -35,13 +35,27 @@ npm run preview  # Preview production build
 ### Frontend Structure (`src/`)
 - `components/` - Vue components (TableEditor, EditableCell, SearchPanel, etc.)
 - `views/` - Page-level components (TableView)
-- `stores/` - Pinia state management
+- `stores/` - Pinia state management (fileData, recentFiles)
 - `types/` - TypeScript type definitions
 - `router/` - Vue Router configuration
+- `composables/` - Vue composables (usePlatform)
 - `platform/` - Platform-specific file operations (desktop, android, ios)
+- `styles/` - Global styles (base.css, platform.css, variables.css)
 
-### Backend Structure (`src-tauri/`)
-- Rust backend for file I/O and Excel processing using calamine and xlsxwriter
+### Backend Structure (`src-tauri/src/`)
+- `commands/` - Tauri command handlers (common.rs, android.rs, ios.rs)
+- `ops/` - Business logic operations (cell_ops, editor_ops, index_ops, search_ops, sort_ops, undo_ops)
+- `io/` - File I/O operations (reader.rs, writer.rs, file_ops.rs)
+- `recent/` - Recent files management (types.rs, store.rs, thumbnail.rs, ops.rs)
+- `utils/` - Utility functions (cell_utils.rs)
+- `types/` - Core data types (CellValue, FileData, SheetData, etc.)
+- `state/` - Editor state management (editor_state.rs)
+- `error/` - Error handling (AppError enum)
+
+### Module Organization Pattern
+- Root-level module files (`ops.rs`, `io.rs`, `recent.rs`, `utils.rs`) declare submodules and re-export public APIs
+- Example: `src/ops.rs` contains `pub mod cell_ops; pub use cell_ops::*;`
+- This pattern provides clean public APIs while maintaining internal organization
 
 ## Compilation Check
 
@@ -90,3 +104,16 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 ```
 git push origin main && git push origin v0.3.6
 ```
+
+## Code Guidelines
+
+### Rust Error Handling
+- Use `AppError` enum from `src/error/error.rs` for all error types
+- Prefer specific error variants (`NoFileLoaded`, `NothingToUndo`, `RowNotFound`) over generic `Internal`
+- Return `Result<T, AppError>` for all fallible operations
+
+### TypeScript/Vue
+- Use `import type` for type-only imports
+- Organize imports: external first, then internal (`@/` aliases)
+- Use CSS variables from `src/styles/variables.css` for consistent theme colors
+- Avoid inline styles in Vue components; use scoped CSS instead

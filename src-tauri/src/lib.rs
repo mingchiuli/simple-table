@@ -2,8 +2,10 @@ mod commands;
 mod error;
 mod io;
 mod ops;
+mod recent;
 mod state;
 mod types;
+mod utils;
 
 use commands::{
     add_column, add_recent_file_with_thumbnail, add_row, add_sheet,

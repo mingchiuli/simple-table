@@ -9,7 +9,8 @@ use tantivy::{doc, Index, IndexWriter, TantivyDocument, Term};
 use tantivy_jieba::JiebaTokenizer;
 
 use crate::state::editor_state::EditorState;
-use crate::types::{CellPosition, CellValue, SheetData};
+use crate::types::{CellPosition, SheetData};
+use crate::utils::cell_to_string;
 
 /// 创建 Tantivy 索引
 pub fn create_tantivy_index() -> Result<(Index, Schema, tantivy::schema::Field, tantivy::schema::Field, tantivy::schema::Field), tantivy::TantivyError> {
@@ -43,16 +44,6 @@ pub fn create_tantivy_index() -> Result<(Index, Schema, tantivy::schema::Field, 
     index.tokenizers().register("jieba", analyzer);
 
     Ok((index, schema, text_field, row_field, col_field))
-}
-
-/// 将单元格值转换为字符串
-fn cell_to_string(cell: &CellValue) -> String {
-    match cell {
-        CellValue::Null => String::new(),
-        CellValue::String(s) => s.clone(),
-        CellValue::Number(n) => n.to_string(),
-        CellValue::Boolean(b) => b.to_string(),
-    }
 }
 
 /// 重建单个 sheet 的索引

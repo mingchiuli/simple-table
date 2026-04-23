@@ -1,7 +1,7 @@
 
 
 use crate::error::AppError;
-use crate::ops::recent_ops::{RecentFile, StorageType};
+use crate::recent::{RecentFile, StorageType};
 use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope, SortState};
 use tauri::AppHandle;
 
@@ -118,22 +118,22 @@ pub fn search(
 
 #[tauri::command]
 pub fn get_recent_files(app: AppHandle) -> Vec<RecentFile> {
-    crate::ops::recent_ops::do_get_recent_files(&app)
+    crate::recent::do_get_recent_files(&app)
 }
 
 #[tauri::command]
 pub fn remove_recent_file(app: AppHandle, id: String) -> Result<(), String> {
-    crate::ops::recent_ops::do_remove_recent_file(&app, id)
+    crate::recent::do_remove_recent_file(&app, id)
 }
 
 #[tauri::command]
 pub fn check_file_exists(path: String) -> bool {
-    crate::ops::recent_ops::do_check_file_exists(path)
+    crate::recent::do_check_file_exists(path)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn update_recent_file_path(app: AppHandle, id: String, new_path: String) -> Result<(), String> {
-    crate::ops::recent_ops::do_update_recent_file_path(&app, id, new_path)
+    crate::recent::do_update_recent_file_path(&app, id, new_path)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -155,7 +155,7 @@ pub fn add_recent_file_with_thumbnail(
         _ => None,
     });
 
-    crate::ops::recent_ops::do_add_recent_file_with_thumbnail(
+    crate::recent::do_add_recent_file_with_thumbnail(
         &app,
         path,
         file_name,

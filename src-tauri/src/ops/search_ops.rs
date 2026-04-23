@@ -3,8 +3,9 @@ use std::sync::RwLock;
 
 use crate::state::editor_state::EditorState;
 use crate::error::AppError;
-use crate::types::{SearchResult, SearchScope, CellValue};
+use crate::types::{SearchResult, SearchScope};
 use crate::ops::index_ops::search_cells;
+use crate::utils::cell_to_string;
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -18,16 +19,6 @@ fn col_to_letter(col: usize) -> String {
     // Safety: math guarantees result is ASCII uppercase letter (65-90)
     result.insert(0, char::from_u32(n as u32 + 65).expect("Invalid ASCII letter"));
     result
-}
-
-/// 将单元格值转换为字符串
-fn cell_to_string(cell: &CellValue) -> String {
-    match cell {
-        CellValue::Null => String::new(),
-        CellValue::String(s) => s.clone(),
-        CellValue::Number(n) => n.to_string(),
-        CellValue::Boolean(b) => b.to_string(),
-    }
 }
 
 /// 搜索单元格
@@ -45,7 +36,7 @@ pub fn do_search(
 
     let editor_state = match state.as_ref() {
         Some(s) => s,
-        None => return Err(AppError::Internal("No file loaded".to_string())),
+        None => return Err(AppError::NoFileLoaded),
     };
 
     let mut results = Vec::new();
