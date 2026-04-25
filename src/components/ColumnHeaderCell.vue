@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Sort, Close } from '@element-plus/icons-vue';
+import { usePlatform } from '@/composables/usePlatform';
 import type { SortState } from '@/types';
+
+const { isTouchDevice } = usePlatform();
 
 const props = defineProps<{
   columnIndex: number;
@@ -13,7 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'delete', index: number): void;
   (e: 'sort', ascending: boolean): void;
-  (e: 'resize-start', event: MouseEvent, colIndex: number): void;
+  (e: 'resize-start', event: MouseEvent | TouchEvent, colIndex: number): void;
 }>();
 
 function handleDelete(index: number) {
@@ -25,6 +28,11 @@ function handleSort() {
   // 如果当前列已排序，切换升序/降序；否则默认升序
   const newAscending = isCurrentColumn && props.sortState ? !props.sortState.ascending : true;
   emit('sort', newAscending);
+}
+
+// 处理 resize 事件
+function handleResizeStart(e: MouseEvent | TouchEvent) {
+  emit('resize-start', e, props.columnIndex);
 }
 
 // 判断当前列是否正在排序
@@ -49,7 +57,8 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
     </div>
     <div
       class="resize-handle"
-      @mousedown.stop="(e) => emit('resize-start', e, columnIndex)"
+      @mousedown.stop="handleResizeStart"
+      @touchstart.stop="(e: TouchEvent) => isTouchDevice && handleResizeStart(e)"
     />
   </div>
 </template>
@@ -110,7 +119,9 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
   z-index: 10;
 }
 
-.resize-handle:hover {
-  background-color: #409eff;
+@media (pointer: coarse) {
+  .resize-handle {
+    width: 12px;
+  }
 }
 </style>

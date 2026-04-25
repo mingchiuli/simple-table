@@ -299,6 +299,11 @@ function handleCellEditorSubmit() {
   handleCellChange(row, col, cellEditorValue.value);
 }
 
+function handleDeselectCell() {
+  selectedCell.value = null;
+  cellEditorValue.value = '';
+}
+
 // ========== File operations ==========
 async function loadFileFromPath(filePath: string) {
   try {
@@ -744,6 +749,7 @@ onUnmounted(() => {
             v-model="cellEditorValue"
             :cell-position="selectedCell"
             @submit="handleCellEditorSubmit"
+            @close="handleDeselectCell"
           />
 
           <div class="table-wrapper">

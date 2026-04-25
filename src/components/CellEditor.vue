@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { Close } from '@element-plus/icons-vue';
 
 const props = defineProps<{
   modelValue: string;
@@ -9,6 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   (e: "submit"): void;
+  (e: "close"): void;
 }>();
 
 const displayPosition = computed(() => {
@@ -24,10 +26,14 @@ function handleInput(value: string) {
 function handleEnter() {
   emit("submit");
 }
+
+function handleClose() {
+  emit("close");
+}
 </script>
 
 <template>
-  <div v-if="cellPosition" class="cell-editor-bar">    
+  <div v-if="cellPosition" class="cell-editor-bar">
     <span class="cell-position">{{ displayPosition }}</span>
     <el-input
       :model-value="modelValue"
@@ -39,6 +45,14 @@ function handleEnter() {
       @keydown.enter="handleEnter"
       @blur="handleEnter"
     />
+    <el-button
+      class="close-btn"
+      circle
+      size="small"
+      @click="handleClose"
+    >
+      <el-icon><Close /></el-icon>
+    </el-button>
   </div>
 </template>
 
@@ -65,5 +79,9 @@ function handleEnter() {
   max-width: 500px;
   max-width: min(100vw - 80px, 100%);
   font-size: 16px;
+}
+
+.close-btn {
+  margin-left: 8px;
 }
 </style>

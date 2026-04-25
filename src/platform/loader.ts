@@ -8,7 +8,7 @@ let cachedAPI: PlatformAPI | null = null;
 let loadingPromise: Promise<PlatformAPI> | null = null;
 
 async function loadPlatformAPI(): Promise<PlatformAPI> {
-  const platform = await getPlatform();
+  const platform = getPlatform();
 
   switch (platform) {
     case 'android': {

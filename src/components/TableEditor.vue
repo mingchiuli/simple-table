@@ -4,6 +4,9 @@ import type {CellValue, ColumnConfig, MergeRange, SortState} from '@/types';
 import EditableCell from './EditableCell.vue';
 import RowNumberCell from './RowNumberCell.vue';
 import ColumnHeaderCell from './ColumnHeaderCell.vue';
+import { usePlatform } from '@/composables/usePlatform';
+
+const { isTouchDevice } = usePlatform();
 
 const props = defineProps<{
   data: CellValue[][];
@@ -36,6 +39,17 @@ const resizingColumn = ref<number | null>(null);
 const startX = ref(0);
 const startWidth = ref(0);
 
+// 计算拖动指示线位置（列右边界位置）
+const resizeLineX = computed(() => {
+  if (resizingColumn.value === null) return 0;
+  // 行号列宽度 60px
+  let x = 60;
+  for (let i = 0; i <= resizingColumn.value; i++) {
+    x += getColumnWidth(i);
+  }
+  return x;
+});
+
 // 初始化列宽
 function initColumnWidths() {
   if (props.columnWidths) {
@@ -55,19 +69,50 @@ function getColumnWidth(colIndex: number): number {
   return columnWidths.value[colIndex] || 120;
 }
 
+// 获取 clientX（兼容鼠标和触摸事件）
+function getClientX(event: MouseEvent | TouchEvent): number {
+  if ('clientX' in event) {
+    return event.clientX;
+  }
+  // TouchEvent - 使用第一个触摸点
+  if (event.touches && event.touches.length > 0) {
+    return event.touches[0].clientX;
+  }
+  // touchend 事件使用 changedTouches
+  if (event.changedTouches && event.changedTouches.length > 0) {
+    return event.changedTouches[0].clientX;
+  }
+  return 0;
+}
+
 // 开始调整列宽
-function startResize(event: MouseEvent, colIndex: number) {
+function startResize(event: MouseEvent | TouchEvent, colIndex: number) {
+  event.preventDefault();
   resizingColumn.value = colIndex;
-  startX.value = event.clientX;
+  startX.value = getClientX(event);
   startWidth.value = getColumnWidth(colIndex);
+
+  // 鼠标事件（始终添加）
   document.addEventListener('mousemove', onResize);
   document.addEventListener('mouseup', stopResize);
+
+  // 触摸事件（仅在触摸设备上动态添加）
+  if (isTouchDevice.value) {
+    document.addEventListener('touchmove', onResize, { passive: false });
+    document.addEventListener('touchend', stopResize);
+  }
 }
 
 // 调整列宽中
-function onResize(event: MouseEvent) {
+function onResize(event: MouseEvent | TouchEvent) {
   if (resizingColumn.value === null) return;
-  const delta = event.clientX - startX.value;
+
+  if (event.type === 'touchmove') {
+    event.preventDefault();
+  }
+
+  const clientX = getClientX(event);
+  const delta = clientX - startX.value;
   columnWidths.value[resizingColumn.value] = Math.max(40, startWidth.value + delta);
 }
 
@@ -77,8 +122,16 @@ function stopResize() {
     emit('column-resize', resizingColumn.value, columnWidths.value[resizingColumn.value]);
   }
   resizingColumn.value = null;
+
+  // 移除鼠标事件
   document.removeEventListener('mousemove', onResize);
   document.removeEventListener('mouseup', stopResize);
+
+  // 移除触摸事件（仅在触摸设备上）
+  if (isTouchDevice.value) {
+    document.removeEventListener('touchmove', onResize);
+    document.removeEventListener('touchend', stopResize);
+  }
 }
 
 // 监听 data 变化，更新当前编辑单元格的值（实现实时同步）
@@ -349,6 +402,12 @@ const ROW_HEIGHT = 60;
         </template>
       </template>
     </el-table-v2>
+    <!-- 拖动指示线 -->
+    <div
+      v-if="resizingColumn !== null"
+      class="resize-line"
+      :style="{ left: resizeLineX + 'px' }"
+    />
   </div>
 </template>
 
@@ -356,6 +415,7 @@ const ROW_HEIGHT = 60;
 .table-container {
   width: 100%;
   height: 100%;
+  position: relative;
 }
 
 :deep(.el-table-v2) {
@@ -375,5 +435,15 @@ const ROW_HEIGHT = 60;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.resize-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #409eff;
+  z-index: 100;
+  pointer-events: none;
 }
 </style>
