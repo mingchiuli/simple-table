@@ -32,6 +32,8 @@ pub enum AppError {
     NothingToUndo,
     #[error("Nothing to redo")]
     NothingToRedo,
+    #[error("Cannot delete the last sheet")]
+    CannotDeleteLastSheet,
 
     // 内部错误
     #[error("Lock poisoned: {0}")]

@@ -107,7 +107,7 @@ pub enum SearchScope {
 }
 
 /// Sheet 索引（不序列化）
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub struct SheetIndex {
     /// 全文搜索索引
     pub search_index: Option<tantivy::Index>,
@@ -115,6 +115,36 @@ pub struct SheetIndex {
     pub search_schema: Option<tantivy::schema::Schema>,
     /// 文本字段
     pub text_field: Option<tantivy::schema::Field>,
+    /// 单元格主键字段（"row:col"，用于增量 delete_term）
+    pub cell_id_field: Option<tantivy::schema::Field>,
+    /// 持久 IndexWriter，跨编辑复用以支持增量更新
+    pub writer: Option<std::sync::Arc<std::sync::Mutex<tantivy::IndexWriter>>>,
+}
+
+impl std::fmt::Debug for SheetIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SheetIndex")
+            .field("search_index", &self.search_index.is_some())
+            .field("search_schema", &self.search_schema.is_some())
+            .field("text_field", &self.text_field)
+            .field("cell_id_field", &self.cell_id_field)
+            .field("writer", &self.writer.is_some())
+            .finish()
+    }
+}
+
+impl Clone for SheetIndex {
+    /// 克隆时跳过 writer（IndexWriter 不可 Clone；undo 历史中的 SheetData 不需要写）
+    /// 拿到克隆体后若需要写入索引，调用方应触发一次全量重建以生成新 writer
+    fn clone(&self) -> Self {
+        Self {
+            search_index: self.search_index.clone(),
+            search_schema: self.search_schema.clone(),
+            text_field: self.text_field,
+            cell_id_field: self.cell_id_field,
+            writer: None,
+        }
+    }
 }
 
 /// 合并范围

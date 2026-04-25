@@ -122,7 +122,7 @@ pub fn get_recent_files(app: AppHandle) -> Vec<RecentFile> {
 }
 
 #[tauri::command]
-pub fn remove_recent_file(app: AppHandle, id: String) -> Result<(), String> {
+pub fn remove_recent_file(app: AppHandle, id: String) -> Result<(), AppError> {
     crate::recent::do_remove_recent_file(&app, id)
 }
 
@@ -132,7 +132,7 @@ pub fn check_file_exists(path: String) -> bool {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn update_recent_file_path(app: AppHandle, id: String, new_path: String) -> Result<(), String> {
+pub fn update_recent_file_path(app: AppHandle, id: String, new_path: String) -> Result<(), AppError> {
     crate::recent::do_update_recent_file_path(&app, id, new_path)
 }
 
@@ -146,7 +146,7 @@ pub fn add_recent_file_with_thumbnail(
     extension: String,
     storage_type: Option<String>,
     original_path: Option<String>,
-) -> Result<RecentFile, String> {
+) -> Result<RecentFile, AppError> {
     // 将字符串转换为 StorageType 枚举
     let st = storage_type.and_then(|s| match s.as_str() {
         "androidUri" => Some(StorageType::AndroidUri),

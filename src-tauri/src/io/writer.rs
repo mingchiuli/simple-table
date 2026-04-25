@@ -45,11 +45,7 @@ fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                             .map_err(|e| AppError::WriteError(e.to_string()))?;
                     }
                     CellValue::Number(n) => {
-                        if let Some(num) = n.as_f64() {
-                            worksheet
-                                .write(row_u32, col_u16, num)
-                                .map_err(|e| AppError::WriteError(e.to_string()))?;
-                        } else if let Some(num) = n.as_i64() {
+                        if let Some(num) = n.as_i64() {
                             const F64_SAFE_MAX: i64 = 9_007_199_254_740_991;
                             const F64_SAFE_MIN: i64 = -9_007_199_254_740_991;
                             if num >= F64_SAFE_MIN && num <= F64_SAFE_MAX {
@@ -59,6 +55,17 @@ fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                             } else {
                                 worksheet
                                     .write(row_u32, col_u16, &num.to_string())
+                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+                            }
+                        } else if let Some(num) = n.as_f64() {
+                            if num.is_finite() {
+                                worksheet
+                                    .write(row_u32, col_u16, num)
+                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+                            } else {
+                                // NaN/Infinity 写为空白单元格
+                                worksheet
+                                    .write_blank(row_u32, col_u16, &Format::new())
                                     .map_err(|e| AppError::WriteError(e.to_string()))?;
                             }
                         } else {
@@ -126,7 +133,15 @@ fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                     .iter()
                     .map(|cell| match cell {
                         CellValue::String(s) => s.clone(),
-                        CellValue::Number(n) => n.to_string(),
+                        CellValue::Number(n) => {
+                            // f64 的 NaN/Infinity 不可机读，写空字符串
+                            if let Some(f) = n.as_f64() {
+                                if !f.is_finite() && n.as_i64().is_none() {
+                                    return String::new();
+                                }
+                            }
+                            n.to_string()
+                        }
                         CellValue::Boolean(b) => b.to_string(),
                         CellValue::Null => String::new(),
                     })

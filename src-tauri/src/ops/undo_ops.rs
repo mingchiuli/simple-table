@@ -266,6 +266,15 @@ impl Operation {
                 }
             }
             Operation::AddColumn { sheet_index, col_index, col_data } => {
+                // 计算最终插入位置：优先使用传入的 col_index（来自 undo of DeleteColumn），
+                // 否则按当前列数追加到末尾
+                let actual_col_index = col_index.unwrap_or_else(|| {
+                    file_data.sheets
+                        .get(*sheet_index)
+                        .and_then(|s| s.rows.first())
+                        .map(|r| r.len())
+                        .unwrap_or(0)
+                });
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     // 使用传入的 col_data，如果为空则创建空列
                     let new_col_data = if col_data.is_empty() {
@@ -273,24 +282,17 @@ impl Operation {
                     } else {
                         col_data.clone()
                     };
-                    // 添加列数据到每一行
+                    // 按 actual_col_index 插入（>= 当前列数时退化为末尾追加）
                     for (i, row) in sheet.rows.iter_mut().enumerate() {
-                        if i < new_col_data.len() {
-                            row.push(new_col_data[i].clone());
-                        } else {
-                            row.push(CellValue::Null);
-                        }
+                        let value = new_col_data
+                            .get(i)
+                            .cloned()
+                            .unwrap_or(CellValue::Null);
+                        let pos = actual_col_index.min(row.len());
+                        row.insert(pos, value);
                     }
                     // 索引重建由调用方异步处理
                 }
-                // 使用传入的 col_index 或计算最后一列的索引
-                let actual_col_index = col_index.unwrap_or_else(|| {
-                    file_data.sheets
-                        .get(*sheet_index)
-                        .and_then(|s| s.rows.first())
-                        .map(|r| r.len().saturating_sub(1))
-                        .unwrap_or(0)
-                });
                 OperationResult::AddColumn {
                     sheet_index: *sheet_index,
                     column: ColumnChange { index: actual_col_index },
@@ -351,16 +353,7 @@ impl Operation {
                     sheet_data: new_sheet,
                 }
             }
-            Operation::DeleteSheet { sheet_index, sheet_data } => {
-                // Don't allow deleting the last sheet (仅对正常删除操作)
-                if file_data.sheets.len() <= 1 && sheet_data.is_empty() {
-                    return OperationResult::AddSheet {
-                        sheet_index: 0,
-                        name: "Error".to_string(),
-                        sheet_data: SheetData::default(),
-                    };
-                }
-
+            Operation::DeleteSheet { sheet_index, sheet_data: _ } => {
                 // 如果 sheet_index 是 MAX，说明这是 AddSheet 的撤销操作，需要删除最后一个 sheet
                 let actual_index = if *sheet_index == usize::MAX {
                     file_data.sheets.len().saturating_sub(1)
@@ -386,7 +379,6 @@ impl Operation {
                         // undo 恢复：用 old_sheet_data 替换当前 sheet
                         *sheet = old_sheet_data.clone();
                         // 返回之前的 sort_state（用于恢复箭头显示）
-                        eprintln!("[execute] is_restore=true, previous_sort_state: {:?}", previous_sort_state);
                         OperationResult::SortColumn {
                             sheet_index: *sheet_index,
                             sheet_data: sheet.clone(),
@@ -460,10 +452,10 @@ impl Operation {
                     col_data: col_data.clone(),
                 }
             }
-            Operation::AddSheet { .. } => {
-                // AddSheet 的撤销：删除最后添加的 sheet（新建的 sheet 是空的，不需要保存数据）
+            Operation::AddSheet { sheet_index, .. } => {
+                // AddSheet 的撤销：删除新增的 sheet（使用 execute 时记录的真实索引）
                 Operation::DeleteSheet {
-                    sheet_index: usize::MAX,
+                    sheet_index: sheet_index.unwrap_or(usize::MAX),
                     sheet_data: SheetData::default(),
                 }
             }
@@ -479,7 +471,6 @@ impl Operation {
             Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data, previous_sort_state } => {
                 // undo: 用 old_sheet_data 恢复排序前的状态
                 // 返回一个新的 Operation，用 old_sheet_data 替换
-                eprintln!("[undo method] creating undo op with previous_sort_state = None");
                 Operation::SortColumn {
                     sheet_index: *sheet_index,
                     col_index: *col_index,

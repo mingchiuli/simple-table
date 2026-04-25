@@ -32,7 +32,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         const fileData = await api.readFileBytes(path, bytesArray, fileName);
 
         const fileDataStore = useFileDataStore();
-        fileDataStore.set(fileData);
+        fileDataStore.set(fileData, path);
 
         const fileSize = bytes.length;
         const storageType = await getStorageType();
@@ -78,7 +78,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         const bytesArray = Array.from(bytes);
         const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
         const fileDataStore = useFileDataStore();
-        fileDataStore.set(fileData);
+        fileDataStore.set(fileData, result.path);
 
         const extension = result.fileName.split(".").pop() || "";
         const storageType = await getStorageType();

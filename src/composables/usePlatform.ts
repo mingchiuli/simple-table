@@ -37,6 +37,7 @@ const platform = computed(() =>
 const isMobileOrTablet = computed(() => isMobile.value || isTablet.value);
 
 let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+let listenerRefCount = 0;
 
 const handleResize = () => {
   if (resizeTimeout) {
@@ -54,13 +55,22 @@ export function usePlatform() {
     width.value = window.innerWidth;
     screenWidth.value = window.screen.width;
     screenHeight.value = window.screen.height;
-    window.addEventListener('resize', handleResize);
+    if (listenerRefCount === 0 && typeof window !== 'undefined') {
+      window.addEventListener('resize', handleResize);
+    }
+    listenerRefCount++;
   });
 
   onUnmounted(() => {
-    window.removeEventListener('resize', handleResize);
-    if (resizeTimeout) {
-      clearTimeout(resizeTimeout);
+    listenerRefCount = Math.max(0, listenerRefCount - 1);
+    if (listenerRefCount === 0) {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', handleResize);
+      }
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = null;
+      }
     }
   });
 

@@ -174,6 +174,17 @@ fn read_workbook_ods(workbook: &mut Ods<std::io::BufReader<Cursor<Vec<u8>>>>, fi
     Ok(FileData { file_name, sheets })
 }
 
+/// 判断字符串是否带有前导零（如 "007"、"-0123"），需要按字符串处理避免精度丢失
+fn has_leading_zero(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let digits = if bytes.first() == Some(&b'-') || bytes.first() == Some(&b'+') {
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    digits.len() > 1 && digits[0] == b'0' && digits.iter().all(|b| b.is_ascii_digit())
+}
+
 fn read_csv_from_bytes(cursor: Cursor<Vec<u8>>, file_name: String) -> Result<FileData, AppError> {
     let mut reader = ReaderBuilder::new()
         .has_headers(false)
@@ -188,13 +199,20 @@ fn read_csv_from_bytes(cursor: Cursor<Vec<u8>>, file_name: String) -> Result<Fil
             .map(|field| {
                 if field.is_empty() {
                     CellValue::Null
+                } else if has_leading_zero(field) {
+                    // 保留电话号码、邮编等以 0 开头的字符串
+                    CellValue::String(field.to_string())
                 } else if let Ok(int_val) = field.parse::<i64>() {
                     if int_val > 9007199254740991 || int_val < -9007199254740991 {
                         return CellValue::String(field.to_string());
                     }
                     CellValue::Number(Value::from(int_val))
                 } else if let Ok(num) = field.parse::<f64>() {
-                    CellValue::Number(Value::from(num))
+                    if num.is_finite() {
+                        CellValue::Number(Value::from(num))
+                    } else {
+                        CellValue::String(field.to_string())
+                    }
                 } else if field.to_lowercase() == "true" {
                     CellValue::Boolean(true)
                 } else if field.to_lowercase() == "false" {

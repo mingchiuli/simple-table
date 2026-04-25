@@ -1,5 +1,7 @@
 use tauri::AppHandle;
 
+use crate::error::AppError;
+
 use super::types::{StorageType, RecentFile};
 use super::store::RecentStore;
 use super::thumbnail::generate_thumbnail_from_bytes;
@@ -17,7 +19,7 @@ pub fn do_add_recent_file_with_thumbnail(
     extension: String,
     storage_type: Option<StorageType>,
     original_path: Option<String>,
-) -> Result<RecentFile, String> {
+) -> Result<RecentFile, AppError> {
     let mut recent_file = RecentFile::new(path, file_name, file_size);
 
     if let Some(thumbnail) = generate_thumbnail_from_bytes(&bytes, &extension) {
@@ -37,7 +39,7 @@ pub fn do_add_recent_file_with_thumbnail(
     RecentStore::add(app, recent_file)
 }
 
-pub fn do_remove_recent_file(app: &AppHandle, id: String) -> Result<(), String> {
+pub fn do_remove_recent_file(app: &AppHandle, id: String) -> Result<(), AppError> {
     RecentStore::remove(app, &id)
 }
 
@@ -45,6 +47,6 @@ pub fn do_check_file_exists(path: String) -> bool {
     RecentStore::exists(&path)
 }
 
-pub fn do_update_recent_file_path(app: &AppHandle, id: String, new_path: String) -> Result<(), String> {
+pub fn do_update_recent_file_path(app: &AppHandle, id: String, new_path: String) -> Result<(), AppError> {
     RecentStore::update_path(app, &id, &new_path)
 }

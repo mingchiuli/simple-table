@@ -14,25 +14,23 @@ const router = useRouter();
 let unlistenDeepLink: (() => void) | null = null;
 
 onMounted(async () => {
-  // Check if app was started via deep link (getCurrent works for initial startup)
+  // 始终注册后续 deep link 事件监听（single_instance / 运行期触发的协议链接）
+  unlistenDeepLink = await listen<string>("deep-link-received", (event) => {
+    handleDeepLink(event.payload);
+  });
+
+  // 启动时通过 deep link 打开
   const startUrls = await getCurrent();
   if (startUrls && startUrls.length > 0) {
     handleDeepLink(startUrls[0]);
     return;
   }
 
-  // Check for pending deep link from macOS file association (stored in Rust state)
+  // macOS 文件关联：Rust 端缓存的待处理链接
   const pendingUrl = await invoke<string | null>("get_pending_deep_link");
   if (pendingUrl) {
     handleDeepLink(pendingUrl);
-    return;
   }
-
-  // Listen for deep links from single_instance (desktop - Windows/Linux)
-  const unlisten = await listen<string>("deep-link-received", (event) => {
-    handleDeepLink(event.payload);
-  });
-  unlistenDeepLink = unlisten;
 });
 
 onUnmounted(() => {
@@ -43,24 +41,17 @@ onUnmounted(() => {
 });
 
 function handleDeepLink(url: string) {
-  console.log("Deep link received:", url);
-  console.log("Platform:", platform);
   try {
     const parsed = new URL(url);
-    console.log("Protocol:", parsed.protocol);
-    console.log("Host:", parsed.host);
-    console.log("Search params:", Object.fromEntries(parsed.searchParams));
 
     if (parsed.protocol === "simpletable:") {
       const filePath = parsed.searchParams.get("file");
-      console.log("File path:", filePath);
       if (filePath) {
         router.push({ name: "table", query: { file: filePath } });
       }
     } else if (parsed.protocol === "file:") {
       // macOS file association: file:///path/to/file.xlsx → /path/to/file.xlsx
       const filePath = decodeURIComponent(parsed.pathname);
-      console.log("File path from association:", filePath);
       router.push({ name: "table", query: { file: filePath } });
     }
   } catch (e) {

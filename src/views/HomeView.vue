@@ -30,7 +30,7 @@ async function handleOpenFile() {
       ? result.bytes
       : Array.from(await readFile(result.path));
     const fileData = await api.readFileBytes(result.path, bytes, result.fileName);
-    fileDataStore.set(fileData);
+    fileDataStore.set(fileData, result.path);
 
     const extension = result.fileName.split(".").pop() || "";
     const storageType = await getStorageType();
@@ -69,7 +69,7 @@ async function handleNewFile() {
   };
 
   await api.initFile(newFileData);
-  fileDataStore.set(newFileData);
+  fileDataStore.set(newFileData, null);
   router.push({ name: "table" });
 }
 

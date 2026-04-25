@@ -1,6 +1,8 @@
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
+use crate::error::AppError;
+
 use super::types::RecentFile;
 
 const STORE_FILE: &str = "recent-files.json";
@@ -20,14 +22,15 @@ impl RecentStore {
             .unwrap_or_default()
     }
 
-    pub fn save(app: &AppHandle, files: &[RecentFile]) -> Result<(), String> {
-        let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-        store.set(STORE_KEY, serde_json::to_value(files).map_err(|e| e.to_string())?);
-        store.save().map_err(|e| e.to_string())?;
+    pub fn save(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
+        let store = app.store(STORE_FILE).map_err(|e| AppError::Internal(e.to_string()))?;
+        let value = serde_json::to_value(files).map_err(|e| AppError::Internal(e.to_string()))?;
+        store.set(STORE_KEY, value);
+        store.save().map_err(|e| AppError::WriteError(e.to_string()))?;
         Ok(())
     }
 
-    pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentFile, String> {
+    pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentFile, AppError> {
         let mut files = Self::get_all(app);
 
         let existing_idx = files.iter().position(|f| f.path == file.path);
@@ -47,19 +50,19 @@ impl RecentStore {
         Ok(files[0].clone())
     }
 
-    pub fn remove(app: &AppHandle, id: &str) -> Result<(), String> {
+    pub fn remove(app: &AppHandle, id: &str) -> Result<(), AppError> {
         let mut files = Self::get_all(app);
         files.retain(|f| f.id != id);
         Self::save(app, &files)
     }
 
-    pub fn update_path(app: &AppHandle, id: &str, new_path: &str) -> Result<(), String> {
+    pub fn update_path(app: &AppHandle, id: &str, new_path: &str) -> Result<(), AppError> {
         let mut files = Self::get_all(app);
 
         let file = files
             .iter_mut()
             .find(|f| f.id == id)
-            .ok_or("File not found")?;
+            .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
 
         file.path = new_path.to_string();
 

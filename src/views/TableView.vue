@@ -63,11 +63,15 @@ const sheetNames = computed(() => {
   return fileData.value.sheets.map((s) => s.name);
 });
 
+// 将单元格值安全转换为编辑器字符串（null/undefined 统一为空串）
+function cellToEditorString(value: CellValue | undefined): string {
+  return value === null || value === undefined ? '' : String(value);
+}
+
 // ========== Watch: Sync cellEditorValue with selectedCell ==========
 watch(selectedCell, (newCell) => {
   if (newCell && currentSheet.value) {
-    const value = currentSheet.value.rows[newCell.row]?.[newCell.col];
-    cellEditorValue.value = value !== null ? String(value) : '';
+    cellEditorValue.value = cellToEditorString(currentSheet.value.rows[newCell.row]?.[newCell.col]);
   } else {
     cellEditorValue.value = '';
   }
@@ -78,9 +82,9 @@ watch(cellEditorValue, (newValue) => {
   if (!selectedCell.value || !currentSheet.value) return;
 
   const { row, col } = selectedCell.value;
-  const originalValue = currentSheet.value.rows[row]?.[col];
+  const originalValue = currentSheet.value.rows[row]?.[col] ?? null;
   const newValueStr = newValue;
-  const originalValueStr = originalValue !== null ? String(originalValue) : '';
+  const originalValueStr = cellToEditorString(originalValue);
 
   // Only update if value changed
   if (newValueStr !== originalValueStr) {
@@ -279,8 +283,8 @@ function handleCellEditing(row: number, col: number, value: string) {
 
   if (!currentSheet.value) return;
 
-  const originalValue = currentSheet.value.rows[row]?.[col];
-  const originalValueStr = originalValue !== null ? String(originalValue) : '';
+  const originalValue = currentSheet.value.rows[row]?.[col] ?? null;
+  const originalValueStr = cellToEditorString(originalValue);
 
   if (value !== originalValueStr) {
     currentSheet.value.rows[row][col] = value;
@@ -312,7 +316,7 @@ async function loadFileFromPath(filePath: string) {
     const bytes = await readFile(filePath);
     const bytesArray = Array.from(bytes);
     const result = await api.readFileBytes(filePath, bytesArray);
-    fileDataStore.set(result);
+    fileDataStore.set(result, filePath);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
 
@@ -342,7 +346,7 @@ async function handleOpenFile() {
     }
     const bytes = result.bytes && result.bytes.length > 0 ? result.bytes : Array.from(await readFile(result.path));
     const fileDataResult = await api.readFileBytes(result.path, bytes, result.fileName);
-    fileDataStore.set(fileDataResult);
+    fileDataStore.set(fileDataResult, result.path);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
 
@@ -386,11 +390,7 @@ async function handleSaveFile() {
     }
 
     const [, bytes] = await api.generateFileBytes(fileData.value);
-    const currentFileName = fileData.value?.fileName || '';
-    const currentFile = recentFilesStore.files.find(f =>
-      f.fileName === currentFileName || f.originalPath?.includes(currentFileName)
-    );
-    const existingPath = currentFile?.path;
+    const existingPath = fileDataStore.currentFilePath;
     const storageType = await getStorageType();
 
     if (existingPath) {
@@ -415,6 +415,7 @@ async function handleSaveFile() {
           storageType
         );
         await recentFilesStore.load();
+        fileDataStore.setPath(savePath);
         ElMessage.success('File saved successfully');
       }
     }
@@ -579,9 +580,7 @@ function handleSheetChange(index: number) {
   if (savedCell) {
     selectedCell.value = savedCell;
     const sheet = fileData.value?.sheets[index];
-    if (sheet && sheet.rows[savedCell.row] && sheet.rows[savedCell.row][savedCell.col] !== null) {
-      cellEditorValue.value = String(sheet.rows[savedCell.row][savedCell.col]);
-    }
+    cellEditorValue.value = cellToEditorString(sheet?.rows[savedCell.row]?.[savedCell.col]);
     autoScroll.value = true;
   } else {
     selectedCell.value = null;
@@ -648,9 +647,7 @@ function handleSearchResultClick(result: SearchResult) {
   selectedCell.value = { row: result.row, col: result.col };
 
   const sheet = fileData.value?.sheets[result.sheetIndex];
-  if (sheet && sheet.rows[result.row]?.[result.col] !== null) {
-    cellEditorValue.value = String(sheet.rows[result.row][result.col]);
-  }
+  cellEditorValue.value = cellToEditorString(sheet?.rows[result.row]?.[result.col]);
 }
 
 function handleClearSearch() {
