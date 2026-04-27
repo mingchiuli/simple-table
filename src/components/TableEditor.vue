@@ -38,17 +38,7 @@ const columnWidths = ref<Record<number, number>>({});
 const resizingColumn = ref<number | null>(null);
 const startX = ref(0);
 const startWidth = ref(0);
-
-// 计算拖动指示线位置（列右边界位置）
-const resizeLineX = computed(() => {
-  if (resizingColumn.value === null) return 0;
-  // 行号列宽度 60px
-  let x = 60;
-  for (let i = 0; i <= resizingColumn.value; i++) {
-    x += getColumnWidth(i);
-  }
-  return x;
-});
+const resizeLineX = ref(0); // 实时拖动线位置（相对于容器）
 
 // 初始化列宽
 function initColumnWidths() {
@@ -92,6 +82,12 @@ function startResize(event: MouseEvent | TouchEvent, colIndex: number) {
   startX.value = getClientX(event);
   startWidth.value = getColumnWidth(colIndex);
 
+  // 初始化拖动线位置
+  if (containerRef.value) {
+    const containerRect = containerRef.value.getBoundingClientRect();
+    resizeLineX.value = startX.value - containerRect.left;
+  }
+
   // 鼠标事件（始终添加）
   document.addEventListener('mousemove', onResize);
   document.addEventListener('mouseup', stopResize);
@@ -112,6 +108,13 @@ function onResize(event: MouseEvent | TouchEvent) {
   }
 
   const clientX = getClientX(event);
+
+  // 实时更新拖动线位置（相对于容器）
+  if (containerRef.value) {
+    const containerRect = containerRef.value.getBoundingClientRect();
+    resizeLineX.value = clientX - containerRect.left;
+  }
+
   const delta = clientX - startX.value;
   columnWidths.value[resizingColumn.value] = Math.max(40, startWidth.value + delta);
 }
@@ -122,6 +125,7 @@ function stopResize() {
     emit('column-resize', resizingColumn.value, columnWidths.value[resizingColumn.value]);
   }
   resizingColumn.value = null;
+  resizeLineX.value = 0;
 
   // 移除鼠标事件
   document.removeEventListener('mousemove', onResize);
