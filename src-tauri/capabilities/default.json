@@ -10,6 +10,8 @@
     "fs:default",
     "deep-link:default",
     "store:default",
+    "updater:default",
+    "process:default",
     {
       "identifier": "fs:allow-write-file",
       "allow": [

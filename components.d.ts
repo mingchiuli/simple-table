@@ -36,5 +36,6 @@ declare module 'vue' {
     StatusBar: typeof import('./src/components/StatusBar.vue')['default']
     TableEditor: typeof import('./src/components/TableEditor.vue')['default']
     Toolbar: typeof import('./src/components/Toolbar.vue')['default']
+    UpdateDialog: typeof import('./src/components/UpdateDialog.vue')['default']
   }
 }

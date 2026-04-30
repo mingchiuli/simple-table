@@ -2,15 +2,17 @@
 import type { FileData } from '@/types';
 import { ref } from 'vue';
 import { usePlatform } from '@/composables/usePlatform';
-import { Search } from '@element-plus/icons-vue';
+import { Search, Refresh } from '@element-plus/icons-vue';
 import FileButtons from './FileButtons.vue';
 import SheetSelector from './SheetSelector.vue';
 import SheetButtons from './SheetButtons.vue';
 import SearchBox from './SearchBox.vue';
 import EditButtons from './EditButtons.vue';
+import UpdateDialog from './UpdateDialog.vue';
 
 const { isMobileOrTablet } = usePlatform();
 const searchPopoverVisible = ref(false);
+const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 
 const props = defineProps<{
   fileData: FileData | null;
@@ -34,16 +36,29 @@ const emit = defineEmits<{
   (e: 'search', query: string, scope: 'currentSheet' | 'allSheets'): void;
   (e: 'clear-search'): void;
 }>();
+function handleCheckUpdate() {
+  updateDialogRef.value?.show();
+}
 </script>
 
 <template>
   <!-- 桌面端工具栏 -->
   <header v-if="!isMobileOrTablet" class="toolbar desktop-toolbar">
-    <FileButtons
-      :file-data="props.fileData"
-      @open-file="emit('open-file')"
-      @save-file="emit('save-file')"
-    />
+    <div class="toolbar-left">
+      <FileButtons
+        :file-data="props.fileData"
+        @open-file="emit('open-file')"
+        @save-file="emit('save-file')"
+      />
+      <el-button
+        size="small"
+        :icon="Refresh"
+        @click="handleCheckUpdate"
+        title="Check for Updates"
+      >
+        Update
+      </el-button>
+    </div>
 
     <div class="toolbar-center" v-if="props.fileData">
       <SheetSelector
@@ -87,12 +102,20 @@ const emit = defineEmits<{
         @save-file="emit('save-file')"
       />
 
-      <SheetSelector
-        v-if="props.fileData"
-        :sheet-names="props.sheetNames"
-        :current-sheet-index="props.currentSheetIndex"
-        @sheet-change="emit('sheet-change', $event)"
-      />
+      <div class="mobile-right">
+        <el-button
+          size="small"
+          :icon="Refresh"
+          @click="handleCheckUpdate"
+          title="Check for Updates"
+        />
+        <SheetSelector
+          v-if="props.fileData"
+          :sheet-names="props.sheetNames"
+          :current-sheet-index="props.currentSheetIndex"
+          @sheet-change="emit('sheet-change', $event)"
+        />
+      </div>
     </div>
 
     <div class="mobile-toolbar-actions" v-if="props.fileData">
@@ -149,6 +172,8 @@ const emit = defineEmits<{
       </el-button>
     </div>
   </header>
+
+  <UpdateDialog ref="updateDialogRef" />
 </template>
 
 <style scoped>
@@ -162,6 +187,12 @@ const emit = defineEmits<{
   overflow-x: auto;
   padding: 8px 20px;
   gap: 16px;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .desktop-toolbar .toolbar-center {
@@ -186,6 +217,12 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-right {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 

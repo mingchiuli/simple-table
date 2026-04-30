@@ -6,6 +6,7 @@ mod recent;
 mod state;
 mod types;
 mod utils;
+mod update;
 
 use commands::{
     add_column, add_recent_file_with_thumbnail, add_row, add_sheet,
@@ -18,6 +19,8 @@ use commands::{
 use commands::android::{pick_file_android, pick_save_location_android, read_file_android, save_file_android};
 #[cfg(target_os = "ios")]
 use commands::ios::{create_private_file_ios, export_file_ios, pick_file_ios, save_file_ios, silent_export_file_ios};
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use update::check_update_mobile;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 #[cfg(desktop)]
@@ -51,6 +54,13 @@ pub fn run() {
     #[cfg(target_os = "android")]
     {
         builder = builder.plugin(tauri_plugin_android_fs::init());
+    }
+
+    // Desktop: updater + process for auto-update
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        builder = builder.plugin(tauri_plugin_process::init());
     }
 
     builder
@@ -122,7 +132,10 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             export_file_ios,
             #[cfg(target_os = "ios")]
-            silent_export_file_ios
+            silent_export_file_ios,
+            // Mobile: 检查更新命令
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            check_update_mobile
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
