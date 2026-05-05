@@ -45,8 +45,8 @@ tauri-plugin-process = "2"
 # Android 专用文件系统插件（支持持久化 URI 权限）
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = "28"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # iOS 专用 HTTP 客户端
 [target.'cfg(target_os = "ios")'.dependencies]
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
