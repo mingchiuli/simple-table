@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use crate::ops::Operation;
 use crate::types::{CellValue, FileData, OperationResult};
-pub use crate::ops::undo_ops::{Operation, Undoable};
+use serde::{Deserialize, Serialize};
 
 /// 编辑器状态管理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +30,13 @@ impl EditorState {
         // 在执行操作前，先准备好需要的数据，以便撤销/重做
         match &operation {
             // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
-            Operation::SetCell { sheet_index, row, col, old_value, new_value } => {
+            Operation::SetCell {
+                sheet_index,
+                row,
+                col,
+                old_value,
+                new_value,
+            } => {
                 if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
                     if let Some(real_old) = sheet.rows.get(*row).and_then(|r| r.get(*col)) {
                         // 如果新值和旧值相同，不需要记录到 history
@@ -54,7 +60,11 @@ impl EditorState {
                 }
             }
             // AddColumn: 添加空列，需要补充列索引（只当 col_data 为空时）
-            Operation::AddColumn { sheet_index, col_index, col_data: _ } => {
+            Operation::AddColumn {
+                sheet_index,
+                col_index,
+                col_data: _,
+            } => {
                 // 如果 col_data 已有数据（撤销操作），保留原数据
                 if col_index.is_none() && *sheet_index < self.file_data.sheets.len() {
                     // 正常添加列，补充列索引
@@ -70,7 +80,11 @@ impl EditorState {
                 }
             }
             // AddRow: 添加空行，需要补充行数据（只当 row_data 为空时）
-            Operation::AddRow { sheet_index, row_index, row_data } => {
+            Operation::AddRow {
+                sheet_index,
+                row_index,
+                row_data,
+            } => {
                 // 如果 row_data 已有数据（撤销操作），保留原数据
                 if row_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
                     if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
@@ -83,7 +97,10 @@ impl EditorState {
                     }
                 }
             }
-            Operation::DeleteSheet { sheet_index, sheet_data } => {
+            Operation::DeleteSheet {
+                sheet_index,
+                sheet_data,
+            } => {
                 // 如果 sheet_data 为空，说明是正常的删除操作，需要保存完整的 sheet 数据
                 if sheet_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
                     if let Some(removed_sheet) = self.file_data.sheets.get(*sheet_index) {
@@ -95,7 +112,11 @@ impl EditorState {
                 }
             }
             // AddSheet: 提前生成名称和索引，保证 redo 重放时使用与首次执行一致的位置和名称
-            Operation::AddSheet { name, sheet_data, sheet_index } => {
+            Operation::AddSheet {
+                name,
+                sheet_data,
+                sheet_index,
+            } => {
                 if sheet_data.is_none() {
                     let final_name = if name.is_empty() {
                         format!("Sheet{}", self.file_data.sheets.len() + 1)
@@ -125,8 +146,8 @@ impl EditorState {
         if let Some(operation) = self.history.pop() {
             // 执行 undo 操作
             let result = operation.undo(&mut self.file_data);
-            // 获取 redo 操作（使用 trait 方法，让操作自己决定 redo 行为）
-            let redo_op = operation.get_redo_operation(&mut self.file_data);
+            // 获取 redo 操作
+            let redo_op = operation.create_redo_op(&mut self.file_data);
             self.redo_stack.push(redo_op);
 
             self.update_flags();

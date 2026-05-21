@@ -24,8 +24,7 @@ function handleDelete(index: number) {
 }
 
 function handleSort() {
-  const isCurrentColumn = props.sortState !== null && props.sortState?.colIndex === props.columnIndex;
-  // 如果当前列已排序，切换升序/降序；否则默认升序
+  const isCurrentColumn = props.sortState?.colIndex === props.columnIndex;
   const newAscending = isCurrentColumn && props.sortState ? !props.sortState.ascending : true;
   emit('sort', newAscending);
 }
@@ -46,7 +45,6 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
       <button
         class="sort-btn"
         :class="{ active: isCurrentSorting }"
-        :title="isCurrentSorting && sortState?.ascending ? '降序排列' : '升序排列'"
         @click.stop="handleSort"
       >
         <el-icon :size="12"><Sort /></el-icon>

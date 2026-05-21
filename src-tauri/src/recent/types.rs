@@ -1,13 +1,13 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::{Deserialize, Serialize};
 
 /// 文件存储类型
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StorageType {
-    /// Android content:// URI（通过 persist_uri_permission 持久化）
-    AndroidUri,
-    /// iOS 私有目录副本（原始文件复制到私有目录）
-    IosPrivate,
+    /// 移动端官方 fs 插件管理的 App 沙盒路径
+    MobileSandboxPath,
     /// 桌面端普通文件路径
     DesktopPath,
 }
@@ -42,8 +42,8 @@ impl RecentFile {
             id: uuid::Uuid::new_v4().to_string(),
             path,
             file_name,
-            last_opened: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            last_opened: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64,
             file_size,

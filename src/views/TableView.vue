@@ -242,7 +242,7 @@ async function debouncedSave() {
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { basename } from '@tauri-apps/api/path';
-import { pickFile, readFile, saveFile, pickSaveLocation, getStorageType } from '@/platform';
+import { openFile, readFile, saveFile, pickSaveLocation, exportFile, getStorageType } from '@/platform';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 
 const router = useRouter();
@@ -313,16 +313,21 @@ async function loadFileFromPath(filePath: string) {
   try {
     isLoading.value = true;
     isFileLoading.value = true;
-    const bytes = await readFile(filePath);
-    const bytesArray = Array.from(bytes);
-    const result = await api.readFileBytes(filePath, bytesArray);
-    fileDataStore.set(result, filePath);
+    const fileData = await readFile(filePath);
+    fileDataStore.set(fileData, filePath);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
 
     const fileName = decodeURIComponent(await basename(filePath));
     const extension = fileName.split('.').pop() || '';
-    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.length, bytesArray, extension);
+    // Only desktop reads thumbnail bytes in the frontend; mobile file IO stays in Rust.
+    const storageType = await getStorageType();
+    let bytes: number[] = [];
+    if (storageType === 'desktopPath') {
+      const { readFile: fsReadFile } = await import('@tauri-apps/plugin-fs');
+      bytes = Array.from(await fsReadFile(filePath));
+    }
+    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.length, bytes, extension, storageType);
     await recentFilesStore.load();
 
     await updateEditorState();
@@ -338,15 +343,13 @@ async function handleOpenFile() {
   try {
     isLoading.value = true;
     isFileLoading.value = true;
-    const result = await pickFile();
+    const result = await openFile();
     if (!result) {
       isLoading.value = false;
       isFileLoading.value = false;
       return;
     }
-    const bytes = result.bytes && result.bytes.length > 0 ? result.bytes : Array.from(await readFile(result.path));
-    const fileDataResult = await api.readFileBytes(result.path, bytes, result.fileName);
-    fileDataStore.set(fileDataResult, result.path);
+    fileDataStore.set(result.fileData, result.path);
     currentSheetIndex.value = 0;
     hasChanges.value = false;
 
@@ -355,10 +358,11 @@ async function handleOpenFile() {
     await api.addRecentFileWithThumbnail(
       result.path,
       result.fileName,
-      bytes.length,
-      bytes,
+      result.bytes?.length || 0,
+      result.bytes || [],
       extension,
-      storageType
+      storageType,
+      result.originalPath
     );
 
     await updateEditorState();
@@ -374,41 +378,34 @@ async function handleSaveFile() {
   if (!fileData.value) return;
 
   try {
-    const originalExtension = fileData.value.fileName.split('.').pop() || 'xlsx';
     const isNewFile = fileData.value.fileName.startsWith('untitled');
     const defaultName = isNewFile
       ? 'untitled'
       : fileData.value.fileName.replace(/\.[^.]+$/, '');
 
-    let extensions: string[];
-    if (isNewFile) {
-      extensions = ['xlsx', 'csv'];
-    } else if (originalExtension === 'csv') {
-      extensions = ['csv'];
-    } else {
-      extensions = ['xlsx'];
-    }
-
-    const [, bytes] = await api.generateFileBytes(fileData.value);
     const existingPath = fileDataStore.currentFilePath;
     const storageType = await getStorageType();
 
     if (existingPath) {
       isLoading.value = true;
-      await saveFile(existingPath, bytes);
+      await saveFile(existingPath, fileData.value);
       hasChanges.value = false;
       ElMessage.success('File saved successfully');
     } else {
-      const savePath = await pickSaveLocation(`${defaultName}.${extensions[0]}`);
+      const savePath = await pickSaveLocation(`${defaultName}.xlsx`);
       if (savePath) {
         isLoading.value = true;
-        await saveFile(savePath, bytes);
+        await saveFile(savePath, fileData.value);
         hasChanges.value = false;
 
-        const extension = extensions[0];
+        const fileName = decodeURIComponent(await basename(savePath));
+        const extension = fileName.split('.').pop() || 'xlsx';
+        const bytes = storageType === 'desktopPath'
+          ? await api.generateFileBytes(fileData.value)
+          : [];
         await api.addRecentFileWithThumbnail(
           savePath,
-          `${defaultName}.${extension}`,
+          fileName,
           bytes.length,
           bytes,
           extension,
@@ -421,6 +418,62 @@ async function handleSaveFile() {
     }
   } catch (error) {
     ElMessage.error(`Failed to save file: ${error}`);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function ensureSandboxPathForExport(defaultName: string, extension: string): Promise<string | null> {
+  let path = fileDataStore.currentFilePath;
+  const storageType = await getStorageType();
+
+  if (!path) {
+    if (storageType === 'desktopPath') {
+      throw new Error('Export is only supported for mobile sandbox files');
+    }
+    path = await pickSaveLocation(`${defaultName}.${extension}`);
+    if (!path) return null;
+    fileDataStore.setPath(path);
+
+    const fileName = decodeURIComponent(await basename(path));
+    const recentExtension = fileName.split('.').pop() || 'xlsx';
+    await api.addRecentFileWithThumbnail(
+      path,
+      fileName,
+      0,
+      [],
+      recentExtension,
+      storageType
+    );
+    await recentFilesStore.load();
+  }
+
+  await saveFile(path, fileData.value!);
+  hasChanges.value = false;
+  return path;
+}
+
+async function handleExportFile() {
+  if (!fileData.value) return;
+
+  try {
+    isLoading.value = true;
+    const isNewFile = fileData.value.fileName.startsWith('untitled');
+    const defaultName = isNewFile
+      ? 'untitled'
+      : fileData.value.fileName.replace(/\.[^.]+$/, '');
+    const currentExtension = fileData.value.fileName.split('.').pop()?.toLowerCase() || 'xlsx';
+    const extension = isNewFile ? 'xlsx' : currentExtension;
+    const exportName = `${defaultName}.${extension}`;
+    const sourcePath = await ensureSandboxPathForExport(defaultName, extension);
+    if (!sourcePath) return;
+
+    const exportedPath = await exportFile(sourcePath, exportName);
+    if (exportedPath) {
+      ElMessage.success('File exported successfully');
+    }
+  } catch (error) {
+    ElMessage.error(`Failed to export file: ${error}`);
   } finally {
     isLoading.value = false;
   }
@@ -719,6 +772,7 @@ onUnmounted(() => {
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"
+      @export-file="handleExportFile"
       @sheet-change="handleSheetChange"
       @add-sheet="handleAddSheet"
       @delete-sheet="handleDeleteSheet"

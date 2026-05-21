@@ -1,8 +1,7 @@
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use crate::ops::index_ops::spawn_rebuild_sheet_index;
 use crate::error::AppError;
+use crate::ops::index_ops::spawn_rebuild_sheet_index;
 use crate::state::editor_state::EditorState;
 use crate::state::state::EditorStateInfo;
 use crate::types::OperationResult;
@@ -31,7 +30,9 @@ fn get_editor_state_info(state: &Arc<RwLock<Option<EditorState>>>) -> Option<Edi
 }
 
 /// 获取编辑器状态（包含能否撤销/重做）
-pub fn do_get_editor_state(state: Arc<RwLock<Option<EditorState>>>) -> Result<Option<EditorStateInfo>, AppError> {
+pub fn do_get_editor_state(
+    state: Arc<RwLock<Option<EditorState>>>,
+) -> Result<Option<EditorStateInfo>, AppError> {
     Ok(get_editor_state_info(&state))
 }
 

@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, Mutex};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 
 // JavaScript 安全整数范围: -(2^53 - 1) 到 (2^53 - 1)
 const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
@@ -10,7 +13,7 @@ const JS_MIN_SAFE_INTEGER: i64 = -9007199254740991;
 pub enum CellValue {
     Null,
     String(String),
-    Number(Value),  // 使用 serde_json::Value 支持精确大整数
+    Number(Value), // 使用 serde_json::Value 支持精确大整数
     Boolean(bool),
 }
 
@@ -33,6 +36,19 @@ impl Serialize for CellValue {
                 v.serialize(serializer)
             }
             CellValue::Boolean(b) => serializer.serialize_bool(*b),
+        }
+    }
+}
+
+impl CellValue {
+    /// 将单元格值转换为字符串（用于搜索索引等场景）
+    /// Null 返回空字符串，其他类型返回其字符串表示
+    pub fn to_display_string(&self) -> String {
+        match self {
+            CellValue::Null => String::new(),
+            CellValue::String(s) => s.clone(),
+            CellValue::Number(n) => n.to_string(),
+            CellValue::Boolean(b) => b.to_string(),
         }
     }
 }
@@ -118,11 +134,11 @@ pub struct SheetIndex {
     /// 单元格主键字段（"row:col"，用于增量 delete_term）
     pub cell_id_field: Option<tantivy::schema::Field>,
     /// 持久 IndexWriter，跨编辑复用以支持增量更新
-    pub writer: Option<std::sync::Arc<std::sync::Mutex<tantivy::IndexWriter>>>,
+    pub writer: Option<Arc<Mutex<tantivy::IndexWriter>>>,
 }
 
-impl std::fmt::Debug for SheetIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for SheetIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SheetIndex")
             .field("search_index", &self.search_index.is_some())
             .field("search_schema", &self.search_schema.is_some())
@@ -183,6 +199,7 @@ impl SheetData {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FileData {
+    pub path: String,
     pub file_name: String,
     pub sheets: Vec<SheetData>,
 }
@@ -217,6 +234,33 @@ pub struct SortState {
     pub col_index: usize,
     pub ascending: bool,
 }
+
+// ==================== GitHub Update Types ====================
+
+/// 更新信息，返回给前端
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub tag_name: String,
+    pub release_url: String,
+    pub apk_url: Option<String>,
+}
+
+/// GitHub Release API 响应结构
+#[derive(Debug, Deserialize)]
+pub struct GitHubRelease {
+    pub tag_name: String,
+    pub assets: Vec<GitHubAsset>,
+}
+
+/// GitHub Release Asset 结构
+#[derive(Debug, Deserialize)]
+pub struct GitHubAsset {
+    pub name: String,
+    pub browser_download_url: String,
+}
+
+// ==================== Operation Result ====================
 
 /// 操作结果（增量数据）
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -8,7 +8,7 @@ import { useFileDataStore } from "@/stores/fileData";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import RecentFilesSection from "@/components/RecentFilesSection.vue";
 import * as api from "@/api";
-import { pickFile, readFile, getStorageType } from "@/platform";
+import { openFile, getStorageType } from "@/platform";
 
 const router = useRouter();
 const fileDataStore = useFileDataStore();
@@ -20,27 +20,24 @@ onMounted(() => {
 
 async function handleOpenFile() {
   try {
-    const result = await pickFile();
+    const result = await openFile();
     if (!result) {
       // 用户取消选择
       return;
     }
 
-    const bytes = result.bytes && result.bytes.length > 0
-      ? result.bytes
-      : Array.from(await readFile(result.path));
-    const fileData = await api.readFileBytes(result.path, bytes, result.fileName);
-    fileDataStore.set(fileData, result.path);
+    fileDataStore.set(result.fileData, result.path);
 
     const extension = result.fileName.split(".").pop() || "";
     const storageType = await getStorageType();
     await api.addRecentFileWithThumbnail(
       result.path,
       result.fileName,
-      bytes.length,
-      bytes,
+      result.bytes?.length || 0,
+      result.bytes || [],
       extension,
-      storageType
+      storageType,
+      result.originalPath
     );
 
     await recentFilesStore.load();
@@ -52,6 +49,7 @@ async function handleOpenFile() {
 
 async function handleNewFile() {
   const newFileData: FileData = {
+    path: "",
     fileName: "untitled.xlsx",
     sheets: [
       {

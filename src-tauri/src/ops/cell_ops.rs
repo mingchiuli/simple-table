@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
+use crate::error::AppError;
 use crate::ops::index_ops::{
     spawn_append_column_index, spawn_append_row_index, spawn_delete_last_column_index,
     spawn_delete_last_row_index, spawn_rebuild_sheet_index, spawn_update_cell_index,
 };
-use crate::error::AppError;
-use crate::state::editor_state::{EditorState, Operation};
+use crate::state::editor_state::EditorState;
+use crate::ops::Operation;
 use crate::types::{CellValue, SheetData};
 
 /// 设置单元格值
@@ -45,7 +45,11 @@ pub fn do_set_cell(
 }
 
 /// 添加行
-pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
+pub fn do_add_row(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+    row_index: usize,
+) -> Result<(), AppError> {
     // 在 execute 之前判断是否末尾追加（前端唯一调用路径），用于选择增量分支
     let is_append_at_end = {
         let guard = state.read().expect("Editor state lock poisoned");
@@ -86,20 +90,27 @@ pub fn do_add_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, r
 }
 
 /// 删除行
-pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
+pub fn do_delete_row(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+    row_index: usize,
+) -> Result<(), AppError> {
     let mut col_count: usize = 0;
     let mut is_last_row = false;
     let result = {
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let sheet = editor_state.file_data.sheets
+                let sheet = editor_state
+                    .file_data
+                    .sheets
                     .get(sheet_index)
                     .ok_or_else(|| AppError::RowNotFound(row_index))?;
                 is_last_row = row_index + 1 == sheet.rows.len();
                 col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                 // 从文件数据中获取行数据（用于撤销）
-                let row_data = sheet.rows
+                let row_data = sheet
+                    .rows
                     .get(row_index)
                     .cloned()
                     .ok_or_else(|| AppError::RowNotFound(row_index))?;
@@ -127,7 +138,10 @@ pub fn do_delete_row(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 }
 
 /// 添加列
-pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<(), AppError> {
+pub fn do_add_column(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+) -> Result<(), AppError> {
     // 用户路径下永远末尾追加；记录追加位置用于增量
     let new_col_index = {
         let guard = state.read().expect("Editor state lock poisoned");
@@ -143,7 +157,11 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
         match state_guard.as_mut() {
             Some(editor_state) => {
                 // col_index 和 col_data 会在 execute 中自动计算和保存
-                let operation = Operation::AddColumn { sheet_index, col_index: None, col_data: vec![] };
+                let operation = Operation::AddColumn {
+                    sheet_index,
+                    col_index: None,
+                    col_data: vec![],
+                };
                 editor_state.execute(operation);
                 Ok(())
             }
@@ -164,7 +182,11 @@ pub fn do_add_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize
 }
 
 /// 删除列
-pub fn do_delete_column(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize, col_index: usize) -> Result<(), AppError> {
+pub fn do_delete_column(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+    col_index: usize,
+) -> Result<(), AppError> {
     let mut row_count: usize = 0;
     let mut is_last_col = false;
     let result = {
@@ -229,7 +251,10 @@ pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppEr
 }
 
 /// 删除 Sheet
-pub fn do_delete_sheet(state: Arc<RwLock<Option<EditorState>>>, sheet_index: usize) -> Result<(), AppError> {
+pub fn do_delete_sheet(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+) -> Result<(), AppError> {
     let mut state_guard = state.write().expect("Editor state lock poisoned");
     match state_guard.as_mut() {
         Some(editor_state) => {

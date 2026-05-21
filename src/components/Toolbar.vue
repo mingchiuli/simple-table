@@ -2,6 +2,7 @@
 import type { FileData } from '@/types';
 import { ref } from 'vue';
 import { usePlatform } from '@/composables/usePlatform';
+import { isMobile as isMobileOS } from '@/utils/platform';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import FileButtons from './FileButtons.vue';
 import SheetSelector from './SheetSelector.vue';
@@ -11,6 +12,7 @@ import EditButtons from './EditButtons.vue';
 import UpdateDialog from './UpdateDialog.vue';
 
 const { isMobileOrTablet } = usePlatform();
+const canExport = isMobileOS();
 const searchPopoverVisible = ref(false);
 const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 
@@ -26,6 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'open-file'): void;
   (e: 'save-file'): void;
+  (e: 'export-file'): void;
   (e: 'sheet-change', value: number): void;
   (e: 'add-sheet'): void;
   (e: 'delete-sheet'): void;
@@ -47,8 +50,10 @@ function handleCheckUpdate() {
     <div class="toolbar-left">
       <FileButtons
         :file-data="props.fileData"
+        :show-export="canExport"
         @open-file="emit('open-file')"
         @save-file="emit('save-file')"
+        @export-file="emit('export-file')"
       />
       <el-button
         size="small"
@@ -98,8 +103,10 @@ function handleCheckUpdate() {
     <div class="mobile-toolbar-row">
       <FileButtons
         :file-data="props.fileData"
+        :show-export="canExport"
         @open-file="emit('open-file')"
         @save-file="emit('save-file')"
+        @export-file="emit('export-file')"
       />
 
       <div class="mobile-right">

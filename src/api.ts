@@ -3,12 +3,14 @@ import type { FileData, RecentFile, CellValue, OperationResult, SearchResult, So
 
 // ==================== File Operations ====================
 
-export async function readFileBytes(path: string, bytes: number[], fileName?: string): Promise<FileData> {
-  return invoke<FileData>("read_file_bytes", { path, bytes, fileName });
+/** Desktop: 直接从路径读取并解析文件 */
+export async function readFileDesktop(path: string): Promise<FileData> {
+  return invoke<FileData>("read_file_desktop", { path });
 }
 
-export async function generateFileBytes(fileData: FileData): Promise<[string, number[]]> {
-  return invoke<[string, number[]]>("generate_file_bytes", { fileData });
+/** Desktop: 生成文件字节并写入路径 */
+export async function saveFileDesktop(path: string, fileData: FileData): Promise<void> {
+  return invoke<void>("save_file_desktop", { path, fileData });
 }
 
 export async function initFile(fileData: FileData): Promise<void> {
@@ -105,7 +107,7 @@ export async function addRecentFileWithThumbnail(
   fileSize: number,
   bytes: number[],
   extension: string,
-  storageType?: 'androidUri' | 'iosPrivate' | 'desktopPath',
+  storageType?: 'androidUri' | 'iosPrivate' | 'mobileSandboxPath' | 'desktopPath',
   originalPath?: string
 ): Promise<RecentFile> {
   return invoke<RecentFile>("add_recent_file_with_thumbnail", {
@@ -131,83 +133,6 @@ export async function updateRecentFilePath(id: string, newPath: string): Promise
   return invoke<void>("update_recent_file_path", { id, newPath });
 }
 
-// ==================== Android File Operations ====================
-
-export interface PickedFile {
-  path: string;
-  fileName: string;
-  bytes: number[];
-}
-
-/**
- * Android: 打开文件选择器并持久化 URI 权限
- * @returns 文件信息，如果用户取消则返回 null
- */
-export async function pickFileAndroid(): Promise<PickedFile | null> {
-  return invoke<PickedFile | null>("pick_file_android");
-}
-
-/**
- * Android: 从持久化 URI 读取文件
- */
-export async function readFileAndroid(uri: string): Promise<number[]> {
-  return invoke<number[]>("read_file_android", { uri });
-}
-
-/**
- * Android: 保存文件到指定 URI
- */
-export async function saveFileAndroid(uri: string, bytes: number[]): Promise<void> {
-  return invoke<void>("save_file_android", { uri, bytes });
-}
-
-/**
- * Android: 选择保存位置
- */
-export async function pickSaveLocationAndroid(defaultName: string): Promise<string | null> {
-  return invoke<string | null>("pick_save_location_android", { defaultName });
-}
-
-// ==================== iOS File Operations ====================
-
-export interface PickedFileIOS {
-  path: string;
-  originalPath: string;
-  fileName: string;
-}
-
-/**
- * iOS: 打开文件选择器并复制到私有目录
- * @returns 文件信息，如果用户取消则返回 null
- */
-export async function pickFileIOS(): Promise<PickedFileIOS | null> {
-  return invoke<PickedFileIOS | null>("pick_file_ios");
-}
-
-/**
- * iOS: 在私有目录创建新文件
- */
-export async function createPrivateFileIOS(fileName: string): Promise<PickedFileIOS> {
-  return invoke<PickedFileIOS>("create_private_file_ios", { fileName });
-}
-
-/**
- * iOS: 保存文件到私有目录
- */
-export async function saveFileIOS(path: string, bytes: number[]): Promise<void> {
-  return invoke<void>("save_file_ios", { path, bytes });
-}
-
-/**
- * iOS: 导出文件到用户选择的位置
- */
-export async function exportFileIOS(sourcePath: string, defaultName: string): Promise<string | null> {
-  return invoke<string | null>("export_file_ios", { sourcePath, defaultName });
-}
-
-/**
- * iOS: 静默导出文件到已知路径（不弹对话框）
- */
-export async function silentExportFileIOS(sourcePath: string, destPath: string): Promise<void> {
-  return invoke<void>("silent_export_file_ios", { sourcePath, destPath });
+export async function generateFileBytes(fileData: FileData): Promise<number[]> {
+  return invoke<number[]>("generate_file_bytes", { fileData });
 }

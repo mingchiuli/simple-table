@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -17,16 +19,21 @@ impl RecentStore {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        store.get(STORE_KEY)
+        store
+            .get(STORE_KEY)
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default()
     }
 
     pub fn save(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
-        let store = app.store(STORE_FILE).map_err(|e| AppError::Internal(e.to_string()))?;
+        let store = app
+            .store(STORE_FILE)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
         let value = serde_json::to_value(files).map_err(|e| AppError::Internal(e.to_string()))?;
         store.set(STORE_KEY, value);
-        store.save().map_err(|e| AppError::WriteError(e.to_string()))?;
+        store
+            .save()
+            .map_err(|e| AppError::WriteError(e.to_string()))?;
         Ok(())
     }
 
@@ -66,7 +73,7 @@ impl RecentStore {
 
         file.path = new_path.to_string();
 
-        if let Some(name) = std::path::Path::new(new_path).file_name() {
+        if let Some(name) = Path::new(new_path).file_name() {
             file.file_name = name.to_string_lossy().to_string();
         }
 
@@ -76,9 +83,12 @@ impl RecentStore {
     }
 
     pub fn exists(path: &str) -> bool {
-        if path.starts_with("content://") || path.starts_with("file://") || path.starts_with("blob:") {
+        if path.starts_with("content://")
+            || path.starts_with("file://")
+            || path.starts_with("blob:")
+        {
             return true;
         }
-        std::path::Path::new(path).exists()
+        Path::new(path).exists()
     }
 }

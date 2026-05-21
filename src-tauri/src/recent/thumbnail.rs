@@ -1,7 +1,7 @@
-use std::io::Cursor;
+use std::io::{BufReader, Cursor};
 
 use base64::Engine;
-use calamine::{Data, Reader, Xlsx, Xls, Ods};
+use calamine::{Data, Ods, Reader, Xls, Xlsx};
 use csv::ReaderBuilder;
 use image::{ImageBuffer, Rgba};
 
@@ -54,7 +54,14 @@ pub fn generate_thumbnail_from_bytes(bytes: &[u8], extension: &str) -> Option<St
             let y = (row_idx as u32) * CELL_HEIGHT;
 
             let bg_color = get_cell_color(cell);
-            fill_rect(&mut img, x + 1, y + 1, CELL_WIDTH - 2, CELL_HEIGHT - 2, bg_color);
+            fill_rect(
+                &mut img,
+                x + 1,
+                y + 1,
+                CELL_WIDTH - 2,
+                CELL_HEIGHT - 2,
+                bg_color,
+            );
         }
     }
 
@@ -67,30 +74,25 @@ pub fn generate_thumbnail_from_bytes(bytes: &[u8], extension: &str) -> Option<St
 
 fn read_xlsx_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<Data>>> {
     let cursor = Cursor::new(bytes.to_vec());
-    let mut workbook: Xlsx<std::io::BufReader<Cursor<Vec<u8>>>> =
-        Xlsx::new(std::io::BufReader::new(cursor)).ok()?;
+    let mut workbook: Xlsx<BufReader<Cursor<Vec<u8>>>> = Xlsx::new(BufReader::new(cursor)).ok()?;
     read_sheet_data_from_bytes(&mut workbook)
 }
 
 fn read_xls_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<Data>>> {
     let cursor = Cursor::new(bytes.to_vec());
-    let mut workbook: Xls<std::io::BufReader<Cursor<Vec<u8>>>> =
-        Xls::new(std::io::BufReader::new(cursor)).ok()?;
+    let mut workbook: Xls<BufReader<Cursor<Vec<u8>>>> = Xls::new(BufReader::new(cursor)).ok()?;
     read_sheet_data_xls_from_bytes(&mut workbook)
 }
 
 fn read_ods_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<Data>>> {
     let cursor = Cursor::new(bytes.to_vec());
-    let mut workbook: Ods<std::io::BufReader<Cursor<Vec<u8>>>> =
-        Ods::new(std::io::BufReader::new(cursor)).ok()?;
+    let mut workbook: Ods<BufReader<Cursor<Vec<u8>>>> = Ods::new(BufReader::new(cursor)).ok()?;
     read_sheet_data_ods_from_bytes(&mut workbook)
 }
 
 fn read_csv_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<Data>>> {
     let cursor = Cursor::new(bytes.to_vec());
-    let mut reader = ReaderBuilder::new()
-        .has_headers(false)
-        .from_reader(cursor);
+    let mut reader = ReaderBuilder::new().has_headers(false).from_reader(cursor);
 
     let mut rows = Vec::new();
     for result in reader.records() {
@@ -122,7 +124,9 @@ fn read_csv_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<Data>>> {
     Some(rows)
 }
 
-fn read_sheet_data_from_bytes(workbook: &mut Xlsx<std::io::BufReader<Cursor<Vec<u8>>>>) -> Option<Vec<Vec<Data>>> {
+fn read_sheet_data_from_bytes(
+    workbook: &mut Xlsx<BufReader<Cursor<Vec<u8>>>>,
+) -> Option<Vec<Vec<Data>>> {
     let sheets = workbook.sheet_names().to_owned();
     if sheets.is_empty() {
         return None;
@@ -140,7 +144,9 @@ fn read_sheet_data_from_bytes(workbook: &mut Xlsx<std::io::BufReader<Cursor<Vec<
     )
 }
 
-fn read_sheet_data_xls_from_bytes(workbook: &mut Xls<std::io::BufReader<Cursor<Vec<u8>>>>) -> Option<Vec<Vec<Data>>> {
+fn read_sheet_data_xls_from_bytes(
+    workbook: &mut Xls<BufReader<Cursor<Vec<u8>>>>,
+) -> Option<Vec<Vec<Data>>> {
     let sheets = workbook.sheet_names().to_owned();
     if sheets.is_empty() {
         return None;
@@ -158,7 +164,9 @@ fn read_sheet_data_xls_from_bytes(workbook: &mut Xls<std::io::BufReader<Cursor<V
     )
 }
 
-fn read_sheet_data_ods_from_bytes(workbook: &mut Ods<std::io::BufReader<Cursor<Vec<u8>>>>) -> Option<Vec<Vec<Data>>> {
+fn read_sheet_data_ods_from_bytes(
+    workbook: &mut Ods<BufReader<Cursor<Vec<u8>>>>,
+) -> Option<Vec<Vec<Data>>> {
     let sheets = workbook.sheet_names().to_owned();
     if sheets.is_empty() {
         return None;
@@ -176,7 +184,14 @@ fn read_sheet_data_ods_from_bytes(workbook: &mut Ods<std::io::BufReader<Cursor<V
     )
 }
 
-fn fill_rect(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, x: u32, y: u32, w: u32, h: u32, color: Rgba<u8>) {
+fn fill_rect(
+    img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: Rgba<u8>,
+) {
     for j in y..(y + h).min(img.height()) {
         for i in x..(x + w).min(img.width()) {
             img.put_pixel(i, j, color);

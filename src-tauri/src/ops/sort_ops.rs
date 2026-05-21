@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use crate::ops::index_ops::spawn_rebuild_sheet_index;
 use crate::error::AppError;
-use crate::state::editor_state::{EditorState, Operation};
+use crate::ops::index_ops::spawn_rebuild_sheet_index;
+use crate::state::editor_state::EditorState;
+use crate::ops::Operation;
 use crate::types::{OperationResult, SheetData, SortState};
 
 /// 对指定列进行排序
@@ -19,7 +19,9 @@ pub fn do_sort_column(
         match state.as_mut() {
             Some(editor_state) => {
                 // 获取当前 sheet 数据（排序前）
-                let old_sheet_data = editor_state.file_data.sheets
+                let old_sheet_data = editor_state
+                    .file_data
+                    .sheets
                     .get(sheet_index)
                     .cloned()
                     .unwrap_or_default();

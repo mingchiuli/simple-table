@@ -1,109 +1,57 @@
 #[cfg(target_os = "android")]
 use crate::error::AppError;
 #[cfg(target_os = "android")]
-use serde::{Deserialize, Serialize};
+use crate::io::platform::mobile::PickFileResult;
+#[cfg(target_os = "android")]
+use crate::types::FileData;
 #[cfg(target_os = "android")]
 use tauri::AppHandle;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg(target_os = "android")]
-pub struct PickedFile {
-    pub path: String,
-    pub file_name: String,
-    pub bytes: Vec<u8>,
-}
-
-// ==================== Android Commands ====================
-
+/// Android: use official dialog + fs plugins to import a picked file into the app sandbox.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn pick_file_android(app: AppHandle) -> Result<Option<PickedFile>, AppError> {
-    use tauri_plugin_android_fs::{AndroidFsExt, FileUri};
-
-    let api = app.android_fs();
-
-    // 打开文件选择器
-    let uri = match api
-        .file_picker()
-        .pick_file(None, &["*/*"], false)
-        .map_err(|e| AppError::ReadError(e.to_string()))?
-    {
-        Some(uri) => uri,
-        None => return Ok(None),
-    };
-
-    // 持久化 URI 权限（关键步骤，使重启后仍可访问）
-    api.file_picker()
-        .persist_uri_permission(&uri)
-        .map_err(|e| AppError::ReadError(format!("Failed to persist permission: {}", e)))?;
-
-    // 获取文件名和内容
-    let file_name = api
-        .get_name(&uri)
-        .map_err(|e| AppError::ReadError(e.to_string()))?;
-
-    let bytes = api
-        .read(&uri)
-        .map_err(|e| AppError::ReadError(e.to_string()))?;
-
-    Ok(Some(PickedFile {
-        path: uri.uri.clone(),
-        file_name,
-        bytes,
-    }))
+pub async fn pick_file_android(app: AppHandle) -> Result<Option<PickFileResult>, AppError> {
+    crate::io::platform::android::pick_file(&app)
 }
 
+/// Android: read and parse a sandboxed file path saved in recent files.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn read_file_android(app: AppHandle, uri: String) -> Result<Vec<u8>, AppError> {
-    use tauri_plugin_android_fs::{AndroidFsExt, FileUri};
-
-    let api = app.android_fs();
-    api.read(&FileUri {
-        uri,
-        document_top_tree_uri: None,
-    })
-    .map_err(|e| AppError::ReadError(e.to_string()))
+pub async fn read_file_android(app: AppHandle, path: String) -> Result<FileData, AppError> {
+    crate::io::platform::mobile::read_file(&app, &path)
 }
 
+/// Android: generate file bytes and write them to the sandbox path.
+#[cfg(target_os = "android")]
+#[tauri::command(rename_all = "camelCase")]
+pub async fn save_file_android(
+    app: AppHandle,
+    path: String,
+    file_data: FileData,
+) -> Result<(), AppError> {
+    crate::io::platform::mobile::save_file(&app, &path, &file_data)
+}
+
+/// Android: export a sandboxed file to a user-selected destination.
+#[cfg(target_os = "android")]
+#[tauri::command(rename_all = "camelCase")]
+pub async fn export_file_android(
+    app: AppHandle,
+    source_path: String,
+    default_name: String,
+) -> Result<Option<String>, AppError> {
+    crate::io::platform::mobile::export_file(&app, &source_path, &default_name)
+}
+
+/// Android: create a new sandbox path for a file that will be written by save_file_android.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn save_file_android(app: AppHandle, uri: String, bytes: Vec<u8>) -> Result<(), AppError> {
-    use tauri_plugin_android_fs::{AndroidFsExt, FileUri};
-
-    let api = app.android_fs();
-    api.write(
-        &FileUri {
-            uri,
-            document_top_tree_uri: None,
-        },
-        bytes,
-    )
-    .map_err(|e| AppError::WriteError(e.to_string()))
+pub async fn pick_save_location_android(
+    app: AppHandle,
+    default_name: String,
+) -> Result<Option<String>, AppError> {
+    Ok(Some(crate::io::platform::android::pick_save_location(
+        &app,
+        &default_name,
+    )?))
 }
-
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub async fn pick_save_location_android(app: AppHandle, default_name: String) -> Result<Option<String>, AppError> {
-    use tauri_plugin_android_fs::{AndroidFsExt};
-
-    let api = app.android_fs();
-
-    let uri = api
-        .file_picker()
-        .save_file(None, default_name, None, false)
-        .map_err(|e| AppError::ReadError(e.to_string()))?;
-
-    match uri {
-        Some(uri) => {
-            // 持久化写入权限
-            api.file_picker()
-                .persist_uri_permission(&uri)
-                .map_err(|e| AppError::ReadError(format!("Failed to persist permission: {}", e)))?;
-            Ok(Some(uri.uri.clone()))
-        }
-        None => Ok(None),
-    }
-}
-

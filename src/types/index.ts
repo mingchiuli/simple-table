@@ -17,6 +17,7 @@ export interface SheetData {
 }
 
 export interface FileData {
+  path: string;
   fileName: string;
   sheets: SheetData[];
 }
@@ -78,6 +79,6 @@ export interface RecentFile {
   lastOpened: number;
   fileSize: number;
   thumbnail?: string;
-  storageType?: 'androidUri' | 'iosPrivate' | 'desktopPath';
+  storageType?: 'androidUri' | 'iosPrivate' | 'mobileSandboxPath' | 'desktopPath';
   originalPath?: string;
 }

@@ -1,21 +1,19 @@
 use std::collections::HashMap;
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::sync::RwLock;
+#[cfg(test)]
+use std::mem;
+use std::sync::{Arc, Mutex, OnceLock, RwLock, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value};
 use tantivy::tokenizer::TextAnalyzer;
-use tantivy::{doc, Index, IndexWriter, TantivyDocument, Term};
+use tantivy::{Index, IndexWriter, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
 use crate::state::editor_state::EditorState;
 use crate::types::{CellPosition, CellValue, SheetData};
-use crate::utils::cell_to_string;
 
 /// 单个 sheet 的索引 writer arena 大小（增量编辑场景下不需要太大）
 const WRITER_ARENA_BYTES: usize = 15_000_000;
@@ -46,9 +44,11 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
     );
 
     // 行号字段
-    let row_field = schema_builder.add_u64_field("row", tantivy::schema::FAST | tantivy::schema::STORED);
+    let row_field =
+        schema_builder.add_u64_field("row", tantivy::schema::FAST | tantivy::schema::STORED);
     // 列号字段
-    let col_field = schema_builder.add_u64_field("col", tantivy::schema::FAST | tantivy::schema::STORED);
+    let col_field =
+        schema_builder.add_u64_field("col", tantivy::schema::FAST | tantivy::schema::STORED);
     // 单元格主键字段（"raw" 分词器，不切分；用于 delete_term）
     let cell_id_field = schema_builder.add_text_field(
         "cell_id",
@@ -69,7 +69,16 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
     let analyzer = TextAnalyzer::builder(tokenizer).build();
     index.tokenizers().register("jieba", analyzer);
 
-    Ok((index, schema, SchemaFields { text: text_field, row: row_field, col: col_field, cell_id: cell_id_field }))
+    Ok((
+        index,
+        schema,
+        SchemaFields {
+            text: text_field,
+            row: row_field,
+            col: col_field,
+            cell_id: cell_id_field,
+        },
+    ))
 }
 
 /// 索引构建产物
@@ -101,7 +110,7 @@ fn build_index_from_rows(rows: &[Vec<CellValue>]) -> Option<BuiltIndex> {
 
     for (row_idx, row) in rows.iter().enumerate() {
         for (col_idx, cell) in row.iter().enumerate() {
-            let text = cell_to_string(cell);
+            let text = cell.to_display_string();
             if !text.is_empty() {
                 if let Err(e) = writer.add_document(doc!(
                     fields.text => text,
@@ -192,15 +201,13 @@ pub fn search_cells(sheet: &SheetData, query: &str, limit: usize) -> Vec<CellPos
     let parsed_query = query_parser.parse_query(query);
 
     let top_docs = match parsed_query {
-        Ok(q) => {
-            match searcher.search(&q, &TopDocs::with_limit(limit).order_by_score()) {
-                Ok(docs) => docs,
-                Err(e) => {
-                    eprintln!("Search failed: {:?}", e);
-                    return vec![];
-                }
+        Ok(q) => match searcher.search(&q, &TopDocs::with_limit(limit).order_by_score()) {
+            Ok(docs) => docs,
+            Err(e) => {
+                eprintln!("Search failed: {:?}", e);
+                return vec![];
             }
-        }
+        },
         Err(_) => {
             // 如果解析失败，尝试作为词项查询
             let term = Term::from_field_text(text_field, &query.to_lowercase());
@@ -218,7 +225,9 @@ pub fn search_cells(sheet: &SheetData, query: &str, limit: usize) -> Vec<CellPos
     let mut results = Vec::new();
     for (_score, doc_address) in top_docs {
         if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address) {
-            if let (Some(row_val), Some(col_val)) = (doc.get_first(row_field), doc.get_first(col_field)) {
+            if let (Some(row_val), Some(col_val)) =
+                (doc.get_first(row_field), doc.get_first(col_field))
+            {
                 if let (Some(row), Some(col)) = (row_val.as_u64(), col_val.as_u64()) {
                     results.push(CellPosition {
                         row: row as usize,
@@ -235,7 +244,10 @@ pub fn search_cells(sheet: &SheetData, query: &str, limit: usize) -> Vec<CellPos
 /// 索引更新作业
 enum IndexJob {
     /// 全量重建（兜底；适用于排序、中间插入/删除等结构改变操作）
-    Rebuild { sheet_index: usize, state: Arc<RwLock<Option<EditorState>>> },
+    Rebuild {
+        sheet_index: usize,
+        state: Arc<RwLock<Option<EditorState>>>,
+    },
     /// 单格更新：删除旧文档 + 添加新文档
     UpdateCell {
         sheet_index: usize,
@@ -316,7 +328,7 @@ static INDEX_QUEUE: OnceLock<mpsc::Sender<IndexJob>> = OnceLock::new();
 fn index_queue() -> &'static mpsc::Sender<IndexJob> {
     INDEX_QUEUE.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<IndexJob>();
-        std::thread::Builder::new()
+        thread::Builder::new()
             .name("simple-table-indexer".into())
             .spawn(move || index_worker(rx))
             .expect("failed to spawn index worker thread");
@@ -406,19 +418,30 @@ fn snapshot_writer_handle(
     let cell_id_field = sheet.index.cell_id_field?;
     let row_field = schema.get_field("row").ok()?;
     let col_field = schema.get_field("col").ok()?;
-    Some(WriterHandle { writer, text_field, row_field, col_field, cell_id_field })
+    Some(WriterHandle {
+        writer,
+        text_field,
+        row_field,
+        col_field,
+        cell_id_field,
+    })
 }
 
 /// 全量重建：锁外构建 + 短写锁安装
 fn run_rebuild(sheet_index: usize, state: &Arc<RwLock<Option<EditorState>>>) {
     let rows_snapshot = match state.read() {
-        Ok(guard) => guard
-            .as_ref()
-            .and_then(|s| s.file_data.sheets.get(sheet_index).map(|sh| sh.rows.clone())),
+        Ok(guard) => guard.as_ref().and_then(|s| {
+            s.file_data
+                .sheets
+                .get(sheet_index)
+                .map(|sh| sh.rows.clone())
+        }),
         Err(_) => None,
     };
     let Some(rows) = rows_snapshot else { return };
-    let Some(built) = build_index_from_rows(&rows) else { return };
+    let Some(built) = build_index_from_rows(&rows) else {
+        return;
+    };
 
     if let Ok(mut guard) = state.write() {
         if let Some(editor_state) = guard.as_mut() {
@@ -445,7 +468,9 @@ fn run_incremental(
 
     for op in ops {
         match op {
-            IndexJob::UpdateCell { row, col, new_text, .. } => {
+            IndexJob::UpdateCell {
+                row, col, new_text, ..
+            } => {
                 let cell_id = format!("{}:{}", row, col);
                 let term = Term::from_field_text(handle.cell_id_field, &cell_id);
                 writer.delete_term(term);
@@ -461,10 +486,16 @@ fn run_incremental(
                     }
                 }
             }
-            IndexJob::AppendRow { row_index, row_data, .. } => {
+            IndexJob::AppendRow {
+                row_index,
+                row_data,
+                ..
+            } => {
                 for (col_idx, cell) in row_data.iter().enumerate() {
-                    let text = cell_to_string(cell);
-                    if text.is_empty() { continue; }
+                    let text = cell.to_display_string();
+                    if text.is_empty() {
+                        continue;
+                    }
                     if let Err(e) = writer.add_document(doc!(
                         handle.text_field => text,
                         handle.row_field => *row_index as u64,
@@ -476,10 +507,16 @@ fn run_incremental(
                     }
                 }
             }
-            IndexJob::AppendColumn { col_index, col_data, .. } => {
+            IndexJob::AppendColumn {
+                col_index,
+                col_data,
+                ..
+            } => {
                 for (row_idx, cell) in col_data.iter().enumerate() {
-                    let text = cell_to_string(cell);
-                    if text.is_empty() { continue; }
+                    let text = cell.to_display_string();
+                    if text.is_empty() {
+                        continue;
+                    }
                     if let Err(e) = writer.add_document(doc!(
                         handle.text_field => text,
                         handle.row_field => row_idx as u64,
@@ -491,7 +528,11 @@ fn run_incremental(
                     }
                 }
             }
-            IndexJob::DeleteLastRow { row_index, col_count, .. } => {
+            IndexJob::DeleteLastRow {
+                row_index,
+                col_count,
+                ..
+            } => {
                 for c in 0..*col_count {
                     let term = Term::from_field_text(
                         handle.cell_id_field,
@@ -500,7 +541,11 @@ fn run_incremental(
                     writer.delete_term(term);
                 }
             }
-            IndexJob::DeleteLastColumn { col_index, row_count, .. } => {
+            IndexJob::DeleteLastColumn {
+                col_index,
+                row_count,
+                ..
+            } => {
                 for r in 0..*row_count {
                     let term = Term::from_field_text(
                         handle.cell_id_field,
@@ -528,12 +573,18 @@ pub fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<Ed
 /// 投递所有 sheet 的全量重建作业
 pub fn spawn_rebuild_all_sheets_index(state: Arc<RwLock<Option<EditorState>>>) {
     let count = match state.read() {
-        Ok(guard) => guard.as_ref().map(|s| s.file_data.sheets.len()).unwrap_or(0),
+        Ok(guard) => guard
+            .as_ref()
+            .map(|s| s.file_data.sheets.len())
+            .unwrap_or(0),
         Err(_) => 0,
     };
     let queue = index_queue();
     for i in 0..count {
-        let _ = queue.send(IndexJob::Rebuild { sheet_index: i, state: state.clone() });
+        let _ = queue.send(IndexJob::Rebuild {
+            sheet_index: i,
+            state: state.clone(),
+        });
     }
 }
 
@@ -545,7 +596,7 @@ pub fn spawn_update_cell_index(
     new_value: &CellValue,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
-    let new_text = cell_to_string(new_value);
+    let new_text = new_value.to_display_string();
     let _ = index_queue().send(IndexJob::UpdateCell {
         sheet_index,
         row,
@@ -639,15 +690,16 @@ mod tests {
     fn apply_incremental_sync(sheet: &mut SheetData, ops: Vec<IndexJob>) -> bool {
         use crate::types::FileData;
         let editor = EditorState::new(FileData {
+            path: String::new(),
             file_name: String::new(),
-            sheets: vec![std::mem::take(sheet)],
+            sheets: vec![mem::take(sheet)],
         });
         let state = Arc::new(RwLock::new(Some(editor)));
         let ok = run_incremental(0, &state, &ops);
         // 取回 sheet
         let mut guard = state.write().unwrap();
         let editor = guard.as_mut().unwrap();
-        std::mem::swap(sheet, &mut editor.file_data.sheets[0]);
+        mem::swap(sheet, &mut editor.file_data.sheets[0]);
         ok
     }
 
@@ -735,10 +787,7 @@ mod tests {
 
     #[test]
     fn append_column_with_content_adds_documents() {
-        let mut sheet = make_sheet(vec![
-            vec![s("apple")],
-            vec![s("cherry")],
-        ]);
+        let mut sheet = make_sheet(vec![vec![s("apple")], vec![s("cherry")]]);
         for (i, row) in sheet.rows.iter_mut().enumerate() {
             row.push(if i == 0 { s("kiwi") } else { CellValue::Null });
         }
@@ -780,7 +829,9 @@ mod tests {
             vec![s("apple"), s("kiwi")],
             vec![s("cherry"), s("mango")],
         ]);
-        for row in sheet.rows.iter_mut() { row.pop(); }
+        for row in sheet.rows.iter_mut() {
+            row.pop();
+        }
         let state_arc: Arc<RwLock<Option<EditorState>>> = Arc::new(RwLock::new(None));
         let job = IndexJob::DeleteLastColumn {
             sheet_index: 0,
@@ -843,7 +894,10 @@ mod tests {
         );
         merge_job(
             &mut pending,
-            IndexJob::Rebuild { sheet_index: 0, state: state_arc.clone() },
+            IndexJob::Rebuild {
+                sheet_index: 0,
+                state: state_arc.clone(),
+            },
         );
         merge_job(
             &mut pending,
@@ -857,8 +911,9 @@ mod tests {
         );
         let entry = pending.get(&0).unwrap();
         assert!(entry.rebuild);
-        assert!(entry.incremental.is_empty(),
-            "incrementals after rebuild must be dropped");
+        assert!(
+            entry.incremental.is_empty(),
+            "incrementals after rebuild must be dropped"
+        );
     }
 }
-

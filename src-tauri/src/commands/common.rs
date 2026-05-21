@@ -1,32 +1,34 @@
-
-
 use crate::error::AppError;
-use crate::recent::{RecentFile, StorageType};
+use crate::recent::RecentFile;
+use crate::state::get_state;
 use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope, SortState};
 use tauri::AppHandle;
 
-/// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）
-static EDITOR_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<Option<crate::state::editor_state::EditorState>>>> = std::sync::OnceLock::new();
-
-pub fn get_state() -> std::sync::Arc<std::sync::RwLock<Option<crate::state::editor_state::EditorState>>> {
-    EDITOR_STATE.get_or_init(|| std::sync::Arc::new(std::sync::RwLock::new(None))).clone()
-}
-
 // ==================== File Operations ====================
 
+/// Desktop: 从路径直接读取并解析文件
+#[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn read_file_bytes(path: String, bytes: Vec<u8>, file_name: Option<String>) -> Result<FileData, AppError> {
-    crate::io::file_ops::do_read_file_bytes(path, bytes, file_name)
+pub fn read_file_desktop(path: String) -> Result<FileData, AppError> {
+    crate::io::platform::desktop::read_file(&path)
 }
 
-#[tauri::command]
-pub fn generate_file_bytes(file_data: FileData) -> Result<(String, Vec<u8>), AppError> {
-    crate::io::file_ops::do_generate_file_bytes(file_data)
+/// Desktop: 生成文件字节并写入路径
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn save_file_desktop(path: String, file_data: FileData) -> Result<(), AppError> {
+    crate::io::platform::desktop::save_file(&path, &file_data)
 }
 
 #[tauri::command]
 pub fn init_file(file_data: FileData) -> Result<(), AppError> {
-    crate::io::file_ops::do_init_file(file_data)
+    crate::io::document::init_file(file_data)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn generate_file_bytes(file_data: FileData) -> Result<Vec<u8>, AppError> {
+    let (_, bytes) = crate::io::codec::writer::generate_file_bytes(&file_data)?;
+    Ok(bytes)
 }
 
 // ==================== Editor Operations ====================
@@ -100,7 +102,13 @@ pub fn sort_column(
     ascending: bool,
     previous_sort_state: Option<SortState>,
 ) -> Result<OperationResult, AppError> {
-    crate::ops::sort_ops::do_sort_column(get_state(), sheet_index, col_index, ascending, previous_sort_state)
+    crate::ops::sort_ops::do_sort_column(
+        get_state(),
+        sheet_index,
+        col_index,
+        ascending,
+        previous_sort_state,
+    )
 }
 
 // ==================== Search Operations ====================
@@ -132,7 +140,11 @@ pub fn check_file_exists(path: String) -> bool {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn update_recent_file_path(app: AppHandle, id: String, new_path: String) -> Result<(), AppError> {
+pub fn update_recent_file_path(
+    app: AppHandle,
+    id: String,
+    new_path: String,
+) -> Result<(), AppError> {
     crate::recent::do_update_recent_file_path(&app, id, new_path)
 }
 
@@ -147,14 +159,6 @@ pub fn add_recent_file_with_thumbnail(
     storage_type: Option<String>,
     original_path: Option<String>,
 ) -> Result<RecentFile, AppError> {
-    // 将字符串转换为 StorageType 枚举
-    let st = storage_type.and_then(|s| match s.as_str() {
-        "androidUri" => Some(StorageType::AndroidUri),
-        "iosPrivate" => Some(StorageType::IosPrivate),
-        "desktopPath" => Some(StorageType::DesktopPath),
-        _ => None,
-    });
-
     crate::recent::do_add_recent_file_with_thumbnail(
         &app,
         path,
@@ -162,7 +166,7 @@ pub fn add_recent_file_with_thumbnail(
         file_size,
         bytes,
         extension,
-        st,
+        storage_type,
         original_path,
     )
 }

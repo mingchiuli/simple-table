@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Close } from '@element-plus/icons-vue';
+import { toCellPosition } from '@/utils/excel';
 
 const props = defineProps<{
   modelValue: string;
@@ -15,8 +16,7 @@ const emit = defineEmits<{
 
 const displayPosition = computed(() => {
   if (!props.cellPosition) return "";
-  const { row, col } = props.cellPosition;
-  return String.fromCharCode(65 + col) + (row + 1);
+  return toCellPosition(props.cellPosition.row, props.cellPosition.col);
 });
 
 function handleInput(value: string) {
@@ -76,8 +76,7 @@ function handleClose() {
 
 .cell-editor-input {
   flex: 1;
-  max-width: 500px;
-  max-width: min(100vw - 80px, 100%);
+  max-width: min(100vw - 80px, 500px);
   font-size: 16px;
 }
 

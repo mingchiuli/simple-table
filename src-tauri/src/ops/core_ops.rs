@@ -1,106 +1,9 @@
-use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+
 use crate::types::{CellValue, ColumnChange, OperationResult, RowChange, SheetData, SortState};
+use serde::{Deserialize, Serialize};
 
-/// 对 sheet 按指定列排序
-fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
-    if sheet.rows.is_empty() || col_index >= sheet.rows.first().map(|r| r.len()).unwrap_or(0) {
-        return;
-    }
-
-    // 获取列值用于排序
-    let col_values: Vec<(usize, &CellValue)> = sheet.rows.iter()
-        .enumerate()
-        .map(|(i, row)| (i, row.get(col_index).unwrap_or(&CellValue::Null)))
-        .collect();
-
-    // 创建索引数组
-    let mut indices: Vec<usize> = (0..sheet.rows.len()).collect();
-
-    // 排序
-    indices.sort_by(|&a, &b| {
-        let val_a = col_values[a].1;
-        let val_b = col_values[b].1;
-        let cmp = compare_cell_values(val_a, val_b);
-        if ascending { cmp } else { cmp.reverse() }
-    });
-
-    // 根据排序后的索引重新排列行
-    let mut new_rows = Vec::with_capacity(sheet.rows.len());
-    for idx in indices {
-        new_rows.push(sheet.rows[idx].clone());
-    }
-    sheet.rows = new_rows;
-}
-
-/// 比较两个单元格值（用于排序）
-/// 数字和字符串都支持按数值排序
-fn compare_cell_values(a: &CellValue, b: &CellValue) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    match (a, b) {
-        // Null 排在最后
-        (CellValue::Null, CellValue::Null) => Ordering::Equal,
-        (CellValue::Null, _) => Ordering::Greater,
-        (_, CellValue::Null) => Ordering::Less,
-
-        // Number vs Number: 从 Value 中提取数字比较
-        (CellValue::Number(na), CellValue::Number(nb)) => {
-            // 优先尝试比较整数
-            if let (Some(ia), Some(ib)) = (na.as_i64(), nb.as_i64()) {
-                ia.cmp(&ib)
-            } else if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-            } else {
-                // 无法比较，按字符串比较
-                na.to_string().to_lowercase().cmp(&nb.to_string().to_lowercase())
-            }
-        }
-        // Number vs String: 尝试将 String 转为数字比较
-        (CellValue::Number(na), CellValue::String(sb)) => {
-            if let Ok(nb) = sb.parse::<f64>() {
-                if let Some(fa) = na.as_f64() {
-                    fa.partial_cmp(&nb).unwrap_or(Ordering::Equal)
-                } else {
-                    Ordering::Equal
-                }
-            } else {
-                // 无法转为数字，按字符串比较
-                na.to_string().to_lowercase().cmp(&sb.to_lowercase())
-            }
-        }
-        (CellValue::String(sa), CellValue::Number(nb)) => {
-            if let Ok(na) = sa.parse::<f64>() {
-                if let Some(fb) = nb.as_f64() {
-                    na.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-                } else {
-                    Ordering::Equal
-                }
-            } else {
-                sa.to_lowercase().cmp(&nb.to_string().to_lowercase())
-            }
-        }
-        // String vs String: 尝试按数值排序，失败则按字典序
-        (CellValue::String(sa), CellValue::String(sb)) => {
-            // 优先尝试解析为整数
-            if let (Ok(ia), Ok(ib)) = (sa.parse::<i128>(), sb.parse::<i128>()) {
-                ia.cmp(&ib)
-            } else if let (Ok(fa), Ok(fb)) = (sa.parse::<f64>(), sb.parse::<f64>()) {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-            } else {
-                // 忽略大小写排序
-                sa.to_lowercase().cmp(&sb.to_lowercase())
-            }
-        }
-
-        // 布尔值：true < false
-        (CellValue::Boolean(ba), CellValue::Boolean(bb)) => {
-            ba.cmp(bb)
-        }
-        (CellValue::Boolean(_), _) => Ordering::Greater,
-        (_, CellValue::Boolean(_)) => Ordering::Less,
-    }
-}
-
-/// 操作类型 - 用于撤销/重做
+/// 操作类型 - 用于执行和撤销/重做
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     /// 设置单元格值
@@ -164,49 +67,6 @@ pub enum Operation {
     },
 }
 
-/// Trait for operations that can be undone/redone
-/// Each operation can define its own behavior for creating redo operations
-pub trait Undoable {
-    /// Execute the undo operation on file_data
-    fn undo(&self, file_data: &mut crate::types::FileData) -> OperationResult;
-
-    /// Get the operation to be pushed to redo_stack after undo
-    /// This allows operations to customize their redo behavior
-    fn get_redo_operation(&self, file_data: &mut crate::types::FileData) -> Operation;
-}
-
-impl Undoable for Operation {
-    /// Execute undo operation
-    fn undo(&self, file_data: &mut crate::types::FileData) -> OperationResult {
-        let undo_op = self.create_undo_op();
-        undo_op.execute(file_data)
-    }
-
-    /// Get the redo operation after undo
-    /// Default implementation returns self.clone()
-    /// SortColumn overrides this to update old_sheet_data to current state
-    fn get_redo_operation(&self, file_data: &mut crate::types::FileData) -> Operation {
-        match self {
-            // SortColumn: update old_sheet_data to current (sorted) state for redo
-            Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data: _, previous_sort_state } => {
-                if let Some(sheet) = file_data.sheets.get(*sheet_index) {
-                    Operation::SortColumn {
-                        sheet_index: *sheet_index,
-                        col_index: *col_index,
-                        ascending: *ascending,
-                        old_sheet_data: sheet.clone(), // Current state becomes old for redo
-                        previous_sort_state: previous_sort_state.clone(),
-                    }
-                } else {
-                    self.clone()
-                }
-            }
-            // Default: return self unchanged
-            _ => self.clone()
-        }
-    }
-}
-
 impl Operation {
     /// 执行操作
     /// 注意：此方法不再同步重建索引，索引重建由调用方异步处理
@@ -214,7 +74,13 @@ impl Operation {
         use crate::types::CellChange;
 
         match self {
-            Operation::SetCell { sheet_index, row, col, new_value, .. } => {
+            Operation::SetCell {
+                sheet_index,
+                row,
+                col,
+                new_value,
+                ..
+            } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     if let Some(row_data) = sheet.rows.get_mut(*row) {
                         if *col < row_data.len() {
@@ -233,7 +99,11 @@ impl Operation {
                     },
                 }
             }
-            Operation::AddRow { sheet_index, row_index, row_data } => {
+            Operation::AddRow {
+                sheet_index,
+                row_index,
+                row_data,
+            } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     // 使用传入的 row_data，如果为空则创建空行
                     let new_row = if row_data.is_empty() {
@@ -253,7 +123,11 @@ impl Operation {
                     },
                 }
             }
-            Operation::DeleteRow { sheet_index, row_index, .. } => {
+            Operation::DeleteRow {
+                sheet_index,
+                row_index,
+                ..
+            } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     if *row_index < sheet.rows.len() {
                         sheet.rows.remove(*row_index);
@@ -265,11 +139,16 @@ impl Operation {
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn { sheet_index, col_index, col_data } => {
+            Operation::AddColumn {
+                sheet_index,
+                col_index,
+                col_data,
+            } => {
                 // 计算最终插入位置：优先使用传入的 col_index（来自 undo of DeleteColumn），
                 // 否则按当前列数追加到末尾
                 let actual_col_index = col_index.unwrap_or_else(|| {
-                    file_data.sheets
+                    file_data
+                        .sheets
                         .get(*sheet_index)
                         .and_then(|s| s.rows.first())
                         .map(|r| r.len())
@@ -284,10 +163,7 @@ impl Operation {
                     };
                     // 按 actual_col_index 插入（>= 当前列数时退化为末尾追加）
                     for (i, row) in sheet.rows.iter_mut().enumerate() {
-                        let value = new_col_data
-                            .get(i)
-                            .cloned()
-                            .unwrap_or(CellValue::Null);
+                        let value = new_col_data.get(i).cloned().unwrap_or(CellValue::Null);
                         let pos = actual_col_index.min(row.len());
                         row.insert(pos, value);
                     }
@@ -295,11 +171,17 @@ impl Operation {
                 }
                 OperationResult::AddColumn {
                     sheet_index: *sheet_index,
-                    column: ColumnChange { index: actual_col_index },
+                    column: ColumnChange {
+                        index: actual_col_index,
+                    },
                     col_data: col_data.clone(),
                 }
             }
-            Operation::DeleteColumn { sheet_index, col_index, .. } => {
+            Operation::DeleteColumn {
+                sheet_index,
+                col_index,
+                ..
+            } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     for row in &mut sheet.rows {
                         if *col_index < row.len() {
@@ -313,7 +195,11 @@ impl Operation {
                     column_index: *col_index,
                 }
             }
-            Operation::AddSheet { name, sheet_data, sheet_index } => {
+            Operation::AddSheet {
+                name,
+                sheet_data,
+                sheet_index,
+            } => {
                 // 如果有完整的 sheet_data，直接插入；否则创建空 sheet
                 let (new_sheet, sheet_name) = if let Some(data) = sheet_data {
                     (data.clone(), data.name.clone())
@@ -353,7 +239,10 @@ impl Operation {
                     sheet_data: new_sheet,
                 }
             }
-            Operation::DeleteSheet { sheet_index, sheet_data: _ } => {
+            Operation::DeleteSheet {
+                sheet_index,
+                sheet_data: _,
+            } => {
                 // 如果 sheet_index 是 MAX，说明这是 AddSheet 的撤销操作，需要删除最后一个 sheet
                 let actual_index = if *sheet_index == usize::MAX {
                     file_data.sheets.len().saturating_sub(1)
@@ -368,7 +257,13 @@ impl Operation {
                     sheet_data: removed_sheet,
                 }
             }
-            Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data, previous_sort_state } => {
+            Operation::SortColumn {
+                sheet_index,
+                col_index,
+                ascending,
+                old_sheet_data,
+                previous_sort_state,
+            } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     // 比较 old_sheet_data 与当前 sheet 是否相同
                     // 如果相同：说明是正常排序操作（redo 时会走到这里）
@@ -410,75 +305,104 @@ impl Operation {
             }
         }
     }
+}
 
-    /// 创建撤销操作（返回反向操作）
-    pub fn create_undo_op(&self) -> Operation {
-        match self {
-            Operation::SetCell { sheet_index, row, col, old_value, new_value } => {
-                Operation::SetCell {
-                    sheet_index: *sheet_index,
-                    row: *row,
-                    col: *col,
-                    old_value: new_value.clone(),
-                    new_value: old_value.clone(),
-                }
-            }
-            Operation::AddRow { sheet_index, row_index, row_data } => {
-                Operation::DeleteRow {
-                    sheet_index: *sheet_index,
-                    row_index: *row_index,
-                    row_data: row_data.clone(), // 保留添加的行数据，用于撤销 DeleteRow 时恢复
-                }
-            }
-            Operation::DeleteRow { sheet_index, row_index, row_data } => {
-                Operation::AddRow {
-                    sheet_index: *sheet_index,
-                    row_index: *row_index,
-                    row_data: row_data.clone(),
-                }
-            }
-            Operation::AddColumn { sheet_index, col_index, col_data } => {
-                Operation::DeleteColumn {
-                    sheet_index: *sheet_index,
-                    // 使用添加列时记录的索引
-                    col_index: col_index.unwrap_or(0),
-                    col_data: col_data.clone(),
-                }
-            }
-            Operation::DeleteColumn { sheet_index, col_index, col_data } => {
-                Operation::AddColumn {
-                    sheet_index: *sheet_index,
-                    col_index: Some(*col_index),
-                    col_data: col_data.clone(),
-                }
-            }
-            Operation::AddSheet { sheet_index, .. } => {
-                // AddSheet 的撤销：删除新增的 sheet（使用 execute 时记录的真实索引）
-                Operation::DeleteSheet {
-                    sheet_index: sheet_index.unwrap_or(usize::MAX),
-                    sheet_data: SheetData::default(),
-                }
-            }
-            Operation::DeleteSheet { sheet_index, sheet_data } => {
-                // DeleteSheet 的撤销：恢复被删除的 sheet（使用保存的完整数据）
-                Operation::AddSheet {
-                    name: sheet_data.name.clone(),
-                    sheet_data: Some(sheet_data.clone()),
-                    sheet_index: Some(*sheet_index), // 恢复到原始位置
-                }
-            }
-            // SortColumn 的 undo：用排序前的数据恢复（不需要反向操作，因为已保存原始数据）
-            Operation::SortColumn { sheet_index, col_index, ascending, old_sheet_data, previous_sort_state } => {
-                // undo: 用 old_sheet_data 恢复排序前的状态
-                // 返回一个新的 Operation，用 old_sheet_data 替换
-                Operation::SortColumn {
-                    sheet_index: *sheet_index,
-                    col_index: *col_index,
-                    ascending: *ascending,
-                    old_sheet_data: old_sheet_data.clone(),
-                    previous_sort_state: previous_sort_state.clone(),
-                }
+/// 对 sheet 按指定列排序
+fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
+    if sheet.rows.is_empty() || col_index >= sheet.rows.first().map(|r| r.len()).unwrap_or(0) {
+        return;
+    }
+
+    // 获取列值用于排序
+    let col_values: Vec<(usize, &CellValue)> = sheet
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| (i, row.get(col_index).unwrap_or(&CellValue::Null)))
+        .collect();
+
+    // 创建索引数组
+    let mut indices: Vec<usize> = (0..sheet.rows.len()).collect();
+
+    // 排序
+    indices.sort_by(|&a, &b| {
+        let val_a = col_values[a].1;
+        let val_b = col_values[b].1;
+        let cmp = compare_cell_values(val_a, val_b);
+        if ascending { cmp } else { cmp.reverse() }
+    });
+
+    // 根据排序后的索引重新排列行
+    let mut new_rows = Vec::with_capacity(sheet.rows.len());
+    for idx in indices {
+        new_rows.push(sheet.rows[idx].clone());
+    }
+    sheet.rows = new_rows;
+}
+
+/// 比较两个单元格值（用于排序）
+/// 数字和字符串都支持按数值排序
+fn compare_cell_values(a: &CellValue, b: &CellValue) -> Ordering {
+    match (a, b) {
+        // Null 排在最后
+        (CellValue::Null, CellValue::Null) => Ordering::Equal,
+        (CellValue::Null, _) => Ordering::Greater,
+        (_, CellValue::Null) => Ordering::Less,
+
+        // Number vs Number: 从 Value 中提取数字比较
+        (CellValue::Number(na), CellValue::Number(nb)) => {
+            // 优先尝试比较整数
+            if let (Some(ia), Some(ib)) = (na.as_i64(), nb.as_i64()) {
+                ia.cmp(&ib)
+            } else if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
+                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+            } else {
+                // 无法比较，按字符串比较
+                na.to_string()
+                    .to_lowercase()
+                    .cmp(&nb.to_string().to_lowercase())
             }
         }
+        // Number vs String: 尝试将 String 转为数字比较
+        (CellValue::Number(na), CellValue::String(sb)) => {
+            if let Ok(nb) = sb.parse::<f64>() {
+                if let Some(fa) = na.as_f64() {
+                    fa.partial_cmp(&nb).unwrap_or(Ordering::Equal)
+                } else {
+                    Ordering::Equal
+                }
+            } else {
+                // 无法转为数字，按字符串比较
+                na.to_string().to_lowercase().cmp(&sb.to_lowercase())
+            }
+        }
+        (CellValue::String(sa), CellValue::Number(nb)) => {
+            if let Ok(na) = sa.parse::<f64>() {
+                if let Some(fb) = nb.as_f64() {
+                    na.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+                } else {
+                    Ordering::Equal
+                }
+            } else {
+                sa.to_lowercase().cmp(&nb.to_string().to_lowercase())
+            }
+        }
+        // String vs String: 尝试按数值排序，失败则按字典序
+        (CellValue::String(sa), CellValue::String(sb)) => {
+            // 优先尝试解析为整数
+            if let (Ok(ia), Ok(ib)) = (sa.parse::<i128>(), sb.parse::<i128>()) {
+                ia.cmp(&ib)
+            } else if let (Ok(fa), Ok(fb)) = (sa.parse::<f64>(), sb.parse::<f64>()) {
+                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+            } else {
+                // 忽略大小写排序
+                sa.to_lowercase().cmp(&sb.to_lowercase())
+            }
+        }
+
+        // 布尔值：true < false
+        (CellValue::Boolean(ba), CellValue::Boolean(bb)) => ba.cmp(bb),
+        (CellValue::Boolean(_), _) => Ordering::Greater,
+        (_, CellValue::Boolean(_)) => Ordering::Less,
     }
 }

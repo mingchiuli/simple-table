@@ -1,33 +1,54 @@
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
-import type { PlatformAPI, PickedFileWithOrigin } from '../types';
+import type { PlatformAPI, OpenFileResult } from '../types';
+import type { FileData } from "@/types";
+
+interface PickFileIOSResult {
+  fileData: FileData;
+  info: {
+    path: string;
+    originalPath: string;
+    fileName: string;
+  };
+  bytes: number[];
+}
 
 export const iosFileOps = {
-  pickFile: async () => {
-    const result = await invoke<PickedFileWithOrigin | null>("pick_file_ios");
+  /** iOS: 后端用官方 dialog/fs 导入到 App 沙盒并解析 */
+  openFile: async (): Promise<OpenFileResult | null> => {
+    const result = await invoke<PickFileIOSResult | null>("pick_file_ios");
     if (!result) return null;
-    return { path: result.path, originalPath: result.originalPath, fileName: result.fileName, bytes: [] };
+
+    return {
+      fileData: result.fileData,
+      path: result.info.path,
+      fileName: result.info.fileName,
+      originalPath: result.info.originalPath,
+      bytes: result.bytes,
+    };
   },
 
-  readFile: async (path: string) => {
-    const bytes = await readFile(path);
-    return Array.from(bytes);
+  /** iOS: 从 App 沙盒路径读取并解析（用于最近文件列表） */
+  readFile: (path: string): Promise<FileData> => {
+    return invoke<FileData>("read_file_ios", { path });
   },
 
-  saveFile: (path: string, bytes: number[]) =>
-    invoke<void>("save_file_ios", { path, bytes }),
+  /** iOS: 生成文件字节并写入 App 沙盒路径 */
+  saveFile: (path: string, fileData: FileData) =>
+    invoke<void>("save_file_ios", { path, fileData }),
 
   createPrivateFile: (fileName: string) =>
-    invoke<PickedFileWithOrigin>("create_private_file_ios", { fileName }),
+    invoke<{ path: string; originalPath: string; fileName: string }>("create_private_file_ios", { fileName }),
+
+  pickSaveLocation: async (defaultName: string) => {
+    const info = await invoke<{ path: string; originalPath: string; fileName: string }>("create_private_file_ios", { fileName: defaultName });
+    return info.path;
+  },
 
   exportFile: (sourcePath: string, defaultName: string) =>
     invoke<string | null>("export_file_ios", { sourcePath, defaultName }),
-
-  silentExport: (sourcePath: string, destPath: string) =>
-    invoke<void>("silent_export_file_ios", { sourcePath, destPath }),
 };
 
 export const iosAPI: PlatformAPI = {
   fileOps: iosFileOps,
-  storageType: 'iosPrivate',
+  storageType: 'mobileSandboxPath',
 };

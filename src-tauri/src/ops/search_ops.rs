@@ -1,11 +1,9 @@
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use crate::state::editor_state::EditorState;
 use crate::error::AppError;
-use crate::types::{SearchResult, SearchScope};
 use crate::ops::index_ops::search_cells;
-use crate::utils::cell_to_string;
+use crate::state::editor_state::EditorState;
+use crate::types::{SearchResult, SearchScope};
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -13,11 +11,17 @@ fn col_to_letter(col: usize) -> String {
     let mut n = col;
     while n >= 26 {
         // Safety: math guarantees result is ASCII uppercase letter (65-90)
-        result.insert(0, char::from_u32((n % 26) as u32 + 65).expect("Invalid ASCII letter"));
+        result.insert(
+            0,
+            char::from_u32((n % 26) as u32 + 65).expect("Invalid ASCII letter"),
+        );
         n = n / 26 - 1;
     }
     // Safety: math guarantees result is ASCII uppercase letter (65-90)
-    result.insert(0, char::from_u32(n as u32 + 65).expect("Invalid ASCII letter"));
+    result.insert(
+        0,
+        char::from_u32(n as u32 + 65).expect("Invalid ASCII letter"),
+    );
     result
 }
 
@@ -47,9 +51,11 @@ pub fn do_search(
             if let Some(sheet) = editor_state.file_data.sheets.get(sheet_idx) {
                 let positions = search_cells(sheet, &query, 1000);
                 for pos in positions {
-                    let value = sheet.rows.get(pos.row)
+                    let value = sheet
+                        .rows
+                        .get(pos.row)
                         .and_then(|r| r.get(pos.col))
-                        .map(|c| cell_to_string(c))
+                        .map(|c| c.to_display_string())
                         .unwrap_or_default();
 
                     results.push(SearchResult {
@@ -67,9 +73,11 @@ pub fn do_search(
             for (sheet_idx, sheet) in editor_state.file_data.sheets.iter().enumerate() {
                 let positions = search_cells(sheet, &query, 1000);
                 for pos in positions {
-                    let value = sheet.rows.get(pos.row)
+                    let value = sheet
+                        .rows
+                        .get(pos.row)
                         .and_then(|r| r.get(pos.col))
-                        .map(|c| cell_to_string(c))
+                        .map(|c| c.to_display_string())
                         .unwrap_or_default();
 
                     results.push(SearchResult {

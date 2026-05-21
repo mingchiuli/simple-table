@@ -3,7 +3,7 @@ import { ElMessage } from "element-plus";
 import type { FileData, RecentFile } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
 import * as api from "@/api";
-import { readFile, getPlatformAPI, getStorageType } from "@/platform";
+import { readFile, openFile, getStorageType } from "@/platform";
 
 export const useRecentFilesStore = defineStore("recentFiles", {
   state: () => ({
@@ -27,23 +27,30 @@ export const useRecentFilesStore = defineStore("recentFiles", {
       const extension = fileName.split(".").pop() || "";
 
       try {
-        const bytes = await readFile(path);
-        const bytesArray = Array.from(bytes);
-        const fileData = await api.readFileBytes(path, bytesArray, fileName);
+        // 直接调用 readFile（现在返回 FileData）
+        const fileData = await readFile(path);
 
         const fileDataStore = useFileDataStore();
         fileDataStore.set(fileData, path);
 
-        const fileSize = bytes.length;
         const storageType = await getStorageType();
+
+        // Only desktop reads thumbnail bytes in the frontend; mobile import returns
+        // bytes from the backend when the file is opened or relocated.
+        let bytes: number[] = [];
+        if (storageType === 'desktopPath') {
+          const { readFile: fsReadFile } = await import('@tauri-apps/plugin-fs');
+          bytes = Array.from(await fsReadFile(path));
+        }
 
         await api.addRecentFileWithThumbnail(
           path,
           fileName,
-          fileSize,
-          bytesArray,
+          bytes.length,
+          bytes,
           extension,
-          storageType
+          storageType,
+          existingFile?.originalPath
         );
         await this.load();
 
@@ -66,19 +73,14 @@ export const useRecentFilesStore = defineStore("recentFiles", {
 
     async relocateAndOpen(file: RecentFile): Promise<boolean> {
       try {
-        const api2 = await getPlatformAPI();
-        const result = await api2.fileOps.pickFile();
+        const result = await openFile();
         if (!result) {
           // 用户取消选择
           return false;
         }
 
-        // 读取文件
-        const bytes = await api2.fileOps.readFile(result.path);
-        const bytesArray = Array.from(bytes);
-        const fileData = await api.readFileBytes(result.path, bytesArray, result.fileName);
         const fileDataStore = useFileDataStore();
-        fileDataStore.set(fileData, result.path);
+        fileDataStore.set(result.fileData, result.path);
 
         const extension = result.fileName.split(".").pop() || "";
         const storageType = await getStorageType();
@@ -86,10 +88,11 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         await api.addRecentFileWithThumbnail(
           result.path,
           result.fileName,
-          bytesArray.length,
-          bytesArray,
+          result.bytes?.length || 0,
+          result.bytes || [],
           extension,
-          storageType
+          storageType,
+          result.originalPath
         );
 
         await api.removeRecentFile(file.id);

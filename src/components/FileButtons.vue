@@ -3,11 +3,13 @@ import type { FileData } from '@/types';
 
 defineProps<{
   fileData: FileData | null;
+  showExport?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'open-file'): void;
   (e: 'save-file'): void;
+  (e: 'export-file'): void;
 }>();
 </script>
 
@@ -22,6 +24,13 @@ const emit = defineEmits<{
       :disabled="!fileData"
     >
       Save
+    </el-button>
+    <el-button
+      v-if="showExport"
+      @click="emit('export-file')"
+      :disabled="!fileData"
+    >
+      Export
     </el-button>
   </div>
 </template>
