@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Capability for mobile platforms (iOS, Android)",
+  "windows": ["main"],
+  "platforms": ["iOS", "android"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "dialog:default",
+    "fs:default",
+    "fs:scope-applocaldata-recursive",
+    "fs:allow-exists",
+    "fs:allow-mkdir",
+    "fs:allow-applocaldata-read",
+    "fs:allow-applocaldata-write",
+    "fs:allow-applocaldata-meta",
+    "store:default",
+    "os:default"
+  ]
+}
