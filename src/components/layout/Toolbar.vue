@@ -4,12 +4,11 @@ import { ref } from 'vue';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
 import { Search, Refresh } from '@element-plus/icons-vue';
-import FileButtons from './FileButtons.vue';
-import SheetSelector from './SheetSelector.vue';
-import SheetButtons from './SheetButtons.vue';
-import SearchBox from './SearchBox.vue';
-import EditButtons from './EditButtons.vue';
-import UpdateDialog from './UpdateDialog.vue';
+import { FileButtons } from '@/components/file';
+import { SheetSelector, SheetButtons } from '@/components/sheet';
+import { SearchBox } from '@/components/search';
+import { EditButtons } from '@/components/edit';
+import UpdateDialog from '@/components/UpdateDialog.vue';
 
 const { isMobileOrTablet } = usePlatform();
 const canExport = isMobileOS();

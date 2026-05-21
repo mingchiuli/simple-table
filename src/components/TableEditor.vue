@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import {computed, h, onMounted, onUnmounted, ref, watch} from 'vue';
 import type {CellValue, ColumnConfig, MergeRange, SortState} from '@/types';
-import EditableCell from './EditableCell.vue';
-import RowNumberCell from './RowNumberCell.vue';
-import ColumnHeaderCell from './ColumnHeaderCell.vue';
+import { EditableCell, RowNumberCell, ColumnHeaderCell } from '@/components/cell';
 import { usePlatform } from '@/composables/usePlatform';
 
 const { isTouchDevice } = usePlatform();

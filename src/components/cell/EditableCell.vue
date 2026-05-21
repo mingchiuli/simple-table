@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 
+const modelValue = defineModel<string>({ required: true });
+
 const props = withDefaults(defineProps<{
-  modelValue: string;
   autoFocus?: boolean;
 }>(), {
   autoFocus: true
 });
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', value: string): void;
   (e: 'blur'): void;
 }>();
 
@@ -40,9 +40,8 @@ onMounted(() => {
 <template>
   <el-input
     ref="inputRef"
-    :model-value="modelValue"
+    v-model="modelValue"
     class="cell-input"
-    @input="emit('update:modelValue', $event)"
     @blur="emit('blur')"
   />
 </template>

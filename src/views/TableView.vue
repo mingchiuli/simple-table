@@ -4,11 +4,10 @@ import { useRoute } from 'vue-router';
 import { HomeFilled } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
 import { useFileDataStore } from '@/stores/fileData';
-import Toolbar from '@/components/Toolbar.vue';
+import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
-import StatusBar from '@/components/StatusBar.vue';
-import CellEditor from '@/components/CellEditor.vue';
-import SearchPanel from '@/components/SearchPanel.vue';
+import { CellEditor } from '@/components/cell';
+import { SearchPanel } from '@/components/search';
 import * as api from '@/api';
 import type { CellValue, SortState, SheetData, OperationResult, SearchResult } from '@/types';
 

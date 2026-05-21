@@ -3,13 +3,13 @@ import { computed } from "vue";
 import { Close } from '@element-plus/icons-vue';
 import { toCellPosition } from '@/utils/excel';
 
+const modelValue = defineModel<string>({ required: true });
+
 const props = defineProps<{
-  modelValue: string;
   cellPosition: { row: number; col: number } | null;
 }>();
 
 const emit = defineEmits<{
-  (e: "update:modelValue", value: string): void;
   (e: "submit"): void;
   (e: "close"): void;
 }>();
@@ -18,10 +18,6 @@ const displayPosition = computed(() => {
   if (!props.cellPosition) return "";
   return toCellPosition(props.cellPosition.row, props.cellPosition.col);
 });
-
-function handleInput(value: string) {
-  emit("update:modelValue", value);
-}
 
 function handleEnter() {
   emit("submit");
@@ -36,12 +32,11 @@ function handleClose() {
   <div v-if="cellPosition" class="cell-editor-bar">
     <span class="cell-position">{{ displayPosition }}</span>
     <el-input
-      :model-value="modelValue"
+      v-model="modelValue"
       type="textarea"
       :autosize="{ minRows: 2, maxRows: 4 }"
       class="cell-editor-input"
       placeholder="Edit cell value..."
-      @input="handleInput"
       @keydown.enter="handleEnter"
       @blur="handleEnter"
     />
