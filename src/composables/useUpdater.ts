@@ -61,7 +61,7 @@ export function useUpdater() {
       } else {
         // 移动端：调用 Rust command
         const info = await invoke<UpdateInfo | null>('check_update_mobile', {
-          currentVersion
+          currentVersion.value
         })
         if (info) {
           mobileUpdateInfo.value = info
