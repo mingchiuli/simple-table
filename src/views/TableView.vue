@@ -76,6 +76,19 @@ watch(selectedCell, (newCell) => {
   }
 }, { immediate: true });
 
+// ========== Computed: Current cell value for sync after undo/redo ==========
+const currentCellValue = computed(() => {
+  if (!selectedCell.value || !currentSheet.value) return undefined;
+  return currentSheet.value.rows[selectedCell.value.row]?.[selectedCell.value.col];
+});
+
+// ========== Watch: Sync cellEditorValue when cell data changes (undo/redo) ==========
+watch(currentCellValue, (newValue) => {
+  if (selectedCell.value) {
+    cellEditorValue.value = cellToEditorString(newValue);
+  }
+});
+
 // ========== Watch: Sync input to cell (with debounce) ==========
 watch(cellEditorValue, (newValue) => {
   if (!selectedCell.value || !currentSheet.value) return;
