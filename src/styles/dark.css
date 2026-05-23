@@ -1,0 +1,172 @@
+/* ==================== Dark Mode CSS Variables ==================== */
+
+html.dark {
+  /* Text colors */
+  --color-text-primary: #E5EAF3;
+  --color-text-regular: #CFD3DC;
+  --color-text-secondary: #A3A6AD;
+
+  /* Background colors */
+  --bg-color-page: #0a0a0a;
+  --bg-color-white: #141414;
+
+  /* Border colors */
+  --border-color-base: #4C4D4F;
+  --border-color-light: #414243;
+  --border-color-lighter: #363637;
+
+  /* Primary colors */
+  --color-primary-light: var(--el-color-primary-light-3);
+  --color-primary-shadow: rgba(64, 158, 255, 0.3);
+
+  /* Status colors */
+  --color-danger-light: var(--el-color-danger-light-3);
+}
+
+/* ==================== Body Background ==================== */
+
+html.dark body {
+  background-color: var(--bg-color-page);
+}
+
+/* ==================== Component Overrides ==================== */
+
+/* HomeView */
+html.dark .home-view {
+  background-color: var(--bg-color-white);
+}
+
+/* TableView */
+html.dark .table-wrapper {
+  background-color: var(--bg-color-white);
+}
+
+html.dark .statusbar {
+  background: var(--bg-color-page);
+  border-color: var(--border-color-base);
+  color: var(--color-text-regular);
+}
+
+/* Toolbar */
+html.dark .desktop-toolbar {
+  background: var(--bg-color-white);
+  border-color: var(--border-color-base);
+}
+
+html.dark .mobile-toolbar {
+  background: var(--bg-color-white);
+  border-color: var(--border-color-base);
+}
+
+html.dark .mobile-toolbar-row {
+  border-color: var(--border-color-base);
+}
+
+/* CellEditor */
+html.dark .cell-editor-bar {
+  background: var(--bg-color-page);
+  border-color: var(--border-color-base);
+}
+
+/* SearchPanel */
+html.dark .search-panel {
+  background: var(--bg-color-white);
+  border-color: var(--border-color-base);
+}
+
+html.dark .search-header {
+  border-color: var(--border-color-base);
+  color: var(--color-text-regular);
+}
+
+html.dark .search-item {
+  border-color: var(--border-color-lighter);
+  background: var(--bg-color-page);
+}
+
+html.dark .search-empty {
+  color: var(--color-text-secondary);
+}
+
+html.dark .search-match-count {
+  color: var(--el-color-primary);
+}
+
+html.dark .search-error-text {
+  color: var(--el-color-danger);
+}
+
+html.dark .search-error-bg {
+  background-color: var(--el-color-danger-light-3);
+}
+
+/* RecentFilesSection */
+html.dark .recent-section-title {
+  color: var(--color-text-primary);
+}
+
+html.dark .recent-card {
+  background: var(--bg-color-white);
+  border-color: var(--border-color-light);
+}
+
+html.dark .recent-card:hover {
+  border-color: var(--el-color-primary);
+}
+
+html.dark .recent-empty {
+  background: var(--bg-color-page);
+  color: var(--color-text-secondary);
+}
+
+html.dark .recent-filename {
+  color: var(--color-text-primary);
+}
+
+html.dark .recent-path {
+  color: var(--color-text-secondary);
+}
+
+html.dark .recent-date {
+  color: var(--color-text-secondary);
+}
+
+html.dark .recent-error {
+  color: var(--el-color-danger);
+}
+
+/* ColumnHeaderCell */
+html.dark .sort-btn {
+  color: var(--el-color-primary);
+}
+
+html.dark .sort-btn:hover {
+  background-color: var(--el-color-primary-light-3);
+}
+
+html.dark .delete-btn {
+  color: var(--el-color-danger);
+}
+
+html.dark .delete-btn:hover {
+  background-color: var(--el-color-danger-light-3);
+}
+
+/* RowNumberCell error indicator */
+html.dark .row-error {
+  color: var(--el-color-danger);
+}
+
+html.dark .row-error-bg {
+  background-color: var(--el-color-danger-light-3);
+}
+
+/* EditableCell focus */
+html.dark .cell-focused {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+}
+
+/* UpdateDialog */
+html.dark .update-info-text {
+  color: var(--color-text-secondary);
+}
