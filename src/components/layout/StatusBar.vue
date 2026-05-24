@@ -18,13 +18,13 @@ defineProps<{
   align-items: center;
   justify-content: space-between;
   padding: 8px 20px;
-  background: #f5f7fa;
-  border-top: 1px solid #e4e7ed;
+  background: var(--el-bg-color-page);
+  border-top: 1px solid var(--el-border-color);
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .unsaved {
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 </style>

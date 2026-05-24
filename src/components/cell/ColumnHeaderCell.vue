@@ -95,12 +95,12 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
   transition: opacity 0.2s, background-color 0.2s;
 }
 
-.sort-btn { color: #409eff; }
-.sort-btn:hover { background-color: #ecf5ff; }
-.sort-btn.active { opacity: 1; color: #409eff; font-weight: bold; }
+.sort-btn { color: var(--el-color-primary); }
+.sort-btn:hover { background-color: var(--el-color-primary-light-9); }
+.sort-btn.active { opacity: 1; color: var(--el-color-primary); font-weight: bold; }
 
-.delete-btn { color: #f56c6c; }
-.delete-btn:hover { background-color: #fef0f0; }
+.delete-btn { color: var(--el-color-danger); }
+.delete-btn:hover { background-color: var(--el-color-danger-light-9); }
 
 .column-header:hover .sort-btn,
 .column-header:hover .delete-btn {

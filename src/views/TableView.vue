@@ -861,7 +861,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background-color: #fff;
+  background-color: var(--el-bg-color);
   position: relative;
 }
 
@@ -882,7 +882,7 @@ onUnmounted(() => {
 }
 
 .table-wrapper {
-  background: #fff;
+  background: var(--el-bg-color);
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -892,13 +892,13 @@ onUnmounted(() => {
 
 .skeleton-container {
   padding: 20px;
-  background: #fff;
+  background: var(--el-bg-color);
 }
 
 .skeleton-header {
   margin-bottom: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--el-border-color-light);
 }
 
 .back-btn {

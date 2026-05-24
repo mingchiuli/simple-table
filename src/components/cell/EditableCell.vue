@@ -57,6 +57,6 @@ onMounted(() => {
 }
 
 :deep(.cell-input .el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #409eff inset;
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
 }
 </style>

@@ -188,8 +188,8 @@ function handleCheckUpdate() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color);
   overflow-x: auto;
   padding: 8px 20px;
   gap: 16px;
@@ -216,7 +216,7 @@ function handleCheckUpdate() {
   flex-direction: column;
   padding: 8px 12px;
   gap: 8px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--el-border-color);
 }
 
 .mobile-toolbar-row {

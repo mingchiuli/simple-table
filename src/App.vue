@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { RouterView, useRouter } from "vue-router";
 import { usePlatform } from "./composables/usePlatform";
-import { useDark } from "./composables/useDark";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import "./styles/base.css";
@@ -9,7 +8,12 @@ import "./styles/platform.css";
 import { onMounted, onUnmounted } from "vue";
 
 const { platform } = usePlatform();
-useDark(); // Auto-sync with system dark mode preference
+
+// 暗黑模式：跟随系统偏好
+const dark = window.matchMedia('(prefers-color-scheme: dark)');
+document.documentElement.classList.toggle('dark', dark.matches);
+dark.addEventListener('change', e => document.documentElement.classList.toggle('dark', e.matches));
+
 const router = useRouter();
 
 let unlistenDeepLink: (() => void) | null = null;

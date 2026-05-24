@@ -110,7 +110,7 @@ function handleNavigate() {
   justify-content: center;
   min-height: 100dvh;
   min-height: 100vh;
-  background-color: #fff;
+  background-color: var(--el-bg-color);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 40px 20px;
@@ -121,7 +121,7 @@ function handleNavigate() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
 .empty-icon {

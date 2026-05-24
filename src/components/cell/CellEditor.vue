@@ -56,15 +56,15 @@ function handleClose() {
   display: flex;
   align-items: center;
   padding: 8px 16px;
-  background: #f5f7fa;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--el-bg-color-page);
+  border-bottom: 1px solid var(--el-border-color);
   gap: 12px;
   overflow: visible;
 }
 
 .cell-position {
   font-weight: bold;
-  color: #409eff;
+  color: var(--el-color-primary);
   min-width: 40px;
   font-size: 14px;
 }

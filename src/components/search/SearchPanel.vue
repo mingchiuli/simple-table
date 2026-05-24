@@ -89,8 +89,8 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 <style scoped>
 .search-panel {
   width: 280px;
-  background: #fff;
-  border-left: 1px solid #e4e7ed;
+  background: var(--el-bg-color);
+  border-left: 1px solid var(--el-border-color);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -101,9 +101,9 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
   justify-content: space-between;
   align-items: center;
   padding: 12px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--el-border-color);
   font-size: 14px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .search-panel-list {
@@ -117,16 +117,16 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
   padding: 10px 12px;
   cursor: pointer;
   gap: 8px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .search-result-item:hover {
-  background: #f5f7fa;
+  background: var(--el-bg-color-page);
 }
 
 .cell-position {
   font-weight: bold;
-  color: #409eff;
+  color: var(--el-color-primary);
   min-width: 40px;
 }
 
@@ -138,14 +138,14 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 }
 
 .cell-value :deep(mark) {
-  background-color: #fef0f0;
-  color: #f56c6c;
+  background-color: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
   padding: 0 2px;
   border-radius: 2px;
 }
 
 .sheet-name {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 </style>

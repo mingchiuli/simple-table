@@ -34,7 +34,7 @@ function handleDelete(index: number) {
   opacity: 0;
   border: none;
   background: none;
-  color: #f56c6c;
+  color: var(--el-color-danger);
   cursor: pointer;
   font-size: 16px;
   padding: 2px 6px;
@@ -43,7 +43,7 @@ function handleDelete(index: number) {
 }
 
 .delete-btn:hover {
-  background-color: #fef0f0;
+  background-color: var(--el-color-danger-light-9);
 }
 
 .row-number:hover .delete-btn {

@@ -196,18 +196,18 @@ defineExpose({ show, checkForUpdate })
 }
 
 .version-info {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
 .mobile-note {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-top: 8px;
 }
 
 .download-size {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 

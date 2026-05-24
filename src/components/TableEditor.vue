@@ -444,7 +444,7 @@ const ROW_HEIGHT = 60;
   top: 0;
   bottom: 0;
   width: 2px;
-  background-color: #409eff;
+  background-color: var(--el-color-primary);
   z-index: 100;
   pointer-events: none;
 }

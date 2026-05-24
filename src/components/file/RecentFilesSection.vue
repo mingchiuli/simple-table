@@ -103,7 +103,7 @@ function formatDate(timestamp: number): string {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 
 .recent-grid {
@@ -116,8 +116,8 @@ function formatDate(timestamp: number): string {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: #fff;
-  border: 1px solid #ebeef5;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
@@ -125,7 +125,7 @@ function formatDate(timestamp: number): string {
 }
 
 .recent-card:hover {
-  border-color: #409eff;
+  border-color: var(--el-color-primary);
   box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
 }
 
@@ -135,8 +135,8 @@ function formatDate(timestamp: number): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f7fa;
-  color: #909399;
+  background: var(--el-bg-color-page);
+  color: var(--el-text-color-secondary);
 }
 
 .thumbnail-img {
@@ -151,7 +151,7 @@ function formatDate(timestamp: number): string {
 .filename {
   font-size: 14px;
   font-weight: 500;
-  color: #303133;
+  color: var(--el-text-color-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -160,7 +160,7 @@ function formatDate(timestamp: number): string {
 
 .meta {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
 .delete-btn {
@@ -170,7 +170,7 @@ function formatDate(timestamp: number): string {
   padding: 4px;
   background: rgba(255, 255, 255, 0.9);
   border-radius: 4px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   opacity: 0;
   transition: all 0.2s ease;
 }
@@ -180,7 +180,7 @@ function formatDate(timestamp: number): string {
 }
 
 .delete-btn:hover {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 /* 移动端：总是显示删除按钮 */
@@ -191,7 +191,7 @@ function formatDate(timestamp: number): string {
   }
 
   .recent-card:active {
-    border-color: #409eff;
+    border-color: var(--el-color-primary);
     box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
   }
 }
