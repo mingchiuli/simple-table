@@ -1,4 +1,4 @@
-import { ref, computed, onMounted } from 'vue'
+import { ref, shallowRef, computed, onMounted } from 'vue'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -17,7 +17,7 @@ export interface UpdateInfo {
 
 export function useUpdater() {
   const status = ref<UpdateStatus>('idle')
-  const updateInfo = ref<Update | null>(null)
+  const updateInfo = shallowRef<Update | null>(null)
   const mobileUpdateInfo = ref<UpdateInfo | null>(null)
   const downloadProgress = ref({ downloaded: 0, total: 0, percentage: 0 })
   const errorMessage = ref<string | null>(null)
