@@ -2,6 +2,7 @@
 import { Document, Delete } from "@element-plus/icons-vue";
 import type { RecentFile } from "@/types";
 import { useRecentFilesStore } from "@/stores/recentFiles";
+import * as api from "@/api";
 
 const recentFilesStore = useRecentFilesStore();
 
@@ -10,14 +11,27 @@ const emit = defineEmits<{
 }>();
 
 async function handleOpenRecent(file: RecentFile) {
-  const result = await recentFilesStore.openFile(file.path);
-  if (result.needsRelocate) {
+  // 预检查文件是否存在
+  const exists = await api.checkFileExists(file.path);
+  if (!exists) {
+    // 文件不存在，直接触发 relocate 流程
     const success = await recentFilesStore.relocateAndOpen(file);
     if (success) {
       emit("open");
     }
-  } else if (result.success) {
+    return;
+  }
+
+  // 文件存在，正常打开
+  const result = await recentFilesStore.openFile(file.path);
+  if (result.success) {
     emit("open");
+  } else if (result.needsRelocate) {
+    // 其他错误（如格式不支持），仍触发 relocate
+    const success = await recentFilesStore.relocateAndOpen(file);
+    if (success) {
+      emit("open");
+    }
   }
 }
 
