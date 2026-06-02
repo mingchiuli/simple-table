@@ -27,22 +27,8 @@ use commands::{
 use commands::{read_file_desktop, save_file_desktop};
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use commands::check_update_mobile;
-use std::sync::Mutex;
 
-use tauri::{Emitter, Manager};
-#[cfg(desktop)]
-use tauri_plugin_deep_link::DeepLinkExt;
-
-struct PendingDeepLink(Mutex<Option<String>>);
-
-#[tauri::command]
-fn get_pending_deep_link(app: tauri::AppHandle) -> Option<String> {
-    app.state::<PendingDeepLink>()
-        .0
-        .lock()
-        .expect("PendingDeepLink lock poisoned")
-        .take()
-}
+use tauri::Emitter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -75,28 +61,6 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_os::init())
-        .manage(PendingDeepLink(Mutex::new(None)))
-        .setup(|app| {
-            // Register on_open_url for macOS file associations (double-click in Finder)
-            #[cfg(desktop)]
-            {
-                let handle = app.handle().clone();
-                app.deep_link().on_open_url(move |event| {
-                    for url in event.urls() {
-                        let url_str = url.to_string();
-                        println!("Opened via file association: {}", url_str);
-
-                        // Store URL in app state for frontend to retrieve
-                        if let Some(state) = handle.try_state::<PendingDeepLink>() {
-                            let mut pending =
-                                state.0.lock().expect("PendingDeepLink lock poisoned");
-                            *pending = Some(url_str);
-                        }
-                    }
-                });
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             #[cfg(desktop)]
             read_file_desktop,
@@ -116,7 +80,6 @@ pub fn run() {
             sort_column,
             get_editor_state,
             search,
-            get_pending_deep_link,
             get_recent_files,
             add_recent_file_with_thumbnail,
             remove_recent_file,

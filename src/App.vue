@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { RouterView, useRouter } from "vue-router";
 import { usePlatform } from "./composables/usePlatform";
+import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import "./styles/base.css";
 import "./styles/platform.css";
 import { onMounted, onUnmounted } from "vue";
@@ -17,6 +17,7 @@ dark.addEventListener('change', e => document.documentElement.classList.toggle('
 const router = useRouter();
 
 let unlistenDeepLink: (() => void) | null = null;
+let unlistenOpenUrl: (() => void) | null = null;
 
 onMounted(async () => {
   // 单实例模式：第二个实例传递文件路径给第一个实例
@@ -24,10 +25,17 @@ onMounted(async () => {
     handleDeepLink(event.payload);
   });
 
-  // macOS 文件关联：双击打开文件
-  const pendingUrl = await invoke<string | null>("get_pending_deep_link");
-  if (pendingUrl) {
-    handleDeepLink(pendingUrl);
+  // macOS 文件关联：监听运行时触发的事件
+  unlistenOpenUrl = await onOpenUrl((urls) => {
+    if (urls.length > 0) {
+      handleDeepLink(urls[0]);
+    }
+  });
+
+  // 启动时检查：Windows/Linux 通过命令行参数启动
+  const startUrls = await getCurrent();
+  if (startUrls && startUrls.length > 0) {
+    handleDeepLink(startUrls[0]);
   }
 });
 
@@ -35,17 +43,26 @@ onUnmounted(() => {
   if (unlistenDeepLink) {
     unlistenDeepLink();
   }
+  if (unlistenOpenUrl) {
+    unlistenOpenUrl();
+  }
 });
 
 function handleDeepLink(url: string) {
   try {
-    const parsed = new URL(url);
+    // macOS: file:///path/to/file.xlsx
+    // Windows/Linux: C:\path\to\file.xlsx 或 /path/to/file.xlsx
+    let filePath: string;
 
-    // macOS file association: file:///path/to/file.xlsx → /path/to/file.xlsx
-    if (parsed.protocol === "file:") {
-      const filePath = decodeURIComponent(parsed.pathname);
-      router.push({ name: "table", query: { file: filePath } });
+    if (url.startsWith("file:")) {
+      const parsed = new URL(url);
+      filePath = decodeURIComponent(parsed.pathname);
+    } else {
+      // Windows/Linux 直接传递文件路径
+      filePath = url;
     }
+
+    router.push({ name: "table", query: { file: filePath } });
   } catch (e) {
     console.error("Failed to parse deep link:", e);
   }
