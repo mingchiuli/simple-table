@@ -10,8 +10,6 @@ export interface OpenFileResult {
   fileName: string;
   /** 原始选择来源路径（用于显示/诊断） */
   originalPath?: string;
-  /** 文件字节（用于生成缩略图） */
-  bytes?: number[];
 }
 
 export interface PlatformFileOps {
@@ -29,7 +27,7 @@ export interface PlatformFileOps {
   exportFile?(sourcePath: string, defaultName: string): Promise<string | null>;
 }
 
-export type StorageType = 'androidUri' | 'iosPrivate' | 'mobileSandboxPath' | 'desktopPath';
+export type StorageType = 'mobileSandboxPath' | 'desktopPath';
 
 export interface PlatformAPI {
   fileOps: PlatformFileOps;

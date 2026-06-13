@@ -234,7 +234,7 @@ fn read_csv_from_bytes(
                     // 保留电话号码、邮编等以 0 开头的字符串
                     CellValue::String(field.to_string())
                 } else if let Ok(int_val) = field.parse::<i64>() {
-                    if int_val > 9007199254740991 || int_val < -9007199254740991 {
+                    if !(-9007199254740991..=9007199254740991).contains(&int_val) {
                         return CellValue::String(field.to_string());
                     }
                     CellValue::Number(Value::from(int_val))

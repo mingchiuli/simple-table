@@ -3,19 +3,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 /// 文件存储类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum StorageType {
     /// 移动端官方 fs 插件管理的 App 沙盒路径
     MobileSandboxPath,
     /// 桌面端普通文件路径
+    #[default]
     DesktopPath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::DesktopPath
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

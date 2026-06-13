@@ -1,3 +1,5 @@
+#![allow(clippy::module_inception)]
+
 pub mod editor_state;
 pub mod state;
 

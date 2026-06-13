@@ -9,7 +9,6 @@ interface PickFileAndroidResult {
     originalPath: string;
     fileName: string;
   };
-  bytes: number[];
 }
 
 export const androidFileOps = {
@@ -23,7 +22,6 @@ export const androidFileOps = {
       path: result.info.path,
       fileName: result.info.fileName,
       originalPath: result.info.originalPath,
-      bytes: result.bytes,
     };
   },
 

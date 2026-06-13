@@ -28,14 +28,14 @@ async function handleOpenFile() {
 
     fileDataStore.set(result.fileData, result.path);
 
-    const extension = result.fileName.split(".").pop() || "";
     const storageType = await getStorageType();
+    const bytes = await api.generateThumbnailBytes(result.fileData);
+    const fileSize = await api.getFileSize(result.path);
     await api.addRecentFileWithThumbnail(
       result.path,
       result.fileName,
-      result.bytes?.length || 0,
-      result.bytes || [],
-      extension,
+      fileSize,
+      bytes,
       storageType,
       result.originalPath
     );

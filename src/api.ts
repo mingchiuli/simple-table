@@ -1,26 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { FileData, RecentFile, CellValue, OperationResult, SearchResult, SortState } from "@/types";
 
-// ==================== File Operations ====================
-
-/** Desktop: 直接从路径读取并解析文件 */
-export async function readFileDesktop(path: string): Promise<FileData> {
-  return invoke<FileData>("read_file_desktop", { path });
-}
-
-/** Desktop: 生成文件字节并写入路径 */
-export async function saveFileDesktop(path: string, fileData: FileData): Promise<void> {
-  return invoke<void>("save_file_desktop", { path, fileData });
-}
-
 export async function initFile(fileData: FileData): Promise<void> {
   return invoke<void>("init_file", { fileData });
 }
 
 // ==================== Editor Operations ====================
 
-export async function getEditorState(): Promise<{ canUndo: boolean; canRedo: boolean }> {
-  return invoke<{ canUndo: boolean; canRedo: boolean }>("get_editor_state");
+export async function getEditorState(): Promise<{ canUndo: boolean; canRedo: boolean } | null> {
+  return invoke<{ canUndo: boolean; canRedo: boolean } | null>("get_editor_state");
 }
 
 export async function undo(): Promise<OperationResult> {
@@ -106,18 +94,18 @@ export async function addRecentFileWithThumbnail(
   fileName: string,
   fileSize: number,
   bytes: number[],
-  extension: string,
-  storageType?: 'androidUri' | 'iosPrivate' | 'mobileSandboxPath' | 'desktopPath',
+  storageType?: 'mobileSandboxPath' | 'desktopPath',
   originalPath?: string
 ): Promise<RecentFile> {
   return invoke<RecentFile>("add_recent_file_with_thumbnail", {
-    path,
-    fileName,
-    fileSize,
-    bytes,
-    extension,
-    storageType,
-    originalPath,
+    request: {
+      path,
+      fileName,
+      fileSize,
+      bytes,
+      storageType,
+      originalPath,
+    },
   });
 }
 
@@ -129,10 +117,23 @@ export async function checkFileExists(path: string): Promise<boolean> {
   return invoke<boolean>("check_file_exists", { path });
 }
 
+export async function getFileSize(path: string): Promise<number> {
+  return invoke<number>("get_file_size", { path });
+}
+
 export async function updateRecentFilePath(id: string, newPath: string): Promise<void> {
   return invoke<void>("update_recent_file_path", { id, newPath });
 }
 
 export async function generateFileBytes(fileData: FileData): Promise<number[]> {
   return invoke<number[]>("generate_file_bytes", { fileData });
+}
+
+export async function generateThumbnailBytes(fileData: FileData): Promise<number[]> {
+  try {
+    return await invoke<number[]>("generate_thumbnail_bytes", { fileData });
+  } catch (error) {
+    console.warn("Failed to generate thumbnail bytes:", error);
+    return [];
+  }
 }

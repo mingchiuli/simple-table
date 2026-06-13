@@ -5,7 +5,9 @@ use reqwest::Client;
 
 /// Check for updates via GitHub Releases API (mobile only)
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub async fn check_update_mobile_impl(current_version: String) -> Result<Option<UpdateInfo>, String> {
+pub async fn check_update_mobile_impl(
+    current_version: String,
+) -> Result<Option<UpdateInfo>, String> {
     let client = Client::new();
 
     let response = client

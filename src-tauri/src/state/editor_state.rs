@@ -37,25 +37,25 @@ impl EditorState {
                 old_value,
                 new_value,
             } => {
-                if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
-                    if let Some(real_old) = sheet.rows.get(*row).and_then(|r| r.get(*col)) {
-                        // 如果新值和旧值相同，不需要记录到 history
-                        if real_old == new_value {
-                            // 返回结果但不记录到 history
-                            let result = operation.execute(&mut self.file_data);
-                            self.update_flags();
-                            return result;
-                        }
-                        // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
-                        if real_old != old_value {
-                            operation = Operation::SetCell {
-                                sheet_index: *sheet_index,
-                                row: *row,
-                                col: *col,
-                                old_value: real_old.clone(),
-                                new_value: new_value.clone(),
-                            };
-                        }
+                if let Some(sheet) = self.file_data.sheets.get(*sheet_index)
+                    && let Some(real_old) = sheet.rows.get(*row).and_then(|r| r.get(*col))
+                {
+                    // 如果新值和旧值相同，不需要记录到 history
+                    if real_old == new_value {
+                        // 返回结果但不记录到 history
+                        let result = operation.execute(&mut self.file_data);
+                        self.update_flags();
+                        return result;
+                    }
+                    // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
+                    if real_old != old_value {
+                        operation = Operation::SetCell {
+                            sheet_index: *sheet_index,
+                            row: *row,
+                            col: *col,
+                            old_value: real_old.clone(),
+                            new_value: new_value.clone(),
+                        };
                     }
                 }
             }
@@ -86,15 +86,16 @@ impl EditorState {
                 row_data,
             } => {
                 // 如果 row_data 已有数据（撤销操作），保留原数据
-                if row_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
-                    if let Some(sheet) = self.file_data.sheets.get(*sheet_index) {
-                        let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
-                        operation = Operation::AddRow {
-                            sheet_index: *sheet_index,
-                            row_index: *row_index,
-                            row_data: vec![CellValue::Null; col_count],
-                        };
-                    }
+                if row_data.is_empty()
+                    && *sheet_index < self.file_data.sheets.len()
+                    && let Some(sheet) = self.file_data.sheets.get(*sheet_index)
+                {
+                    let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                    operation = Operation::AddRow {
+                        sheet_index: *sheet_index,
+                        row_index: *row_index,
+                        row_data: vec![CellValue::Null; col_count],
+                    };
                 }
             }
             Operation::DeleteSheet {
@@ -102,13 +103,14 @@ impl EditorState {
                 sheet_data,
             } => {
                 // 如果 sheet_data 为空，说明是正常的删除操作，需要保存完整的 sheet 数据
-                if sheet_data.is_empty() && *sheet_index < self.file_data.sheets.len() {
-                    if let Some(removed_sheet) = self.file_data.sheets.get(*sheet_index) {
-                        operation = Operation::DeleteSheet {
-                            sheet_index: *sheet_index,
-                            sheet_data: removed_sheet.clone(),
-                        };
-                    }
+                if sheet_data.is_empty()
+                    && *sheet_index < self.file_data.sheets.len()
+                    && let Some(removed_sheet) = self.file_data.sheets.get(*sheet_index)
+                {
+                    operation = Operation::DeleteSheet {
+                        sheet_index: *sheet_index,
+                        sheet_data: removed_sheet.clone(),
+                    };
                 }
             }
             // AddSheet: 提前生成名称和索引，保证 redo 重放时使用与首次执行一致的位置和名称

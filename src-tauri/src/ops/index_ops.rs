@@ -111,15 +111,15 @@ fn build_index_from_rows(rows: &[Vec<CellValue>]) -> Option<BuiltIndex> {
     for (row_idx, row) in rows.iter().enumerate() {
         for (col_idx, cell) in row.iter().enumerate() {
             let text = cell.to_display_string();
-            if !text.is_empty() {
-                if let Err(e) = writer.add_document(doc!(
+            if !text.is_empty()
+                && let Err(e) = writer.add_document(doc!(
                     fields.text => text,
                     fields.row => row_idx as u64,
                     fields.col => col_idx as u64,
                     fields.cell_id => format!("{}:{}", row_idx, col_idx),
-                )) {
-                    eprintln!("Failed to add document: {:?}", e);
-                }
+                ))
+            {
+                eprintln!("Failed to add document: {:?}", e);
             }
         }
     }
@@ -224,17 +224,15 @@ pub fn search_cells(sheet: &SheetData, query: &str, limit: usize) -> Vec<CellPos
 
     let mut results = Vec::new();
     for (_score, doc_address) in top_docs {
-        if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address) {
-            if let (Some(row_val), Some(col_val)) =
+        if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address)
+            && let (Some(row_val), Some(col_val)) =
                 (doc.get_first(row_field), doc.get_first(col_field))
-            {
-                if let (Some(row), Some(col)) = (row_val.as_u64(), col_val.as_u64()) {
-                    results.push(CellPosition {
-                        row: row as usize,
-                        col: col as usize,
-                    });
-                }
-            }
+            && let (Some(row), Some(col)) = (row_val.as_u64(), col_val.as_u64())
+        {
+            results.push(CellPosition {
+                row: row as usize,
+                col: col as usize,
+            });
         }
     }
 
@@ -385,11 +383,11 @@ fn index_worker(rx: mpsc::Receiver<IndexJob>) {
         for (sheet_index, p) in pending {
             if p.rebuild {
                 run_rebuild(sheet_index, &p.state);
-            } else if !p.incremental.is_empty() {
-                if !run_incremental(sheet_index, &p.state, &p.incremental) {
-                    // 增量路径失败（writer 缺失或 commit 出错）→ 退化为全量重建
-                    run_rebuild(sheet_index, &p.state);
-                }
+            } else if !p.incremental.is_empty()
+                && !run_incremental(sheet_index, &p.state, &p.incremental)
+            {
+                // 增量路径失败（writer 缺失或 commit 出错）→ 退化为全量重建
+                run_rebuild(sheet_index, &p.state);
             }
         }
     }
@@ -443,12 +441,11 @@ fn run_rebuild(sheet_index: usize, state: &Arc<RwLock<Option<EditorState>>>) {
         return;
     };
 
-    if let Ok(mut guard) = state.write() {
-        if let Some(editor_state) = guard.as_mut() {
-            if let Some(sheet) = editor_state.file_data.sheets.get_mut(sheet_index) {
-                install_built_index(sheet, built);
-            }
-        }
+    if let Ok(mut guard) = state.write()
+        && let Some(editor_state) = guard.as_mut()
+        && let Some(sheet) = editor_state.file_data.sheets.get_mut(sheet_index)
+    {
+        install_built_index(sheet, built);
     }
 }
 
@@ -474,16 +471,16 @@ fn run_incremental(
                 let cell_id = format!("{}:{}", row, col);
                 let term = Term::from_field_text(handle.cell_id_field, &cell_id);
                 writer.delete_term(term);
-                if !new_text.is_empty() {
-                    if let Err(e) = writer.add_document(doc!(
+                if !new_text.is_empty()
+                    && let Err(e) = writer.add_document(doc!(
                         handle.text_field => new_text.clone(),
                         handle.row_field => *row as u64,
                         handle.col_field => *col as u64,
                         handle.cell_id_field => cell_id,
-                    )) {
-                        eprintln!("incremental add_document failed: {:?}", e);
-                        return false;
-                    }
+                    ))
+                {
+                    eprintln!("incremental add_document failed: {:?}", e);
+                    return false;
                 }
             }
             IndexJob::AppendRow {

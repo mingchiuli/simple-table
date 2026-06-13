@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::recent::RecentFile;
+use crate::recent::{AddRecentFileRequest, RecentFile};
 use crate::state::get_state;
 use crate::types::{CellValue, FileData, OperationResult, SearchResult, SearchScope, SortState};
 use tauri::AppHandle;
@@ -28,6 +28,13 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 #[tauri::command(rename_all = "camelCase")]
 pub fn generate_file_bytes(file_data: FileData) -> Result<Vec<u8>, AppError> {
     let (_, bytes) = crate::io::codec::writer::generate_file_bytes(&file_data)?;
+    Ok(bytes)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn generate_thumbnail_bytes(file_data: FileData) -> Result<Vec<u8>, AppError> {
+    let (_, bytes) =
+        crate::io::codec::writer::generate_file_bytes_for_target(&file_data, "thumbnail.xlsx")?;
     Ok(bytes)
 }
 
@@ -139,6 +146,13 @@ pub fn check_file_exists(path: String) -> bool {
     crate::recent::do_check_file_exists(path)
 }
 
+#[tauri::command]
+pub fn get_file_size(path: String) -> i64 {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len() as i64)
+        .unwrap_or(0)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn update_recent_file_path(
     app: AppHandle,
@@ -151,22 +165,7 @@ pub fn update_recent_file_path(
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_recent_file_with_thumbnail(
     app: AppHandle,
-    path: String,
-    file_name: String,
-    file_size: i64,
-    bytes: Vec<u8>,
-    extension: String,
-    storage_type: Option<String>,
-    original_path: Option<String>,
+    request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
-    crate::recent::do_add_recent_file_with_thumbnail(
-        &app,
-        path,
-        file_name,
-        file_size,
-        bytes,
-        extension,
-        storage_type,
-        original_path,
-    )
+    crate::recent::do_add_recent_file_with_thumbnail(&app, request)
 }

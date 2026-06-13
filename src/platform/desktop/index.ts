@@ -1,5 +1,4 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
@@ -15,8 +14,6 @@ export const desktopFileOps = {
     if (!selected) return null;
 
     const fileName = decodeURIComponent(await basename(selected));
-    const bytes = await readFile(selected);
-    const bytesArray = Array.from(bytes);
 
     // 直接调用 Rust 解析（一次调用）
     const fileData = await invoke<FileData>("read_file_desktop", { path: selected });
@@ -25,7 +22,6 @@ export const desktopFileOps = {
       fileData,
       path: selected,
       fileName,
-      bytes: bytesArray, // 用于缩略图
     };
   },
 

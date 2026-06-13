@@ -8,6 +8,7 @@
     "core:default",
     "opener:default",
     "dialog:default",
+    "deep-link:default",
     "fs:default",
     "fs:scope-applocaldata-recursive",
     "fs:allow-exists",

@@ -1,10 +1,10 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
+use crate::ops::Operation;
 use crate::ops::index_ops::spawn_rebuild_sheet_index;
 use crate::state::editor_state::EditorState;
-use crate::ops::Operation;
-use crate::types::{OperationResult, SheetData, SortState};
+use crate::types::{OperationResult, SortState};
 
 /// 对指定列进行排序
 pub fn do_sort_column(
@@ -24,7 +24,14 @@ pub fn do_sort_column(
                     .sheets
                     .get(sheet_index)
                     .cloned()
-                    .unwrap_or_default();
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+                let col_count = old_sheet_data.rows.first().map(|r| r.len()).unwrap_or(0);
+                if col_index >= col_count {
+                    return Err(AppError::InvalidCellPosition {
+                        row: 0,
+                        col: col_index,
+                    });
+                }
 
                 let operation = Operation::SortColumn {
                     sheet_index,
@@ -36,14 +43,7 @@ pub fn do_sort_column(
                 let result = editor_state.execute(operation);
                 (result, true)
             }
-            None => (
-                OperationResult::SortColumn {
-                    sheet_index,
-                    sheet_data: SheetData::default(),
-                    sort_state: None,
-                },
-                false,
-            ),
+            None => return Err(AppError::NoFileLoaded),
         }
     };
 

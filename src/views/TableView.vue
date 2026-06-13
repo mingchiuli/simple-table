@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { HomeFilled } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
+import { useFileActions } from '@/composables/useFileActions';
+import { cellToEditorString, usePendingCellSave } from '@/composables/usePendingCellSave';
 import { useFileDataStore } from '@/stores/fileData';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { CellEditor } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
 import * as api from '@/api';
+import { colToLetter } from '@/utils/excel';
 import type { CellValue, SortState, SheetData, OperationResult, SearchResult } from '@/types';
 
 const route = useRoute();
@@ -31,10 +35,6 @@ const searchQuery = ref('');
 const isSearching = ref(false);
 const sheetSelectedCells = ref<Map<number, { row: number; col: number }>>(new Map());
 
-// Debounce timer and pending changes
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingChanges = new Map<string, { row: number; col: number; value: string; oldValue: CellValue }>();
-
 // ========== Computed values ==========
 const fileData = computed(() => fileDataStore.data);
 
@@ -51,10 +51,7 @@ const tableData = computed(() => {
 const columns = computed(() => {
   if (!tableData.value.length) return [];
   const maxCols = Math.max(...tableData.value.map((row) => row.length));
-  return Array.from({ length: maxCols }, (_, i) => {
-    const charCode = 65 + i;
-    return String.fromCharCode(charCode);
-  });
+  return Array.from({ length: maxCols }, (_, i) => colToLetter(i));
 });
 
 const sheetNames = computed(() => {
@@ -62,83 +59,12 @@ const sheetNames = computed(() => {
   return fileData.value.sheets.map((s) => s.name);
 });
 
-// 将单元格值安全转换为编辑器字符串（null/undefined 统一为空串）
-function cellToEditorString(value: CellValue | undefined): string {
-  return value === null || value === undefined ? '' : String(value);
-}
-
-// ========== Watch: Sync cellEditorValue with selectedCell ==========
-watch(selectedCell, (newCell) => {
-  if (newCell && currentSheet.value) {
-    cellEditorValue.value = cellToEditorString(currentSheet.value.rows[newCell.row]?.[newCell.col]);
-  } else {
-    cellEditorValue.value = '';
-  }
-}, { immediate: true });
-
-// ========== Computed: Current cell value for sync after undo/redo ==========
-const currentCellValue = computed(() => {
-  if (!selectedCell.value || !currentSheet.value) return undefined;
-  return currentSheet.value.rows[selectedCell.value.row]?.[selectedCell.value.col];
-});
-
-// ========== Watch: Sync cellEditorValue when cell data changes (undo/redo) ==========
-watch(currentCellValue, (newValue) => {
-  if (selectedCell.value) {
-    cellEditorValue.value = cellToEditorString(newValue);
-  }
-});
-
-// ========== Watch: Sync input to cell (with debounce) ==========
-watch(cellEditorValue, (newValue) => {
-  if (!selectedCell.value || !currentSheet.value) return;
-
-  const { row, col } = selectedCell.value;
-  const originalValue = currentSheet.value.rows[row]?.[col] ?? null;
-  const newValueStr = newValue;
-  const originalValueStr = cellToEditorString(originalValue);
-
-  // Only update if value changed
-  if (newValueStr !== originalValueStr) {
-    currentSheet.value.rows[row][col] = newValueStr;
-  }
-
-  // Trigger debounce save
-  pendingChanges.set(getCellKey(row, col), { row, col, value: newValueStr, oldValue: originalValue });
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
-  debounceTimer = setTimeout(debouncedSave, 500);
-});
-
-// ========== Utility functions ==========
-function getCellKey(row: number, col: number) {
-  return `${row},${col}`;
-}
-
-function parseCellValue(value: string): CellValue {
-  if (value === '') return null;
-  if (/^0\d/.test(value)) return value;
-  if (/^-?\d+$/.test(value) || /^-?\d+\.\d+$/.test(value)) {
-    return value;
-  }
-  const num = Number(value);
-  if (!isNaN(num)) return value;
-  if (value.toLowerCase() === 'true') return true;
-  if (value.toLowerCase() === 'false') return false;
-  return value;
-}
-
-function toRustCellValue(value: CellValue): string | number | boolean | null {
-  return value;
-}
-
 // ========== Update editor state ==========
 async function updateEditorState() {
   try {
     const state = await api.getEditorState();
-    canUndo.value = state.canUndo;
-    canRedo.value = state.canRedo;
+    canUndo.value = state?.canUndo ?? false;
+    canRedo.value = state?.canRedo ?? false;
   } catch (error) {
     console.error('Failed to get editor state:', error);
   }
@@ -223,282 +149,44 @@ function applyOperation(result: OperationResult) {
   }
 }
 
-// ========== Cell operations ==========
-async function debouncedSave() {
-  const originalSnapshot = new Map<string, CellValue>();
-  for (const [key, { row, col }] of pendingChanges) {
-    if (currentSheet.value) {
-      originalSnapshot.set(key, currentSheet.value.rows[row]?.[col]);
-    }
-  }
+const {
+  flushPendingCellChanges,
+  handleCellChange,
+  handleCellEditing,
+  handleCellEditorSubmit,
+  handleDeselectCell,
+} = usePendingCellSave({
+  fileData,
+  currentSheet,
+  currentSheetIndex,
+  selectedCell,
+  cellEditorValue,
+  currentSortColumn,
+  hasChanges,
+  updateEditorState,
+});
 
-  const changes = Array.from(pendingChanges.values());
-  pendingChanges.clear();
-
-  for (const { row, col, value } of changes) {
-    try {
-      await handleCellChange(row, col, value);
-    } catch (error) {
-      if (currentSheet.value) {
-        for (const [key, originalValue] of originalSnapshot) {
-          const [r, c] = key.split(',').map(Number);
-          currentSheet.value.rows[r][c] = originalValue;
-        }
-      }
-      ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
-      return;
-    }
-  }
-}
-
-import { ElMessage } from 'element-plus';
-import { useRouter } from 'vue-router';
-import { basename } from '@tauri-apps/api/path';
-import { openFile, readFile, saveFile, pickSaveLocation, exportFile, getStorageType } from '@/platform';
-import { useRecentFilesStore } from '@/stores/recentFiles';
-
-const router = useRouter();
-const recentFilesStore = useRecentFilesStore();
-
-async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
-  if (!fileData.value || !currentSheet.value) return;
-
-  currentSortColumn.value = null;
-  const oldValue = currentSheet.value.rows[rowIndex][colIndex];
-  const newValue = parseCellValue(value);
-  const isCurrentCell = selectedCell.value?.row === rowIndex && selectedCell.value?.col === colIndex;
-
-  try {
-    await api.setCell(
-      currentSheetIndex.value,
-      rowIndex,
-      colIndex,
-      toRustCellValue(oldValue),
-      toRustCellValue(newValue)
-    );
-
-    if (isCurrentCell) {
-      cellEditorValue.value = value;
-    }
-
-    hasChanges.value = true;
-    await updateEditorState();
-  } catch (error) {
-    ElMessage.error(`Failed to set cell: ${error}`);
-  }
-}
-
-function handleCellEditing(row: number, col: number, value: string) {
-  if (selectedCell?.value?.row === row && selectedCell?.value?.col === col) {
-    cellEditorValue.value = value;
-  }
-
-  if (!currentSheet.value) return;
-
-  const originalValue = currentSheet.value.rows[row]?.[col] ?? null;
-  const originalValueStr = cellToEditorString(originalValue);
-
-  if (value !== originalValueStr) {
-    currentSheet.value.rows[row][col] = value;
-  }
-
-  pendingChanges.set(getCellKey(row, col), { row, col, value, oldValue: originalValue });
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
-  debounceTimer = setTimeout(debouncedSave, 500);
-}
-
-function handleCellEditorSubmit() {
-  if (!selectedCell.value) return;
-  const { row, col } = selectedCell.value;
-  handleCellChange(row, col, cellEditorValue.value);
-}
-
-function handleDeselectCell() {
-  selectedCell.value = null;
-  cellEditorValue.value = '';
-}
-
-// ========== File operations ==========
-async function loadFileFromPath(filePath: string) {
-  try {
-    isLoading.value = true;
-    isFileLoading.value = true;
-    const fileData = await readFile(filePath);
-    fileDataStore.set(fileData, filePath);
-    currentSheetIndex.value = 0;
-    hasChanges.value = false;
-
-    const fileName = decodeURIComponent(await basename(filePath));
-    const extension = fileName.split('.').pop() || '';
-    // Only desktop reads thumbnail bytes in the frontend; mobile file IO stays in Rust.
-    const storageType = await getStorageType();
-    let bytes: number[] = [];
-    if (storageType === 'desktopPath') {
-      const { readFile: fsReadFile } = await import('@tauri-apps/plugin-fs');
-      bytes = Array.from(await fsReadFile(filePath));
-    }
-    await api.addRecentFileWithThumbnail(filePath, fileName, bytes.length, bytes, extension, storageType);
-    await recentFilesStore.load();
-
-    await updateEditorState();
-  } catch (error) {
-    ElMessage.error(`Failed to open file: ${error}`);
-  } finally {
-    isLoading.value = false;
-    isFileLoading.value = false;
-  }
-}
-
-async function handleOpenFile() {
-  try {
-    isLoading.value = true;
-    isFileLoading.value = true;
-    const result = await openFile();
-    if (!result) {
-      isLoading.value = false;
-      isFileLoading.value = false;
-      return;
-    }
-    fileDataStore.set(result.fileData, result.path);
-    currentSheetIndex.value = 0;
-    hasChanges.value = false;
-
-    const extension = result.fileName.split('.').pop() || '';
-    const storageType = await getStorageType();
-    await api.addRecentFileWithThumbnail(
-      result.path,
-      result.fileName,
-      result.bytes?.length || 0,
-      result.bytes || [],
-      extension,
-      storageType,
-      result.originalPath
-    );
-
-    await updateEditorState();
-  } catch (error) {
-    ElMessage.error(`Failed to open file: ${error}`);
-  } finally {
-    isLoading.value = false;
-    isFileLoading.value = false;
-  }
-}
-
-async function handleSaveFile() {
-  if (!fileData.value) return;
-
-  try {
-    const isNewFile = fileData.value.fileName.startsWith('untitled');
-    const defaultName = isNewFile
-      ? 'untitled'
-      : fileData.value.fileName.replace(/\.[^.]+$/, '');
-
-    const existingPath = fileDataStore.currentFilePath;
-    const storageType = await getStorageType();
-
-    if (existingPath) {
-      isLoading.value = true;
-      await saveFile(existingPath, fileData.value);
-      hasChanges.value = false;
-      ElMessage.success('File saved successfully');
-    } else {
-      const savePath = await pickSaveLocation(`${defaultName}.xlsx`);
-      if (savePath) {
-        isLoading.value = true;
-        await saveFile(savePath, fileData.value);
-        hasChanges.value = false;
-
-        const fileName = decodeURIComponent(await basename(savePath));
-        const extension = fileName.split('.').pop() || 'xlsx';
-        const bytes = storageType === 'desktopPath'
-          ? await api.generateFileBytes(fileData.value)
-          : [];
-        await api.addRecentFileWithThumbnail(
-          savePath,
-          fileName,
-          bytes.length,
-          bytes,
-          extension,
-          storageType
-        );
-        await recentFilesStore.load();
-        fileDataStore.setPath(savePath);
-        ElMessage.success('File saved successfully');
-      }
-    }
-  } catch (error) {
-    ElMessage.error(`Failed to save file: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function ensureSandboxPathForExport(defaultName: string, extension: string): Promise<string | null> {
-  let path = fileDataStore.currentFilePath;
-  const storageType = await getStorageType();
-
-  if (!path) {
-    if (storageType === 'desktopPath') {
-      throw new Error('Export is only supported for mobile sandbox files');
-    }
-    path = await pickSaveLocation(`${defaultName}.${extension}`);
-    if (!path) return null;
-    fileDataStore.setPath(path);
-
-    const fileName = decodeURIComponent(await basename(path));
-    const recentExtension = fileName.split('.').pop() || 'xlsx';
-    await api.addRecentFileWithThumbnail(
-      path,
-      fileName,
-      0,
-      [],
-      recentExtension,
-      storageType
-    );
-    await recentFilesStore.load();
-  }
-
-  await saveFile(path, fileData.value!);
-  hasChanges.value = false;
-  return path;
-}
-
-async function handleExportFile() {
-  if (!fileData.value) return;
-
-  try {
-    isLoading.value = true;
-    const isNewFile = fileData.value.fileName.startsWith('untitled');
-    const defaultName = isNewFile
-      ? 'untitled'
-      : fileData.value.fileName.replace(/\.[^.]+$/, '');
-    const currentExtension = fileData.value.fileName.split('.').pop()?.toLowerCase() || 'xlsx';
-    const extension = isNewFile ? 'xlsx' : currentExtension;
-    const exportName = `${defaultName}.${extension}`;
-    const sourcePath = await ensureSandboxPathForExport(defaultName, extension);
-    if (!sourcePath) return;
-
-    const exportedPath = await exportFile(sourcePath, exportName);
-    if (exportedPath) {
-      ElMessage.success('File exported successfully');
-    }
-  } catch (error) {
-    ElMessage.error(`Failed to export file: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-function handleBack() {
-  fileDataStore.clear();
-  router.push({ name: 'home' });
-}
+const {
+  loadFileFromPath,
+  handleOpenFile,
+  handleSaveFile,
+  handleExportFile,
+  handleBack,
+} = useFileActions({
+  fileData,
+  currentSheetIndex,
+  hasChanges,
+  isLoading,
+  isFileLoading,
+  flushPendingCellChanges,
+  updateEditorState,
+});
 
 // ========== Row/Column operations ==========
 async function handleAddRow() {
   if (!currentSheet.value) return;
+  if (!(await flushPendingCellChanges())) return;
+
   const colCount = currentSheet.value.rows[0]?.length || 0;
   const newRowIndex = currentSheet.value.rows.length;
   currentSheet.value.rows.push(Array(colCount).fill(null));
@@ -518,6 +206,8 @@ async function handleAddRow() {
 
 async function handleDeleteRow(index: number) {
   if (!currentSheet.value) return;
+  if (!(await flushPendingCellChanges())) return;
+
   const deletedRow = currentSheet.value.rows[index];
   currentSheet.value.rows.splice(index, 1);
 
@@ -536,6 +226,8 @@ async function handleDeleteRow(index: number) {
 
 async function handleAddColumn() {
   if (!currentSheet.value) return;
+  if (!(await flushPendingCellChanges())) return;
+
   for (const row of currentSheet.value.rows) {
     row.push(null);
   }
@@ -557,6 +249,8 @@ async function handleAddColumn() {
 
 async function handleDeleteColumn(index: number) {
   if (!currentSheet.value) return;
+  if (!(await flushPendingCellChanges())) return;
+
   const deletedCols: CellValue[][] = currentSheet.value.rows.map(row => row.splice(index, 1));
 
   try {
@@ -577,6 +271,8 @@ async function handleDeleteColumn(index: number) {
 // ========== Sheet operations ==========
 async function handleAddSheet() {
   if (!fileData.value) return;
+  if (!(await flushPendingCellChanges())) return;
+
   const newSheetIndex = fileData.value.sheets.length;
   const newSheet: SheetData = {
     name: `Sheet${newSheetIndex + 1}`,
@@ -612,6 +308,7 @@ async function handleDeleteSheet() {
     ElMessage.warning('Cannot delete the last sheet');
     return;
   }
+  if (!(await flushPendingCellChanges())) return;
 
   const deletedIndex = currentSheetIndex.value;
   const deletedSheet = fileData.value.sheets[deletedIndex];
@@ -658,6 +355,8 @@ async function handleUndo() {
 
   try {
     isLoading.value = true;
+    if (!(await flushPendingCellChanges())) return;
+
     const result = await api.undo();
     applyOperation(result);
     hasChanges.value = true;
@@ -674,6 +373,8 @@ async function handleRedo() {
 
   try {
     isLoading.value = true;
+    if (!(await flushPendingCellChanges())) return;
+
     const result = await api.redo();
     applyOperation(result);
     hasChanges.value = true;
@@ -692,6 +393,8 @@ async function handleSearch(query: string, scope: 'currentSheet' | 'allSheets') 
   searchQuery.value = query;
   try {
     isSearching.value = true;
+    if (!(await flushPendingCellChanges())) return;
+
     searchResults.value = await api.search(
       query,
       scope,
@@ -726,6 +429,8 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
 
   try {
     isLoading.value = true;
+    if (!(await flushPendingCellChanges())) return;
+
     const prevSortState = currentSortColumn.value;
     currentSortColumn.value = null;
 
@@ -764,12 +469,6 @@ onMounted(async () => {
   }
 });
 
-onUnmounted(() => {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
-});
 </script>
 
 <template>

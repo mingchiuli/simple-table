@@ -9,7 +9,6 @@ interface PickFileIOSResult {
     originalPath: string;
     fileName: string;
   };
-  bytes: number[];
 }
 
 export const iosFileOps = {
@@ -23,7 +22,6 @@ export const iosFileOps = {
       path: result.info.path,
       fileName: result.info.fileName,
       originalPath: result.info.originalPath,
-      bytes: result.bytes,
     };
   },
 

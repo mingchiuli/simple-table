@@ -2,6 +2,7 @@
  * Platform loader - Dynamic import factory with caching
  */
 import { getPlatform } from '@/utils/platform';
+import { basename } from '@tauri-apps/api/path';
 import type { PlatformAPI, OpenFileResult } from './types';
 import type { FileData } from '@/types';
 
@@ -88,4 +89,9 @@ export async function exportFile(sourcePath: string, defaultName: string) {
 export async function getStorageType() {
   const api = await getPlatformAPI();
   return api.storageType;
+}
+
+/** 获取路径中的文件名 */
+export async function getFileName(path: string) {
+  return decodeURIComponent(await basename(path));
 }

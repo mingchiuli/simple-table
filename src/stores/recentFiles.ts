@@ -24,7 +24,6 @@ export const useRecentFilesStore = defineStore("recentFiles", {
     async openFile(path: string): Promise<{ success: boolean; file?: FileData; needsRelocate?: boolean }> {
       const existingFile = this.files.find(f => f.path === path);
       const fileName = existingFile?.fileName || path.split("/").pop()?.split("?")[0] || "unknown";
-      const extension = fileName.split(".").pop() || "";
 
       try {
         // 直接调用 readFile（现在返回 FileData）
@@ -35,20 +34,14 @@ export const useRecentFilesStore = defineStore("recentFiles", {
 
         const storageType = await getStorageType();
 
-        // Only desktop reads thumbnail bytes in the frontend; mobile import returns
-        // bytes from the backend when the file is opened or relocated.
-        let bytes: number[] = [];
-        if (storageType === 'desktopPath') {
-          const { readFile: fsReadFile } = await import('@tauri-apps/plugin-fs');
-          bytes = Array.from(await fsReadFile(path));
-        }
+        const bytes = await api.generateThumbnailBytes(fileData);
 
+        const fileSize = await api.getFileSize(path);
         await api.addRecentFileWithThumbnail(
           path,
           fileName,
-          bytes.length,
+          fileSize,
           bytes,
-          extension,
           storageType,
           existingFile?.originalPath
         );
@@ -82,15 +75,15 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         const fileDataStore = useFileDataStore();
         fileDataStore.set(result.fileData, result.path);
 
-        const extension = result.fileName.split(".").pop() || "";
         const storageType = await getStorageType();
 
+        const bytes = await api.generateThumbnailBytes(result.fileData);
+        const fileSize = await api.getFileSize(result.path);
         await api.addRecentFileWithThumbnail(
           result.path,
           result.fileName,
-          result.bytes?.length || 0,
-          result.bytes || [],
-          extension,
+          fileSize,
+          bytes,
           storageType,
           result.originalPath
         );

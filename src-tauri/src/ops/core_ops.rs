@@ -81,14 +81,13 @@ impl Operation {
                 new_value,
                 ..
             } => {
-                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    if let Some(row_data) = sheet.rows.get_mut(*row) {
-                        if *col < row_data.len() {
-                            // 先更新值
-                            row_data[*col] = new_value.clone();
-                            // 索引重建由调用方异步处理
-                        }
-                    }
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index)
+                    && let Some(row_data) = sheet.rows.get_mut(*row)
+                    && *col < row_data.len()
+                {
+                    // 先更新值
+                    row_data[*col] = new_value.clone();
+                    // 索引重建由调用方异步处理
                 }
                 OperationResult::SetCell {
                     sheet_index: *sheet_index,
@@ -128,10 +127,10 @@ impl Operation {
                 row_index,
                 ..
             } => {
-                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    if *row_index < sheet.rows.len() {
-                        sheet.rows.remove(*row_index);
-                    }
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index)
+                    && *row_index < sheet.rows.len()
+                {
+                    sheet.rows.remove(*row_index);
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteRow {

@@ -13,20 +13,20 @@ use commands::android::{
     export_file_android, pick_file_android, pick_save_location_android, read_file_android,
     save_file_android,
 };
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use commands::check_update_mobile;
 #[cfg(target_os = "ios")]
 use commands::ios::{
     create_private_file_ios, export_file_ios, pick_file_ios, read_file_ios, save_file_ios,
 };
 use commands::{
     add_column, add_recent_file_with_thumbnail, add_row, add_sheet, check_file_exists,
-    delete_column, delete_row, delete_sheet, generate_file_bytes, get_editor_state,
-    get_recent_files, init_file, redo, remove_recent_file, search, set_cell, sort_column, undo,
-    update_recent_file_path,
+    delete_column, delete_row, delete_sheet, generate_file_bytes, generate_thumbnail_bytes,
+    get_editor_state, get_file_size, get_recent_files, init_file, redo, remove_recent_file, search,
+    set_cell, sort_column, undo, update_recent_file_path,
 };
 #[cfg(desktop)]
 use commands::{read_file_desktop, save_file_desktop};
-#[cfg(any(target_os = "android", target_os = "ios"))]
-use commands::check_update_mobile;
 
 use tauri::Emitter;
 
@@ -39,10 +39,10 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             println!("new app instance opened with {argv:?}");
             // File path is passed as argv[1], emit event for frontend to handle
-            if argv.len() > 1 {
-                if let Err(e) = app.emit("deep-link-received", argv[1].clone()) {
-                    eprintln!("Failed to emit deep link: {}", e);
-                }
+            if argv.len() > 1
+                && let Err(e) = app.emit("deep-link-received", argv[1].clone())
+            {
+                eprintln!("Failed to emit deep link: {}", e);
             }
         }));
     }
@@ -67,6 +67,7 @@ pub fn run() {
             #[cfg(desktop)]
             save_file_desktop,
             generate_file_bytes,
+            generate_thumbnail_bytes,
             init_file,
             undo,
             redo,
@@ -84,6 +85,7 @@ pub fn run() {
             add_recent_file_with_thumbnail,
             remove_recent_file,
             check_file_exists,
+            get_file_size,
             update_recent_file_path,
             // Android 专用命令
             #[cfg(target_os = "android")]

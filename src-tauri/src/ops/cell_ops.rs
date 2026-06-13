@@ -1,12 +1,12 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
+use crate::ops::Operation;
 use crate::ops::index_ops::{
     spawn_append_column_index, spawn_append_row_index, spawn_delete_last_column_index,
     spawn_delete_last_row_index, spawn_rebuild_sheet_index, spawn_update_cell_index,
 };
 use crate::state::editor_state::EditorState;
-use crate::ops::Operation;
 use crate::types::{CellValue, SheetData};
 
 /// 设置单元格值
@@ -22,6 +22,14 @@ pub fn do_set_cell(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
+                let sheet = editor_state
+                    .file_data
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+                if row >= sheet.rows.len() || sheet.rows.get(row).is_none_or(|r| col >= r.len()) {
+                    return Err(AppError::InvalidCellPosition { row, col });
+                }
                 let operation = Operation::SetCell {
                     sheet_index,
                     row,
@@ -64,6 +72,12 @@ pub fn do_add_row(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
+                if sheet_index >= editor_state.file_data.sheets.len() {
+                    return Err(AppError::InvalidSheetIndex(sheet_index));
+                }
+                if row_index > editor_state.file_data.sheets[sheet_index].rows.len() {
+                    return Err(AppError::RowNotFound(row_index));
+                }
                 // 直接计算 row_data（空行数据）
                 let operation = Operation::AddRow {
                     sheet_index,
@@ -105,7 +119,7 @@ pub fn do_delete_row(
                     .file_data
                     .sheets
                     .get(sheet_index)
-                    .ok_or_else(|| AppError::RowNotFound(row_index))?;
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
                 is_last_row = row_index + 1 == sheet.rows.len();
                 col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
                 // 从文件数据中获取行数据（用于撤销）
@@ -113,7 +127,7 @@ pub fn do_delete_row(
                     .rows
                     .get(row_index)
                     .cloned()
-                    .ok_or_else(|| AppError::RowNotFound(row_index))?;
+                    .ok_or(AppError::RowNotFound(row_index))?;
                 let operation = Operation::DeleteRow {
                     sheet_index,
                     row_index,
@@ -156,6 +170,9 @@ pub fn do_add_column(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
+                if sheet_index >= editor_state.file_data.sheets.len() {
+                    return Err(AppError::InvalidSheetIndex(sheet_index));
+                }
                 // col_index 和 col_data 会在 execute 中自动计算和保存
                 let operation = Operation::AddColumn {
                     sheet_index,
@@ -193,8 +210,18 @@ pub fn do_delete_column(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
-                let sheet = &editor_state.file_data.sheets[sheet_index];
+                let sheet = editor_state
+                    .file_data
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
                 let total_cols = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                if col_index >= total_cols {
+                    return Err(AppError::InvalidCellPosition {
+                        row: 0,
+                        col: col_index,
+                    });
+                }
                 is_last_col = col_index + 1 == total_cols;
                 row_count = sheet.rows.len();
                 // 从文件数据中获取列数据（用于撤销）
@@ -228,26 +255,20 @@ pub fn do_delete_column(
 
 /// 添加 Sheet
 pub fn do_add_sheet(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppError> {
-    let result = {
-        let mut state_guard = state.write().expect("Editor state lock poisoned");
-        match state_guard.as_mut() {
-            Some(editor_state) => {
-                // 传入空字符串和 None，让 execute 生成名称并创建空 sheet
-                let operation = Operation::AddSheet {
-                    name: String::new(),
-                    sheet_data: None,
-                    sheet_index: None,
-                };
-                editor_state.execute(operation);
-                Ok(())
-            }
-            None => Err(AppError::NoFileLoaded),
+    let mut state_guard = state.write().expect("Editor state lock poisoned");
+    match state_guard.as_mut() {
+        Some(editor_state) => {
+            // 传入空字符串和 None，让 execute 生成名称并创建空 sheet
+            let operation = Operation::AddSheet {
+                name: String::new(),
+                sheet_data: None,
+                sheet_index: None,
+            };
+            editor_state.execute(operation);
+            Ok(())
         }
-    };
-
-    // Note: Adding a sheet doesn't require index rebuild since it's a new empty sheet
-
-    result
+        None => Err(AppError::NoFileLoaded),
+    }
 }
 
 /// 删除 Sheet

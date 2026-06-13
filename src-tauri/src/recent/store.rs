@@ -45,9 +45,16 @@ impl RecentStore {
             files[idx].last_opened = file.last_opened;
             files[idx].file_size = file.file_size;
             files[idx].thumbnail = file.thumbnail;
+            files[idx].storage_type = file.storage_type;
+            files[idx].original_path = file.original_path;
             files.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+            let updated = files
+                .iter()
+                .find(|f| f.path == file.path)
+                .cloned()
+                .ok_or_else(|| AppError::FileNotFound(file.path.clone()))?;
             Self::save(app, &files)?;
-            return Ok(files[idx].clone());
+            return Ok(updated);
         }
 
         files.insert(0, file);

@@ -27,10 +27,10 @@ impl Serialize for CellValue {
             CellValue::String(s) => serializer.serialize_str(s),
             CellValue::Number(v) => {
                 // 如果是整数且超出 JavaScript 安全范围，序列化为字符串
-                if let Some(i) = v.as_i64() {
-                    if i > JS_MAX_SAFE_INTEGER || i < JS_MIN_SAFE_INTEGER {
-                        return serializer.serialize_str(&i.to_string());
-                    }
+                if let Some(i) = v.as_i64()
+                    && !(JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&i)
+                {
+                    return serializer.serialize_str(&i.to_string());
                 }
                 // 否则正常序列化
                 v.serialize(serializer)
@@ -74,18 +74,9 @@ impl<'de> Deserialize<'de> for CellValue {
                 }
             }
             Value::String(s) => {
-                // 优先尝试解析为 i64
-                if let Ok(i) = s.parse::<i64>() {
-                    // 如果超出 JS 安全范围，保持为字符串
-                    if i > JS_MAX_SAFE_INTEGER || i < JS_MIN_SAFE_INTEGER {
-                        return Ok(CellValue::String(s));
-                    }
-                    Ok(CellValue::Number(Value::from(i)))
-                } else if let Ok(f) = s.parse::<f64>() {
-                    Ok(CellValue::Number(Value::from(f)))
-                } else {
-                    Ok(CellValue::String(s))
-                }
+                // JS 端传入 string 时表示用户明确要保留文本语义，
+                // 例如邮编/编号 "007" 或超过 JS 安全整数范围的值。
+                Ok(CellValue::String(s))
             }
             Value::Array(_) | Value::Object(_) => {
                 // 不支持的类型，转为字符串
@@ -238,6 +229,7 @@ pub struct SortState {
 // ==================== GitHub Update Types ====================
 
 /// 更新信息，返回给前端
+#[cfg(any(target_os = "android", target_os = "ios"))]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub version: String,
@@ -247,6 +239,7 @@ pub struct UpdateInfo {
 }
 
 /// GitHub Release API 响应结构
+#[cfg(any(target_os = "android", target_os = "ios"))]
 #[derive(Debug, Deserialize)]
 pub struct GitHubRelease {
     pub tag_name: String,
@@ -254,6 +247,7 @@ pub struct GitHubRelease {
 }
 
 /// GitHub Release Asset 结构
+#[cfg(any(target_os = "android", target_os = "ios"))]
 #[derive(Debug, Deserialize)]
 pub struct GitHubAsset {
     pub name: String,

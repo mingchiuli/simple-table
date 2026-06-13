@@ -6,31 +6,48 @@ use rust_xlsxwriter::*;
 
 /// 根据 FileData 生成可写入文件系统或导出的文件字节
 pub fn generate_file_bytes(file_data: &FileData) -> Result<(String, Vec<u8>), AppError> {
+    generate_file_bytes_for_name(file_data, &file_data.file_name)
+}
+
+/// 根据目标文件名/路径生成对应格式的字节。
+///
+/// 读入 .xls/.ods 后仍允许编辑，但当前写出层只支持 xlsx/csv；
+/// 调用方必须传入用户最终选择的目标路径，避免用旧 file_name 推断格式。
+pub fn generate_file_bytes_for_target(
+    file_data: &FileData,
+    target_path_or_name: &str,
+) -> Result<(String, Vec<u8>), AppError> {
+    let target_name = Path::new(target_path_or_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(target_path_or_name);
+    generate_file_bytes_for_name(file_data, target_name)
+}
+
+fn generate_file_bytes_for_name(
+    file_data: &FileData,
+    output_name: &str,
+) -> Result<(String, Vec<u8>), AppError> {
     // 确定文件扩展名
-    let file_name = &file_data.file_name;
-    let extension = Path::new(file_name)
+    let extension = Path::new(output_name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_else(|| "xlsx".to_string());
+    let output_stem = Path::new(output_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("untitled");
 
     match extension.as_str() {
         "xlsx" => {
             let bytes = write_excel_to_bytes(file_data)?;
-            Ok((
-                format!(
-                    "{}.xlsx",
-                    file_name.replace(".xlsx", "").replace(".csv", "")
-                ),
-                bytes,
-            ))
+            Ok((format!("{output_stem}.xlsx"), bytes))
         }
         "csv" => {
             let bytes = write_csv_to_bytes(file_data)?;
-            Ok((
-                format!("{}.csv", file_name.replace(".xlsx", "").replace(".csv", "")),
-                bytes,
-            ))
+            Ok((format!("{output_stem}.csv"), bytes))
         }
         _ => Err(AppError::UnsupportedFormat),
     }
@@ -59,13 +76,13 @@ fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                         if let Some(num) = n.as_i64() {
                             const F64_SAFE_MAX: i64 = 9_007_199_254_740_991;
                             const F64_SAFE_MIN: i64 = -9_007_199_254_740_991;
-                            if num >= F64_SAFE_MIN && num <= F64_SAFE_MAX {
+                            if (F64_SAFE_MIN..=F64_SAFE_MAX).contains(&num) {
                                 worksheet
                                     .write(row_u32, col_u16, num as f64)
                                     .map_err(|e| AppError::WriteError(e.to_string()))?;
                             } else {
                                 worksheet
-                                    .write(row_u32, col_u16, &num.to_string())
+                                    .write(row_u32, col_u16, num.to_string())
                                     .map_err(|e| AppError::WriteError(e.to_string()))?;
                             }
                         } else if let Some(num) = n.as_f64() {
@@ -81,7 +98,7 @@ fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                             }
                         } else {
                             worksheet
-                                .write(row_u32, col_u16, &n.to_string())
+                                .write(row_u32, col_u16, n.to_string())
                                 .map_err(|e| AppError::WriteError(e.to_string()))?;
                         }
                     }
@@ -146,10 +163,11 @@ fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                         CellValue::String(s) => s.clone(),
                         CellValue::Number(n) => {
                             // f64 的 NaN/Infinity 不可机读，写空字符串
-                            if let Some(f) = n.as_f64() {
-                                if !f.is_finite() && n.as_i64().is_none() {
-                                    return String::new();
-                                }
+                            if let Some(f) = n.as_f64()
+                                && !f.is_finite()
+                                && n.as_i64().is_none()
+                            {
+                                return String::new();
                             }
                             n.to_string()
                         }

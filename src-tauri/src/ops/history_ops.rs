@@ -28,13 +28,11 @@ impl Operation {
                 sheet_index,
                 row_index,
                 row_data,
-            } => {
-                Operation::DeleteRow {
-                    sheet_index: *sheet_index,
-                    row_index: *row_index,
-                    row_data: row_data.clone(),
-                }
-            }
+            } => Operation::DeleteRow {
+                sheet_index: *sheet_index,
+                row_index: *row_index,
+                row_data: row_data.clone(),
+            },
             Operation::DeleteRow {
                 sheet_index,
                 row_index,
@@ -48,13 +46,11 @@ impl Operation {
                 sheet_index,
                 col_index,
                 col_data,
-            } => {
-                Operation::DeleteColumn {
-                    sheet_index: *sheet_index,
-                    col_index: col_index.unwrap_or(0),
-                    col_data: col_data.clone(),
-                }
-            }
+            } => Operation::DeleteColumn {
+                sheet_index: *sheet_index,
+                col_index: col_index.unwrap_or(0),
+                col_data: col_data.clone(),
+            },
             Operation::DeleteColumn {
                 sheet_index,
                 col_index,
@@ -64,37 +60,31 @@ impl Operation {
                 col_index: Some(*col_index),
                 col_data: col_data.clone(),
             },
-            Operation::AddSheet { sheet_index, .. } => {
-                Operation::DeleteSheet {
-                    sheet_index: sheet_index.unwrap_or(usize::MAX),
-                    sheet_data: SheetData::default(),
-                }
-            }
+            Operation::AddSheet { sheet_index, .. } => Operation::DeleteSheet {
+                sheet_index: sheet_index.unwrap_or(usize::MAX),
+                sheet_data: SheetData::default(),
+            },
             Operation::DeleteSheet {
                 sheet_index,
                 sheet_data,
-            } => {
-                Operation::AddSheet {
-                    name: sheet_data.name.clone(),
-                    sheet_data: Some(sheet_data.clone()),
-                    sheet_index: Some(*sheet_index),
-                }
-            }
+            } => Operation::AddSheet {
+                name: sheet_data.name.clone(),
+                sheet_data: Some(sheet_data.clone()),
+                sheet_index: Some(*sheet_index),
+            },
             Operation::SortColumn {
                 sheet_index,
                 col_index,
                 ascending,
                 old_sheet_data,
                 previous_sort_state,
-            } => {
-                Operation::SortColumn {
-                    sheet_index: *sheet_index,
-                    col_index: *col_index,
-                    ascending: *ascending,
-                    old_sheet_data: old_sheet_data.clone(),
-                    previous_sort_state: previous_sort_state.clone(),
-                }
-            }
+            } => Operation::SortColumn {
+                sheet_index: *sheet_index,
+                col_index: *col_index,
+                ascending: *ascending,
+                old_sheet_data: old_sheet_data.clone(),
+                previous_sort_state: previous_sort_state.clone(),
+            },
         }
     }
 

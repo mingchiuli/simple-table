@@ -8,7 +8,7 @@ pub fn read_file(path: &str) -> Result<FileData, AppError> {
 }
 
 pub fn save_file(path: &str, file_data: &FileData) -> Result<(), AppError> {
-    let (_, bytes) = crate::io::codec::writer::generate_file_bytes(file_data)?;
+    let (_, bytes) = crate::io::codec::writer::generate_file_bytes_for_target(file_data, path)?;
     fs::write(path, bytes).map_err(|e| AppError::WriteError(e.to_string()))?;
     Ok(())
 }
