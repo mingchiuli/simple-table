@@ -127,7 +127,7 @@ fn read_csv_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<Data>>> {
 fn read_sheet_data_from_bytes(
     workbook: &mut Xlsx<BufReader<Cursor<Vec<u8>>>>,
 ) -> Option<Vec<Vec<Data>>> {
-    let sheets = workbook.sheet_names().to_owned();
+    let sheets = workbook.sheet_names();
     if sheets.is_empty() {
         return None;
     }
@@ -147,7 +147,7 @@ fn read_sheet_data_from_bytes(
 fn read_sheet_data_xls_from_bytes(
     workbook: &mut Xls<BufReader<Cursor<Vec<u8>>>>,
 ) -> Option<Vec<Vec<Data>>> {
-    let sheets = workbook.sheet_names().to_owned();
+    let sheets = workbook.sheet_names();
     if sheets.is_empty() {
         return None;
     }
@@ -167,7 +167,7 @@ fn read_sheet_data_xls_from_bytes(
 fn read_sheet_data_ods_from_bytes(
     workbook: &mut Ods<BufReader<Cursor<Vec<u8>>>>,
 ) -> Option<Vec<Vec<Data>>> {
-    let sheets = workbook.sheet_names().to_owned();
+    let sheets = workbook.sheet_names();
     if sheets.is_empty() {
         return None;
     }

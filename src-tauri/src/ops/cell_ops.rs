@@ -46,7 +46,7 @@ pub fn do_set_cell(
 
     // 增量更新单格索引（worker 内部 delete_term + add_document）
     if result.is_ok() {
-        spawn_update_cell_index(sheet_index, row, col, &new_value, state.clone());
+        spawn_update_cell_index(sheet_index, row, col, &new_value, state);
     }
 
     result
@@ -94,9 +94,9 @@ pub fn do_add_row(
     if result.is_ok() {
         if is_append_at_end {
             // execute 内部会把空 row_data 填成 vec![Null; col_count]，索引层全空 → 空提交
-            spawn_append_row_index(sheet_index, row_index, vec![], state.clone());
+            spawn_append_row_index(sheet_index, row_index, vec![], state);
         } else {
-            spawn_rebuild_sheet_index(sheet_index, state.clone());
+            spawn_rebuild_sheet_index(sheet_index, state);
         }
     }
 
@@ -142,9 +142,9 @@ pub fn do_delete_row(
 
     if result.is_ok() {
         if is_last_row {
-            spawn_delete_last_row_index(sheet_index, row_index, col_count, state.clone());
+            spawn_delete_last_row_index(sheet_index, row_index, col_count, state);
         } else {
-            spawn_rebuild_sheet_index(sheet_index, state.clone());
+            spawn_rebuild_sheet_index(sheet_index, state);
         }
     }
 
@@ -189,9 +189,9 @@ pub fn do_add_column(
     if result.is_ok() {
         if let Some(col_index) = new_col_index {
             // 新列全空，索引层无需写入文档；增量提交开销 ~ms
-            spawn_append_column_index(sheet_index, col_index, vec![], state.clone());
+            spawn_append_column_index(sheet_index, col_index, vec![], state);
         } else {
-            spawn_rebuild_sheet_index(sheet_index, state.clone());
+            spawn_rebuild_sheet_index(sheet_index, state);
         }
     }
 
@@ -244,9 +244,9 @@ pub fn do_delete_column(
 
     if result.is_ok() {
         if is_last_col {
-            spawn_delete_last_column_index(sheet_index, col_index, row_count, state.clone());
+            spawn_delete_last_column_index(sheet_index, col_index, row_count, state);
         } else {
-            spawn_rebuild_sheet_index(sheet_index, state.clone());
+            spawn_rebuild_sheet_index(sheet_index, state);
         }
     }
 

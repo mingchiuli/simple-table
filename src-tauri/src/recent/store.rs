@@ -21,7 +21,7 @@ impl RecentStore {
         };
         store
             .get(STORE_KEY)
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default()
     }
 

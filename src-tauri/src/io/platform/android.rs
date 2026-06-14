@@ -3,18 +3,20 @@ use super::mobile::{
     write_path_with_official_fs,
 };
 use crate::error::AppError;
+use crate::io::document;
 use std::path::Path;
 use std::str;
 use tauri::AppHandle;
+use tauri_plugin_fs::FilePath;
 
-fn display_name_from_path(path: &tauri_plugin_fs::FilePath) -> String {
+fn display_name_from_path(path: &FilePath) -> String {
     match path {
-        tauri_plugin_fs::FilePath::Path(p) => p
+        FilePath::Path(p) => p
             .file_name()
             .and_then(|name| name.to_str())
             .map(|name| name.to_string())
             .unwrap_or_else(|| "imported.xlsx".to_string()),
-        tauri_plugin_fs::FilePath::Url(url) => url
+        FilePath::Url(url) => url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
             .filter(|segment| !segment.is_empty())
@@ -100,7 +102,7 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
 
     let path = sandbox_path.to_string_lossy().to_string();
     let file_data =
-        crate::io::document::open_from_bytes(path.clone(), bytes.clone(), Some(file_name.clone()))?;
+        document::open_from_bytes(path.clone(), bytes.clone(), Some(file_name.clone()))?;
 
     Ok(Some(PickFileResult {
         file_data,

@@ -1,17 +1,19 @@
 use super::mobile::{
-    PickFileResult, PickedFileInfo, unique_import_path, write_path_with_official_fs,
+    self, PickFileResult, PickedFileInfo, unique_import_path, write_path_with_official_fs,
 };
 use crate::error::AppError;
+use crate::io::document;
 use tauri::AppHandle;
+use tauri_plugin_fs::FilePath;
 
-fn display_name_from_path(path: &tauri_plugin_fs::FilePath) -> String {
+fn display_name_from_path(path: &FilePath) -> String {
     match path {
-        tauri_plugin_fs::FilePath::Path(p) => p
+        FilePath::Path(p) => p
             .file_name()
             .and_then(|name| name.to_str())
             .map(|name| name.to_string())
             .unwrap_or_else(|| "imported.xlsx".to_string()),
-        tauri_plugin_fs::FilePath::Url(url) => url
+        FilePath::Url(url) => url
             .to_file_path()
             .ok()
             .and_then(|p| {
@@ -51,7 +53,7 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
 
     let path = sandbox_path.to_string_lossy().to_string();
     let file_data =
-        crate::io::document::open_from_bytes(path.clone(), bytes.clone(), Some(file_name.clone()))?;
+        document::open_from_bytes(path.clone(), bytes.clone(), Some(file_name.clone()))?;
 
     Ok(Some(PickFileResult {
         file_data,
@@ -69,5 +71,5 @@ pub fn export_file(
     source_path: &str,
     default_name: &str,
 ) -> Result<Option<String>, AppError> {
-    super::mobile::export_file(app, source_path, default_name)
+    mobile::export_file(app, source_path, default_name)
 }

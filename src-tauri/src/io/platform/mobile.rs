@@ -1,10 +1,12 @@
 use crate::error::AppError;
+use crate::io::{codec::writer, document};
 use crate::types::FileData;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_fs::FilePath;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +54,7 @@ pub(super) fn unique_import_path(app: &AppHandle, file_name: &str) -> Result<Pat
 
 pub(super) fn write_with_official_fs(
     app: &AppHandle,
-    path: tauri_plugin_fs::FilePath,
+    path: FilePath,
     bytes: &[u8],
 ) -> Result<(), AppError> {
     use tauri_plugin_fs::{FsExt, OpenOptions};
@@ -72,7 +74,7 @@ pub(super) fn write_path_with_official_fs(
     path: PathBuf,
     bytes: &[u8],
 ) -> Result<(), AppError> {
-    write_with_official_fs(app, tauri_plugin_fs::FilePath::from(path), bytes)
+    write_with_official_fs(app, FilePath::from(path), bytes)
 }
 
 pub fn read_file(app: &AppHandle, path: &str) -> Result<FileData, AppError> {
@@ -85,14 +87,14 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<FileData, AppError> {
         .to_string();
     let bytes = app
         .fs()
-        .read(tauri_plugin_fs::FilePath::from(PathBuf::from(path)))
+        .read(FilePath::from(PathBuf::from(path)))
         .map_err(|e| AppError::ReadError(format!("Failed to read file: {}", e)))?;
 
-    crate::io::document::open_from_bytes(path.to_string(), bytes, Some(file_name))
+    document::open_from_bytes(path.to_string(), bytes, Some(file_name))
 }
 
 pub fn save_file(app: &AppHandle, path: &str, file_data: &FileData) -> Result<(), AppError> {
-    let (_, bytes) = crate::io::codec::writer::generate_file_bytes_for_target(file_data, path)?;
+    let (_, bytes) = writer::generate_file_bytes_for_target(file_data, path)?;
     write_path_with_official_fs(app, PathBuf::from(path), &bytes)
 }
 
@@ -133,7 +135,7 @@ pub fn export_file(
 
     let bytes = app
         .fs()
-        .read(tauri_plugin_fs::FilePath::from(PathBuf::from(source_path)))
+        .read(FilePath::from(PathBuf::from(source_path)))
         .map_err(|e| AppError::ReadError(format!("Failed to read export source: {}", e)))?;
 
     write_with_official_fs(app, dest.clone(), &bytes)

@@ -28,12 +28,7 @@ pub fn open_from_bytes(
     });
 
     // 传入 path 到 reader
-    let file_data = super::codec::reader::read_file_from_bytes(
-        &extension,
-        bytes,
-        path.clone(),
-        resolved_file_name,
-    )?;
+    let file_data = reader::read_file_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
     // 初始化编辑器状态
     init_editor_state(file_data.clone());
@@ -54,5 +49,5 @@ fn init_editor_state(file_data: FileData) {
         *state_guard = Some(EditorState::new(file_data));
     }
     // 异步构建索引（后台线程）
-    spawn_rebuild_all_sheets_index(state.clone());
+    spawn_rebuild_all_sheets_index(state);
 }

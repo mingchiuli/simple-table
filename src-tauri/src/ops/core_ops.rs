@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 
-use crate::types::{CellValue, ColumnChange, OperationResult, RowChange, SheetData, SortState};
+use crate::types::{
+    CellChange, CellValue, ColumnChange, FileData, OperationResult, RowChange, SheetData,
+    SheetIndex, SortState,
+};
 use serde::{Deserialize, Serialize};
 
 /// 操作类型 - 用于执行和撤销/重做
@@ -70,9 +73,7 @@ pub enum Operation {
 impl Operation {
     /// 执行操作
     /// 注意：此方法不再同步重建索引，索引重建由调用方异步处理
-    pub fn execute(&self, file_data: &mut crate::types::FileData) -> OperationResult {
-        use crate::types::CellChange;
-
+    pub fn execute(&self, file_data: &mut FileData) -> OperationResult {
         match self {
             Operation::SetCell {
                 sheet_index,
@@ -222,7 +223,7 @@ impl Operation {
                             vec![CellValue::Null; 5],
                         ],
                         merges: vec![],
-                        index: crate::types::SheetIndex::default(),
+                        index: SheetIndex::default(),
                         ..Default::default()
                     };
                     (new_sheet, final_name)

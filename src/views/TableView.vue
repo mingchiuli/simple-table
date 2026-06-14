@@ -423,6 +423,11 @@ function handleClearSearch() {
   searchQuery.value = '';
 }
 
+function handleSelectCell(row: number, col: number) {
+  autoScroll.value = false;
+  selectedCell.value = { row, col };
+}
+
 // ========== Sort ==========
 async function handleSortColumn(colIndex: number, ascending: boolean) {
   if (!fileData.value) return;
@@ -527,7 +532,7 @@ onMounted(async () => {
               @cell-editing="handleCellEditing"
               @delete-row="handleDeleteRow"
               @delete-column="handleDeleteColumn"
-              @select-cell="(row, col) => { autoScroll = false; selectedCell = { row, col } }"
+              @select-cell="handleSelectCell"
               @sort-column="handleSortColumn"
               @column-resize="handleColumnResize"
             />
