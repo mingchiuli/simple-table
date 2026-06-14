@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::error::AppError;
+use crate::io::codec::reader;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::state::{editor_state::EditorState, get_state};
 use crate::types::FileData;
