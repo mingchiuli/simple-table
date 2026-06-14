@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::AppError;
-use crate::io::codec::reader;
+use crate::io::codec::reader::read_file_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::state::{editor_state::EditorState, get_state};
 use crate::types::FileData;
@@ -29,7 +29,7 @@ pub fn open_from_bytes(
     });
 
     // 传入 path 到 reader
-    let file_data = reader::read_file_from_bytes(&extension, bytes, path, resolved_file_name)?;
+    let file_data = read_file_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
     // 初始化编辑器状态
     init_editor_state(file_data.clone());
