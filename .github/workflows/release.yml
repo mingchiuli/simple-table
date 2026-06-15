@@ -116,11 +116,15 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r26d
+          ndk-version: r29
           add-to-path: true
+          link-to-sdk: true
 
-      - name: Set NDK_HOME
-        run: echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+      - name: Set Android NDK env
+        run: |
+          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -130,7 +134,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -198,18 +202,15 @@ jobs:
           head -50 "$GRADLE_FILE" | cat -n
 
       - name: Build Android APK
-        run: npx tauri android build --apk
+        run: npx tauri android build --apk --target aarch64
 
       - name: Upload APK to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 优先查找签名后的 release APK
-          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-release.apk" | head -1)
-          if [ -n "$APK_PATH" ]; then
-            gh release upload ${{ github.ref_name }} "$APK_PATH" --clobber
-          else
-            echo "::warning::No signed release APK found, uploading all APKs..."
-            find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec \
-              gh release upload ${{ github.ref_name }} {} --clobber \;
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -path "*/arm64/release/*-release.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::No arm64 release APK found"
+            exit 1
           fi
+          gh release upload ${{ github.ref_name }} "$APK_PATH" --clobber

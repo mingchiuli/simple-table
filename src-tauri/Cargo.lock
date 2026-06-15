@@ -4923,7 +4923,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "base64 0.22.1",
  "calamine",
