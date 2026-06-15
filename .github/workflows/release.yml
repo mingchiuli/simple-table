@@ -202,7 +202,7 @@ jobs:
           head -50 "$GRADLE_FILE" | cat -n
 
       - name: Build Android APK
-        run: npx tauri android build --apk --target aarch64
+        run: npx tauri android build --apk --target aarch64 --split-per-abi
 
       - name: Upload APK to Release
         env:
