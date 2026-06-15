@@ -214,28 +214,93 @@ function handleCheckUpdate() {
 .mobile-toolbar {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 8px 12px;
   gap: 8px;
   border-bottom: 1px solid var(--el-border-color);
+  overflow: hidden;
 }
 
 .mobile-toolbar-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mobile-toolbar :deep(.file-buttons) {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.mobile-toolbar :deep(.file-buttons .el-button) {
+  flex: 1 1 88px;
+  min-width: 0;
+  margin-left: 0;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.mobile-toolbar :deep(.file-buttons .el-button > span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 180px;
+  min-width: 0;
   gap: 8px;
 }
 
+.mobile-right > .el-button {
+  flex: 0 0 40px;
+  margin-left: 0;
+}
+
+.mobile-right :deep(.sheet-selector) {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 120px;
+  max-width: 180px;
+}
+
 .mobile-toolbar-actions {
-  display: flex;
-  justify-content: center;
-  gap: 4px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.mobile-toolbar-actions :deep(.el-button) {
+  width: 100%;
+  min-width: 0;
+  margin-left: 0;
+  padding-right: 4px;
+  padding-left: 4px;
+}
+
+.mobile-toolbar-actions :deep(.el-button > span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .mobile-right {
+    flex-basis: 100%;
+  }
+
+  .mobile-right :deep(.sheet-selector) {
+    max-width: none;
+  }
 }
 </style>

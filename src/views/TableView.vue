@@ -564,9 +564,12 @@ onMounted(async () => {
 .app-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  width: 100%;
+  max-width: 100vw;
+  height: 100dvh;
   background-color: var(--el-bg-color);
   position: relative;
+  overflow: hidden;
 }
 
 .content {
@@ -575,6 +578,7 @@ onMounted(async () => {
   padding: 0;
   display: flex;
   flex-direction: row;
+  min-width: 0;
 }
 
 .editor-column {
@@ -592,6 +596,9 @@ onMounted(async () => {
   flex-direction: column;
   overflow-x: auto;
   overflow-y: hidden;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .skeleton-container {
