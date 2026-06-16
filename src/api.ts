@@ -7,8 +7,18 @@ export async function initFile(fileData: FileData): Promise<void> {
 
 // ==================== Editor Operations ====================
 
-export async function getEditorState(): Promise<{ canUndo: boolean; canRedo: boolean } | null> {
-  return invoke<{ canUndo: boolean; canRedo: boolean } | null>("get_editor_state");
+export type EditorStateInfo = {
+  canUndo: boolean;
+  canRedo: boolean;
+  isDirty: boolean;
+};
+
+export async function getEditorState(): Promise<EditorStateInfo | null> {
+  return invoke<EditorStateInfo | null>("get_editor_state");
+}
+
+export async function markFileSaved(): Promise<void> {
+  return invoke<void>("mark_file_saved");
 }
 
 export async function undo(): Promise<OperationResult> {

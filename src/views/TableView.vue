@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { HomeFilled } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
+import { useDocumentStatus } from '@/composables/useDocumentStatus';
 import { useFileActions } from '@/composables/useFileActions';
 import { cellToEditorString, usePendingCellSave } from '@/composables/usePendingCellSave';
 import { useFileDataStore } from '@/stores/fileData';
@@ -23,9 +24,6 @@ const { isMobileOrTablet } = usePlatform();
 const isLoading = ref(false);
 const isFileLoading = ref(false);
 const currentSheetIndex = ref(0);
-const hasChanges = ref(false);
-const canUndo = ref(false);
-const canRedo = ref(false);
 const currentSortColumn = ref<SortState | null>(null);
 const selectedCell = ref<{ row: number; col: number } | null>(null);
 const cellEditorValue = ref<string>('');
@@ -59,16 +57,16 @@ const sheetNames = computed(() => {
   return fileData.value.sheets.map((s) => s.name);
 });
 
-// ========== Update editor state ==========
-async function updateEditorState() {
-  try {
-    const state = await api.getEditorState();
-    canUndo.value = state?.canUndo ?? false;
-    canRedo.value = state?.canRedo ?? false;
-  } catch (error) {
-    console.error('Failed to get editor state:', error);
-  }
-}
+const {
+  canUndo,
+  canRedo,
+  hasUnsavedChanges,
+  refreshEditorState,
+  markPendingContentChange,
+  clearPendingContentChange,
+  resetDocumentStatus,
+  markSaved,
+} = useDocumentStatus();
 
 // ========== Apply operation (for undo/redo) ==========
 function applyOperation(result: OperationResult) {
@@ -162,8 +160,9 @@ const {
   selectedCell,
   cellEditorValue,
   currentSortColumn,
-  hasChanges,
-  updateEditorState,
+  refreshEditorState,
+  markPendingContentChange,
+  clearPendingContentChange,
 });
 
 const {
@@ -175,11 +174,12 @@ const {
 } = useFileActions({
   fileData,
   currentSheetIndex,
-  hasChanges,
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  updateEditorState,
+  refreshEditorState,
+  markSaved,
+  resetDocumentStatus,
 });
 
 // ========== Row/Column operations ==========
@@ -194,8 +194,7 @@ async function handleAddRow() {
   try {
     isLoading.value = true;
     await api.addRow(currentSheetIndex.value, newRowIndex);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     currentSheet.value.rows.pop();
     ElMessage.error(`Failed to add row: ${error}`);
@@ -214,8 +213,7 @@ async function handleDeleteRow(index: number) {
   try {
     isLoading.value = true;
     await api.deleteRow(currentSheetIndex.value, index);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     currentSheet.value.rows.splice(index, 0, deletedRow);
     ElMessage.error(`Failed to delete row: ${error}`);
@@ -235,8 +233,7 @@ async function handleAddColumn() {
   try {
     isLoading.value = true;
     await api.addColumn(currentSheetIndex.value);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     for (const row of currentSheet.value.rows) {
       row.pop();
@@ -256,8 +253,7 @@ async function handleDeleteColumn(index: number) {
   try {
     isLoading.value = true;
     await api.deleteColumn(currentSheetIndex.value, index);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     for (let i = 0; i < currentSheet.value.rows.length; i++) {
       currentSheet.value.rows[i].splice(index, 0, ...deletedCols[i]);
@@ -293,8 +289,7 @@ async function handleAddSheet() {
     selectedCell.value = null;
     cellEditorValue.value = '';
     currentSheetIndex.value = newSheetIndex;
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     fileData.value.sheets.pop();
     ElMessage.error(`Failed to add sheet: ${error}`);
@@ -319,8 +314,7 @@ async function handleDeleteSheet() {
   try {
     isLoading.value = true;
     await api.deleteSheet(deletedIndex);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     fileData.value.sheets.splice(deletedIndex, 0, deletedSheet);
     currentSheetIndex.value = deletedIndex;
@@ -359,8 +353,7 @@ async function handleUndo() {
 
     const result = await api.undo();
     applyOperation(result);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     ElMessage.error(`Failed to undo: ${error}`);
   } finally {
@@ -377,8 +370,7 @@ async function handleRedo() {
 
     const result = await api.redo();
     applyOperation(result);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     ElMessage.error(`Failed to redo: ${error}`);
   } finally {
@@ -446,8 +438,7 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
       prevSortState
     );
     applyOperation(result);
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   } catch (error) {
     ElMessage.error(`Failed to sort column: ${error}`);
   } finally {
@@ -462,7 +453,6 @@ function handleColumnResize(colIndex: number, width: number) {
     currentSheet.value.columnWidths = {};
   }
   currentSheet.value.columnWidths[colIndex] = width;
-  hasChanges.value = true;
 }
 
 // ========== Lifecycle ==========
@@ -471,6 +461,8 @@ onMounted(async () => {
   if (filePath) {
     console.log('Loading file from path:', filePath);
     await loadFileFromPath(filePath);
+  } else {
+    await refreshEditorState();
   }
 });
 
@@ -551,7 +543,7 @@ onMounted(async () => {
     <StatusBar
       v-if="fileData && !isMobileOrTablet"
       :file-name="fileData.fileName"
-      :has-changes="hasChanges"
+      :has-changes="hasUnsavedChanges"
     />
 
     <el-button class="back-btn" circle @click="handleBack">

@@ -1,4 +1,5 @@
 use crate::ops::Operation;
+use crate::state::content_hash::hash_file_content;
 use crate::types::{CellValue, FileData, OperationResult};
 use serde::{Deserialize, Serialize};
 
@@ -12,17 +13,31 @@ pub struct EditorState {
     pub redo_stack: Vec<Operation>,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub current_content_hash: u64,
+    pub saved_content_hash: u64,
 }
 
 impl EditorState {
     pub fn new(file_data: FileData) -> Self {
+        let content_hash = hash_file_content(&file_data);
         Self {
             file_data,
             history: Vec::new(),
             redo_stack: Vec::new(),
             can_undo: false,
             can_redo: false,
+            current_content_hash: content_hash,
+            saved_content_hash: content_hash,
         }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.current_content_hash != self.saved_content_hash
+    }
+
+    pub fn mark_saved(&mut self) {
+        self.refresh_content_hash();
+        self.saved_content_hash = self.current_content_hash;
     }
 
     /// 执行操作并记录到历史，返回增量结果
@@ -45,6 +60,7 @@ impl EditorState {
                         // 返回结果但不记录到 history
                         let result = operation.execute(&mut self.file_data);
                         self.update_flags();
+                        self.refresh_content_hash();
                         return result;
                     }
                     // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
@@ -140,6 +156,7 @@ impl EditorState {
         self.history.push(operation);
         self.redo_stack.clear();
         self.update_flags();
+        self.refresh_content_hash();
         result
     }
 
@@ -153,6 +170,7 @@ impl EditorState {
             self.redo_stack.push(redo_op);
 
             self.update_flags();
+            self.refresh_content_hash();
             Some(result)
         } else {
             None
@@ -165,6 +183,7 @@ impl EditorState {
             let result = operation.execute(&mut self.file_data);
             self.history.push(operation);
             self.update_flags();
+            self.refresh_content_hash();
             Some(result)
         } else {
             None
@@ -174,5 +193,9 @@ impl EditorState {
     fn update_flags(&mut self) {
         self.can_undo = !self.history.is_empty();
         self.can_redo = !self.redo_stack.is_empty();
+    }
+
+    fn refresh_content_hash(&mut self) {
+        self.current_content_hash = hash_file_content(&self.file_data);
     }
 }

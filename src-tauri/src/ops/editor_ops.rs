@@ -26,6 +26,7 @@ fn get_editor_state_info(state: &Arc<RwLock<Option<EditorState>>>) -> Option<Edi
     state.as_ref().map(|s| EditorStateInfo {
         can_undo: s.can_undo,
         can_redo: s.can_redo,
+        is_dirty: s.is_dirty(),
     })
 }
 
@@ -34,6 +35,18 @@ pub fn do_get_editor_state(
     state: Arc<RwLock<Option<EditorState>>>,
 ) -> Result<Option<EditorStateInfo>, AppError> {
     Ok(get_editor_state_info(&state))
+}
+
+/// 标记当前编辑器内容已经成功保存
+pub fn do_mark_file_saved(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppError> {
+    let mut state = state.write().expect("Editor state lock poisoned");
+    match state.as_mut() {
+        Some(editor_state) => {
+            editor_state.mark_saved();
+            Ok(())
+        }
+        None => Err(AppError::NoFileLoaded),
+    }
 }
 
 /// 撤销操作

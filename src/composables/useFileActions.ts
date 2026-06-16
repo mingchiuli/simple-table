@@ -10,11 +10,12 @@ import type { FileData } from '@/types';
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
   currentSheetIndex: Ref<number>;
-  hasChanges: Ref<boolean>;
   isLoading: Ref<boolean>;
   isFileLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
-  updateEditorState: () => Promise<void>;
+  refreshEditorState: () => Promise<void>;
+  markSaved: () => Promise<void>;
+  resetDocumentStatus: () => void;
 };
 
 function writableExtension(fileName: string): 'xlsx' | 'csv' | null {
@@ -25,11 +26,12 @@ function writableExtension(fileName: string): 'xlsx' | 'csv' | null {
 export function useFileActions({
   fileData,
   currentSheetIndex,
-  hasChanges,
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  updateEditorState,
+  refreshEditorState,
+  markSaved,
+  resetDocumentStatus,
 }: UseFileActionsOptions) {
   const router = useRouter();
   const fileDataStore = useFileDataStore();
@@ -55,14 +57,14 @@ export function useFileActions({
       const loadedFileData = await readFile(filePath);
       fileDataStore.set(loadedFileData, filePath);
       currentSheetIndex.value = 0;
-      hasChanges.value = false;
+      resetDocumentStatus();
 
       const fileName = await getFileName(filePath);
       const storageType = await getStorageType();
       await updateRecentFileEntry(filePath, fileName, storageType);
       await recentFilesStore.load();
 
-      await updateEditorState();
+      await refreshEditorState();
     } catch (error) {
       ElMessage.error(`Failed to open file: ${error}`);
     } finally {
@@ -82,7 +84,7 @@ export function useFileActions({
 
       fileDataStore.set(result.fileData, result.path);
       currentSheetIndex.value = 0;
-      hasChanges.value = false;
+      resetDocumentStatus();
 
       const storageType = await getStorageType();
       const bytes = await api.generateThumbnailBytes(result.fileData);
@@ -96,7 +98,7 @@ export function useFileActions({
         result.originalPath
       );
 
-      await updateEditorState();
+      await refreshEditorState();
     } catch (error) {
       ElMessage.error(`Failed to open file: ${error}`);
     } finally {
@@ -123,7 +125,7 @@ export function useFileActions({
       if (existingPath && existingWritableExtension) {
         isLoading.value = true;
         await saveFile(existingPath, fileData.value);
-        hasChanges.value = false;
+        await markSaved();
         const fileName = await getFileName(existingPath);
         fileData.value.fileName = fileName;
         fileData.value.path = existingPath;
@@ -144,7 +146,7 @@ export function useFileActions({
 
       isLoading.value = true;
       await saveFile(savePath, fileData.value);
-      hasChanges.value = false;
+      await markSaved();
 
       const fileName = await getFileName(savePath);
       fileData.value.fileName = fileName;
@@ -181,10 +183,10 @@ export function useFileActions({
     }
 
     await saveFile(path, fileData.value);
+    await markSaved();
     const fileName = await getFileName(path);
     await updateRecentFileEntry(path, fileName, storageType);
     await recentFilesStore.load();
-    hasChanges.value = false;
     return path;
   }
 
@@ -216,6 +218,7 @@ export function useFileActions({
     if (!(await flushPendingCellChanges())) return;
 
     fileDataStore.clear();
+    resetDocumentStatus();
     router.push({ name: 'home' });
   }
 

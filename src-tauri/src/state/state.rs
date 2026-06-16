@@ -8,6 +8,7 @@ use crate::state::editor_state::EditorState;
 pub struct EditorStateInfo {
     pub can_undo: bool,
     pub can_redo: bool,
+    pub is_dirty: bool,
 }
 
 /// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）

@@ -20,8 +20,9 @@ type UsePendingCellSaveOptions = {
   selectedCell: Ref<CellPosition | null>;
   cellEditorValue: Ref<string>;
   currentSortColumn: Ref<SortState | null>;
-  hasChanges: Ref<boolean>;
-  updateEditorState: () => Promise<void>;
+  refreshEditorState: () => Promise<void>;
+  markPendingContentChange: () => void;
+  clearPendingContentChange: () => void;
 };
 
 export function cellToEditorString(value: CellValue | undefined): string {
@@ -55,8 +56,9 @@ export function usePendingCellSave({
   selectedCell,
   cellEditorValue,
   currentSortColumn,
-  hasChanges,
-  updateEditorState,
+  refreshEditorState,
+  markPendingContentChange,
+  clearPendingContentChange,
 }: UsePendingCellSaveOptions) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const pendingChanges = new Map<string, PendingCellChange>();
@@ -90,6 +92,7 @@ export function usePendingCellSave({
 
     currentSheet.value.rows[row][col] = newValue;
     queueCellChange(currentSheetIndex.value, row, col, newValue, originalValue);
+    markPendingContentChange();
     schedulePendingSave();
   });
 
@@ -146,12 +149,14 @@ export function usePendingCellSave({
       cellEditorValue.value = value;
     }
 
-    hasChanges.value = true;
-    await updateEditorState();
+    await refreshEditorState();
   }
 
   async function debouncedSave(): Promise<boolean> {
-    if (!pendingChanges.size) return true;
+    if (!pendingChanges.size) {
+      clearPendingContentChange();
+      return true;
+    }
 
     const changes = Array.from(pendingChanges.values());
     pendingChanges.clear();
@@ -170,8 +175,14 @@ export function usePendingCellSave({
           }
         }
         ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
+        if (!pendingChanges.size) {
+          clearPendingContentChange();
+        }
         return false;
       }
+    }
+    if (!pendingChanges.size) {
+      clearPendingContentChange();
     }
     return true;
   }
@@ -231,6 +242,7 @@ export function usePendingCellSave({
 
     currentSheet.value.rows[row][col] = value;
     queueCellChange(currentSheetIndex.value, row, col, value, originalValue);
+    markPendingContentChange();
     schedulePendingSave();
   }
 
@@ -242,6 +254,7 @@ export function usePendingCellSave({
     if (cellEditorValue.value !== cellToEditorString(currentValue)) {
       currentSheet.value.rows[row][col] = cellEditorValue.value;
       queueCellChange(currentSheetIndex.value, row, col, cellEditorValue.value, currentValue);
+      markPendingContentChange();
     }
     void flushPendingCellChanges();
   }

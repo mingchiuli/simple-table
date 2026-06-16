@@ -49,6 +49,11 @@ pub fn get_editor_state() -> Result<Option<EditorStateInfo>, AppError> {
 }
 
 #[tauri::command]
+pub fn mark_file_saved() -> Result<(), AppError> {
+    editor_ops::do_mark_file_saved(get_state())
+}
+
+#[tauri::command]
 pub fn undo() -> Result<OperationResult, AppError> {
     editor_ops::do_undo(get_state())
 }
