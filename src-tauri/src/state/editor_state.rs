@@ -1,5 +1,5 @@
 use crate::ops::Operation;
-use crate::state::content_hash::hash_file_content;
+use crate::state::content_hash::{ContentHash, hash_file_content};
 use crate::types::{CellValue, FileData, OperationResult};
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +13,8 @@ pub struct EditorState {
     pub redo_stack: Vec<Operation>,
     pub can_undo: bool,
     pub can_redo: bool,
-    pub current_content_hash: u64,
-    pub saved_content_hash: u64,
+    pub current_content_hash: ContentHash,
+    pub saved_content_hash: ContentHash,
 }
 
 impl EditorState {

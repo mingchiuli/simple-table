@@ -46,55 +46,60 @@ function handleCheckUpdate() {
 <template>
   <!-- 桌面端工具栏 -->
   <header v-if="!isMobileOrTablet" class="toolbar desktop-toolbar">
-    <div class="toolbar-left">
-      <FileButtons
-        :file-data="props.fileData"
-        :show-export="canExport"
-        @open-file="emit('open-file')"
-        @save-file="emit('save-file')"
-        @export-file="emit('export-file')"
-      />
-      <el-button
-        size="small"
-        :icon="Refresh"
-        @click="handleCheckUpdate"
-        title="Check for Updates"
-      >
-        Update
-      </el-button>
-    </div>
+    <el-scrollbar
+      class="desktop-toolbar-scrollbar"
+      view-class="desktop-toolbar-content"
+    >
+      <div class="toolbar-left">
+        <FileButtons
+          :file-data="props.fileData"
+          :show-export="canExport"
+          @open-file="emit('open-file')"
+          @save-file="emit('save-file')"
+          @export-file="emit('export-file')"
+        />
+        <el-button
+          size="small"
+          :icon="Refresh"
+          @click="handleCheckUpdate"
+          title="Check for Updates"
+        >
+          Update
+        </el-button>
+      </div>
 
-    <div class="toolbar-center" v-if="props.fileData">
-      <SheetSelector
-        :sheet-names="props.sheetNames"
-        :current-sheet-index="props.currentSheetIndex"
-        @sheet-change="emit('sheet-change', $event)"
-      />
+      <div class="toolbar-center" v-if="props.fileData">
+        <SheetSelector
+          :sheet-names="props.sheetNames"
+          :current-sheet-index="props.currentSheetIndex"
+          @sheet-change="emit('sheet-change', $event)"
+        />
 
-      <SheetButtons
-        class="sheet-buttons"
-        :sheet-count="props.sheetNames.length"
-        @add-sheet="emit('add-sheet')"
-        @delete-sheet="emit('delete-sheet')"
-      />
+        <SheetButtons
+          class="sheet-buttons"
+          :sheet-count="props.sheetNames.length"
+          @add-sheet="emit('add-sheet')"
+          @delete-sheet="emit('delete-sheet')"
+        />
 
-      <SearchBox
-        class="search-box"
-        :is-searching="props.isSearching"
-        @search="(query: string, scope: 'currentSheet' | 'allSheets') => emit('search', query, scope)"
-        @clear-search="emit('clear-search')"
-      />
-    </div>
+        <SearchBox
+          class="search-box"
+          :is-searching="props.isSearching"
+          @search="(query: string, scope: 'currentSheet' | 'allSheets') => emit('search', query, scope)"
+          @clear-search="emit('clear-search')"
+        />
+      </div>
 
-    <EditButtons
-      v-if="props.fileData"
-      :can-undo="props.canUndo"
-      :can-redo="props.canRedo"
-      @undo="emit('undo')"
-      @redo="emit('redo')"
-      @add-row="emit('add-row')"
-      @add-column="emit('add-column')"
-    />
+      <EditButtons
+        v-if="props.fileData"
+        :can-undo="props.canUndo"
+        :can-redo="props.canRedo"
+        @undo="emit('undo')"
+        @redo="emit('redo')"
+        @add-row="emit('add-row')"
+        @add-column="emit('add-column')"
+      />
+    </el-scrollbar>
   </header>
 
   <!-- 移动端工具栏 -->
@@ -185,13 +190,26 @@ function handleCheckUpdate() {
 <style scoped>
 /* ==================== 桌面端工具栏 ==================== */
 .desktop-toolbar {
+  background: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color);
+  overflow: hidden;
+}
+
+.desktop-toolbar-scrollbar {
+  width: 100%;
+}
+
+.desktop-toolbar-scrollbar :deep(.el-scrollbar__wrap) {
+  overflow-y: hidden;
+}
+
+.desktop-toolbar-scrollbar :deep(.desktop-toolbar-content) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--el-bg-color);
-  border-bottom: 1px solid var(--el-border-color);
-  overflow-x: auto;
-  padding: 8px 20px;
+  width: max-content;
+  min-width: 100%;
+  padding: 8px 20px 12px;
   gap: 16px;
 }
 

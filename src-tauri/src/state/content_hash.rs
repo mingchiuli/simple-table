@@ -1,57 +1,79 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 
 use crate::types::{CellValue, FileData, MergeRange, SheetData};
 
-pub fn hash_file_content(file_data: &FileData) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    file_data.sheets.len().hash(&mut hasher);
+pub type ContentHash = [u8; 32];
+
+pub fn hash_file_content(file_data: &FileData) -> ContentHash {
+    let mut hasher = Sha256::new();
+    write_usize(&mut hasher, file_data.sheets.len());
     for sheet in &file_data.sheets {
         hash_sheet_content(sheet, &mut hasher);
     }
-    hasher.finish()
+    hasher.finalize().into()
 }
 
-fn hash_sheet_content(sheet: &SheetData, hasher: &mut DefaultHasher) {
-    sheet.name.hash(hasher);
-    sheet.rows.len().hash(hasher);
+fn hash_sheet_content(sheet: &SheetData, hasher: &mut Sha256) {
+    write_str(hasher, &sheet.name);
+    write_usize(hasher, sheet.rows.len());
     for row in &sheet.rows {
-        row.len().hash(hasher);
+        write_usize(hasher, row.len());
         for cell in row {
             hash_cell_value(cell, hasher);
         }
     }
-    sheet.merges.len().hash(hasher);
+    write_usize(hasher, sheet.merges.len());
     for merge in &sheet.merges {
         hash_merge_range(merge, hasher);
     }
 }
 
-fn hash_cell_value(cell: &CellValue, hasher: &mut DefaultHasher) {
+fn hash_cell_value(cell: &CellValue, hasher: &mut Sha256) {
     match cell {
         CellValue::Null => {
-            0_u8.hash(hasher);
+            write_tag(hasher, 0);
         }
         CellValue::String(value) => {
-            1_u8.hash(hasher);
-            value.hash(hasher);
+            write_tag(hasher, 1);
+            write_str(hasher, value);
         }
         CellValue::Number(value) => {
-            2_u8.hash(hasher);
-            value.to_string().hash(hasher);
+            write_tag(hasher, 2);
+            write_str(hasher, &value.to_string());
         }
         CellValue::Boolean(value) => {
-            3_u8.hash(hasher);
-            value.hash(hasher);
+            write_tag(hasher, 3);
+            hasher.update([u8::from(*value)]);
         }
     }
 }
 
-fn hash_merge_range(merge: &MergeRange, hasher: &mut DefaultHasher) {
-    merge.start_row.hash(hasher);
-    merge.start_col.hash(hasher);
-    merge.end_row.hash(hasher);
-    merge.end_col.hash(hasher);
+fn hash_merge_range(merge: &MergeRange, hasher: &mut Sha256) {
+    write_u32(hasher, merge.start_row);
+    write_u16(hasher, merge.start_col);
+    write_u32(hasher, merge.end_row);
+    write_u16(hasher, merge.end_col);
+}
+
+fn write_tag(hasher: &mut Sha256, tag: u8) {
+    hasher.update([tag]);
+}
+
+fn write_str(hasher: &mut Sha256, value: &str) {
+    write_usize(hasher, value.len());
+    hasher.update(value.as_bytes());
+}
+
+fn write_usize(hasher: &mut Sha256, value: usize) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn write_u32(hasher: &mut Sha256, value: u32) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn write_u16(hasher: &mut Sha256, value: u16) {
+    hasher.update(value.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -82,7 +104,10 @@ mod tests {
         changed_layout.file_name = "renamed.xlsx".to_string();
         changed_layout.sheets[0].column_widths = Some(HashMap::from([(0, 240)]));
 
-        assert_eq!(hash_file_content(&original), hash_file_content(&changed_layout));
+        assert_eq!(
+            hash_file_content(&original),
+            hash_file_content(&changed_layout)
+        );
     }
 
     #[test]
@@ -91,6 +116,9 @@ mod tests {
         let mut changed_content = original.clone();
         changed_content.sheets[0].rows[0][0] = CellValue::String("b".to_string());
 
-        assert_ne!(hash_file_content(&original), hash_file_content(&changed_content));
+        assert_ne!(
+            hash_file_content(&original),
+            hash_file_content(&changed_content)
+        );
     }
 }
