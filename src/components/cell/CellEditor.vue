@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import { Close } from '@element-plus/icons-vue';
 import { toCellPosition } from '@/utils/excel';
 

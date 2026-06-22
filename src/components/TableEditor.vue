@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import {computed, h, onMounted, onUnmounted, ref, watch} from 'vue';
-import type {CellValue, ColumnConfig, MergeRange, SortState} from '@/types';
+import { TableV2FixedDir } from 'element-plus';
+import type { Column } from 'element-plus';
+import type {CellValue, MergeRange, SortState} from '@/types';
 import { EditableCell, RowNumberCell, ColumnHeaderCell } from '@/components/cell';
 import { usePlatform } from '@/composables/usePlatform';
 
@@ -305,6 +306,10 @@ function isEditing(rowIndex: number, colIndex: number): boolean {
   return editingCell.value === getKey(rowIndex, colIndex);
 }
 
+function getDataColumnIndex(dataKey: unknown): number {
+  return typeof dataKey === 'number' ? dataKey : -1;
+}
+
 function handleCellClick(rowIndex: number, colIndex: number) {
   // 检查是否点击在合并区域内，如果是则跳转到起始单元格
   const merge = getMergeInfo(rowIndex, colIndex);
@@ -330,12 +335,12 @@ function handleCellClick(rowIndex: number, colIndex: number) {
 
 // 列配置
 const columns = computed(() => {
-  const cols: ColumnConfig[] = [
+  const cols: Column[] = [
     {
       key: 'row-number',
       title: '#',
       width: 60,
-      fixed: 'left',
+      fixed: TableV2FixedDir.LEFT,
     }
   ];
 
@@ -388,18 +393,18 @@ const ROW_HEIGHT = 60;
         <!-- 数据列 -->
         <template v-else>
           <div
-            v-if="!isEditing(rowIndex, column.dataKey)"
+            v-if="!isEditing(rowIndex, getDataColumnIndex(column.dataKey))"
             class="cell-text"
-            @click="handleCellClick(rowIndex, column.dataKey)"
+            @click="handleCellClick(rowIndex, getDataColumnIndex(column.dataKey))"
           >
-            {{ getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey]) }}
+            {{ getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData[getDataColumnIndex(column.dataKey)]) }}
           </div>
           <EditableCell
             v-else
             :auto-focus="isManualClick"
-            :model-value="editingValue[getKey(rowIndex, column.dataKey)] ?? getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey])"
-            @update:model-value="(val: string) => handleInput(rowIndex, column.dataKey, val)"
-            @blur="handleBlur(rowIndex, column.dataKey, editingValue[getKey(rowIndex, column.dataKey)] ?? getDisplayValue(rowIndex, column.dataKey, rowData[column.dataKey]))"
+            :model-value="editingValue[getKey(rowIndex, getDataColumnIndex(column.dataKey))] ?? getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData[getDataColumnIndex(column.dataKey)])"
+            @update:model-value="(val: string) => handleInput(rowIndex, getDataColumnIndex(column.dataKey), val)"
+            @blur="handleBlur(rowIndex, getDataColumnIndex(column.dataKey), editingValue[getKey(rowIndex, getDataColumnIndex(column.dataKey))] ?? getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData[getDataColumnIndex(column.dataKey)]))"
           />
         </template>
       </template>

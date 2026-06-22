@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-
 const modelValue = defineModel<string>({ required: true });
 
 const props = withDefaults(defineProps<{

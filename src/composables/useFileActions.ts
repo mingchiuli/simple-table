@@ -1,6 +1,4 @@
 import type { ComputedRef, Ref } from 'vue';
-import { ElMessage } from 'element-plus';
-import { useRouter } from 'vue-router';
 import * as api from '@/api';
 import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, readFile, saveFile } from '@/platform';
 import { useFileDataStore } from '@/stores/fileData';

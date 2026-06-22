@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
 import { useUpdater } from '@/composables/useUpdater'
-import { ElDialog, ElProgress, ElButton, ElIcon } from 'element-plus'
 import { Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 
 const {

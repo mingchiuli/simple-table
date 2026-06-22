@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
-import { useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
 import { HomeFilled } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
 import { useDocumentStatus } from '@/composables/useDocumentStatus';

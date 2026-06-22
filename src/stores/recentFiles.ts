@@ -1,5 +1,3 @@
-import { defineStore } from "pinia";
-import { ElMessage } from "element-plus";
 import type { FileData, RecentFile } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";
 import * as api from "@/api";

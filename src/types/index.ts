@@ -1,5 +1,3 @@
-import type { VNode } from 'vue';
-
 export type CellValue = string | number | boolean | null;
 
 export interface MergeRange {
@@ -60,16 +58,6 @@ export interface SearchResult {
   col: number;
   value: string;
   cellPosition: string;
-}
-
-// Element Plus 表格列配置类型
-export interface ColumnConfig {
-  key: string;
-  title: string;
-  width?: number;
-  fixed?: 'left' | 'right';
-  dataKey?: number;
-  headerCellRenderer?: () => VNode;
 }
 
 export interface RecentFile {

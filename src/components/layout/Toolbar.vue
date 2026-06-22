@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { FileData } from '@/types';
-import { ref } from 'vue';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
 import { Search, Refresh } from '@element-plus/icons-vue';

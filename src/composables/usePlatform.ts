@@ -1,5 +1,3 @@
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-
 // 触摸设备检测
 const isTouchDevice = ref(
   typeof window !== 'undefined' &&

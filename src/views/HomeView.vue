@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
-import { useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
 import { Document } from "@element-plus/icons-vue";
 import type { FileData } from "@/types";
 import { useFileDataStore } from "@/stores/fileData";

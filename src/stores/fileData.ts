@@ -1,4 +1,3 @@
-import { defineStore } from "pinia";
 import type { FileData } from "@/types";
 
 export const useFileDataStore = defineStore("fileData", {

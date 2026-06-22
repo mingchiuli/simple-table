@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import { Sort, Close } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
 import type { SortState } from '@/types';

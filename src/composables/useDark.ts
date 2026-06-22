@@ -1,5 +1,3 @@
-import { ref, onMounted, onUnmounted } from 'vue';
-
 const isDark = ref(false);
 let mediaQuery: MediaQueryList | null = null;
 let listenerRefCount = 0;

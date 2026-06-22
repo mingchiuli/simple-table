@@ -17,6 +17,7 @@ export default defineConfig(async () => ({
   plugins: [
     vue(),
     AutoImport({
+      imports: ["vue", "vue-router", "pinia"],
       resolvers: [ElementPlusResolver()],
     }),
     Components({
