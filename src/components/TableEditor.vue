@@ -2,19 +2,29 @@
 import { TableV2FixedDir } from 'element-plus';
 import type { Column } from 'element-plus';
 import type {CellValue, MergeRange, SortState} from '@/types';
-import { EditableCell, RowNumberCell, ColumnHeaderCell } from '@/components/cell';
+import { CellView, EditableCell, RowNumberCell, ColumnHeaderCell } from '@/components/cell';
 import { usePlatform } from '@/composables/usePlatform';
+import { cellToDisplayString, cellToEditorString } from '@/composables/usePendingCellSave';
 
 const { isTouchDevice } = usePlatform();
+const DEFAULT_ROW_HEIGHT = 72;
+
+type TableRow = {
+  __rowIndex: number;
+  cells: CellValue[];
+};
 
 const props = defineProps<{
   data: CellValue[][];
   columns: string[];
+  sheetIndex: number;
+  draftCellValues?: Map<string, string>;
   merges?: MergeRange[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
   sortState?: SortState | null;
   columnWidths?: Record<number, number>;
+  rowHeights?: Record<number, number>;
 }>();
 
 const emit = defineEmits<{
@@ -23,8 +33,10 @@ const emit = defineEmits<{
   (e: 'delete-column', index: number): void;
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
+  (e: 'cell-edit-cancel', rowIndex: number, colIndex: number): void;
   (e: 'sort-column', colIndex: number, ascending: boolean): void;
   (e: 'column-resize', colIndex: number, width: number): void;
+  (e: 'row-resize', rowIndex: number, height: number): void;
 }>();
 
 // 本地编辑状态
@@ -34,10 +46,23 @@ const isManualClick = ref(false); // 是否手动点击触发的编辑
 
 // 列宽状态
 const columnWidths = ref<Record<number, number>>({});
+const rowHeights = ref<Record<number, number>>({});
 const resizingColumn = ref<number | null>(null);
+const resizingRow = ref<number | null>(null);
 const startX = ref(0);
+const startY = ref(0);
 const startWidth = ref(0);
+const startHeight = ref(0);
 const resizeLineX = ref(0); // 实时拖动线位置（相对于容器）
+const resizeLineY = ref(0);
+const tableRenderKey = ref(0);
+
+const tableRows = computed<TableRow[]>(() => {
+  return props.data.map((cells, rowIndex) => ({
+    __rowIndex: rowIndex,
+    cells,
+  }));
+});
 
 // 初始化列宽
 function initColumnWidths() {
@@ -53,9 +78,25 @@ initColumnWidths();
 // 监听 columnWidths 变化
 watch(() => props.columnWidths, initColumnWidths, { deep: true });
 
+function initRowHeights() {
+  if (props.rowHeights) {
+    rowHeights.value = { ...props.rowHeights };
+  } else {
+    rowHeights.value = {};
+  }
+}
+
+initRowHeights();
+
+watch(() => props.rowHeights, initRowHeights, { deep: true });
+
 // 获取列宽
 function getColumnWidth(colIndex: number): number {
   return columnWidths.value[colIndex] || 120;
+}
+
+function getRowHeight(rowIndex: number): number {
+  return rowHeights.value[rowIndex] || DEFAULT_ROW_HEIGHT;
 }
 
 // 获取 clientX（兼容鼠标和触摸事件）
@@ -98,24 +139,58 @@ function startResize(event: MouseEvent | TouchEvent, colIndex: number) {
   }
 }
 
+function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number) {
+  event.preventDefault();
+  resizingRow.value = rowIndex;
+  startY.value = getClientY(event);
+  startHeight.value = getRowHeight(rowIndex);
+
+  if (containerRef.value) {
+    const containerRect = containerRef.value.getBoundingClientRect();
+    resizeLineY.value = startY.value - containerRect.top;
+  }
+
+  document.addEventListener('mousemove', onResize);
+  document.addEventListener('mouseup', stopResize);
+
+  if (isTouchDevice.value) {
+    document.addEventListener('touchmove', onResize, { passive: false });
+    document.addEventListener('touchend', stopResize);
+  }
+}
+
 // 调整列宽中
 function onResize(event: MouseEvent | TouchEvent) {
-  if (resizingColumn.value === null) return;
+  if (resizingColumn.value === null && resizingRow.value === null) return;
 
   if (event.type === 'touchmove') {
     event.preventDefault();
   }
 
-  const clientX = getClientX(event);
+  if (resizingColumn.value !== null) {
+    const clientX = getClientX(event);
 
-  // 实时更新拖动线位置（相对于容器）
-  if (containerRef.value) {
-    const containerRect = containerRef.value.getBoundingClientRect();
-    resizeLineX.value = clientX - containerRect.left;
+    // 实时更新拖动线位置（相对于容器）
+    if (containerRef.value) {
+      const containerRect = containerRef.value.getBoundingClientRect();
+      resizeLineX.value = clientX - containerRect.left;
+    }
+
+    const delta = clientX - startX.value;
+    columnWidths.value[resizingColumn.value] = Math.max(56, startWidth.value + delta);
   }
 
-  const delta = clientX - startX.value;
-  columnWidths.value[resizingColumn.value] = Math.max(40, startWidth.value + delta);
+  if (resizingRow.value !== null) {
+    const clientY = getClientY(event);
+
+    if (containerRef.value) {
+      const containerRect = containerRef.value.getBoundingClientRect();
+      resizeLineY.value = clientY - containerRect.top;
+    }
+
+    const delta = clientY - startY.value;
+    rowHeights.value[resizingRow.value] = Math.max(36, startHeight.value + delta);
+  }
 }
 
 // 结束调整列宽
@@ -123,8 +198,14 @@ function stopResize() {
   if (resizingColumn.value !== null) {
     emit('column-resize', resizingColumn.value, columnWidths.value[resizingColumn.value]);
   }
+  if (resizingRow.value !== null) {
+    emit('row-resize', resizingRow.value, rowHeights.value[resizingRow.value]);
+    tableRenderKey.value += 1;
+  }
   resizingColumn.value = null;
+  resizingRow.value = null;
   resizeLineX.value = 0;
+  resizeLineY.value = 0;
 
   // 移除鼠标事件
   document.removeEventListener('mousemove', onResize);
@@ -143,7 +224,9 @@ watch(() => props.data, () => {
     const key = getKey(props.selectedCell.row, props.selectedCell.col);
     if (editingValue.value[key] !== undefined) {
       // 外部数据变化时，同步更新 editingValue
-      editingValue.value[key] = getCellValue(props.data[props.selectedCell.row]?.[props.selectedCell.col]) || '';
+      editingValue.value[key] = getDraftValue(props.selectedCell.row, props.selectedCell.col)
+        ?? getCellValue(props.data[props.selectedCell.row]?.[props.selectedCell.col])
+        ?? '';
     }
   }
 }, { deep: true });
@@ -162,24 +245,18 @@ watch(() => props.selectedCell, async (newCell) => {
     return;
   }
 
-  // 如果是本地点击触发的（selectedCell 变化但 editingCell 已同步），不重复处理
   const newKey = getKey(newCell.row, newCell.col);
   if (editingCell.value === newKey) {
     return;
   }
 
-  // 外部触发（如搜索侧边栏），不自动聚焦
-  isManualClick.value = false;
-
-  // Enter edit mode when a cell is selected
-  const key = getKey(newCell.row, newCell.col);
-  editingCell.value = key;
+  editingCell.value = null;
   editingValue.value = {};
-  editingValue.value[key] = getCellValue(props.data[newCell.row]?.[newCell.col]) || '';
+  isManualClick.value = false;
 
   // Only scroll when autoScroll is true (e.g., from search results)
   if (props.autoScroll && tableRef.value) {
-    const scrollTop = newCell.row * ROW_HEIGHT - tableSize.value.height / 2 + ROW_HEIGHT / 2;
+    const scrollTop = newCell.row * DEFAULT_ROW_HEIGHT - tableSize.value.height / 2 + DEFAULT_ROW_HEIGHT / 2;
     const rowNumberWidth = 60;
     const colWidth = 120;
     const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
@@ -217,12 +294,32 @@ onUnmounted(() => {
 });
 
 function getCellValue(cell: CellValue): string {
-  if (cell === null || cell === undefined) return '';
-  return String(cell);
+  return cellToEditorString(cell);
+}
+
+function getClientY(event: MouseEvent | TouchEvent): number {
+  if ('clientY' in event) {
+    return event.clientY;
+  }
+  if (event.touches && event.touches.length > 0) {
+    return event.touches[0].clientY;
+  }
+  if (event.changedTouches && event.changedTouches.length > 0) {
+    return event.changedTouches[0].clientY;
+  }
+  return 0;
 }
 
 function getKey(rowIndex: number, colIndex: number): string {
   return `${rowIndex}-${colIndex}`;
+}
+
+function getDraftKey(rowIndex: number, colIndex: number): string {
+  return `${props.sheetIndex},${rowIndex},${colIndex}`;
+}
+
+function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
+  return props.draftCellValues?.get(getDraftKey(rowIndex, colIndex));
 }
 
 // 获取单元格所在的合并区域信息
@@ -278,12 +375,23 @@ function handleBlur(rowIndex: number, colIndex: number, value: string) {
   const key = getKey(rowIndex, colIndex);
   const originalValue = getCellValue(props.data[rowIndex]?.[colIndex]);
 
-  if (value !== originalValue) {
+  if (value !== originalValue || getDraftValue(rowIndex, colIndex) !== undefined) {
     emit('cell-change', rowIndex, colIndex, value);
   }
 
   delete editingValue.value[key];
   editingCell.value = null;
+
+  if (value.includes('\n') || originalValue.includes('\n')) {
+    tableRenderKey.value += 1;
+  }
+}
+
+function handleCancelEdit(rowIndex: number, colIndex: number) {
+  const key = getKey(rowIndex, colIndex);
+  delete editingValue.value[key];
+  editingCell.value = null;
+  emit('cell-edit-cancel', rowIndex, colIndex);
 }
 
 function handleDeleteRow(index: number) {
@@ -299,7 +407,11 @@ function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValu
   if (editingValue.value[key] !== undefined) {
     return editingValue.value[key];
   }
-  return getCellValue(cellValue);
+  const draftValue = getDraftValue(rowIndex, colIndex);
+  if (draftValue !== undefined) {
+    return draftValue;
+  }
+  return cellToDisplayString(cellValue);
 }
 
 function isEditing(rowIndex: number, colIndex: number): boolean {
@@ -320,17 +432,21 @@ function handleCellClick(rowIndex: number, colIndex: number) {
 
   // 单击选中单元格并显示编辑栏
   emit('select-cell', rowIndex, colIndex);
+}
 
-  // 双击进入编辑模式（通过检查是否已选中来判断）
-  const key = getKey(rowIndex, colIndex);
-  if (editingCell.value === key) {
-    // 已经是编辑状态，保持
-  } else {
-    // 选中单元格，进入编辑模式
-    editingCell.value = key;
-    // 标记为手动点击，启用自动聚焦
-    isManualClick.value = true;
+function handleCellDoubleClick(rowIndex: number, colIndex: number) {
+  const merge = getMergeInfo(rowIndex, colIndex);
+  if (merge) {
+    rowIndex = merge.startRow;
+    colIndex = merge.startCol;
   }
+
+  emit('select-cell', rowIndex, colIndex);
+  const key = getKey(rowIndex, colIndex);
+  editingCell.value = key;
+  editingValue.value = {};
+  editingValue.value[key] = getDraftValue(rowIndex, colIndex) ?? getCellValue(props.data[rowIndex]?.[colIndex]) ?? '';
+  isManualClick.value = true;
 }
 
 // 列配置
@@ -364,18 +480,18 @@ const columns = computed(() => {
 
   return cols;
 });
-
-// 行高固定
-const ROW_HEIGHT = 60;
 </script>
 
 <template>
   <div ref="containerRef" class="table-container">
     <el-table-v2
       ref="tableRef"
+      :key="tableRenderKey"
       :columns="columns"
-      :data="props.data"
-      :row-height="ROW_HEIGHT"
+      :data="tableRows"
+      :row-key="'__rowIndex'"
+      :row-height="DEFAULT_ROW_HEIGHT"
+      :estimated-row-height="DEFAULT_ROW_HEIGHT"
       :width="tableSize.width"
       :height="tableSize.height"
       :span-method="spanMethod"
@@ -384,27 +500,41 @@ const ROW_HEIGHT = 60;
       <template #cell="{ column, rowData, rowIndex }">
         <!-- 行号列 -->
         <template v-if="column.key === 'row-number'">
-          <RowNumberCell
-            :row-index="rowIndex"
-            @delete="handleDeleteRow"
-          />
+          <div class="row-number-cell">
+            <RowNumberCell
+              :row-index="rowIndex"
+              @delete="handleDeleteRow"
+            />
+            <div
+              class="row-resize-handle"
+              @mousedown.stop="startRowResize($event, rowIndex)"
+              @touchstart.stop="(e: TouchEvent) => isTouchDevice && startRowResize(e, rowIndex)"
+            />
+          </div>
         </template>
 
         <!-- 数据列 -->
         <template v-else>
           <div
             v-if="!isEditing(rowIndex, getDataColumnIndex(column.dataKey))"
-            class="cell-text"
             @click="handleCellClick(rowIndex, getDataColumnIndex(column.dataKey))"
+            @dblclick="handleCellDoubleClick(rowIndex, getDataColumnIndex(column.dataKey))"
           >
-            {{ getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData[getDataColumnIndex(column.dataKey)]) }}
+            <CellView
+              :value="rowData.cells[getDataColumnIndex(column.dataKey)]"
+              :draft-value="getDraftValue(rowIndex, getDataColumnIndex(column.dataKey))"
+              :selected="selectedCell?.row === rowIndex && selectedCell?.col === getDataColumnIndex(column.dataKey)"
+              :row-height="getRowHeight(rowIndex)"
+            />
           </div>
           <EditableCell
             v-else
             :auto-focus="isManualClick"
-            :model-value="editingValue[getKey(rowIndex, getDataColumnIndex(column.dataKey))] ?? getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData[getDataColumnIndex(column.dataKey)])"
+            :min-height="getRowHeight(rowIndex)"
+            :model-value="editingValue[getKey(rowIndex, getDataColumnIndex(column.dataKey))] ?? getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData.cells[getDataColumnIndex(column.dataKey)])"
             @update:model-value="(val: string) => handleInput(rowIndex, getDataColumnIndex(column.dataKey), val)"
-            @blur="handleBlur(rowIndex, getDataColumnIndex(column.dataKey), editingValue[getKey(rowIndex, getDataColumnIndex(column.dataKey))] ?? getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData[getDataColumnIndex(column.dataKey)]))"
+            @commit="handleBlur(rowIndex, getDataColumnIndex(column.dataKey), editingValue[getKey(rowIndex, getDataColumnIndex(column.dataKey))] ?? getDisplayValue(rowIndex, getDataColumnIndex(column.dataKey), rowData.cells[getDataColumnIndex(column.dataKey)]))"
+            @cancel="handleCancelEdit(rowIndex, getDataColumnIndex(column.dataKey))"
           />
         </template>
       </template>
@@ -414,6 +544,11 @@ const ROW_HEIGHT = 60;
       v-if="resizingColumn !== null"
       class="resize-line"
       :style="{ left: resizeLineX + 'px' }"
+    />
+    <div
+      v-if="resizingRow !== null"
+      class="resize-line horizontal"
+      :style="{ top: resizeLineY + 'px' }"
     />
   </div>
 </template>
@@ -430,18 +565,27 @@ const ROW_HEIGHT = 60;
 }
 
 :deep(.el-table-v2__row-cell) {
-  padding: 0 8px;
+  padding: 0;
 }
 
-.cell-text {
+.row-number-cell {
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  cursor: text;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  position: relative;
+}
+
+.row-resize-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 5px;
+  cursor: row-resize;
+  z-index: 2;
+}
+
+.row-resize-handle:hover {
+  background: var(--el-color-primary-light-7);
 }
 
 .resize-line {
@@ -452,5 +596,13 @@ const ROW_HEIGHT = 60;
   background-color: var(--el-color-primary);
   z-index: 100;
   pointer-events: none;
+}
+
+.resize-line.horizontal {
+  left: 0;
+  right: 0;
+  bottom: auto;
+  width: auto;
+  height: 2px;
 }
 </style>

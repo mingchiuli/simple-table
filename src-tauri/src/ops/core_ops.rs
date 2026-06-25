@@ -343,6 +343,10 @@ fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
 /// 比较两个单元格值（用于排序）
 /// 数字和字符串都支持按数值排序
 fn compare_cell_values(a: &CellValue, b: &CellValue) -> Ordering {
+    let mut a_normalized = None;
+    let mut b_normalized = None;
+    let a = sortable_cell_value(a, &mut a_normalized);
+    let b = sortable_cell_value(b, &mut b_normalized);
     match (a, b) {
         // Null 排在最后
         (CellValue::Null, CellValue::Null) => Ordering::Equal,
@@ -404,5 +408,29 @@ fn compare_cell_values(a: &CellValue, b: &CellValue) -> Ordering {
         (CellValue::Boolean(ba), CellValue::Boolean(bb)) => ba.cmp(bb),
         (CellValue::Boolean(_), _) => Ordering::Greater,
         (_, CellValue::Boolean(_)) => Ordering::Less,
+        (CellValue::Formula { .. }, _) | (_, CellValue::Formula { .. }) => a
+            .to_display_string()
+            .to_lowercase()
+            .cmp(&b.to_display_string().to_lowercase()),
+    }
+}
+
+fn sortable_cell_value<'a>(
+    cell: &'a CellValue,
+    normalized: &'a mut Option<CellValue>,
+) -> &'a CellValue {
+    match cell {
+        CellValue::Formula {
+            cached_value,
+            error,
+            ..
+        } if error.is_none() => cached_value,
+        CellValue::Formula { error, .. } => {
+            *normalized = Some(CellValue::String(
+                error.clone().unwrap_or_else(|| cell.to_display_string()),
+            ));
+            normalized.as_ref().unwrap()
+        }
+        _ => cell,
     }
 }

@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use crate::state::editor_state::EditorState;
 
 /// 获取编辑器状态信息
-#[derive(serde::Serialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorStateInfo {
     pub can_undo: bool,

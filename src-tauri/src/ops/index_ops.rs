@@ -247,6 +247,7 @@ enum IndexJob {
         state: Arc<RwLock<Option<EditorState>>>,
     },
     /// 单格更新：删除旧文档 + 添加新文档
+    #[allow(dead_code)]
     UpdateCell {
         sheet_index: usize,
         row: usize,
@@ -255,6 +256,7 @@ enum IndexJob {
         state: Arc<RwLock<Option<EditorState>>>,
     },
     /// 末尾追加一行（仅写入非空单元格；全空时为 no-op）
+    #[allow(dead_code)]
     AppendRow {
         sheet_index: usize,
         row_index: usize,
@@ -262,6 +264,7 @@ enum IndexJob {
         state: Arc<RwLock<Option<EditorState>>>,
     },
     /// 末尾追加一列（仅写入非空单元格；全空时为 no-op）
+    #[allow(dead_code)]
     AppendColumn {
         sheet_index: usize,
         col_index: usize,
@@ -269,6 +272,7 @@ enum IndexJob {
         state: Arc<RwLock<Option<EditorState>>>,
     },
     /// 删除末尾一行（按 cell_id term 删除该行所有 doc）
+    #[allow(dead_code)]
     DeleteLastRow {
         sheet_index: usize,
         row_index: usize,
@@ -276,6 +280,7 @@ enum IndexJob {
         state: Arc<RwLock<Option<EditorState>>>,
     },
     /// 删除末尾一列（按 cell_id term 删除该列所有 doc）
+    #[allow(dead_code)]
     DeleteLastColumn {
         sheet_index: usize,
         col_index: usize,
@@ -563,6 +568,7 @@ fn run_incremental(
 }
 
 /// 投递全量重建作业（结构性改变、首次构建、增量回退）
+#[allow(dead_code)]
 pub fn spawn_rebuild_sheet_index(sheet_index: usize, state: Arc<RwLock<Option<EditorState>>>) {
     let _ = index_queue().send(IndexJob::Rebuild { sheet_index, state });
 }
@@ -586,6 +592,7 @@ pub fn spawn_rebuild_all_sheets_index(state: Arc<RwLock<Option<EditorState>>>) {
 }
 
 /// 单格更新（增量）
+#[allow(dead_code)]
 pub fn spawn_update_cell_index(
     sheet_index: usize,
     row: usize,
@@ -604,6 +611,7 @@ pub fn spawn_update_cell_index(
 }
 
 /// 末尾追加一行（增量；row_data 全空时也会投递，worker 内部跳过空格）
+#[allow(dead_code)]
 pub fn spawn_append_row_index(
     sheet_index: usize,
     row_index: usize,
@@ -619,6 +627,7 @@ pub fn spawn_append_row_index(
 }
 
 /// 末尾追加一列（增量；col_data 全空时也会投递，worker 内部跳过空格）
+#[allow(dead_code)]
 pub fn spawn_append_column_index(
     sheet_index: usize,
     col_index: usize,
@@ -634,6 +643,7 @@ pub fn spawn_append_column_index(
 }
 
 /// 删除末尾一行（增量）
+#[allow(dead_code)]
 pub fn spawn_delete_last_row_index(
     sheet_index: usize,
     row_index: usize,
@@ -649,6 +659,7 @@ pub fn spawn_delete_last_row_index(
 }
 
 /// 删除末尾一列（增量）
+#[allow(dead_code)]
 pub fn spawn_delete_last_column_index(
     sheet_index: usize,
     col_index: usize,

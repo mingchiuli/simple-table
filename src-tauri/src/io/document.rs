@@ -32,7 +32,7 @@ pub fn open_from_bytes(
     let file_data = read_file_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
     // 初始化编辑器状态
-    init_editor_state(file_data.clone());
+    let file_data = init_editor_state(file_data);
 
     Ok(file_data)
 }
@@ -43,12 +43,16 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
     Ok(())
 }
 
-fn init_editor_state(file_data: FileData) {
+fn init_editor_state(file_data: FileData) -> FileData {
     let state = get_state();
+    let initialized_file_data;
     {
         let mut state_guard = state.write().expect("Editor state lock poisoned");
-        *state_guard = Some(EditorState::new(file_data));
+        let editor_state = EditorState::new(file_data);
+        initialized_file_data = editor_state.file_data.clone();
+        *state_guard = Some(editor_state);
     }
     // 异步构建索引（后台线程）
     spawn_rebuild_all_sheets_index(state);
+    initialized_file_data
 }

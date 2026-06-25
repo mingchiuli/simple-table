@@ -45,6 +45,10 @@ fn hash_cell_value(cell: &CellValue, hasher: &mut Sha256) {
             write_tag(hasher, 3);
             hasher.update([u8::from(*value)]);
         }
+        CellValue::Formula { formula, .. } => {
+            write_tag(hasher, 4);
+            write_str(hasher, formula);
+        }
     }
 }
 
@@ -103,6 +107,7 @@ mod tests {
         changed_layout.path = "/tmp/renamed.xlsx".to_string();
         changed_layout.file_name = "renamed.xlsx".to_string();
         changed_layout.sheets[0].column_widths = Some(HashMap::from([(0, 240)]));
+        changed_layout.sheets[0].row_heights = Some(HashMap::from([(0, 96)]));
 
         assert_eq!(
             hash_file_content(&original),
@@ -119,6 +124,29 @@ mod tests {
         assert_ne!(
             hash_file_content(&original),
             hash_file_content(&changed_content)
+        );
+    }
+
+    #[test]
+    fn formula_hash_uses_formula_text_not_cached_value() {
+        let mut original = file_data();
+        original.sheets[0].rows[0][0] = CellValue::formula("=A2+1", CellValue::Number(1.into()));
+
+        let mut changed_cache = original.clone();
+        changed_cache.sheets[0].rows[0][0] =
+            CellValue::formula("=A2+1", CellValue::Number(2.into()));
+
+        let mut changed_formula = original.clone();
+        changed_formula.sheets[0].rows[0][0] =
+            CellValue::formula("=A2+2", CellValue::Number(1.into()));
+
+        assert_eq!(
+            hash_file_content(&original),
+            hash_file_content(&changed_cache)
+        );
+        assert_ne!(
+            hash_file_content(&original),
+            hash_file_content(&changed_formula)
         );
     }
 }

@@ -3,58 +3,87 @@ const modelValue = defineModel<string>({ required: true });
 
 const props = withDefaults(defineProps<{
   autoFocus?: boolean;
+  minHeight?: number;
 }>(), {
-  autoFocus: true
+  autoFocus: true,
+  minHeight: 72,
 });
 
 const emit = defineEmits<{
-  (e: 'blur'): void;
+  (e: 'commit'): void;
+  (e: 'cancel'): void;
 }>();
 
-const inputRef = ref<InstanceType<typeof import('element-plus').ElInput> | null>(null);
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
+let isCancelling = false;
 
-onMounted(() => {
-  if (!props.autoFocus) return;
+function focusWithoutScroll() {
+  if (!props.autoFocus || !textareaRef.value) return;
 
-  // 获取 ElInput 内部原生 input 元素，而非通过 querySelector 查找
-  // 这样可以避免 ElInput 封装层干扰 preventScroll 选项
-  const nativeInput = inputRef.value?.ref as HTMLInputElement | undefined;
-  if (!nativeInput) return;
-
-  // 记录当前滚动位置，focus 后恢复
-  // 原因：虚拟列表滚动时可能触发 EditableCell 重建，focus 会导致浏览器自动滚动
-  const scrollContainer = nativeInput.closest('.el-table-v2__body') ?? document.documentElement;
+  const textarea = textareaRef.value;
+  const scrollContainer = textarea.closest('.el-table-v2__body') ?? document.documentElement;
   const { scrollTop, scrollLeft } = scrollContainer;
 
-  nativeInput.focus({ preventScroll: true });
+  textarea.focus({ preventScroll: true });
+  textarea.select();
 
-  // requestAnimationFrame 确保在浏览器完成 focus 滚动后再恢复位置
   requestAnimationFrame(() => {
     scrollContainer.scrollTo({ top: scrollTop, left: scrollLeft, behavior: 'instant' });
   });
-});
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter' && !event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+    event.preventDefault();
+    emit('commit');
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    isCancelling = true;
+    emit('cancel');
+  }
+}
+
+function handleBlur() {
+  if (isCancelling) {
+    isCancelling = false;
+    return;
+  }
+  emit('commit');
+}
+
+onMounted(focusWithoutScroll);
 </script>
 
 <template>
-  <el-input
-    ref="inputRef"
+  <textarea
+    ref="textareaRef"
     v-model="modelValue"
-    class="cell-input"
-    @blur="emit('blur')"
+    class="cell-textarea"
+    spellcheck="false"
+    :style="{ minHeight: `${Math.max(36, minHeight)}px` }"
+    @keydown="handleKeydown"
+    @blur="handleBlur"
   />
 </template>
 
 <style scoped>
-.cell-input {
+.cell-textarea {
+  display: block;
   width: 100%;
-  font-size: 16px;
-}
-
-:deep(.cell-input .el-input__wrapper) {
-  box-shadow: none;
-}
-
-:deep(.cell-input .el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+  min-width: 0;
+  resize: none;
+  border: 1px solid var(--el-color-primary);
+  box-shadow: inset 0 0 0 1px var(--el-color-primary);
+  background: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+  font: inherit;
+  line-height: 1.35;
+  padding: 6px 8px;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 </style>

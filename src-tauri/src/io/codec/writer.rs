@@ -55,6 +55,7 @@ fn generate_file_bytes_for_name(
 
 fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
     let mut workbook = Workbook::new();
+    let blank_format = Format::new();
 
     for sheet in &file_data.sheets {
         let worksheet = workbook.add_worksheet();
@@ -64,83 +65,40 @@ fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
 
         for (row_idx, row) in sheet.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
-                let row_u32 = row_idx as u32;
-                let col_u16 = col_idx as u16;
-                match cell {
-                    CellValue::String(s) => {
-                        worksheet
-                            .write(row_u32, col_u16, s.as_str())
-                            .map_err(|e| AppError::WriteError(e.to_string()))?;
-                    }
-                    CellValue::Number(n) => {
-                        if let Some(num) = n.as_i64() {
-                            const F64_SAFE_MAX: i64 = 9_007_199_254_740_991;
-                            const F64_SAFE_MIN: i64 = -9_007_199_254_740_991;
-                            if (F64_SAFE_MIN..=F64_SAFE_MAX).contains(&num) {
-                                worksheet
-                                    .write(row_u32, col_u16, num as f64)
-                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
-                            } else {
-                                worksheet
-                                    .write(row_u32, col_u16, num.to_string())
-                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
-                            }
-                        } else if let Some(num) = n.as_f64() {
-                            if num.is_finite() {
-                                worksheet
-                                    .write(row_u32, col_u16, num)
-                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
-                            } else {
-                                // NaN/Infinity 写为空白单元格
-                                worksheet
-                                    .write_blank(row_u32, col_u16, &Format::new())
-                                    .map_err(|e| AppError::WriteError(e.to_string()))?;
-                            }
-                        } else {
-                            worksheet
-                                .write(row_u32, col_u16, n.to_string())
-                                .map_err(|e| AppError::WriteError(e.to_string()))?;
-                        }
-                    }
-                    CellValue::Boolean(b) => {
-                        worksheet
-                            .write(row_u32, col_u16, *b)
-                            .map_err(|e| AppError::WriteError(e.to_string()))?;
-                    }
-                    CellValue::Null => {
-                        worksheet
-                            .write_blank(row_u32, col_u16, &Format::new())
-                            .map_err(|e| AppError::WriteError(e.to_string()))?;
-                    }
-                }
+                write_cell(
+                    worksheet,
+                    row_idx as u32,
+                    col_idx as u16,
+                    cell,
+                    &blank_format,
+                )?;
             }
         }
 
         for merge in &sheet.merges {
-            let value = sheet
-                .rows
-                .get(merge.start_row as usize)
-                .and_then(|r| r.get(merge.start_col as usize))
-                .cloned()
-                .unwrap_or(CellValue::Null);
-
-            let s = match value {
-                CellValue::String(s) => s.clone(),
-                CellValue::Number(n) => n.to_string(),
-                CellValue::Boolean(b) => b.to_string(),
-                CellValue::Null => String::new(),
-            };
-
             worksheet
                 .merge_range(
                     merge.start_row,
                     merge.start_col,
                     merge.end_row,
                     merge.end_col,
-                    &s,
-                    &Format::new(),
+                    "",
+                    &blank_format,
                 )
                 .map_err(|e| AppError::WriteError(e.to_string()))?;
+
+            let value = sheet
+                .rows
+                .get(merge.start_row as usize)
+                .and_then(|r| r.get(merge.start_col as usize))
+                .unwrap_or(&CellValue::Null);
+            write_cell(
+                worksheet,
+                merge.start_row,
+                merge.start_col,
+                value,
+                &blank_format,
+            )?;
         }
     }
 
@@ -148,6 +106,76 @@ fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
         .save_to_buffer()
         .map_err(|e| AppError::WriteError(e.to_string()))?;
     Ok(bytes)
+}
+
+fn write_cell(
+    worksheet: &mut Worksheet,
+    row: u32,
+    col: u16,
+    cell: &CellValue,
+    blank_format: &Format,
+) -> Result<(), AppError> {
+    match cell {
+        CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } => {
+            let result = error
+                .clone()
+                .unwrap_or_else(|| cached_value.to_display_string());
+            worksheet
+                .write_formula(row, col, Formula::new(formula).set_result(result))
+                .map_err(|e| AppError::WriteError(e.to_string()))?;
+        }
+        CellValue::String(s) => {
+            worksheet
+                .write(row, col, s.as_str())
+                .map_err(|e| AppError::WriteError(e.to_string()))?;
+        }
+        CellValue::Number(n) => {
+            if let Some(num) = n.as_i64() {
+                const F64_SAFE_MAX: i64 = 9_007_199_254_740_991;
+                const F64_SAFE_MIN: i64 = -9_007_199_254_740_991;
+                if (F64_SAFE_MIN..=F64_SAFE_MAX).contains(&num) {
+                    worksheet
+                        .write(row, col, num as f64)
+                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                } else {
+                    worksheet
+                        .write(row, col, num.to_string())
+                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                }
+            } else if let Some(num) = n.as_f64() {
+                if num.is_finite() {
+                    worksheet
+                        .write(row, col, num)
+                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                } else {
+                    // NaN/Infinity 写为空白单元格
+                    worksheet
+                        .write_blank(row, col, blank_format)
+                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                }
+            } else {
+                worksheet
+                    .write(row, col, n.to_string())
+                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+            }
+        }
+        CellValue::Boolean(b) => {
+            worksheet
+                .write(row, col, *b)
+                .map_err(|e| AppError::WriteError(e.to_string()))?;
+        }
+        CellValue::Null => {
+            worksheet
+                .write_blank(row, col, blank_format)
+                .map_err(|e| AppError::WriteError(e.to_string()))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
@@ -160,6 +188,7 @@ fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
                 let string_row: Vec<String> = row
                     .iter()
                     .map(|cell| match cell {
+                        CellValue::Formula { .. } => cell.to_display_string(),
                         CellValue::String(s) => s.clone(),
                         CellValue::Number(n) => {
                             // f64 的 NaN/Infinity 不可机读，写空字符串
@@ -186,4 +215,54 @@ fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
             .map_err(|e: std::io::Error| AppError::WriteError(e.to_string()))?;
     }
     Ok(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+    use crate::io::codec::reader::read_file_from_bytes;
+    use crate::types::{MergeRange, SheetData};
+
+    #[test]
+    fn preserves_formula_in_merged_top_left_cell() {
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "merged-formula.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![
+                    CellValue::Formula {
+                        formula: "=1+2".to_string(),
+                        cached_value: Box::new(CellValue::Number(Value::from(3))),
+                        error: None,
+                    },
+                    CellValue::Null,
+                ]],
+                merges: vec![MergeRange {
+                    start_row: 0,
+                    start_col: 0,
+                    end_row: 0,
+                    end_col: 1,
+                }],
+                ..Default::default()
+            }],
+        };
+
+        let (_, bytes) =
+            generate_file_bytes_for_target(&file_data, "merged-formula.xlsx").expect("write xlsx");
+        let read_back = read_file_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "merged-formula.xlsx".to_string(),
+        )
+        .expect("read xlsx");
+
+        match &read_back.sheets[0].rows[0][0] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=1+2"),
+            value => panic!("expected formula, got {value:?}"),
+        }
+    }
 }

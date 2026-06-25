@@ -11,7 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    CellEditor: typeof import('./src/components/cell/CellEditor.vue')['default']
+    CellView: typeof import('./src/components/cell/CellView.vue')['default']
     ColumnHeaderCell: typeof import('./src/components/cell/ColumnHeaderCell.vue')['default']
     EditableCell: typeof import('./src/components/cell/EditableCell.vue')['default']
     EditButtons: typeof import('./src/components/edit/EditButtons.vue')['default']
@@ -28,6 +28,7 @@ declare module 'vue' {
     ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
     ElTableV2: typeof import('element-plus/es')['ElTableV2']
     FileButtons: typeof import('./src/components/file/FileButtons.vue')['default']
+    FormulaBar: typeof import('./src/components/cell/FormulaBar.vue')['default']
     RecentFilesSection: typeof import('./src/components/file/RecentFilesSection.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

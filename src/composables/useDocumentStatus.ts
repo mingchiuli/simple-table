@@ -1,4 +1,5 @@
 import * as api from '@/api';
+import type { EditorStateInfo } from '@/types';
 
 export function useDocumentStatus() {
   const canUndo = ref(false);
@@ -8,12 +9,16 @@ export function useDocumentStatus() {
 
   const hasUnsavedChanges = computed(() => isContentDirty.value || hasPendingContentChange.value);
 
+  function applyEditorState(state: EditorStateInfo | null | undefined) {
+    canUndo.value = state?.canUndo ?? false;
+    canRedo.value = state?.canRedo ?? false;
+    isContentDirty.value = state?.isDirty ?? false;
+  }
+
   async function refreshEditorState() {
     try {
       const state = await api.getEditorState();
-      canUndo.value = state?.canUndo ?? false;
-      canRedo.value = state?.canRedo ?? false;
-      isContentDirty.value = state?.isDirty ?? false;
+      applyEditorState(state);
     } catch (error) {
       console.error('Failed to get editor state:', error);
     }
@@ -46,6 +51,7 @@ export function useDocumentStatus() {
     hasUnsavedChanges,
     isContentDirty,
     hasPendingContentChange,
+    applyEditorState,
     refreshEditorState,
     markPendingContentChange,
     clearPendingContentChange,

@@ -1,24 +1,32 @@
+use crate::formula::engine::FormulaRuntime;
 use crate::ops::Operation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
-use crate::types::{CellValue, FileData, OperationResult};
-use serde::{Deserialize, Serialize};
+use crate::types::{CellValue, FileData, OperationResult, SheetCellChange};
+
+#[derive(Debug, Clone)]
+pub struct ExecutedOperation {
+    pub operation: OperationResult,
+    pub cell_changes: Vec<SheetCellChange>,
+}
 
 /// 编辑器状态管理器
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorState {
     pub file_data: FileData,
-    #[serde(skip)]
     pub history: Vec<Operation>,
-    #[serde(skip)]
     pub redo_stack: Vec<Operation>,
     pub can_undo: bool,
     pub can_redo: bool,
     pub current_content_hash: ContentHash,
     pub saved_content_hash: ContentHash,
+    formula_runtime: FormulaRuntime,
 }
 
 impl EditorState {
-    pub fn new(file_data: FileData) -> Self {
+    pub fn new(mut file_data: FileData) -> Self {
+        let formula_runtime = FormulaRuntime::new(&mut file_data).unwrap_or_else(|error| {
+            eprintln!("Formula runtime initialization failed: {error}");
+            FormulaRuntime::empty()
+        });
         let content_hash = hash_file_content(&file_data);
         Self {
             file_data,
@@ -28,6 +36,7 @@ impl EditorState {
             can_redo: false,
             current_content_hash: content_hash,
             saved_content_hash: content_hash,
+            formula_runtime,
         }
     }
 
@@ -41,7 +50,7 @@ impl EditorState {
     }
 
     /// 执行操作并记录到历史，返回增量结果
-    pub fn execute(&mut self, mut operation: Operation) -> OperationResult {
+    pub fn execute(&mut self, mut operation: Operation) -> ExecutedOperation {
         // 在执行操作前，先准备好需要的数据，以便撤销/重做
         match &operation {
             // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
@@ -59,9 +68,13 @@ impl EditorState {
                     if real_old == new_value {
                         // 返回结果但不记录到 history
                         let result = operation.execute(&mut self.file_data);
+                        let cell_changes = self.recalculate_after_operation(&operation);
                         self.update_flags();
                         self.refresh_content_hash();
-                        return result;
+                        return ExecutedOperation {
+                            operation: result,
+                            cell_changes,
+                        };
                     }
                     // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
                     if real_old != old_value {
@@ -153,38 +166,50 @@ impl EditorState {
         }
 
         let result = operation.execute(&mut self.file_data);
+        let cell_changes = self.recalculate_after_operation(&operation);
         self.history.push(operation);
         self.redo_stack.clear();
         self.update_flags();
         self.refresh_content_hash();
-        result
+        ExecutedOperation {
+            operation: result,
+            cell_changes,
+        }
     }
 
     /// 撤销上一个操作
-    pub fn undo(&mut self) -> Option<OperationResult> {
+    pub fn undo(&mut self) -> Option<ExecutedOperation> {
         if let Some(operation) = self.history.pop() {
             // 执行 undo 操作
             let result = operation.undo(&mut self.file_data);
+            self.rebuild_formula_runtime();
             // 获取 redo 操作
             let redo_op = operation.create_redo_op(&mut self.file_data);
             self.redo_stack.push(redo_op);
 
             self.update_flags();
             self.refresh_content_hash();
-            Some(result)
+            Some(ExecutedOperation {
+                operation: result,
+                cell_changes: Vec::new(),
+            })
         } else {
             None
         }
     }
 
     /// 重做上一个被撤销的操作
-    pub fn redo(&mut self) -> Option<OperationResult> {
+    pub fn redo(&mut self) -> Option<ExecutedOperation> {
         if let Some(operation) = self.redo_stack.pop() {
             let result = operation.execute(&mut self.file_data);
+            let cell_changes = self.recalculate_after_operation(&operation);
             self.history.push(operation);
             self.update_flags();
             self.refresh_content_hash();
-            Some(result)
+            Some(ExecutedOperation {
+                operation: result,
+                cell_changes,
+            })
         } else {
             None
         }
@@ -197,5 +222,86 @@ impl EditorState {
 
     fn refresh_content_hash(&mut self) {
         self.current_content_hash = hash_file_content(&self.file_data);
+    }
+
+    fn recalculate_after_operation(&mut self, operation: &Operation) -> Vec<SheetCellChange> {
+        match operation {
+            Operation::SetCell {
+                sheet_index,
+                row,
+                col,
+                new_value,
+                ..
+            } => {
+                let result = self.formula_runtime.sync_cell_and_recalculate(
+                    &mut self.file_data,
+                    *sheet_index,
+                    *row,
+                    *col,
+                );
+
+                match result {
+                    Ok(changes) => changes,
+                    Err(error) => {
+                        eprintln!("Formula recalculation failed: {error}");
+                        let changes = self.formula_error_change(
+                            *sheet_index,
+                            *row,
+                            *col,
+                            new_value,
+                            error.to_string(),
+                        );
+                        self.rebuild_formula_runtime();
+                        changes
+                    }
+                }
+            }
+            _ => match self.formula_runtime.rebuild(&mut self.file_data) {
+                Ok(()) => Vec::new(),
+                Err(error) => {
+                    eprintln!("Formula recalculation failed: {error}");
+                    self.rebuild_formula_runtime();
+                    Vec::new()
+                }
+            },
+        }
+    }
+
+    fn formula_error_change(
+        &mut self,
+        sheet_index: usize,
+        row: usize,
+        col: usize,
+        value: &CellValue,
+        error: String,
+    ) -> Vec<SheetCellChange> {
+        if !matches!(value, CellValue::Formula { .. }) {
+            return Vec::new();
+        }
+
+        let Some(cell) = self
+            .file_data
+            .sheets
+            .get_mut(sheet_index)
+            .and_then(|sheet| sheet.rows.get_mut(row))
+            .and_then(|row_data| row_data.get_mut(col))
+        else {
+            return Vec::new();
+        };
+
+        *cell = cell.with_formula_result(CellValue::Null, Some(error));
+        vec![SheetCellChange {
+            sheet_index,
+            row,
+            col,
+            value: cell.clone(),
+        }]
+    }
+
+    fn rebuild_formula_runtime(&mut self) {
+        if let Err(error) = self.formula_runtime.rebuild(&mut self.file_data) {
+            eprintln!("Formula runtime rebuild failed: {error}");
+            self.formula_runtime = FormulaRuntime::empty();
+        }
     }
 }

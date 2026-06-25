@@ -2,9 +2,10 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
 use crate::ops::Operation;
-use crate::ops::index_ops::spawn_rebuild_sheet_index;
+use crate::ops::editor_ops::snapshot_mutation_response;
+use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::state::editor_state::EditorState;
-use crate::types::{OperationResult, SortState};
+use crate::types::{EditorMutationResponse, SortState};
 
 /// 对指定列进行排序
 pub fn do_sort_column(
@@ -13,8 +14,8 @@ pub fn do_sort_column(
     col_index: usize,
     ascending: bool,
     previous_sort_state: Option<SortState>,
-) -> Result<OperationResult, AppError> {
-    let (result, needs_rebuild) = {
+) -> Result<EditorMutationResponse, AppError> {
+    let response = {
         let mut state = state.write().expect("Editor state lock poisoned");
         match state.as_mut() {
             Some(editor_state) => {
@@ -41,16 +42,18 @@ pub fn do_sort_column(
                     previous_sort_state,
                 };
                 let result = editor_state.execute(operation);
-                (result, true)
+                Ok(snapshot_mutation_response(
+                    editor_state,
+                    Some(result.operation),
+                ))
             }
             None => return Err(AppError::NoFileLoaded),
         }
     };
 
-    // 异步重建索引
-    if needs_rebuild {
-        spawn_rebuild_sheet_index(sheet_index, state);
+    if response.is_ok() {
+        spawn_rebuild_all_sheets_index(state);
     }
 
-    Ok(result)
+    response
 }

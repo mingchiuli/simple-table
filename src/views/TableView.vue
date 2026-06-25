@@ -7,11 +7,12 @@ import { cellToEditorString, usePendingCellSave } from '@/composables/usePending
 import { useFileDataStore } from '@/stores/fileData';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
-import { CellEditor } from '@/components/cell';
+import { FormulaBar } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
 import * as api from '@/api';
+import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
-import type { CellValue, SortState, SheetData, OperationResult, SearchResult } from '@/types';
+import type { CellValue, EditorMutationResponse, FileData, SortState, SearchResult } from '@/types';
 
 const route = useRoute();
 const fileDataStore = useFileDataStore();
@@ -29,6 +30,8 @@ const searchResults = ref<SearchResult[]>([]);
 const searchQuery = ref('');
 const isSearching = ref(false);
 const sheetSelectedCells = ref<Map<number, { row: number; col: number }>>(new Map());
+const sheetColumnWidths = ref<Record<number, Record<number, number>>>({});
+const sheetRowHeights = ref<Record<number, Record<number, number>>>({});
 
 // ========== Computed values ==========
 const fileData = computed(() => fileDataStore.data);
@@ -61,93 +64,103 @@ const {
   refreshEditorState,
   markPendingContentChange,
   clearPendingContentChange,
+  applyEditorState,
   resetDocumentStatus,
   markSaved,
 } = useDocumentStatus();
 
-// ========== Apply operation (for undo/redo) ==========
-function applyOperation(result: OperationResult) {
-  const data = fileData.value;
-  if (!data) return;
+function applyMutationResponse(response: EditorMutationResponse) {
+  const nextFileData = applyMutationFileData(response);
+  if (!nextFileData) return;
 
-  if (currentSortColumn.value) {
+  applyEditorState(response.editorState);
+
+  if (currentSheetIndex.value >= nextFileData.sheets.length) {
+    currentSheetIndex.value = Math.max(0, nextFileData.sheets.length - 1);
+  }
+
+  if (response.operation?.type === 'SortColumn') {
+    currentSortColumn.value = response.operation.data.sortState;
+  } else if (response.operation) {
     currentSortColumn.value = null;
   }
 
-  switch (result.type) {
-    case 'SetCell': {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      if (sheet.rows[resultData.cell.row]) {
-        sheet.rows[resultData.cell.row][resultData.cell.col] = resultData.cell.value;
-      }
-      break;
+  if (selectedCell.value) {
+    const sheet = nextFileData.sheets[currentSheetIndex.value];
+    if (!sheet?.rows[selectedCell.value.row]?.length) {
+      selectedCell.value = null;
+      cellEditorValue.value = '';
+      return;
     }
-    case 'AddSheet': {
-      const resultData = result.data;
-      const sheetData = resultData.sheetData;
-      const sheetIndex = resultData.sheetIndex;
-      data.sheets.splice(sheetIndex, 0, sheetData);
-      break;
+    if (selectedCell.value.col >= sheet.rows[selectedCell.value.row].length) {
+      selectedCell.value = null;
+      cellEditorValue.value = '';
+      return;
     }
-    case 'DeleteSheet': {
-      const resultData = result.data;
-      data.sheets.splice(resultData.sheetIndex, 1);
-      if (currentSheetIndex.value >= data.sheets.length) {
-        currentSheetIndex.value = Math.max(0, data.sheets.length - 1);
-      }
-      break;
+    cellEditorValue.value = getEditorValue(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col);
+  }
+}
+
+function applyMutationFileData(response: EditorMutationResponse): FileData | null {
+  if (response.kind === 'snapshot') {
+    if (!response.fileData) return fileDataStore.data;
+    const currentFileData = fileDataStore.data;
+    const nextFileData = {
+      ...response.fileData,
+      path: currentFileData?.path ?? response.fileData.path,
+      fileName: currentFileData?.fileName ?? response.fileData.fileName,
+    };
+    fileDataStore.setData(nextFileData);
+    return nextFileData;
+  }
+
+  const currentFileData = fileDataStore.data;
+  if (!currentFileData) return null;
+  const changes = response.cellChanges ?? [];
+  if (!changes.length) return currentFileData;
+
+  const nextFileData: FileData = {
+    ...currentFileData,
+    sheets: [...currentFileData.sheets],
+  };
+  const clonedRowsBySheet = new Map<number, CellValue[][]>();
+
+  for (const change of changes) {
+    const sheet = currentFileData.sheets[change.sheetIndex];
+    if (!sheet) continue;
+    let rows = clonedRowsBySheet.get(change.sheetIndex);
+    if (!rows) {
+      rows = [...sheet.rows];
+      clonedRowsBySheet.set(change.sheetIndex, rows);
+      nextFileData.sheets[change.sheetIndex] = {
+        ...sheet,
+        rows,
+      };
     }
-    case 'AddRow': {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      const rowValues = resultData.row?.values || [];
-      sheet.rows.splice(resultData.row.index, 0, rowValues);
-      break;
-    }
-    case 'DeleteRow': {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      sheet.rows.splice(resultData.rowIndex, 1);
-      break;
-    }
-    case 'AddColumn': {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      const colIndex = resultData.column.index;
-      const colData = resultData.colData || [];
-      for (let i = 0; i < sheet.rows.length; i++) {
-        const value = i < colData.length ? colData[i] : null;
-        sheet.rows[i].splice(colIndex, 0, value);
-      }
-      break;
-    }
-    case 'DeleteColumn': {
-      const resultData = result.data;
-      const sheet = data.sheets[resultData.sheetIndex];
-      if (!sheet) break;
-      for (const row of sheet.rows) {
-        row.splice(resultData.columnIndex, 1);
-      }
-      break;
-    }
-    case 'SortColumn': {
-      const resultData = result.data;
-      data.sheets[resultData.sheetIndex] = resultData.sheetData;
-      currentSortColumn.value = resultData.sortState;
-      break;
-    }
+    ensureCellExists(rows, change.row, change.col);
+    rows[change.row][change.col] = change.value;
+  }
+
+  fileDataStore.setData(nextFileData);
+  return nextFileData;
+}
+
+function ensureCellExists(rows: CellValue[][], row: number, col: number) {
+  while (rows.length <= row) {
+    rows.push([]);
+  }
+  rows[row] = [...rows[row]];
+  while (rows[row].length <= col) {
+    rows[row].push(null);
   }
 }
 
 const {
+  draftCellValues,
   flushPendingCellChanges,
   handleCellChange,
   handleCellEditing,
+  handleCellEditCancel,
   handleCellEditorSubmit,
   handleDeselectCell,
 } = usePendingCellSave({
@@ -157,9 +170,21 @@ const {
   selectedCell,
   cellEditorValue,
   currentSortColumn,
-  refreshEditorState,
+  applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
+});
+
+watch(() => fileDataStore.documentVersion, () => {
+  selectedCell.value = null;
+  cellEditorValue.value = '';
+  autoScroll.value = false;
+  searchResults.value = [];
+  searchQuery.value = '';
+  currentSortColumn.value = null;
+  sheetSelectedCells.value = new Map();
+  sheetColumnWidths.value = {};
+  sheetRowHeights.value = {};
 });
 
 const {
@@ -179,21 +204,24 @@ const {
   resetDocumentStatus,
 });
 
+function getEditorValue(sheetIndex: number, row: number, col: number): string {
+  const draftValue = draftCellValues.get(getCellKey(sheetIndex, row, col));
+  if (draftValue !== undefined) return draftValue;
+  const sheet = fileData.value?.sheets[sheetIndex];
+  return cellToEditorString(sheet?.rows[row]?.[col]);
+}
+
 // ========== Row/Column operations ==========
 async function handleAddRow() {
   if (!currentSheet.value) return;
   if (!(await flushPendingCellChanges())) return;
 
-  const colCount = currentSheet.value.rows[0]?.length || 0;
   const newRowIndex = currentSheet.value.rows.length;
-  currentSheet.value.rows.push(Array(colCount).fill(null));
 
   try {
     isLoading.value = true;
-    await api.addRow(currentSheetIndex.value, newRowIndex);
-    await refreshEditorState();
+    applyMutationResponse(await api.addRow(currentSheetIndex.value, newRowIndex));
   } catch (error) {
-    currentSheet.value.rows.pop();
     ElMessage.error(`Failed to add row: ${error}`);
   } finally {
     isLoading.value = false;
@@ -204,15 +232,10 @@ async function handleDeleteRow(index: number) {
   if (!currentSheet.value) return;
   if (!(await flushPendingCellChanges())) return;
 
-  const deletedRow = currentSheet.value.rows[index];
-  currentSheet.value.rows.splice(index, 1);
-
   try {
     isLoading.value = true;
-    await api.deleteRow(currentSheetIndex.value, index);
-    await refreshEditorState();
+    applyMutationResponse(await api.deleteRow(currentSheetIndex.value, index));
   } catch (error) {
-    currentSheet.value.rows.splice(index, 0, deletedRow);
     ElMessage.error(`Failed to delete row: ${error}`);
   } finally {
     isLoading.value = false;
@@ -223,18 +246,10 @@ async function handleAddColumn() {
   if (!currentSheet.value) return;
   if (!(await flushPendingCellChanges())) return;
 
-  for (const row of currentSheet.value.rows) {
-    row.push(null);
-  }
-
   try {
     isLoading.value = true;
-    await api.addColumn(currentSheetIndex.value);
-    await refreshEditorState();
+    applyMutationResponse(await api.addColumn(currentSheetIndex.value));
   } catch (error) {
-    for (const row of currentSheet.value.rows) {
-      row.pop();
-    }
     ElMessage.error(`Failed to add column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -245,16 +260,10 @@ async function handleDeleteColumn(index: number) {
   if (!currentSheet.value) return;
   if (!(await flushPendingCellChanges())) return;
 
-  const deletedCols: CellValue[][] = currentSheet.value.rows.map(row => row.splice(index, 1));
-
   try {
     isLoading.value = true;
-    await api.deleteColumn(currentSheetIndex.value, index);
-    await refreshEditorState();
+    applyMutationResponse(await api.deleteColumn(currentSheetIndex.value, index));
   } catch (error) {
-    for (let i = 0; i < currentSheet.value.rows.length; i++) {
-      currentSheet.value.rows[i].splice(index, 0, ...deletedCols[i]);
-    }
     ElMessage.error(`Failed to delete column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -267,28 +276,14 @@ async function handleAddSheet() {
   if (!(await flushPendingCellChanges())) return;
 
   const newSheetIndex = fileData.value.sheets.length;
-  const newSheet: SheetData = {
-    name: `Sheet${newSheetIndex + 1}`,
-    rows: [
-      [null, null, null, null, null],
-      [null, null, null, null, null],
-      [null, null, null, null, null],
-      [null, null, null, null, null],
-      [null, null, null, null, null],
-    ],
-    merges: [],
-  };
-  fileData.value.sheets.push(newSheet);
 
   try {
     isLoading.value = true;
-    await api.addSheet();
+    applyMutationResponse(await api.addSheet());
     selectedCell.value = null;
     cellEditorValue.value = '';
     currentSheetIndex.value = newSheetIndex;
-    await refreshEditorState();
   } catch (error) {
-    fileData.value.sheets.pop();
     ElMessage.error(`Failed to add sheet: ${error}`);
   } finally {
     isLoading.value = false;
@@ -303,18 +298,13 @@ async function handleDeleteSheet() {
   if (!(await flushPendingCellChanges())) return;
 
   const deletedIndex = currentSheetIndex.value;
-  const deletedSheet = fileData.value.sheets[deletedIndex];
-  fileData.value.sheets.splice(deletedIndex, 1);
   const newIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
-  currentSheetIndex.value = newIndex;
 
   try {
     isLoading.value = true;
-    await api.deleteSheet(deletedIndex);
-    await refreshEditorState();
+    applyMutationResponse(await api.deleteSheet(deletedIndex));
+    currentSheetIndex.value = newIndex;
   } catch (error) {
-    fileData.value.sheets.splice(deletedIndex, 0, deletedSheet);
-    currentSheetIndex.value = deletedIndex;
     ElMessage.error(`Failed to delete sheet: ${error}`);
   } finally {
     isLoading.value = false;
@@ -332,8 +322,7 @@ function handleSheetChange(index: number) {
   const savedCell = sheetSelectedCells.value.get(index);
   if (savedCell) {
     selectedCell.value = savedCell;
-    const sheet = fileData.value?.sheets[index];
-    cellEditorValue.value = cellToEditorString(sheet?.rows[savedCell.row]?.[savedCell.col]);
+    cellEditorValue.value = getEditorValue(index, savedCell.row, savedCell.col);
     autoScroll.value = true;
   } else {
     selectedCell.value = null;
@@ -348,9 +337,7 @@ async function handleUndo() {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
 
-    const result = await api.undo();
-    applyOperation(result);
-    await refreshEditorState();
+    applyMutationResponse(await api.undo());
   } catch (error) {
     ElMessage.error(`Failed to undo: ${error}`);
   } finally {
@@ -365,9 +352,7 @@ async function handleRedo() {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
 
-    const result = await api.redo();
-    applyOperation(result);
-    await refreshEditorState();
+    applyMutationResponse(await api.redo());
   } catch (error) {
     ElMessage.error(`Failed to redo: ${error}`);
   } finally {
@@ -402,9 +387,7 @@ function handleSearchResultClick(result: SearchResult) {
   }
   autoScroll.value = true;
   selectedCell.value = { row: result.row, col: result.col };
-
-  const sheet = fileData.value?.sheets[result.sheetIndex];
-  cellEditorValue.value = cellToEditorString(sheet?.rows[result.row]?.[result.col]);
+  cellEditorValue.value = getEditorValue(result.sheetIndex, result.row, result.col);
 }
 
 function handleClearSearch() {
@@ -428,14 +411,12 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
     const prevSortState = currentSortColumn.value;
     currentSortColumn.value = null;
 
-    const result = await api.sortColumn(
+    applyMutationResponse(await api.sortColumn(
       currentSheetIndex.value,
       colIndex,
       ascending,
       prevSortState
-    );
-    applyOperation(result);
-    await refreshEditorState();
+    ));
   } catch (error) {
     ElMessage.error(`Failed to sort column: ${error}`);
   } finally {
@@ -445,11 +426,19 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
 
 // ========== Column resize ==========
 function handleColumnResize(colIndex: number, width: number) {
-  if (!currentSheet.value) return;
-  if (!currentSheet.value.columnWidths) {
-    currentSheet.value.columnWidths = {};
-  }
-  currentSheet.value.columnWidths[colIndex] = width;
+  const sheetWidths = sheetColumnWidths.value[currentSheetIndex.value] ?? {};
+  sheetColumnWidths.value[currentSheetIndex.value] = {
+    ...sheetWidths,
+    [colIndex]: width,
+  };
+}
+
+function handleRowResize(rowIndex: number, height: number) {
+  const sheetHeights = sheetRowHeights.value[currentSheetIndex.value] ?? {};
+  sheetRowHeights.value[currentSheetIndex.value] = {
+    ...sheetHeights,
+    [rowIndex]: height,
+  };
 }
 
 // ========== Lifecycle ==========
@@ -500,7 +489,7 @@ onMounted(async () => {
         </div>
 
         <template v-else>
-          <CellEditor
+          <FormulaBar
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
             :cell-position="selectedCell"
@@ -512,18 +501,23 @@ onMounted(async () => {
             <TableEditor
               :data="tableData"
               :columns="columns"
+              :sheet-index="currentSheetIndex"
+              :draft-cell-values="draftCellValues"
               :merges="currentSheet?.merges"
               :selected-cell="selectedCell"
               :auto-scroll="autoScroll"
               :sort-state="currentSortColumn"
-              :column-widths="currentSheet?.columnWidths"
+              :column-widths="sheetColumnWidths[currentSheetIndex]"
+              :row-heights="sheetRowHeights[currentSheetIndex]"
               @cell-change="handleCellChange"
               @cell-editing="handleCellEditing"
+              @cell-edit-cancel="handleCellEditCancel"
               @delete-row="handleDeleteRow"
               @delete-column="handleDeleteColumn"
               @select-cell="handleSelectCell"
               @sort-column="handleSortColumn"
               @column-resize="handleColumnResize"
+              @row-resize="handleRowResize"
             />
           </div>
         </template>

@@ -1,4 +1,13 @@
-export type CellValue = string | number | boolean | null;
+export type ScalarCellValue = string | number | boolean | null;
+
+export type FormulaCellValue = {
+  type: 'formula';
+  formula: string;
+  cachedValue: CellValue;
+  error?: string;
+};
+
+export type CellValue = ScalarCellValue | FormulaCellValue;
 
 export interface MergeRange {
   startRow: number;
@@ -12,6 +21,7 @@ export interface SheetData {
   rows: CellValue[][];
   merges: MergeRange[];
   columnWidths?: Record<number, number>;
+  rowHeights?: Record<number, number>;
 }
 
 export interface FileData {
@@ -21,6 +31,13 @@ export interface FileData {
 }
 
 export interface CellChange {
+  row: number;
+  col: number;
+  value: CellValue;
+}
+
+export interface SheetCellChange {
+  sheetIndex: number;
   row: number;
   col: number;
   value: CellValue;
@@ -69,4 +86,18 @@ export interface RecentFile {
   thumbnail?: string;
   storageType?: 'mobileSandboxPath' | 'desktopPath';
   originalPath?: string;
+}
+
+export interface EditorStateInfo {
+  canUndo: boolean;
+  canRedo: boolean;
+  isDirty: boolean;
+}
+
+export interface EditorMutationResponse {
+  kind: 'snapshot' | 'cellDelta';
+  fileData?: FileData;
+  editorState: EditorStateInfo;
+  operation?: OperationResult | null;
+  cellChanges?: SheetCellChange[];
 }

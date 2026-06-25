@@ -1,5 +1,6 @@
 mod commands;
 mod error;
+mod formula;
 mod io;
 mod ops;
 mod recent;

@@ -1,17 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { FileData, RecentFile, CellValue, OperationResult, SearchResult, SortState } from "@/types";
+import type {
+  FileData,
+  RecentFile,
+  CellValue,
+  SearchResult,
+  SortState,
+  EditorMutationResponse,
+  EditorStateInfo,
+} from "@/types";
 
 export async function initFile(fileData: FileData): Promise<void> {
   return invoke<void>("init_file", { fileData });
 }
 
 // ==================== Editor Operations ====================
-
-export type EditorStateInfo = {
-  canUndo: boolean;
-  canRedo: boolean;
-  isDirty: boolean;
-};
 
 export async function getEditorState(): Promise<EditorStateInfo | null> {
   return invoke<EditorStateInfo | null>("get_editor_state");
@@ -21,12 +23,12 @@ export async function markFileSaved(): Promise<void> {
   return invoke<void>("mark_file_saved");
 }
 
-export async function undo(): Promise<OperationResult> {
-  return invoke<OperationResult>("undo");
+export async function undo(): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("undo");
 }
 
-export async function redo(): Promise<OperationResult> {
-  return invoke<OperationResult>("redo");
+export async function redo(): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("redo");
 }
 
 // ==================== Cell Operations ====================
@@ -37,34 +39,34 @@ export async function setCell(
   col: number,
   oldValue: CellValue,
   newValue: CellValue
-): Promise<void> {
-  return invoke<void>("set_cell", { sheetIndex, row, col, oldValue, newValue });
+): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("set_cell", { sheetIndex, row, col, oldValue, newValue });
 }
 
-export async function addRow(sheetIndex: number, rowIndex: number): Promise<void> {
-  return invoke<void>("add_row", { sheetIndex, rowIndex });
+export async function addRow(sheetIndex: number, rowIndex: number): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("add_row", { sheetIndex, rowIndex });
 }
 
-export async function deleteRow(sheetIndex: number, rowIndex: number): Promise<void> {
-  return invoke<void>("delete_row", { sheetIndex, rowIndex });
+export async function deleteRow(sheetIndex: number, rowIndex: number): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("delete_row", { sheetIndex, rowIndex });
 }
 
-export async function addColumn(sheetIndex: number): Promise<void> {
-  return invoke<void>("add_column", { sheetIndex });
+export async function addColumn(sheetIndex: number): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("add_column", { sheetIndex });
 }
 
-export async function deleteColumn(sheetIndex: number, colIndex: number): Promise<void> {
-  return invoke<void>("delete_column", { sheetIndex, colIndex });
+export async function deleteColumn(sheetIndex: number, colIndex: number): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("delete_column", { sheetIndex, colIndex });
 }
 
 // ==================== Sheet Operations ====================
 
-export async function addSheet(): Promise<void> {
-  return invoke<void>("add_sheet");
+export async function addSheet(): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("add_sheet");
 }
 
-export async function deleteSheet(sheetIndex: number): Promise<void> {
-  return invoke<void>("delete_sheet", { sheetIndex });
+export async function deleteSheet(sheetIndex: number): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("delete_sheet", { sheetIndex });
 }
 
 // ==================== Sort Operations ====================
@@ -74,8 +76,8 @@ export async function sortColumn(
   colIndex: number,
   ascending: boolean,
   previousSortState: SortState | null
-): Promise<OperationResult> {
-  return invoke<OperationResult>("sort_column", {
+): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("sort_column", {
     sheetIndex,
     colIndex,
     ascending,

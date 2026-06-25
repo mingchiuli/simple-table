@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use crate::state::state::EditorStateInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -15,6 +16,11 @@ pub enum CellValue {
     String(String),
     Number(Value), // 使用 serde_json::Value 支持精确大整数
     Boolean(bool),
+    Formula {
+        formula: String,
+        cached_value: Box<CellValue>,
+        error: Option<String>,
+    },
 }
 
 impl Serialize for CellValue {
@@ -36,6 +42,26 @@ impl Serialize for CellValue {
                 v.serialize(serializer)
             }
             CellValue::Boolean(b) => serializer.serialize_bool(*b),
+            CellValue::Formula {
+                formula,
+                cached_value,
+                error,
+            } => {
+                use serde::ser::SerializeMap;
+
+                let mut len = 3;
+                if error.is_some() {
+                    len += 1;
+                }
+                let mut map = serializer.serialize_map(Some(len))?;
+                map.serialize_entry("type", "formula")?;
+                map.serialize_entry("formula", formula)?;
+                map.serialize_entry("cachedValue", cached_value)?;
+                if let Some(error) = error {
+                    map.serialize_entry("error", error)?;
+                }
+                map.end()
+            }
         }
     }
 }
@@ -49,7 +75,41 @@ impl CellValue {
             CellValue::String(s) => s.clone(),
             CellValue::Number(n) => n.to_string(),
             CellValue::Boolean(b) => b.to_string(),
+            CellValue::Formula {
+                cached_value,
+                error,
+                ..
+            } => error
+                .clone()
+                .unwrap_or_else(|| cached_value.to_display_string()),
         }
+    }
+
+    pub fn formula(formula: impl Into<String>, cached_value: CellValue) -> Self {
+        CellValue::Formula {
+            formula: normalize_formula_text(formula.into()),
+            cached_value: Box::new(cached_value),
+            error: None,
+        }
+    }
+
+    pub fn with_formula_result(&self, cached_value: CellValue, error: Option<String>) -> Self {
+        match self {
+            CellValue::Formula { formula, .. } => CellValue::Formula {
+                formula: formula.clone(),
+                cached_value: Box::new(cached_value),
+                error,
+            },
+            _ => self.clone(),
+        }
+    }
+}
+
+pub fn normalize_formula_text(formula: String) -> String {
+    if formula.starts_with('=') {
+        formula
+    } else {
+        format!("={formula}")
     }
 }
 
@@ -78,7 +138,34 @@ impl<'de> Deserialize<'de> for CellValue {
                 // 例如邮编/编号 "007" 或超过 JS 安全整数范围的值。
                 Ok(CellValue::String(s))
             }
-            Value::Array(_) | Value::Object(_) => {
+            Value::Object(mut object) => {
+                if object.get("type").and_then(Value::as_str) == Some("formula") {
+                    let formula = object
+                        .remove("formula")
+                        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                        .unwrap_or_default();
+                    let cached_value = object
+                        .remove("cachedValue")
+                        .or_else(|| object.remove("cached_value"))
+                        .map(CellValue::deserialize)
+                        .transpose()
+                        .map_err(serde::de::Error::custom)?
+                        .unwrap_or(CellValue::Null);
+                    let error = object
+                        .remove("error")
+                        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+
+                    Ok(CellValue::Formula {
+                        formula: normalize_formula_text(formula),
+                        cached_value: Box::new(cached_value),
+                        error,
+                    })
+                } else {
+                    // 不支持的对象类型，转为字符串
+                    Ok(CellValue::String(Value::Object(object).to_string()))
+                }
+            }
+            Value::Array(_) => {
                 // 不支持的类型，转为字符串
                 Ok(CellValue::String(value.to_string()))
             }
@@ -177,6 +264,9 @@ pub struct SheetData {
     /// 列宽配置（用于持久化）
     #[serde(default)]
     pub column_widths: Option<HashMap<usize, u32>>,
+    /// 行高配置（用于前端布局，不计入内容 dirty）
+    #[serde(default)]
+    pub row_heights: Option<HashMap<usize, u32>>,
 }
 
 impl SheetData {
@@ -199,6 +289,16 @@ pub struct FileData {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CellChange {
+    pub row: usize,
+    pub col: usize,
+    pub value: CellValue,
+}
+
+/// 带 sheet 的单元格变化，用于高频编辑的增量响应。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetCellChange {
+    pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
     pub value: CellValue,
@@ -329,4 +429,23 @@ pub enum OperationResult {
         #[serde(rename = "sortState")]
         sort_state: Option<SortState>,
     },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorMutationResponseKind {
+    Snapshot,
+    CellDelta,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorMutationResponse {
+    pub kind: EditorMutationResponseKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_data: Option<FileData>,
+    pub editor_state: EditorStateInfo,
+    pub operation: Option<OperationResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_changes: Vec<SheetCellChange>,
 }
