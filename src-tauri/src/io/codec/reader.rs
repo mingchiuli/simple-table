@@ -1,116 +1,31 @@
-use std::io::{BufReader, Cursor};
-use std::iter;
-
-use calamine::{Data, Ods, Range, Reader, Xls, Xlsx};
+use std::collections::HashMap;
+use std::io::Cursor;
 
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, MergeRange, SheetData, SheetIndex};
+use crate::types::{CellValue, FileData, MergeRange, SheetData};
 use csv::ReaderBuilder;
 use serde_json::Value;
+use umya_spreadsheet::{Cell, Workbook, Worksheet, reader};
 
-fn cell_to_value(cell: Data) -> CellValue {
-    match cell {
-        Data::String(s) => CellValue::String(s),
-        // 使用 serde_json::Value 来精确存储整数
-        Data::Float(f) => CellValue::Number(Value::from(f)),
-        Data::Int(i) => CellValue::Number(Value::from(i)),
-        Data::Bool(b) => CellValue::Boolean(b),
-        Data::DateTime(dt) => CellValue::Number(Value::from(dt.as_f64())),
-        Data::DateTimeIso(s) => CellValue::String(s),
-        Data::DurationIso(s) => CellValue::String(s),
-        Data::Error(e) => CellValue::String(format!("{:?}", e)),
-        Data::Empty => CellValue::Null,
-    }
+const DEFAULT_COLUMN_WIDTH_PX: u32 = 120;
+const DEFAULT_ROW_HEIGHT_PX: u32 = 72;
+
+pub struct ReadFileResult {
+    pub file_data: FileData,
+    pub workbook: Option<Workbook>,
 }
 
-fn range_origin(range: &Range<Data>) -> (usize, usize) {
-    range
-        .start()
-        .map(|(row, col)| (row as usize, col as usize))
-        .unwrap_or((0, 0))
-}
-
-fn normalize_range_coord(
-    absolute_row: usize,
-    absolute_col: usize,
-    origin: (usize, usize),
-) -> Option<(usize, usize)> {
-    Some((
-        absolute_row.checked_sub(origin.0)?,
-        absolute_col.checked_sub(origin.1)?,
-    ))
-}
-
-fn apply_formula_cells(
-    rows: &mut Vec<Vec<CellValue>>,
-    formula_range: Range<String>,
-    value_origin: (usize, usize),
-) {
-    let formula_origin = formula_range
-        .start()
-        .map(|(row, col)| (row as usize, col as usize))
-        .unwrap_or(value_origin);
-
-    for (relative_row, relative_col, formula) in formula_range.used_cells() {
-        if formula.is_empty() {
-            continue;
-        }
-
-        let Some((row_idx, col_idx)) = normalize_range_coord(
-            formula_origin.0 + relative_row,
-            formula_origin.1 + relative_col,
-            value_origin,
-        ) else {
-            continue;
-        };
-
-        if rows.len() <= row_idx {
-            rows.resize_with(row_idx + 1, Vec::new);
-        }
-        if rows[row_idx].len() <= col_idx {
-            rows[row_idx].resize(col_idx + 1, CellValue::Null);
-        }
-        let cached_value = rows[row_idx][col_idx].clone();
-        rows[row_idx][col_idx] = CellValue::formula(formula.clone(), cached_value);
-    }
-}
-
-fn normalize_merges(
-    merged_data: &[(String, u32, u16, u32, u16)],
-    sheet_name: &str,
-    value_origin: (usize, usize),
-) -> Vec<MergeRange> {
-    merged_data
-        .iter()
-        .filter(|(name, _, _, _, _)| name == sheet_name)
-        .filter_map(|(_, start_r, start_c, end_r, end_c)| {
-            let (start_row, start_col) =
-                normalize_range_coord(*start_r as usize, *start_c as usize, value_origin)?;
-            let (end_row, end_col) =
-                normalize_range_coord(*end_r as usize, *end_c as usize, value_origin)?;
-            Some(MergeRange {
-                start_row: start_row as u32,
-                start_col: start_col as u16,
-                end_row: end_row as u32,
-                end_col: end_col as u16,
-            })
-        })
-        .collect()
-}
-
-/// 从已读取的文件字节解析 FileData
-pub fn read_file_from_bytes(
+/// 从已读取的文件字节解析 FileData，并在 Excel 格式下保留原始 umya Workbook。
+pub fn read_file_with_workbook_from_bytes(
     extension: &str,
     bytes: Vec<u8>,
     path: String,
     file_name: String,
-) -> Result<FileData, AppError> {
+) -> Result<ReadFileResult, AppError> {
     let cursor = Cursor::new(bytes);
 
     match extension.to_lowercase().as_str() {
-        "xlsx" => read_xlsx_from_bytes(cursor, path, file_name),
-        "xls" => read_xls_from_bytes(cursor, path, file_name),
-        "ods" => read_ods_from_bytes(cursor, path, file_name),
+        "xlsx" | "xlsm" => read_xlsx_from_bytes(cursor, path, file_name),
         "csv" => read_csv_from_bytes(cursor, path, file_name),
         _ => Err(AppError::UnsupportedFormat),
     }
@@ -120,204 +35,160 @@ fn read_xlsx_from_bytes(
     cursor: Cursor<Vec<u8>>,
     path: String,
     file_name: String,
-) -> Result<FileData, AppError> {
-    let mut workbook: Xlsx<BufReader<Cursor<Vec<u8>>>> = Xlsx::new(BufReader::new(cursor))
-        .map_err(|e: calamine::XlsxError| AppError::ReadError(e.to_string()))?;
-    read_workbook(&mut workbook, path, file_name)
+) -> Result<ReadFileResult, AppError> {
+    let workbook =
+        reader::xlsx::read_reader(cursor, true).map_err(|e| AppError::ReadError(e.to_string()))?;
+    let mut sheets = Vec::new();
+
+    for worksheet in workbook.sheet_collection() {
+        sheets.push(read_worksheet(worksheet));
+    }
+
+    Ok(ReadFileResult {
+        file_data: FileData {
+            path,
+            file_name,
+            sheets,
+        },
+        workbook: Some(workbook),
+    })
 }
 
-fn read_xls_from_bytes(
-    cursor: Cursor<Vec<u8>>,
-    path: String,
-    file_name: String,
-) -> Result<FileData, AppError> {
-    let mut workbook: Xls<BufReader<Cursor<Vec<u8>>>> = Xls::new(BufReader::new(cursor))
-        .map_err(|e: calamine::XlsError| AppError::ReadError(e.to_string()))?;
-    read_workbook_xls(&mut workbook, path, file_name)
-}
+fn read_worksheet(worksheet: &Worksheet) -> SheetData {
+    let (highest_col, highest_row) = worksheet.highest_column_and_row();
+    let mut rows = vec![vec![CellValue::Null; highest_col as usize]; highest_row as usize];
 
-fn read_ods_from_bytes(
-    cursor: Cursor<Vec<u8>>,
-    path: String,
-    file_name: String,
-) -> Result<FileData, AppError> {
-    let mut workbook: Ods<BufReader<Cursor<Vec<u8>>>> = Ods::new(BufReader::new(cursor))
-        .map_err(|e: calamine::OdsError| AppError::ReadError(e.to_string()))?;
-    read_workbook_ods(&mut workbook, path, file_name)
-}
-
-fn read_workbook(
-    workbook: &mut Xlsx<BufReader<Cursor<Vec<u8>>>>,
-    path: String,
-    file_name: String,
-) -> Result<FileData, AppError> {
-    workbook
-        .load_merged_regions()
-        .map_err(|e| AppError::ReadError(e.to_string()))?;
-
-    let sheet_names = workbook.sheet_names().to_vec();
-
-    let merged_data: Vec<(String, u32, u16, u32, u16)> = workbook
-        .merged_regions()
-        .iter()
-        .flat_map(|(name, _, dims)| {
-            iter::once((
-                name.clone(),
-                dims.start.0,
-                dims.start.1 as u16,
-                dims.end.0,
-                dims.end.1 as u16,
-            ))
-        })
-        .collect();
-
-    let mut sheets: Vec<SheetData> = Vec::new();
-
-    for sheet_name in &sheet_names {
-        let range = match workbook.worksheet_range(sheet_name) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        let rows: Vec<Vec<CellValue>> = range
-            .rows()
-            .map(|row| row.iter().map(|cell| cell_to_value(cell.clone())).collect())
-            .collect();
-        let mut rows = rows;
-        let value_origin = range_origin(&range);
-
-        if let Ok(formula_range) = workbook.worksheet_formula(sheet_name) {
-            apply_formula_cells(&mut rows, formula_range, value_origin);
+    for cell in worksheet.cells() {
+        let row_idx = cell.coordinate().row_num().saturating_sub(1) as usize;
+        let col_idx = cell.coordinate().col_num().saturating_sub(1) as usize;
+        if row_idx >= rows.len() {
+            rows.resize_with(row_idx + 1, Vec::new);
         }
-
-        let merges = normalize_merges(&merged_data, sheet_name, value_origin);
-
-        let index = SheetIndex::default();
-        sheets.push(SheetData {
-            name: sheet_name.clone(),
-            rows,
-            merges,
-            index,
-            ..Default::default()
-        });
+        if col_idx >= rows[row_idx].len() {
+            rows[row_idx].resize(col_idx + 1, CellValue::Null);
+        }
+        rows[row_idx][col_idx] = cell_to_value(cell);
     }
 
-    Ok(FileData {
-        path,
-        file_name,
-        sheets,
-    })
+    SheetData {
+        name: worksheet.name().to_string(),
+        rows,
+        merges: read_merge_ranges(worksheet),
+        column_widths: read_column_widths(worksheet),
+        row_heights: read_row_heights(worksheet),
+        ..Default::default()
+    }
 }
 
-fn read_workbook_xls(
-    workbook: &mut Xls<BufReader<Cursor<Vec<u8>>>>,
-    path: String,
-    file_name: String,
-) -> Result<FileData, AppError> {
-    let sheet_names = workbook.sheet_names().to_vec();
-    let sheets: Vec<SheetData> = sheet_names
-        .iter()
-        .filter_map(|sheet_name| {
-            let range = workbook.worksheet_range(sheet_name).ok()?;
-            let rows: Vec<Vec<CellValue>> = range
-                .rows()
-                .map(|row| row.iter().map(|cell| cell_to_value(cell.clone())).collect())
-                .collect();
-            let mut rows = rows;
-            let value_origin = range_origin(&range);
+fn cell_to_value(cell: &Cell) -> CellValue {
+    let cell_value = cell.cell_value();
+    let cached_value = raw_cell_value(cell);
+    if cell_value.is_formula() {
+        return CellValue::formula(cell_value.formula().to_string(), cached_value);
+    }
+    cached_value
+}
 
-            if let Ok(formula_range) = workbook.worksheet_formula(sheet_name) {
-                apply_formula_cells(&mut rows, formula_range, value_origin);
+fn raw_cell_value(cell: &Cell) -> CellValue {
+    if cell.data_type() == "b" {
+        return CellValue::Boolean(matches!(
+            cell.value().as_ref().to_ascii_lowercase().as_str(),
+            "1" | "true"
+        ));
+    }
+
+    if cell.data_type() == "e" {
+        return CellValue::String(cell.value().into_owned());
+    }
+
+    if let Some(number) = cell.value_number() {
+        if number.is_finite() {
+            if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
+                return CellValue::Number(Value::from(number as i64));
             }
+            return CellValue::Number(Value::from(number));
+        }
+    }
 
-            let merges: Vec<MergeRange> = Vec::new();
-            let index = SheetIndex::default();
-            Some(SheetData {
-                name: sheet_name.clone(),
-                rows,
-                merges,
-                index,
-                ..Default::default()
+    let value = cell.value().into_owned();
+    if value.is_empty() {
+        CellValue::Null
+    } else {
+        CellValue::String(value)
+    }
+}
+
+fn read_merge_ranges(worksheet: &Worksheet) -> Vec<MergeRange> {
+    worksheet
+        .merge_cells()
+        .iter()
+        .filter_map(|range| {
+            let start_row = range.coordinate_start_row()?.num().checked_sub(1)?;
+            let start_col = range.coordinate_start_col()?.num().checked_sub(1)?;
+            let end_row = range
+                .coordinate_end_row()
+                .map(|row| row.num())
+                .unwrap_or(start_row + 1)
+                .checked_sub(1)?;
+            let end_col = range
+                .coordinate_end_col()
+                .map(|col| col.num())
+                .unwrap_or(start_col + 1)
+                .checked_sub(1)?;
+            Some(MergeRange {
+                start_row,
+                start_col: start_col as u16,
+                end_row,
+                end_col: end_col as u16,
             })
         })
-        .collect();
-    Ok(FileData {
-        path,
-        file_name,
-        sheets,
-    })
+        .collect()
 }
 
-fn read_workbook_ods(
-    workbook: &mut Ods<BufReader<Cursor<Vec<u8>>>>,
-    path: String,
-    file_name: String,
-) -> Result<FileData, AppError> {
-    let sheet_names = workbook.sheet_names().to_vec();
-    let sheets: Vec<SheetData> = sheet_names
+fn read_column_widths(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
+    let widths: HashMap<usize, u32> = worksheet
+        .column_dimensions()
         .iter()
-        .filter_map(|sheet_name| {
-            let range = workbook.worksheet_range(sheet_name).ok()?;
-            let rows: Vec<Vec<CellValue>> = range
-                .rows()
-                .map(|row| row.iter().map(|cell| cell_to_value(cell.clone())).collect())
-                .collect();
-            let mut rows = rows;
-            let value_origin = range_origin(&range);
-
-            if let Ok(formula_range) = workbook.worksheet_formula(sheet_name) {
-                apply_formula_cells(&mut rows, formula_range, value_origin);
+        .filter_map(|column| {
+            let px = excel_column_width_to_px(column.width());
+            if px == DEFAULT_COLUMN_WIDTH_PX {
+                None
+            } else {
+                Some((column.col_num().saturating_sub(1) as usize, px))
             }
-
-            let merges: Vec<MergeRange> = Vec::new();
-            let index = SheetIndex::default();
-            Some(SheetData {
-                name: sheet_name.clone(),
-                rows,
-                merges,
-                index,
-                ..Default::default()
-            })
         })
         .collect();
-    Ok(FileData {
-        path,
-        file_name,
-        sheets,
-    })
+    (!widths.is_empty()).then_some(widths)
 }
 
-#[cfg(test)]
-mod tests {
-    use calamine::Range;
+fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
+    let heights: HashMap<usize, u32> = worksheet
+        .row_dimensions()
+        .into_iter()
+        .filter_map(|row| {
+            let px = points_to_px(row.height());
+            if px == DEFAULT_ROW_HEIGHT_PX {
+                None
+            } else {
+                Some((row.row_num().saturating_sub(1) as usize, px))
+            }
+        })
+        .collect();
+    (!heights.is_empty()).then_some(heights)
+}
 
-    use super::*;
-
-    #[test]
-    fn aligns_formula_cells_to_value_range_origin() {
-        let mut rows = vec![vec![CellValue::Number(Value::from(2))]];
-        let mut formula_range = Range::<String>::new((2, 1), (2, 1));
-        formula_range.set_value((2, 1), "=A1+1".to_string());
-
-        apply_formula_cells(&mut rows, formula_range, (2, 1));
-
-        assert!(matches!(rows[0][0], CellValue::Formula { .. }));
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].len(), 1);
+fn excel_column_width_to_px(width: f64) -> u32 {
+    if width <= 0.0 {
+        return DEFAULT_COLUMN_WIDTH_PX;
     }
+    ((width * 7.0) + 5.0).round().max(1.0) as u32
+}
 
-    #[test]
-    fn normalizes_merge_ranges_to_value_range_origin() {
-        let merges = vec![("Sheet1".to_string(), 2, 1, 3, 2)];
-
-        let normalized = normalize_merges(&merges, "Sheet1", (2, 1));
-
-        assert_eq!(normalized.len(), 1);
-        assert_eq!(normalized[0].start_row, 0);
-        assert_eq!(normalized[0].start_col, 0);
-        assert_eq!(normalized[0].end_row, 1);
-        assert_eq!(normalized[0].end_col, 1);
+fn points_to_px(points: f64) -> u32 {
+    if points <= 0.0 {
+        return DEFAULT_ROW_HEIGHT_PX;
     }
+    (points * 96.0 / 72.0).round().max(1.0) as u32
 }
 
 /// 判断字符串是否带有前导零（如 "007"、"-0123"），需要按字符串处理避免精度丢失
@@ -335,7 +206,7 @@ fn read_csv_from_bytes(
     cursor: Cursor<Vec<u8>>,
     path: String,
     file_name: String,
-) -> Result<FileData, AppError> {
+) -> Result<ReadFileResult, AppError> {
     let mut reader = ReaderBuilder::new().has_headers(false).from_reader(cursor);
 
     let mut rows: Vec<Vec<CellValue>> = Vec::new();
@@ -348,7 +219,6 @@ fn read_csv_from_bytes(
                 if field.is_empty() {
                     CellValue::Null
                 } else if has_leading_zero(field) {
-                    // 保留电话号码、邮编等以 0 开头的字符串
                     CellValue::String(field.to_string())
                 } else if let Ok(int_val) = field.parse::<i64>() {
                     if !(-9007199254740991..=9007199254740991).contains(&int_val) {
@@ -361,9 +231,9 @@ fn read_csv_from_bytes(
                     } else {
                         CellValue::String(field.to_string())
                     }
-                } else if field.to_lowercase() == "true" {
+                } else if field.eq_ignore_ascii_case("true") {
                     CellValue::Boolean(true)
-                } else if field.to_lowercase() == "false" {
+                } else if field.eq_ignore_ascii_case("false") {
                     CellValue::Boolean(false)
                 } else {
                     CellValue::String(field.to_string())
@@ -373,16 +243,43 @@ fn read_csv_from_bytes(
         rows.push(row);
     }
 
-    let index = SheetIndex::default();
-    Ok(FileData {
-        path,
-        file_name,
-        sheets: vec![SheetData {
-            name: "Sheet1".to_string(),
-            rows,
-            merges: vec![],
-            index,
-            ..Default::default()
-        }],
+    Ok(ReadFileResult {
+        file_data: FileData {
+            path,
+            file_name,
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows,
+                ..Default::default()
+            }],
+        },
+        workbook: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unsupported_excel_formats() {
+        let result = read_file_with_workbook_from_bytes(
+            "ods",
+            Vec::new(),
+            String::new(),
+            "unsupported.ods".to_string(),
+        );
+
+        assert!(matches!(result, Err(AppError::UnsupportedFormat)));
+    }
+
+    #[test]
+    fn column_width_conversion_is_stable_for_ui_default() {
+        assert_eq!(excel_column_width_to_px(16.428571428571427), 120);
+    }
+
+    #[test]
+    fn row_height_conversion_uses_pixels() {
+        assert_eq!(points_to_px(54.0), 72);
+    }
 }

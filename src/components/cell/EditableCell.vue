@@ -86,4 +86,11 @@ onMounted(focusWithoutScroll);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+@media (pointer: coarse) {
+  .cell-textarea {
+    font-size: 16px;
+    padding: 8px;
+  }
+}
 </style>

@@ -16,9 +16,9 @@ type UseFileActionsOptions = {
   resetDocumentStatus: () => void;
 };
 
-function writableExtension(fileName: string): 'xlsx' | 'csv' | null {
+function writableExtension(fileName: string): 'xlsx' | 'xlsm' | 'csv' | null {
   const extension = fileName.split('.').pop()?.toLowerCase() || 'xlsx';
-  return extension === 'xlsx' || extension === 'csv' ? extension : null;
+  return extension === 'xlsx' || extension === 'xlsm' || extension === 'csv' ? extension : null;
 }
 
 export function useFileActions({
@@ -138,7 +138,7 @@ export function useFileActions({
       if (!savePath) return;
 
       if (!writableExtension(savePath)) {
-        ElMessage.error('Saving is only supported as .xlsx or .csv');
+        ElMessage.error('Saving is only supported as .xlsx, .xlsm, or .csv');
         return;
       }
 

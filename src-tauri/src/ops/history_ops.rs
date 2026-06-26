@@ -1,13 +1,7 @@
 use crate::ops::core_ops::Operation;
-use crate::types::{FileData, OperationResult, SheetData};
+use crate::types::{FileData, SheetData};
 
 impl Operation {
-    /// 执行撤销操作
-    pub fn undo(&self, file_data: &mut FileData) -> OperationResult {
-        let undo_op = self.create_undo_op();
-        undo_op.execute(file_data)
-    }
-
     /// 创建撤销操作（返回反向操作）
     pub fn create_undo_op(&self) -> Operation {
         match self {
@@ -59,6 +53,28 @@ impl Operation {
                 sheet_index: *sheet_index,
                 col_index: Some(*col_index),
                 col_data: col_data.clone(),
+            },
+            Operation::SetColumnWidth {
+                sheet_index,
+                col_index,
+                old_width,
+                new_width,
+            } => Operation::SetColumnWidth {
+                sheet_index: *sheet_index,
+                col_index: *col_index,
+                old_width: *new_width,
+                new_width: *old_width,
+            },
+            Operation::SetRowHeight {
+                sheet_index,
+                row_index,
+                old_height,
+                new_height,
+            } => Operation::SetRowHeight {
+                sheet_index: *sheet_index,
+                row_index: *row_index,
+                old_height: *new_height,
+                new_height: *old_height,
             },
             Operation::AddSheet { sheet_index, .. } => Operation::DeleteSheet {
                 sheet_index: sheet_index.unwrap_or(usize::MAX),

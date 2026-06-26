@@ -59,6 +59,22 @@ export async function deleteColumn(sheetIndex: number, colIndex: number): Promis
   return invoke<EditorMutationResponse>("delete_column", { sheetIndex, colIndex });
 }
 
+export async function setColumnWidth(
+  sheetIndex: number,
+  colIndex: number,
+  width: number | null
+): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("set_column_width", { sheetIndex, colIndex, width });
+}
+
+export async function setRowHeight(
+  sheetIndex: number,
+  rowIndex: number,
+  height: number | null
+): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("set_row_height", { sheetIndex, rowIndex, height });
+}
+
 // ==================== Sheet Operations ====================
 
 export async function addSheet(): Promise<EditorMutationResponse> {

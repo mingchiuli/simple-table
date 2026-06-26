@@ -105,10 +105,15 @@ function applyMutationFileData(response: EditorMutationResponse): FileData | nul
   if (response.kind === 'snapshot') {
     if (!response.fileData) return fileDataStore.data;
     const currentFileData = fileDataStore.data;
+    const keepCurrentLayout =
+      response.operation?.type !== 'SetColumnWidth' && response.operation?.type !== 'SetRowHeight';
     const nextFileData = {
       ...response.fileData,
       path: currentFileData?.path ?? response.fileData.path,
       fileName: currentFileData?.fileName ?? response.fileData.fileName,
+      sheets: keepCurrentLayout
+        ? mergeCurrentLayoutIntoSheets(currentFileData, response.fileData)
+        : response.fileData.sheets,
     };
     fileDataStore.setData(nextFileData);
     return nextFileData;
@@ -155,6 +160,32 @@ function ensureCellExists(rows: CellValue[][], row: number, col: number) {
   }
 }
 
+function mergeCurrentLayoutIntoSheets(
+  currentFileData: FileData | null,
+  nextFileData: FileData
+): FileData['sheets'] {
+  if (!currentFileData) return nextFileData.sheets;
+
+  const currentSheetsByName = new Map(currentFileData.sheets.map((sheet) => [sheet.name, sheet]));
+
+  return nextFileData.sheets.map((sheet, index) => {
+    const currentSheet =
+      currentFileData.sheets[index]?.name === sheet.name
+        ? currentFileData.sheets[index]
+        : currentSheetsByName.get(sheet.name);
+
+    if (!currentSheet?.columnWidths && !currentSheet?.rowHeights) {
+      return sheet;
+    }
+
+    return {
+      ...sheet,
+      columnWidths: currentSheet.columnWidths ?? sheet.columnWidths,
+      rowHeights: currentSheet.rowHeights ?? sheet.rowHeights,
+    };
+  });
+}
+
 const {
   draftCellValues,
   flushPendingCellChanges,
@@ -185,7 +216,10 @@ watch(() => fileDataStore.documentVersion, () => {
   sheetSelectedCells.value = new Map();
   sheetColumnWidths.value = {};
   sheetRowHeights.value = {};
+  hydrateLayoutMapsFromFileData();
 });
+
+watch(() => fileData.value, hydrateLayoutMapsFromFileData, { immediate: true });
 
 const {
   loadFileFromPath,
@@ -425,20 +459,50 @@ async function handleSortColumn(colIndex: number, ascending: boolean) {
 }
 
 // ========== Column resize ==========
-function handleColumnResize(colIndex: number, width: number) {
-  const sheetWidths = sheetColumnWidths.value[currentSheetIndex.value] ?? {};
-  sheetColumnWidths.value[currentSheetIndex.value] = {
-    ...sheetWidths,
-    [colIndex]: width,
-  };
+async function handleColumnResize(colIndex: number, width: number) {
+  if (!fileData.value) return;
+  try {
+    isLoading.value = true;
+    if (!(await flushPendingCellChanges())) return;
+    applyMutationResponse(await api.setColumnWidth(currentSheetIndex.value, colIndex, width));
+  } catch (error) {
+    ElMessage.error(`Failed to resize column: ${error}`);
+  } finally {
+    isLoading.value = false;
+  }
 }
 
-function handleRowResize(rowIndex: number, height: number) {
-  const sheetHeights = sheetRowHeights.value[currentSheetIndex.value] ?? {};
-  sheetRowHeights.value[currentSheetIndex.value] = {
-    ...sheetHeights,
-    [rowIndex]: height,
-  };
+async function handleRowResize(rowIndex: number, height: number) {
+  if (!fileData.value) return;
+  try {
+    isLoading.value = true;
+    if (!(await flushPendingCellChanges())) return;
+    applyMutationResponse(await api.setRowHeight(currentSheetIndex.value, rowIndex, height));
+  } catch (error) {
+    ElMessage.error(`Failed to resize row: ${error}`);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+function hydrateLayoutMapsFromFileData() {
+  const data = fileData.value;
+  if (!data) {
+    sheetColumnWidths.value = {};
+    sheetRowHeights.value = {};
+    return;
+  }
+
+  sheetColumnWidths.value = Object.fromEntries(
+    data.sheets
+      .map((sheet, index) => [index, sheet.columnWidths ?? {}] as const)
+      .filter(([, widths]) => Object.keys(widths).length > 0)
+  );
+  sheetRowHeights.value = Object.fromEntries(
+    data.sheets
+      .map((sheet, index) => [index, sheet.rowHeights ?? {}] as const)
+      .filter(([, heights]) => Object.keys(heights).length > 0)
+  );
 }
 
 // ========== Lifecycle ==========
@@ -524,6 +588,7 @@ onMounted(async () => {
       </div>
 
       <SearchPanel
+        class="search-panel-host"
         :results="searchResults"
         :query="searchQuery"
         @result-click="handleSearchResultClick"
@@ -549,7 +614,7 @@ onMounted(async () => {
   flex-direction: column;
   width: 100%;
   max-width: 100vw;
-  height: 100dvh;
+  height: 100%;
   background-color: var(--el-bg-color);
   position: relative;
   overflow: hidden;
@@ -562,6 +627,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: row;
   min-width: 0;
+  min-height: 0;
 }
 
 .editor-column {
@@ -570,6 +636,7 @@ onMounted(async () => {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  min-height: 0;
 }
 
 .table-wrapper {
@@ -577,9 +644,9 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   min-width: 0;
+  min-height: 0;
   width: 100%;
   max-width: 100%;
 }
@@ -602,5 +669,40 @@ onMounted(async () => {
   width: 36px;
   height: 36px;
   z-index: 100;
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+  .content {
+    position: relative;
+  }
+
+  .search-panel-host {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    z-index: 80;
+    max-height: min(42vh, 320px);
+    border: 1px solid var(--el-border-color);
+    border-radius: 8px;
+    box-shadow: var(--el-box-shadow-light);
+  }
+
+  .back-btn {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: auto;
+    width: 40px;
+    height: 40px;
+  }
+}
+
+@media (max-width: 480px) {
+  .search-panel-host {
+    right: 6px;
+    bottom: 6px;
+    left: 6px;
+    max-height: 46vh;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::io::{codec::writer, document};
+use crate::io::document;
 use crate::types::FileData;
 use std::fs;
 
@@ -9,7 +9,7 @@ pub fn read_file(path: &str) -> Result<FileData, AppError> {
 }
 
 pub fn save_file(path: &str, file_data: &FileData) -> Result<(), AppError> {
-    let (_, bytes) = writer::generate_file_bytes_for_target(file_data, path)?;
+    let (_, bytes) = document::generate_current_file_bytes_for_target(path, file_data)?;
     fs::write(path, bytes).map_err(|e| AppError::WriteError(e.to_string()))?;
     Ok(())
 }

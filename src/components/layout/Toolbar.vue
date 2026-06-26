@@ -2,7 +2,15 @@
 import type { FileData } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
-import { Search, Refresh } from '@element-plus/icons-vue';
+import {
+  CirclePlus,
+  Delete,
+  Plus,
+  Refresh,
+  RefreshLeft,
+  RefreshRight,
+  Search,
+} from '@element-plus/icons-vue';
 import { FileButtons } from '@/components/file';
 import { SheetSelector, SheetButtons } from '@/components/sheet';
 import { SearchBox } from '@/components/search';
@@ -153,7 +161,7 @@ function handleCheckUpdate() {
         size="small"
         title="Undo"
       >
-        Undo
+        <el-icon><RefreshLeft /></el-icon>
       </el-button>
       <el-button
         :disabled="!props.canRedo"
@@ -161,16 +169,16 @@ function handleCheckUpdate() {
         size="small"
         title="Redo"
       >
-        Redo
+        <el-icon><RefreshRight /></el-icon>
       </el-button>
       <el-button @click="emit('add-row')" size="small" title="Add Row">
-        +R
+        <el-icon><Plus /></el-icon>
       </el-button>
       <el-button @click="emit('add-column')" size="small" title="Add Column">
-        +C
+        <el-icon><Plus /></el-icon>
       </el-button>
       <el-button @click="emit('add-sheet')" size="small" title="Add Sheet">
-        +S
+        <el-icon><CirclePlus /></el-icon>
       </el-button>
       <el-button
         :disabled="props.sheetNames.length <= 1"
@@ -178,7 +186,7 @@ function handleCheckUpdate() {
         size="small"
         title="Delete Sheet"
       >
-        -S
+        <el-icon><Delete /></el-icon>
       </el-button>
     </div>
   </header>
@@ -234,31 +242,34 @@ function handleCheckUpdate() {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  padding: 8px 12px;
-  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  gap: 6px;
   border-bottom: 1px solid var(--el-border-color);
   overflow: hidden;
+  background: var(--el-bg-color);
 }
 
 .mobile-toolbar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 
 .mobile-toolbar :deep(.file-buttons) {
-  flex: 1 1 260px;
+  flex: 1 1 auto;
   min-width: 0;
+  gap: 4px;
 }
 
 .mobile-toolbar :deep(.file-buttons .el-button) {
-  flex: 1 1 88px;
+  flex: 1 1 0;
   min-width: 0;
   margin-left: 0;
-  padding-right: 10px;
-  padding-left: 10px;
+  padding-right: 6px;
+  padding-left: 6px;
 }
 
 .mobile-toolbar :deep(.file-buttons .el-button > span) {
@@ -272,9 +283,9 @@ function handleCheckUpdate() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex: 1 1 180px;
+  flex: 0 1 190px;
   min-width: 0;
-  gap: 8px;
+  gap: 6px;
 }
 
 .mobile-right > .el-button {
@@ -285,19 +296,20 @@ function handleCheckUpdate() {
 .mobile-right :deep(.sheet-selector) {
   flex: 1 1 auto;
   width: auto;
-  min-width: 120px;
-  max-width: 180px;
+  min-width: 96px;
+  max-width: 160px;
 }
 
 .mobile-toolbar-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  grid-template-columns: repeat(7, minmax(36px, 1fr));
   gap: 6px;
   min-width: 0;
 }
 
 .mobile-toolbar-actions :deep(.el-button) {
   width: 100%;
+  height: 34px;
   min-width: 0;
   margin-left: 0;
   padding-right: 4px;
@@ -312,12 +324,34 @@ function handleCheckUpdate() {
 }
 
 @media (max-width: 480px) {
+  .mobile-toolbar {
+    padding: 5px 6px;
+    gap: 5px;
+  }
+
+  .mobile-toolbar-row {
+    align-items: stretch;
+  }
+
   .mobile-right {
-    flex-basis: 100%;
+    flex: 0 0 auto;
   }
 
   .mobile-right :deep(.sheet-selector) {
-    max-width: none;
+    width: 104px;
+    min-width: 104px;
+    max-width: 104px;
+  }
+
+  .mobile-toolbar :deep(.file-buttons .el-button) {
+    height: 34px;
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+
+  .mobile-toolbar-actions {
+    grid-template-columns: repeat(7, minmax(34px, 1fr));
+    gap: 4px;
   }
 }
 </style>

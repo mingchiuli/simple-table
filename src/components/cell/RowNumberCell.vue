@@ -37,7 +37,9 @@ function handleDelete(index: number) {
   color: var(--el-color-danger);
   cursor: pointer;
   font-size: 16px;
-  padding: 2px 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border-radius: 4px;
   transition: opacity 0.2s, background-color 0.2s;
 }
@@ -48,5 +50,17 @@ function handleDelete(index: number) {
 
 .row-number:hover .delete-btn {
   opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .row-number {
+    gap: 4px;
+    padding: 0 2px;
+  }
+
+  .delete-btn {
+    opacity: 1;
+    font-size: 18px;
+  }
 }
 </style>

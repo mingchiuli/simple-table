@@ -2,6 +2,18 @@ import { platform } from '@tauri-apps/plugin-os';
 
 let cachedPlatform: string | null = null;
 
+function detectBrowserPlatform(): string {
+  if (typeof navigator === 'undefined') return 'unknown';
+
+  const userAgent = navigator.userAgent.toLowerCase();
+  if (/android/.test(userAgent)) return 'android';
+  if (/iphone|ipad|ipod/.test(userAgent)) return 'ios';
+  if (/win/.test(userAgent)) return 'windows';
+  if (/mac/.test(userAgent)) return 'macos';
+  if (/linux/.test(userAgent)) return 'linux';
+  return 'unknown';
+}
+
 /**
  * 获取当前平台类型（带缓存）
  */
@@ -9,7 +21,11 @@ export function getPlatform(): string {
   if (cachedPlatform) {
     return cachedPlatform;
   }
-  cachedPlatform = platform();
+  try {
+    cachedPlatform = platform();
+  } catch {
+    cachedPlatform = detectBrowserPlatform();
+  }
   return cachedPlatform;
 }
 

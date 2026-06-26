@@ -21,7 +21,7 @@ pub fn do_sort_column(
             Some(editor_state) => {
                 // 获取当前 sheet 数据（排序前）
                 let old_sheet_data = editor_state
-                    .file_data
+                    .file_data()
                     .sheets
                     .get(sheet_index)
                     .cloned()

@@ -89,6 +89,7 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 <style scoped>
 .search-panel {
   width: 280px;
+  min-width: 280px;
   background: var(--el-bg-color);
   border-left: 1px solid var(--el-border-color);
   display: flex;
@@ -147,5 +148,37 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 .sheet-name {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+  .search-panel {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    border-left: none;
+    background: var(--el-bg-color-overlay);
+  }
+
+  .search-panel-header {
+    padding: 10px 12px;
+  }
+
+  .search-panel-list {
+    max-height: calc(42vh - 44px);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .search-result-item {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .cell-value {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
 }
 </style>

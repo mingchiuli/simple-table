@@ -31,7 +31,7 @@ fn supported_extension_from_name(file_name: &str) -> Option<String> {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase())?;
     match ext.as_str() {
-        "xlsx" | "xls" | "csv" | "ods" => Some(ext),
+        "xlsx" | "xlsm" | "csv" => Some(ext),
         _ => None,
     }
 }
@@ -39,10 +39,6 @@ fn supported_extension_from_name(file_name: &str) -> Option<String> {
 fn extension_for_import(file_name: &str, bytes: &[u8]) -> String {
     if let Some(ext) = supported_extension_from_name(file_name) {
         return ext;
-    }
-
-    if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
-        return "xls".to_string();
     }
 
     if bytes.starts_with(b"PK") {

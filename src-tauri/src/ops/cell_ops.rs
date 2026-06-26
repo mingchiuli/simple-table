@@ -21,7 +21,7 @@ pub fn do_set_cell(
         match state_guard.as_mut() {
             Some(editor_state) => {
                 let sheet = editor_state
-                    .file_data
+                    .file_data()
                     .sheets
                     .get(sheet_index)
                     .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
@@ -71,10 +71,10 @@ pub fn do_add_row(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
-                if sheet_index >= editor_state.file_data.sheets.len() {
+                if sheet_index >= editor_state.file_data().sheets.len() {
                     return Err(AppError::InvalidSheetIndex(sheet_index));
                 }
-                if row_index > editor_state.file_data.sheets[sheet_index].rows.len() {
+                if row_index > editor_state.file_data().sheets[sheet_index].rows.len() {
                     return Err(AppError::RowNotFound(row_index));
                 }
                 // 直接计算 row_data（空行数据）
@@ -111,7 +111,7 @@ pub fn do_delete_row(
         match state_guard.as_mut() {
             Some(editor_state) => {
                 let sheet = editor_state
-                    .file_data
+                    .file_data()
                     .sheets
                     .get(sheet_index)
                     .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
@@ -152,7 +152,7 @@ pub fn do_add_column(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
-                if sheet_index >= editor_state.file_data.sheets.len() {
+                if sheet_index >= editor_state.file_data().sheets.len() {
                     return Err(AppError::InvalidSheetIndex(sheet_index));
                 }
                 // col_index 和 col_data 会在 execute 中自动计算和保存
@@ -189,7 +189,7 @@ pub fn do_delete_column(
         match state_guard.as_mut() {
             Some(editor_state) => {
                 let sheet = editor_state
-                    .file_data
+                    .file_data()
                     .sheets
                     .get(sheet_index)
                     .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
@@ -224,6 +224,82 @@ pub fn do_delete_column(
     if response.is_ok() {
         spawn_rebuild_all_sheets_index(state);
     }
+
+    response
+}
+
+pub fn do_set_column_width(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+    col_index: usize,
+    width: Option<u32>,
+) -> Result<EditorMutationResponse, AppError> {
+    let response = {
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
+        match state_guard.as_mut() {
+            Some(editor_state) => {
+                let sheet = editor_state
+                    .file_data()
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+                let old_width = sheet
+                    .column_widths
+                    .as_ref()
+                    .and_then(|widths| widths.get(&col_index).copied());
+                let operation = Operation::SetColumnWidth {
+                    sheet_index,
+                    col_index,
+                    old_width,
+                    new_width: width,
+                };
+                let result = editor_state.execute(operation);
+                Ok(snapshot_mutation_response(
+                    editor_state,
+                    Some(result.operation),
+                ))
+            }
+            None => Err(AppError::NoFileLoaded),
+        }
+    };
+
+    response
+}
+
+pub fn do_set_row_height(
+    state: Arc<RwLock<Option<EditorState>>>,
+    sheet_index: usize,
+    row_index: usize,
+    height: Option<u32>,
+) -> Result<EditorMutationResponse, AppError> {
+    let response = {
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
+        match state_guard.as_mut() {
+            Some(editor_state) => {
+                let sheet = editor_state
+                    .file_data()
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+                let old_height = sheet
+                    .row_heights
+                    .as_ref()
+                    .and_then(|heights| heights.get(&row_index).copied());
+                let operation = Operation::SetRowHeight {
+                    sheet_index,
+                    row_index,
+                    old_height,
+                    new_height: height,
+                };
+                let result = editor_state.execute(operation);
+                Ok(snapshot_mutation_response(
+                    editor_state,
+                    Some(result.operation),
+                ))
+            }
+            None => Err(AppError::NoFileLoaded),
+        }
+    };
 
     response
 }
@@ -268,10 +344,10 @@ pub fn do_delete_sheet(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         match state_guard.as_mut() {
             Some(editor_state) => {
-                if editor_state.file_data.sheets.len() <= 1 {
+                if editor_state.file_data().sheets.len() <= 1 {
                     return Err(AppError::CannotDeleteLastSheet);
                 }
-                if sheet_index >= editor_state.file_data.sheets.len() {
+                if sheet_index >= editor_state.file_data().sheets.len() {
                     return Err(AppError::InvalidSheetIndex(sheet_index));
                 }
                 // sheet_data 为空，会在 execute 中自动保存

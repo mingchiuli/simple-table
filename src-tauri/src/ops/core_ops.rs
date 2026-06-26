@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
 use crate::types::{
-    CellChange, CellValue, ColumnChange, FileData, OperationResult, RowChange, SheetData,
-    SheetIndex, SortState,
+    CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData, OperationResult, RowChange,
+    RowHeightChange, SheetData, SheetIndex, SortState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,18 @@ pub enum Operation {
         sheet_index: usize,
         col_index: usize,
         col_data: Vec<CellValue>,
+    },
+    SetColumnWidth {
+        sheet_index: usize,
+        col_index: usize,
+        old_width: Option<u32>,
+        new_width: Option<u32>,
+    },
+    SetRowHeight {
+        sheet_index: usize,
+        row_index: usize,
+        old_height: Option<u32>,
+        new_height: Option<u32>,
     },
     /// 添加 Sheet（带数据，用于撤销时恢复）
     AddSheet {
@@ -193,6 +205,70 @@ impl Operation {
                 OperationResult::DeleteColumn {
                     sheet_index: *sheet_index,
                     column_index: *col_index,
+                }
+            }
+            Operation::SetColumnWidth {
+                sheet_index,
+                col_index,
+                new_width,
+                ..
+            } => {
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    match new_width {
+                        Some(width) => {
+                            sheet
+                                .column_widths
+                                .get_or_insert_with(Default::default)
+                                .insert(*col_index, *width);
+                        }
+                        None => {
+                            if let Some(widths) = sheet.column_widths.as_mut() {
+                                widths.remove(col_index);
+                                if widths.is_empty() {
+                                    sheet.column_widths = None;
+                                }
+                            }
+                        }
+                    }
+                }
+                OperationResult::SetColumnWidth {
+                    sheet_index: *sheet_index,
+                    column: ColumnWidthChange {
+                        col_index: *col_index,
+                        width: *new_width,
+                    },
+                }
+            }
+            Operation::SetRowHeight {
+                sheet_index,
+                row_index,
+                new_height,
+                ..
+            } => {
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    match new_height {
+                        Some(height) => {
+                            sheet
+                                .row_heights
+                                .get_or_insert_with(Default::default)
+                                .insert(*row_index, *height);
+                        }
+                        None => {
+                            if let Some(heights) = sheet.row_heights.as_mut() {
+                                heights.remove(row_index);
+                                if heights.is_empty() {
+                                    sheet.row_heights = None;
+                                }
+                            }
+                        }
+                    }
+                }
+                OperationResult::SetRowHeight {
+                    sheet_index: *sheet_index,
+                    row: RowHeightChange {
+                        row_index: *row_index,
+                        height: *new_height,
+                    },
                 }
             }
             Operation::AddSheet {

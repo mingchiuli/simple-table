@@ -1,30 +1,28 @@
+import { isMobile as isMobileOS } from '@/utils/platform';
+
 // 触摸设备检测
 const isTouchDevice = ref(
   typeof window !== 'undefined' &&
-    'ontouchstart' in window &&
-    navigator.maxTouchPoints > 0
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0)
 );
-
-// 屏幕尺寸
-const screenWidth = ref(typeof window !== 'undefined' ? window.screen.width : 1200);
-const screenHeight = ref(typeof window !== 'undefined' ? window.screen.height : 800);
 
 // 视口尺寸
 const width = ref(typeof window !== 'undefined' ? window.innerWidth : 1200);
+const height = ref(typeof window !== 'undefined' ? window.innerHeight : 800);
+const isMobileRuntime = ref(typeof window !== 'undefined' ? isMobileOS() : false);
 
 // 判断逻辑：移动端 vs 桌面端
-// 移动端特征：有触摸 + 宽高比例接近正方形或竖屏（height >= width）
-// 桌面端特征：无触摸 或 宽 > 高（横屏）
+// Tauri 的 Android/iOS 平台优先，避免手机横屏被误判成桌面端。
+// 浏览器预览或触屏桌面再用触摸能力 + 视口宽度兜底。
 const isMobileDevice = computed(() => {
-  // 有触摸能力且屏幕是竖屏或正方形
-  return isTouchDevice.value && screenHeight.value >= screenWidth.value;
+  return isMobileRuntime.value || (isTouchDevice.value && width.value < 900);
 });
 
 // 移动端内部判断：手机 vs 平板
-// 手机：宽度 < 768
-// 平板：宽度 >= 768
-const isMobile = computed(() => isMobileDevice.value && screenWidth.value < 768);
-const isTablet = computed(() => isMobileDevice.value && screenWidth.value >= 768);
+// 手机：短边 < 768
+// 平板：短边 >= 768
+const isMobile = computed(() => isMobileDevice.value && Math.min(width.value, height.value) < 768);
+const isTablet = computed(() => isMobileDevice.value && Math.min(width.value, height.value) >= 768);
 
 // 桌面端
 const isDesktop = computed(() => !isMobileDevice.value);
@@ -43,16 +41,15 @@ const handleResize = () => {
   }
   resizeTimeout = setTimeout(() => {
     width.value = window.innerWidth;
-    screenWidth.value = window.screen.width;
-    screenHeight.value = window.screen.height;
+    height.value = window.innerHeight;
   }, 100);
 };
 
 export function usePlatform() {
   onMounted(() => {
     width.value = window.innerWidth;
-    screenWidth.value = window.screen.width;
-    screenHeight.value = window.screen.height;
+    height.value = window.innerHeight;
+    isMobileRuntime.value = isMobileOS();
     if (listenerRefCount === 0 && typeof window !== 'undefined') {
       window.addEventListener('resize', handleResize);
     }

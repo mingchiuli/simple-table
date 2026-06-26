@@ -104,6 +104,24 @@ pub fn delete_column(
     cell_ops::do_delete_column(get_state(), sheet_index, col_index)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_column_width(
+    sheet_index: usize,
+    col_index: usize,
+    width: Option<u32>,
+) -> Result<EditorMutationResponse, AppError> {
+    cell_ops::do_set_column_width(get_state(), sheet_index, col_index, width)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_row_height(
+    sheet_index: usize,
+    row_index: usize,
+    height: Option<u32>,
+) -> Result<EditorMutationResponse, AppError> {
+    cell_ops::do_set_row_height(get_state(), sheet_index, row_index, height)
+}
+
 // ==================== Sheet Operations ====================
 
 #[tauri::command]

@@ -23,7 +23,7 @@ pub fn snapshot_mutation_response(
 ) -> EditorMutationResponse {
     EditorMutationResponse {
         kind: EditorMutationResponseKind::Snapshot,
-        file_data: Some(editor_state.file_data.clone()),
+        file_data: Some(editor_state.file_data().clone()),
         editor_state: editor_state_info(editor_state),
         operation,
         cell_changes: Vec::new(),

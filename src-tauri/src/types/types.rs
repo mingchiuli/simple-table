@@ -318,6 +318,22 @@ pub struct ColumnChange {
     pub index: usize,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnWidthChange {
+    #[serde(rename = "colIndex")]
+    pub col_index: usize,
+    pub width: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RowHeightChange {
+    #[serde(rename = "rowIndex")]
+    pub row_index: usize,
+    pub height: Option<u32>,
+}
+
 /// 排序状态
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -399,6 +415,18 @@ pub enum OperationResult {
         sheet_index: usize,
         #[serde(rename = "columnIndex")]
         column_index: usize,
+    },
+    #[serde(rename = "SetColumnWidth")]
+    SetColumnWidth {
+        #[serde(rename = "sheetIndex")]
+        sheet_index: usize,
+        column: ColumnWidthChange,
+    },
+    #[serde(rename = "SetRowHeight")]
+    SetRowHeight {
+        #[serde(rename = "sheetIndex")]
+        sheet_index: usize,
+        row: RowHeightChange,
     },
     /// 添加 Sheet
     #[serde(rename = "AddSheet")]

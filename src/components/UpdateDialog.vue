@@ -75,7 +75,7 @@ defineExpose({ show, checkForUpdate })
   <ElDialog
     v-model="visible"
     :title="dialogTitle"
-    width="400px"
+    width="min(400px, calc(100vw - 32px))"
     @close="handleClose"
   >
     <div class="update-content">
@@ -219,5 +219,20 @@ defineExpose({ show, checkForUpdate })
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-width: 480px) {
+  .update-content {
+    padding: 12px 0;
+  }
+
+  .dialog-footer {
+    justify-content: stretch;
+  }
+
+  .dialog-footer :deep(.el-button) {
+    flex: 1;
+    min-width: 0;
+  }
 }
 </style>

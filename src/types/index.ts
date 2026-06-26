@@ -52,6 +52,16 @@ export interface ColumnChange {
   index: number;
 }
 
+export interface ColumnWidthChange {
+  colIndex: number;
+  width?: number | null;
+}
+
+export interface RowHeightChange {
+  rowIndex: number;
+  height?: number | null;
+}
+
 export interface SortState {
   colIndex: number;
   ascending: boolean;
@@ -64,6 +74,8 @@ export type OperationResult =
   | { type: 'DeleteRow'; data: { sheetIndex: number; rowIndex: number } }
   | { type: 'AddColumn'; data: { sheetIndex: number; column: ColumnChange; colData: CellValue[] } }
   | { type: 'DeleteColumn'; data: { sheetIndex: number; columnIndex: number } }
+  | { type: 'SetColumnWidth'; data: { sheetIndex: number; column: ColumnWidthChange } }
+  | { type: 'SetRowHeight'; data: { sheetIndex: number; row: RowHeightChange } }
   | { type: 'AddSheet'; data: { sheetIndex: number; name: string; sheetData: SheetData } }
   | { type: 'DeleteSheet'; data: { sheetIndex: number; sheetData: SheetData } }
   | { type: 'SortColumn'; data: { sheetIndex: number; sheetData: SheetData; sortState: SortState | null } };

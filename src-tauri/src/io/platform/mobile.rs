@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::io::{codec::writer, document};
+use crate::io::document;
 use crate::types::FileData;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -94,7 +94,7 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<FileData, AppError> {
 }
 
 pub fn save_file(app: &AppHandle, path: &str, file_data: &FileData) -> Result<(), AppError> {
-    let (_, bytes) = writer::generate_file_bytes_for_target(file_data, path)?;
+    let (_, bytes) = document::generate_current_file_bytes_for_target(path, file_data)?;
     write_path_with_official_fs(app, PathBuf::from(path), &bytes)
 }
 
@@ -124,7 +124,7 @@ pub fn export_file(
     let dest = match app
         .dialog()
         .file()
-        .add_filter("Spreadsheet", &["xlsx", "xls", "csv", "ods", "*"])
+        .add_filter("Spreadsheet", &["xlsx", "xlsm", "csv", "*"])
         .set_picker_mode(PickerMode::Document)
         .set_file_name(default_name)
         .blocking_save_file()

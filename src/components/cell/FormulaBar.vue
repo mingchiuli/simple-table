@@ -121,4 +121,35 @@ function handleKeydown(event: KeyboardEvent) {
   color: var(--el-color-primary);
   border-color: var(--el-color-primary-light-5);
 }
+
+@media (max-width: 640px), (pointer: coarse) {
+  .formula-bar {
+    grid-template-columns: 56px 32px minmax(0, 1fr) 36px 36px;
+    gap: 6px;
+    padding: 6px;
+    min-height: 50px;
+  }
+
+  .name-box,
+  .formula-token,
+  .formula-action {
+    min-height: 36px;
+  }
+
+  .formula-input {
+    min-height: 36px;
+    font-size: 16px;
+    resize: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .formula-bar {
+    grid-template-columns: 56px 32px minmax(0, 1fr);
+  }
+
+  .formula-action {
+    display: none;
+  }
+}
 </style>

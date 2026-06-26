@@ -48,7 +48,7 @@ pub fn do_search(
     match scope {
         SearchScope::CurrentSheet => {
             let sheet_idx = current_sheet_index.unwrap_or(0);
-            if let Some(sheet) = editor_state.file_data.sheets.get(sheet_idx) {
+            if let Some(sheet) = editor_state.file_data().sheets.get(sheet_idx) {
                 let positions = search_cells(sheet, &query, 1000);
                 for pos in positions {
                     let value = sheet
@@ -70,7 +70,7 @@ pub fn do_search(
             }
         }
         SearchScope::AllSheets => {
-            for (sheet_idx, sheet) in editor_state.file_data.sheets.iter().enumerate() {
+            for (sheet_idx, sheet) in editor_state.file_data().sheets.iter().enumerate() {
                 let positions = search_cells(sheet, &query, 1000);
                 for pos in positions {
                     let value = sheet

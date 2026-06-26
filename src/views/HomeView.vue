@@ -105,12 +105,13 @@ function handleNavigate() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 100dvh;
-  min-height: 100vh;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   background-color: var(--el-bg-color);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 40px 20px;
+  padding: 40px 20px max(40px, env(safe-area-inset-bottom));
 }
 
 .empty-state {
@@ -134,5 +135,22 @@ function handleNavigate() {
 .button-group {
   display: flex;
   gap: 12px;
+}
+
+@media (max-width: 480px) {
+  .home-view {
+    justify-content: flex-start;
+    padding: 24px 16px max(24px, env(safe-area-inset-bottom));
+  }
+
+  .button-group {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .button-group :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
 }
 </style>

@@ -55,7 +55,7 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["xlsx", "xls"],
+        "ext": ["xlsx", "xlsm"],
         "name": "Excel",
         "description": "Microsoft Excel Spreadsheet",
         "role": "Editor"
@@ -64,12 +64,6 @@
         "ext": ["csv"],
         "name": "CSV",
         "description": "Comma-separated Values",
-        "role": "Editor"
-      },
-      {
-        "ext": ["ods"],
-        "name": "ODS",
-        "description": "OpenDocument Spreadsheet",
         "role": "Editor"
       }
     ]

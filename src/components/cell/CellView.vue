@@ -76,4 +76,10 @@ const minHeight = computed(() => `${Math.max(36, props.rowHeight)}px`);
 .kind-error {
   color: var(--el-color-danger);
 }
+
+@media (pointer: coarse) {
+  .cell-view {
+    padding: 8px;
+  }
+}
 </style>

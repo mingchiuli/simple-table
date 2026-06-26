@@ -414,7 +414,7 @@ fn snapshot_writer_handle(
 ) -> Option<WriterHandle> {
     let guard = state.read().ok()?;
     let editor = guard.as_ref()?;
-    let sheet = editor.file_data.sheets.get(sheet_index)?;
+    let sheet = editor.file_data().sheets.get(sheet_index)?;
     let writer = sheet.index.writer.clone()?;
     let schema = sheet.index.search_schema.as_ref()?;
     let text_field = sheet.index.text_field?;
@@ -434,7 +434,7 @@ fn snapshot_writer_handle(
 fn run_rebuild(sheet_index: usize, state: &Arc<RwLock<Option<EditorState>>>) {
     let rows_snapshot = match state.read() {
         Ok(guard) => guard.as_ref().and_then(|s| {
-            s.file_data
+            s.file_data()
                 .sheets
                 .get(sheet_index)
                 .map(|sh| sh.rows.clone())
@@ -448,7 +448,7 @@ fn run_rebuild(sheet_index: usize, state: &Arc<RwLock<Option<EditorState>>>) {
 
     if let Ok(mut guard) = state.write()
         && let Some(editor_state) = guard.as_mut()
-        && let Some(sheet) = editor_state.file_data.sheets.get_mut(sheet_index)
+        && let Some(sheet) = editor_state.sheet_mut_for_indexing(sheet_index)
     {
         install_built_index(sheet, built);
     }
@@ -578,7 +578,7 @@ pub fn spawn_rebuild_all_sheets_index(state: Arc<RwLock<Option<EditorState>>>) {
     let count = match state.read() {
         Ok(guard) => guard
             .as_ref()
-            .map(|s| s.file_data.sheets.len())
+            .map(|s| s.file_data().sheets.len())
             .unwrap_or(0),
         Err(_) => 0,
     };
@@ -697,17 +697,20 @@ mod tests {
     /// 仅供测试使用：构造一个临时 EditorState 包装并调用 run_incremental。
     fn apply_incremental_sync(sheet: &mut SheetData, ops: Vec<IndexJob>) -> bool {
         use crate::types::FileData;
-        let editor = EditorState::new(FileData {
-            path: String::new(),
-            file_name: String::new(),
-            sheets: vec![mem::take(sheet)],
-        });
+        let editor = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: String::new(),
+                sheets: vec![mem::take(sheet)],
+            },
+            None,
+        );
         let state = Arc::new(RwLock::new(Some(editor)));
         let ok = run_incremental(0, &state, &ops);
         // 取回 sheet
         let mut guard = state.write().unwrap();
         let editor = guard.as_mut().unwrap();
-        mem::swap(sheet, &mut editor.file_data.sheets[0]);
+        mem::swap(sheet, editor.sheet_mut_for_indexing(0).unwrap());
         ok
     }
 

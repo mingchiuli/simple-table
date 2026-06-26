@@ -81,6 +81,7 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
 .actions {
   display: flex;
   gap: 2px;
+  flex: 0 0 auto;
 }
 
 .sort-btn,
@@ -91,6 +92,11 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
   cursor: pointer;
   padding: 2px;
   border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: opacity 0.2s, background-color 0.2s;
 }
 
@@ -117,8 +123,20 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
 }
 
 @media (pointer: coarse) {
+  .column-header {
+    padding: 0 2px 0 4px;
+  }
+
+  .sort-btn,
+  .delete-btn {
+    opacity: 1;
+    width: 28px;
+    height: 28px;
+  }
+
   .resize-handle {
-    width: 12px;
+    right: -4px;
+    width: 18px;
   }
 }
 </style>

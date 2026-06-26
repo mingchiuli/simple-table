@@ -9,7 +9,7 @@ export const desktopFileOps = {
   openFile: async (): Promise<OpenFileResult | null> => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "xls", "csv", "ods"] }],
+      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "xlsm", "csv"] }],
     });
     if (!selected) return null;
 
@@ -38,7 +38,7 @@ export const desktopFileOps = {
   pickSaveLocation: async (defaultName: string) => {
     const selected = await save({
       defaultPath: defaultName,
-      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "csv"] }],
+      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "xlsm", "csv"] }],
     });
     return selected;
   },

@@ -4,6 +4,8 @@ pub mod codec {
 }
 
 pub mod document;
+pub mod document_model;
+pub mod workbook_state;
 
 pub mod platform {
     #[cfg(target_os = "android")]

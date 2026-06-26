@@ -558,6 +558,10 @@ const columns = computed(() => {
   width: 100%;
   height: 100%;
   position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: pan-x pan-y;
 }
 
 :deep(.el-table-v2) {
@@ -604,5 +608,22 @@ const columns = computed(() => {
   bottom: auto;
   width: auto;
   height: 2px;
+}
+
+@media (pointer: coarse) {
+  :deep(.el-table-v2) {
+    font-size: 16px;
+  }
+
+  :deep(.el-table-v2__body),
+  :deep(.el-table-v2__main),
+  :deep(.el-table-v2__window) {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .row-resize-handle {
+    bottom: -8px;
+    height: 16px;
+  }
 }
 </style>

@@ -1,8 +1,11 @@
 use std::path::Path;
+use std::str::FromStr;
 
 use crate::error::AppError;
 use crate::types::{CellValue, FileData};
-use rust_xlsxwriter::*;
+use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
+
+const DEFAULT_SHEET_NAME: &str = "Sheet1";
 
 /// 根据 FileData 生成可写入文件系统或导出的文件字节
 pub fn generate_file_bytes(file_data: &FileData) -> Result<(String, Vec<u8>), AppError> {
@@ -10,9 +13,6 @@ pub fn generate_file_bytes(file_data: &FileData) -> Result<(String, Vec<u8>), Ap
 }
 
 /// 根据目标文件名/路径生成对应格式的字节。
-///
-/// 读入 .xls/.ods 后仍允许编辑，但当前写出层只支持 xlsx/csv；
-/// 调用方必须传入用户最终选择的目标路径，避免用旧 file_name 推断格式。
 pub fn generate_file_bytes_for_target(
     file_data: &FileData,
     target_path_or_name: &str,
@@ -28,7 +28,6 @@ fn generate_file_bytes_for_name(
     file_data: &FileData,
     output_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    // 确定文件扩展名
     let extension = Path::new(output_name)
         .extension()
         .and_then(|e| e.to_str())
@@ -41,9 +40,10 @@ fn generate_file_bytes_for_name(
         .unwrap_or("untitled");
 
     match extension.as_str() {
-        "xlsx" => {
-            let bytes = write_excel_to_bytes(file_data)?;
-            Ok((format!("{output_stem}.xlsx"), bytes))
+        "xlsx" | "xlsm" => {
+            let workbook = workbook_from_file_data(file_data)?;
+            let bytes = write_workbook_to_bytes(&workbook)?;
+            Ok((format!("{output_stem}.{extension}"), bytes))
         }
         "csv" => {
             let bytes = write_csv_to_bytes(file_data)?;
@@ -53,129 +53,257 @@ fn generate_file_bytes_for_name(
     }
 }
 
-fn write_excel_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
-    let mut workbook = Workbook::new();
-    let blank_format = Format::new();
+/// 在已有 umya Workbook 上同步当前 FileData，再按目标文件名生成 Excel 字节。
+pub fn generate_excel_bytes_from_workbook_for_target(
+    workbook: &Workbook,
+    file_data: &FileData,
+    target_path_or_name: &str,
+) -> Result<(String, Vec<u8>), AppError> {
+    let target_name = Path::new(target_path_or_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(target_path_or_name);
+    let extension = Path::new(target_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_else(|| "xlsx".to_string());
+    let output_stem = Path::new(target_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("untitled");
 
-    for sheet in &file_data.sheets {
-        let worksheet = workbook.add_worksheet();
-        worksheet
-            .set_name(&sheet.name)
+    if !matches!(extension.as_str(), "xlsx" | "xlsm") {
+        return Err(AppError::UnsupportedFormat);
+    }
+
+    let mut workbook = workbook.clone();
+    sync_workbook_from_file_data(&mut workbook, file_data)?;
+    let bytes = write_workbook_to_bytes(&workbook)?;
+    Ok((format!("{output_stem}.{extension}"), bytes))
+}
+
+pub fn workbook_from_file_data(file_data: &FileData) -> Result<Workbook, AppError> {
+    let mut workbook = new_file();
+    sync_workbook_from_file_data(&mut workbook, file_data)?;
+    Ok(workbook)
+}
+
+pub fn sync_workbook_from_file_data(
+    workbook: &mut Workbook,
+    file_data: &FileData,
+) -> Result<(), AppError> {
+    if file_data.sheets.is_empty() {
+        return Ok(());
+    }
+
+    while workbook.sheet_count() < file_data.sheets.len() {
+        let sheet_index = workbook.sheet_count();
+        let sheet_name = file_data
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| normalized_sheet_name(&sheet.name, sheet_index))
+            .unwrap_or_else(|| normalized_sheet_name("", sheet_index));
+        workbook
+            .new_sheet(sheet_name)
             .map_err(|e| AppError::WriteError(e.to_string()))?;
+    }
 
-        for (row_idx, row) in sheet.rows.iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
-                write_cell(
-                    worksheet,
-                    row_idx as u32,
-                    col_idx as u16,
-                    cell,
-                    &blank_format,
-                )?;
-            }
-        }
+    while workbook.sheet_count() > file_data.sheets.len() && workbook.sheet_count() > 1 {
+        workbook
+            .remove_sheet(workbook.sheet_count() - 1)
+            .map_err(|e| AppError::WriteError(e.to_string()))?;
+    }
 
-        for merge in &sheet.merges {
-            worksheet
-                .merge_range(
-                    merge.start_row,
-                    merge.start_col,
-                    merge.end_row,
-                    merge.end_col,
-                    "",
-                    &blank_format,
-                )
-                .map_err(|e| AppError::WriteError(e.to_string()))?;
+    for (sheet_index, sheet) in file_data.sheets.iter().enumerate() {
+        let worksheet = workbook
+            .sheet_mut(sheet_index)
+            .map_err(|e| AppError::WriteError(e.to_string()))?;
+        worksheet.set_name(normalized_sheet_name(&sheet.name, sheet_index));
+        sync_sheet_from_sheet_data(worksheet, sheet)?;
+    }
 
-            let value = sheet
-                .rows
-                .get(merge.start_row as usize)
-                .and_then(|r| r.get(merge.start_col as usize))
-                .unwrap_or(&CellValue::Null);
-            write_cell(
-                worksheet,
-                merge.start_row,
-                merge.start_col,
-                value,
-                &blank_format,
-            )?;
+    Ok(())
+}
+
+pub fn write_workbook_to_bytes(workbook: &Workbook) -> Result<Vec<u8>, AppError> {
+    let mut buffer = Vec::new();
+    writer::xlsx::write_writer(&workbook, &mut buffer)
+        .map_err(|e| AppError::WriteError(e.to_string()))?;
+    Ok(buffer)
+}
+
+pub fn sync_sheet_from_sheet_data(
+    worksheet: &mut Worksheet,
+    sheet: &crate::types::SheetData,
+) -> Result<(), AppError> {
+    for (col_idx, width) in sheet.column_widths.iter().flatten() {
+        worksheet
+            .column_dimension_by_number_mut(*col_idx as u32 + 1)
+            .set_width(px_to_excel_column_width(*width));
+    }
+
+    for (row_idx, height) in sheet.row_heights.iter().flatten() {
+        worksheet
+            .row_dimension_mut(*row_idx as u32 + 1)
+            .set_height(px_to_points(*height));
+    }
+
+    for (row_idx, row) in sheet.rows.iter().enumerate() {
+        for (col_idx, cell) in row.iter().enumerate() {
+            write_cell(worksheet, row_idx as u32 + 1, col_idx as u32 + 1, cell);
         }
     }
 
-    let bytes = workbook
-        .save_to_buffer()
-        .map_err(|e| AppError::WriteError(e.to_string()))?;
-    Ok(bytes)
+    clear_cells_outside_sheet_data(worksheet, sheet);
+    worksheet.merge_cells_mut().clear();
+
+    for merge in &sheet.merges {
+        let range = format!(
+            "{}:{}",
+            coordinate(merge.start_col as u32 + 1, merge.start_row + 1),
+            coordinate(merge.end_col as u32 + 1, merge.end_row + 1)
+        );
+        worksheet.add_merge_cells(range);
+    }
+
+    Ok(())
 }
 
-fn write_cell(
-    worksheet: &mut Worksheet,
-    row: u32,
-    col: u16,
-    cell: &CellValue,
-    blank_format: &Format,
-) -> Result<(), AppError> {
+pub fn write_cell(worksheet: &mut Worksheet, row: u32, col: u32, cell: &CellValue) {
+    let cell_ref = worksheet.cell_mut((col, row));
     match cell {
         CellValue::Formula {
             formula,
             cached_value,
             error,
         } => {
-            let result = error
-                .clone()
-                .unwrap_or_else(|| cached_value.to_display_string());
-            worksheet
-                .write_formula(row, col, Formula::new(formula).set_result(result))
-                .map_err(|e| AppError::WriteError(e.to_string()))?;
+            cell_ref.set_formula(formula.trim_start_matches('='));
+            if let Some(error) = error {
+                if let Ok(error_type) = CellErrorType::from_str(error) {
+                    cell_ref.set_formula_result_error(error_type);
+                } else {
+                    cell_ref.set_formula_result_string(error);
+                }
+            } else {
+                write_formula_cached_value(cell_ref, cached_value);
+            }
         }
         CellValue::String(s) => {
-            worksheet
-                .write(row, col, s.as_str())
-                .map_err(|e| AppError::WriteError(e.to_string()))?;
+            cell_ref.set_value_string(s);
         }
         CellValue::Number(n) => {
             if let Some(num) = n.as_i64() {
                 const F64_SAFE_MAX: i64 = 9_007_199_254_740_991;
                 const F64_SAFE_MIN: i64 = -9_007_199_254_740_991;
                 if (F64_SAFE_MIN..=F64_SAFE_MAX).contains(&num) {
-                    worksheet
-                        .write(row, col, num as f64)
-                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                    cell_ref.set_value_number(num as f64);
                 } else {
-                    worksheet
-                        .write(row, col, num.to_string())
-                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                    cell_ref.set_value_string(num.to_string());
                 }
             } else if let Some(num) = n.as_f64() {
                 if num.is_finite() {
-                    worksheet
-                        .write(row, col, num)
-                        .map_err(|e| AppError::WriteError(e.to_string()))?;
-                } else {
-                    // NaN/Infinity 写为空白单元格
-                    worksheet
-                        .write_blank(row, col, blank_format)
-                        .map_err(|e| AppError::WriteError(e.to_string()))?;
+                    cell_ref.set_value_number(num);
                 }
             } else {
-                worksheet
-                    .write(row, col, n.to_string())
-                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+                cell_ref.set_value_string(n.to_string());
             }
         }
         CellValue::Boolean(b) => {
-            worksheet
-                .write(row, col, *b)
-                .map_err(|e| AppError::WriteError(e.to_string()))?;
+            cell_ref.set_value_bool(*b);
         }
         CellValue::Null => {
-            worksheet
-                .write_blank(row, col, blank_format)
-                .map_err(|e| AppError::WriteError(e.to_string()))?;
+            cell_ref.set_blank();
         }
     }
+}
 
-    Ok(())
+fn clear_cells_outside_sheet_data(worksheet: &mut Worksheet, sheet: &crate::types::SheetData) {
+    let (highest_col, highest_row) = worksheet.highest_column_and_row();
+    let new_highest_row = sheet.rows.len() as u32;
+    let new_highest_col = sheet
+        .rows
+        .iter()
+        .map(|row| row.len() as u32)
+        .max()
+        .unwrap_or(0);
+
+    for row in 1..=highest_row.max(new_highest_row) {
+        for col in 1..=highest_col.max(new_highest_col) {
+            let in_file_data = (row as usize)
+                .checked_sub(1)
+                .and_then(|row_idx| sheet.rows.get(row_idx))
+                .and_then(|row_data| {
+                    (col as usize)
+                        .checked_sub(1)
+                        .and_then(|col_idx| row_data.get(col_idx))
+                })
+                .is_some();
+            if !in_file_data {
+                worksheet.cell_mut((col, row)).set_blank();
+            }
+        }
+    }
+}
+
+fn write_formula_cached_value(cell: &mut umya_spreadsheet::Cell, value: &CellValue) {
+    match value {
+        CellValue::String(s) => {
+            cell.set_formula_result_string(s);
+        }
+        CellValue::Number(n) => {
+            if let Some(num) = n.as_i64() {
+                cell.set_formula_result_number(num as f64);
+            } else if let Some(num) = n.as_f64()
+                && num.is_finite()
+            {
+                cell.set_formula_result_number(num);
+            } else {
+                cell.set_formula_result_blank();
+            }
+        }
+        CellValue::Boolean(b) => {
+            cell.set_formula_result_bool(*b);
+        }
+        CellValue::Formula { cached_value, .. } => {
+            write_formula_cached_value(cell, cached_value);
+        }
+        CellValue::Null => {
+            cell.set_formula_result_blank();
+        }
+    }
+}
+
+pub fn coordinate(col: u32, row: u32) -> String {
+    let mut col_num = col;
+    let mut letters = String::new();
+    while col_num > 0 {
+        let rem = ((col_num - 1) % 26) as u8;
+        letters.insert(0, (b'A' + rem) as char);
+        col_num = (col_num - 1) / 26;
+    }
+    format!("{letters}{row}")
+}
+
+fn normalized_sheet_name(name: &str, sheet_index: usize) -> String {
+    if name.is_empty() {
+        if sheet_index == 0 {
+            DEFAULT_SHEET_NAME.to_string()
+        } else {
+            format!("Sheet{}", sheet_index + 1)
+        }
+    } else {
+        name.to_string()
+    }
+}
+
+pub fn px_to_excel_column_width(px: u32) -> f64 {
+    px.saturating_sub(5) as f64 / 7.0
+}
+
+pub fn px_to_points(px: u32) -> f64 {
+    px as f64 * 72.0 / 96.0
 }
 
 fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
@@ -185,25 +313,7 @@ fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
 
         if let Some(first_sheet) = file_data.sheets.first() {
             for row in &first_sheet.rows {
-                let string_row: Vec<String> = row
-                    .iter()
-                    .map(|cell| match cell {
-                        CellValue::Formula { .. } => cell.to_display_string(),
-                        CellValue::String(s) => s.clone(),
-                        CellValue::Number(n) => {
-                            // f64 的 NaN/Infinity 不可机读，写空字符串
-                            if let Some(f) = n.as_f64()
-                                && !f.is_finite()
-                                && n.as_i64().is_none()
-                            {
-                                return String::new();
-                            }
-                            n.to_string()
-                        }
-                        CellValue::Boolean(b) => b.to_string(),
-                        CellValue::Null => String::new(),
-                    })
-                    .collect();
+                let string_row: Vec<String> = row.iter().map(cell_to_csv_string).collect();
                 writer
                     .write_record(&string_row)
                     .map_err(|e| AppError::WriteError(e.to_string()))?;
@@ -217,12 +327,32 @@ fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
     Ok(buffer)
 }
 
+fn cell_to_csv_string(cell: &CellValue) -> String {
+    match cell {
+        CellValue::Formula { .. } => cell.to_display_string(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Number(n) => {
+            if let Some(f) = n.as_f64()
+                && !f.is_finite()
+                && n.as_i64().is_none()
+            {
+                return String::new();
+            }
+            n.to_string()
+        }
+        CellValue::Boolean(b) => b.to_string(),
+        CellValue::Null => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::Value;
 
     use super::*;
-    use crate::io::codec::reader::read_file_from_bytes;
+    use crate::io::codec::reader::read_file_with_workbook_from_bytes;
     use crate::types::{MergeRange, SheetData};
 
     #[test]
@@ -252,17 +382,84 @@ mod tests {
 
         let (_, bytes) =
             generate_file_bytes_for_target(&file_data, "merged-formula.xlsx").expect("write xlsx");
-        let read_back = read_file_from_bytes(
+        let read_back = read_file_with_workbook_from_bytes(
             "xlsx",
             bytes,
             String::new(),
             "merged-formula.xlsx".to_string(),
         )
-        .expect("read xlsx");
+        .expect("read xlsx")
+        .file_data;
 
         match &read_back.sheets[0].rows[0][0] {
             CellValue::Formula { formula, .. } => assert_eq!(formula, "=1+2"),
             value => panic!("expected formula, got {value:?}"),
         }
+        assert_eq!(read_back.sheets[0].merges.len(), 1);
+    }
+
+    #[test]
+    fn roundtrips_row_heights_and_column_widths() {
+        let mut column_widths = HashMap::new();
+        column_widths.insert(0, 180);
+        let mut row_heights = HashMap::new();
+        row_heights.insert(1, 96);
+
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "layout.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::String("layout".to_string())]],
+                column_widths: Some(column_widths),
+                row_heights: Some(row_heights),
+                ..Default::default()
+            }],
+        };
+
+        let (_, bytes) =
+            generate_file_bytes_for_target(&file_data, "layout.xlsx").expect("write xlsx");
+        let read_back = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "layout.xlsx".to_string(),
+        )
+        .expect("read xlsx")
+        .file_data;
+
+        assert_eq!(
+            read_back.sheets[0]
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&0)),
+            Some(&180)
+        );
+        assert_eq!(
+            read_back.sheets[0]
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&1)),
+            Some(&96)
+        );
+    }
+
+    #[test]
+    fn supports_xlsm_output_extension() {
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "macro.xlsm".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::String("ok".to_string())]],
+                ..Default::default()
+            }],
+        };
+
+        let (name, bytes) =
+            generate_file_bytes_for_target(&file_data, "macro.xlsm").expect("write xlsm");
+
+        assert_eq!(name, "macro.xlsm");
+        assert!(!bytes.is_empty());
     }
 }
