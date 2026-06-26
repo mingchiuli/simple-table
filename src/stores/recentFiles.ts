@@ -32,7 +32,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
 
         const storageType = await getStorageType();
 
-        const bytes = await api.generateThumbnailBytes(fileData);
+        const bytes = await api.generateCurrentThumbnailBytes();
 
         const fileSize = await api.getFileSize(path);
         await api.addRecentFileWithThumbnail(
@@ -75,7 +75,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
 
         const storageType = await getStorageType();
 
-        const bytes = await api.generateThumbnailBytes(result.fileData);
+        const bytes = await api.generateCurrentThumbnailBytes();
         const fileSize = await api.getFileSize(result.path);
         await api.addRecentFileWithThumbnail(
           result.path,

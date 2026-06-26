@@ -4,6 +4,5 @@ pub mod editor_ops;
 pub mod history_ops;
 pub mod index_ops;
 pub mod search_ops;
-pub mod sort_ops;
 
 pub use core_ops::Operation;

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::AppError;
-use crate::io::codec::{reader::read_file_with_workbook_from_bytes, writer};
+use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::state::{editor_state::EditorState, get_state};
 use crate::types::FileData;
@@ -46,17 +46,15 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 
 pub fn generate_current_file_bytes_for_target(
     target_path_or_name: &str,
-    fallback_file_data: &FileData,
 ) -> Result<(String, Vec<u8>), AppError> {
     let state = get_state();
-    let mut state_guard = state.write().expect("Editor state lock poisoned");
+    let state_guard = state.read().expect("Editor state lock poisoned");
 
-    if let Some(editor_state) = state_guard.as_mut() {
-        editor_state.sync_layout_from_frontend(fallback_file_data);
+    if let Some(editor_state) = state_guard.as_ref() {
         return editor_state.generate_file_bytes_for_target(target_path_or_name);
     }
 
-    writer::generate_file_bytes_for_target(fallback_file_data, target_path_or_name)
+    Err(AppError::NoFileLoaded)
 }
 
 fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> FileData {

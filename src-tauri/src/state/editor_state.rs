@@ -2,7 +2,8 @@ use crate::error::AppError;
 use crate::io::document_model::SpreadsheetDocument;
 use crate::ops::Operation;
 use crate::state::content_hash::ContentHash;
-use crate::types::{CellValue, FileData, OperationResult, SheetCellChange, SheetData};
+use crate::state::search_index::{SearchIndexStore, SearchSheetIndex, SearchWriterHandle};
+use crate::types::{CellValue, FileData, OperationResult, SheetCellChange};
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,7 @@ pub struct EditorState {
     pub can_redo: bool,
     pub current_content_hash: ContentHash,
     pub saved_content_hash: ContentHash,
+    search_index: SearchIndexStore,
 }
 
 impl EditorState {
@@ -34,6 +36,7 @@ impl EditorState {
             can_redo: false,
             current_content_hash: content_hash,
             saved_content_hash: content_hash,
+            search_index: SearchIndexStore::default(),
         }
     }
 
@@ -41,8 +44,22 @@ impl EditorState {
         self.document.projection()
     }
 
-    pub fn sheet_mut_for_indexing(&mut self, sheet_index: usize) -> Option<&mut SheetData> {
-        self.document.projection_mut().sheets.get_mut(sheet_index)
+    pub fn install_search_index(&mut self, sheet_index: usize, index: Option<SearchSheetIndex>) {
+        self.search_index.install_sheet_index(sheet_index, index);
+        self.search_index.truncate(self.file_data().sheets.len());
+    }
+
+    pub fn search_sheet(
+        &self,
+        sheet_index: usize,
+        query: &str,
+        limit: usize,
+    ) -> Vec<crate::types::CellPosition> {
+        self.search_index.search_sheet(sheet_index, query, limit)
+    }
+
+    pub fn search_writer_handle(&self, sheet_index: usize) -> Option<SearchWriterHandle> {
+        self.search_index.writer_handle(sheet_index)
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -54,10 +71,6 @@ impl EditorState {
         self.saved_content_hash = self.current_content_hash;
     }
 
-    pub fn sync_layout_from_frontend(&mut self, frontend_file_data: &FileData) {
-        self.document.sync_layout_from_frontend(frontend_file_data);
-    }
-
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
@@ -67,7 +80,7 @@ impl EditorState {
     }
 
     /// 执行操作并记录到历史，返回增量结果
-    pub fn execute(&mut self, mut operation: Operation) -> ExecutedOperation {
+    pub fn execute(&mut self, mut operation: Operation) -> Result<ExecutedOperation, AppError> {
         // 在执行操作前，先准备好需要的数据，以便撤销/重做
         match &operation {
             // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
@@ -84,13 +97,13 @@ impl EditorState {
                     // 如果新值和旧值相同，不需要记录到 history
                     if real_old == new_value {
                         // 返回结果但不记录到 history
-                        let result = self.document.execute_operation(&operation);
+                        let result = self.document.execute_operation(&operation)?;
                         self.update_flags();
                         self.refresh_content_hash();
-                        return ExecutedOperation {
+                        return Ok(ExecutedOperation {
                             operation: result.operation,
                             cell_changes: result.cell_changes,
-                        };
+                        });
                     }
                     // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
                     if real_old != old_value {
@@ -109,6 +122,7 @@ impl EditorState {
                 sheet_index,
                 col_index,
                 col_data: _,
+                column_width,
             } => {
                 // 如果 col_data 已有数据（撤销操作），保留原数据
                 if col_index.is_none() && *sheet_index < self.file_data().sheets.len() {
@@ -120,6 +134,7 @@ impl EditorState {
                             sheet_index: *sheet_index,
                             col_index: Some(col_count),
                             col_data: vec![],
+                            column_width: *column_width,
                         };
                     }
                 }
@@ -129,6 +144,7 @@ impl EditorState {
                 sheet_index,
                 row_index,
                 row_data,
+                row_height,
             } => {
                 // 如果 row_data 已有数据（撤销操作），保留原数据
                 if row_data.is_empty()
@@ -140,6 +156,7 @@ impl EditorState {
                         sheet_index: *sheet_index,
                         row_index: *row_index,
                         row_data: vec![CellValue::Null; col_count],
+                        row_height: *row_height,
                     };
                 }
             }
@@ -171,13 +188,13 @@ impl EditorState {
                     .and_then(|sheet| sheet.column_widths.as_ref())
                     .and_then(|widths| widths.get(col_index).copied());
                 if real_old == *new_width {
-                    let result = self.document.execute_operation(&operation);
+                    let result = self.document.execute_operation(&operation)?;
                     self.update_flags();
                     self.refresh_content_hash();
-                    return ExecutedOperation {
+                    return Ok(ExecutedOperation {
                         operation: result.operation,
                         cell_changes: result.cell_changes,
-                    };
+                    });
                 }
                 if real_old != *old_width {
                     operation = Operation::SetColumnWidth {
@@ -201,13 +218,13 @@ impl EditorState {
                     .and_then(|sheet| sheet.row_heights.as_ref())
                     .and_then(|heights| heights.get(row_index).copied());
                 if real_old == *new_height {
-                    let result = self.document.execute_operation(&operation);
+                    let result = self.document.execute_operation(&operation)?;
                     self.update_flags();
                     self.refresh_content_hash();
-                    return ExecutedOperation {
+                    return Ok(ExecutedOperation {
                         operation: result.operation,
                         cell_changes: result.cell_changes,
-                    };
+                    });
                 }
                 if real_old != *old_height {
                     operation = Operation::SetRowHeight {
@@ -241,50 +258,66 @@ impl EditorState {
             _ => {}
         }
 
-        let result = self.document.execute_operation(&operation);
+        let result = self.document.execute_operation(&operation)?;
         self.history.push(operation);
         self.redo_stack.clear();
         self.update_flags();
         self.refresh_content_hash();
-        ExecutedOperation {
+        Ok(ExecutedOperation {
             operation: result.operation,
             cell_changes: result.cell_changes,
-        }
+        })
     }
 
     /// 撤销上一个操作
-    pub fn undo(&mut self) -> Option<ExecutedOperation> {
+    pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         if let Some(operation) = self.history.pop() {
             let undo_operation = operation.create_undo_op();
-            let result = self.document.execute_operation(&undo_operation);
+            let result = match self.document.execute_operation(&undo_operation) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.history.push(operation);
+                    self.update_flags();
+                    self.refresh_content_hash();
+                    return Err(error);
+                }
+            };
             // 获取 redo 操作
-            let redo_op = operation.create_redo_op(self.document.projection_mut());
+            let redo_op = operation.create_redo_op();
             self.redo_stack.push(redo_op);
 
             self.update_flags();
             self.refresh_content_hash();
-            Some(ExecutedOperation {
+            Ok(Some(ExecutedOperation {
                 operation: result.operation,
                 cell_changes: result.cell_changes,
-            })
+            }))
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// 重做上一个被撤销的操作
-    pub fn redo(&mut self) -> Option<ExecutedOperation> {
+    pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         if let Some(operation) = self.redo_stack.pop() {
-            let result = self.document.execute_operation(&operation);
+            let result = match self.document.execute_operation(&operation) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.redo_stack.push(operation);
+                    self.update_flags();
+                    self.refresh_content_hash();
+                    return Err(error);
+                }
+            };
             self.history.push(operation);
             self.update_flags();
             self.refresh_content_hash();
-            Some(ExecutedOperation {
+            Ok(Some(ExecutedOperation {
                 operation: result.operation,
                 cell_changes: result.cell_changes,
-            })
+            }))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -333,13 +366,15 @@ mod tests {
         .expect("read source");
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
-        state.execute(Operation::SetCell {
-            sheet_index: 0,
-            row: 0,
-            col: 0,
-            old_value: CellValue::String("old".to_string()),
-            new_value: CellValue::Number(Value::from(42)),
-        });
+        state
+            .execute(Operation::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                old_value: CellValue::String("old".to_string()),
+                new_value: CellValue::Number(Value::from(42)),
+            })
+            .expect("set cell");
 
         let (_, saved_bytes) = state
             .generate_file_bytes_for_target("styled.xlsx")
@@ -382,22 +417,31 @@ mod tests {
         .expect("read source");
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
-        state.execute(Operation::DeleteRow {
-            sheet_index: 0,
-            row_index: 0,
-            row_data: vec![
-                CellValue::String("a1".to_string()),
-                CellValue::String("b1".to_string()),
-            ],
-        });
-        state.undo().expect("undo row delete");
-        state.redo().expect("redo row delete");
-        state.execute(Operation::DeleteColumn {
-            sheet_index: 0,
-            col_index: 0,
-            col_data: vec![CellValue::String("a2".to_string())],
-        });
-        state.undo().expect("undo column delete");
+        state
+            .execute(Operation::DeleteRow {
+                sheet_index: 0,
+                row_index: 0,
+                row_data: vec![
+                    CellValue::String("a1".to_string()),
+                    CellValue::String("b1".to_string()),
+                ],
+                row_height: None,
+            })
+            .expect("delete row");
+        state.undo().expect("undo row delete").expect("undo result");
+        state.redo().expect("redo row delete").expect("redo result");
+        state
+            .execute(Operation::DeleteColumn {
+                sheet_index: 0,
+                col_index: 0,
+                col_data: vec![CellValue::String("a2".to_string())],
+                column_width: None,
+            })
+            .expect("delete column");
+        state
+            .undo()
+            .expect("undo column delete")
+            .expect("undo result");
 
         let (_, saved_bytes) = state
             .generate_file_bytes_for_target("structure.xlsx")
@@ -408,6 +452,111 @@ mod tests {
         assert_eq!(sheet.cell("A1").expect("A1").value(), "a2");
         assert_eq!(sheet.cell("B1").expect("B1").value(), "b2");
         assert!(sheet.cell("A2").is_none());
+    }
+
+    #[test]
+    fn workbook_structure_patch_preserves_adjusted_formula_references() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_number(1);
+            sheet.cell_mut("A2").set_value_number(2);
+            sheet.cell_mut("B2").set_formula("SUM(A1:A2)");
+            sheet.cell_mut("B2").set_formula_result_number(3.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "formula-shift.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(Operation::AddRow {
+                sheet_index: 0,
+                row_index: 1,
+                row_data: vec![CellValue::Null, CellValue::Null],
+                row_height: None,
+            })
+            .expect("add row");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("formula-shift.xlsx")
+            .expect("save from workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let sheet = saved.sheet(0).expect("saved sheet");
+
+        assert_eq!(
+            sheet.cell("B3").expect("B3").formula(),
+            "SUM(A1:A3)",
+            "formula references should come from workbook structure adjustment"
+        );
+        match &state.file_data().sheets[0].rows[2][1] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=SUM(A1:A3)"),
+            value => panic!("expected adjusted formula in projection, got {value:?}"),
+        }
+    }
+
+    #[test]
+    fn workbook_structure_patch_refreshes_cross_sheet_formula_projection() {
+        let mut source = umya_spreadsheet::new_file();
+        source.new_sheet("Other").expect("other sheet");
+        {
+            let inputs = source.sheet_mut(0).expect("input sheet");
+            inputs.set_name("Inputs");
+            inputs.cell_mut("A1").set_value_number(1);
+            inputs.cell_mut("A2").set_value_number(2);
+        }
+        {
+            let other = source.sheet_mut(1).expect("other sheet");
+            other.cell_mut("A1").set_formula("Inputs!A2");
+            other.cell_mut("A1").set_formula_result_number(2.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "cross-sheet-formula.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(Operation::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+                row_data: vec![CellValue::Null],
+                row_height: None,
+            })
+            .expect("add row");
+
+        match &state.file_data().sheets[1].rows[0][0] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A3"),
+            value => panic!("expected adjusted cross-sheet formula, got {value:?}"),
+        }
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("cross-sheet-formula.xlsx")
+            .expect("save from workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+
+        assert_eq!(
+            saved
+                .sheet(1)
+                .expect("sheet")
+                .cell("A1")
+                .expect("A1")
+                .formula(),
+            "Inputs!A3"
+        );
     }
 
     #[test]
@@ -430,18 +579,22 @@ mod tests {
         .expect("read source");
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
-        state.execute(Operation::SetColumnWidth {
-            sheet_index: 0,
-            col_index: 0,
-            old_width: None,
-            new_width: Some(180),
-        });
-        state.execute(Operation::SetRowHeight {
-            sheet_index: 0,
-            row_index: 0,
-            old_height: None,
-            new_height: Some(96),
-        });
+        state
+            .execute(Operation::SetColumnWidth {
+                sheet_index: 0,
+                col_index: 0,
+                old_width: None,
+                new_width: Some(180),
+            })
+            .expect("set column width");
+        state
+            .execute(Operation::SetRowHeight {
+                sheet_index: 0,
+                row_index: 0,
+                old_height: None,
+                new_height: Some(96),
+            })
+            .expect("set row height");
 
         assert_eq!(
             state.file_data().sheets[0]
@@ -458,9 +611,9 @@ mod tests {
             Some(&96)
         );
 
-        state.undo().expect("undo row height");
+        state.undo().expect("undo row height").expect("undo result");
         assert!(state.file_data().sheets[0].row_heights.is_none());
-        state.redo().expect("redo row height");
+        state.redo().expect("redo row height").expect("redo result");
         assert_eq!(
             state.file_data().sheets[0]
                 .row_heights
@@ -486,6 +639,121 @@ mod tests {
                 .row_dimensions()
                 .iter()
                 .any(|row| row.row_num() == 1 && (row.height() - 72.0).abs() < 0.001)
+        );
+    }
+
+    #[test]
+    fn row_column_structure_undo_restores_persisted_layout() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_string("a1");
+            sheet.cell_mut("B1").set_value_string("b1");
+            sheet.cell_mut("A2").set_value_string("a2");
+            sheet.cell_mut("B2").set_value_string("b2");
+            sheet.row_dimension_mut(1).set_height(84.0);
+            sheet.column_dimension_by_number_mut(1).set_width(25.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "layout-structure.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        assert_eq!(
+            state.file_data().sheets[0]
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&0)),
+            Some(&112)
+        );
+        assert_eq!(
+            state.file_data().sheets[0]
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&0)),
+            Some(&180)
+        );
+
+        state
+            .execute(Operation::DeleteRow {
+                sheet_index: 0,
+                row_index: 0,
+                row_data: vec![
+                    CellValue::String("a1".to_string()),
+                    CellValue::String("b1".to_string()),
+                ],
+                row_height: Some(112),
+            })
+            .expect("delete row");
+        assert!(
+            state.file_data().sheets[0]
+                .row_heights
+                .as_ref()
+                .is_none_or(|heights| !heights.contains_key(&0))
+        );
+        state.undo().expect("undo row delete").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0]
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&0)),
+            Some(&112)
+        );
+
+        state
+            .execute(Operation::DeleteColumn {
+                sheet_index: 0,
+                col_index: 0,
+                col_data: vec![
+                    CellValue::String("a1".to_string()),
+                    CellValue::String("a2".to_string()),
+                ],
+                column_width: Some(180),
+            })
+            .expect("delete column");
+        assert!(
+            state.file_data().sheets[0]
+                .column_widths
+                .as_ref()
+                .is_none_or(|widths| !widths.contains_key(&0)),
+            "column widths after delete: {:?}",
+            state.file_data().sheets[0].column_widths
+        );
+        state
+            .undo()
+            .expect("undo column delete")
+            .expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0]
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&0)),
+            Some(&180)
+        );
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("layout-structure.xlsx")
+            .expect("save from workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let sheet = saved.sheet(0).expect("saved sheet");
+        assert!(
+            sheet
+                .row_dimensions()
+                .iter()
+                .any(|row| row.row_num() == 1 && (row.height() - 84.0).abs() < 0.001)
+        );
+        assert!(
+            sheet
+                .column_dimensions()
+                .iter()
+                .any(|column| { column.col_num() == 1 && (column.width() - 25.0).abs() < 0.001 })
         );
     }
 }

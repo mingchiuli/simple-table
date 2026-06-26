@@ -31,8 +31,8 @@ export const iosFileOps = {
   },
 
   /** iOS: 生成文件字节并写入 App 沙盒路径 */
-  saveFile: (path: string, fileData: FileData) =>
-    invoke<void>("save_file_ios", { path, fileData }),
+  saveFile: (path: string) =>
+    invoke<void>("save_file_ios", { path }),
 
   createPrivateFile: (fileName: string) =>
     invoke<{ path: string; originalPath: string; fileName: string }>("create_private_file_ios", { fileName }),

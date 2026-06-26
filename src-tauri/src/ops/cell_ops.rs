@@ -35,7 +35,7 @@ pub fn do_set_cell(
                     old_value,
                     new_value: new_value.clone(),
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(cell_delta_mutation_response(
                     editor_state,
                     result.operation,
@@ -82,8 +82,9 @@ pub fn do_add_row(
                     sheet_index,
                     row_index,
                     row_data: vec![],
+                    row_height: None,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -121,12 +122,17 @@ pub fn do_delete_row(
                     .get(row_index)
                     .cloned()
                     .ok_or(AppError::RowNotFound(row_index))?;
+                let row_height = sheet
+                    .row_heights
+                    .as_ref()
+                    .and_then(|heights| heights.get(&row_index).copied());
                 let operation = Operation::DeleteRow {
                     sheet_index,
                     row_index,
                     row_data,
+                    row_height,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -160,8 +166,9 @@ pub fn do_add_column(
                     sheet_index,
                     col_index: None,
                     col_data: vec![],
+                    column_width: None,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -206,12 +213,17 @@ pub fn do_delete_column(
                     .iter()
                     .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
                     .collect();
+                let column_width = sheet
+                    .column_widths
+                    .as_ref()
+                    .and_then(|widths| widths.get(&col_index).copied());
                 let operation = Operation::DeleteColumn {
                     sheet_index,
                     col_index,
                     col_data,
+                    column_width,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -253,7 +265,7 @@ pub fn do_set_column_width(
                     old_width,
                     new_width: width,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -291,7 +303,7 @@ pub fn do_set_row_height(
                     old_height,
                     new_height: height,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -318,7 +330,7 @@ pub fn do_add_sheet(
                     sheet_data: None,
                     sheet_index: None,
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -355,7 +367,7 @@ pub fn do_delete_sheet(
                     sheet_index,
                     sheet_data: SheetData::default(),
                 };
-                let result = editor_state.execute(operation);
+                let result = editor_state.execute(operation)?;
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),

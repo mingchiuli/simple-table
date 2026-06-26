@@ -30,6 +30,8 @@ pub enum AppError {
     NothingToRedo,
     #[error("Cannot delete the last sheet")]
     CannotDeleteLastSheet,
+    #[error("Workbook patch failed: {0}")]
+    WorkbookPatchFailed(String),
 
     // 内部错误
     #[error("Internal error: {0}")]

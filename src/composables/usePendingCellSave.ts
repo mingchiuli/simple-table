@@ -1,6 +1,6 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
-import type { CellValue, EditorMutationResponse, FileData, SheetData, SortState } from '@/types';
+import type { CellValue, EditorMutationResponse, FileData, SheetData } from '@/types';
 import { getCellKey } from '@/utils/cellKey';
 
 type CellPosition = { row: number; col: number };
@@ -19,7 +19,6 @@ type UsePendingCellSaveOptions = {
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<CellPosition | null>;
   cellEditorValue: Ref<string>;
-  currentSortColumn: Ref<SortState | null>;
   applyMutationResponse: (response: EditorMutationResponse) => void;
   markPendingContentChange: () => void;
   clearPendingContentChange: () => void;
@@ -79,7 +78,6 @@ export function usePendingCellSave({
   currentSheetIndex,
   selectedCell,
   cellEditorValue,
-  currentSortColumn,
   applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
@@ -222,7 +220,6 @@ export function usePendingCellSave({
     const sheet = currentFileData.sheets[sheetIndex];
     if (!sheet) return;
 
-    currentSortColumn.value = null;
     const oldValue = oldValueOverride ?? sheet.rows[rowIndex][colIndex];
     const newValue = parseCellValue(value);
     const isCurrentCell = currentSheetIndex.value === sheetIndex

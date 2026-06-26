@@ -32,6 +32,7 @@ umya-spreadsheet = "3"
 formualizer-workbook = { version = "0.7.0", default-features = false, features = ["system-clock"] }
 formualizer-parse = "2.0.0"
 csv = "1.4"
+regex = "1"
 thiserror = "2"
 tantivy = "0.26.1"
 tantivy-jieba = "0.20.0"

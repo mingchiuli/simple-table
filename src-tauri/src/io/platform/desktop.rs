@@ -8,8 +8,8 @@ pub fn read_file(path: &str) -> Result<FileData, AppError> {
     document::open_from_bytes(path.to_string(), bytes, None)
 }
 
-pub fn save_file(path: &str, file_data: &FileData) -> Result<(), AppError> {
-    let (_, bytes) = document::generate_current_file_bytes_for_target(path, file_data)?;
+pub fn save_file(path: &str) -> Result<(), AppError> {
+    let (_, bytes) = document::generate_current_file_bytes_for_target(path)?;
     fs::write(path, bytes).map_err(|e| AppError::WriteError(e.to_string()))?;
     Ok(())
 }

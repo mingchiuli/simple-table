@@ -1,13 +1,11 @@
 use crate::error::AppError;
+use crate::io::document;
 #[cfg(desktop)]
 use crate::io::platform::desktop;
-use crate::io::{codec::writer, document};
-use crate::ops::{cell_ops, editor_ops, search_ops, sort_ops};
+use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{get_state, state::EditorStateInfo};
-use crate::types::{
-    CellValue, EditorMutationResponse, FileData, SearchResult, SearchScope, SortState,
-};
+use crate::types::{CellValue, EditorMutationResponse, FileData, SearchResult, SearchScope};
 use tauri::AppHandle;
 
 // ==================== File Operations ====================
@@ -22,8 +20,8 @@ pub fn read_file_desktop(path: String) -> Result<FileData, AppError> {
 /// Desktop: 生成文件字节并写入路径
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn save_file_desktop(path: String, file_data: FileData) -> Result<(), AppError> {
-    desktop::save_file(&path, &file_data)
+pub fn save_file_desktop(path: String) -> Result<(), AppError> {
+    desktop::save_file(&path)
 }
 
 #[tauri::command]
@@ -31,15 +29,9 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
     document::init_file(file_data)
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub fn generate_file_bytes(file_data: FileData) -> Result<Vec<u8>, AppError> {
-    let (_, bytes) = writer::generate_file_bytes(&file_data)?;
-    Ok(bytes)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn generate_thumbnail_bytes(file_data: FileData) -> Result<Vec<u8>, AppError> {
-    let (_, bytes) = writer::generate_file_bytes_for_target(&file_data, "thumbnail.xlsx")?;
+#[tauri::command]
+pub fn generate_current_thumbnail_bytes() -> Result<Vec<u8>, AppError> {
+    let (_, bytes) = document::generate_current_file_bytes_for_target("thumbnail.xlsx")?;
     Ok(bytes)
 }
 
@@ -132,24 +124,6 @@ pub fn add_sheet() -> Result<EditorMutationResponse, AppError> {
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_sheet(sheet_index: usize) -> Result<EditorMutationResponse, AppError> {
     cell_ops::do_delete_sheet(get_state(), sheet_index)
-}
-
-// ==================== Sort Operations ====================
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn sort_column(
-    sheet_index: usize,
-    col_index: usize,
-    ascending: bool,
-    previous_sort_state: Option<SortState>,
-) -> Result<EditorMutationResponse, AppError> {
-    sort_ops::do_sort_column(
-        get_state(),
-        sheet_index,
-        col_index,
-        ascending,
-        previous_sort_state,
-    )
 }
 
 // ==================== Search Operations ====================

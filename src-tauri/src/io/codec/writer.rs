@@ -7,11 +7,6 @@ use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
 
 const DEFAULT_SHEET_NAME: &str = "Sheet1";
 
-/// 根据 FileData 生成可写入文件系统或导出的文件字节
-pub fn generate_file_bytes(file_data: &FileData) -> Result<(String, Vec<u8>), AppError> {
-    generate_file_bytes_for_name(file_data, &file_data.file_name)
-}
-
 /// 根据目标文件名/路径生成对应格式的字节。
 pub fn generate_file_bytes_for_target(
     file_data: &FileData,
@@ -56,7 +51,6 @@ fn generate_file_bytes_for_name(
 /// 在已有 umya Workbook 上同步当前 FileData，再按目标文件名生成 Excel 字节。
 pub fn generate_excel_bytes_from_workbook_for_target(
     workbook: &Workbook,
-    file_data: &FileData,
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     let target_name = Path::new(target_path_or_name)
@@ -78,9 +72,7 @@ pub fn generate_excel_bytes_from_workbook_for_target(
         return Err(AppError::UnsupportedFormat);
     }
 
-    let mut workbook = workbook.clone();
-    sync_workbook_from_file_data(&mut workbook, file_data)?;
-    let bytes = write_workbook_to_bytes(&workbook)?;
+    let bytes = write_workbook_to_bytes(workbook)?;
     Ok((format!("{output_stem}.{extension}"), bytes))
 }
 

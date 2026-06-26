@@ -5583,6 +5583,7 @@ dependencies = [
  "formualizer-parse",
  "formualizer-workbook",
  "image",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

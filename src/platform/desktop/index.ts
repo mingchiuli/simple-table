@@ -31,8 +31,8 @@ export const desktopFileOps = {
   },
 
   /** Desktop: 生成文件字节并写入路径 */
-  saveFile: async (path: string, fileData: FileData) => {
-    await invoke<void>("save_file_desktop", { path, fileData });
+  saveFile: async (path: string) => {
+    await invoke<void>("save_file_desktop", { path });
   },
 
   pickSaveLocation: async (defaultName: string) => {

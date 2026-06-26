@@ -26,7 +26,7 @@ async function handleOpenFile() {
     fileDataStore.set(result.fileData, result.path);
 
     const storageType = await getStorageType();
-    const bytes = await api.generateThumbnailBytes(result.fileData);
+    const bytes = await api.generateCurrentThumbnailBytes();
     const fileSize = await api.getFileSize(result.path);
     await api.addRecentFileWithThumbnail(
       result.path,

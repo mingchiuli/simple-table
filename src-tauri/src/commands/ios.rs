@@ -36,12 +36,8 @@ pub async fn create_private_file_ios(
 /// iOS: generate file bytes and write them to the sandbox path.
 #[cfg(target_os = "ios")]
 #[tauri::command(rename_all = "camelCase")]
-pub async fn save_file_ios(
-    app: AppHandle,
-    path: String,
-    file_data: FileData,
-) -> Result<(), AppError> {
-    mobile::save_file(&app, &path, &file_data)
+pub async fn save_file_ios(app: AppHandle, path: String) -> Result<(), AppError> {
+    mobile::save_file(&app, &path)
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.

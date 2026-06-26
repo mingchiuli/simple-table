@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { TableV2FixedDir } from 'element-plus';
 import type { Column } from 'element-plus';
-import type {CellValue, MergeRange, SortState} from '@/types';
+import type {CellValue, MergeRange} from '@/types';
 import { CellView, EditableCell, RowNumberCell, ColumnHeaderCell } from '@/components/cell';
 import { usePlatform } from '@/composables/usePlatform';
 import { cellToDisplayString, cellToEditorString } from '@/composables/usePendingCellSave';
@@ -22,7 +22,6 @@ const props = defineProps<{
   merges?: MergeRange[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
-  sortState?: SortState | null;
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
 }>();
@@ -34,7 +33,6 @@ const emit = defineEmits<{
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
   (e: 'cell-edit-cancel', rowIndex: number, colIndex: number): void;
-  (e: 'sort-column', colIndex: number, ascending: boolean): void;
   (e: 'column-resize', colIndex: number, width: number): void;
   (e: 'row-resize', rowIndex: number, height: number): void;
 }>();
@@ -71,6 +69,7 @@ function initColumnWidths() {
   } else {
     columnWidths.value = {};
   }
+  tableRenderKey.value += 1;
 }
 
 initColumnWidths();
@@ -84,6 +83,7 @@ function initRowHeights() {
   } else {
     rowHeights.value = {};
   }
+  tableRenderKey.value += 1;
 }
 
 initRowHeights();
@@ -97,6 +97,22 @@ function getColumnWidth(colIndex: number): number {
 
 function getRowHeight(rowIndex: number): number {
   return rowHeights.value[rowIndex] || DEFAULT_ROW_HEIGHT;
+}
+
+function getRowOffset(rowIndex: number): number {
+  let offset = 0;
+  for (let index = 0; index < rowIndex; index += 1) {
+    offset += getRowHeight(index);
+  }
+  return offset;
+}
+
+function getColumnOffset(colIndex: number): number {
+  let offset = 60;
+  for (let index = 0; index < colIndex; index += 1) {
+    offset += getColumnWidth(index);
+  }
+  return offset;
 }
 
 // 获取 clientX（兼容鼠标和触摸事件）
@@ -256,10 +272,10 @@ watch(() => props.selectedCell, async (newCell) => {
 
   // Only scroll when autoScroll is true (e.g., from search results)
   if (props.autoScroll && tableRef.value) {
-    const scrollTop = newCell.row * DEFAULT_ROW_HEIGHT - tableSize.value.height / 2 + DEFAULT_ROW_HEIGHT / 2;
-    const rowNumberWidth = 60;
-    const colWidth = 120;
-    const scrollLeft = rowNumberWidth + newCell.col * colWidth - tableSize.value.width / 2 + colWidth / 2;
+    const rowHeight = getRowHeight(newCell.row);
+    const colWidth = getColumnWidth(newCell.col);
+    const scrollTop = getRowOffset(newCell.row) - tableSize.value.height / 2 + rowHeight / 2;
+    const scrollLeft = getColumnOffset(newCell.col) - tableSize.value.width / 2 + colWidth / 2;
 
     if (typeof tableRef.value.scrollToTop === 'function') {
       tableRef.value.scrollToTop(Math.max(0, scrollTop));
@@ -470,9 +486,7 @@ const columns = computed(() => {
         columnIndex: colIndex,
         title: col,
         width: getColumnWidth(colIndex),
-        sortState: props.sortState,
         onDelete: handleDeleteColumn,
-        onSort: (ascending: boolean) => emit('sort-column', colIndex, ascending),
         onResizeStart: startResize
       })
     });
@@ -492,6 +506,7 @@ const columns = computed(() => {
       :row-key="'__rowIndex'"
       :row-height="DEFAULT_ROW_HEIGHT"
       :estimated-row-height="DEFAULT_ROW_HEIGHT"
+      :get-row-height="getRowHeight"
       :width="tableSize.width"
       :height="tableSize.height"
       :span-method="spanMethod"

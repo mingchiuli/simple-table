@@ -62,9 +62,9 @@ export async function readFile(path: string): Promise<FileData> {
 }
 
 /** 保存文件：生成字节 + 写入（一体化） */
-export async function saveFile(path: string, fileData: FileData) {
+export async function saveFile(path: string) {
   const api = await getPlatformAPI();
-  return api.fileOps.saveFile(path, fileData);
+  return api.fileOps.saveFile(path);
 }
 
 /** 选择保存位置 */

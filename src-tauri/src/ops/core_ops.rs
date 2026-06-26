@@ -1,8 +1,6 @@
-use std::cmp::Ordering;
-
 use crate::types::{
     CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData, OperationResult, RowChange,
-    RowHeightChange, SheetData, SheetIndex, SortState,
+    RowHeightChange, SheetData,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,12 +21,14 @@ pub enum Operation {
         row_index: usize,
         /// 被恢复的行数据（用于撤销 DeleteRow）
         row_data: Vec<CellValue>,
+        row_height: Option<u32>,
     },
     /// 删除行
     DeleteRow {
         sheet_index: usize,
         row_index: usize,
         row_data: Vec<CellValue>,
+        row_height: Option<u32>,
     },
     /// 添加列
     AddColumn {
@@ -37,12 +37,14 @@ pub enum Operation {
         col_index: Option<usize>,
         /// 添加的列数据（用于撤销时恢复）
         col_data: Vec<CellValue>,
+        column_width: Option<u32>,
     },
     /// 删除列
     DeleteColumn {
         sheet_index: usize,
         col_index: usize,
         col_data: Vec<CellValue>,
+        column_width: Option<u32>,
     },
     SetColumnWidth {
         sheet_index: usize,
@@ -69,16 +71,6 @@ pub enum Operation {
     DeleteSheet {
         sheet_index: usize,
         sheet_data: SheetData,
-    },
-    /// 列排序（保存完整的 sheet 数据用于 undo）
-    SortColumn {
-        sheet_index: usize,
-        col_index: usize,
-        ascending: bool,
-        /// 排序前的完整 sheet 数据（用于 undo 恢复）
-        old_sheet_data: SheetData,
-        /// 排序前的 sort_state（用于 undo 时恢复箭头状态）
-        previous_sort_state: Option<SortState>,
     },
 }
 
@@ -115,6 +107,7 @@ impl Operation {
                 sheet_index,
                 row_index,
                 row_data,
+                row_height,
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     // 使用传入的 row_data，如果为空则创建空行
@@ -125,6 +118,13 @@ impl Operation {
                         row_data.clone()
                     };
                     sheet.rows.insert(*row_index, new_row);
+                    shift_layout_map_on_insert(sheet.row_heights.as_mut(), *row_index);
+                    if let Some(height) = row_height {
+                        sheet
+                            .row_heights
+                            .get_or_insert_with(Default::default)
+                            .insert(*row_index, *height);
+                    }
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::AddRow {
@@ -144,6 +144,7 @@ impl Operation {
                     && *row_index < sheet.rows.len()
                 {
                     sheet.rows.remove(*row_index);
+                    shift_layout_map_on_delete(sheet.row_heights.as_mut(), *row_index);
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteRow {
@@ -155,6 +156,7 @@ impl Operation {
                 sheet_index,
                 col_index,
                 col_data,
+                column_width,
             } => {
                 // 计算最终插入位置：优先使用传入的 col_index（来自 undo of DeleteColumn），
                 // 否则按当前列数追加到末尾
@@ -179,6 +181,13 @@ impl Operation {
                         let pos = actual_col_index.min(row.len());
                         row.insert(pos, value);
                     }
+                    shift_layout_map_on_insert(sheet.column_widths.as_mut(), actual_col_index);
+                    if let Some(width) = column_width {
+                        sheet
+                            .column_widths
+                            .get_or_insert_with(Default::default)
+                            .insert(actual_col_index, *width);
+                    }
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::AddColumn {
@@ -200,6 +209,7 @@ impl Operation {
                             row.remove(*col_index);
                         }
                     }
+                    shift_layout_map_on_delete(sheet.column_widths.as_mut(), *col_index);
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteColumn {
@@ -299,7 +309,6 @@ impl Operation {
                             vec![CellValue::Null; 5],
                         ],
                         merges: vec![],
-                        index: SheetIndex::default(),
                         ..Default::default()
                     };
                     (new_sheet, final_name)
@@ -333,180 +342,50 @@ impl Operation {
                     sheet_data: removed_sheet,
                 }
             }
-            Operation::SortColumn {
-                sheet_index,
-                col_index,
-                ascending,
-                old_sheet_data,
-                previous_sort_state,
-            } => {
-                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    // 比较 old_sheet_data 与当前 sheet 是否相同
-                    // 如果相同：说明是正常排序操作（redo 时会走到这里）
-                    // 如果不同：说明是 undo 恢复操作，需要用 old_sheet_data 替换
-                    let is_restore = sheet.rows != old_sheet_data.rows;
-
-                    if is_restore {
-                        // undo 恢复：用 old_sheet_data 替换当前 sheet
-                        *sheet = old_sheet_data.clone();
-                        // 返回之前的 sort_state（用于恢复箭头显示）
-                        OperationResult::SortColumn {
-                            sheet_index: *sheet_index,
-                            sheet_data: sheet.clone(),
-                            sort_state: previous_sort_state.clone(),
-                        }
-                    } else {
-                        // 正常排序：执行排序
-                        sort_sheet(sheet, *col_index, *ascending);
-
-                        let sort_state = SortState {
-                            col_index: *col_index,
-                            ascending: *ascending,
-                        };
-
-                        // 返回排序后的完整数据
-                        OperationResult::SortColumn {
-                            sheet_index: *sheet_index,
-                            sheet_data: sheet.clone(),
-                            sort_state: Some(sort_state),
-                        }
-                    }
-                } else {
-                    OperationResult::SortColumn {
-                        sheet_index: *sheet_index,
-                        sheet_data: old_sheet_data.clone(),
-                        sort_state: previous_sort_state.clone(),
-                    }
-                }
-            }
         }
     }
 }
 
-/// 对 sheet 按指定列排序
-fn sort_sheet(sheet: &mut SheetData, col_index: usize, ascending: bool) {
-    if sheet.rows.is_empty() || col_index >= sheet.rows.first().map(|r| r.len()).unwrap_or(0) {
+fn shift_layout_map_on_insert(
+    map: Option<&mut std::collections::HashMap<usize, u32>>,
+    index: usize,
+) {
+    let Some(map) = map else {
+        return;
+    };
+    if map.is_empty() {
         return;
     }
-
-    // 获取列值用于排序
-    let col_values: Vec<(usize, &CellValue)> = sheet
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| (i, row.get(col_index).unwrap_or(&CellValue::Null)))
+    let shifted = map
+        .drain()
+        .map(|(key, value)| {
+            let key = if key >= index { key + 1 } else { key };
+            (key, value)
+        })
         .collect();
-
-    // 创建索引数组
-    let mut indices: Vec<usize> = (0..sheet.rows.len()).collect();
-
-    // 排序
-    indices.sort_by(|&a, &b| {
-        let val_a = col_values[a].1;
-        let val_b = col_values[b].1;
-        let cmp = compare_cell_values(val_a, val_b);
-        if ascending { cmp } else { cmp.reverse() }
-    });
-
-    // 根据排序后的索引重新排列行
-    let mut new_rows = Vec::with_capacity(sheet.rows.len());
-    for idx in indices {
-        new_rows.push(sheet.rows[idx].clone());
-    }
-    sheet.rows = new_rows;
+    *map = shifted;
 }
 
-/// 比较两个单元格值（用于排序）
-/// 数字和字符串都支持按数值排序
-fn compare_cell_values(a: &CellValue, b: &CellValue) -> Ordering {
-    let mut a_normalized = None;
-    let mut b_normalized = None;
-    let a = sortable_cell_value(a, &mut a_normalized);
-    let b = sortable_cell_value(b, &mut b_normalized);
-    match (a, b) {
-        // Null 排在最后
-        (CellValue::Null, CellValue::Null) => Ordering::Equal,
-        (CellValue::Null, _) => Ordering::Greater,
-        (_, CellValue::Null) => Ordering::Less,
-
-        // Number vs Number: 从 Value 中提取数字比较
-        (CellValue::Number(na), CellValue::Number(nb)) => {
-            // 优先尝试比较整数
-            if let (Some(ia), Some(ib)) = (na.as_i64(), nb.as_i64()) {
-                ia.cmp(&ib)
-            } else if let (Some(fa), Some(fb)) = (na.as_f64(), nb.as_f64()) {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-            } else {
-                // 无法比较，按字符串比较
-                na.to_string()
-                    .to_lowercase()
-                    .cmp(&nb.to_string().to_lowercase())
-            }
-        }
-        // Number vs String: 尝试将 String 转为数字比较
-        (CellValue::Number(na), CellValue::String(sb)) => {
-            if let Ok(nb) = sb.parse::<f64>() {
-                if let Some(fa) = na.as_f64() {
-                    fa.partial_cmp(&nb).unwrap_or(Ordering::Equal)
-                } else {
-                    Ordering::Equal
-                }
-            } else {
-                // 无法转为数字，按字符串比较
-                na.to_string().to_lowercase().cmp(&sb.to_lowercase())
-            }
-        }
-        (CellValue::String(sa), CellValue::Number(nb)) => {
-            if let Ok(na) = sa.parse::<f64>() {
-                if let Some(fb) = nb.as_f64() {
-                    na.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-                } else {
-                    Ordering::Equal
-                }
-            } else {
-                sa.to_lowercase().cmp(&nb.to_string().to_lowercase())
-            }
-        }
-        // String vs String: 尝试按数值排序，失败则按字典序
-        (CellValue::String(sa), CellValue::String(sb)) => {
-            // 优先尝试解析为整数
-            if let (Ok(ia), Ok(ib)) = (sa.parse::<i128>(), sb.parse::<i128>()) {
-                ia.cmp(&ib)
-            } else if let (Ok(fa), Ok(fb)) = (sa.parse::<f64>(), sb.parse::<f64>()) {
-                fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
-            } else {
-                // 忽略大小写排序
-                sa.to_lowercase().cmp(&sb.to_lowercase())
-            }
-        }
-
-        // 布尔值：true < false
-        (CellValue::Boolean(ba), CellValue::Boolean(bb)) => ba.cmp(bb),
-        (CellValue::Boolean(_), _) => Ordering::Greater,
-        (_, CellValue::Boolean(_)) => Ordering::Less,
-        (CellValue::Formula { .. }, _) | (_, CellValue::Formula { .. }) => a
-            .to_display_string()
-            .to_lowercase()
-            .cmp(&b.to_display_string().to_lowercase()),
+fn shift_layout_map_on_delete(
+    map: Option<&mut std::collections::HashMap<usize, u32>>,
+    index: usize,
+) {
+    let Some(map) = map else {
+        return;
+    };
+    if map.is_empty() {
+        return;
     }
-}
-
-fn sortable_cell_value<'a>(
-    cell: &'a CellValue,
-    normalized: &'a mut Option<CellValue>,
-) -> &'a CellValue {
-    match cell {
-        CellValue::Formula {
-            cached_value,
-            error,
-            ..
-        } if error.is_none() => cached_value,
-        CellValue::Formula { error, .. } => {
-            *normalized = Some(CellValue::String(
-                error.clone().unwrap_or_else(|| cell.to_display_string()),
-            ));
-            normalized.as_ref().unwrap()
-        }
-        _ => cell,
-    }
+    let shifted = map
+        .drain()
+        .filter_map(|(key, value)| {
+            if key == index {
+                None
+            } else {
+                let key = if key > index { key - 1 } else { key };
+                Some((key, value))
+            }
+        })
+        .collect();
+    *map = shifted;
 }

@@ -62,11 +62,6 @@ export interface RowHeightChange {
   height?: number | null;
 }
 
-export interface SortState {
-  colIndex: number;
-  ascending: boolean;
-}
-
 // Rust 使用 #[serde(tag = "type", content = "data")]，所以格式是 { type: 'SetCell', data: {...} }
 export type OperationResult =
   | { type: 'SetCell'; data: { sheetIndex: number; cell: CellChange } }
@@ -77,8 +72,7 @@ export type OperationResult =
   | { type: 'SetColumnWidth'; data: { sheetIndex: number; column: ColumnWidthChange } }
   | { type: 'SetRowHeight'; data: { sheetIndex: number; row: RowHeightChange } }
   | { type: 'AddSheet'; data: { sheetIndex: number; name: string; sheetData: SheetData } }
-  | { type: 'DeleteSheet'; data: { sheetIndex: number; sheetData: SheetData } }
-  | { type: 'SortColumn'; data: { sheetIndex: number; sheetData: SheetData; sortState: SortState | null } };
+  | { type: 'DeleteSheet'; data: { sheetIndex: number; sheetData: SheetData } };
 
 export interface SearchResult {
   sheetIndex: number;

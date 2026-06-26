@@ -26,12 +26,8 @@ pub async fn read_file_android(app: AppHandle, path: String) -> Result<FileData,
 /// Android: generate file bytes and write them to the sandbox path.
 #[cfg(target_os = "android")]
 #[tauri::command(rename_all = "camelCase")]
-pub async fn save_file_android(
-    app: AppHandle,
-    path: String,
-    file_data: FileData,
-) -> Result<(), AppError> {
-    mobile::save_file(&app, &path, &file_data)
+pub async fn save_file_android(app: AppHandle, path: String) -> Result<(), AppError> {
+    mobile::save_file(&app, &path)
 }
 
 /// Android: export a sandboxed file to a user-selected destination.

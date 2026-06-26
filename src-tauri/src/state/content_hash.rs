@@ -26,6 +26,8 @@ fn hash_sheet_content(sheet: &SheetData, hasher: &mut Sha256) {
     for merge in &sheet.merges {
         hash_merge_range(merge, hasher);
     }
+    hash_layout_map(sheet.column_widths.as_ref(), hasher);
+    hash_layout_map(sheet.row_heights.as_ref(), hasher);
 }
 
 fn hash_cell_value(cell: &CellValue, hasher: &mut Sha256) {
@@ -57,6 +59,20 @@ fn hash_merge_range(merge: &MergeRange, hasher: &mut Sha256) {
     write_u16(hasher, merge.start_col);
     write_u32(hasher, merge.end_row);
     write_u16(hasher, merge.end_col);
+}
+
+fn hash_layout_map(map: Option<&std::collections::HashMap<usize, u32>>, hasher: &mut Sha256) {
+    let Some(map) = map else {
+        write_usize(hasher, 0);
+        return;
+    };
+    let mut entries: Vec<_> = map.iter().collect();
+    entries.sort_by_key(|(index, _)| *index);
+    write_usize(hasher, entries.len());
+    for (index, value) in entries {
+        write_usize(hasher, *index);
+        write_u32(hasher, *value);
+    }
 }
 
 fn write_tag(hasher: &mut Sha256, tag: u8) {
@@ -101,15 +117,26 @@ mod tests {
     }
 
     #[test]
-    fn hash_ignores_runtime_and_layout_fields() {
+    fn hash_ignores_file_identity() {
         let original = file_data();
         let mut changed_layout = original.clone();
         changed_layout.path = "/tmp/renamed.xlsx".to_string();
         changed_layout.file_name = "renamed.xlsx".to_string();
+
+        assert_eq!(
+            hash_file_content(&original),
+            hash_file_content(&changed_layout)
+        );
+    }
+
+    #[test]
+    fn hash_changes_when_persisted_layout_changes() {
+        let original = file_data();
+        let mut changed_layout = original.clone();
         changed_layout.sheets[0].column_widths = Some(HashMap::from([(0, 240)]));
         changed_layout.sheets[0].row_heights = Some(HashMap::from([(0, 96)]));
 
-        assert_eq!(
+        assert_ne!(
             hash_file_content(&original),
             hash_file_content(&changed_layout)
         );

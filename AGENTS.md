@@ -66,8 +66,8 @@ Root module files such as `ops.rs`, `state.rs`, and `types.rs` declare submodule
 
 Unsaved-change display is driven by Rust-side content hashing plus a frontend pending-edit overlay.
 
-- Rust hashes only saved file content: sheet names, rows, and merge ranges.
-- Runtime/layout fields such as path, file name, search index, and `columnWidths` do not count as dirty content.
+- Rust hashes saved file content: sheet names, rows, merge ranges, and persisted row/column dimensions.
+- Runtime-only fields such as path, file name, and search indexes do not count as dirty content.
 - `EditorStateInfo.isDirty` reports whether current content hash differs from the last saved hash.
 - Frontend `useDocumentStatus()` combines backend dirty state with pending debounce edits:
 
@@ -75,7 +75,7 @@ Unsaved-change display is driven by Rust-side content hashing plus a frontend pe
 hasUnsavedChanges = isContentDirty || hasPendingContentChange
 ```
 
-Column resizing is a UI/layout feature and must not trigger `Unsaved changes` unless persistence semantics are deliberately changed.
+Column and row resizing are persisted document edits and should participate in `Unsaved changes`, undo, and redo.
 
 ## File And Save Flow
 

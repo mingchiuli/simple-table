@@ -1,10 +1,7 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::{Arc, Mutex};
-
 use crate::state::state::EditorStateInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 // JavaScript 安全整数范围: -(2^53 - 1) 到 (2^53 - 1)
 const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
@@ -200,47 +197,6 @@ pub enum SearchScope {
     AllSheets,
 }
 
-/// Sheet 索引（不序列化）
-#[derive(Default)]
-pub struct SheetIndex {
-    /// 全文搜索索引
-    pub search_index: Option<tantivy::Index>,
-    /// Schema
-    pub search_schema: Option<tantivy::schema::Schema>,
-    /// 文本字段
-    pub text_field: Option<tantivy::schema::Field>,
-    /// 单元格主键字段（"row:col"，用于增量 delete_term）
-    pub cell_id_field: Option<tantivy::schema::Field>,
-    /// 持久 IndexWriter，跨编辑复用以支持增量更新
-    pub writer: Option<Arc<Mutex<tantivy::IndexWriter>>>,
-}
-
-impl fmt::Debug for SheetIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SheetIndex")
-            .field("search_index", &self.search_index.is_some())
-            .field("search_schema", &self.search_schema.is_some())
-            .field("text_field", &self.text_field)
-            .field("cell_id_field", &self.cell_id_field)
-            .field("writer", &self.writer.is_some())
-            .finish()
-    }
-}
-
-impl Clone for SheetIndex {
-    /// 克隆时跳过 writer（IndexWriter 不可 Clone；undo 历史中的 SheetData 不需要写）
-    /// 拿到克隆体后若需要写入索引，调用方应触发一次全量重建以生成新 writer
-    fn clone(&self) -> Self {
-        Self {
-            search_index: self.search_index.clone(),
-            search_schema: self.search_schema.clone(),
-            text_field: self.text_field,
-            cell_id_field: self.cell_id_field,
-            writer: None,
-        }
-    }
-}
-
 /// 合并范围
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -258,13 +214,10 @@ pub struct SheetData {
     pub rows: Vec<Vec<CellValue>>,
     /// 合并范围
     pub merges: Vec<MergeRange>,
-    /// 运行时索引（不序列化）
-    #[serde(skip)]
-    pub index: SheetIndex,
     /// 列宽配置（用于持久化）
     #[serde(default)]
     pub column_widths: Option<HashMap<usize, u32>>,
-    /// 行高配置（用于前端布局，不计入内容 dirty）
+    /// 行高配置（持久化到 Excel，属于文档状态）
     #[serde(default)]
     pub row_heights: Option<HashMap<usize, u32>>,
 }
@@ -332,14 +285,6 @@ pub struct RowHeightChange {
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
     pub height: Option<u32>,
-}
-
-/// 排序状态
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct SortState {
-    pub col_index: usize,
-    pub ascending: bool,
 }
 
 // ==================== GitHub Update Types ====================
@@ -446,16 +391,6 @@ pub enum OperationResult {
         /// 被删除的 sheet 数据（用于撤销时恢复）
         #[serde(rename = "sheetData")]
         sheet_data: SheetData,
-    },
-    /// 列排序
-    #[serde(rename = "SortColumn")]
-    SortColumn {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        #[serde(rename = "sheetData")]
-        sheet_data: SheetData,
-        #[serde(rename = "sortState")]
-        sort_state: Option<SortState>,
     },
 }
 

@@ -4,7 +4,6 @@ import type {
   RecentFile,
   CellValue,
   SearchResult,
-  SortState,
   EditorMutationResponse,
   EditorStateInfo,
 } from "@/types";
@@ -85,22 +84,6 @@ export async function deleteSheet(sheetIndex: number): Promise<EditorMutationRes
   return invoke<EditorMutationResponse>("delete_sheet", { sheetIndex });
 }
 
-// ==================== Sort Operations ====================
-
-export async function sortColumn(
-  sheetIndex: number,
-  colIndex: number,
-  ascending: boolean,
-  previousSortState: SortState | null
-): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("sort_column", {
-    sheetIndex,
-    colIndex,
-    ascending,
-    previousSortState,
-  });
-}
-
 // ==================== Search Operations ====================
 
 export async function search(
@@ -153,15 +136,11 @@ export async function updateRecentFilePath(id: string, newPath: string): Promise
   return invoke<void>("update_recent_file_path", { id, newPath });
 }
 
-export async function generateFileBytes(fileData: FileData): Promise<number[]> {
-  return invoke<number[]>("generate_file_bytes", { fileData });
-}
-
-export async function generateThumbnailBytes(fileData: FileData): Promise<number[]> {
+export async function generateCurrentThumbnailBytes(): Promise<number[]> {
   try {
-    return await invoke<number[]>("generate_thumbnail_bytes", { fileData });
+    return await invoke<number[]>("generate_current_thumbnail_bytes");
   } catch (error) {
-    console.warn("Failed to generate thumbnail bytes:", error);
+    console.warn("Failed to generate current thumbnail bytes:", error);
     return [];
   }
 }

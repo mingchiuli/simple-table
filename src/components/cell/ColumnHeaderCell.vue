@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { Sort, Close } from '@element-plus/icons-vue';
+import { Close } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
-import type { SortState } from '@/types';
 
 const { isTouchDevice } = usePlatform();
 
@@ -9,12 +8,10 @@ const props = defineProps<{
   columnIndex: number;
   title: string;
   width?: number;
-  sortState?: SortState | null;
 }>();
 
 const emit = defineEmits<{
   (e: 'delete', index: number): void;
-  (e: 'sort', ascending: boolean): void;
   (e: 'resize-start', event: MouseEvent | TouchEvent, colIndex: number): void;
 }>();
 
@@ -22,32 +19,16 @@ function handleDelete(index: number) {
   emit('delete', index);
 }
 
-function handleSort() {
-  const isCurrentColumn = props.sortState?.colIndex === props.columnIndex;
-  const newAscending = isCurrentColumn && props.sortState ? !props.sortState.ascending : true;
-  emit('sort', newAscending);
-}
-
 // 处理 resize 事件
 function handleResizeStart(e: MouseEvent | TouchEvent) {
   emit('resize-start', e, props.columnIndex);
 }
-
-// 判断当前列是否正在排序
-const isCurrentSorting = computed(() => props.sortState?.colIndex === props.columnIndex);
 </script>
 
 <template>
   <div class="column-header">
     <span class="title">{{ title }}</span>
     <div class="actions">
-      <button
-        class="sort-btn"
-        :class="{ active: isCurrentSorting }"
-        @click.stop="handleSort"
-      >
-        <el-icon :size="12"><Sort /></el-icon>
-      </button>
       <button class="delete-btn" @click.stop="handleDelete(columnIndex)">
         <el-icon :size="12"><Close /></el-icon>
       </button>
@@ -84,7 +65,6 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
   flex: 0 0 auto;
 }
 
-.sort-btn,
 .delete-btn {
   opacity: 0;
   border: none;
@@ -100,14 +80,9 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
   transition: opacity 0.2s, background-color 0.2s;
 }
 
-.sort-btn { color: var(--el-color-primary); }
-.sort-btn:hover { background-color: var(--el-color-primary-light-9); }
-.sort-btn.active { opacity: 1; color: var(--el-color-primary); font-weight: bold; }
-
 .delete-btn { color: var(--el-color-danger); }
 .delete-btn:hover { background-color: var(--el-color-danger-light-9); }
 
-.column-header:hover .sort-btn,
 .column-header:hover .delete-btn {
   opacity: 1;
 }
@@ -127,7 +102,6 @@ const isCurrentSorting = computed(() => props.sortState?.colIndex === props.colu
     padding: 0 2px 0 4px;
   }
 
-  .sort-btn,
   .delete-btn {
     opacity: 1;
     width: 28px;

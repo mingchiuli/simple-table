@@ -9,6 +9,7 @@ use umya_spreadsheet::{Cell, Workbook, Worksheet, reader};
 
 const DEFAULT_COLUMN_WIDTH_PX: u32 = 120;
 const DEFAULT_ROW_HEIGHT_PX: u32 = 72;
+const EXCEL_DEFAULT_COLUMN_WIDTH: f64 = 8.38;
 
 pub struct ReadFileResult {
     pub file_data: FileData,
@@ -54,7 +55,7 @@ fn read_xlsx_from_bytes(
     })
 }
 
-fn read_worksheet(worksheet: &Worksheet) -> SheetData {
+pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
     let (highest_col, highest_row) = worksheet.highest_column_and_row();
     let mut rows = vec![vec![CellValue::Null; highest_col as usize]; highest_row as usize];
 
@@ -151,7 +152,7 @@ fn read_column_widths(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
         .iter()
         .filter_map(|column| {
             let px = excel_column_width_to_px(column.width());
-            if px == DEFAULT_COLUMN_WIDTH_PX {
+            if is_default_column_width(column.width(), px) {
                 None
             } else {
                 Some((column.col_num().saturating_sub(1) as usize, px))
@@ -182,6 +183,10 @@ fn excel_column_width_to_px(width: f64) -> u32 {
         return DEFAULT_COLUMN_WIDTH_PX;
     }
     ((width * 7.0) + 5.0).round().max(1.0) as u32
+}
+
+fn is_default_column_width(width: f64, px: u32) -> bool {
+    px == DEFAULT_COLUMN_WIDTH_PX || (width - EXCEL_DEFAULT_COLUMN_WIDTH).abs() < 0.001
 }
 
 fn points_to_px(points: f64) -> u32 {
@@ -276,6 +281,14 @@ mod tests {
     #[test]
     fn column_width_conversion_is_stable_for_ui_default() {
         assert_eq!(excel_column_width_to_px(16.428571428571427), 120);
+    }
+
+    #[test]
+    fn default_umya_column_width_is_not_persisted_as_custom_layout() {
+        assert!(is_default_column_width(
+            8.38,
+            excel_column_width_to_px(8.38)
+        ));
     }
 
     #[test]

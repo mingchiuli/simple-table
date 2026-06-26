@@ -98,7 +98,7 @@ pub fn do_undo(
         let mut state = state.write().expect("Editor state lock poisoned");
         match state.as_mut() {
             Some(editor_state) => {
-                if let Some(result) = editor_state.undo() {
+                if let Some(result) = editor_state.undo()? {
                     snapshot_mutation_response(editor_state, Some(result.operation))
                 } else {
                     return Err(AppError::NothingToUndo);
@@ -122,7 +122,7 @@ pub fn do_redo(
         let mut state = state.write().expect("Editor state lock poisoned");
         match state.as_mut() {
             Some(editor_state) => {
-                if let Some(result) = editor_state.redo() {
+                if let Some(result) = editor_state.redo()? {
                     snapshot_mutation_response(editor_state, Some(result.operation))
                 } else {
                     return Err(AppError::NothingToRedo);

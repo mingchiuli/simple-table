@@ -21,7 +21,6 @@ pub struct PickedFileInfo {
 pub struct PickFileResult {
     pub file_data: FileData,
     pub info: PickedFileInfo,
-    pub bytes: Vec<u8>,
 }
 
 pub(super) fn extension_from_name(file_name: &str) -> String {
@@ -93,8 +92,8 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<FileData, AppError> {
     document::open_from_bytes(path.to_string(), bytes, Some(file_name))
 }
 
-pub fn save_file(app: &AppHandle, path: &str, file_data: &FileData) -> Result<(), AppError> {
-    let (_, bytes) = document::generate_current_file_bytes_for_target(path, file_data)?;
+pub fn save_file(app: &AppHandle, path: &str) -> Result<(), AppError> {
+    let (_, bytes) = document::generate_current_file_bytes_for_target(path)?;
     write_path_with_official_fs(app, PathBuf::from(path), &bytes)
 }
 

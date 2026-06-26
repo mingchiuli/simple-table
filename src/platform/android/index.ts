@@ -31,8 +31,8 @@ export const androidFileOps = {
   },
 
   /** Android: 生成文件字节并写入 App 沙盒路径 */
-  saveFile: (path: string, fileData: FileData) =>
-    invoke<void>("save_file_android", { path, fileData }),
+  saveFile: (path: string) =>
+    invoke<void>("save_file_android", { path }),
 
   exportFile: (sourcePath: string, defaultName: string) =>
     invoke<string | null>("export_file_android", { sourcePath, defaultName }),

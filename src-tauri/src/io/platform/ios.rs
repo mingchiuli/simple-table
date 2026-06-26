@@ -52,8 +52,7 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
 
     let path = sandbox_path.to_string_lossy().to_string();
-    let file_data =
-        document::open_from_bytes(path.clone(), bytes.clone(), Some(file_name.clone()))?;
+    let file_data = document::open_from_bytes(path.clone(), bytes, Some(file_name.clone()))?;
 
     Ok(Some(PickFileResult {
         file_data,
@@ -62,7 +61,6 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
             original_path,
             file_name,
         },
-        bytes,
     }))
 }
 

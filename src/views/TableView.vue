@@ -12,7 +12,7 @@ import { SearchPanel } from '@/components/search';
 import * as api from '@/api';
 import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
-import type { CellValue, EditorMutationResponse, FileData, SortState, SearchResult } from '@/types';
+import type { CellValue, EditorMutationResponse, FileData, SearchResult } from '@/types';
 
 const route = useRoute();
 const fileDataStore = useFileDataStore();
@@ -22,7 +22,6 @@ const { isMobileOrTablet } = usePlatform();
 const isLoading = ref(false);
 const isFileLoading = ref(false);
 const currentSheetIndex = ref(0);
-const currentSortColumn = ref<SortState | null>(null);
 const selectedCell = ref<{ row: number; col: number } | null>(null);
 const cellEditorValue = ref<string>('');
 const autoScroll = ref(false);
@@ -79,12 +78,6 @@ function applyMutationResponse(response: EditorMutationResponse) {
     currentSheetIndex.value = Math.max(0, nextFileData.sheets.length - 1);
   }
 
-  if (response.operation?.type === 'SortColumn') {
-    currentSortColumn.value = response.operation.data.sortState;
-  } else if (response.operation) {
-    currentSortColumn.value = null;
-  }
-
   if (selectedCell.value) {
     const sheet = nextFileData.sheets[currentSheetIndex.value];
     if (!sheet?.rows[selectedCell.value.row]?.length) {
@@ -105,15 +98,10 @@ function applyMutationFileData(response: EditorMutationResponse): FileData | nul
   if (response.kind === 'snapshot') {
     if (!response.fileData) return fileDataStore.data;
     const currentFileData = fileDataStore.data;
-    const keepCurrentLayout =
-      response.operation?.type !== 'SetColumnWidth' && response.operation?.type !== 'SetRowHeight';
     const nextFileData = {
       ...response.fileData,
       path: currentFileData?.path ?? response.fileData.path,
       fileName: currentFileData?.fileName ?? response.fileData.fileName,
-      sheets: keepCurrentLayout
-        ? mergeCurrentLayoutIntoSheets(currentFileData, response.fileData)
-        : response.fileData.sheets,
     };
     fileDataStore.setData(nextFileData);
     return nextFileData;
@@ -160,32 +148,6 @@ function ensureCellExists(rows: CellValue[][], row: number, col: number) {
   }
 }
 
-function mergeCurrentLayoutIntoSheets(
-  currentFileData: FileData | null,
-  nextFileData: FileData
-): FileData['sheets'] {
-  if (!currentFileData) return nextFileData.sheets;
-
-  const currentSheetsByName = new Map(currentFileData.sheets.map((sheet) => [sheet.name, sheet]));
-
-  return nextFileData.sheets.map((sheet, index) => {
-    const currentSheet =
-      currentFileData.sheets[index]?.name === sheet.name
-        ? currentFileData.sheets[index]
-        : currentSheetsByName.get(sheet.name);
-
-    if (!currentSheet?.columnWidths && !currentSheet?.rowHeights) {
-      return sheet;
-    }
-
-    return {
-      ...sheet,
-      columnWidths: currentSheet.columnWidths ?? sheet.columnWidths,
-      rowHeights: currentSheet.rowHeights ?? sheet.rowHeights,
-    };
-  });
-}
-
 const {
   draftCellValues,
   flushPendingCellChanges,
@@ -200,7 +162,6 @@ const {
   currentSheetIndex,
   selectedCell,
   cellEditorValue,
-  currentSortColumn,
   applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
@@ -212,7 +173,6 @@ watch(() => fileDataStore.documentVersion, () => {
   autoScroll.value = false;
   searchResults.value = [];
   searchQuery.value = '';
-  currentSortColumn.value = null;
   sheetSelectedCells.value = new Map();
   sheetColumnWidths.value = {};
   sheetRowHeights.value = {};
@@ -434,38 +394,18 @@ function handleSelectCell(row: number, col: number) {
   selectedCell.value = { row, col };
 }
 
-// ========== Sort ==========
-async function handleSortColumn(colIndex: number, ascending: boolean) {
-  if (!fileData.value) return;
-
-  try {
-    isLoading.value = true;
-    if (!(await flushPendingCellChanges())) return;
-
-    const prevSortState = currentSortColumn.value;
-    currentSortColumn.value = null;
-
-    applyMutationResponse(await api.sortColumn(
-      currentSheetIndex.value,
-      colIndex,
-      ascending,
-      prevSortState
-    ));
-  } catch (error) {
-    ElMessage.error(`Failed to sort column: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
 // ========== Column resize ==========
 async function handleColumnResize(colIndex: number, width: number) {
   if (!fileData.value) return;
+  const sheetIndex = currentSheetIndex.value;
+  const oldWidth = sheetColumnWidths.value[sheetIndex]?.[colIndex];
   try {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
-    applyMutationResponse(await api.setColumnWidth(currentSheetIndex.value, colIndex, width));
+    setLocalColumnWidth(sheetIndex, colIndex, width);
+    applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
   } catch (error) {
+    setLocalColumnWidth(sheetIndex, colIndex, oldWidth);
     ElMessage.error(`Failed to resize column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -474,15 +414,55 @@ async function handleColumnResize(colIndex: number, width: number) {
 
 async function handleRowResize(rowIndex: number, height: number) {
   if (!fileData.value) return;
+  const sheetIndex = currentSheetIndex.value;
+  const oldHeight = sheetRowHeights.value[sheetIndex]?.[rowIndex];
   try {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
-    applyMutationResponse(await api.setRowHeight(currentSheetIndex.value, rowIndex, height));
+    setLocalRowHeight(sheetIndex, rowIndex, height);
+    applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
   } catch (error) {
+    setLocalRowHeight(sheetIndex, rowIndex, oldHeight);
     ElMessage.error(`Failed to resize row: ${error}`);
   } finally {
     isLoading.value = false;
   }
+}
+
+function setLocalColumnWidth(sheetIndex: number, colIndex: number, width: number | undefined) {
+  const sheetWidths = { ...(sheetColumnWidths.value[sheetIndex] ?? {}) };
+  if (width === undefined) {
+    delete sheetWidths[colIndex];
+  } else {
+    sheetWidths[colIndex] = width;
+  }
+  const next = { ...sheetColumnWidths.value };
+  if (Object.keys(sheetWidths).length) {
+    next[sheetIndex] = sheetWidths;
+  } else {
+    delete next[sheetIndex];
+  }
+  sheetColumnWidths.value = {
+    ...next,
+  };
+}
+
+function setLocalRowHeight(sheetIndex: number, rowIndex: number, height: number | undefined) {
+  const sheetHeights = { ...(sheetRowHeights.value[sheetIndex] ?? {}) };
+  if (height === undefined) {
+    delete sheetHeights[rowIndex];
+  } else {
+    sheetHeights[rowIndex] = height;
+  }
+  const next = { ...sheetRowHeights.value };
+  if (Object.keys(sheetHeights).length) {
+    next[sheetIndex] = sheetHeights;
+  } else {
+    delete next[sheetIndex];
+  }
+  sheetRowHeights.value = {
+    ...next,
+  };
 }
 
 function hydrateLayoutMapsFromFileData() {
@@ -570,7 +550,6 @@ onMounted(async () => {
               :merges="currentSheet?.merges"
               :selected-cell="selectedCell"
               :auto-scroll="autoScroll"
-              :sort-state="currentSortColumn"
               :column-widths="sheetColumnWidths[currentSheetIndex]"
               :row-heights="sheetRowHeights[currentSheetIndex]"
               @cell-change="handleCellChange"
@@ -579,7 +558,6 @@ onMounted(async () => {
               @delete-row="handleDeleteRow"
               @delete-column="handleDeleteColumn"
               @select-cell="handleSelectCell"
-              @sort-column="handleSortColumn"
               @column-resize="handleColumnResize"
               @row-resize="handleRowResize"
             />

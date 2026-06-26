@@ -44,7 +44,7 @@ export function useFileActions({
     if (!fileData.value) return;
 
     const fileSize = await api.getFileSize(path);
-    const bytes = await api.generateThumbnailBytes(fileData.value);
+    const bytes = await api.generateCurrentThumbnailBytes();
     await api.addRecentFileWithThumbnail(path, fileName, fileSize, bytes, storageType, originalPath);
   }
 
@@ -85,7 +85,7 @@ export function useFileActions({
       resetDocumentStatus();
 
       const storageType = await getStorageType();
-      const bytes = await api.generateThumbnailBytes(result.fileData);
+      const bytes = await api.generateCurrentThumbnailBytes();
       const fileSize = await api.getFileSize(result.path);
       await api.addRecentFileWithThumbnail(
         result.path,
@@ -122,7 +122,7 @@ export function useFileActions({
 
       if (existingPath && existingWritableExtension) {
         isLoading.value = true;
-        await saveFile(existingPath, fileData.value);
+        await saveFile(existingPath);
         await markSaved();
         const fileName = await getFileName(existingPath);
         fileData.value.fileName = fileName;
@@ -143,7 +143,7 @@ export function useFileActions({
       }
 
       isLoading.value = true;
-      await saveFile(savePath, fileData.value);
+      await saveFile(savePath);
       await markSaved();
 
       const fileName = await getFileName(savePath);
@@ -180,7 +180,7 @@ export function useFileActions({
       fileData.value.path = path;
     }
 
-    await saveFile(path, fileData.value);
+    await saveFile(path);
     await markSaved();
     const fileName = await getFileName(path);
     await updateRecentFileEntry(path, fileName, storageType);

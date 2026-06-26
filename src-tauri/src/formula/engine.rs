@@ -50,7 +50,7 @@ impl FormulaRuntime {
         }
     }
 
-    pub fn rebuild(&mut self, file_data: &mut FileData) -> Result<(), AppError> {
+    pub fn rebuild(&mut self, file_data: &mut FileData) -> Result<Vec<SheetCellChange>, AppError> {
         let mut workbook = Workbook::new_with_mode(WorkbookMode::Ephemeral);
         for sheet in &file_data.sheets {
             workbook
@@ -59,6 +59,7 @@ impl FormulaRuntime {
         }
 
         let mut registration_result = register_workbook_cells(&mut workbook, file_data)?;
+        let mut changes = registration_result.invalid_formulas.clone();
 
         let sheet_names: Vec<String> = file_data
             .sheets
@@ -73,8 +74,8 @@ impl FormulaRuntime {
         self.workbook = workbook;
         self.registered_formulas = std::mem::take(&mut registration_result.registered_formulas);
         self.dependency_index = build_dependency_index(file_data, &self.registered_formulas);
-        self.recalculate_all_formula_cells(file_data)?;
-        Ok(())
+        changes.extend(self.recalculate_all_formula_cells(file_data)?);
+        Ok(changes)
     }
 
     pub fn sync_cell_and_recalculate(
@@ -143,10 +144,12 @@ impl FormulaRuntime {
         impacted
     }
 
-    fn recalculate_all_formula_cells(&mut self, file_data: &mut FileData) -> Result<(), AppError> {
+    fn recalculate_all_formula_cells(
+        &mut self,
+        file_data: &mut FileData,
+    ) -> Result<Vec<SheetCellChange>, AppError> {
         let targets: Vec<FormulaCellRef> = self.dependency_index.formulas.iter().cloned().collect();
         self.recalculate_formula_cells(file_data, targets.iter())
-            .map(|_| ())
     }
 
     fn recalculate_formula_cells<'a>(

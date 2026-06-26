@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::ops::index_ops::search_cells;
 use crate::state::editor_state::EditorState;
 use crate::types::{SearchResult, SearchScope};
 
@@ -49,7 +48,7 @@ pub fn do_search(
         SearchScope::CurrentSheet => {
             let sheet_idx = current_sheet_index.unwrap_or(0);
             if let Some(sheet) = editor_state.file_data().sheets.get(sheet_idx) {
-                let positions = search_cells(sheet, &query, 1000);
+                let positions = editor_state.search_sheet(sheet_idx, &query, 1000);
                 for pos in positions {
                     let value = sheet
                         .rows
@@ -71,7 +70,7 @@ pub fn do_search(
         }
         SearchScope::AllSheets => {
             for (sheet_idx, sheet) in editor_state.file_data().sheets.iter().enumerate() {
-                let positions = search_cells(sheet, &query, 1000);
+                let positions = editor_state.search_sheet(sheet_idx, &query, 1000);
                 for pos in positions {
                     let value = sheet
                         .rows

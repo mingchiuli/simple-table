@@ -1,5 +1,5 @@
 use crate::ops::core_ops::Operation;
-use crate::types::{FileData, SheetData};
+use crate::types::SheetData;
 
 impl Operation {
     /// 创建撤销操作（返回反向操作）
@@ -22,37 +22,45 @@ impl Operation {
                 sheet_index,
                 row_index,
                 row_data,
+                row_height,
             } => Operation::DeleteRow {
                 sheet_index: *sheet_index,
                 row_index: *row_index,
                 row_data: row_data.clone(),
+                row_height: *row_height,
             },
             Operation::DeleteRow {
                 sheet_index,
                 row_index,
                 row_data,
+                row_height,
             } => Operation::AddRow {
                 sheet_index: *sheet_index,
                 row_index: *row_index,
                 row_data: row_data.clone(),
+                row_height: *row_height,
             },
             Operation::AddColumn {
                 sheet_index,
                 col_index,
                 col_data,
+                column_width,
             } => Operation::DeleteColumn {
                 sheet_index: *sheet_index,
                 col_index: col_index.unwrap_or(0),
                 col_data: col_data.clone(),
+                column_width: *column_width,
             },
             Operation::DeleteColumn {
                 sheet_index,
                 col_index,
                 col_data,
+                column_width,
             } => Operation::AddColumn {
                 sheet_index: *sheet_index,
                 col_index: Some(*col_index),
                 col_data: col_data.clone(),
+                column_width: *column_width,
             },
             Operation::SetColumnWidth {
                 sheet_index,
@@ -88,46 +96,11 @@ impl Operation {
                 sheet_data: Some(sheet_data.clone()),
                 sheet_index: Some(*sheet_index),
             },
-            Operation::SortColumn {
-                sheet_index,
-                col_index,
-                ascending,
-                old_sheet_data,
-                previous_sort_state,
-            } => Operation::SortColumn {
-                sheet_index: *sheet_index,
-                col_index: *col_index,
-                ascending: *ascending,
-                old_sheet_data: old_sheet_data.clone(),
-                previous_sort_state: previous_sort_state.clone(),
-            },
         }
     }
 
     /// 创建重做操作
-    /// SortColumn 需要更新 old_sheet_data 为当前状态，用于 redo 时恢复排序后的状态
-    pub fn create_redo_op(&self, file_data: &mut FileData) -> Operation {
-        match self {
-            Operation::SortColumn {
-                sheet_index,
-                col_index,
-                ascending,
-                old_sheet_data: _,
-                previous_sort_state,
-            } => {
-                if let Some(sheet) = file_data.sheets.get(*sheet_index) {
-                    Operation::SortColumn {
-                        sheet_index: *sheet_index,
-                        col_index: *col_index,
-                        ascending: *ascending,
-                        old_sheet_data: sheet.clone(),
-                        previous_sort_state: previous_sort_state.clone(),
-                    }
-                } else {
-                    self.clone()
-                }
-            }
-            _ => self.clone(),
-        }
+    pub fn create_redo_op(&self) -> Operation {
+        self.clone()
     }
 }
