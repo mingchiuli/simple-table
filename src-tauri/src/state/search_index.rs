@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
@@ -26,6 +27,26 @@ pub struct SearchSheetIndex {
     writer: Arc<Mutex<IndexWriter>>,
 }
 
+struct SearchSheetIndexEntry {
+    revision: u64,
+    index: SearchSheetIndex,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SearchIndexStamp {
+    pub generation: u64,
+    pub revision: u64,
+}
+
+impl Default for SearchIndexStamp {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            revision: 0,
+        }
+    }
+}
+
 pub struct SearchWriterHandle {
     pub writer: Arc<Mutex<IndexWriter>>,
     pub text_field: Field,
@@ -34,47 +55,99 @@ pub struct SearchWriterHandle {
     pub cell_id_field: Field,
 }
 
-#[derive(Default)]
+static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 pub struct SearchIndexStore {
-    sheets: Vec<Option<SearchSheetIndex>>,
+    generation: u64,
+    revision: u64,
+    sheets: Vec<Option<SearchSheetIndexEntry>>,
+}
+
+impl Default for SearchIndexStore {
+    fn default() -> Self {
+        Self {
+            generation: NEXT_SEARCH_INDEX_GENERATION.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
+            sheets: Vec::new(),
+        }
+    }
 }
 
 impl SearchIndexStore {
-    pub fn install_sheet_index(&mut self, sheet_index: usize, index: Option<SearchSheetIndex>) {
+    pub fn stamp(&self) -> SearchIndexStamp {
+        SearchIndexStamp {
+            generation: self.generation,
+            revision: self.revision,
+        }
+    }
+
+    pub fn mark_stale(&mut self) -> SearchIndexStamp {
+        self.revision = self.revision.wrapping_add(1);
+        self.stamp()
+    }
+
+    pub fn install_sheet_index(
+        &mut self,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+        index: Option<SearchSheetIndex>,
+    ) {
+        if stamp != self.stamp() {
+            return;
+        }
         if self.sheets.len() <= sheet_index {
             self.sheets.resize_with(sheet_index + 1, || None);
         }
-        self.sheets[sheet_index] = index;
+        self.sheets[sheet_index] = index.map(|index| SearchSheetIndexEntry {
+            revision: stamp.revision,
+            index,
+        });
     }
 
     pub fn truncate(&mut self, sheet_count: usize) {
         self.sheets.truncate(sheet_count);
     }
 
-    pub fn writer_handle(&self, sheet_index: usize) -> Option<SearchWriterHandle> {
-        let sheet_index = self.sheets.get(sheet_index)?.as_ref()?;
-        let row_field = sheet_index.schema.get_field("row").ok()?;
-        let col_field = sheet_index.schema.get_field("col").ok()?;
+    pub fn writer_handle(
+        &self,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+    ) -> Option<SearchWriterHandle> {
+        if stamp != self.stamp() {
+            return None;
+        }
+        let entry = self.sheets.get(sheet_index)?.as_ref()?;
+        if entry.revision != stamp.revision {
+            return None;
+        }
+        let row_field = entry.index.schema.get_field("row").ok()?;
+        let col_field = entry.index.schema.get_field("col").ok()?;
         Some(SearchWriterHandle {
-            writer: sheet_index.writer.clone(),
-            text_field: sheet_index.text_field,
+            writer: entry.index.writer.clone(),
+            text_field: entry.index.text_field,
             row_field,
             col_field,
-            cell_id_field: sheet_index.cell_id_field,
+            cell_id_field: entry.index.cell_id_field,
         })
     }
 
-    pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {
+    pub fn search_sheet(
+        &self,
+        sheet_index: usize,
+        query: &str,
+        limit: usize,
+    ) -> Option<Vec<CellPosition>> {
         let query = query.trim();
         if query.is_empty() {
-            return vec![];
+            return Some(vec![]);
         }
 
-        let Some(Some(index)) = self.sheets.get(sheet_index) else {
-            return vec![];
+        let entry = self.sheets.get(sheet_index)?.as_ref()?;
+        if entry.revision != self.revision {
+            return None;
         };
 
-        search_index(index, query, limit)
+        Some(search_index(&entry.index, query, limit))
     }
 }
 
@@ -220,4 +293,37 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Cell
         }
     }
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_indexes_are_not_used_until_matching_replacement_installs() {
+        let rows = vec![vec![CellValue::String("indexed text".to_string())]];
+        let index = build_sheet_index(&rows).expect("index");
+        let mut store = SearchIndexStore::default();
+        let original_stamp = store.stamp();
+
+        store.install_sheet_index(0, original_stamp, Some(index));
+        assert_eq!(
+            store.search_sheet(0, "indexed", 10),
+            Some(vec![CellPosition { row: 0, col: 0 }])
+        );
+
+        let stale_stamp = store.mark_stale();
+        assert_eq!(store.search_sheet(0, "indexed", 10), None);
+
+        let stale_index = build_sheet_index(&rows).expect("stale index");
+        store.install_sheet_index(0, original_stamp, Some(stale_index));
+        assert_eq!(store.search_sheet(0, "indexed", 10), None);
+
+        let replacement_index = build_sheet_index(&rows).expect("replacement index");
+        store.install_sheet_index(0, stale_stamp, Some(replacement_index));
+        assert_eq!(
+            store.search_sheet(0, "indexed", 10),
+            Some(vec![CellPosition { row: 0, col: 0 }])
+        );
+    }
 }

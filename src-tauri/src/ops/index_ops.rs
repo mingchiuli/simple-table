@@ -6,16 +6,18 @@ use std::time::{Duration, Instant};
 use tantivy::{Term, doc};
 
 use crate::state::editor_state::EditorState;
-use crate::state::search_index::build_sheet_index;
+use crate::state::search_index::{SearchIndexStamp, build_sheet_index};
 use crate::types::CellValue;
 
 enum IndexJob {
     Rebuild {
         sheet_index: usize,
+        stamp: SearchIndexStamp,
         state: Arc<RwLock<Option<EditorState>>>,
     },
     UpdateCell {
         sheet_index: usize,
+        stamp: SearchIndexStamp,
         row: usize,
         col: usize,
         new_text: String,
@@ -23,24 +25,28 @@ enum IndexJob {
     },
     AppendRow {
         sheet_index: usize,
+        stamp: SearchIndexStamp,
         row_index: usize,
         row_data: Vec<CellValue>,
         state: Arc<RwLock<Option<EditorState>>>,
     },
     AppendColumn {
         sheet_index: usize,
+        stamp: SearchIndexStamp,
         col_index: usize,
         col_data: Vec<CellValue>,
         state: Arc<RwLock<Option<EditorState>>>,
     },
     DeleteLastRow {
         sheet_index: usize,
+        stamp: SearchIndexStamp,
         row_index: usize,
         col_count: usize,
         state: Arc<RwLock<Option<EditorState>>>,
     },
     DeleteLastColumn {
         sheet_index: usize,
+        stamp: SearchIndexStamp,
         col_index: usize,
         row_count: usize,
         state: Arc<RwLock<Option<EditorState>>>,
@@ -59,6 +65,17 @@ impl IndexJob {
         }
     }
 
+    fn stamp(&self) -> SearchIndexStamp {
+        match self {
+            IndexJob::Rebuild { stamp, .. }
+            | IndexJob::UpdateCell { stamp, .. }
+            | IndexJob::AppendRow { stamp, .. }
+            | IndexJob::AppendColumn { stamp, .. }
+            | IndexJob::DeleteLastRow { stamp, .. }
+            | IndexJob::DeleteLastColumn { stamp, .. } => *stamp,
+        }
+    }
+
     fn state(&self) -> &Arc<RwLock<Option<EditorState>>> {
         match self {
             IndexJob::Rebuild { state, .. }
@@ -72,7 +89,7 @@ impl IndexJob {
 }
 
 struct SheetPending {
-    rebuild: bool,
+    rebuild: Option<SearchIndexStamp>,
     incremental: Vec<IndexJob>,
     state: Arc<RwLock<Option<EditorState>>>,
 }
@@ -96,18 +113,23 @@ fn merge_job(pending: &mut HashMap<usize, SheetPending>, job: IndexJob) {
     let sheet_index = job.sheet_index();
     let state = job.state().clone();
     let entry = pending.entry(sheet_index).or_insert_with(|| SheetPending {
-        rebuild: false,
+        rebuild: None,
         incremental: Vec::new(),
         state: state.clone(),
     });
-    entry.state = state;
     match job {
-        IndexJob::Rebuild { .. } => {
-            entry.rebuild = true;
-            entry.incremental.clear();
+        IndexJob::Rebuild { stamp, .. } => {
+            let latest_incremental = entry.incremental.iter().map(IndexJob::stamp).max();
+            let latest_seen = entry.rebuild.into_iter().chain(latest_incremental).max();
+            if latest_seen.is_none_or(|latest| stamp >= latest) {
+                entry.state = state;
+                entry.rebuild = Some(stamp);
+                entry.incremental.clear();
+            }
         }
         other => {
-            if !entry.rebuild {
+            if entry.rebuild.is_none() {
+                entry.state = state;
                 entry.incremental.push(other);
             }
         }
@@ -138,20 +160,33 @@ fn index_worker(rx: mpsc::Receiver<IndexJob>) {
         }
 
         for (sheet_index, pending) in pending {
-            if pending.rebuild {
-                run_rebuild(sheet_index, &pending.state);
+            if let Some(stamp) = pending.rebuild {
+                run_rebuild(sheet_index, stamp, &pending.state);
             } else if !pending.incremental.is_empty()
                 && !run_incremental(sheet_index, &pending.state, &pending.incremental)
             {
-                run_rebuild(sheet_index, &pending.state);
+                let latest_stamp = pending
+                    .incremental
+                    .iter()
+                    .map(IndexJob::stamp)
+                    .max()
+                    .expect("incremental ops are non-empty");
+                run_rebuild(sheet_index, latest_stamp, &pending.state);
             }
         }
     }
 }
 
-fn run_rebuild(sheet_index: usize, state: &Arc<RwLock<Option<EditorState>>>) {
+fn run_rebuild(
+    sheet_index: usize,
+    stamp: SearchIndexStamp,
+    state: &Arc<RwLock<Option<EditorState>>>,
+) {
     let rows_snapshot = match state.read() {
         Ok(guard) => guard.as_ref().and_then(|editor| {
+            if editor.search_index_stamp() != stamp {
+                return None;
+            }
             editor
                 .file_data()
                 .sheets
@@ -166,7 +201,7 @@ fn run_rebuild(sheet_index: usize, state: &Arc<RwLock<Option<EditorState>>>) {
     if let Ok(mut guard) = state.write()
         && let Some(editor_state) = guard.as_mut()
     {
-        editor_state.install_search_index(sheet_index, built_index);
+        editor_state.install_search_index(sheet_index, stamp, built_index);
     }
 }
 
@@ -175,11 +210,14 @@ fn run_incremental(
     state: &Arc<RwLock<Option<EditorState>>>,
     ops: &[IndexJob],
 ) -> bool {
-    let Some(handle) = state
-        .read()
-        .ok()
-        .and_then(|guard| guard.as_ref()?.search_writer_handle(sheet_index))
-    else {
+    let Some(handle) = state.read().ok().and_then(|guard| {
+        let editor = guard.as_ref()?;
+        let stamp = ops.first()?.stamp();
+        if ops.iter().any(|op| op.stamp() != stamp) {
+            return None;
+        }
+        editor.search_writer_handle(sheet_index, stamp)
+    }) else {
         return false;
     };
     let mut writer = match handle.writer.lock() {
@@ -284,18 +322,19 @@ fn run_incremental(
 }
 
 pub fn spawn_rebuild_all_sheets_index(state: Arc<RwLock<Option<EditorState>>>) {
-    let count = match state.read() {
+    let (count, stamp) = match state.read() {
         Ok(guard) => guard
             .as_ref()
-            .map(|editor| editor.file_data().sheets.len())
-            .unwrap_or(0),
-        Err(_) => 0,
+            .map(|editor| (editor.file_data().sheets.len(), editor.search_index_stamp()))
+            .unwrap_or((0, SearchIndexStamp::default())),
+        Err(_) => (0, SearchIndexStamp::default()),
     };
 
     let queue = index_queue();
     for sheet_index in 0..count {
         let _ = queue.send(IndexJob::Rebuild {
             sheet_index,
+            stamp,
             state: state.clone(),
         });
     }
@@ -308,8 +347,16 @@ pub fn spawn_update_cell_index(
     new_value: &CellValue,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
+    let stamp = match state.read() {
+        Ok(guard) => guard
+            .as_ref()
+            .map(|editor| editor.search_index_stamp())
+            .unwrap_or_default(),
+        Err(_) => SearchIndexStamp::default(),
+    };
     let _ = index_queue().send(IndexJob::UpdateCell {
         sheet_index,
+        stamp,
         row,
         col,
         new_text: new_value.to_display_string(),
@@ -324,8 +371,16 @@ pub fn spawn_append_row_index(
     row_data: Vec<CellValue>,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
+    let stamp = match state.read() {
+        Ok(guard) => guard
+            .as_ref()
+            .map(|editor| editor.search_index_stamp())
+            .unwrap_or_default(),
+        Err(_) => SearchIndexStamp::default(),
+    };
     let _ = index_queue().send(IndexJob::AppendRow {
         sheet_index,
+        stamp,
         row_index,
         row_data,
         state,
@@ -339,8 +394,16 @@ pub fn spawn_append_column_index(
     col_data: Vec<CellValue>,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
+    let stamp = match state.read() {
+        Ok(guard) => guard
+            .as_ref()
+            .map(|editor| editor.search_index_stamp())
+            .unwrap_or_default(),
+        Err(_) => SearchIndexStamp::default(),
+    };
     let _ = index_queue().send(IndexJob::AppendColumn {
         sheet_index,
+        stamp,
         col_index,
         col_data,
         state,
@@ -354,8 +417,16 @@ pub fn spawn_delete_last_row_index(
     col_count: usize,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
+    let stamp = match state.read() {
+        Ok(guard) => guard
+            .as_ref()
+            .map(|editor| editor.search_index_stamp())
+            .unwrap_or_default(),
+        Err(_) => SearchIndexStamp::default(),
+    };
     let _ = index_queue().send(IndexJob::DeleteLastRow {
         sheet_index,
+        stamp,
         row_index,
         col_count,
         state,
@@ -369,8 +440,16 @@ pub fn spawn_delete_last_column_index(
     row_count: usize,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
+    let stamp = match state.read() {
+        Ok(guard) => guard
+            .as_ref()
+            .map(|editor| editor.search_index_stamp())
+            .unwrap_or_default(),
+        Err(_) => SearchIndexStamp::default(),
+    };
     let _ = index_queue().send(IndexJob::DeleteLastColumn {
         sheet_index,
+        stamp,
         col_index,
         row_count,
         state,
@@ -415,13 +494,18 @@ mod tests {
         rows
     }
 
+    fn current_stamp(state: &Arc<RwLock<Option<EditorState>>>) -> SearchIndexStamp {
+        let guard = state.read().unwrap();
+        guard.as_ref().unwrap().search_index_stamp()
+    }
+
     #[test]
     fn rebuild_searches_existing_content() {
         let state = make_state(vec![
             vec![s("apple"), s("banana")],
             vec![s("cherry"), s("durian")],
         ]);
-        run_rebuild(0, &state);
+        run_rebuild(0, current_stamp(&state), &state);
 
         assert_eq!(rows_of(&state, "apple"), vec![(0, 0)]);
         assert_eq!(rows_of(&state, "durian"), vec![(1, 1)]);
@@ -430,7 +514,7 @@ mod tests {
     #[test]
     fn incremental_update_replaces_old_value() {
         let state = make_state(vec![vec![s("apple"), s("banana")]]);
-        run_rebuild(0, &state);
+        run_rebuild(0, current_stamp(&state), &state);
         {
             let mut guard = state.write().unwrap();
             let editor = guard.as_mut().unwrap();
@@ -450,6 +534,7 @@ mod tests {
             &state,
             &[IndexJob::UpdateCell {
                 sheet_index: 0,
+                stamp: current_stamp(&state),
                 row: 0,
                 col: 0,
                 new_text: "orange".to_string(),
@@ -461,5 +546,34 @@ mod tests {
         assert!(rows_of(&state, "apple").is_empty());
         assert_eq!(rows_of(&state, "orange"), vec![(0, 0)]);
         assert_eq!(rows_of(&state, "banana"), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn stale_index_search_falls_back_to_current_rows() {
+        let state = make_state(vec![vec![s("apple")]]);
+        run_rebuild(0, current_stamp(&state), &state);
+        assert_eq!(rows_of(&state, "apple"), vec![(0, 0)]);
+
+        {
+            let mut guard = state.write().unwrap();
+            let editor = guard.as_mut().unwrap();
+            editor
+                .execute(Operation::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    old_value: s("apple"),
+                    new_value: s("orange"),
+                })
+                .unwrap();
+            editor.mark_search_index_stale();
+        }
+
+        assert!(rows_of(&state, "apple").is_empty());
+        assert_eq!(rows_of(&state, "orange"), vec![(0, 0)]);
+
+        run_rebuild(0, current_stamp(&state), &state);
+        assert!(rows_of(&state, "apple").is_empty());
+        assert_eq!(rows_of(&state, "orange"), vec![(0, 0)]);
     }
 }

@@ -99,6 +99,7 @@ pub fn do_undo(
         match state.as_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.undo()? {
+                    editor_state.mark_search_index_stale();
                     snapshot_mutation_response(editor_state, Some(result.operation))
                 } else {
                     return Err(AppError::NothingToUndo);
@@ -123,6 +124,7 @@ pub fn do_redo(
         match state.as_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.redo()? {
+                    editor_state.mark_search_index_stale();
                     snapshot_mutation_response(editor_state, Some(result.operation))
                 } else {
                     return Err(AppError::NothingToRedo);

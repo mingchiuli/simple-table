@@ -2,8 +2,10 @@ use crate::error::AppError;
 use crate::io::document_model::SpreadsheetDocument;
 use crate::ops::Operation;
 use crate::state::content_hash::ContentHash;
-use crate::state::search_index::{SearchIndexStore, SearchSheetIndex, SearchWriterHandle};
-use crate::types::{CellValue, FileData, OperationResult, SheetCellChange};
+use crate::state::search_index::{
+    SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
+};
+use crate::types::{CellPosition, CellValue, FileData, OperationResult, SheetCellChange};
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
@@ -44,22 +46,68 @@ impl EditorState {
         self.document.projection()
     }
 
-    pub fn install_search_index(&mut self, sheet_index: usize, index: Option<SearchSheetIndex>) {
-        self.search_index.install_sheet_index(sheet_index, index);
+    pub fn search_index_stamp(&self) -> SearchIndexStamp {
+        self.search_index.stamp()
+    }
+
+    pub fn install_search_index(
+        &mut self,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+        index: Option<SearchSheetIndex>,
+    ) {
+        self.search_index
+            .install_sheet_index(sheet_index, stamp, index);
         self.search_index.truncate(self.file_data().sheets.len());
     }
 
-    pub fn search_sheet(
-        &self,
-        sheet_index: usize,
-        query: &str,
-        limit: usize,
-    ) -> Vec<crate::types::CellPosition> {
-        self.search_index.search_sheet(sheet_index, query, limit)
+    pub fn mark_search_index_stale(&mut self) -> SearchIndexStamp {
+        self.search_index.mark_stale()
     }
 
-    pub fn search_writer_handle(&self, sheet_index: usize) -> Option<SearchWriterHandle> {
-        self.search_index.writer_handle(sheet_index)
+    pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {
+        self.search_index
+            .search_sheet(sheet_index, query, limit)
+            .unwrap_or_else(|| self.scan_sheet(sheet_index, query, limit))
+    }
+
+    pub fn search_writer_handle(
+        &self,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+    ) -> Option<SearchWriterHandle> {
+        self.search_index.writer_handle(sheet_index, stamp)
+    }
+
+    fn scan_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {
+        let query = query.trim();
+        if query.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+
+        let Some(sheet) = self.file_data().sheets.get(sheet_index) else {
+            return Vec::new();
+        };
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+        for (row_idx, row) in sheet.rows.iter().enumerate() {
+            for (col_idx, cell) in row.iter().enumerate() {
+                if cell
+                    .to_display_string()
+                    .to_lowercase()
+                    .contains(&query_lower)
+                {
+                    results.push(CellPosition {
+                        row: row_idx,
+                        col: col_idx,
+                    });
+                    if results.len() >= limit {
+                        return results;
+                    }
+                }
+            }
+        }
+        results
     }
 
     pub fn is_dirty(&self) -> bool {

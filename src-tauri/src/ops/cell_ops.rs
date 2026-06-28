@@ -85,6 +85,7 @@ pub fn do_add_row(
                     row_height: None,
                 };
                 let result = editor_state.execute(operation)?;
+                editor_state.mark_search_index_stale();
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -133,6 +134,7 @@ pub fn do_delete_row(
                     row_height,
                 };
                 let result = editor_state.execute(operation)?;
+                editor_state.mark_search_index_stale();
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -169,6 +171,7 @@ pub fn do_add_column(
                     column_width: None,
                 };
                 let result = editor_state.execute(operation)?;
+                editor_state.mark_search_index_stale();
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -224,6 +227,7 @@ pub fn do_delete_column(
                     column_width,
                 };
                 let result = editor_state.execute(operation)?;
+                editor_state.mark_search_index_stale();
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -331,6 +335,7 @@ pub fn do_add_sheet(
                     sheet_index: None,
                 };
                 let result = editor_state.execute(operation)?;
+                editor_state.mark_search_index_stale();
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),
@@ -368,6 +373,7 @@ pub fn do_delete_sheet(
                     sheet_data: SheetData::default(),
                 };
                 let result = editor_state.execute(operation)?;
+                editor_state.mark_search_index_stale();
                 Ok(snapshot_mutation_response(
                     editor_state,
                     Some(result.operation),

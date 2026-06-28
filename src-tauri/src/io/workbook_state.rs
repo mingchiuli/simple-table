@@ -258,6 +258,62 @@ fn adjust_formula_references(
     current_sheet_name: &str,
     shift: StructureShift,
 ) -> String {
+    let mut adjusted = String::with_capacity(formula.len());
+    let bytes = formula.as_bytes();
+    let mut segment_start = 0;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+
+        if segment_start < index {
+            adjusted.push_str(&adjust_formula_reference_segment(
+                &formula[segment_start..index],
+                target_sheet_name,
+                current_sheet_name,
+                shift,
+            ));
+        }
+
+        let string_start = index;
+        index += 1;
+        while index < bytes.len() {
+            if bytes[index] == b'"' {
+                if index + 1 < bytes.len() && bytes[index + 1] == b'"' {
+                    index += 2;
+                } else {
+                    index += 1;
+                    break;
+                }
+            } else {
+                index += 1;
+            }
+        }
+        adjusted.push_str(&formula[string_start..index]);
+        segment_start = index;
+    }
+
+    if segment_start < formula.len() {
+        adjusted.push_str(&adjust_formula_reference_segment(
+            &formula[segment_start..],
+            target_sheet_name,
+            current_sheet_name,
+            shift,
+        ));
+    }
+
+    adjusted
+}
+
+fn adjust_formula_reference_segment(
+    formula: &str,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+    shift: StructureShift,
+) -> String {
     let re = Regex::new(
         r#"(?x)
         (?P<prefix>(?:'(?P<quoted>(?:[^']|'')+)'|(?P<sheet>[A-Za-z_][A-Za-z0-9_ .]*))!)?
@@ -270,7 +326,22 @@ fn adjust_formula_references(
     )
     .expect("valid formula reference regex");
 
-    re.replace_all(formula, |captures: &Captures<'_>| {
+    let mut adjusted = String::with_capacity(formula.len());
+    let mut last_end = 0;
+
+    for captures in re.captures_iter(formula) {
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
+
+        adjusted.push_str(&formula[last_end..matched.start()]);
+        last_end = matched.end();
+
+        if !is_reference_match_boundary(formula, matched.start(), matched.end()) {
+            adjusted.push_str(matched.as_str());
+            continue;
+        }
+
         let sheet_name = captures
             .name("quoted")
             .map(|m| m.as_str().replace("''", "'"))
@@ -281,120 +352,213 @@ fn adjust_formula_references(
             .map(|name| name == target_sheet_name)
             .unwrap_or(current_sheet_name == target_sheet_name);
         if !applies_to_reference {
-            return captures[0].to_string();
+            adjusted.push_str(matched.as_str());
+            continue;
         }
 
-        let Some(start) =
-            adjust_cell_reference(&captures["start_col"], &captures["start_row"], shift)
-        else {
-            return format!(
-                "{}#REF!",
-                captures.name("prefix").map(|m| m.as_str()).unwrap_or("")
-            );
-        };
+        adjusted.push_str(&adjust_reference_match(&captures, shift));
+    }
 
-        let Some(end_col) = captures.name("end_col") else {
-            return format!(
-                "{}{}",
-                captures.name("prefix").map(|m| m.as_str()).unwrap_or(""),
-                start
-            );
-        };
-        let Some(end_row) = captures.name("end_row") else {
-            return format!(
-                "{}{}",
-                captures.name("prefix").map(|m| m.as_str()).unwrap_or(""),
-                start
-            );
-        };
+    adjusted.push_str(&formula[last_end..]);
+    adjusted
+}
 
-        let Some(end) = adjust_cell_reference(end_col.as_str(), end_row.as_str(), shift) else {
-            return format!(
-                "{}#REF!",
-                captures.name("prefix").map(|m| m.as_str()).unwrap_or("")
-            );
-        };
+fn is_reference_match_boundary(formula: &str, start: usize, end: usize) -> bool {
+    let previous = formula[..start].chars().next_back();
+    let next = formula[end..].chars().next();
 
-        format!(
-            "{}{}:{}",
-            captures.name("prefix").map(|m| m.as_str()).unwrap_or(""),
-            start,
-            end
-        )
+    !previous.is_some_and(is_reference_identifier_char)
+        && !next.is_some_and(is_reference_identifier_char)
+}
+
+fn is_reference_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'
+}
+
+fn adjust_reference_match(captures: &Captures<'_>, shift: StructureShift) -> String {
+    let prefix = captures.name("prefix").map(|m| m.as_str()).unwrap_or("");
+    let start_col = &captures["start_col"];
+    let start_row = &captures["start_row"];
+
+    match (captures.name("end_col"), captures.name("end_row")) {
+        (Some(end_col), Some(end_row)) => {
+            match adjust_range_reference(
+                start_col,
+                start_row,
+                end_col.as_str(),
+                end_row.as_str(),
+                shift,
+            ) {
+                Some((start, end)) => format!("{prefix}{start}:{end}"),
+                None => format!("{prefix}#REF!"),
+            }
+        }
+        _ => match adjust_cell_reference(start_col, start_row, shift) {
+            Some(start) => format!("{prefix}{start}"),
+            None => format!("{prefix}#REF!"),
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CellReference {
+    col_index: usize,
+    row_index: usize,
+    col_locked: bool,
+    row_locked: bool,
+}
+
+fn parse_cell_reference(col: &str, row: &str) -> Option<CellReference> {
+    Some(CellReference {
+        col_locked: col.starts_with('$'),
+        row_locked: row.starts_with('$'),
+        col_index: column_label_to_index(col.trim_start_matches('$'))?,
+        row_index: row
+            .trim_start_matches('$')
+            .parse::<usize>()
+            .ok()?
+            .checked_sub(1)?,
     })
-    .into_owned()
+}
+
+fn format_cell_reference(cell_ref: CellReference) -> String {
+    format!(
+        "{}{}{}{}",
+        if cell_ref.col_locked { "$" } else { "" },
+        column_index_to_label(cell_ref.col_index),
+        if cell_ref.row_locked { "$" } else { "" },
+        cell_ref.row_index + 1
+    )
+}
+
+fn adjust_range_reference(
+    start_col: &str,
+    start_row: &str,
+    end_col: &str,
+    end_row: &str,
+    shift: StructureShift,
+) -> Option<(String, String)> {
+    let mut start = parse_cell_reference(start_col, start_row)?;
+    let mut end = parse_cell_reference(end_col, end_row)?;
+
+    match shift {
+        StructureShift::InsertRows { .. } | StructureShift::InsertColumns { .. } => {
+            start = adjust_cell_reference_value(start, shift)?;
+            end = adjust_cell_reference_value(end, shift)?;
+        }
+        StructureShift::DeleteRows { row_index, count } => {
+            let (start_row, end_row) =
+                adjust_deleted_range_axis(start.row_index, end.row_index, row_index, count)?;
+            start.row_index = start_row;
+            end.row_index = end_row;
+        }
+        StructureShift::DeleteColumns { col_index, count } => {
+            let (start_col, end_col) =
+                adjust_deleted_range_axis(start.col_index, end.col_index, col_index, count)?;
+            start.col_index = start_col;
+            end.col_index = end_col;
+        }
+    }
+
+    Some((format_cell_reference(start), format_cell_reference(end)))
+}
+
+fn adjust_deleted_range_axis(
+    start: usize,
+    end: usize,
+    delete_start: usize,
+    count: usize,
+) -> Option<(usize, usize)> {
+    let delete_end = delete_start.checked_add(count)?.checked_sub(1)?;
+    if start > end {
+        return adjust_deleted_range_axis(end, start, delete_start, count)
+            .map(|(end, start)| (start, end));
+    }
+
+    if end < delete_start {
+        return Some((start, end));
+    }
+    if start > delete_end {
+        return Some((start.saturating_sub(count), end.saturating_sub(count)));
+    }
+
+    let keeps_before = start < delete_start;
+    let keeps_after = end > delete_end;
+    match (keeps_before, keeps_after) {
+        (false, false) => None,
+        (true, false) => Some((start, delete_start.saturating_sub(1))),
+        (false, true) => Some((delete_start, end.saturating_sub(count))),
+        (true, true) => Some((start, end.saturating_sub(count))),
+    }
 }
 
 fn adjust_cell_reference(col: &str, row: &str, shift: StructureShift) -> Option<String> {
-    let col_locked = col.starts_with('$');
-    let row_locked = row.starts_with('$');
-    let col_index = column_label_to_index(col.trim_start_matches('$'))?;
-    let row_index = row
-        .trim_start_matches('$')
-        .parse::<usize>()
-        .ok()?
-        .checked_sub(1)?;
+    let cell_ref = parse_cell_reference(col, row)?;
+    adjust_cell_reference_value(cell_ref, shift).map(format_cell_reference)
+}
 
+fn adjust_cell_reference_value(
+    cell_ref: CellReference,
+    shift: StructureShift,
+) -> Option<CellReference> {
     let (new_col, new_row) = match shift {
         StructureShift::InsertRows {
             row_index: at,
             count,
         } => {
-            let row = if row_index >= at {
-                row_index + count
+            let row = if cell_ref.row_index >= at {
+                cell_ref.row_index + count
             } else {
-                row_index
+                cell_ref.row_index
             };
-            (col_index, row)
+            (cell_ref.col_index, row)
         }
         StructureShift::DeleteRows {
             row_index: at,
             count,
         } => {
-            if (at..at + count).contains(&row_index) {
+            if (at..at + count).contains(&cell_ref.row_index) {
                 return None;
             }
-            let row = if row_index >= at + count {
-                row_index - count
+            let row = if cell_ref.row_index >= at + count {
+                cell_ref.row_index - count
             } else {
-                row_index
+                cell_ref.row_index
             };
-            (col_index, row)
+            (cell_ref.col_index, row)
         }
         StructureShift::InsertColumns {
             col_index: at,
             count,
         } => {
-            let col = if col_index >= at {
-                col_index + count
+            let col = if cell_ref.col_index >= at {
+                cell_ref.col_index + count
             } else {
-                col_index
+                cell_ref.col_index
             };
-            (col, row_index)
+            (col, cell_ref.row_index)
         }
         StructureShift::DeleteColumns {
             col_index: at,
             count,
         } => {
-            if (at..at + count).contains(&col_index) {
+            if (at..at + count).contains(&cell_ref.col_index) {
                 return None;
             }
-            let col = if col_index >= at + count {
-                col_index - count
+            let col = if cell_ref.col_index >= at + count {
+                cell_ref.col_index - count
             } else {
-                col_index
+                cell_ref.col_index
             };
-            (col, row_index)
+            (col, cell_ref.row_index)
         }
     };
 
-    Some(format!(
-        "{}{}{}{}",
-        if col_locked { "$" } else { "" },
-        column_index_to_label(new_col),
-        if row_locked { "$" } else { "" },
-        new_row + 1
-    ))
+    Some(CellReference {
+        col_index: new_col,
+        row_index: new_row,
+        ..cell_ref
+    })
 }
 
 fn column_label_to_index(label: &str) -> Option<usize> {
@@ -577,6 +741,96 @@ mod tests {
                 },
             ),
             "Inputs!A1+Inputs!#REF!"
+        );
+    }
+
+    #[test]
+    fn leaves_reference_like_text_literals_unchanged() {
+        assert_eq!(
+            adjust_formula_references(
+                r#""Inputs!A1"&Inputs!A1"#,
+                "Inputs",
+                "Other",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            ),
+            r#""Inputs!A1"&Inputs!A2"#
+        );
+    }
+
+    #[test]
+    fn shrinks_ranges_when_deleted_rows_touch_range_edges() {
+        assert_eq!(
+            adjust_formula_references(
+                "SUM(Inputs!A1:A3)",
+                "Inputs",
+                "Other",
+                StructureShift::DeleteRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            ),
+            "SUM(Inputs!A1:A2)"
+        );
+
+        assert_eq!(
+            adjust_formula_references(
+                "SUM(Inputs!A1:A3)",
+                "Inputs",
+                "Other",
+                StructureShift::DeleteRows {
+                    row_index: 2,
+                    count: 1,
+                },
+            ),
+            "SUM(Inputs!A1:A2)"
+        );
+    }
+
+    #[test]
+    fn shrinks_ranges_when_deleted_columns_touch_range_edges() {
+        assert_eq!(
+            adjust_formula_references(
+                "SUM(Inputs!A1:C1)",
+                "Inputs",
+                "Other",
+                StructureShift::DeleteColumns {
+                    col_index: 0,
+                    count: 1,
+                },
+            ),
+            "SUM(Inputs!A1:B1)"
+        );
+
+        assert_eq!(
+            adjust_formula_references(
+                "SUM(Inputs!A1:C1)",
+                "Inputs",
+                "Other",
+                StructureShift::DeleteColumns {
+                    col_index: 2,
+                    count: 1,
+                },
+            ),
+            "SUM(Inputs!A1:B1)"
+        );
+    }
+
+    #[test]
+    fn removes_ranges_only_when_deleted_rows_cover_whole_range() {
+        assert_eq!(
+            adjust_formula_references(
+                "SUM(Inputs!A1:A3)",
+                "Inputs",
+                "Other",
+                StructureShift::DeleteRows {
+                    row_index: 0,
+                    count: 3,
+                },
+            ),
+            "SUM(Inputs!#REF!)"
         );
     }
 
