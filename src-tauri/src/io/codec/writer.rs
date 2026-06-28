@@ -121,7 +121,7 @@ pub fn sync_workbook_from_file_data(
 
 pub fn write_workbook_to_bytes(workbook: &Workbook) -> Result<Vec<u8>, AppError> {
     let mut buffer = Vec::new();
-    writer::xlsx::write_writer(&workbook, &mut buffer)
+    writer::xlsx::write_writer(workbook, &mut buffer)
         .map_err(|e| AppError::WriteError(e.to_string()))?;
     Ok(buffer)
 }

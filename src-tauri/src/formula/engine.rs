@@ -59,7 +59,7 @@ impl FormulaRuntime {
         }
 
         let mut registration_result = register_workbook_cells(&mut workbook, file_data)?;
-        let mut changes = registration_result.invalid_formulas.clone();
+        let mut changes = std::mem::take(&mut registration_result.invalid_formulas);
 
         let sheet_names: Vec<String> = file_data
             .sheets
@@ -70,7 +70,7 @@ impl FormulaRuntime {
             .prepare_graph_for_sheets(sheet_names.iter().map(String::as_str))
             .map_err(|error| AppError::Internal(error.to_string()))?;
 
-        apply_cell_changes(file_data, &registration_result.invalid_formulas);
+        apply_cell_changes(file_data, &changes);
         self.workbook = workbook;
         self.registered_formulas = std::mem::take(&mut registration_result.registered_formulas);
         self.dependency_index = build_dependency_index(file_data, &self.registered_formulas);
@@ -248,7 +248,6 @@ fn set_workbook_cell(
                     });
                 }
                 Err(error) => {
-                    let error = error.to_string();
                     workbook
                         .set_value(sheet_name, row, col, LiteralValue::Empty)
                         .map_err(|error| AppError::Internal(error.to_string()))?;

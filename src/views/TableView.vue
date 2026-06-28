@@ -488,7 +488,6 @@ function hydrateLayoutMapsFromFileData() {
 onMounted(async () => {
   const filePath = route.query.file as string;
   if (filePath) {
-    console.log('Loading file from path:', filePath);
     await loadFileFromPath(filePath);
   } else {
     await refreshEditorState();

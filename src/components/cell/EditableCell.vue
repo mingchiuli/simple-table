@@ -21,7 +21,7 @@ function focusWithoutScroll() {
   if (!props.autoFocus || !textareaRef.value) return;
 
   const textarea = textareaRef.value;
-  const scrollContainer = textarea.closest<HTMLElement>('.data-viewport, .el-table-v2__body')
+  const scrollContainer = textarea.closest<HTMLElement>('.data-viewport')
     ?? document.documentElement;
   const { scrollTop, scrollLeft } = scrollContainer;
 

@@ -5,7 +5,7 @@
 ## Features
 
 ### Core Features
-- Open and edit Excel files (.xlsx, .xls, .ods)
+- Open and edit Excel files (.xlsx, .xlsm)
 - Open and edit CSV files
 - Multi-sheet support (add/delete sheets)
 - Add/delete rows and columns
@@ -18,7 +18,7 @@
 
 ### Platform Support
 - **Desktop**: macOS, Linux, Windows
-- Platform detection via `src/stores/platform.ts` (isMobile, isTablet, isDesktop)
+- Platform detection via `src/composables/usePlatform.ts` and `src/utils/platform.ts`
 
 ### Limitations
 
@@ -55,7 +55,7 @@ npm run tauri build
 
 - **Frontend**: Vue 3 + TypeScript + Element Plus
 - **Backend**: Rust + Tauri 2.0
-- **Excel Processing**: calamine (read) + xlsxwriter (write)
+- **Excel Processing**: umya-spreadsheet backed workbook patching
 - **State Management**: Pinia
 - **Routing**: Vue Router
 
@@ -78,10 +78,10 @@ src/                      # Frontend source
 src-tauri/                # Rust backend
 ├── src/
 │   ├── commands/         # Tauri commands
-│   ├── ops/              # Operations (cell, sheet, sort, search, undo)
-│   ├── io/               # File I/O (reader, writer, file_ops)
+│   ├── ops/              # Operations (cell, sheet, search, undo/redo, indexing)
+│   ├── io/               # File I/O, codecs, platform adapters, workbook patching
 │   ├── recent/           # Recent files management (types, store, thumbnail, ops)
-│   ├── utils/            # Utility functions (cell_utils)
+│   ├── utils.rs          # Utility functions
 │   ├── types/            # Rust types
 │   ├── state/            # Editor state management
 │   └── error/            # Error handling (AppError)

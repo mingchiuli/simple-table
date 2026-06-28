@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::path::Path;
 
 use tauri::AppHandle;
@@ -42,18 +43,19 @@ impl RecentStore {
 
         let existing_idx = files.iter().position(|f| f.path == file.path);
         if let Some(idx) = existing_idx {
+            let path = file.path;
             files[idx].last_opened = file.last_opened;
             files[idx].file_size = file.file_size;
             files[idx].thumbnail = file.thumbnail;
             files[idx].storage_type = file.storage_type;
             files[idx].original_path = file.original_path;
-            files.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
-            let updated = files
+            files.sort_by_key(|file| Reverse(file.last_opened));
+            let updated_index = files
                 .iter()
-                .find(|f| f.path == file.path)
-                .cloned()
-                .ok_or_else(|| AppError::FileNotFound(file.path.clone()))?;
+                .position(|f| f.path == path)
+                .ok_or_else(|| AppError::FileNotFound(path.clone()))?;
             Self::save(app, &files)?;
+            let updated = files.remove(updated_index);
             return Ok(updated);
         }
 
@@ -61,7 +63,7 @@ impl RecentStore {
         files.truncate(MAX_RECENT);
 
         Self::save(app, &files)?;
-        Ok(files[0].clone())
+        Ok(files.remove(0))
     }
 
     pub fn remove(app: &AppHandle, id: &str) -> Result<(), AppError> {
@@ -84,7 +86,7 @@ impl RecentStore {
             file.file_name = name.to_string_lossy().to_string();
         }
 
-        files.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+        files.sort_by_key(|file| Reverse(file.last_opened));
 
         Self::save(app, &files)
     }

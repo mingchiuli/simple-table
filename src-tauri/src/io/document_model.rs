@@ -16,7 +16,7 @@ pub struct DocumentOperationResult {
 }
 
 enum SpreadsheetDocumentBody {
-    Excel { workbook: Workbook },
+    Excel { workbook: Box<Workbook> },
     ProjectionOnly,
 }
 
@@ -40,7 +40,9 @@ impl SpreadsheetDocument {
         Self {
             projection,
             body: workbook
-                .map(|workbook| SpreadsheetDocumentBody::Excel { workbook })
+                .map(|workbook| SpreadsheetDocumentBody::Excel {
+                    workbook: Box::new(workbook),
+                })
                 .unwrap_or(SpreadsheetDocumentBody::ProjectionOnly),
             formula_runtime,
         }

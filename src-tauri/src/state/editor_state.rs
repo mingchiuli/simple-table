@@ -286,22 +286,20 @@ impl EditorState {
             // AddSheet: 提前生成名称和索引，保证 redo 重放时使用与首次执行一致的位置和名称
             Operation::AddSheet {
                 name,
-                sheet_data,
+                sheet_data: None,
                 sheet_index,
             } => {
-                if sheet_data.is_none() {
-                    let final_name = if name.is_empty() {
-                        format!("Sheet{}", self.file_data().sheets.len() + 1)
-                    } else {
-                        name.clone()
-                    };
-                    let actual_index = sheet_index.unwrap_or(self.file_data().sheets.len());
-                    operation = Operation::AddSheet {
-                        name: final_name,
-                        sheet_data: None,
-                        sheet_index: Some(actual_index),
-                    };
-                }
+                let final_name = if name.is_empty() {
+                    format!("Sheet{}", self.file_data().sheets.len() + 1)
+                } else {
+                    name.clone()
+                };
+                let actual_index = sheet_index.unwrap_or(self.file_data().sheets.len());
+                operation = Operation::AddSheet {
+                    name: final_name,
+                    sheet_data: None,
+                    sheet_index: Some(actual_index),
+                };
             }
             _ => {}
         }

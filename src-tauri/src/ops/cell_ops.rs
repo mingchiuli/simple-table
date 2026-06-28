@@ -33,7 +33,7 @@ pub fn do_set_cell(
                     row,
                     col,
                     old_value,
-                    new_value: new_value.clone(),
+                    new_value,
                 };
                 let result = editor_state.execute(operation)?;
                 Ok(cell_delta_mutation_response(
@@ -250,36 +250,32 @@ pub fn do_set_column_width(
     col_index: usize,
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = {
-        let mut state_guard = state.write().expect("Editor state lock poisoned");
-        match state_guard.as_mut() {
-            Some(editor_state) => {
-                let sheet = editor_state
-                    .file_data()
-                    .sheets
-                    .get(sheet_index)
-                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-                let old_width = sheet
-                    .column_widths
-                    .as_ref()
-                    .and_then(|widths| widths.get(&col_index).copied());
-                let operation = Operation::SetColumnWidth {
-                    sheet_index,
-                    col_index,
-                    old_width,
-                    new_width: width,
-                };
-                let result = editor_state.execute(operation)?;
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
-            }
-            None => Err(AppError::NoFileLoaded),
+    let mut state_guard = state.write().expect("Editor state lock poisoned");
+    match state_guard.as_mut() {
+        Some(editor_state) => {
+            let sheet = editor_state
+                .file_data()
+                .sheets
+                .get(sheet_index)
+                .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+            let old_width = sheet
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&col_index).copied());
+            let operation = Operation::SetColumnWidth {
+                sheet_index,
+                col_index,
+                old_width,
+                new_width: width,
+            };
+            let result = editor_state.execute(operation)?;
+            Ok(snapshot_mutation_response(
+                editor_state,
+                Some(result.operation),
+            ))
         }
-    };
-
-    response
+        None => Err(AppError::NoFileLoaded),
+    }
 }
 
 pub fn do_set_row_height(
@@ -288,36 +284,32 @@ pub fn do_set_row_height(
     row_index: usize,
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = {
-        let mut state_guard = state.write().expect("Editor state lock poisoned");
-        match state_guard.as_mut() {
-            Some(editor_state) => {
-                let sheet = editor_state
-                    .file_data()
-                    .sheets
-                    .get(sheet_index)
-                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-                let old_height = sheet
-                    .row_heights
-                    .as_ref()
-                    .and_then(|heights| heights.get(&row_index).copied());
-                let operation = Operation::SetRowHeight {
-                    sheet_index,
-                    row_index,
-                    old_height,
-                    new_height: height,
-                };
-                let result = editor_state.execute(operation)?;
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
-            }
-            None => Err(AppError::NoFileLoaded),
+    let mut state_guard = state.write().expect("Editor state lock poisoned");
+    match state_guard.as_mut() {
+        Some(editor_state) => {
+            let sheet = editor_state
+                .file_data()
+                .sheets
+                .get(sheet_index)
+                .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+            let old_height = sheet
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&row_index).copied());
+            let operation = Operation::SetRowHeight {
+                sheet_index,
+                row_index,
+                old_height,
+                new_height: height,
+            };
+            let result = editor_state.execute(operation)?;
+            Ok(snapshot_mutation_response(
+                editor_state,
+                Some(result.operation),
+            ))
         }
-    };
-
-    response
+        None => Err(AppError::NoFileLoaded),
+    }
 }
 
 /// 添加 Sheet

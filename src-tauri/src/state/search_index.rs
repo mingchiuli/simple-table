@@ -32,19 +32,10 @@ struct SearchSheetIndexEntry {
     index: SearchSheetIndex,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SearchIndexStamp {
     pub generation: u64,
     pub revision: u64,
-}
-
-impl Default for SearchIndexStamp {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            revision: 0,
-        }
-    }
 }
 
 pub struct SearchWriterHandle {

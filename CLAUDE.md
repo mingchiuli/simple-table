@@ -10,7 +10,7 @@ Simple Table is a cross-platform desktop application for viewing and editing Exc
 
 - **Frontend**: Vue 3 + TypeScript + Element Plus
 - **Backend**: Rust + Tauri 2.0
-- **Excel Processing**: calamine (read) + xlsxwriter (write)
+- **Excel Processing**: umya-spreadsheet backed workbook patching
 
 ## Common Commands
 
@@ -38,16 +38,16 @@ npm run preview  # Preview production build
 - `stores/` - Pinia state management (fileData, recentFiles)
 - `types/` - TypeScript type definitions
 - `router/` - Vue Router configuration
-- `composables/` - Vue composables (usePlatform)
+- `composables/` - Vue composables for platform, file actions, document status, pending edits, and updates
 - `platform/` - Platform-specific file operations (desktop, android, ios)
-- `styles/` - Global styles (base.css, platform.css, variables.css)
+- `styles/` - Global styles (base.css, platform.css)
 
 ### Backend Structure (`src-tauri/src/`)
 - `commands/` - Tauri command handlers (common.rs, android.rs, ios.rs)
-- `ops/` - Business logic operations (cell_ops, editor_ops, index_ops, search_ops, sort_ops, undo_ops)
-- `io/` - File I/O operations (reader.rs, writer.rs, file_ops.rs)
+- `ops/` - Business logic operations (cell_ops, editor_ops, index_ops, search_ops, history_ops)
+- `io/` - File I/O, codecs, platform adapters, and workbook patching
 - `recent/` - Recent files management (types.rs, store.rs, thumbnail.rs, ops.rs)
-- `utils/` - Utility functions (cell_utils.rs)
+- `utils.rs` - Utility functions
 - `types/` - Core data types (CellValue, FileData, SheetData, etc.)
 - `state/` - Editor state management (editor_state.rs)
 - `error/` - Error handling (AppError enum)
@@ -115,5 +115,5 @@ git push origin main && git push origin v0.3.6
 ### TypeScript/Vue
 - Use `import type` for type-only imports
 - Organize imports: external first, then internal (`@/` aliases)
-- Use CSS variables from `src/styles/variables.css` for consistent theme colors
+- Use Element Plus theme variables and global styles from `src/styles/` for consistent colors
 - Avoid inline styles in Vue components; use scoped CSS instead

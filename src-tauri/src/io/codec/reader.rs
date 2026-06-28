@@ -77,7 +77,6 @@ pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
         merges: read_merge_ranges(worksheet),
         column_widths: read_column_widths(worksheet),
         row_heights: read_row_heights(worksheet),
-        ..Default::default()
     }
 }
 
@@ -102,13 +101,13 @@ fn raw_cell_value(cell: &Cell) -> CellValue {
         return CellValue::String(cell.value().into_owned());
     }
 
-    if let Some(number) = cell.value_number() {
-        if number.is_finite() {
-            if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
-                return CellValue::Number(Value::from(number as i64));
-            }
-            return CellValue::Number(Value::from(number));
+    if let Some(number) = cell.value_number()
+        && number.is_finite()
+    {
+        if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
+            return CellValue::Number(Value::from(number as i64));
         }
+        return CellValue::Number(Value::from(number));
     }
 
     let value = cell.value().into_owned();
