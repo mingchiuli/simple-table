@@ -21,7 +21,8 @@ function focusWithoutScroll() {
   if (!props.autoFocus || !textareaRef.value) return;
 
   const textarea = textareaRef.value;
-  const scrollContainer = textarea.closest('.el-table-v2__body') ?? document.documentElement;
+  const scrollContainer = textarea.closest<HTMLElement>('.data-viewport, .el-table-v2__body')
+    ?? document.documentElement;
   const { scrollTop, scrollLeft } = scrollContainer;
 
   textarea.focus({ preventScroll: true });
@@ -63,7 +64,7 @@ onMounted(focusWithoutScroll);
     v-model="modelValue"
     class="cell-textarea"
     spellcheck="false"
-    :style="{ minHeight: `${Math.max(36, minHeight)}px` }"
+    :style="{ height: `${Math.max(36, minHeight)}px` }"
     @keydown="handleKeydown"
     @blur="handleBlur"
   />
@@ -73,7 +74,9 @@ onMounted(focusWithoutScroll);
 .cell-textarea {
   display: block;
   width: 100%;
+  height: 100%;
   min-width: 0;
+  box-sizing: border-box;
   resize: none;
   border: 1px solid var(--el-color-primary);
   box-shadow: inset 0 0 0 1px var(--el-color-primary);
@@ -85,6 +88,7 @@ onMounted(focusWithoutScroll);
   outline: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  text-align: center;
 }
 
 @media (pointer: coarse) {

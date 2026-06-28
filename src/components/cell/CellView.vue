@@ -25,14 +25,14 @@ const valueKind = computed(() => {
   return 'text';
 });
 
-const minHeight = computed(() => `${Math.max(36, props.rowHeight)}px`);
+const height = computed(() => `${Math.max(36, props.rowHeight)}px`);
 </script>
 
 <template>
   <div
     class="cell-view"
     :class="[`kind-${valueKind}`, { selected }]"
-    :style="{ minHeight }"
+    :style="{ height }"
   >
     <span v-if="displayValue" class="cell-content">{{ displayValue }}</span>
   </div>
@@ -41,9 +41,12 @@ const minHeight = computed(() => `${Math.max(36, props.rowHeight)}px`);
 <style scoped>
 .cell-view {
   width: 100%;
+  height: 100%;
   min-width: 0;
+  box-sizing: border-box;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
   padding: 6px 8px;
   overflow: hidden;
   cursor: cell;
@@ -62,10 +65,7 @@ const minHeight = computed(() => `${Math.max(36, props.rowHeight)}px`);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.35;
-}
-
-.kind-number {
-  justify-content: flex-end;
+  text-align: center;
 }
 
 .kind-boolean,

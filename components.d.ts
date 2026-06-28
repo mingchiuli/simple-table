@@ -26,7 +26,6 @@ declare module 'vue' {
     ElScrollbar: typeof import('element-plus/es')['ElScrollbar']
     ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
-    ElTableV2: typeof import('element-plus/es')['ElTableV2']
     FileButtons: typeof import('./src/components/file/FileButtons.vue')['default']
     FormulaBar: typeof import('./src/components/cell/FormulaBar.vue')['default']
     RecentFilesSection: typeof import('./src/components/file/RecentFilesSection.vue')['default']

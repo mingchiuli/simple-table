@@ -13,7 +13,6 @@ import * as api from '@/api';
 import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
 import type { CellValue, EditorMutationResponse, FileData, SearchResult } from '@/types';
-
 const route = useRoute();
 const fileDataStore = useFileDataStore();
 const { isMobileOrTablet } = usePlatform();
@@ -506,7 +505,6 @@ onMounted(async () => {
       :current-sheet-index="currentSheetIndex"
       :can-undo="canUndo"
       :can-redo="canRedo"
-      :search-results="searchResults"
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"

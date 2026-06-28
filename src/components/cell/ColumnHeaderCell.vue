@@ -1,27 +1,17 @@
 <script setup lang="ts">
 import { Close } from '@element-plus/icons-vue';
-import { usePlatform } from '@/composables/usePlatform';
-
-const { isTouchDevice } = usePlatform();
 
 const props = defineProps<{
   columnIndex: number;
   title: string;
-  width?: number;
 }>();
 
 const emit = defineEmits<{
   (e: 'delete', index: number): void;
-  (e: 'resize-start', event: MouseEvent | TouchEvent, colIndex: number): void;
 }>();
 
 function handleDelete(index: number) {
   emit('delete', index);
-}
-
-// 处理 resize 事件
-function handleResizeStart(e: MouseEvent | TouchEvent) {
-  emit('resize-start', e, props.columnIndex);
 }
 </script>
 
@@ -33,11 +23,6 @@ function handleResizeStart(e: MouseEvent | TouchEvent) {
         <el-icon :size="12"><Close /></el-icon>
       </button>
     </div>
-    <div
-      class="resize-handle"
-      @mousedown.stop="handleResizeStart"
-      @touchstart.stop="(e: TouchEvent) => isTouchDevice && handleResizeStart(e)"
-    />
   </div>
 </template>
 
@@ -45,15 +30,16 @@ function handleResizeStart(e: MouseEvent | TouchEvent) {
 .column-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   width: 100%;
   height: 100%;
-  padding: 0 4px;
+  padding: 0 30px;
   position: relative;
+  text-align: center;
 }
 
 .title {
-  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -63,6 +49,10 @@ function handleResizeStart(e: MouseEvent | TouchEvent) {
   display: flex;
   gap: 2px;
   flex: 0 0 auto;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .delete-btn {
@@ -87,30 +77,15 @@ function handleResizeStart(e: MouseEvent | TouchEvent) {
   opacity: 1;
 }
 
-.resize-handle {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 10;
-}
-
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .column-header {
-    padding: 0 2px 0 4px;
+    padding: 0 34px 0 6px;
   }
 
   .delete-btn {
     opacity: 1;
     width: 28px;
     height: 28px;
-  }
-
-  .resize-handle {
-    right: -4px;
-    width: 18px;
   }
 }
 </style>
