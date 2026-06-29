@@ -53,12 +53,12 @@ export function useGridResize({
     addDocumentListeners();
   }
 
-  function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number) {
+  function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number, boundaryY?: number) {
     event.preventDefault();
     resizingRow.value = rowIndex;
     startY.value = getClientY(event);
     startHeight.value = getRowHeight(rowIndex);
-    resizeLineY.value = headerHeight + getRowOffset(rowIndex) + startHeight.value - scrollTop.value;
+    resizeLineY.value = boundaryY ?? headerHeight + getRowOffset(rowIndex) + startHeight.value - scrollTop.value;
     addDocumentListeners();
   }
 

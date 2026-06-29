@@ -34,6 +34,7 @@ struct SearchSheetIndexEntry {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SearchIndexStamp {
+    pub document_id: u64,
     pub generation: u64,
     pub revision: u64,
 }
@@ -65,25 +66,27 @@ impl Default for SearchIndexStore {
 }
 
 impl SearchIndexStore {
-    pub fn stamp(&self) -> SearchIndexStamp {
+    pub fn stamp(&self, document_id: u64) -> SearchIndexStamp {
         SearchIndexStamp {
+            document_id,
             generation: self.generation,
             revision: self.revision,
         }
     }
 
-    pub fn mark_stale(&mut self) -> SearchIndexStamp {
+    pub fn mark_stale(&mut self, document_id: u64) -> SearchIndexStamp {
         self.revision = self.revision.wrapping_add(1);
-        self.stamp()
+        self.stamp(document_id)
     }
 
     pub fn install_sheet_index(
         &mut self,
+        document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
         index: Option<SearchSheetIndex>,
     ) {
-        if stamp != self.stamp() {
+        if stamp != self.stamp(document_id) {
             return;
         }
         if self.sheets.len() <= sheet_index {
@@ -101,10 +104,11 @@ impl SearchIndexStore {
 
     pub fn writer_handle(
         &self,
+        document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
     ) -> Option<SearchWriterHandle> {
-        if stamp != self.stamp() {
+        if stamp != self.stamp(document_id) {
             return None;
         }
         let entry = self.sheets.get(sheet_index)?.as_ref()?;
@@ -295,23 +299,24 @@ mod tests {
         let rows = vec![vec![CellValue::String("indexed text".to_string())]];
         let index = build_sheet_index(&rows).expect("index");
         let mut store = SearchIndexStore::default();
-        let original_stamp = store.stamp();
+        let document_id = 42;
+        let original_stamp = store.stamp(document_id);
 
-        store.install_sheet_index(0, original_stamp, Some(index));
+        store.install_sheet_index(document_id, 0, original_stamp, Some(index));
         assert_eq!(
             store.search_sheet(0, "indexed", 10),
             Some(vec![CellPosition { row: 0, col: 0 }])
         );
 
-        let stale_stamp = store.mark_stale();
+        let stale_stamp = store.mark_stale(document_id);
         assert_eq!(store.search_sheet(0, "indexed", 10), None);
 
         let stale_index = build_sheet_index(&rows).expect("stale index");
-        store.install_sheet_index(0, original_stamp, Some(stale_index));
+        store.install_sheet_index(document_id, 0, original_stamp, Some(stale_index));
         assert_eq!(store.search_sheet(0, "indexed", 10), None);
 
         let replacement_index = build_sheet_index(&rows).expect("replacement index");
-        store.install_sheet_index(0, stale_stamp, Some(replacement_index));
+        store.install_sheet_index(document_id, 0, stale_stamp, Some(replacement_index));
         assert_eq!(
             store.search_sheet(0, "indexed", 10),
             Some(vec![CellPosition { row: 0, col: 0 }])

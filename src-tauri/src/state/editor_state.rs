@@ -5,12 +5,15 @@ use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
     SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
-use crate::types::{CellPosition, FileData, OperationResult, SheetCellChange};
+use crate::types::{AppliedOperationResult, CellPosition, FileData, SheetCellChange};
+use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
+
+static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
-    pub operation: Option<OperationResult>,
+    pub operation: Option<AppliedOperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
 }
 
@@ -20,6 +23,7 @@ struct HistoryEntry {
 
 /// 编辑器状态管理器
 pub struct EditorState {
+    document_id: u64,
     document: SpreadsheetDocument,
     history: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
@@ -35,6 +39,7 @@ impl EditorState {
         let document = SpreadsheetDocument::new(file_data, workbook);
         let content_hash = document.content_hash();
         Self {
+            document_id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             document,
             history: Vec::new(),
             redo_stack: Vec::new(),
@@ -51,7 +56,7 @@ impl EditorState {
     }
 
     pub fn search_index_stamp(&self) -> SearchIndexStamp {
-        self.search_index.stamp()
+        self.search_index.stamp(self.document_id)
     }
 
     pub fn install_search_index(
@@ -61,12 +66,12 @@ impl EditorState {
         index: Option<SearchSheetIndex>,
     ) {
         self.search_index
-            .install_sheet_index(sheet_index, stamp, index);
+            .install_sheet_index(self.document_id, sheet_index, stamp, index);
         self.search_index.truncate(self.file_data().sheets.len());
     }
 
     pub fn mark_search_index_stale(&mut self) -> SearchIndexStamp {
-        self.search_index.mark_stale()
+        self.search_index.mark_stale(self.document_id)
     }
 
     pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {
@@ -80,7 +85,8 @@ impl EditorState {
         sheet_index: usize,
         stamp: SearchIndexStamp,
     ) -> Option<SearchWriterHandle> {
-        self.search_index.writer_handle(sheet_index, stamp)
+        self.search_index
+            .writer_handle(self.document_id, sheet_index, stamp)
     }
 
     fn scan_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {

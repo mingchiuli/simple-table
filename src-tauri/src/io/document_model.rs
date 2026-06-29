@@ -7,12 +7,12 @@ use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
-use crate::types::{CellValue, FileData, OperationResult, SheetCellChange, SheetData};
+use crate::types::{AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 #[derive(Debug, Clone)]
 pub struct DocumentOperationResult {
-    pub operation: OperationResult,
+    pub operation: AppliedOperationResult,
     pub cell_changes: Vec<SheetCellChange>,
 }
 
@@ -641,7 +641,7 @@ impl SpreadsheetDocument {
     fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
-        result: &OperationResult,
+        result: &AppliedOperationResult,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
         match &mut self.body {

@@ -307,12 +307,12 @@ pub struct GitHubAsset {
     pub browser_download_url: String,
 }
 
-// ==================== Operation Result ====================
+// ==================== Applied Operation Result ====================
 
-/// 操作结果（增量数据）
+/// Internal result produced after an editor operation has been applied.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
-pub enum OperationResult {
+pub enum AppliedOperationResult {
     /// 单元格修改
     #[serde(rename = "SetCell")]
     SetCell {
@@ -404,6 +404,12 @@ pub enum EditorPatch {
     Cells { changes: Vec<SheetCellChange> },
     #[serde(rename = "Layout")]
     Layout { patch: LayoutPatch },
+    #[serde(rename = "SheetSnapshot")]
+    SheetSnapshot {
+        #[serde(rename = "sheetIndex")]
+        sheet_index: usize,
+        sheet: SheetData,
+    },
     #[serde(rename = "FullSnapshot")]
     FullSnapshot {
         #[serde(rename = "fileData")]
@@ -414,6 +420,7 @@ pub enum EditorPatch {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
+    pub protocol_version: u16,
     pub editor_state: EditorStateInfo,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,

@@ -3,7 +3,8 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::EditorCommand;
 use crate::ops::editor_ops::{
-    cell_delta_mutation_response, layout_mutation_response, snapshot_mutation_response,
+    cell_delta_mutation_response, layout_mutation_response, sheet_snapshot_mutation_response,
+    snapshot_mutation_response,
 };
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
@@ -38,12 +39,13 @@ pub fn do_add_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_structural_snapshot(
+    execute_sheet_snapshot(
         state,
         EditorCommand::AddRow {
             sheet_index,
             row_index,
         },
+        sheet_index,
     )
 }
 
@@ -52,12 +54,13 @@ pub fn do_delete_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_structural_snapshot(
+    execute_sheet_snapshot(
         state,
         EditorCommand::DeleteRow {
             sheet_index,
             row_index,
         },
+        sheet_index,
     )
 }
 
@@ -65,7 +68,7 @@ pub fn do_add_column(
     state: Arc<RwLock<Option<EditorState>>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_structural_snapshot(state, EditorCommand::AddColumn { sheet_index })
+    execute_sheet_snapshot(state, EditorCommand::AddColumn { sheet_index }, sheet_index)
 }
 
 pub fn do_delete_column(
@@ -73,12 +76,13 @@ pub fn do_delete_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_structural_snapshot(
+    execute_sheet_snapshot(
         state,
         EditorCommand::DeleteColumn {
             sheet_index,
             col_index,
         },
+        sheet_index,
     )
 }
 
@@ -163,6 +167,23 @@ fn execute_structural_snapshot(
     Ok(response)
 }
 
+fn execute_sheet_snapshot(
+    state: Arc<RwLock<Option<EditorState>>>,
+    command: EditorCommand,
+    sheet_index: usize,
+) -> Result<EditorMutationResponse, AppError> {
+    let response = {
+        let mut state_guard = state.write().expect("Editor state lock poisoned");
+        let editor_state = state_guard.as_mut().ok_or(AppError::NoFileLoaded)?;
+        let _result = editor_state.execute(command)?;
+        sheet_snapshot_mutation_response(editor_state, sheet_index)
+    };
+
+    schedule_index_for_response(&response, state);
+
+    Ok(response)
+}
+
 fn execute_layout(
     state: Arc<RwLock<Option<EditorState>>>,
     command: EditorCommand,
@@ -187,5 +208,41 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
         sheet_index,
         column_widths: Default::default(),
         row_heights: [(row_index, height)].into_iter().collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{CellValue, EditorPatch, FileData, SheetData};
+
+    fn make_state() -> Arc<RwLock<Option<EditorState>>> {
+        Arc::new(RwLock::new(Some(EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "test.xlsx".to_string(),
+                sheets: vec![SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("A1".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        ))))
+    }
+
+    #[test]
+    fn row_and_column_structure_edits_return_sheet_snapshots() {
+        let add_row_response = do_add_row(make_state(), 0, 1).expect("add row");
+        assert!(matches!(
+            add_row_response.patches.as_slice(),
+            [EditorPatch::SheetSnapshot { sheet_index: 0, .. }]
+        ));
+
+        let add_column_response = do_add_column(make_state(), 0).expect("add column");
+        assert!(matches!(
+            add_column_response.patches.as_slice(),
+            [EditorPatch::SheetSnapshot { sheet_index: 0, .. }]
+        ));
     }
 }

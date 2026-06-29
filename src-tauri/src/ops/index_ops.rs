@@ -275,7 +275,9 @@ pub fn schedule_index_for_response(
                     );
                 }
             }
-            EditorPatch::FullSnapshot { .. } => needs_rebuild = true,
+            EditorPatch::FullSnapshot { .. } | EditorPatch::SheetSnapshot { .. } => {
+                needs_rebuild = true
+            }
             EditorPatch::Layout { .. } => {}
         }
     }

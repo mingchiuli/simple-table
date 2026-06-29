@@ -5,15 +5,10 @@ const { rowIndex } = defineProps<{
 
 const emit = defineEmits<{
   (e: 'delete', index: number): void;
-  (e: 'resize-start', event: MouseEvent | TouchEvent, index: number): void;
 }>();
 
 function handleDelete(index: number) {
   emit('delete', index);
-}
-
-function handleResizeStart(event: MouseEvent | TouchEvent) {
-  emit('resize-start', event, rowIndex);
 }
 </script>
 
@@ -21,11 +16,6 @@ function handleResizeStart(event: MouseEvent | TouchEvent) {
   <div class="row-number">
     <span>{{ rowIndex + 1 }}</span>
     <button class="delete-btn" @click.stop="handleDelete(rowIndex)">×</button>
-    <div
-      class="row-resize-handle"
-      @mousedown.stop="handleResizeStart"
-      @touchstart.stop="handleResizeStart"
-    />
   </div>
 </template>
 
@@ -39,17 +29,6 @@ function handleResizeStart(event: MouseEvent | TouchEvent) {
   height: 100%;
   padding: 0 30px;
   text-align: center;
-}
-
-.row-resize-handle {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 10px;
-  cursor: row-resize;
-  z-index: 5;
-  touch-action: none;
 }
 
 .delete-btn {
@@ -87,10 +66,6 @@ function handleResizeStart(event: MouseEvent | TouchEvent) {
   .delete-btn {
     opacity: 1;
     font-size: 18px;
-  }
-
-  .row-resize-handle {
-    height: 18px;
   }
 }
 </style>

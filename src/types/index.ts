@@ -72,9 +72,11 @@ export interface LayoutPatch {
 export type EditorPatch =
   | { type: 'Cells'; data: { changes: SheetCellChange[] } }
   | { type: 'Layout'; data: { patch: LayoutPatch } }
+  | { type: 'SheetSnapshot'; data: { sheetIndex: number; sheet: SheetData } }
   | { type: 'FullSnapshot'; data: { fileData: FileData } };
 
 export interface EditorMutationResponse {
+  protocolVersion: 1;
   editorState: EditorStateInfo;
   patches?: EditorPatch[];
 }

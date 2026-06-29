@@ -3,17 +3,8 @@ import type { CellValue, MergeRange } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { cellToDisplayString, cellToEditorString } from '@/composables/usePendingCellSave';
 import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from '@/components/table-grid';
-import {
-  areNumberRecordsEqual,
-  buildOffsets,
-  collectColumnResizeHandles,
-  collectVisibleItems,
-  offsetAt,
-  spanSize,
-  type GridItem,
-} from '@/table-geometry/gridGeometry';
+import { useGridGeometry } from '@/table-geometry/useGridGeometry';
 import { useGridResize } from '@/table-geometry/useGridResize';
-import { useMergeLookup } from '@/table-geometry/useMergeLookup';
 import { useCellEditing } from '@/table-geometry/useCellEditing';
 
 const { isTouchDevice } = usePlatform();
@@ -25,29 +16,6 @@ const ROW_HEADER_WIDTH = 60;
 const MIN_COLUMN_WIDTH = 56;
 const MIN_ROW_HEIGHT = 36;
 const OVERSCAN_PX = 240;
-
-type ColumnItem = {
-  index: number;
-  title: string;
-  left: number;
-  width: number;
-};
-
-type CellItem = {
-  key: string;
-  rowIndex: number;
-  colIndex: number;
-  top: number;
-  left: number;
-  width: number;
-  height: number;
-  value: CellValue | undefined;
-};
-
-type MergeOverlayCell = CellItem & {
-  draftValue?: string;
-  selected: boolean;
-};
 
 const props = defineProps<{
   data: CellValue[][];
@@ -75,124 +43,46 @@ const emit = defineEmits<{
 const containerRef = ref<HTMLElement | null>(null);
 const scrollViewportRef = ref<HTMLElement | null>(null);
 const tableSize = ref({ width: 800, height: 600 });
-
-const columnWidths = ref<Record<number, number>>({});
-const rowHeights = ref<Record<number, number>>({});
 const scrollLeft = ref(0);
 const scrollTop = ref(0);
 
-function initColumnWidths() {
-  const nextWidths = props.columnWidths ? { ...props.columnWidths } : {};
-  if (areNumberRecordsEqual(columnWidths.value, nextWidths)) return;
-  columnWidths.value = nextWidths;
-}
-
-function initRowHeights() {
-  const nextHeights = props.rowHeights ? { ...props.rowHeights } : {};
-  if (areNumberRecordsEqual(rowHeights.value, nextHeights)) return;
-  rowHeights.value = nextHeights;
-}
-
-initColumnWidths();
-initRowHeights();
-
-watch(() => props.columnWidths, initColumnWidths, { deep: true });
-watch(() => props.rowHeights, initRowHeights, { deep: true });
-
-const viewportWidth = computed(() => Math.max(0, tableSize.value.width - ROW_HEADER_WIDTH));
-const viewportHeight = computed(() => Math.max(0, tableSize.value.height - HEADER_HEIGHT));
-
-const columnOffsets = computed(() => {
-  return buildOffsets(props.columns.length, getColumnWidth);
-});
-
-const rowOffsets = computed(() => {
-  return buildOffsets(props.data.length, getRowHeight);
-});
-
-const totalColumnsWidth = computed(() => columnOffsets.value.at(-1) ?? 0);
-const totalRowsHeight = computed(() => rowOffsets.value.at(-1) ?? 0);
-
-const visibleRows = computed<GridItem[]>(() => {
-  return collectVisibleItems(rowOffsets.value, props.data.length, scrollTop.value, viewportHeight.value, OVERSCAN_PX);
-});
-
-const visibleColumns = computed<ColumnItem[]>(() => {
-  return collectVisibleItems(
-    columnOffsets.value,
-    props.columns.length,
-    scrollLeft.value,
-    viewportWidth.value,
-    OVERSCAN_PX
-  )
-    .map((item) => ({
-      index: item.index,
-      title: props.columns[item.index] ?? '',
-      left: item.top,
-      width: item.height,
-    }));
-});
-
-const visibleCellItems = computed<CellItem[]>(() => {
-  const cells: CellItem[] = [];
-  for (const row of visibleRows.value) {
-    for (const column of visibleColumns.value) {
-      if (isMergedCell(row.index, column.index)) continue;
-      cells.push({
-        key: `${row.index}-${column.index}`,
-        rowIndex: row.index,
-        colIndex: column.index,
-        top: row.top,
-        left: column.left,
-        width: column.width,
-        height: row.height,
-        value: props.data[row.index]?.[column.index],
-      });
-    }
-  }
-  return cells;
-});
-
-const visibleMergeCells = computed<MergeOverlayCell[]>(() => {
-  const leftLimit = scrollLeft.value - OVERSCAN_PX;
-  const rightLimit = scrollLeft.value + viewportWidth.value + OVERSCAN_PX;
-  const topLimit = scrollTop.value - OVERSCAN_PX;
-  const bottomLimit = scrollTop.value + viewportHeight.value + OVERSCAN_PX;
-
-  return mergeRanges.value.flatMap((merge) => {
-    const left = getDataColumnOffset(merge.startCol);
-    const top = getRowOffset(merge.startRow);
-    const width = getColumnSpanWidth(merge.startCol, merge.endCol);
-    const height = getRowSpanHeight(merge.startRow, merge.endRow);
-
-    if (
-      width <= 0
-      || height <= 0
-      || left + width < leftLimit
-      || left > rightLimit
-      || top + height < topLimit
-      || top > bottomLimit
-    ) {
-      return [];
-    }
-
-    return [{
-      key: `${merge.startRow}-${merge.startCol}-${merge.endRow}-${merge.endCol}`,
-      rowIndex: merge.startRow,
-      colIndex: merge.startCol,
-      top,
-      left,
-      width,
-      height,
-      value: props.data[merge.startRow]?.[merge.startCol],
-      draftValue: getDraftValue(merge.startRow, merge.startCol),
-      selected: isSelectedCell(merge.startRow, merge.startCol),
-    }];
-  });
-});
-
 const mergeRanges = computed(() => props.merges ?? []);
-const { isMergedCell, normalizeCellPosition } = useMergeLookup(mergeRanges);
+const {
+  viewportWidth,
+  viewportHeight,
+  totalColumnsWidth,
+  totalRowsHeight,
+  visibleRows,
+  visibleColumns,
+  visibleCellItems,
+  visibleMergeCells,
+  visibleColumnResizeHandles,
+  visibleRowResizeHandles,
+  getColumnWidth,
+  getRowHeight,
+  getRowOffset,
+  getColumnOffset,
+  getDataColumnOffset,
+  setColumnWidth: setPreviewColumnWidth,
+  setRowHeight: setPreviewRowHeight,
+  normalizeCellPosition,
+} = useGridGeometry({
+  data: computed(() => props.data),
+  columns: computed(() => props.columns),
+  merges: mergeRanges,
+  selectedCell: computed(() => props.selectedCell),
+  columnWidths: computed(() => props.columnWidths),
+  rowHeights: computed(() => props.rowHeights),
+  tableSize,
+  scrollLeft,
+  scrollTop,
+  rowHeaderWidth: ROW_HEADER_WIDTH,
+  headerHeight: HEADER_HEIGHT,
+  defaultColumnWidth: DEFAULT_COLUMN_WIDTH,
+  defaultRowHeight: DEFAULT_ROW_HEIGHT,
+  overscanPx: OVERSCAN_PX,
+  getDraftValue,
+});
 const {
   editingValue,
   isManualClick,
@@ -212,44 +102,6 @@ const {
   emitChange: (rowIndex, colIndex, value) => emit('cell-change', rowIndex, colIndex, value),
   emitCancel: (rowIndex, colIndex) => emit('cell-edit-cancel', rowIndex, colIndex),
 });
-
-const visibleColumnResizeHandles = computed(() => {
-  return collectColumnResizeHandles(
-    props.columns.length,
-    ROW_HEADER_WIDTH,
-    scrollLeft.value,
-    tableSize.value.width,
-    getColumnWidth
-  );
-});
-
-function getColumnWidth(colIndex: number): number {
-  return columnWidths.value[colIndex] || DEFAULT_COLUMN_WIDTH;
-}
-
-function getRowHeight(rowIndex: number): number {
-  return rowHeights.value[rowIndex] || DEFAULT_ROW_HEIGHT;
-}
-
-function getRowOffset(rowIndex: number): number {
-  return offsetAt(rowOffsets.value, rowIndex, totalRowsHeight.value);
-}
-
-function getColumnOffset(colIndex: number): number {
-  return ROW_HEADER_WIDTH + getDataColumnOffset(colIndex);
-}
-
-function getDataColumnOffset(colIndex: number): number {
-  return offsetAt(columnOffsets.value, colIndex, totalColumnsWidth.value);
-}
-
-function getColumnSpanWidth(startCol: number, endCol: number): number {
-  return spanSize(columnOffsets.value, startCol, endCol, totalColumnsWidth.value);
-}
-
-function getRowSpanHeight(startRow: number, endRow: number): number {
-  return spanSize(rowOffsets.value, startRow, endRow, totalRowsHeight.value);
-}
 
 function handleViewportScroll() {
   const viewport = scrollViewportRef.value;
@@ -276,12 +128,8 @@ const {
   getRowHeight,
   getColumnOffset,
   getRowOffset,
-  setColumnWidth: (colIndex, width) => {
-    columnWidths.value[colIndex] = width;
-  },
-  setRowHeight: (rowIndex, height) => {
-    rowHeights.value[rowIndex] = height;
-  },
+  setColumnWidth: setPreviewColumnWidth,
+  setRowHeight: setPreviewRowHeight,
   commitColumnWidth: (colIndex, width) => emit('column-resize', colIndex, width),
   commitRowHeight: (rowIndex, height) => emit('row-resize', rowIndex, height),
 });
@@ -385,10 +233,6 @@ function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValu
   return cellToDisplayString(cellValue);
 }
 
-function isSelectedCell(rowIndex: number, colIndex: number): boolean {
-  return props.selectedCell?.row === rowIndex && props.selectedCell?.col === colIndex;
-}
-
 function handleCellClick(rowIndex: number, colIndex: number) {
   const normalized = normalizeCellPosition(rowIndex, colIndex);
   emit('select-cell', normalized.rowIndex, normalized.colIndex);
@@ -422,7 +266,6 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
       :total-rows-height="totalRowsHeight"
       @delete-row="handleDeleteRow"
       @delete-column="handleDeleteColumn"
-      @row-resize-start="startRowResize"
     />
 
     <div ref="scrollViewportRef" class="data-viewport" @scroll="handleViewportScroll">
@@ -466,13 +309,15 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
     </div>
 
     <ResizeLayer
-      :handles="visibleColumnResizeHandles"
+      :column-handles="visibleColumnResizeHandles"
+      :row-handles="visibleRowResizeHandles"
       :resizing-column="resizingColumn"
       :resizing-row="resizingRow"
       :resize-line-x="resizeLineX"
       :resize-line-y="resizeLineY"
       :is-touch-device="isTouchDevice"
       @column-resize-start="startColumnResize"
+      @row-resize-start="startRowResize"
     />
   </div>
 </template>
@@ -646,6 +491,32 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   background: var(--el-color-primary);
 }
 
+:deep(.row-resize-handle) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  transform: translateY(-5px);
+  cursor: row-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+:deep(.row-resize-handle)::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 2px;
+  background: transparent;
+}
+
+:deep(.row-resize-handle:hover)::after,
+:deep(.row-resize-handle.is-active)::after {
+  background: var(--el-color-primary);
+}
+
 :deep(.resize-line) {
   position: absolute;
   top: 0;
@@ -682,6 +553,15 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
 
   :deep(.column-resize-handle)::after {
     left: 8px;
+  }
+
+  :deep(.row-resize-handle) {
+    height: 18px;
+    transform: translateY(-9px);
+  }
+
+  :deep(.row-resize-handle)::after {
+    top: 8px;
   }
 }
 </style>

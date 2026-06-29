@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::types::{
-    CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData, MergeRange, OperationResult,
-    RowChange, RowHeightChange, SheetData,
+    AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData,
+    MergeRange, RowChange, RowHeightChange, SheetData,
 };
 use serde::{Deserialize, Serialize};
 
@@ -237,7 +237,7 @@ impl EditorCommand {
 }
 
 impl AppliedOperation {
-    pub fn execute(&self, file_data: &mut FileData) -> OperationResult {
+    pub fn execute(&self, file_data: &mut FileData) -> AppliedOperationResult {
         match self {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -250,7 +250,7 @@ impl AppliedOperation {
                     ensure_cell_exists(sheet, *row, *col);
                     sheet.rows[*row][*col] = new_value.clone();
                 }
-                OperationResult::SetCell {
+                AppliedOperationResult::SetCell {
                     sheet_index: *sheet_index,
                     cell: CellChange {
                         row: *row,
@@ -276,7 +276,7 @@ impl AppliedOperation {
                             .insert(*row_index, *height);
                     }
                 }
-                OperationResult::AddRow {
+                AppliedOperationResult::AddRow {
                     sheet_index: *sheet_index,
                     row: RowChange {
                         index: *row_index,
@@ -295,7 +295,7 @@ impl AppliedOperation {
                     shift_layout_map_on_delete(sheet.row_heights.as_mut(), *row_index);
                     shift_row_merges_on_delete(&mut sheet.merges, *row_index);
                 }
-                OperationResult::DeleteRow {
+                AppliedOperationResult::DeleteRow {
                     sheet_index: *sheet_index,
                     row_index: *row_index,
                 }
@@ -321,7 +321,7 @@ impl AppliedOperation {
                             .insert(*col_index, *width);
                     }
                 }
-                OperationResult::AddColumn {
+                AppliedOperationResult::AddColumn {
                     sheet_index: *sheet_index,
                     column: ColumnChange { index: *col_index },
                     col_data: col_data.clone(),
@@ -340,7 +340,7 @@ impl AppliedOperation {
                     shift_layout_map_on_delete(sheet.column_widths.as_mut(), *col_index);
                     shift_column_merges_on_delete(&mut sheet.merges, *col_index);
                 }
-                OperationResult::DeleteColumn {
+                AppliedOperationResult::DeleteColumn {
                     sheet_index: *sheet_index,
                     column_index: *col_index,
                 }
@@ -354,7 +354,7 @@ impl AppliedOperation {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     set_layout_value(&mut sheet.column_widths, *col_index, *new_width);
                 }
-                OperationResult::SetColumnWidth {
+                AppliedOperationResult::SetColumnWidth {
                     sheet_index: *sheet_index,
                     column: ColumnWidthChange {
                         col_index: *col_index,
@@ -371,7 +371,7 @@ impl AppliedOperation {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     set_layout_value(&mut sheet.row_heights, *row_index, *new_height);
                 }
-                OperationResult::SetRowHeight {
+                AppliedOperationResult::SetRowHeight {
                     sheet_index: *sheet_index,
                     row: RowHeightChange {
                         row_index: *row_index,
@@ -385,7 +385,7 @@ impl AppliedOperation {
             } => {
                 let index = (*sheet_index).min(file_data.sheets.len());
                 file_data.sheets.insert(index, sheet_data.clone());
-                OperationResult::AddSheet {
+                AppliedOperationResult::AddSheet {
                     sheet_index: index,
                     name: sheet_data.name.clone(),
                     sheet_data: sheet_data.clone(),
@@ -393,7 +393,7 @@ impl AppliedOperation {
             }
             AppliedOperation::DeleteSheet { sheet_index } => {
                 let removed_sheet = file_data.sheets.remove(*sheet_index);
-                OperationResult::DeleteSheet {
+                AppliedOperationResult::DeleteSheet {
                     sheet_index: *sheet_index,
                     sheet_data: removed_sheet,
                 }

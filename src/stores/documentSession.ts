@@ -10,7 +10,7 @@ import type {
 
 type CellPosition = { row: number; col: number };
 
-export type PendingCellChange = {
+export type CellSaveRequest = {
   sheetIndex: number;
   row: number;
   col: number;
@@ -32,8 +32,8 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     isSearching: false,
     sheetSelectedCells: new Map<number, CellPosition>(),
     draftCellValues: new Map<string, string>(),
-    pendingCellChanges: new Map<string, PendingCellChange>(),
-    inFlightCellChanges: new Map<string, PendingCellChange>(),
+    queuedCellSaves: new Map<string, CellSaveRequest>(),
+    activeCellSaves: new Map<string, CellSaveRequest>(),
     sheetColumnWidths: {} as Record<number, Record<number, number>>,
     sheetRowHeights: {} as Record<number, Record<number, number>>,
     canUndo: false,
@@ -66,6 +66,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.resetUiForCurrentDocument();
     },
     applyMutationResponse(response: EditorMutationResponse): FileData | null {
+      if (response.protocolVersion !== 1) {
+        throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
+      }
       const nextData = this.applyPatches(response.patches);
       this.applyEditorState(response.editorState);
       this.clampSelectionToCurrentSheet();
@@ -91,16 +94,25 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     applyPatches(patches: EditorPatch[] | undefined): FileData | null {
       let nextData = this.data;
       for (const patch of patches ?? []) {
-        if (patch.type === "FullSnapshot") {
-          nextData = this.applySnapshot(patch.data.fileData);
-        } else if (patch.type === "Cells") {
-          nextData = this.applyCellChanges(patch.data.changes);
-        } else if (patch.type === "Layout") {
-          nextData = this.applyLayoutPatch(
-            patch.data.patch.sheetIndex,
-            patch.data.patch.columnWidths ?? {},
-            patch.data.patch.rowHeights ?? {}
-          );
+        switch (patch.type) {
+          case "FullSnapshot":
+            nextData = this.applySnapshot(patch.data.fileData);
+            break;
+          case "Cells":
+            nextData = this.applyCellChanges(patch.data.changes);
+            break;
+          case "Layout":
+            nextData = this.applyLayoutPatch(
+              patch.data.patch.sheetIndex,
+              patch.data.patch.columnWidths ?? {},
+              patch.data.patch.rowHeights ?? {}
+            );
+            break;
+          case "SheetSnapshot":
+            nextData = this.applySheetSnapshot(patch.data.sheetIndex, patch.data.sheet);
+            break;
+          default:
+            assertNever(patch);
         }
       }
       this.syncLayoutFromData();
@@ -112,6 +124,16 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         path: this.data?.path ?? snapshot.path,
         fileName: this.data?.fileName ?? snapshot.fileName,
       };
+      this.data = nextData;
+      return nextData;
+    },
+    applySheetSnapshot(sheetIndex: number, sheetSnapshot: FileData["sheets"][number]): FileData | null {
+      if (!this.data || !this.data.sheets[sheetIndex]) return this.data;
+      const nextData = {
+        ...this.data,
+        sheets: [...this.data.sheets],
+      };
+      nextData.sheets[sheetIndex] = sheetSnapshot;
       this.data = nextData;
       return nextData;
     },
@@ -178,8 +200,8 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
     resetPendingEdits() {
       this.draftCellValues.clear();
-      this.pendingCellChanges.clear();
-      this.inFlightCellChanges.clear();
+      this.queuedCellSaves.clear();
+      this.activeCellSaves.clear();
     },
     syncLayoutFromData() {
       if (!this.data) {
@@ -251,6 +273,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
   },
 });
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled editor patch: ${JSON.stringify(value)}`);
+}
 
 function ensureCellExists(rows: CellValue[][], row: number, col: number) {
   while (rows.length <= row) {

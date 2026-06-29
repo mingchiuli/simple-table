@@ -5,8 +5,10 @@ use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
 use crate::state::state::EditorStateInfo;
 use crate::types::{
-    EditorMutationResponse, EditorPatch, LayoutPatch, OperationResult, SheetCellChange,
+    AppliedOperationResult, EditorMutationResponse, EditorPatch, LayoutPatch, SheetCellChange,
 };
+
+const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
 
 /// 获取编辑器状态信息
 pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
@@ -19,9 +21,10 @@ pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
 
 pub fn snapshot_mutation_response(
     editor_state: &EditorState,
-    _operation: Option<OperationResult>,
+    _operation: Option<AppliedOperationResult>,
 ) -> EditorMutationResponse {
     EditorMutationResponse {
+        protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         editor_state: editor_state_info(editor_state),
         patches: vec![EditorPatch::FullSnapshot {
             file_data: editor_state.file_data().clone(),
@@ -31,10 +34,10 @@ pub fn snapshot_mutation_response(
 
 pub fn cell_delta_mutation_response(
     editor_state: &EditorState,
-    operation: OperationResult,
+    operation: AppliedOperationResult,
     mut cell_changes: Vec<SheetCellChange>,
 ) -> EditorMutationResponse {
-    if let OperationResult::SetCell { sheet_index, cell } = &operation {
+    if let AppliedOperationResult::SetCell { sheet_index, cell } = &operation {
         push_cell_change_if_missing(
             &mut cell_changes,
             SheetCellChange {
@@ -47,6 +50,7 @@ pub fn cell_delta_mutation_response(
     }
 
     EditorMutationResponse {
+        protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         editor_state: editor_state_info(editor_state),
         patches: if cell_changes.is_empty() {
             Vec::new()
@@ -63,8 +67,32 @@ pub fn layout_mutation_response(
     patch: LayoutPatch,
 ) -> EditorMutationResponse {
     EditorMutationResponse {
+        protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         editor_state: editor_state_info(editor_state),
         patches: vec![EditorPatch::Layout { patch }],
+    }
+}
+
+pub fn sheet_snapshot_mutation_response(
+    editor_state: &EditorState,
+    sheet_index: usize,
+) -> EditorMutationResponse {
+    let patches = editor_state
+        .file_data()
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| {
+            vec![EditorPatch::SheetSnapshot {
+                sheet_index,
+                sheet: sheet.clone(),
+            }]
+        })
+        .unwrap_or_default();
+
+    EditorMutationResponse {
+        protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
+        editor_state: editor_state_info(editor_state),
+        patches,
     }
 }
 

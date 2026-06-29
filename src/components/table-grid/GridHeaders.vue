@@ -26,7 +26,6 @@ defineProps<{
 const emit = defineEmits<{
   (e: "delete-row", index: number): void;
   (e: "delete-column", index: number): void;
-  (e: "row-resize-start", event: MouseEvent | TouchEvent, index: number): void;
 }>();
 </script>
 
@@ -67,7 +66,6 @@ const emit = defineEmits<{
         <RowNumberCell
           :row-index="row.index"
           @delete="(index) => emit('delete-row', index)"
-          @resize-start="(event, index) => emit('row-resize-start', event, index)"
         />
       </div>
     </div>

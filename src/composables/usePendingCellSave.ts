@@ -1,6 +1,6 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
-import { useDocumentSessionStore, type PendingCellChange } from '@/stores/documentSession';
+import { useDocumentSessionStore, type CellSaveRequest } from '@/stores/documentSession';
 import type { CellValue, EditorMutationResponse, FileData, SheetData } from '@/types';
 import { getCellKey } from '@/utils/cellKey';
 
@@ -77,11 +77,10 @@ export function usePendingCellSave({
 }: UsePendingCellSaveOptions) {
   const documentSessionStore = useDocumentSessionStore();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const pendingChanges = documentSessionStore.pendingCellChanges;
-  const inFlightChanges = documentSessionStore.inFlightCellChanges;
+  const queuedSaves = documentSessionStore.queuedCellSaves;
+  const activeSaves = documentSessionStore.activeCellSaves;
   const draftCellValues = documentSessionStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
-  let needsSaveAfterInFlight = false;
 
   const currentCellValue = computed(() => {
     if (!selectedCell.value || !currentSheet.value) return undefined;
@@ -123,52 +122,70 @@ export function usePendingCellSave({
     return fileData.value?.sheets[sheetIndex]?.rows[row]?.[col] ?? null;
   }
 
-  function pendingBaseCellValue(sheetIndex: number, row: number, col: number): CellValue {
+  function visibleBaseCellValue(sheetIndex: number, row: number, col: number): CellValue {
     const key = getCellKey(sheetIndex, row, col);
-    const inFlightChange = inFlightChanges.get(key);
-    return inFlightChange ? parseCellValue(inFlightChange.value) : committedCellValue(sheetIndex, row, col);
+    const activeSave = activeSaves.get(key);
+    return activeSave ? parseCellValue(activeSave.value) : committedCellValue(sheetIndex, row, col);
   }
 
-  function pendingBaseEditorString(sheetIndex: number, row: number, col: number): string {
+  function visibleBaseEditorString(sheetIndex: number, row: number, col: number): string {
     const key = getCellKey(sheetIndex, row, col);
-    return inFlightChanges.get(key)?.value ?? cellToEditorString(committedCellValue(sheetIndex, row, col));
+    return activeSaves.get(key)?.value ?? cellToEditorString(committedCellValue(sheetIndex, row, col));
   }
 
   function editorStringForCell(sheetIndex: number, row: number, col: number): string {
     const key = getCellKey(sheetIndex, row, col);
-    return draftCellValues.get(key) ?? pendingBaseEditorString(sheetIndex, row, col);
+    return draftCellValues.get(key) ?? visibleBaseEditorString(sheetIndex, row, col);
   }
 
   function updateDraftCell(sheetIndex: number, row: number, col: number, value: string) {
-    const originalValue = pendingBaseCellValue(sheetIndex, row, col);
     const key = getCellKey(sheetIndex, row, col);
+    const activeSave = activeSaves.get(key);
+    const committedValue = committedCellValue(sheetIndex, row, col);
+    const visibleBaseValue = activeSave ? parseCellValue(activeSave.value) : committedValue;
 
-    if (draftCellValues.get(key) === value) {
-      return;
-    }
-
-    if (value === cellToEditorString(originalValue)) {
-      draftCellValues.delete(key);
-      pendingChanges.delete(key);
+    if (activeSave && value === activeSave.value) {
+      draftCellValues.set(key, value);
+      queuedSaves.delete(key);
       clearPendingContentChangeIfIdle();
       return;
     }
 
+    if (activeSave && value === cellToEditorString(activeSave.oldValue)) {
+      draftCellValues.set(key, value);
+      queueCellSave(sheetIndex, row, col, value, visibleBaseValue);
+      markPendingContentChange();
+      schedulePendingSave();
+      return;
+    }
+
+    if (!activeSave && value === cellToEditorString(committedValue)) {
+      draftCellValues.delete(key);
+      queuedSaves.delete(key);
+      clearPendingContentChangeIfIdle();
+      return;
+    }
+
+    if (draftCellValues.get(key) === value && queuedSaves.get(key)?.value === value) {
+      return;
+    }
+
     draftCellValues.set(key, value);
-    queueCellChange(sheetIndex, row, col, value, originalValue);
+    queueCellSave(sheetIndex, row, col, value, visibleBaseValue);
     markPendingContentChange();
     schedulePendingSave();
   }
 
-  function queueCellChange(sheetIndex: number, row: number, col: number, value: string, oldValue: CellValue) {
+  function queueCellSave(sheetIndex: number, row: number, col: number, value: string, oldValue: CellValue) {
     const key = getCellKey(sheetIndex, row, col);
-    const existing = pendingChanges.get(key);
-    pendingChanges.set(key, {
+    const existing = queuedSaves.get(key);
+    const activeSave = activeSaves.get(key);
+    queuedSaves.set(key, {
       sheetIndex,
       row,
       col,
       value,
-      oldValue: existing?.oldValue ?? oldValue,
+      oldValue: existing?.oldValue ?? activeSave?.oldValue ?? oldValue,
     });
   }
 
@@ -184,18 +201,16 @@ export function usePendingCellSave({
 
   function startPendingSave() {
     if (pendingSavePromise) {
-      needsSaveAfterInFlight = true;
       return;
     }
 
     pendingSavePromise = debouncedSave().finally(() => {
       pendingSavePromise = null;
-      if (needsSaveAfterInFlight || (pendingChanges.size && !debounceTimer)) {
-        needsSaveAfterInFlight = false;
+      if (queuedSaves.size && !debounceTimer) {
         startPendingSave();
         return;
       }
-      if (!pendingChanges.size) {
+      if (!queuedSaves.size && !activeSaves.size) {
         clearPendingContentChange();
       }
     });
@@ -208,10 +223,10 @@ export function usePendingCellSave({
     value: string
   ) {
     const currentFileData = fileData.value;
-    if (!currentFileData) return;
+    if (!currentFileData) throw new Error('No file is loaded');
 
     const sheet = currentFileData.sheets[sheetIndex];
-    if (!sheet) return;
+    if (!sheet) throw new Error(`Sheet ${sheetIndex} does not exist`);
 
     const newValue = parseCellValue(value);
     const isCurrentCell = currentSheetIndex.value === sheetIndex
@@ -222,7 +237,7 @@ export function usePendingCellSave({
     applyMutationResponse(response);
 
     const key = getCellKey(sheetIndex, rowIndex, colIndex);
-    inFlightChanges.delete(key);
+    activeSaves.delete(key);
     if (draftCellValues.get(key) === value) {
       draftCellValues.delete(key);
     }
@@ -234,15 +249,15 @@ export function usePendingCellSave({
   }
 
   async function debouncedSave(): Promise<boolean> {
-    if (!pendingChanges.size) {
+    if (!queuedSaves.size) {
       clearPendingContentChange();
       return true;
     }
 
-    const changes = Array.from(pendingChanges.values());
-    pendingChanges.clear();
+    const changes = Array.from(queuedSaves.values());
+    queuedSaves.clear();
     for (const change of changes) {
-      inFlightChanges.set(getCellKey(change.sheetIndex, change.row, change.col), change);
+      activeSaves.set(getCellKey(change.sheetIndex, change.row, change.col), change);
     }
 
     for (let i = 0; i < changes.length; i += 1) {
@@ -250,37 +265,37 @@ export function usePendingCellSave({
       try {
         await commitCellChange(sheetIndex, row, col, value);
       } catch (error) {
-        for (const change of changes.slice(i)) {
-          inFlightChanges.delete(getCellKey(change.sheetIndex, change.row, change.col));
+        for (const change of changes) {
+          activeSaves.delete(getCellKey(change.sheetIndex, change.row, change.col));
         }
         for (const change of changes.slice(i)) {
           clearDraftIfUnchanged(change);
         }
         ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
-        if (!pendingChanges.size) {
+        if (!queuedSaves.size && !activeSaves.size) {
           clearPendingContentChange();
         }
         return false;
       }
     }
-    if (!pendingChanges.size) {
+    if (!queuedSaves.size && !activeSaves.size) {
       clearPendingContentChange();
     }
     return true;
   }
 
-  function clearDraftIfUnchanged(change: PendingCellChange) {
+  function clearDraftIfUnchanged(change: CellSaveRequest) {
     const key = getCellKey(change.sheetIndex, change.row, change.col);
     if (draftCellValues.get(key) === change.value) {
       draftCellValues.delete(key);
     }
-    if (pendingChanges.get(key)?.value === change.value) {
-      pendingChanges.delete(key);
+    if (queuedSaves.get(key)?.value === change.value) {
+      queuedSaves.delete(key);
     }
   }
 
   function clearPendingContentChangeIfIdle() {
-    if (!pendingChanges.size && !pendingSavePromise) {
+    if (!queuedSaves.size && !activeSaves.size && !pendingSavePromise) {
       clearPendingContentChange();
     }
   }
@@ -295,7 +310,7 @@ export function usePendingCellSave({
       if (pendingSavePromise) {
         const saved = await pendingSavePromise;
         if (!saved) return false;
-      } else if (pendingChanges.size) {
+      } else if (queuedSaves.size) {
         startPendingSave();
         if (!pendingSavePromise) return false;
         const saved = await pendingSavePromise;
@@ -306,7 +321,7 @@ export function usePendingCellSave({
         clearTimeout(debounceTimer);
         debounceTimer = null;
       }
-      if (pendingChanges.size) {
+      if (queuedSaves.size) {
         continue;
       }
       if (!pendingSavePromise) {
@@ -336,14 +351,14 @@ export function usePendingCellSave({
 
     const sheetIndex = currentSheetIndex.value;
     const key = getCellKey(sheetIndex, row, col);
-    const inFlightChange = inFlightChanges.get(key);
+    const activeSave = activeSaves.get(key);
     draftCellValues.delete(key);
-    pendingChanges.delete(key);
+    queuedSaves.delete(key);
 
-    if (inFlightChange) {
-      const revertValue = cellToEditorString(inFlightChange.oldValue);
+    if (activeSave) {
+      const revertValue = cellToEditorString(activeSave.oldValue);
       draftCellValues.set(key, revertValue);
-      queueCellChange(sheetIndex, row, col, revertValue, pendingBaseCellValue(sheetIndex, row, col));
+      queueCellSave(sheetIndex, row, col, revertValue, visibleBaseCellValue(sheetIndex, row, col));
       markPendingContentChange();
       schedulePendingSave();
     }
@@ -352,7 +367,7 @@ export function usePendingCellSave({
       cellEditorValue.value = editorStringForCell(sheetIndex, row, col);
     }
 
-    if (!pendingChanges.size && debounceTimer) {
+    if (!queuedSaves.size && debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }

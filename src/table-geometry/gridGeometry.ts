@@ -9,6 +9,11 @@ export type ColumnResizeHandle = {
   left: number;
 };
 
+export type RowResizeHandle = {
+  rowIndex: number;
+  top: number;
+};
+
 export function buildOffsets(count: number, sizeAt: (index: number) => number): number[] {
   const offsets = [0];
   for (let index = 0; index < count; index += 1) {
@@ -91,6 +96,27 @@ export function collectColumnResizeHandles(
       handles.push({ colIndex, left: boundary });
     }
     if (boundary > tableWidth) break;
+  }
+
+  return handles;
+}
+
+export function collectRowResizeHandles(
+  rowCount: number,
+  headerHeight: number,
+  scrollTop: number,
+  tableHeight: number,
+  heightAt: (index: number) => number
+): RowResizeHandle[] {
+  const handles: RowResizeHandle[] = [];
+  let boundary = headerHeight - scrollTop;
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    boundary += heightAt(rowIndex);
+    if (boundary >= headerHeight && boundary <= tableHeight) {
+      handles.push({ rowIndex, top: boundary });
+    }
+    if (boundary > tableHeight) break;
   }
 
   return handles;
