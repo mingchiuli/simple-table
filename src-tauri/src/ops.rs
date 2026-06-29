@@ -4,4 +4,4 @@ pub mod editor_ops;
 pub mod index_ops;
 pub mod search_ops;
 
-pub use core_ops::Operation;
+pub use core_ops::{AppliedOperation, EditorCommand};

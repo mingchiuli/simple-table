@@ -64,10 +64,9 @@ pub fn set_cell(
     sheet_index: usize,
     row: usize,
     col: usize,
-    old_value: CellValue,
     new_value: CellValue,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_set_cell(get_state(), sheet_index, row, col, old_value, new_value)
+    cell_ops::do_set_cell(get_state(), sheet_index, row, col, new_value)
 }
 
 #[tauri::command(rename_all = "camelCase")]

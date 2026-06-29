@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { Document } from "@element-plus/icons-vue";
 import type { FileData } from "@/types";
-import { useFileDataStore } from "@/stores/fileData";
+import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
 import { openFile, getStorageType } from "@/platform";
 
 const router = useRouter();
-const fileDataStore = useFileDataStore();
+const documentSessionStore = useDocumentSessionStore();
 const recentFilesStore = useRecentFilesStore();
 
 onMounted(() => {
@@ -23,7 +23,7 @@ async function handleOpenFile() {
       return;
     }
 
-    fileDataStore.set(result.fileData, result.path);
+    documentSessionStore.openDocument(result.fileData, result.path);
 
     const storageType = await getStorageType();
     const bytes = await api.generateCurrentThumbnailBytes();
@@ -64,7 +64,7 @@ async function handleNewFile() {
   };
 
   await api.initFile(newFileData);
-  fileDataStore.set(newFileData, null);
+  documentSessionStore.openDocument(newFileData, null);
   router.push({ name: "table" });
 }
 

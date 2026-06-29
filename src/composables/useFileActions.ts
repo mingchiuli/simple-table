@@ -1,7 +1,7 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
 import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, readFile, saveFile } from '@/platform';
-import { useFileDataStore } from '@/stores/fileData';
+import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
 
@@ -32,7 +32,7 @@ export function useFileActions({
   resetDocumentStatus,
 }: UseFileActionsOptions) {
   const router = useRouter();
-  const fileDataStore = useFileDataStore();
+  const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
 
   async function updateRecentFileEntry(
@@ -53,7 +53,7 @@ export function useFileActions({
       isLoading.value = true;
       isFileLoading.value = true;
       const loadedFileData = await readFile(filePath);
-      fileDataStore.set(loadedFileData, filePath);
+      documentSessionStore.openDocument(loadedFileData, filePath);
       currentSheetIndex.value = 0;
       resetDocumentStatus();
 
@@ -80,7 +80,7 @@ export function useFileActions({
       const result = await openFile();
       if (!result) return;
 
-      fileDataStore.set(result.fileData, result.path);
+      documentSessionStore.openDocument(result.fileData, result.path);
       currentSheetIndex.value = 0;
       resetDocumentStatus();
 
@@ -116,7 +116,7 @@ export function useFileActions({
         ? 'untitled'
         : fileData.value.fileName.replace(/\.[^.]+$/, '');
 
-      const existingPath = fileDataStore.currentFilePath;
+      const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
       const existingWritableExtension = existingPath ? writableExtension(existingPath) : null;
 
@@ -125,8 +125,7 @@ export function useFileActions({
         await saveFile(existingPath);
         await markSaved();
         const fileName = await getFileName(existingPath);
-        fileData.value.fileName = fileName;
-        fileData.value.path = existingPath;
+        documentSessionStore.updateIdentity(existingPath, fileName);
         await updateRecentFileEntry(existingPath, fileName, storageType);
         await recentFilesStore.load();
         ElMessage.success('File saved successfully');
@@ -147,11 +146,9 @@ export function useFileActions({
       await markSaved();
 
       const fileName = await getFileName(savePath);
-      fileData.value.fileName = fileName;
-      fileData.value.path = savePath;
+      documentSessionStore.updateIdentity(savePath, fileName);
       await updateRecentFileEntry(savePath, fileName, storageType);
       await recentFilesStore.load();
-      fileDataStore.setPath(savePath);
       ElMessage.success('File saved successfully');
     } catch (error) {
       ElMessage.error(`Failed to save file: ${error}`);
@@ -164,7 +161,7 @@ export function useFileActions({
     if (!(await flushPendingCellChanges())) return null;
     if (!fileData.value) return null;
 
-    let path = fileDataStore.currentFilePath;
+    let path = documentSessionStore.currentFilePath;
     const storageType = await getStorageType();
 
     if (!path || !writableExtension(path)) {
@@ -173,11 +170,9 @@ export function useFileActions({
       }
       path = await pickSaveLocation(`${defaultName}.${extension}`);
       if (!path) return null;
-      fileDataStore.setPath(path);
 
       const fileName = await getFileName(path);
-      fileData.value.fileName = fileName;
-      fileData.value.path = path;
+      documentSessionStore.updateIdentity(path, fileName);
     }
 
     await saveFile(path);
@@ -215,7 +210,7 @@ export function useFileActions({
   async function handleBack() {
     if (!(await flushPendingCellChanges())) return;
 
-    fileDataStore.clear();
+    documentSessionStore.clearDocument();
     resetDocumentStatus();
     router.push({ name: 'home' });
   }

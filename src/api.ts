@@ -36,10 +36,9 @@ export async function setCell(
   sheetIndex: number,
   row: number,
   col: number,
-  oldValue: CellValue,
   newValue: CellValue
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("set_cell", { sheetIndex, row, col, oldValue, newValue });
+  return invoke<EditorMutationResponse>("set_cell", { sheetIndex, row, col, newValue });
 }
 
 export async function addRow(sheetIndex: number, rowIndex: number): Promise<EditorMutationResponse> {

@@ -222,14 +222,6 @@ pub struct SheetData {
     pub row_heights: Option<HashMap<usize, u32>>,
 }
 
-impl SheetData {
-    /// 判断是否为空的 sheet（用于判断是否需要保存数据）
-    /// 只有当 name 为空且 rows 也为空时，才认为是空的 sheet
-    pub fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.rows.is_empty()
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FileData {

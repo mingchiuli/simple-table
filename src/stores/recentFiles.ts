@@ -1,5 +1,5 @@
 import type { FileData, RecentFile } from "@/types";
-import { useFileDataStore } from "@/stores/fileData";
+import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
 import { readFile, openFile, getStorageType } from "@/platform";
 
@@ -27,8 +27,8 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         // 直接调用 readFile（现在返回 FileData）
         const fileData = await readFile(path);
 
-        const fileDataStore = useFileDataStore();
-        fileDataStore.set(fileData, path);
+        const documentSessionStore = useDocumentSessionStore();
+        documentSessionStore.openDocument(fileData, path);
 
         const storageType = await getStorageType();
 
@@ -70,8 +70,8 @@ export const useRecentFilesStore = defineStore("recentFiles", {
           return false;
         }
 
-        const fileDataStore = useFileDataStore();
-        fileDataStore.set(result.fileData, result.path);
+        const documentSessionStore = useDocumentSessionStore();
+        documentSessionStore.openDocument(result.fileData, result.path);
 
         const storageType = await getStorageType();
 

@@ -1,6 +1,6 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
-import { useDocumentUiStore, type PendingCellChange } from '@/stores/documentUi';
+import { useDocumentSessionStore, type PendingCellChange } from '@/stores/documentSession';
 import type { CellValue, EditorMutationResponse, FileData, SheetData } from '@/types';
 import { getCellKey } from '@/utils/cellKey';
 
@@ -75,11 +75,11 @@ export function usePendingCellSave({
   markPendingContentChange,
   clearPendingContentChange,
 }: UsePendingCellSaveOptions) {
-  const documentUiStore = useDocumentUiStore();
+  const documentSessionStore = useDocumentSessionStore();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const pendingChanges = documentUiStore.pendingCellChanges;
-  const inFlightChanges = documentUiStore.inFlightCellChanges;
-  const draftCellValues = documentUiStore.draftCellValues;
+  const pendingChanges = documentSessionStore.pendingCellChanges;
+  const inFlightChanges = documentSessionStore.inFlightCellChanges;
+  const draftCellValues = documentSessionStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
   let needsSaveAfterInFlight = false;
 
@@ -205,8 +205,7 @@ export function usePendingCellSave({
     sheetIndex: number,
     rowIndex: number,
     colIndex: number,
-    value: string,
-    oldValueOverride?: CellValue
+    value: string
   ) {
     const currentFileData = fileData.value;
     if (!currentFileData) return;
@@ -214,13 +213,12 @@ export function usePendingCellSave({
     const sheet = currentFileData.sheets[sheetIndex];
     if (!sheet) return;
 
-    const oldValue = oldValueOverride ?? sheet.rows[rowIndex][colIndex];
     const newValue = parseCellValue(value);
     const isCurrentCell = currentSheetIndex.value === sheetIndex
       && selectedCell.value?.row === rowIndex
       && selectedCell.value?.col === colIndex;
 
-    const response = await api.setCell(sheetIndex, rowIndex, colIndex, oldValue, newValue);
+    const response = await api.setCell(sheetIndex, rowIndex, colIndex, newValue);
     applyMutationResponse(response);
 
     const key = getCellKey(sheetIndex, rowIndex, colIndex);
@@ -248,9 +246,9 @@ export function usePendingCellSave({
     }
 
     for (let i = 0; i < changes.length; i += 1) {
-      const { sheetIndex, row, col, value, oldValue } = changes[i];
+      const { sheetIndex, row, col, value } = changes[i];
       try {
-        await commitCellChange(sheetIndex, row, col, value, oldValue);
+        await commitCellChange(sheetIndex, row, col, value);
       } catch (error) {
         for (const change of changes.slice(i)) {
           inFlightChanges.delete(getCellKey(change.sheetIndex, change.row, change.col));

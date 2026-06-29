@@ -1,11 +1,11 @@
 use crate::error::AppError;
 use crate::io::document_model::{DocumentMemento, MementoSide, SpreadsheetDocument};
-use crate::ops::Operation;
+use crate::ops::EditorCommand;
 use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
     SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
-use crate::types::{CellPosition, CellValue, FileData, OperationResult, SheetCellChange};
+use crate::types::{CellPosition, FileData, OperationResult, SheetCellChange};
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
@@ -131,181 +131,17 @@ impl EditorState {
             .generate_file_bytes_for_target(target_path_or_name)
     }
 
-    /// 执行操作并记录到历史，返回增量结果
-    pub fn execute(&mut self, mut operation: Operation) -> Result<ExecutedOperation, AppError> {
-        // 在执行操作前，先准备好需要的数据，以便撤销/重做
-        match &operation {
-            // SetCell: 从 file_data 中获取真正的旧值，而不是依赖前端传入的（可能已过时）
-            Operation::SetCell {
-                sheet_index,
-                row,
-                col,
-                old_value,
-                new_value,
-            } => {
-                if let Some(sheet) = self.file_data().sheets.get(*sheet_index)
-                    && let Some(real_old) = sheet.rows.get(*row).and_then(|r| r.get(*col))
-                {
-                    // 如果新值和旧值相同，不需要记录到 history
-                    if real_old == new_value {
-                        // 返回结果但不记录到 history
-                        let result = self.document.execute_operation(&operation)?;
-                        self.update_flags();
-                        self.refresh_content_hash();
-                        return Ok(ExecutedOperation {
-                            operation: Some(result.operation),
-                            cell_changes: result.cell_changes,
-                        });
-                    }
-                    // 只有当后端获取的旧值与前端传入的不同时，才更新 operation
-                    if real_old != old_value {
-                        operation = Operation::SetCell {
-                            sheet_index: *sheet_index,
-                            row: *row,
-                            col: *col,
-                            old_value: real_old.clone(),
-                            new_value: new_value.clone(),
-                        };
-                    }
-                }
-            }
-            // AddColumn: 添加空列，需要补充列索引（只当 col_data 为空时）
-            Operation::AddColumn {
-                sheet_index,
-                col_index,
-                col_data: _,
-                column_width,
-            } => {
-                // 如果 col_data 已有数据（撤销操作），保留原数据
-                if col_index.is_none() && *sheet_index < self.file_data().sheets.len() {
-                    // 正常添加列，补充列索引
-                    if let Some(sheet) = self.file_data().sheets.get(*sheet_index) {
-                        let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
-                        // 新列被添加到末尾，索引就是当前列数（添加前）
-                        operation = Operation::AddColumn {
-                            sheet_index: *sheet_index,
-                            col_index: Some(col_count),
-                            col_data: vec![],
-                            column_width: *column_width,
-                        };
-                    }
-                }
-            }
-            // AddRow: 添加空行，需要补充行数据（只当 row_data 为空时）
-            Operation::AddRow {
-                sheet_index,
-                row_index,
-                row_data,
-                row_height,
-            } => {
-                // 如果 row_data 已有数据（撤销操作），保留原数据
-                if row_data.is_empty()
-                    && *sheet_index < self.file_data().sheets.len()
-                    && let Some(sheet) = self.file_data().sheets.get(*sheet_index)
-                {
-                    let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
-                    operation = Operation::AddRow {
-                        sheet_index: *sheet_index,
-                        row_index: *row_index,
-                        row_data: vec![CellValue::Null; col_count],
-                        row_height: *row_height,
-                    };
-                }
-            }
-            Operation::DeleteSheet {
-                sheet_index,
-                sheet_data,
-            } => {
-                // 如果 sheet_data 为空，说明是正常的删除操作，需要保存完整的 sheet 数据
-                if sheet_data.is_empty()
-                    && *sheet_index < self.file_data().sheets.len()
-                    && let Some(removed_sheet) = self.file_data().sheets.get(*sheet_index)
-                {
-                    operation = Operation::DeleteSheet {
-                        sheet_index: *sheet_index,
-                        sheet_data: removed_sheet.clone(),
-                    };
-                }
-            }
-            Operation::SetColumnWidth {
-                sheet_index,
-                col_index,
-                old_width,
-                new_width,
-            } => {
-                let real_old = self
-                    .file_data()
-                    .sheets
-                    .get(*sheet_index)
-                    .and_then(|sheet| sheet.column_widths.as_ref())
-                    .and_then(|widths| widths.get(col_index).copied());
-                if real_old == *new_width {
-                    let result = self.document.execute_operation(&operation)?;
-                    self.update_flags();
-                    self.refresh_content_hash();
-                    return Ok(ExecutedOperation {
-                        operation: Some(result.operation),
-                        cell_changes: result.cell_changes,
-                    });
-                }
-                if real_old != *old_width {
-                    operation = Operation::SetColumnWidth {
-                        sheet_index: *sheet_index,
-                        col_index: *col_index,
-                        old_width: real_old,
-                        new_width: *new_width,
-                    };
-                }
-            }
-            Operation::SetRowHeight {
-                sheet_index,
-                row_index,
-                old_height,
-                new_height,
-            } => {
-                let real_old = self
-                    .file_data()
-                    .sheets
-                    .get(*sheet_index)
-                    .and_then(|sheet| sheet.row_heights.as_ref())
-                    .and_then(|heights| heights.get(row_index).copied());
-                if real_old == *new_height {
-                    let result = self.document.execute_operation(&operation)?;
-                    self.update_flags();
-                    self.refresh_content_hash();
-                    return Ok(ExecutedOperation {
-                        operation: Some(result.operation),
-                        cell_changes: result.cell_changes,
-                    });
-                }
-                if real_old != *old_height {
-                    operation = Operation::SetRowHeight {
-                        sheet_index: *sheet_index,
-                        row_index: *row_index,
-                        old_height: real_old,
-                        new_height: *new_height,
-                    };
-                }
-            }
-            // AddSheet: 提前生成名称和索引，保证 redo 重放时使用与首次执行一致的位置和名称
-            Operation::AddSheet {
-                name,
-                sheet_data: None,
-                sheet_index,
-            } => {
-                let final_name = if name.is_empty() {
-                    format!("Sheet{}", self.file_data().sheets.len() + 1)
-                } else {
-                    name.clone()
-                };
-                let actual_index = sheet_index.unwrap_or(self.file_data().sheets.len());
-                operation = Operation::AddSheet {
-                    name: final_name,
-                    sheet_data: None,
-                    sheet_index: Some(actual_index),
-                };
-            }
-            _ => {}
+    /// 执行命令并记录到历史，返回增量结果。
+    pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
+        let operation = command.resolve(self.file_data())?;
+        if operation.is_noop() {
+            let result = self.document.execute_operation(&operation)?;
+            self.update_flags();
+            self.refresh_content_hash();
+            return Ok(ExecutedOperation {
+                operation: Some(result.operation),
+                cell_changes: result.cell_changes,
+            });
         }
 
         let before = self.document.clone();
@@ -373,7 +209,8 @@ mod tests {
 
     use super::*;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-    use crate::ops::Operation;
+    use crate::ops::EditorCommand;
+    use crate::types::CellValue;
     use serde_json::Value;
     use umya_spreadsheet::{Color, reader, writer};
 
@@ -403,11 +240,10 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::SetCell {
+            .execute(EditorCommand::SetCell {
                 sheet_index: 0,
                 row: 0,
                 col: 0,
-                old_value: CellValue::String("old".to_string()),
                 new_value: CellValue::Number(Value::from(42)),
             })
             .expect("set cell");
@@ -454,24 +290,17 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::DeleteRow {
+            .execute(EditorCommand::DeleteRow {
                 sheet_index: 0,
                 row_index: 0,
-                row_data: vec![
-                    CellValue::String("a1".to_string()),
-                    CellValue::String("b1".to_string()),
-                ],
-                row_height: None,
             })
             .expect("delete row");
         state.undo().expect("undo row delete").expect("undo result");
         state.redo().expect("redo row delete").expect("redo result");
         state
-            .execute(Operation::DeleteColumn {
+            .execute(EditorCommand::DeleteColumn {
                 sheet_index: 0,
                 col_index: 0,
-                col_data: vec![CellValue::String("a2".to_string())],
-                column_width: None,
             })
             .expect("delete column");
         state
@@ -513,11 +342,9 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::AddRow {
+            .execute(EditorCommand::AddRow {
                 sheet_index: 0,
                 row_index: 1,
-                row_data: vec![CellValue::Null, CellValue::Null],
-                row_height: None,
             })
             .expect("add row");
 
@@ -566,11 +393,9 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::AddRow {
+            .execute(EditorCommand::AddRow {
                 sheet_index: 0,
                 row_index: 0,
-                row_data: vec![CellValue::Null],
-                row_height: None,
             })
             .expect("add row");
 
@@ -616,19 +441,17 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::SetColumnWidth {
+            .execute(EditorCommand::SetColumnWidth {
                 sheet_index: 0,
                 col_index: 0,
-                old_width: None,
-                new_width: Some(180),
+                width: Some(180),
             })
             .expect("set column width");
         state
-            .execute(Operation::SetRowHeight {
+            .execute(EditorCommand::SetRowHeight {
                 sheet_index: 0,
                 row_index: 0,
-                old_height: None,
-                new_height: Some(96),
+                height: Some(96),
             })
             .expect("set row height");
 
@@ -718,14 +541,9 @@ mod tests {
         );
 
         state
-            .execute(Operation::DeleteRow {
+            .execute(EditorCommand::DeleteRow {
                 sheet_index: 0,
                 row_index: 0,
-                row_data: vec![
-                    CellValue::String("a1".to_string()),
-                    CellValue::String("b1".to_string()),
-                ],
-                row_height: Some(112),
             })
             .expect("delete row");
         assert!(
@@ -744,14 +562,9 @@ mod tests {
         );
 
         state
-            .execute(Operation::DeleteColumn {
+            .execute(EditorCommand::DeleteColumn {
                 sheet_index: 0,
                 col_index: 0,
-                col_data: vec![
-                    CellValue::String("a1".to_string()),
-                    CellValue::String("a2".to_string()),
-                ],
-                column_width: Some(180),
             })
             .expect("delete column");
         assert!(
@@ -809,11 +622,10 @@ mod tests {
         );
 
         state
-            .execute(Operation::SetCell {
+            .execute(EditorCommand::SetCell {
                 sheet_index: 0,
                 row: 3,
                 col: 4,
-                old_value: CellValue::Null,
                 new_value: CellValue::String("E4".to_string()),
             })
             .expect("set sparse cell");
@@ -854,11 +666,10 @@ mod tests {
         );
 
         state
-            .execute(Operation::SetCell {
+            .execute(EditorCommand::SetCell {
                 sheet_index: 0,
                 row: 3,
                 col: 4,
-                old_value: CellValue::Null,
                 new_value: CellValue::String("E4".to_string()),
             })
             .expect("set sparse cell");
@@ -902,11 +713,10 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::SetCell {
+            .execute(EditorCommand::SetCell {
                 sheet_index: 0,
                 row: 0,
                 col: 0,
-                old_value: CellValue::String("styled".to_string()),
                 new_value: CellValue::String("changed".to_string()),
             })
             .expect("set cell");
@@ -949,19 +759,15 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         state
-            .execute(Operation::DeleteRow {
+            .execute(EditorCommand::DeleteRow {
                 sheet_index: 0,
                 row_index: 0,
-                row_data: vec![CellValue::String("merged".to_string())],
-                row_height: None,
             })
             .expect("delete first row");
         state
-            .execute(Operation::DeleteColumn {
+            .execute(EditorCommand::DeleteColumn {
                 sheet_index: 0,
                 col_index: 2,
-                col_data: vec![],
-                column_width: None,
             })
             .expect("delete last merged column");
 
@@ -1001,11 +807,10 @@ mod tests {
         );
 
         state
-            .execute(Operation::SetCell {
+            .execute(EditorCommand::SetCell {
                 sheet_index: 0,
                 row: 0,
                 col: 1,
-                old_value: CellValue::Null,
                 new_value: CellValue::String("xlsx".to_string()),
             })
             .expect("edit csv projection");

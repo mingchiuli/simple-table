@@ -1,0 +1,147 @@
+import type { ComputedRef, Ref } from "vue";
+
+type MaybeReadonlyRef<T> = Ref<T> | ComputedRef<T>;
+
+type UseGridResizeOptions = {
+  isTouchDevice: MaybeReadonlyRef<boolean>;
+  headerHeight: number;
+  minColumnWidth: number;
+  minRowHeight: number;
+  scrollLeft: Ref<number>;
+  scrollTop: Ref<number>;
+  getColumnWidth: (colIndex: number) => number;
+  getRowHeight: (rowIndex: number) => number;
+  getColumnOffset: (colIndex: number) => number;
+  getRowOffset: (rowIndex: number) => number;
+  setColumnWidth: (colIndex: number, width: number) => void;
+  setRowHeight: (rowIndex: number, height: number) => void;
+  commitColumnWidth: (colIndex: number, width: number) => void;
+  commitRowHeight: (rowIndex: number, height: number) => void;
+};
+
+export function useGridResize({
+  isTouchDevice,
+  headerHeight,
+  minColumnWidth,
+  minRowHeight,
+  scrollLeft,
+  scrollTop,
+  getColumnWidth,
+  getRowHeight,
+  getColumnOffset,
+  getRowOffset,
+  setColumnWidth,
+  setRowHeight,
+  commitColumnWidth,
+  commitRowHeight,
+}: UseGridResizeOptions) {
+  const resizingColumn = ref<number | null>(null);
+  const resizingRow = ref<number | null>(null);
+  const startX = ref(0);
+  const startY = ref(0);
+  const startWidth = ref(0);
+  const startHeight = ref(0);
+  const resizeLineX = ref(0);
+  const resizeLineY = ref(0);
+
+  function startColumnResize(event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number) {
+    event.preventDefault();
+    resizingColumn.value = colIndex;
+    startX.value = getClientX(event);
+    startWidth.value = getColumnWidth(colIndex);
+    resizeLineX.value = boundaryX;
+    addDocumentListeners();
+  }
+
+  function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number) {
+    event.preventDefault();
+    resizingRow.value = rowIndex;
+    startY.value = getClientY(event);
+    startHeight.value = getRowHeight(rowIndex);
+    resizeLineY.value = headerHeight + getRowOffset(rowIndex) + startHeight.value - scrollTop.value;
+    addDocumentListeners();
+  }
+
+  function onResize(event: MouseEvent | TouchEvent) {
+    if (resizingColumn.value === null && resizingRow.value === null) return;
+
+    if (event.type === "touchmove") {
+      event.preventDefault();
+    }
+
+    if (resizingColumn.value !== null) {
+      const delta = getClientX(event) - startX.value;
+      const nextWidth = Math.max(minColumnWidth, startWidth.value + delta);
+      setColumnWidth(resizingColumn.value, nextWidth);
+      resizeLineX.value = getColumnOffset(resizingColumn.value) + nextWidth - scrollLeft.value;
+    }
+
+    if (resizingRow.value !== null) {
+      const delta = getClientY(event) - startY.value;
+      const nextHeight = Math.max(minRowHeight, startHeight.value + delta);
+      setRowHeight(resizingRow.value, nextHeight);
+      resizeLineY.value = headerHeight + getRowOffset(resizingRow.value) + nextHeight - scrollTop.value;
+    }
+  }
+
+  function stopResize() {
+    if (resizingColumn.value !== null) {
+      commitColumnWidth(resizingColumn.value, getColumnWidth(resizingColumn.value));
+    }
+
+    if (resizingRow.value !== null) {
+      commitRowHeight(resizingRow.value, getRowHeight(resizingRow.value));
+    }
+
+    resizingColumn.value = null;
+    resizingRow.value = null;
+    resizeLineX.value = 0;
+    resizeLineY.value = 0;
+    removeDocumentListeners();
+  }
+
+  function addDocumentListeners() {
+    document.addEventListener("mousemove", onResize);
+    document.addEventListener("mouseup", stopResize);
+
+    if (isTouchDevice.value) {
+      document.addEventListener("touchmove", onResize, { passive: false });
+      document.addEventListener("touchend", stopResize);
+    }
+  }
+
+  function removeDocumentListeners() {
+    document.removeEventListener("mousemove", onResize);
+    document.removeEventListener("mouseup", stopResize);
+
+    if (isTouchDevice.value) {
+      document.removeEventListener("touchmove", onResize);
+      document.removeEventListener("touchend", stopResize);
+    }
+  }
+
+  onUnmounted(removeDocumentListeners);
+
+  return {
+    resizingColumn,
+    resizingRow,
+    resizeLineX,
+    resizeLineY,
+    startColumnResize,
+    startRowResize,
+  };
+}
+
+function getClientX(event: MouseEvent | TouchEvent): number {
+  if ("clientX" in event) return event.clientX;
+  if (event.touches && event.touches.length > 0) return event.touches[0].clientX;
+  if (event.changedTouches && event.changedTouches.length > 0) return event.changedTouches[0].clientX;
+  return 0;
+}
+
+function getClientY(event: MouseEvent | TouchEvent): number {
+  if ("clientY" in event) return event.clientY;
+  if (event.touches && event.touches.length > 0) return event.touches[0].clientY;
+  if (event.changedTouches && event.changedTouches.length > 0) return event.changedTouches[0].clientY;
+  return 0;
+}

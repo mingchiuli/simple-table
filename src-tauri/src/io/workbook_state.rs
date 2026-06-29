@@ -5,7 +5,7 @@ use crate::io::codec::reader::read_worksheet;
 use crate::io::codec::writer::{
     coordinate, px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
 };
-use crate::ops::Operation;
+use crate::ops::AppliedOperation;
 use crate::types::{FileData, OperationResult, SheetCellChange, SheetData};
 use regex::{Captures, Regex};
 use umya_spreadsheet::{Workbook, Worksheet};
@@ -21,12 +21,12 @@ enum StructureShift {
 pub fn patch_after_operation(
     workbook: &mut Workbook,
     file_data: &mut FileData,
-    operation: &Operation,
+    operation: &AppliedOperation,
     result: &OperationResult,
     cell_changes: &[SheetCellChange],
 ) -> Result<(), AppError> {
     match operation {
-        Operation::SetCell {
+        AppliedOperation::SetCell {
             sheet_index,
             row,
             col,
@@ -35,7 +35,7 @@ pub fn patch_after_operation(
             patch_cell(workbook, file_data, *sheet_index, *row, *col)?;
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
-        Operation::AddRow {
+        AppliedOperation::AddRow {
             sheet_index,
             row_index,
             row_data,
@@ -62,7 +62,7 @@ pub fn patch_after_operation(
             refresh_projection(workbook, file_data);
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
-        Operation::DeleteRow {
+        AppliedOperation::DeleteRow {
             sheet_index,
             row_index,
             ..
@@ -83,7 +83,7 @@ pub fn patch_after_operation(
             refresh_projection(workbook, file_data);
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
-        Operation::AddColumn {
+        AppliedOperation::AddColumn {
             sheet_index,
             col_index,
             col_data,
@@ -92,14 +92,7 @@ pub fn patch_after_operation(
         } => {
             let actual_col_index = match result {
                 OperationResult::AddColumn { column, .. } => column.index,
-                _ => col_index.unwrap_or_else(|| {
-                    file_data
-                        .sheets
-                        .get(*sheet_index)
-                        .and_then(|sheet| sheet.rows.first())
-                        .map(|row| row.len().saturating_sub(1))
-                        .unwrap_or(0)
-                }),
+                _ => *col_index,
             };
             let sheet_name = sheet_name(workbook, *sheet_index)?;
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
@@ -121,7 +114,7 @@ pub fn patch_after_operation(
             refresh_projection(workbook, file_data);
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
-        Operation::DeleteColumn {
+        AppliedOperation::DeleteColumn {
             sheet_index,
             col_index,
             ..
@@ -142,7 +135,7 @@ pub fn patch_after_operation(
             refresh_projection(workbook, file_data);
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
-        Operation::SetColumnWidth {
+        AppliedOperation::SetColumnWidth {
             sheet_index,
             col_index,
             new_width,
@@ -152,7 +145,7 @@ pub fn patch_after_operation(
                 patch_column_width(worksheet, *col_index, *new_width);
             }
         }
-        Operation::SetRowHeight {
+        AppliedOperation::SetRowHeight {
             sheet_index,
             row_index,
             new_height,
@@ -162,7 +155,7 @@ pub fn patch_after_operation(
                 patch_row_height(worksheet, *row_index, *new_height);
             }
         }
-        Operation::AddSheet { .. } => {
+        AppliedOperation::AddSheet { .. } => {
             if let OperationResult::AddSheet {
                 sheet_index,
                 sheet_data,
@@ -174,7 +167,7 @@ pub fn patch_after_operation(
                 patch_cell_changes(workbook, file_data, cell_changes)?;
             }
         }
-        Operation::DeleteSheet { .. } => {
+        AppliedOperation::DeleteSheet { .. } => {
             if let OperationResult::DeleteSheet { sheet_index, .. } = result {
                 remove_sheet(workbook, *sheet_index)?;
                 refresh_projection(workbook, file_data);

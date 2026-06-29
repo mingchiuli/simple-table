@@ -1,13 +1,58 @@
+use crate::error::AppError;
 use crate::types::{
     CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData, MergeRange, OperationResult,
     RowChange, RowHeightChange, SheetData,
 };
 use serde::{Deserialize, Serialize};
 
-/// 操作类型 - 用于执行和撤销/重做
+/// User-facing editor command.
+///
+/// This is intentionally not a history record. Undo/redo is handled by
+/// document mementos, so command variants only describe the requested mutation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Operation {
-    /// 设置单元格值
+pub enum EditorCommand {
+    SetCell {
+        sheet_index: usize,
+        row: usize,
+        col: usize,
+        new_value: CellValue,
+    },
+    AddRow {
+        sheet_index: usize,
+        row_index: usize,
+    },
+    DeleteRow {
+        sheet_index: usize,
+        row_index: usize,
+    },
+    AddColumn {
+        sheet_index: usize,
+    },
+    DeleteColumn {
+        sheet_index: usize,
+        col_index: usize,
+    },
+    SetColumnWidth {
+        sheet_index: usize,
+        col_index: usize,
+        width: Option<u32>,
+    },
+    SetRowHeight {
+        sheet_index: usize,
+        row_index: usize,
+        height: Option<u32>,
+    },
+    AddSheet {
+        name: Option<String>,
+    },
+    DeleteSheet {
+        sheet_index: usize,
+    },
+}
+
+/// Canonical mutation after resolving indices and current document state.
+#[derive(Debug, Clone)]
+pub enum AppliedOperation {
     SetCell {
         sheet_index: usize,
         row: usize,
@@ -15,36 +60,25 @@ pub enum Operation {
         old_value: CellValue,
         new_value: CellValue,
     },
-    /// 添加行
     AddRow {
         sheet_index: usize,
         row_index: usize,
-        /// 被恢复的行数据（用于撤销 DeleteRow）
         row_data: Vec<CellValue>,
         row_height: Option<u32>,
     },
-    /// 删除行
     DeleteRow {
         sheet_index: usize,
         row_index: usize,
-        row_data: Vec<CellValue>,
-        row_height: Option<u32>,
     },
-    /// 添加列
     AddColumn {
-        sheet_index: usize,
-        /// 记录添加的列索引，用于撤销
-        col_index: Option<usize>,
-        /// 添加的列数据（用于撤销时恢复）
-        col_data: Vec<CellValue>,
-        column_width: Option<u32>,
-    },
-    /// 删除列
-    DeleteColumn {
         sheet_index: usize,
         col_index: usize,
         col_data: Vec<CellValue>,
         column_width: Option<u32>,
+    },
+    DeleteColumn {
+        sheet_index: usize,
+        col_index: usize,
     },
     SetColumnWidth {
         sheet_index: usize,
@@ -58,28 +92,154 @@ pub enum Operation {
         old_height: Option<u32>,
         new_height: Option<u32>,
     },
-    /// 添加 Sheet（带数据，用于撤销时恢复）
     AddSheet {
-        /// sheet 名称（新建时使用）
-        name: String,
-        /// 完整的 sheet 数据（用于撤销恢复时）
-        sheet_data: Option<SheetData>,
-        /// 恢复时的原始索引（用于撤销 DeleteSheet 时恢复到正确位置）
-        sheet_index: Option<usize>,
-    },
-    /// 删除 Sheet（带完整数据，用于撤销时恢复）
-    DeleteSheet {
         sheet_index: usize,
         sheet_data: SheetData,
     },
+    DeleteSheet {
+        sheet_index: usize,
+    },
 }
 
-impl Operation {
-    /// 执行操作
-    /// 注意：此方法不再同步重建索引，索引重建由调用方异步处理
+impl EditorCommand {
+    pub fn resolve(self, file_data: &FileData) -> Result<AppliedOperation, AppError> {
+        match self {
+            EditorCommand::SetCell {
+                sheet_index,
+                row,
+                col,
+                new_value,
+            } => {
+                require_sheet(file_data, sheet_index)?;
+                let old_value = file_data.sheets[sheet_index]
+                    .rows
+                    .get(row)
+                    .and_then(|row_data| row_data.get(col))
+                    .cloned()
+                    .unwrap_or(CellValue::Null);
+                Ok(AppliedOperation::SetCell {
+                    sheet_index,
+                    row,
+                    col,
+                    old_value,
+                    new_value,
+                })
+            }
+            EditorCommand::AddRow {
+                sheet_index,
+                row_index,
+            } => {
+                let sheet = require_sheet(file_data, sheet_index)?;
+                if row_index > sheet.rows.len() {
+                    return Err(AppError::RowNotFound(row_index));
+                }
+                let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+                Ok(AppliedOperation::AddRow {
+                    sheet_index,
+                    row_index,
+                    row_data: vec![CellValue::Null; col_count],
+                    row_height: None,
+                })
+            }
+            EditorCommand::DeleteRow {
+                sheet_index,
+                row_index,
+            } => {
+                let sheet = require_sheet(file_data, sheet_index)?;
+                if row_index >= sheet_row_extent(sheet) {
+                    return Err(AppError::RowNotFound(row_index));
+                }
+                Ok(AppliedOperation::DeleteRow {
+                    sheet_index,
+                    row_index,
+                })
+            }
+            EditorCommand::AddColumn { sheet_index } => {
+                let sheet = require_sheet(file_data, sheet_index)?;
+                let col_index = sheet_column_extent(sheet);
+                Ok(AppliedOperation::AddColumn {
+                    sheet_index,
+                    col_index,
+                    col_data: vec![CellValue::Null; sheet.rows.len()],
+                    column_width: None,
+                })
+            }
+            EditorCommand::DeleteColumn {
+                sheet_index,
+                col_index,
+            } => {
+                let sheet = require_sheet(file_data, sheet_index)?;
+                let total_cols = sheet_column_extent(sheet);
+                if col_index >= total_cols {
+                    return Err(AppError::InvalidCellPosition {
+                        row: 0,
+                        col: col_index,
+                    });
+                }
+                Ok(AppliedOperation::DeleteColumn {
+                    sheet_index,
+                    col_index,
+                })
+            }
+            EditorCommand::SetColumnWidth {
+                sheet_index,
+                col_index,
+                width,
+            } => {
+                let sheet = require_sheet(file_data, sheet_index)?;
+                let old_width = sheet
+                    .column_widths
+                    .as_ref()
+                    .and_then(|widths| widths.get(&col_index).copied());
+                Ok(AppliedOperation::SetColumnWidth {
+                    sheet_index,
+                    col_index,
+                    old_width,
+                    new_width: width,
+                })
+            }
+            EditorCommand::SetRowHeight {
+                sheet_index,
+                row_index,
+                height,
+            } => {
+                let sheet = require_sheet(file_data, sheet_index)?;
+                let old_height = sheet
+                    .row_heights
+                    .as_ref()
+                    .and_then(|heights| heights.get(&row_index).copied());
+                Ok(AppliedOperation::SetRowHeight {
+                    sheet_index,
+                    row_index,
+                    old_height,
+                    new_height: height,
+                })
+            }
+            EditorCommand::AddSheet { name } => {
+                let sheet_index = file_data.sheets.len();
+                let sheet_name = name
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| format!("Sheet{}", sheet_index + 1));
+                Ok(AppliedOperation::AddSheet {
+                    sheet_index,
+                    sheet_data: empty_sheet(sheet_name),
+                })
+            }
+            EditorCommand::DeleteSheet { sheet_index } => {
+                if file_data.sheets.len() <= 1 {
+                    return Err(AppError::CannotDeleteLastSheet);
+                }
+                require_sheet(file_data, sheet_index)?;
+                Ok(AppliedOperation::DeleteSheet { sheet_index })
+            }
+        }
+    }
+}
+
+impl AppliedOperation {
     pub fn execute(&self, file_data: &mut FileData) -> OperationResult {
         match self {
-            Operation::SetCell {
+            AppliedOperation::SetCell {
                 sheet_index,
                 row,
                 col,
@@ -99,21 +259,14 @@ impl Operation {
                     },
                 }
             }
-            Operation::AddRow {
+            AppliedOperation::AddRow {
                 sheet_index,
                 row_index,
                 row_data,
                 row_height,
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    // 使用传入的 row_data，如果为空则创建空行
-                    let new_row = if row_data.is_empty() {
-                        let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
-                        vec![CellValue::Null; col_count]
-                    } else {
-                        row_data.clone()
-                    };
-                    sheet.rows.insert(*row_index, new_row);
+                    sheet.rows.insert(*row_index, row_data.clone());
                     shift_layout_map_on_insert(sheet.row_heights.as_mut(), *row_index);
                     shift_row_merges_on_insert(&mut sheet.merges, *row_index);
                     if let Some(height) = row_height {
@@ -122,7 +275,6 @@ impl Operation {
                             .get_or_insert_with(Default::default)
                             .insert(*row_index, *height);
                     }
-                    // 索引重建由调用方异步处理
                 }
                 OperationResult::AddRow {
                     sheet_index: *sheet_index,
@@ -132,74 +284,52 @@ impl Operation {
                     },
                 }
             }
-            Operation::DeleteRow {
+            AppliedOperation::DeleteRow {
                 sheet_index,
                 row_index,
-                ..
             } => {
-                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index)
-                    && *row_index < sheet.rows.len()
-                {
-                    sheet.rows.remove(*row_index);
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    if *row_index < sheet.rows.len() {
+                        sheet.rows.remove(*row_index);
+                    }
                     shift_layout_map_on_delete(sheet.row_heights.as_mut(), *row_index);
                     shift_row_merges_on_delete(&mut sheet.merges, *row_index);
-                    // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteRow {
                     sheet_index: *sheet_index,
                     row_index: *row_index,
                 }
             }
-            Operation::AddColumn {
+            AppliedOperation::AddColumn {
                 sheet_index,
                 col_index,
                 col_data,
                 column_width,
             } => {
-                // 计算最终插入位置：优先使用传入的 col_index（来自 undo of DeleteColumn），
-                // 否则按当前列数追加到末尾
-                let actual_col_index = col_index.unwrap_or_else(|| {
-                    file_data
-                        .sheets
-                        .get(*sheet_index)
-                        .map(|s| s.rows.iter().map(Vec::len).max().unwrap_or(0))
-                        .unwrap_or(0)
-                });
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    // 使用传入的 col_data，如果为空则创建空列
-                    let new_col_data = if col_data.is_empty() {
-                        vec![CellValue::Null; sheet.rows.len()]
-                    } else {
-                        col_data.clone()
-                    };
-                    // 按 actual_col_index 插入（>= 当前列数时退化为末尾追加）
-                    for (i, row) in sheet.rows.iter_mut().enumerate() {
-                        let value = new_col_data.get(i).cloned().unwrap_or(CellValue::Null);
-                        let pos = actual_col_index.min(row.len());
+                    for (row_index, row) in sheet.rows.iter_mut().enumerate() {
+                        let value = col_data.get(row_index).cloned().unwrap_or(CellValue::Null);
+                        let pos = (*col_index).min(row.len());
                         row.insert(pos, value);
                     }
-                    shift_layout_map_on_insert(sheet.column_widths.as_mut(), actual_col_index);
-                    shift_column_merges_on_insert(&mut sheet.merges, actual_col_index);
+                    shift_layout_map_on_insert(sheet.column_widths.as_mut(), *col_index);
+                    shift_column_merges_on_insert(&mut sheet.merges, *col_index);
                     if let Some(width) = column_width {
                         sheet
                             .column_widths
                             .get_or_insert_with(Default::default)
-                            .insert(actual_col_index, *width);
+                            .insert(*col_index, *width);
                     }
-                    // 索引重建由调用方异步处理
                 }
                 OperationResult::AddColumn {
                     sheet_index: *sheet_index,
-                    column: ColumnChange {
-                        index: actual_col_index,
-                    },
+                    column: ColumnChange { index: *col_index },
                     col_data: col_data.clone(),
                 }
             }
-            Operation::DeleteColumn {
+            AppliedOperation::DeleteColumn {
                 sheet_index,
                 col_index,
-                ..
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     for row in &mut sheet.rows {
@@ -209,36 +339,20 @@ impl Operation {
                     }
                     shift_layout_map_on_delete(sheet.column_widths.as_mut(), *col_index);
                     shift_column_merges_on_delete(&mut sheet.merges, *col_index);
-                    // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteColumn {
                     sheet_index: *sheet_index,
                     column_index: *col_index,
                 }
             }
-            Operation::SetColumnWidth {
+            AppliedOperation::SetColumnWidth {
                 sheet_index,
                 col_index,
                 new_width,
                 ..
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    match new_width {
-                        Some(width) => {
-                            sheet
-                                .column_widths
-                                .get_or_insert_with(Default::default)
-                                .insert(*col_index, *width);
-                        }
-                        None => {
-                            if let Some(widths) = sheet.column_widths.as_mut() {
-                                widths.remove(col_index);
-                                if widths.is_empty() {
-                                    sheet.column_widths = None;
-                                }
-                            }
-                        }
-                    }
+                    set_layout_value(&mut sheet.column_widths, *col_index, *new_width);
                 }
                 OperationResult::SetColumnWidth {
                     sheet_index: *sheet_index,
@@ -248,29 +362,14 @@ impl Operation {
                     },
                 }
             }
-            Operation::SetRowHeight {
+            AppliedOperation::SetRowHeight {
                 sheet_index,
                 row_index,
                 new_height,
                 ..
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
-                    match new_height {
-                        Some(height) => {
-                            sheet
-                                .row_heights
-                                .get_or_insert_with(Default::default)
-                                .insert(*row_index, *height);
-                        }
-                        None => {
-                            if let Some(heights) = sheet.row_heights.as_mut() {
-                                heights.remove(row_index);
-                                if heights.is_empty() {
-                                    sheet.row_heights = None;
-                                }
-                            }
-                        }
-                    }
+                    set_layout_value(&mut sheet.row_heights, *row_index, *new_height);
                 }
                 OperationResult::SetRowHeight {
                     sheet_index: *sheet_index,
@@ -280,65 +379,113 @@ impl Operation {
                     },
                 }
             }
-            Operation::AddSheet {
-                name,
-                sheet_data,
+            AppliedOperation::AddSheet {
                 sheet_index,
+                sheet_data,
             } => {
-                // 如果有完整的 sheet_data，直接插入；否则创建空 sheet
-                let (new_sheet, sheet_name) = if let Some(data) = sheet_data {
-                    (data.clone(), data.name.clone())
-                } else {
-                    // 生成新 sheet 名称
-                    let final_name = if name.is_empty() {
-                        let sheet_count = file_data.sheets.len();
-                        format!("Sheet{}", sheet_count + 1)
-                    } else {
-                        name.clone()
-                    };
-
-                    // 创建新的空 sheet
-                    let new_sheet = SheetData {
-                        name: final_name.clone(),
-                        rows: vec![
-                            vec![CellValue::Null; 5],
-                            vec![CellValue::Null; 5],
-                            vec![CellValue::Null; 5],
-                            vec![CellValue::Null; 5],
-                            vec![CellValue::Null; 5],
-                        ],
-                        merges: vec![],
-                        ..Default::default()
-                    };
-                    (new_sheet, final_name)
-                };
-
-                // 如果提供了 sheet_index，插入到指定位置；否则添加到末尾
-                let actual_index = sheet_index.unwrap_or(file_data.sheets.len());
-                file_data.sheets.insert(actual_index, new_sheet.clone());
-
+                let index = (*sheet_index).min(file_data.sheets.len());
+                file_data.sheets.insert(index, sheet_data.clone());
                 OperationResult::AddSheet {
-                    sheet_index: actual_index,
-                    name: sheet_name,
-                    sheet_data: new_sheet,
+                    sheet_index: index,
+                    name: sheet_data.name.clone(),
+                    sheet_data: sheet_data.clone(),
                 }
             }
-            Operation::DeleteSheet {
-                sheet_index,
-                sheet_data: _,
-            } => {
-                // 如果 sheet_index 是 MAX，说明这是 AddSheet 的撤销操作，需要删除最后一个 sheet
-                let actual_index = if *sheet_index == usize::MAX {
-                    file_data.sheets.len().saturating_sub(1)
-                } else {
-                    *sheet_index
-                };
-
-                let removed_sheet = file_data.sheets.remove(actual_index);
-
+            AppliedOperation::DeleteSheet { sheet_index } => {
+                let removed_sheet = file_data.sheets.remove(*sheet_index);
                 OperationResult::DeleteSheet {
-                    sheet_index: actual_index,
+                    sheet_index: *sheet_index,
                     sheet_data: removed_sheet,
+                }
+            }
+        }
+    }
+
+    pub fn is_noop(&self) -> bool {
+        match self {
+            AppliedOperation::SetCell {
+                old_value,
+                new_value,
+                ..
+            } => old_value == new_value,
+            AppliedOperation::SetColumnWidth {
+                old_width,
+                new_width,
+                ..
+            } => old_width == new_width,
+            AppliedOperation::SetRowHeight {
+                old_height,
+                new_height,
+                ..
+            } => old_height == new_height,
+            _ => false,
+        }
+    }
+}
+
+fn require_sheet(file_data: &FileData, sheet_index: usize) -> Result<&SheetData, AppError> {
+    file_data
+        .sheets
+        .get(sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(sheet_index))
+}
+
+fn sheet_row_extent(sheet: &SheetData) -> usize {
+    let row_count = sheet.rows.len();
+    let merge_extent = sheet
+        .merges
+        .iter()
+        .map(|merge| merge.end_row as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let layout_extent = sheet
+        .row_heights
+        .as_ref()
+        .and_then(|heights| heights.keys().max().map(|index| index + 1))
+        .unwrap_or(0);
+    row_count.max(merge_extent).max(layout_extent)
+}
+
+fn sheet_column_extent(sheet: &SheetData) -> usize {
+    let row_extent = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+    let merge_extent = sheet
+        .merges
+        .iter()
+        .map(|merge| merge.end_col as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let layout_extent = sheet
+        .column_widths
+        .as_ref()
+        .and_then(|widths| widths.keys().max().map(|index| index + 1))
+        .unwrap_or(0);
+    row_extent.max(merge_extent).max(layout_extent)
+}
+
+fn empty_sheet(name: String) -> SheetData {
+    SheetData {
+        name,
+        rows: vec![vec![CellValue::Null; 5]; 5],
+        merges: vec![],
+        ..Default::default()
+    }
+}
+
+fn set_layout_value(
+    map: &mut Option<std::collections::HashMap<usize, u32>>,
+    index: usize,
+    value: Option<u32>,
+) {
+    match value {
+        Some(value) => {
+            map.get_or_insert_with(Default::default)
+                .insert(index, value);
+        }
+        None => {
+            if let Some(values) = map.as_mut() {
+                values.remove(&index);
+                if values.is_empty() {
+                    *map = None;
                 }
             }
         }

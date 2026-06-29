@@ -5,7 +5,7 @@ use crate::error::AppError;
 use crate::formula::engine::FormulaRuntime;
 use crate::io::codec::writer;
 use crate::io::workbook_state;
-use crate::ops::Operation;
+use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
 use crate::types::{CellValue, FileData, OperationResult, SheetCellChange};
 use umya_spreadsheet::Workbook;
@@ -144,7 +144,7 @@ impl SpreadsheetDocument {
 
     pub fn execute_operation(
         &mut self,
-        operation: &Operation,
+        operation: &AppliedOperation,
     ) -> Result<DocumentOperationResult, AppError> {
         let previous_projection = self.projection.clone();
         let previous_body = self.clone_body();
@@ -178,11 +178,11 @@ impl SpreadsheetDocument {
     pub fn create_memento(
         before: &Self,
         after: &Self,
-        operation: &Operation,
+        operation: &AppliedOperation,
         cell_changes: &[SheetCellChange],
     ) -> DocumentMemento {
         match operation {
-            Operation::SetCell {
+            AppliedOperation::SetCell {
                 sheet_index,
                 row,
                 col,
@@ -191,7 +191,7 @@ impl SpreadsheetDocument {
                 before: before.cell_memento(*sheet_index, *row, *col, cell_changes),
                 after: after.cell_memento(*sheet_index, *row, *col, cell_changes),
             },
-            Operation::SetColumnWidth {
+            AppliedOperation::SetColumnWidth {
                 sheet_index,
                 col_index,
                 ..
@@ -199,7 +199,7 @@ impl SpreadsheetDocument {
                 before: before.layout_memento(*sheet_index, Some(*col_index), None),
                 after: after.layout_memento(*sheet_index, Some(*col_index), None),
             },
-            Operation::SetRowHeight {
+            AppliedOperation::SetRowHeight {
                 sheet_index,
                 row_index,
                 ..
@@ -207,12 +207,12 @@ impl SpreadsheetDocument {
                 before: before.layout_memento(*sheet_index, None, Some(*row_index)),
                 after: after.layout_memento(*sheet_index, None, Some(*row_index)),
             },
-            Operation::AddRow { .. }
-            | Operation::DeleteRow { .. }
-            | Operation::AddColumn { .. }
-            | Operation::DeleteColumn { .. }
-            | Operation::AddSheet { .. }
-            | Operation::DeleteSheet { .. } => DocumentMemento::Full {
+            AppliedOperation::AddRow { .. }
+            | AppliedOperation::DeleteRow { .. }
+            | AppliedOperation::AddColumn { .. }
+            | AppliedOperation::DeleteColumn { .. }
+            | AppliedOperation::AddSheet { .. }
+            | AppliedOperation::DeleteSheet { .. } => DocumentMemento::Full {
                 before: Box::new(before.clone()),
                 after: Box::new(after.clone()),
             },
@@ -420,9 +420,12 @@ impl SpreadsheetDocument {
         self.patch_workbook_layout(memento)
     }
 
-    fn recalculate_after_operation(&mut self, operation: &Operation) -> Vec<SheetCellChange> {
+    fn recalculate_after_operation(
+        &mut self,
+        operation: &AppliedOperation,
+    ) -> Vec<SheetCellChange> {
         match operation {
-            Operation::SetCell {
+            AppliedOperation::SetCell {
                 sheet_index,
                 row,
                 col,
@@ -452,7 +455,9 @@ impl SpreadsheetDocument {
                     }
                 }
             }
-            Operation::SetColumnWidth { .. } | Operation::SetRowHeight { .. } => Vec::new(),
+            AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
+                Vec::new()
+            }
             _ => match self.formula_runtime.rebuild(&mut self.projection) {
                 Ok(changes) => changes,
                 Err(error) => {
@@ -504,7 +509,7 @@ impl SpreadsheetDocument {
 
     fn patch_workbook_after_operation(
         &mut self,
-        operation: &Operation,
+        operation: &AppliedOperation,
         result: &OperationResult,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {

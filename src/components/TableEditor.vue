@@ -12,6 +12,9 @@ import {
   spanSize,
   type GridItem,
 } from '@/table-geometry/gridGeometry';
+import { useGridResize } from '@/table-geometry/useGridResize';
+import { useMergeLookup } from '@/table-geometry/useMergeLookup';
+import { useCellEditing } from '@/table-geometry/useCellEditing';
 
 const { isTouchDevice } = usePlatform();
 
@@ -73,20 +76,8 @@ const containerRef = ref<HTMLElement | null>(null);
 const scrollViewportRef = ref<HTMLElement | null>(null);
 const tableSize = ref({ width: 800, height: 600 });
 
-const editingValue = ref<Record<string, string>>({});
-const editingCell = ref<string | null>(null);
-const isManualClick = ref(false);
-
 const columnWidths = ref<Record<number, number>>({});
 const rowHeights = ref<Record<number, number>>({});
-const resizingColumn = ref<number | null>(null);
-const resizingRow = ref<number | null>(null);
-const startX = ref(0);
-const startY = ref(0);
-const startWidth = ref(0);
-const startHeight = ref(0);
-const resizeLineX = ref(0);
-const resizeLineY = ref(0);
 const scrollLeft = ref(0);
 const scrollTop = ref(0);
 
@@ -163,13 +154,12 @@ const visibleCellItems = computed<CellItem[]>(() => {
 });
 
 const visibleMergeCells = computed<MergeOverlayCell[]>(() => {
-  const merges = props.merges ?? [];
   const leftLimit = scrollLeft.value - OVERSCAN_PX;
   const rightLimit = scrollLeft.value + viewportWidth.value + OVERSCAN_PX;
   const topLimit = scrollTop.value - OVERSCAN_PX;
   const bottomLimit = scrollTop.value + viewportHeight.value + OVERSCAN_PX;
 
-  return merges.flatMap((merge) => {
+  return mergeRanges.value.flatMap((merge) => {
     const left = getDataColumnOffset(merge.startCol);
     const top = getRowOffset(merge.startRow);
     const width = getColumnSpanWidth(merge.startCol, merge.endCol);
@@ -199,6 +189,28 @@ const visibleMergeCells = computed<MergeOverlayCell[]>(() => {
       selected: isSelectedCell(merge.startRow, merge.startCol),
     }];
   });
+});
+
+const mergeRanges = computed(() => props.merges ?? []);
+const { isMergedCell, normalizeCellPosition } = useMergeLookup(mergeRanges);
+const {
+  editingValue,
+  isManualClick,
+  isEditing,
+  beginEdit,
+  resetEditing,
+  handleInput,
+  commit: commitEdit,
+  cancel: cancelEdit,
+  syncSelectedCell,
+} = useCellEditing({
+  getCellKey: getKey,
+  getInitialValue: (rowIndex, colIndex) => getDraftValue(rowIndex, colIndex)
+    ?? getCellValue(props.data[rowIndex]?.[colIndex])
+    ?? '',
+  emitEditing: (rowIndex, colIndex, value) => emit('cell-editing', rowIndex, colIndex, value),
+  emitChange: (rowIndex, colIndex, value) => emit('cell-change', rowIndex, colIndex, value),
+  emitCancel: (rowIndex, colIndex) => emit('cell-edit-cancel', rowIndex, colIndex),
 });
 
 const visibleColumnResizeHandles = computed(() => {
@@ -246,96 +258,33 @@ function handleViewportScroll() {
   scrollTop.value = viewport.scrollTop;
 }
 
-function getClientX(event: MouseEvent | TouchEvent): number {
-  if ('clientX' in event) return event.clientX;
-  if (event.touches && event.touches.length > 0) return event.touches[0].clientX;
-  if (event.changedTouches && event.changedTouches.length > 0) return event.changedTouches[0].clientX;
-  return 0;
-}
-
-function getClientY(event: MouseEvent | TouchEvent): number {
-  if ('clientY' in event) return event.clientY;
-  if (event.touches && event.touches.length > 0) return event.touches[0].clientY;
-  if (event.changedTouches && event.changedTouches.length > 0) return event.changedTouches[0].clientY;
-  return 0;
-}
-
-function startResize(event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number) {
-  event.preventDefault();
-  resizingColumn.value = colIndex;
-  startX.value = getClientX(event);
-  startWidth.value = getColumnWidth(colIndex);
-  resizeLineX.value = boundaryX;
-
-  document.addEventListener('mousemove', onResize);
-  document.addEventListener('mouseup', stopResize);
-
-  if (isTouchDevice.value) {
-    document.addEventListener('touchmove', onResize, { passive: false });
-    document.addEventListener('touchend', stopResize);
-  }
-}
-
-function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number) {
-  event.preventDefault();
-  resizingRow.value = rowIndex;
-  startY.value = getClientY(event);
-  startHeight.value = getRowHeight(rowIndex);
-  resizeLineY.value = HEADER_HEIGHT + getRowOffset(rowIndex) + startHeight.value - scrollTop.value;
-
-  document.addEventListener('mousemove', onResize);
-  document.addEventListener('mouseup', stopResize);
-
-  if (isTouchDevice.value) {
-    document.addEventListener('touchmove', onResize, { passive: false });
-    document.addEventListener('touchend', stopResize);
-  }
-}
-
-function onResize(event: MouseEvent | TouchEvent) {
-  if (resizingColumn.value === null && resizingRow.value === null) return;
-
-  if (event.type === 'touchmove') {
-    event.preventDefault();
-  }
-
-  if (resizingColumn.value !== null) {
-    const delta = getClientX(event) - startX.value;
-    const nextWidth = Math.max(MIN_COLUMN_WIDTH, startWidth.value + delta);
-    columnWidths.value[resizingColumn.value] = nextWidth;
-    resizeLineX.value = getColumnOffset(resizingColumn.value) + nextWidth - scrollLeft.value;
-  }
-
-  if (resizingRow.value !== null) {
-    const delta = getClientY(event) - startY.value;
-    const nextHeight = Math.max(MIN_ROW_HEIGHT, startHeight.value + delta);
-    rowHeights.value[resizingRow.value] = nextHeight;
-    resizeLineY.value = HEADER_HEIGHT + getRowOffset(resizingRow.value) + nextHeight - scrollTop.value;
-  }
-}
-
-function stopResize() {
-  if (resizingColumn.value !== null) {
-    emit('column-resize', resizingColumn.value, columnWidths.value[resizingColumn.value]);
-  }
-
-  if (resizingRow.value !== null) {
-    emit('row-resize', resizingRow.value, rowHeights.value[resizingRow.value]);
-  }
-
-  resizingColumn.value = null;
-  resizingRow.value = null;
-  resizeLineX.value = 0;
-  resizeLineY.value = 0;
-
-  document.removeEventListener('mousemove', onResize);
-  document.removeEventListener('mouseup', stopResize);
-
-  if (isTouchDevice.value) {
-    document.removeEventListener('touchmove', onResize);
-    document.removeEventListener('touchend', stopResize);
-  }
-}
+const {
+  resizingColumn,
+  resizingRow,
+  resizeLineX,
+  resizeLineY,
+  startColumnResize,
+  startRowResize,
+} = useGridResize({
+  isTouchDevice,
+  headerHeight: HEADER_HEIGHT,
+  minColumnWidth: MIN_COLUMN_WIDTH,
+  minRowHeight: MIN_ROW_HEIGHT,
+  scrollLeft,
+  scrollTop,
+  getColumnWidth,
+  getRowHeight,
+  getColumnOffset,
+  getRowOffset,
+  setColumnWidth: (colIndex, width) => {
+    columnWidths.value[colIndex] = width;
+  },
+  setRowHeight: (rowIndex, height) => {
+    rowHeights.value[rowIndex] = height;
+  },
+  commitColumnWidth: (colIndex, width) => emit('column-resize', colIndex, width),
+  commitRowHeight: (rowIndex, height) => emit('row-resize', rowIndex, height),
+});
 
 watch(() => props.data, () => {
   if (!props.selectedCell) return;
@@ -350,17 +299,12 @@ watch(() => props.data, () => {
 
 watch(() => props.selectedCell, (newCell) => {
   if (!newCell) {
-    editingCell.value = null;
-    editingValue.value = {};
+    resetEditing();
     return;
   }
 
   const newKey = getKey(newCell.row, newCell.col);
-  if (editingCell.value === newKey) return;
-
-  editingCell.value = null;
-  editingValue.value = {};
-  isManualClick.value = false;
+  syncSelectedCell(newKey);
 
   if (props.autoScroll && scrollViewportRef.value) {
     const targetTop = getRowOffset(newCell.row) - viewportHeight.value / 2 + getRowHeight(newCell.row) / 2;
@@ -409,49 +353,18 @@ function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
   return props.draftCellValues?.get(getDraftKey(rowIndex, colIndex));
 }
 
-function getMergeInfo(rowIndex: number, colIndex: number): MergeRange | null {
-  if (!props.merges) return null;
-
-  for (const merge of props.merges) {
-    if (
-      rowIndex >= merge.startRow
-      && rowIndex <= merge.endRow
-      && colIndex >= merge.startCol
-      && colIndex <= merge.endCol
-    ) {
-      return merge;
-    }
-  }
-
-  return null;
-}
-
-function isMergedCell(rowIndex: number, colIndex: number): boolean {
-  return getMergeInfo(rowIndex, colIndex) !== null;
-}
-
-function handleInput(rowIndex: number, colIndex: number, value: string) {
-  editingValue.value[getKey(rowIndex, colIndex)] = value;
-  emit('cell-editing', rowIndex, colIndex, value);
-}
-
 function handleBlur(rowIndex: number, colIndex: number, value: string) {
-  const key = getKey(rowIndex, colIndex);
   const originalValue = getCellValue(props.data[rowIndex]?.[colIndex]);
 
   if (value !== originalValue || getDraftValue(rowIndex, colIndex) !== undefined) {
-    emit('cell-change', rowIndex, colIndex, value);
+    commitEdit(rowIndex, colIndex, value);
+  } else {
+    resetEditing();
   }
-
-  delete editingValue.value[key];
-  editingCell.value = null;
 }
 
 function handleCancelEdit(rowIndex: number, colIndex: number) {
-  const key = getKey(rowIndex, colIndex);
-  delete editingValue.value[key];
-  editingCell.value = null;
-  emit('cell-edit-cancel', rowIndex, colIndex);
+  cancelEdit(rowIndex, colIndex);
 }
 
 function handleDeleteRow(index: number) {
@@ -472,39 +385,22 @@ function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValu
   return cellToDisplayString(cellValue);
 }
 
-function isEditing(rowIndex: number, colIndex: number): boolean {
-  return editingCell.value === getKey(rowIndex, colIndex);
-}
-
 function isSelectedCell(rowIndex: number, colIndex: number): boolean {
   return props.selectedCell?.row === rowIndex && props.selectedCell?.col === colIndex;
 }
 
 function handleCellClick(rowIndex: number, colIndex: number) {
-  const merge = getMergeInfo(rowIndex, colIndex);
-  if (merge) {
-    rowIndex = merge.startRow;
-    colIndex = merge.startCol;
-  }
-
-  emit('select-cell', rowIndex, colIndex);
+  const normalized = normalizeCellPosition(rowIndex, colIndex);
+  emit('select-cell', normalized.rowIndex, normalized.colIndex);
 }
 
 function handleCellDoubleClick(rowIndex: number, colIndex: number) {
-  const merge = getMergeInfo(rowIndex, colIndex);
-  if (merge) {
-    rowIndex = merge.startRow;
-    colIndex = merge.startCol;
-  }
+  const normalized = normalizeCellPosition(rowIndex, colIndex);
+  rowIndex = normalized.rowIndex;
+  colIndex = normalized.colIndex;
 
   emit('select-cell', rowIndex, colIndex);
-  const key = getKey(rowIndex, colIndex);
-  editingCell.value = key;
-  editingValue.value = {};
-  editingValue.value[key] = getDraftValue(rowIndex, colIndex)
-    ?? getCellValue(props.data[rowIndex]?.[colIndex])
-    ?? '';
-  isManualClick.value = true;
+  beginEdit(rowIndex, colIndex);
 }
 </script>
 
@@ -640,8 +536,8 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
         class="column-resize-handle"
         :class="{ 'is-active': resizingColumn === handle.colIndex }"
         :style="{ left: `${handle.left}px` }"
-        @mousedown.stop="startResize($event, handle.colIndex, handle.left)"
-        @touchstart.stop="(event: TouchEvent) => isTouchDevice && startResize(event, handle.colIndex, handle.left)"
+        @mousedown.stop="startColumnResize($event, handle.colIndex, handle.left)"
+        @touchstart.stop="(event: TouchEvent) => isTouchDevice && startColumnResize(event, handle.colIndex, handle.left)"
       />
     </div>
 

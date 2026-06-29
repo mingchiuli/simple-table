@@ -4,8 +4,7 @@ import { usePlatform } from '@/composables/usePlatform';
 import { useDocumentStatus } from '@/composables/useDocumentStatus';
 import { useFileActions } from '@/composables/useFileActions';
 import { cellToEditorString, usePendingCellSave } from '@/composables/usePendingCellSave';
-import { useFileDataStore } from '@/stores/fileData';
-import { useDocumentUiStore } from '@/stores/documentUi';
+import { useDocumentSessionStore } from '@/stores/documentSession';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
@@ -15,8 +14,7 @@ import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
 import type { EditorMutationResponse, SearchResult } from '@/types';
 const route = useRoute();
-const fileDataStore = useFileDataStore();
-const documentUiStore = useDocumentUiStore();
+const documentSessionStore = useDocumentSessionStore();
 const { isMobileOrTablet } = usePlatform();
 
 // ========== State refs (must be declared before composables use them) ==========
@@ -32,10 +30,10 @@ const {
   isSearching,
   sheetColumnWidths,
   sheetRowHeights,
-} = storeToRefs(documentUiStore);
+} = storeToRefs(documentSessionStore);
 
 // ========== Computed values ==========
-const fileData = computed(() => fileDataStore.data);
+const fileData = computed(() => documentSessionStore.data);
 
 const currentSheet = computed(() => {
   if (!fileData.value || !fileData.value.sheets.length) return null;
@@ -71,7 +69,7 @@ const {
 } = useDocumentStatus();
 
 function applyMutationResponse(response: EditorMutationResponse) {
-  const nextFileData = fileDataStore.applyPatches(response.patches);
+  const nextFileData = documentSessionStore.applyPatches(response.patches);
   if (!nextFileData) return;
 
   applyEditorState(response.editorState);
@@ -100,14 +98,14 @@ function applyMutationResponse(response: EditorMutationResponse) {
 function syncLayoutMapsFromPatches(response: EditorMutationResponse) {
   for (const patch of response.patches ?? []) {
     if (patch.type === 'FullSnapshot') {
-      documentUiStore.hydrateLayout(fileData.value);
+      documentSessionStore.hydrateLayout(fileData.value);
     } else if (patch.type === 'Layout') {
       const { sheetIndex, columnWidths = {}, rowHeights = {} } = patch.data.patch;
       for (const [key, value] of Object.entries(columnWidths)) {
-        documentUiStore.setColumnWidth(sheetIndex, Number(key), value ?? undefined);
+        documentSessionStore.setColumnWidth(sheetIndex, Number(key), value ?? undefined);
       }
       for (const [key, value] of Object.entries(rowHeights)) {
-        documentUiStore.setRowHeight(sheetIndex, Number(key), value ?? undefined);
+        documentSessionStore.setRowHeight(sheetIndex, Number(key), value ?? undefined);
       }
     }
   }
@@ -132,11 +130,7 @@ const {
   clearPendingContentChange,
 });
 
-watch(() => fileDataStore.documentVersion, () => {
-  documentUiStore.resetForDocument(fileData.value);
-});
-
-watch(() => fileData.value, (data) => documentUiStore.hydrateLayout(data), { immediate: true });
+watch(() => fileData.value, (data) => documentSessionStore.hydrateLayout(data), { immediate: true });
 
 const {
   loadFileFromPath,
@@ -231,7 +225,7 @@ async function handleAddSheet() {
   try {
     isLoading.value = true;
     applyMutationResponse(await api.addSheet());
-    documentUiStore.clearSelection();
+    documentSessionStore.clearSelection();
     currentSheetIndex.value = newSheetIndex;
   } catch (error) {
     ElMessage.error(`Failed to add sheet: ${error}`);
@@ -262,9 +256,9 @@ async function handleDeleteSheet() {
 }
 
 function handleSheetChange(index: number) {
-  documentUiStore.rememberCurrentSheetSelection();
+  documentSessionStore.rememberCurrentSheetSelection();
   cellEditorValue.value = '';
-  documentUiStore.restoreSheetSelection(index, (cell) => getEditorValue(index, cell.row, cell.col));
+  documentSessionStore.restoreSheetSelection(index, (cell) => getEditorValue(index, cell.row, cell.col));
 }
 
 // ========== Undo/Redo ==========
@@ -323,16 +317,16 @@ function handleSearchResultClick(result: SearchResult) {
   if (result.sheetIndex !== currentSheetIndex.value) {
     currentSheetIndex.value = result.sheetIndex;
   }
-  documentUiStore.selectCell(result.row, result.col, true);
+  documentSessionStore.selectCell(result.row, result.col, true);
   cellEditorValue.value = getEditorValue(result.sheetIndex, result.row, result.col);
 }
 
 function handleClearSearch() {
-  documentUiStore.clearSearch();
+  documentSessionStore.clearSearch();
 }
 
 function handleSelectCell(row: number, col: number) {
-  documentUiStore.selectCell(row, col, false);
+  documentSessionStore.selectCell(row, col, false);
 }
 
 // ========== Column resize ==========
@@ -343,10 +337,10 @@ async function handleColumnResize(colIndex: number, width: number) {
   try {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
-    documentUiStore.setColumnWidth(sheetIndex, colIndex, width);
+    documentSessionStore.setColumnWidth(sheetIndex, colIndex, width);
     applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
   } catch (error) {
-    documentUiStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
+    documentSessionStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
     ElMessage.error(`Failed to resize column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -360,10 +354,10 @@ async function handleRowResize(rowIndex: number, height: number) {
   try {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
-    documentUiStore.setRowHeight(sheetIndex, rowIndex, height);
+    documentSessionStore.setRowHeight(sheetIndex, rowIndex, height);
     applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
   } catch (error) {
-    documentUiStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
+    documentSessionStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
     ElMessage.error(`Failed to resize row: ${error}`);
   } finally {
     isLoading.value = false;

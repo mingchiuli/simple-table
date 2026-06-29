@@ -288,7 +288,7 @@ pub fn schedule_index_for_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::Operation;
+    use crate::ops::EditorCommand;
     use crate::types::{FileData, SheetData};
 
     fn s(value: &str) -> CellValue {
@@ -348,11 +348,10 @@ mod tests {
             let mut guard = state.write().unwrap();
             let editor = guard.as_mut().unwrap();
             editor
-                .execute(Operation::SetCell {
+                .execute(EditorCommand::SetCell {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
-                    old_value: s("apple"),
                     new_value: s("orange"),
                 })
                 .unwrap();
@@ -387,11 +386,10 @@ mod tests {
             let mut guard = state.write().unwrap();
             let editor = guard.as_mut().unwrap();
             editor
-                .execute(Operation::SetCell {
+                .execute(EditorCommand::SetCell {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
-                    old_value: s("apple"),
                     new_value: s("orange"),
                 })
                 .unwrap();
