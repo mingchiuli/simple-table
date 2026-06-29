@@ -134,6 +134,7 @@ impl EditorState {
     /// 执行命令并记录到历史，返回增量结果。
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         let operation = command.resolve(self.file_data())?;
+        let should_mark_search_stale = operation.requires_search_rebuild();
         if operation.is_noop() {
             let result = self.document.execute_operation(&operation)?;
             self.update_flags();
@@ -151,6 +152,9 @@ impl EditorState {
             SpreadsheetDocument::create_memento(&before, &after, &operation, &result.cell_changes);
         self.history.push(HistoryEntry { memento });
         self.redo_stack.clear();
+        if should_mark_search_stale {
+            self.mark_search_index_stale();
+        }
         self.update_flags();
         self.refresh_content_hash();
         Ok(ExecutedOperation {
@@ -165,6 +169,7 @@ impl EditorState {
             self.document
                 .restore_memento(&entry.memento, MementoSide::Before)?;
             self.redo_stack.push(entry);
+            self.mark_search_index_stale();
             self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
@@ -182,6 +187,7 @@ impl EditorState {
             self.document
                 .restore_memento(&entry.memento, MementoSide::After)?;
             self.history.push(entry);
+            self.mark_search_index_stale();
             self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {

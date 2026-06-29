@@ -30,49 +30,12 @@ export interface FileData {
   sheets: SheetData[];
 }
 
-export interface CellChange {
-  row: number;
-  col: number;
-  value: CellValue;
-}
-
 export interface SheetCellChange {
   sheetIndex: number;
   row: number;
   col: number;
   value: CellValue;
 }
-
-export interface RowChange {
-  index: number;
-  values: CellValue[];
-}
-
-export interface ColumnChange {
-  index: number;
-}
-
-export interface ColumnWidthChange {
-  colIndex: number;
-  width?: number | null;
-}
-
-export interface RowHeightChange {
-  rowIndex: number;
-  height?: number | null;
-}
-
-// Rust 使用 #[serde(tag = "type", content = "data")]，所以格式是 { type: 'SetCell', data: {...} }
-export type OperationResult =
-  | { type: 'SetCell'; data: { sheetIndex: number; cell: CellChange } }
-  | { type: 'AddRow'; data: { sheetIndex: number; row: RowChange } }
-  | { type: 'DeleteRow'; data: { sheetIndex: number; rowIndex: number } }
-  | { type: 'AddColumn'; data: { sheetIndex: number; column: ColumnChange; colData: CellValue[] } }
-  | { type: 'DeleteColumn'; data: { sheetIndex: number; columnIndex: number } }
-  | { type: 'SetColumnWidth'; data: { sheetIndex: number; column: ColumnWidthChange } }
-  | { type: 'SetRowHeight'; data: { sheetIndex: number; row: RowHeightChange } }
-  | { type: 'AddSheet'; data: { sheetIndex: number; name: string; sheetData: SheetData } }
-  | { type: 'DeleteSheet'; data: { sheetIndex: number; sheetData: SheetData } };
 
 export interface SearchResult {
   sheetIndex: number;

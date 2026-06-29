@@ -155,7 +155,6 @@ fn execute_structural_snapshot(
         let mut state_guard = state.write().expect("Editor state lock poisoned");
         let editor_state = state_guard.as_mut().ok_or(AppError::NoFileLoaded)?;
         let result = editor_state.execute(command)?;
-        editor_state.mark_search_index_stale();
         snapshot_mutation_response(editor_state, result.operation)
     };
 

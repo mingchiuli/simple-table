@@ -1,18 +1,19 @@
 import * as api from '@/api';
+import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { EditorStateInfo } from '@/types';
 
 export function useDocumentStatus() {
-  const canUndo = ref(false);
-  const canRedo = ref(false);
-  const isContentDirty = ref(false);
-  const hasPendingContentChange = ref(false);
-
-  const hasUnsavedChanges = computed(() => isContentDirty.value || hasPendingContentChange.value);
+  const documentSessionStore = useDocumentSessionStore();
+  const {
+    canUndo,
+    canRedo,
+    isContentDirty,
+    hasPendingContentChange,
+    hasUnsavedChanges,
+  } = storeToRefs(documentSessionStore);
 
   function applyEditorState(state: EditorStateInfo | null | undefined) {
-    canUndo.value = state?.canUndo ?? false;
-    canRedo.value = state?.canRedo ?? false;
-    isContentDirty.value = state?.isDirty ?? false;
+    documentSessionStore.applyEditorState(state);
   }
 
   async function refreshEditorState() {
@@ -25,23 +26,20 @@ export function useDocumentStatus() {
   }
 
   function markPendingContentChange() {
-    hasPendingContentChange.value = true;
+    documentSessionStore.markPendingContentChange();
   }
 
   function clearPendingContentChange() {
-    hasPendingContentChange.value = false;
+    documentSessionStore.clearPendingContentChange();
   }
 
   function resetDocumentStatus() {
-    canUndo.value = false;
-    canRedo.value = false;
-    isContentDirty.value = false;
-    hasPendingContentChange.value = false;
+    documentSessionStore.resetDocumentStatus();
   }
 
   async function markSaved() {
     await api.markFileSaved();
-    hasPendingContentChange.value = false;
+    documentSessionStore.clearPendingContentChange();
     await refreshEditorState();
   }
 

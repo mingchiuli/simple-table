@@ -670,12 +670,16 @@ fn patch_cell(
     Ok(())
 }
 
-fn refresh_projection(workbook: &Workbook, file_data: &mut FileData) {
+pub fn refresh_projection_from_workbook(workbook: &Workbook, file_data: &mut FileData) {
     file_data.sheets = workbook
         .sheet_collection()
         .iter()
         .map(read_worksheet)
         .collect();
+}
+
+fn refresh_projection(workbook: &Workbook, file_data: &mut FileData) {
+    refresh_projection_from_workbook(workbook, file_data);
 }
 
 fn patch_column_width(worksheet: &mut Worksheet, col_index: usize, width: Option<u32>) {

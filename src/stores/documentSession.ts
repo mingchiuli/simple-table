@@ -1,4 +1,12 @@
-import type { CellValue, EditorPatch, FileData, SearchResult, SheetCellChange } from "@/types";
+import type {
+  CellValue,
+  EditorMutationResponse,
+  EditorPatch,
+  EditorStateInfo,
+  FileData,
+  SearchResult,
+  SheetCellChange,
+} from "@/types";
 
 type CellPosition = { row: number; col: number };
 
@@ -28,7 +36,14 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     inFlightCellChanges: new Map<string, PendingCellChange>(),
     sheetColumnWidths: {} as Record<number, Record<number, number>>,
     sheetRowHeights: {} as Record<number, Record<number, number>>,
+    canUndo: false,
+    canRedo: false,
+    isContentDirty: false,
+    hasPendingContentChange: false,
   }),
+  getters: {
+    hasUnsavedChanges: (state) => state.isContentDirty || state.hasPendingContentChange,
+  },
   actions: {
     openDocument(data: FileData, path: string | null = null) {
       this.data = data;
@@ -50,6 +65,29 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = null;
       this.resetUiForCurrentDocument();
     },
+    applyMutationResponse(response: EditorMutationResponse): FileData | null {
+      const nextData = this.applyPatches(response.patches);
+      this.applyEditorState(response.editorState);
+      this.clampSelectionToCurrentSheet();
+      return nextData;
+    },
+    applyEditorState(state: EditorStateInfo | null | undefined) {
+      this.canUndo = state?.canUndo ?? false;
+      this.canRedo = state?.canRedo ?? false;
+      this.isContentDirty = state?.isDirty ?? false;
+    },
+    resetDocumentStatus() {
+      this.canUndo = false;
+      this.canRedo = false;
+      this.isContentDirty = false;
+      this.hasPendingContentChange = false;
+    },
+    markPendingContentChange() {
+      this.hasPendingContentChange = true;
+    },
+    clearPendingContentChange() {
+      this.hasPendingContentChange = false;
+    },
     applyPatches(patches: EditorPatch[] | undefined): FileData | null {
       let nextData = this.data;
       for (const patch of patches ?? []) {
@@ -65,6 +103,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
           );
         }
       }
+      this.syncLayoutFromData();
       return nextData;
     },
     applySnapshot(snapshot: FileData): FileData {
@@ -135,27 +174,27 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.isSearching = false;
       this.sheetSelectedCells = new Map();
       this.resetPendingEdits();
-      this.hydrateLayout(this.data);
+      this.syncLayoutFromData();
     },
     resetPendingEdits() {
       this.draftCellValues.clear();
       this.pendingCellChanges.clear();
       this.inFlightCellChanges.clear();
     },
-    hydrateLayout(fileData: FileData | null) {
-      if (!fileData) {
+    syncLayoutFromData() {
+      if (!this.data) {
         this.sheetColumnWidths = {};
         this.sheetRowHeights = {};
         return;
       }
 
       this.sheetColumnWidths = Object.fromEntries(
-        fileData.sheets
+        this.data.sheets
           .map((sheet, index) => [index, sheet.columnWidths ?? {}] as const)
           .filter(([, widths]) => Object.keys(widths).length > 0)
       );
       this.sheetRowHeights = Object.fromEntries(
-        fileData.sheets
+        this.data.sheets
           .map((sheet, index) => [index, sheet.rowHeights ?? {}] as const)
           .filter(([, heights]) => Object.keys(heights).length > 0)
       );
@@ -193,6 +232,22 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     clearSearch() {
       this.searchResults = [];
       this.searchQuery = "";
+    },
+    clampSelectionToCurrentSheet() {
+      if (!this.data) {
+        this.clearSelection();
+        return;
+      }
+      if (this.currentSheetIndex >= this.data.sheets.length) {
+        this.currentSheetIndex = Math.max(0, this.data.sheets.length - 1);
+      }
+      if (!this.selectedCell) return;
+
+      const sheet = this.data.sheets[this.currentSheetIndex];
+      const row = sheet?.rows[this.selectedCell.row];
+      if (!row || this.selectedCell.col >= row.length) {
+        this.clearSelection();
+      }
     },
   },
 });

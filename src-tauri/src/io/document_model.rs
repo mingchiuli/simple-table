@@ -7,8 +7,8 @@ use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
-use crate::types::{CellValue, FileData, OperationResult, SheetCellChange};
-use umya_spreadsheet::Workbook;
+use crate::types::{CellValue, FileData, OperationResult, SheetCellChange, SheetData};
+use umya_spreadsheet::{Workbook, Worksheet};
 
 #[derive(Debug, Clone)]
 pub struct DocumentOperationResult {
@@ -35,9 +35,9 @@ pub(crate) enum DocumentMemento {
         before: LayoutMemento,
         after: LayoutMemento,
     },
-    Full {
-        before: Box<SpreadsheetDocument>,
-        after: Box<SpreadsheetDocument>,
+    Structure {
+        before: StructureMemento,
+        after: StructureMemento,
     },
 }
 
@@ -55,6 +55,37 @@ pub(crate) struct LayoutMemento {
     sheet_index: usize,
     column_widths: HashMap<usize, Option<u32>>,
     row_heights: HashMap<usize, Option<u32>>,
+}
+
+pub(crate) struct StructureMemento {
+    projection: FileStructureMemento,
+    body: BodyStructureMemento,
+}
+
+pub(crate) struct FileStructureMemento {
+    sheet_count: usize,
+    sheets: Vec<SheetSnapshot>,
+}
+
+pub(crate) struct SheetSnapshot {
+    sheet_index: usize,
+    sheet: SheetData,
+}
+
+enum BodyStructureMemento {
+    ExcelSheets {
+        sheet_count: usize,
+        sheets: Vec<WorksheetSnapshot>,
+    },
+    ExcelWorkbook {
+        workbook: Box<Workbook>,
+    },
+    ProjectionOnly,
+}
+
+struct WorksheetSnapshot {
+    sheet_index: usize,
+    worksheet: Worksheet,
 }
 
 pub(crate) enum MementoSide {
@@ -207,15 +238,22 @@ impl SpreadsheetDocument {
                 before: before.layout_memento(*sheet_index, None, Some(*row_index)),
                 after: after.layout_memento(*sheet_index, None, Some(*row_index)),
             },
-            AppliedOperation::AddRow { .. }
-            | AppliedOperation::DeleteRow { .. }
-            | AppliedOperation::AddColumn { .. }
-            | AppliedOperation::DeleteColumn { .. }
-            | AppliedOperation::AddSheet { .. }
-            | AppliedOperation::DeleteSheet { .. } => DocumentMemento::Full {
-                before: Box::new(before.clone()),
-                after: Box::new(after.clone()),
+            AppliedOperation::AddRow { sheet_index, .. }
+            | AppliedOperation::DeleteRow { sheet_index, .. }
+            | AppliedOperation::AddColumn { sheet_index, .. }
+            | AppliedOperation::DeleteColumn { sheet_index, .. } => DocumentMemento::Structure {
+                before: before.sheet_structure_memento([*sheet_index]),
+                after: after.sheet_structure_memento([*sheet_index]),
             },
+            AppliedOperation::AddSheet { sheet_index, .. }
+            | AppliedOperation::DeleteSheet { sheet_index } => {
+                let start = *sheet_index;
+                DocumentMemento::Structure {
+                    before: before
+                        .workbook_structure_memento(start..before.projection.sheets.len()),
+                    after: after.workbook_structure_memento(start..after.projection.sheets.len()),
+                }
+            }
         }
     }
 
@@ -235,13 +273,11 @@ impl SpreadsheetDocument {
             (DocumentMemento::Layout { after, .. }, MementoSide::After) => {
                 self.restore_layout(after)
             }
-            (DocumentMemento::Full { before, .. }, MementoSide::Before) => {
-                *self = (**before).clone();
-                Ok(())
+            (DocumentMemento::Structure { before, .. }, MementoSide::Before) => {
+                self.restore_structure(before)
             }
-            (DocumentMemento::Full { after, .. }, MementoSide::After) => {
-                *self = (**after).clone();
-                Ok(())
+            (DocumentMemento::Structure { after, .. }, MementoSide::After) => {
+                self.restore_structure(after)
             }
         }
     }
@@ -334,6 +370,74 @@ impl SpreadsheetDocument {
         }
     }
 
+    fn sheet_structure_memento(
+        &self,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) -> StructureMemento {
+        let sheet_indexes: Vec<usize> = sheet_indexes.into_iter().collect();
+        StructureMemento {
+            projection: self.projection_structure_memento(&sheet_indexes),
+            body: match &self.body {
+                SpreadsheetDocumentBody::Excel(body) => BodyStructureMemento::ExcelSheets {
+                    sheet_count: body.workbook.sheet_count(),
+                    sheets: sheet_indexes
+                        .iter()
+                        .filter_map(|sheet_index| {
+                            body.workbook
+                                .sheet(*sheet_index)
+                                .ok()
+                                .cloned()
+                                .map(|worksheet| WorksheetSnapshot {
+                                    sheet_index: *sheet_index,
+                                    worksheet,
+                                })
+                        })
+                        .collect(),
+                },
+                SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => {
+                    BodyStructureMemento::ProjectionOnly
+                }
+            },
+        }
+    }
+
+    fn workbook_structure_memento(
+        &self,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) -> StructureMemento {
+        let sheet_indexes: Vec<usize> = sheet_indexes.into_iter().collect();
+        StructureMemento {
+            projection: self.projection_structure_memento(&sheet_indexes),
+            body: match &self.body {
+                SpreadsheetDocumentBody::Excel(body) => BodyStructureMemento::ExcelWorkbook {
+                    workbook: body.workbook.clone(),
+                },
+                SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => {
+                    BodyStructureMemento::ProjectionOnly
+                }
+            },
+        }
+    }
+
+    fn projection_structure_memento(&self, sheet_indexes: &[usize]) -> FileStructureMemento {
+        FileStructureMemento {
+            sheet_count: self.projection.sheets.len(),
+            sheets: sheet_indexes
+                .iter()
+                .filter_map(|sheet_index| {
+                    self.projection
+                        .sheets
+                        .get(*sheet_index)
+                        .cloned()
+                        .map(|sheet| SheetSnapshot {
+                            sheet_index: *sheet_index,
+                            sheet,
+                        })
+                })
+                .collect(),
+        }
+    }
+
     fn projection_cell(&self, sheet_index: usize, row: usize, col: usize) -> CellValue {
         self.projection
             .sheets
@@ -418,6 +522,33 @@ impl SpreadsheetDocument {
         }
 
         self.patch_workbook_layout(memento)
+    }
+
+    fn restore_structure(&mut self, memento: &StructureMemento) -> Result<(), AppError> {
+        match &memento.body {
+            BodyStructureMemento::ExcelSheets {
+                sheet_count,
+                sheets,
+            } => {
+                if let SpreadsheetDocumentBody::Excel(body) = &mut self.body {
+                    restore_workbook_sheets(&mut body.workbook, *sheet_count, sheets)?;
+                    self.refresh_projection_from_workbook();
+                } else {
+                    restore_projection_sheets(&mut self.projection, &memento.projection);
+                }
+            }
+            BodyStructureMemento::ExcelWorkbook { workbook } => {
+                self.body = SpreadsheetDocumentBody::Excel(ExcelDocumentBody {
+                    workbook: workbook.clone(),
+                });
+                self.refresh_projection_from_workbook();
+            }
+            BodyStructureMemento::ProjectionOnly => {
+                restore_projection_sheets(&mut self.projection, &memento.projection);
+            }
+        }
+        self.rebuild_formula_runtime();
+        Ok(())
     }
 
     fn recalculate_after_operation(
@@ -568,6 +699,12 @@ impl SpreadsheetDocument {
         }
     }
 
+    fn refresh_projection_from_workbook(&mut self) {
+        if let SpreadsheetDocumentBody::Excel(body) = &self.body {
+            workbook_state::refresh_projection_from_workbook(&body.workbook, &mut self.projection);
+        }
+    }
+
     fn clone_body(&self) -> SpreadsheetDocumentBody {
         match &self.body {
             SpreadsheetDocumentBody::Excel(body) => {
@@ -581,6 +718,59 @@ impl SpreadsheetDocument {
             }
         }
     }
+}
+
+fn restore_projection_sheets(file_data: &mut FileData, memento: &FileStructureMemento) {
+    if memento.sheets.is_empty() {
+        file_data.sheets.truncate(memento.sheet_count);
+        return;
+    }
+
+    let min_index = memento
+        .sheets
+        .iter()
+        .map(|sheet| sheet.sheet_index)
+        .min()
+        .unwrap_or(0);
+    file_data.sheets.truncate(min_index);
+
+    for snapshot in &memento.sheets {
+        if file_data.sheets.len() < snapshot.sheet_index {
+            file_data
+                .sheets
+                .resize_with(snapshot.sheet_index, SheetData::default);
+        }
+        if file_data.sheets.len() == snapshot.sheet_index {
+            file_data.sheets.push(snapshot.sheet.clone());
+        } else {
+            file_data.sheets[snapshot.sheet_index] = snapshot.sheet.clone();
+        }
+    }
+
+    file_data.sheets.truncate(memento.sheet_count);
+}
+
+fn restore_workbook_sheets(
+    workbook: &mut Workbook,
+    sheet_count: usize,
+    sheets: &[WorksheetSnapshot],
+) -> Result<(), AppError> {
+    while workbook.sheet_count() > sheet_count {
+        workbook
+            .remove_sheet(workbook.sheet_count() - 1)
+            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))?;
+    }
+
+    {
+        let workbook_sheets = workbook.sheet_collection_mut();
+        for snapshot in sheets {
+            if let Some(target) = workbook_sheets.get_mut(snapshot.sheet_index) {
+                *target = snapshot.worksheet.clone();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn push_unique_position(

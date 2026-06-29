@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { CellValue, MergeRange } from '@/types';
-import { CellView, ColumnHeaderCell, EditableCell, RowNumberCell } from '@/components/cell';
 import { usePlatform } from '@/composables/usePlatform';
 import { cellToDisplayString, cellToEditorString } from '@/composables/usePendingCellSave';
+import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from '@/components/table-grid';
 import {
   areNumberRecordsEqual,
   buildOffsets,
@@ -413,47 +413,17 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
       '--table-header-height': `${HEADER_HEIGHT}px`,
     }"
   >
-    <div class="corner-cell">#</div>
-
-    <div class="column-header-viewport">
-      <div class="column-header-strip" :style="{ width: `${totalColumnsWidth}px` }">
-        <div
-          v-for="column in visibleColumns"
-          :key="column.index"
-          class="column-header-cell"
-          :style="{
-            left: `${column.left - scrollLeft}px`,
-            width: `${column.width}px`,
-          }"
-        >
-          <ColumnHeaderCell
-            :column-index="column.index"
-            :title="column.title"
-            @delete="handleDeleteColumn"
-          />
-        </div>
-      </div>
-    </div>
-
-    <div class="row-header-viewport">
-      <div class="row-header-strip" :style="{ height: `${totalRowsHeight}px` }">
-        <div
-          v-for="row in visibleRows"
-          :key="row.index"
-          class="row-header-cell"
-          :style="{
-            top: `${row.top - scrollTop}px`,
-            height: `${row.height}px`,
-          }"
-        >
-          <RowNumberCell
-            :row-index="row.index"
-            @delete="handleDeleteRow"
-            @resize-start="startRowResize"
-          />
-        </div>
-      </div>
-    </div>
+    <GridHeaders
+      :columns="visibleColumns"
+      :rows="visibleRows"
+      :scroll-left="scrollLeft"
+      :scroll-top="scrollTop"
+      :total-columns-width="totalColumnsWidth"
+      :total-rows-height="totalRowsHeight"
+      @delete-row="handleDeleteRow"
+      @delete-column="handleDeleteColumn"
+      @row-resize-start="startRowResize"
+    />
 
     <div ref="scrollViewportRef" class="data-viewport" @scroll="handleViewportScroll">
       <div
@@ -463,93 +433,46 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
           height: `${totalRowsHeight}px`,
         }"
       >
-        <div
-          v-for="cell in visibleCellItems"
-          :key="cell.key"
-          class="data-cell"
-          :class="{ 'is-selected': isSelectedCell(cell.rowIndex, cell.colIndex) }"
-          :style="{
-            left: `${cell.left}px`,
-            top: `${cell.top}px`,
-            width: `${cell.width}px`,
-            height: `${cell.height}px`,
-          }"
-          @click="handleCellClick(cell.rowIndex, cell.colIndex)"
-          @dblclick="handleCellDoubleClick(cell.rowIndex, cell.colIndex)"
-        >
-          <CellView
-            v-if="!isEditing(cell.rowIndex, cell.colIndex)"
-            :value="cell.value"
-            :draft-value="getDraftValue(cell.rowIndex, cell.colIndex)"
-            :selected="false"
-            :row-height="cell.height"
-          />
-          <EditableCell
-            v-else
-            :auto-focus="isManualClick"
-            :min-height="cell.height"
-            :model-value="editingValue[getKey(cell.rowIndex, cell.colIndex)] ?? getDisplayValue(cell.rowIndex, cell.colIndex, cell.value)"
-            @update:model-value="(val: string) => handleInput(cell.rowIndex, cell.colIndex, val)"
-            @commit="handleBlur(cell.rowIndex, cell.colIndex, editingValue[getKey(cell.rowIndex, cell.colIndex)] ?? getDisplayValue(cell.rowIndex, cell.colIndex, cell.value))"
-            @cancel="handleCancelEdit(cell.rowIndex, cell.colIndex)"
-          />
-        </div>
+        <GridCellsLayer
+          :cells="visibleCellItems"
+          :selected-cell="selectedCell"
+          :is-manual-click="isManualClick"
+          :editing-value="editingValue"
+          :get-key="getKey"
+          :get-draft-value="getDraftValue"
+          :get-display-value="getDisplayValue"
+          :is-editing="isEditing"
+          @cell-click="handleCellClick"
+          @cell-double-click="handleCellDoubleClick"
+          @input="handleInput"
+          @commit="handleBlur"
+          @cancel="handleCancelEdit"
+        />
 
-        <div
-          v-for="mergeCell in visibleMergeCells"
-          :key="mergeCell.key"
-          class="merge-cell"
-          :class="{ 'is-selected': mergeCell.selected, 'is-editing': isEditing(mergeCell.rowIndex, mergeCell.colIndex) }"
-          :style="{
-            left: `${mergeCell.left}px`,
-            top: `${mergeCell.top}px`,
-            width: `${mergeCell.width}px`,
-            height: `${mergeCell.height}px`,
-          }"
-          @click="handleCellClick(mergeCell.rowIndex, mergeCell.colIndex)"
-          @dblclick="handleCellDoubleClick(mergeCell.rowIndex, mergeCell.colIndex)"
-        >
-          <CellView
-            v-if="!isEditing(mergeCell.rowIndex, mergeCell.colIndex)"
-            :value="mergeCell.value"
-            :draft-value="mergeCell.draftValue"
-            :selected="false"
-            :row-height="mergeCell.height"
-          />
-          <EditableCell
-            v-else
-            :auto-focus="isManualClick"
-            :min-height="mergeCell.height"
-            :model-value="editingValue[getKey(mergeCell.rowIndex, mergeCell.colIndex)] ?? getDisplayValue(mergeCell.rowIndex, mergeCell.colIndex, mergeCell.value)"
-            @update:model-value="(val: string) => handleInput(mergeCell.rowIndex, mergeCell.colIndex, val)"
-            @commit="handleBlur(mergeCell.rowIndex, mergeCell.colIndex, editingValue[getKey(mergeCell.rowIndex, mergeCell.colIndex)] ?? getDisplayValue(mergeCell.rowIndex, mergeCell.colIndex, mergeCell.value))"
-            @cancel="handleCancelEdit(mergeCell.rowIndex, mergeCell.colIndex)"
-          />
-        </div>
+        <MergeCellsLayer
+          :cells="visibleMergeCells"
+          :is-manual-click="isManualClick"
+          :editing-value="editingValue"
+          :get-key="getKey"
+          :get-display-value="getDisplayValue"
+          :is-editing="isEditing"
+          @cell-click="handleCellClick"
+          @cell-double-click="handleCellDoubleClick"
+          @input="handleInput"
+          @commit="handleBlur"
+          @cancel="handleCancelEdit"
+        />
       </div>
     </div>
 
-    <div class="resize-overlay" aria-hidden="true">
-      <div
-        v-for="handle in visibleColumnResizeHandles"
-        :key="handle.colIndex"
-        class="column-resize-handle"
-        :class="{ 'is-active': resizingColumn === handle.colIndex }"
-        :style="{ left: `${handle.left}px` }"
-        @mousedown.stop="startColumnResize($event, handle.colIndex, handle.left)"
-        @touchstart.stop="(event: TouchEvent) => isTouchDevice && startColumnResize(event, handle.colIndex, handle.left)"
-      />
-    </div>
-
-    <div
-      v-if="resizingColumn !== null"
-      class="resize-line"
-      :style="{ left: `${resizeLineX}px` }"
-    />
-    <div
-      v-if="resizingRow !== null"
-      class="resize-line horizontal"
-      :style="{ top: `${resizeLineY}px` }"
+    <ResizeLayer
+      :handles="visibleColumnResizeHandles"
+      :resizing-column="resizingColumn"
+      :resizing-row="resizingRow"
+      :resize-line-x="resizeLineX"
+      :resize-line-y="resizeLineY"
+      :is-touch-device="isTouchDevice"
+      @column-resize-start="startColumnResize"
     />
   </div>
 </template>
@@ -569,13 +492,13 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   touch-action: pan-x pan-y;
 }
 
-.corner-cell,
-.column-header-cell,
-.row-header-cell {
+:deep(.corner-cell),
+:deep(.column-header-cell),
+:deep(.row-header-cell) {
   background: var(--el-fill-color-blank);
 }
 
-.corner-cell {
+:deep(.corner-cell) {
   position: absolute;
   left: 0;
   top: 0;
@@ -592,7 +515,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
     inset 0 -1px 0 var(--grid-border-color);
 }
 
-.column-header-viewport {
+:deep(.column-header-viewport) {
   position: absolute;
   left: var(--row-header-width, 60px);
   right: 0;
@@ -603,13 +526,13 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   background: var(--el-fill-color-blank);
 }
 
-.column-header-strip,
-.row-header-strip,
+:deep(.column-header-strip),
+:deep(.row-header-strip),
 .data-scroll-content {
   position: relative;
 }
 
-.column-header-cell {
+:deep(.column-header-cell) {
   position: absolute;
   top: 0;
   height: var(--table-header-height, 50px);
@@ -619,7 +542,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
     inset 0 -1px 0 var(--grid-border-color);
 }
 
-.row-header-viewport {
+:deep(.row-header-viewport) {
   position: absolute;
   left: 0;
   top: var(--table-header-height, 50px);
@@ -630,7 +553,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   background: var(--el-fill-color-blank);
 }
 
-.row-header-cell {
+:deep(.row-header-cell) {
   position: absolute;
   left: 0;
   width: var(--row-header-width, 60px);
@@ -657,28 +580,28 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   min-height: 100%;
 }
 
-.data-cell,
-.merge-cell {
+:deep(.data-cell),
+:deep(.merge-cell) {
   position: absolute;
   box-sizing: border-box;
   background: var(--el-bg-color);
   overflow: hidden;
 }
 
-.data-cell {
+:deep(.data-cell) {
   z-index: 1;
   box-shadow:
     inset -1px 0 0 var(--grid-border-color),
     inset 0 -1px 0 var(--grid-border-color);
 }
 
-.merge-cell {
+:deep(.merge-cell) {
   z-index: 3;
   box-shadow: inset 0 0 0 1px var(--grid-border-color);
 }
 
-.data-cell.is-selected::after,
-.merge-cell.is-selected::after {
+:deep(.data-cell.is-selected)::after,
+:deep(.merge-cell.is-selected)::after {
   content: "";
   position: absolute;
   inset: -1px;
@@ -687,18 +610,18 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   z-index: 5;
 }
 
-.merge-cell.is-editing {
+:deep(.merge-cell.is-editing) {
   z-index: 4;
 }
 
-.resize-overlay {
+:deep(.resize-overlay) {
   position: absolute;
   inset: 0;
   z-index: 90;
   pointer-events: none;
 }
 
-.column-resize-handle {
+:deep(.column-resize-handle) {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -708,7 +631,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   pointer-events: auto;
 }
 
-.column-resize-handle::after {
+:deep(.column-resize-handle)::after {
   content: "";
   position: absolute;
   top: 0;
@@ -718,12 +641,12 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   background: transparent;
 }
 
-.column-resize-handle:hover::after,
-.column-resize-handle.is-active::after {
+:deep(.column-resize-handle:hover)::after,
+:deep(.column-resize-handle.is-active)::after {
   background: var(--el-color-primary);
 }
 
-.resize-line {
+:deep(.resize-line) {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -734,7 +657,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
   transform: translateX(-1px);
 }
 
-.resize-line.horizontal {
+:deep(.resize-line.horizontal) {
   left: 0;
   right: 0;
   bottom: auto;
@@ -752,12 +675,12 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
     -webkit-overflow-scrolling: touch;
   }
 
-  .column-resize-handle {
+  :deep(.column-resize-handle) {
     width: 18px;
     transform: translateX(-9px);
   }
 
-  .column-resize-handle::after {
+  :deep(.column-resize-handle)::after {
     left: 8px;
   }
 }

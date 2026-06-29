@@ -2,6 +2,7 @@
 import { HomeFilled } from '@element-plus/icons-vue';
 import { usePlatform } from '@/composables/usePlatform';
 import { useDocumentStatus } from '@/composables/useDocumentStatus';
+import { useEditorCommands } from '@/composables/useEditorCommands';
 import { useFileActions } from '@/composables/useFileActions';
 import { cellToEditorString, usePendingCellSave } from '@/composables/usePendingCellSave';
 import { useDocumentSessionStore } from '@/stores/documentSession';
@@ -9,10 +10,9 @@ import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
-import * as api from '@/api';
 import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
-import type { EditorMutationResponse, SearchResult } from '@/types';
+import type { EditorMutationResponse } from '@/types';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const { isMobileOrTablet } = usePlatform();
@@ -63,52 +63,19 @@ const {
   refreshEditorState,
   markPendingContentChange,
   clearPendingContentChange,
-  applyEditorState,
   resetDocumentStatus,
   markSaved,
 } = useDocumentStatus();
 
 function applyMutationResponse(response: EditorMutationResponse) {
-  const nextFileData = documentSessionStore.applyPatches(response.patches);
-  if (!nextFileData) return;
+  const nextFileData = documentSessionStore.applyMutationResponse(response);
+  if (!nextFileData || !selectedCell.value) return;
 
-  applyEditorState(response.editorState);
-  syncLayoutMapsFromPatches(response);
-
-  if (currentSheetIndex.value >= nextFileData.sheets.length) {
-    currentSheetIndex.value = Math.max(0, nextFileData.sheets.length - 1);
-  }
-
-  if (selectedCell.value) {
-    const sheet = nextFileData.sheets[currentSheetIndex.value];
-    if (!sheet?.rows[selectedCell.value.row]?.length) {
-      selectedCell.value = null;
-      cellEditorValue.value = '';
-      return;
-    }
-    if (selectedCell.value.col >= sheet.rows[selectedCell.value.row].length) {
-      selectedCell.value = null;
-      cellEditorValue.value = '';
-      return;
-    }
-    cellEditorValue.value = getEditorValue(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col);
-  }
-}
-
-function syncLayoutMapsFromPatches(response: EditorMutationResponse) {
-  for (const patch of response.patches ?? []) {
-    if (patch.type === 'FullSnapshot') {
-      documentSessionStore.hydrateLayout(fileData.value);
-    } else if (patch.type === 'Layout') {
-      const { sheetIndex, columnWidths = {}, rowHeights = {} } = patch.data.patch;
-      for (const [key, value] of Object.entries(columnWidths)) {
-        documentSessionStore.setColumnWidth(sheetIndex, Number(key), value ?? undefined);
-      }
-      for (const [key, value] of Object.entries(rowHeights)) {
-        documentSessionStore.setRowHeight(sheetIndex, Number(key), value ?? undefined);
-      }
-    }
-  }
+  cellEditorValue.value = getEditorValue(
+    currentSheetIndex.value,
+    selectedCell.value.row,
+    selectedCell.value.col
+  );
 }
 
 const {
@@ -129,8 +96,6 @@ const {
   markPendingContentChange,
   clearPendingContentChange,
 });
-
-watch(() => fileData.value, (data) => documentSessionStore.hydrateLayout(data), { immediate: true });
 
 const {
   loadFileFromPath,
@@ -156,213 +121,32 @@ function getEditorValue(sheetIndex: number, row: number, col: number): string {
   return cellToEditorString(sheet?.rows[row]?.[col]);
 }
 
-// ========== Row/Column operations ==========
-async function handleAddRow() {
-  if (!currentSheet.value) return;
-  if (!(await flushPendingCellChanges())) return;
-
-  const newRowIndex = currentSheet.value.rows.length;
-
-  try {
-    isLoading.value = true;
-    applyMutationResponse(await api.addRow(currentSheetIndex.value, newRowIndex));
-  } catch (error) {
-    ElMessage.error(`Failed to add row: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleDeleteRow(index: number) {
-  if (!currentSheet.value) return;
-  if (!(await flushPendingCellChanges())) return;
-
-  try {
-    isLoading.value = true;
-    applyMutationResponse(await api.deleteRow(currentSheetIndex.value, index));
-  } catch (error) {
-    ElMessage.error(`Failed to delete row: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleAddColumn() {
-  if (!currentSheet.value) return;
-  if (!(await flushPendingCellChanges())) return;
-
-  try {
-    isLoading.value = true;
-    applyMutationResponse(await api.addColumn(currentSheetIndex.value));
-  } catch (error) {
-    ElMessage.error(`Failed to add column: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleDeleteColumn(index: number) {
-  if (!currentSheet.value) return;
-  if (!(await flushPendingCellChanges())) return;
-
-  try {
-    isLoading.value = true;
-    applyMutationResponse(await api.deleteColumn(currentSheetIndex.value, index));
-  } catch (error) {
-    ElMessage.error(`Failed to delete column: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-// ========== Sheet operations ==========
-async function handleAddSheet() {
-  if (!fileData.value) return;
-  if (!(await flushPendingCellChanges())) return;
-
-  const newSheetIndex = fileData.value.sheets.length;
-
-  try {
-    isLoading.value = true;
-    applyMutationResponse(await api.addSheet());
-    documentSessionStore.clearSelection();
-    currentSheetIndex.value = newSheetIndex;
-  } catch (error) {
-    ElMessage.error(`Failed to add sheet: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleDeleteSheet() {
-  if (!fileData.value || fileData.value.sheets.length <= 1) {
-    ElMessage.warning('Cannot delete the last sheet');
-    return;
-  }
-  if (!(await flushPendingCellChanges())) return;
-
-  const deletedIndex = currentSheetIndex.value;
-  const newIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
-
-  try {
-    isLoading.value = true;
-    applyMutationResponse(await api.deleteSheet(deletedIndex));
-    currentSheetIndex.value = newIndex;
-  } catch (error) {
-    ElMessage.error(`Failed to delete sheet: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-function handleSheetChange(index: number) {
-  documentSessionStore.rememberCurrentSheetSelection();
-  cellEditorValue.value = '';
-  documentSessionStore.restoreSheetSelection(index, (cell) => getEditorValue(index, cell.row, cell.col));
-}
-
-// ========== Undo/Redo ==========
-async function handleUndo() {
-  if (!canUndo.value) return;
-
-  try {
-    isLoading.value = true;
-    if (!(await flushPendingCellChanges())) return;
-
-    applyMutationResponse(await api.undo());
-  } catch (error) {
-    ElMessage.error(`Failed to undo: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleRedo() {
-  if (!canRedo.value) return;
-
-  try {
-    isLoading.value = true;
-    if (!(await flushPendingCellChanges())) return;
-
-    applyMutationResponse(await api.redo());
-  } catch (error) {
-    ElMessage.error(`Failed to redo: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-// ========== Search ==========
-async function handleSearch(query: string, scope: 'currentSheet' | 'allSheets') {
-  if (!fileData.value) return;
-
-  searchQuery.value = query;
-  try {
-    isSearching.value = true;
-    if (!(await flushPendingCellChanges())) return;
-
-    searchResults.value = await api.search(
-      query,
-      scope,
-      scope === 'currentSheet' ? currentSheetIndex.value : null
-    );
-  } catch (error) {
-    ElMessage.error(`Search failed: ${error}`);
-  } finally {
-    isSearching.value = false;
-  }
-}
-
-function handleSearchResultClick(result: SearchResult) {
-  if (result.sheetIndex !== currentSheetIndex.value) {
-    currentSheetIndex.value = result.sheetIndex;
-  }
-  documentSessionStore.selectCell(result.row, result.col, true);
-  cellEditorValue.value = getEditorValue(result.sheetIndex, result.row, result.col);
-}
-
-function handleClearSearch() {
-  documentSessionStore.clearSearch();
-}
-
-function handleSelectCell(row: number, col: number) {
-  documentSessionStore.selectCell(row, col, false);
-}
-
-// ========== Column resize ==========
-async function handleColumnResize(colIndex: number, width: number) {
-  if (!fileData.value) return;
-  const sheetIndex = currentSheetIndex.value;
-  const oldWidth = sheetColumnWidths.value[sheetIndex]?.[colIndex];
-  try {
-    isLoading.value = true;
-    if (!(await flushPendingCellChanges())) return;
-    documentSessionStore.setColumnWidth(sheetIndex, colIndex, width);
-    applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
-  } catch (error) {
-    documentSessionStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
-    ElMessage.error(`Failed to resize column: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleRowResize(rowIndex: number, height: number) {
-  if (!fileData.value) return;
-  const sheetIndex = currentSheetIndex.value;
-  const oldHeight = sheetRowHeights.value[sheetIndex]?.[rowIndex];
-  try {
-    isLoading.value = true;
-    if (!(await flushPendingCellChanges())) return;
-    documentSessionStore.setRowHeight(sheetIndex, rowIndex, height);
-    applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
-  } catch (error) {
-    documentSessionStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
-    ElMessage.error(`Failed to resize row: ${error}`);
-  } finally {
-    isLoading.value = false;
-  }
-}
+const {
+  handleAddRow,
+  handleDeleteRow,
+  handleAddColumn,
+  handleDeleteColumn,
+  handleAddSheet,
+  handleDeleteSheet,
+  handleSheetChange,
+  handleUndo,
+  handleRedo,
+  handleSearch,
+  handleSearchResultClick,
+  handleClearSearch,
+  handleSelectCell,
+  handleColumnResize,
+  handleRowResize,
+} = useEditorCommands({
+  fileData,
+  currentSheet,
+  currentSheetIndex,
+  cellEditorValue,
+  isLoading,
+  flushPendingCellChanges,
+  editorValueForCell: getEditorValue,
+  applyMutationResponse,
+});
 
 // ========== Lifecycle ==========
 onMounted(async () => {

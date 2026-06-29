@@ -421,6 +421,18 @@ impl AppliedOperation {
             _ => false,
         }
     }
+
+    pub fn requires_search_rebuild(&self) -> bool {
+        matches!(
+            self,
+            AppliedOperation::AddRow { .. }
+                | AppliedOperation::DeleteRow { .. }
+                | AppliedOperation::AddColumn { .. }
+                | AppliedOperation::DeleteColumn { .. }
+                | AppliedOperation::AddSheet { .. }
+                | AppliedOperation::DeleteSheet { .. }
+        )
+    }
 }
 
 fn require_sheet(file_data: &FileData, sheet_index: usize) -> Result<&SheetData, AppError> {
