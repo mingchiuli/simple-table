@@ -10,6 +10,7 @@ import {
   spanSize,
   type GridItem,
 } from "@/table-geometry/gridGeometry";
+import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 import { useMergeLookup } from "@/table-geometry/useMergeLookup";
 
 export type ColumnItem = {
@@ -94,20 +95,26 @@ export function useGridGeometry({
 
   const viewportWidth = computed(() => Math.max(0, tableSize.value.width - rowHeaderWidth));
   const viewportHeight = computed(() => Math.max(0, tableSize.value.height - headerHeight));
+  const sheetExtent = computed(() =>
+    calculateSheetExtent(data.value, merges.value, columnWidths.value, rowHeights.value)
+  );
 
-  const columnOffsets = computed(() => buildOffsets(columns.value.length, getColumnWidth));
-  const rowOffsets = computed(() => buildOffsets(data.value.length, getRowHeight));
+  const columnCount = computed(() => Math.max(columns.value.length, sheetExtent.value.columnCount));
+  const rowCount = computed(() => sheetExtent.value.rowCount);
+
+  const columnOffsets = computed(() => buildOffsets(columnCount.value, getColumnWidth));
+  const rowOffsets = computed(() => buildOffsets(rowCount.value, getRowHeight));
   const totalColumnsWidth = computed(() => columnOffsets.value.at(-1) ?? 0);
   const totalRowsHeight = computed(() => rowOffsets.value.at(-1) ?? 0);
 
   const visibleRows = computed<GridItem[]>(() =>
-    collectVisibleItems(rowOffsets.value, data.value.length, scrollTop.value, viewportHeight.value, overscanPx)
+    collectVisibleItems(rowOffsets.value, rowCount.value, scrollTop.value, viewportHeight.value, overscanPx)
   );
 
   const visibleColumns = computed<ColumnItem[]>(() =>
     collectVisibleItems(
       columnOffsets.value,
-      columns.value.length,
+      columnCount.value,
       scrollLeft.value,
       viewportWidth.value,
       overscanPx
@@ -179,7 +186,7 @@ export function useGridGeometry({
 
   const visibleColumnResizeHandles = computed(() =>
     collectColumnResizeHandles(
-      columns.value.length,
+      columnCount.value,
       rowHeaderWidth,
       scrollLeft.value,
       tableSize.value.width,
@@ -189,7 +196,7 @@ export function useGridGeometry({
 
   const visibleRowResizeHandles = computed(() =>
     collectRowResizeHandles(
-      data.value.length,
+      rowCount.value,
       headerHeight,
       scrollTop.value,
       tableSize.value.height,

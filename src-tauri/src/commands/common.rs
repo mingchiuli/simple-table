@@ -4,8 +4,10 @@ use crate::io::document;
 use crate::io::platform::desktop;
 use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
-use crate::state::{get_state, state::EditorStateInfo};
-use crate::types::{CellValue, EditorMutationResponse, FileData, SearchResult, SearchScope};
+use crate::state::{get_state, state::EditorSessionInfo};
+use crate::types::{
+    CellValue, EditorMutationResponse, FileData, SearchResult, SearchScope, SetCellRequest,
+};
 use tauri::AppHandle;
 
 // ==================== File Operations ====================
@@ -38,7 +40,7 @@ pub fn generate_current_thumbnail_bytes() -> Result<Vec<u8>, AppError> {
 // ==================== Editor Operations ====================
 
 #[tauri::command]
-pub fn get_editor_state() -> Result<Option<EditorStateInfo>, AppError> {
+pub fn get_editor_state() -> Result<Option<EditorSessionInfo>, AppError> {
     editor_ops::do_get_editor_state(get_state())
 }
 
@@ -67,6 +69,11 @@ pub fn set_cell(
     new_value: CellValue,
 ) -> Result<EditorMutationResponse, AppError> {
     cell_ops::do_set_cell(get_state(), sheet_index, row, col, new_value)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_cells(changes: Vec<SetCellRequest>) -> Result<EditorMutationResponse, AppError> {
+    cell_ops::do_set_cells(get_state(), changes)
 }
 
 #[tauri::command(rename_all = "camelCase")]

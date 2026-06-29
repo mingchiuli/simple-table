@@ -8,7 +8,7 @@ use crate::ops::editor_ops::{
 };
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
-use crate::types::{CellValue, EditorMutationResponse, LayoutPatch};
+use crate::types::{CellValue, EditorMutationResponse, LayoutPatch, SetCellRequest};
 
 pub fn do_set_cell(
     state: Arc<RwLock<Option<EditorState>>>,
@@ -26,6 +26,19 @@ pub fn do_set_cell(
             new_value,
         },
     );
+
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
+    }
+
+    response
+}
+
+pub fn do_set_cells(
+    state: Arc<RwLock<Option<EditorState>>>,
+    changes: Vec<SetCellRequest>,
+) -> Result<EditorMutationResponse, AppError> {
+    let response = execute_cell_delta(state.clone(), EditorCommand::SetCells { changes });
 
     if let Ok(response) = &response {
         schedule_index_for_response(response, state);

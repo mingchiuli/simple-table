@@ -27,6 +27,18 @@ pub fn patch_after_operation(
             patch_cell(workbook, file_data, *sheet_index, *row, *col)?;
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
+        AppliedOperation::SetCells { changes } => {
+            for change in changes {
+                patch_cell(
+                    workbook,
+                    file_data,
+                    change.sheet_index,
+                    change.row,
+                    change.col,
+                )?;
+            }
+            patch_cell_changes(workbook, file_data, cell_changes)?;
+        }
         AppliedOperation::AddRow {
             sheet_index,
             row_index,

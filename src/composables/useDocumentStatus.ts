@@ -1,6 +1,6 @@
 import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import type { EditorStateInfo } from '@/types';
+import type { EditorSessionInfo, EditorStateInfo } from '@/types';
 
 export function useDocumentStatus() {
   const documentSessionStore = useDocumentSessionStore();
@@ -16,10 +16,14 @@ export function useDocumentStatus() {
     documentSessionStore.applyEditorState(state);
   }
 
+  function applyEditorSession(info: EditorSessionInfo | null | undefined) {
+    documentSessionStore.applyEditorSession(info);
+  }
+
   async function refreshEditorState() {
     try {
-      const state = await api.getEditorState();
-      applyEditorState(state);
+      const session = await api.getEditorState();
+      applyEditorSession(session);
     } catch (error) {
       console.error('Failed to get editor state:', error);
     }
@@ -50,6 +54,7 @@ export function useDocumentStatus() {
     isContentDirty,
     hasPendingContentChange,
     applyEditorState,
+    applyEditorSession,
     refreshEditorState,
     markPendingContentChange,
     clearPendingContentChange,

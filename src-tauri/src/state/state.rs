@@ -1,6 +1,7 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::state::editor_state::EditorState;
+use crate::types::FormulaStatus;
 
 /// 获取编辑器状态信息
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -9,6 +10,15 @@ pub struct EditorStateInfo {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_dirty: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSessionInfo {
+    pub document_id: u64,
+    pub revision: u64,
+    pub formula_status: FormulaStatus,
+    pub editor_state: EditorStateInfo,
 }
 
 /// 全局编辑器状态（使用 Arc<RwLock> 支持多线程访问）

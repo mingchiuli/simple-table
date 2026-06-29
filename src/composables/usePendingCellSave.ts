@@ -1,7 +1,7 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
-import { useDocumentSessionStore, type CellSaveRequest } from '@/stores/documentSession';
-import type { CellValue, EditorMutationResponse, FileData, SheetData } from '@/types';
+import { usePendingCellSavesStore, type CellSaveRequest } from '@/stores/pendingCellSaves';
+import type { CellValue, EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
 import { getCellKey } from '@/utils/cellKey';
 
 type CellPosition = { row: number; col: number };
@@ -75,11 +75,11 @@ export function usePendingCellSave({
   markPendingContentChange,
   clearPendingContentChange,
 }: UsePendingCellSaveOptions) {
-  const documentSessionStore = useDocumentSessionStore();
+  const pendingCellSavesStore = usePendingCellSavesStore();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const queuedSaves = documentSessionStore.queuedCellSaves;
-  const activeSaves = documentSessionStore.activeCellSaves;
-  const draftCellValues = documentSessionStore.draftCellValues;
+  const queuedSaves = pendingCellSavesStore.queuedCellSaves;
+  const activeSaves = pendingCellSavesStore.activeCellSaves;
+  const draftCellValues = pendingCellSavesStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
 
   const currentCellValue = computed(() => {
@@ -216,36 +216,42 @@ export function usePendingCellSave({
     });
   }
 
-  async function commitCellChange(
-    sheetIndex: number,
-    rowIndex: number,
-    colIndex: number,
-    value: string
-  ) {
+  async function commitCellBatch(changes: CellSaveRequest[]) {
     const currentFileData = fileData.value;
     if (!currentFileData) throw new Error('No file is loaded');
 
-    const sheet = currentFileData.sheets[sheetIndex];
-    if (!sheet) throw new Error(`Sheet ${sheetIndex} does not exist`);
+    const payload: SetCellRequest[] = changes.map((change) => {
+      const sheet = currentFileData.sheets[change.sheetIndex];
+      if (!sheet) throw new Error(`Sheet ${change.sheetIndex} does not exist`);
+      return {
+        sheetIndex: change.sheetIndex,
+        row: change.row,
+        col: change.col,
+        newValue: parseCellValue(change.value),
+      };
+    });
 
-    const newValue = parseCellValue(value);
-    const isCurrentCell = currentSheetIndex.value === sheetIndex
-      && selectedCell.value?.row === rowIndex
-      && selectedCell.value?.col === colIndex;
-
-    const response = await api.setCell(sheetIndex, rowIndex, colIndex, newValue);
+    const selectedKey = selectedCell.value
+      ? getCellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
+      : null;
+    const response = await api.setCells(payload);
     applyMutationResponse(response);
 
-    const key = getCellKey(sheetIndex, rowIndex, colIndex);
-    activeSaves.delete(key);
-    if (draftCellValues.get(key) === value) {
-      draftCellValues.delete(key);
+    for (const change of changes) {
+      const key = getCellKey(change.sheetIndex, change.row, change.col);
+      activeSaves.delete(key);
+      if (draftCellValues.get(key) === change.value) {
+        draftCellValues.delete(key);
+      }
     }
 
-    if (isCurrentCell) {
-      cellEditorValue.value = editorStringForCell(sheetIndex, rowIndex, colIndex);
+    if (selectedCell.value && selectedKey) {
+      cellEditorValue.value = editorStringForCell(
+        currentSheetIndex.value,
+        selectedCell.value.row,
+        selectedCell.value.col
+      );
     }
-
   }
 
   async function debouncedSave(): Promise<boolean> {
@@ -260,23 +266,18 @@ export function usePendingCellSave({
       activeSaves.set(getCellKey(change.sheetIndex, change.row, change.col), change);
     }
 
-    for (let i = 0; i < changes.length; i += 1) {
-      const { sheetIndex, row, col, value } = changes[i];
-      try {
-        await commitCellChange(sheetIndex, row, col, value);
-      } catch (error) {
-        for (const change of changes) {
-          activeSaves.delete(getCellKey(change.sheetIndex, change.row, change.col));
-        }
-        for (const change of changes.slice(i)) {
-          clearDraftIfUnchanged(change);
-        }
-        ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
-        if (!queuedSaves.size && !activeSaves.size) {
-          clearPendingContentChange();
-        }
-        return false;
+    try {
+      await commitCellBatch(changes);
+    } catch (error) {
+      for (const change of changes) {
+        activeSaves.delete(getCellKey(change.sheetIndex, change.row, change.col));
+        clearDraftIfUnchanged(change);
       }
+      ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
+      if (!queuedSaves.size && !activeSaves.size) {
+        clearPendingContentChange();
+      }
+      return false;
     }
     if (!queuedSaves.size && !activeSaves.size) {
       clearPendingContentChange();

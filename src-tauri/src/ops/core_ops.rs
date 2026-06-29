@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::types::{
     AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData,
-    MergeRange, RowChange, RowHeightChange, SheetData,
+    MergeRange, RowChange, RowHeightChange, SetCellRequest, SheetCellChange, SheetData,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,9 @@ pub enum EditorCommand {
         row: usize,
         col: usize,
         new_value: CellValue,
+    },
+    SetCells {
+        changes: Vec<SetCellRequest>,
     },
     AddRow {
         sheet_index: usize,
@@ -60,6 +63,9 @@ pub enum AppliedOperation {
         old_value: CellValue,
         new_value: CellValue,
     },
+    SetCells {
+        changes: Vec<ResolvedCellEdit>,
+    },
     AddRow {
         sheet_index: usize,
         row_index: usize,
@@ -101,6 +107,15 @@ pub enum AppliedOperation {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedCellEdit {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub old_value: CellValue,
+    pub new_value: CellValue,
+}
+
 impl EditorCommand {
     pub fn resolve(self, file_data: &FileData) -> Result<AppliedOperation, AppError> {
         match self {
@@ -124,6 +139,31 @@ impl EditorCommand {
                     old_value,
                     new_value,
                 })
+            }
+            EditorCommand::SetCells { changes } => {
+                if changes.is_empty() {
+                    return Ok(AppliedOperation::SetCells {
+                        changes: Vec::new(),
+                    });
+                }
+                let mut resolved = Vec::with_capacity(changes.len());
+                for change in changes {
+                    require_sheet(file_data, change.sheet_index)?;
+                    let old_value = file_data.sheets[change.sheet_index]
+                        .rows
+                        .get(change.row)
+                        .and_then(|row_data| row_data.get(change.col))
+                        .cloned()
+                        .unwrap_or(CellValue::Null);
+                    resolved.push(ResolvedCellEdit {
+                        sheet_index: change.sheet_index,
+                        row: change.row,
+                        col: change.col,
+                        old_value,
+                        new_value: change.new_value,
+                    });
+                }
+                Ok(AppliedOperation::SetCells { changes: resolved })
             }
             EditorCommand::AddRow {
                 sheet_index,
@@ -257,6 +297,25 @@ impl AppliedOperation {
                         col: *col,
                         value: new_value.clone(),
                     },
+                }
+            }
+            AppliedOperation::SetCells { changes } => {
+                for change in changes {
+                    if let Some(sheet) = file_data.sheets.get_mut(change.sheet_index) {
+                        ensure_cell_exists(sheet, change.row, change.col);
+                        sheet.rows[change.row][change.col] = change.new_value.clone();
+                    }
+                }
+                AppliedOperationResult::SetCells {
+                    changes: changes
+                        .iter()
+                        .map(|change| SheetCellChange {
+                            sheet_index: change.sheet_index,
+                            row: change.row,
+                            col: change.col,
+                            value: change.new_value.clone(),
+                        })
+                        .collect(),
                 }
             }
             AppliedOperation::AddRow {
@@ -408,6 +467,9 @@ impl AppliedOperation {
                 new_value,
                 ..
             } => old_value == new_value,
+            AppliedOperation::SetCells { changes } => changes
+                .iter()
+                .all(|change| change.old_value == change.new_value),
             AppliedOperation::SetColumnWidth {
                 old_width,
                 new_width,

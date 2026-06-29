@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::state::editor_state::EditorState;
+use crate::state::editor_state::{EditorState, SearchSource};
 use crate::types::{SearchResult, SearchScope};
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
@@ -43,13 +43,15 @@ pub fn do_search(
     };
 
     let mut results = Vec::new();
+    let mut used_scan_fallback = false;
 
     match scope {
         SearchScope::CurrentSheet => {
             let sheet_idx = current_sheet_index.unwrap_or(0);
             if let Some(sheet) = editor_state.file_data().sheets.get(sheet_idx) {
-                let positions = editor_state.search_sheet(sheet_idx, &query, 1000);
-                for pos in positions {
+                let search = editor_state.search_sheet(sheet_idx, &query, 1000);
+                used_scan_fallback |= search.source == SearchSource::ScanFallback;
+                for pos in search.positions {
                     let value = sheet
                         .rows
                         .get(pos.row)
@@ -70,8 +72,9 @@ pub fn do_search(
         }
         SearchScope::AllSheets => {
             for (sheet_idx, sheet) in editor_state.file_data().sheets.iter().enumerate() {
-                let positions = editor_state.search_sheet(sheet_idx, &query, 1000);
-                for pos in positions {
+                let search = editor_state.search_sheet(sheet_idx, &query, 1000);
+                used_scan_fallback |= search.source == SearchSource::ScanFallback;
+                for pos in search.positions {
                     let value = sheet
                         .rows
                         .get(pos.row)
@@ -90,6 +93,10 @@ pub fn do_search(
                 }
             }
         }
+    }
+
+    if used_scan_fallback {
+        eprintln!("Search used synchronous scan fallback while index was stale or unavailable");
     }
 
     Ok(results)

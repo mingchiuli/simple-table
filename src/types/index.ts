@@ -37,6 +37,13 @@ export interface SheetCellChange {
   value: CellValue;
 }
 
+export interface SetCellRequest {
+  sheetIndex: number;
+  row: number;
+  col: number;
+  newValue: CellValue;
+}
+
 export interface SearchResult {
   sheetIndex: number;
   sheetName: string;
@@ -63,6 +70,10 @@ export interface EditorStateInfo {
   isDirty: boolean;
 }
 
+export type FormulaStatus =
+  | { state: 'ready' }
+  | { state: 'degraded'; message: string };
+
 export interface LayoutPatch {
   sheetIndex: number;
   columnWidths?: Record<number, number | null>;
@@ -77,6 +88,16 @@ export type EditorPatch =
 
 export interface EditorMutationResponse {
   protocolVersion: 1;
+  documentId: number;
+  revision: number;
+  formulaStatus: FormulaStatus;
   editorState: EditorStateInfo;
   patches?: EditorPatch[];
+}
+
+export interface EditorSessionInfo {
+  documentId: number;
+  revision: number;
+  formulaStatus: FormulaStatus;
+  editorState: EditorStateInfo;
 }

@@ -16,7 +16,15 @@ type UseFileActionsOptions = {
   resetDocumentStatus: () => void;
 };
 
-function writableExtension(fileName: string): 'xlsx' | 'xlsm' | 'csv' | null {
+type NativeSaveExtension = 'xlsx' | 'xlsm';
+type ExportExtension = NativeSaveExtension | 'csv';
+
+function nativeSaveExtension(fileName: string): NativeSaveExtension | null {
+  const extension = fileName.split('.').pop()?.toLowerCase() || 'xlsx';
+  return extension === 'xlsx' || extension === 'xlsm' ? extension : null;
+}
+
+function exportExtension(fileName: string): ExportExtension | null {
   const extension = fileName.split('.').pop()?.toLowerCase() || 'xlsx';
   return extension === 'xlsx' || extension === 'xlsm' || extension === 'csv' ? extension : null;
 }
@@ -118,9 +126,9 @@ export function useFileActions({
 
       const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
-      const existingWritableExtension = existingPath ? writableExtension(existingPath) : null;
+      const existingNativeExtension = existingPath ? nativeSaveExtension(existingPath) : null;
 
-      if (existingPath && existingWritableExtension) {
+      if (existingPath && existingNativeExtension) {
         isLoading.value = true;
         await saveFile(existingPath);
         await markSaved();
@@ -132,12 +140,12 @@ export function useFileActions({
         return;
       }
 
-      const fallbackExtension = writableExtension(fileData.value.fileName) || 'xlsx';
+      const fallbackExtension = nativeSaveExtension(fileData.value.fileName) || 'xlsx';
       const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
       if (!savePath) return;
 
-      if (!writableExtension(savePath)) {
-        ElMessage.error('Saving is only supported as .xlsx, .xlsm, or .csv');
+      if (!nativeSaveExtension(savePath)) {
+        ElMessage.error('Native save is only supported as .xlsx or .xlsm. Use export for CSV.');
         return;
       }
 
@@ -164,7 +172,7 @@ export function useFileActions({
     let path = documentSessionStore.currentFilePath;
     const storageType = await getStorageType();
 
-    if (!path || !writableExtension(path)) {
+    if (!path || !exportExtension(path)) {
       if (storageType === 'desktopPath') {
         throw new Error('Export is only supported for mobile sandbox files');
       }
@@ -192,7 +200,7 @@ export function useFileActions({
       const defaultName = isNewFile
         ? 'untitled'
         : fileData.value.fileName.replace(/\.[^.]+$/, '');
-      const extension = isNewFile ? 'xlsx' : writableExtension(fileData.value.fileName) || 'xlsx';
+      const extension = isNewFile ? 'xlsx' : exportExtension(fileData.value.fileName) || 'xlsx';
       const sourcePath = await ensureSandboxPathForExport(defaultName, extension);
       if (!sourcePath) return;
 

@@ -6,15 +6,22 @@ import { useEditorCommands } from '@/composables/useEditorCommands';
 import { useFileActions } from '@/composables/useFileActions';
 import { cellToEditorString, usePendingCellSave } from '@/composables/usePendingCellSave';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
+import { useSearchSessionStore } from '@/stores/searchSession';
+import { useSheetLayoutStore } from '@/stores/sheetLayout';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
 import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
+import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
 import type { EditorMutationResponse } from '@/types';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
+const pendingCellSavesStore = usePendingCellSavesStore();
+const searchSessionStore = useSearchSessionStore();
+const sheetLayoutStore = useSheetLayoutStore();
 const { isMobileOrTablet } = usePlatform();
 
 // ========== State refs (must be declared before composables use them) ==========
@@ -25,12 +32,20 @@ const {
   selectedCell,
   cellEditorValue,
   autoScroll,
+  formulaStatus,
+} = storeToRefs(documentSessionStore);
+const {
   searchResults,
   searchQuery,
   isSearching,
+} = storeToRefs(searchSessionStore);
+const {
   sheetColumnWidths,
   sheetRowHeights,
-} = storeToRefs(documentSessionStore);
+} = storeToRefs(sheetLayoutStore);
+const {
+  draftCellValues,
+} = storeToRefs(pendingCellSavesStore);
 
 // ========== Computed values ==========
 const fileData = computed(() => documentSessionStore.data);
@@ -46,9 +61,13 @@ const tableData = computed(() => {
 });
 
 const columns = computed(() => {
-  if (!tableData.value.length) return [];
-  const maxCols = Math.max(...tableData.value.map((row) => row.length));
-  return Array.from({ length: maxCols }, (_, i) => colToLetter(i));
+  const extent = calculateSheetExtent(
+    tableData.value,
+    currentSheet.value?.merges ?? [],
+    sheetColumnWidths.value[currentSheetIndex.value],
+    sheetRowHeights.value[currentSheetIndex.value]
+  );
+  return Array.from({ length: extent.columnCount }, (_, i) => colToLetter(i));
 });
 
 const sheetNames = computed(() => {
@@ -79,7 +98,6 @@ function applyMutationResponse(response: EditorMutationResponse) {
 }
 
 const {
-  draftCellValues,
   flushPendingCellChanges,
   handleCellChange,
   handleCellEditing,
@@ -115,7 +133,7 @@ const {
 });
 
 function getEditorValue(sheetIndex: number, row: number, col: number): string {
-  const draftValue = draftCellValues.get(getCellKey(sheetIndex, row, col));
+  const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));
   if (draftValue !== undefined) return draftValue;
   const sheet = fileData.value?.sheets[sheetIndex];
   return cellToEditorString(sheet?.rows[row]?.[col]);
@@ -239,6 +257,7 @@ onMounted(async () => {
       v-if="fileData && !isMobileOrTablet"
       :file-name="fileData.fileName"
       :has-changes="hasUnsavedChanges"
+      :formula-status="formulaStatus"
     />
 
     <el-button class="back-btn" circle @click="handleBack">

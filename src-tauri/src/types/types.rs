@@ -249,6 +249,16 @@ pub struct SheetCellChange {
     pub value: CellValue,
 }
 
+/// 前端批量提交的单元格编辑请求。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCellRequest {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub new_value: CellValue,
+}
+
 /// 行变化
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -320,6 +330,8 @@ pub enum AppliedOperationResult {
         sheet_index: usize,
         cell: CellChange,
     },
+    #[serde(rename = "SetCells")]
+    SetCells { changes: Vec<SheetCellChange> },
     /// 添加行
     #[serde(rename = "AddRow")]
     AddRow {
@@ -421,7 +433,17 @@ pub enum EditorPatch {
 #[serde(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
     pub protocol_version: u16,
+    pub document_id: u64,
+    pub revision: u64,
+    pub formula_status: FormulaStatus,
     pub editor_state: EditorStateInfo,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum FormulaStatus {
+    Ready,
+    Degraded { message: String },
 }

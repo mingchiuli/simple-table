@@ -3,9 +3,10 @@ import type {
   FileData,
   RecentFile,
   CellValue,
+  SetCellRequest,
   SearchResult,
   EditorMutationResponse,
-  EditorStateInfo,
+  EditorSessionInfo,
 } from "@/types";
 
 export async function initFile(fileData: FileData): Promise<void> {
@@ -14,8 +15,8 @@ export async function initFile(fileData: FileData): Promise<void> {
 
 // ==================== Editor Operations ====================
 
-export async function getEditorState(): Promise<EditorStateInfo | null> {
-  return invoke<EditorStateInfo | null>("get_editor_state");
+export async function getEditorState(): Promise<EditorSessionInfo | null> {
+  return invoke<EditorSessionInfo | null>("get_editor_state");
 }
 
 export async function markFileSaved(): Promise<void> {
@@ -39,6 +40,10 @@ export async function setCell(
   newValue: CellValue
 ): Promise<EditorMutationResponse> {
   return invoke<EditorMutationResponse>("set_cell", { sheetIndex, row, col, newValue });
+}
+
+export async function setCells(changes: SetCellRequest[]): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("set_cells", { changes });
 }
 
 export async function addRow(sheetIndex: number, rowIndex: number): Promise<EditorMutationResponse> {

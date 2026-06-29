@@ -2,40 +2,31 @@ import type {
   CellValue,
   EditorMutationResponse,
   EditorPatch,
+  EditorSessionInfo,
   EditorStateInfo,
   FileData,
-  SearchResult,
+  FormulaStatus,
   SheetCellChange,
 } from "@/types";
+import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
+import { useSearchSessionStore } from "@/stores/searchSession";
+import { useSheetLayoutStore } from "@/stores/sheetLayout";
 
 type CellPosition = { row: number; col: number };
-
-export type CellSaveRequest = {
-  sheetIndex: number;
-  row: number;
-  col: number;
-  value: string;
-  oldValue: CellValue;
-};
 
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
     data: null as FileData | null,
     currentFilePath: null as string | null,
+    documentId: null as number | null,
+    revision: 0,
+    formulaStatus: { state: "ready" } as FormulaStatus,
 
     currentSheetIndex: 0,
     selectedCell: null as CellPosition | null,
     cellEditorValue: "",
     autoScroll: false,
-    searchResults: [] as SearchResult[],
-    searchQuery: "",
-    isSearching: false,
     sheetSelectedCells: new Map<number, CellPosition>(),
-    draftCellValues: new Map<string, string>(),
-    queuedCellSaves: new Map<string, CellSaveRequest>(),
-    activeCellSaves: new Map<string, CellSaveRequest>(),
-    sheetColumnWidths: {} as Record<number, Record<number, number>>,
-    sheetRowHeights: {} as Record<number, Record<number, number>>,
     canUndo: false,
     canRedo: false,
     isContentDirty: false,
@@ -48,6 +39,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     openDocument(data: FileData, path: string | null = null) {
       this.data = data;
       this.currentFilePath = path;
+      this.documentId = null;
+      this.revision = 0;
+      this.formulaStatus = { state: "ready" };
       this.resetUiForCurrentDocument();
     },
     updateIdentity(path: string | null, fileName: string) {
@@ -63,12 +57,26 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     clearDocument() {
       this.data = null;
       this.currentFilePath = null;
+      this.documentId = null;
+      this.revision = 0;
+      this.formulaStatus = { state: "ready" };
       this.resetUiForCurrentDocument();
     },
     applyMutationResponse(response: EditorMutationResponse): FileData | null {
       if (response.protocolVersion !== 1) {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
+      if (this.documentId !== null && response.documentId !== this.documentId) {
+        return this.data;
+      }
+      if (this.documentId === null) {
+        this.documentId = response.documentId;
+      }
+      if (response.revision < this.revision) {
+        return this.data;
+      }
+      this.revision = response.revision;
+      this.formulaStatus = response.formulaStatus;
       const nextData = this.applyPatches(response.patches);
       this.applyEditorState(response.editorState);
       this.clampSelectionToCurrentSheet();
@@ -78,6 +86,19 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.canUndo = state?.canUndo ?? false;
       this.canRedo = state?.canRedo ?? false;
       this.isContentDirty = state?.isDirty ?? false;
+    },
+    applyEditorSession(info: EditorSessionInfo | null | undefined) {
+      if (!info) {
+        this.applyEditorState(null);
+        return;
+      }
+      if (this.documentId !== null && info.documentId !== this.documentId) {
+        return;
+      }
+      this.documentId = info.documentId;
+      this.revision = Math.max(this.revision, info.revision);
+      this.formulaStatus = info.formulaStatus;
+      this.applyEditorState(info.editorState);
     },
     resetDocumentStatus() {
       this.canUndo = false;
@@ -115,7 +136,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
             assertNever(patch);
         }
       }
-      this.syncLayoutFromData();
+      useSheetLayoutStore().syncFromData(this.data);
       return nextData;
     },
     applySnapshot(snapshot: FileData): FileData {
@@ -191,35 +212,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.selectedCell = null;
       this.cellEditorValue = "";
       this.autoScroll = false;
-      this.searchResults = [];
-      this.searchQuery = "";
-      this.isSearching = false;
       this.sheetSelectedCells = new Map();
-      this.resetPendingEdits();
-      this.syncLayoutFromData();
-    },
-    resetPendingEdits() {
-      this.draftCellValues.clear();
-      this.queuedCellSaves.clear();
-      this.activeCellSaves.clear();
-    },
-    syncLayoutFromData() {
-      if (!this.data) {
-        this.sheetColumnWidths = {};
-        this.sheetRowHeights = {};
-        return;
-      }
-
-      this.sheetColumnWidths = Object.fromEntries(
-        this.data.sheets
-          .map((sheet, index) => [index, sheet.columnWidths ?? {}] as const)
-          .filter(([, widths]) => Object.keys(widths).length > 0)
-      );
-      this.sheetRowHeights = Object.fromEntries(
-        this.data.sheets
-          .map((sheet, index) => [index, sheet.rowHeights ?? {}] as const)
-          .filter(([, heights]) => Object.keys(heights).length > 0)
-      );
+      useSearchSessionStore().reset();
+      usePendingCellSavesStore().reset();
+      useSheetLayoutStore().syncFromData(this.data);
     },
     selectCell(row: number, col: number, autoScroll = false) {
       this.autoScroll = autoScroll;
@@ -244,16 +240,6 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.selectedCell = savedCell;
       this.cellEditorValue = editorValueFor(savedCell);
       this.autoScroll = true;
-    },
-    setColumnWidth(sheetIndex: number, colIndex: number, width: number | undefined) {
-      this.sheetColumnWidths = patchNestedNumberRecord(this.sheetColumnWidths, sheetIndex, colIndex, width);
-    },
-    setRowHeight(sheetIndex: number, rowIndex: number, height: number | undefined) {
-      this.sheetRowHeights = patchNestedNumberRecord(this.sheetRowHeights, sheetIndex, rowIndex, height);
-    },
-    clearSearch() {
-      this.searchResults = [];
-      this.searchQuery = "";
     },
     clampSelectionToCurrentSheet() {
       if (!this.data) {
@@ -301,26 +287,4 @@ function patchNumberRecord(
     }
   }
   return Object.keys(next).length ? next : undefined;
-}
-
-function patchNestedNumberRecord(
-  current: Record<number, Record<number, number>>,
-  sheetIndex: number,
-  key: number,
-  value: number | undefined
-): Record<number, Record<number, number>> {
-  const sheetRecord = { ...(current[sheetIndex] ?? {}) };
-  if (value === undefined) {
-    delete sheetRecord[key];
-  } else {
-    sheetRecord[key] = value;
-  }
-
-  const next = { ...current };
-  if (Object.keys(sheetRecord).length) {
-    next[sheetIndex] = sheetRecord;
-  } else {
-    delete next[sheetIndex];
-  }
-  return next;
 }

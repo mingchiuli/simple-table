@@ -7,6 +7,7 @@ use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
+use crate::types::FormulaStatus;
 use crate::types::{AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData};
 use umya_spreadsheet::{Workbook, Worksheet};
 
@@ -26,19 +27,15 @@ struct ExcelDocumentBody {
     workbook: Box<Workbook>,
 }
 
-pub(crate) enum DocumentMemento {
-    Cells {
-        before: CellMemento,
-        after: CellMemento,
-    },
-    Layout {
-        before: LayoutMemento,
-        after: LayoutMemento,
-    },
-    Structure {
-        before: StructureMemento,
-        after: StructureMemento,
-    },
+pub(crate) struct DocumentMemento {
+    before: DocumentMementoSide,
+    after: DocumentMementoSide,
+}
+
+pub(crate) enum DocumentMementoSide {
+    Cells(CellMemento),
+    Layout(LayoutMemento),
+    Structure(StructureMemento),
 }
 
 pub(crate) struct CellMemento {
@@ -101,6 +98,7 @@ pub struct SpreadsheetDocument {
     projection: FileData,
     body: SpreadsheetDocumentBody,
     formula_runtime: FormulaRuntime,
+    formula_status: FormulaStatus,
 }
 
 impl Clone for SpreadsheetDocument {
@@ -112,16 +110,25 @@ impl Clone for SpreadsheetDocument {
             projection,
             body: self.clone_body(),
             formula_runtime,
+            formula_status: self.formula_status.clone(),
         }
     }
 }
 
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
-        let formula_runtime = FormulaRuntime::new(&mut projection).unwrap_or_else(|error| {
-            eprintln!("Formula runtime initialization failed: {error}");
-            FormulaRuntime::empty()
-        });
+        let (formula_runtime, formula_status) = match FormulaRuntime::new(&mut projection) {
+            Ok(runtime) => (runtime, FormulaStatus::Ready),
+            Err(error) => {
+                eprintln!("Formula runtime initialization failed: {error}");
+                (
+                    FormulaRuntime::empty(),
+                    FormulaStatus::Degraded {
+                        message: error.to_string(),
+                    },
+                )
+            }
+        };
 
         let body = match workbook {
             Some(workbook) => SpreadsheetDocumentBody::Excel(ExcelDocumentBody {
@@ -135,6 +142,7 @@ impl SpreadsheetDocument {
             projection,
             body,
             formula_runtime,
+            formula_status,
         }
     }
 
@@ -144,6 +152,10 @@ impl SpreadsheetDocument {
 
     pub fn content_hash(&self) -> ContentHash {
         hash_file_content(&self.projection)
+    }
+
+    pub fn formula_status(&self) -> FormulaStatus {
+        self.formula_status.clone()
     }
 
     pub fn generate_file_bytes_for_target(
@@ -176,16 +188,12 @@ impl SpreadsheetDocument {
     pub fn execute_operation(
         &mut self,
         operation: &AppliedOperation,
+        rollback: &DocumentMementoSide,
     ) -> Result<DocumentOperationResult, AppError> {
-        let previous_projection = self.projection.clone();
-        let previous_body = self.clone_body();
-
         let result = operation.execute(&mut self.projection);
 
         if let Err(error) = self.patch_workbook_after_operation(operation, &result, &[]) {
-            self.projection = previous_projection;
-            self.body = previous_body;
-            self.rebuild_formula_runtime();
+            let _ = self.restore_memento_side(rollback);
             return Err(error);
         }
 
@@ -194,9 +202,7 @@ impl SpreadsheetDocument {
         if !cell_changes.is_empty()
             && let Err(error) = self.patch_workbook_formula_changes(&cell_changes)
         {
-            self.projection = previous_projection;
-            self.body = previous_body;
-            self.rebuild_formula_runtime();
+            let _ = self.restore_memento_side(rollback);
             return Err(error);
         }
 
@@ -207,52 +213,53 @@ impl SpreadsheetDocument {
     }
 
     pub fn create_memento(
-        before: &Self,
-        after: &Self,
-        operation: &AppliedOperation,
-        cell_changes: &[SheetCellChange],
+        before: DocumentMementoSide,
+        after: DocumentMementoSide,
     ) -> DocumentMemento {
+        DocumentMemento { before, after }
+    }
+
+    pub fn capture_memento_side(&self, operation: &AppliedOperation) -> DocumentMementoSide {
         match operation {
             AppliedOperation::SetCell {
                 sheet_index,
                 row,
                 col,
                 ..
-            } => DocumentMemento::Cells {
-                before: before.cell_memento(*sheet_index, *row, *col, cell_changes),
-                after: after.cell_memento(*sheet_index, *row, *col, cell_changes),
-            },
+            } => DocumentMementoSide::Cells(self.cell_memento(*sheet_index, *row, *col)),
+            AppliedOperation::SetCells { changes } => {
+                DocumentMementoSide::Cells(self.cell_batch_memento(changes))
+            }
             AppliedOperation::SetColumnWidth {
                 sheet_index,
                 col_index,
                 ..
-            } => DocumentMemento::Layout {
-                before: before.layout_memento(*sheet_index, Some(*col_index), None),
-                after: after.layout_memento(*sheet_index, Some(*col_index), None),
-            },
+            } => DocumentMementoSide::Layout(self.layout_memento(
+                *sheet_index,
+                Some(*col_index),
+                None,
+            )),
             AppliedOperation::SetRowHeight {
                 sheet_index,
                 row_index,
                 ..
-            } => DocumentMemento::Layout {
-                before: before.layout_memento(*sheet_index, None, Some(*row_index)),
-                after: after.layout_memento(*sheet_index, None, Some(*row_index)),
-            },
+            } => DocumentMementoSide::Layout(self.layout_memento(
+                *sheet_index,
+                None,
+                Some(*row_index),
+            )),
             AppliedOperation::AddRow { sheet_index, .. }
             | AppliedOperation::DeleteRow { sheet_index, .. }
             | AppliedOperation::AddColumn { sheet_index, .. }
-            | AppliedOperation::DeleteColumn { sheet_index, .. } => DocumentMemento::Structure {
-                before: before.sheet_structure_memento([*sheet_index]),
-                after: after.sheet_structure_memento([*sheet_index]),
-            },
+            | AppliedOperation::DeleteColumn { sheet_index, .. } => {
+                DocumentMementoSide::Structure(self.sheet_structure_memento([*sheet_index]))
+            }
             AppliedOperation::AddSheet { sheet_index, .. }
             | AppliedOperation::DeleteSheet { sheet_index } => {
                 let start = *sheet_index;
-                DocumentMemento::Structure {
-                    before: before
-                        .workbook_structure_memento(start..before.projection.sheets.len()),
-                    after: after.workbook_structure_memento(start..after.projection.sheets.len()),
-                }
+                DocumentMementoSide::Structure(
+                    self.workbook_structure_memento(start..self.projection.sheets.len()),
+                )
             }
         }
     }
@@ -262,43 +269,51 @@ impl SpreadsheetDocument {
         memento: &DocumentMemento,
         side: MementoSide,
     ) -> Result<(), AppError> {
-        match (memento, side) {
-            (DocumentMemento::Cells { before, .. }, MementoSide::Before) => {
-                self.restore_cells(before)
-            }
-            (DocumentMemento::Cells { after, .. }, MementoSide::After) => self.restore_cells(after),
-            (DocumentMemento::Layout { before, .. }, MementoSide::Before) => {
-                self.restore_layout(before)
-            }
-            (DocumentMemento::Layout { after, .. }, MementoSide::After) => {
-                self.restore_layout(after)
-            }
-            (DocumentMemento::Structure { before, .. }, MementoSide::Before) => {
-                self.restore_structure(before)
-            }
-            (DocumentMemento::Structure { after, .. }, MementoSide::After) => {
-                self.restore_structure(after)
-            }
+        match side {
+            MementoSide::Before => self.restore_memento_side(&memento.before),
+            MementoSide::After => self.restore_memento_side(&memento.after),
         }
     }
 
-    fn cell_memento(
+    fn restore_memento_side(&mut self, side: &DocumentMementoSide) -> Result<(), AppError> {
+        match side {
+            DocumentMementoSide::Cells(memento) => self.restore_cells(memento),
+            DocumentMementoSide::Layout(memento) => self.restore_layout(memento),
+            DocumentMementoSide::Structure(memento) => self.restore_structure(memento),
+        }
+    }
+
+    fn cell_memento(&self, sheet_index: usize, row: usize, col: usize) -> CellMemento {
+        self.cell_positions_memento([(sheet_index, row, col)])
+    }
+
+    fn cell_batch_memento(
         &self,
-        sheet_index: usize,
-        row: usize,
-        col: usize,
-        cell_changes: &[SheetCellChange],
+        changes: &[crate::ops::core_ops::ResolvedCellEdit],
+    ) -> CellMemento {
+        self.cell_positions_memento(
+            changes
+                .iter()
+                .map(|change| (change.sheet_index, change.row, change.col)),
+        )
+    }
+
+    fn cell_positions_memento(
+        &self,
+        positions_to_capture: impl IntoIterator<Item = (usize, usize, usize)>,
     ) -> CellMemento {
         let mut positions = Vec::new();
         let mut seen = HashSet::new();
-        push_unique_position(&mut positions, &mut seen, sheet_index, row, col);
-        for change in cell_changes {
+        for (sheet_index, row, col) in positions_to_capture {
+            push_unique_position(&mut positions, &mut seen, sheet_index, row, col);
+        }
+        for (formula_sheet_index, formula_row, formula_col) in self.formula_cell_positions() {
             push_unique_position(
                 &mut positions,
                 &mut seen,
-                change.sheet_index,
-                change.row,
-                change.col,
+                formula_sheet_index,
+                formula_row,
+                formula_col,
             );
         }
 
@@ -332,6 +347,29 @@ impl SpreadsheetDocument {
             cells,
             sheet_shapes,
         }
+    }
+
+    fn formula_cell_positions(&self) -> Vec<(usize, usize, usize)> {
+        self.projection
+            .sheets
+            .iter()
+            .enumerate()
+            .flat_map(|(sheet_index, sheet)| {
+                sheet
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(row, row_data)| {
+                        row_data.iter().enumerate().filter_map(move |(col, cell)| {
+                            matches!(cell, CellValue::Formula { .. }).then_some((
+                                sheet_index,
+                                row,
+                                col,
+                            ))
+                        })
+                    })
+            })
+            .collect()
     }
 
     fn layout_memento(
@@ -571,7 +609,10 @@ impl SpreadsheetDocument {
                 );
 
                 match result {
-                    Ok(changes) => changes,
+                    Ok(changes) => {
+                        self.formula_status = FormulaStatus::Ready;
+                        changes
+                    }
                     Err(error) => {
                         eprintln!("Formula recalculation failed: {error}");
                         let changes = self.formula_error_change(
@@ -586,11 +627,27 @@ impl SpreadsheetDocument {
                     }
                 }
             }
+            AppliedOperation::SetCells { .. } => {
+                match self.formula_runtime.rebuild(&mut self.projection) {
+                    Ok(changes) => {
+                        self.formula_status = FormulaStatus::Ready;
+                        changes
+                    }
+                    Err(error) => {
+                        eprintln!("Formula recalculation failed: {error}");
+                        self.rebuild_formula_runtime();
+                        Vec::new()
+                    }
+                }
+            }
             AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
                 Vec::new()
             }
             _ => match self.formula_runtime.rebuild(&mut self.projection) {
-                Ok(changes) => changes,
+                Ok(changes) => {
+                    self.formula_status = FormulaStatus::Ready;
+                    changes
+                }
                 Err(error) => {
                     eprintln!("Formula recalculation failed: {error}");
                     self.rebuild_formula_runtime();
@@ -632,9 +689,17 @@ impl SpreadsheetDocument {
     }
 
     fn rebuild_formula_runtime(&mut self) {
-        if let Err(error) = self.formula_runtime.rebuild(&mut self.projection) {
-            eprintln!("Formula runtime rebuild failed: {error}");
-            self.formula_runtime = FormulaRuntime::empty();
+        match self.formula_runtime.rebuild(&mut self.projection) {
+            Ok(_) => {
+                self.formula_status = FormulaStatus::Ready;
+            }
+            Err(error) => {
+                eprintln!("Formula runtime rebuild failed: {error}");
+                self.formula_runtime = FormulaRuntime::empty();
+                self.formula_status = FormulaStatus::Degraded {
+                    message: error.to_string(),
+                };
+            }
         }
     }
 

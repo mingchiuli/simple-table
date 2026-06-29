@@ -291,6 +291,7 @@ pub fn schedule_index_for_response(
 mod tests {
     use super::*;
     use crate::ops::EditorCommand;
+    use crate::state::editor_state::SearchSource;
     use crate::types::{FileData, SheetData};
 
     fn s(value: &str) -> CellValue {
@@ -318,6 +319,7 @@ mod tests {
         let editor = guard.as_ref().unwrap();
         let mut rows: Vec<_> = editor
             .search_sheet(0, query, 10)
+            .positions
             .iter()
             .map(|position| (position.row, position.col))
             .collect();
@@ -398,6 +400,14 @@ mod tests {
             editor.mark_search_index_stale();
         }
 
+        {
+            let guard = state.read().unwrap();
+            let editor = guard.as_ref().unwrap();
+            assert_eq!(
+                editor.search_sheet(0, "orange", 10).source,
+                SearchSource::ScanFallback
+            );
+        }
         assert!(rows_of(&state, "apple").is_empty());
         assert_eq!(rows_of(&state, "orange"), vec![(0, 0)]);
 

@@ -1,6 +1,8 @@
 import type { ComputedRef, Ref } from "vue";
 import * as api from "@/api";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useSearchSessionStore } from "@/stores/searchSession";
+import { useSheetLayoutStore } from "@/stores/sheetLayout";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
 
 type UseEditorCommandsOptions = {
@@ -25,6 +27,8 @@ export function useEditorCommands({
   applyMutationResponse,
 }: UseEditorCommandsOptions) {
   const documentSessionStore = useDocumentSessionStore();
+  const searchSessionStore = useSearchSessionStore();
+  const sheetLayoutStore = useSheetLayoutStore();
 
   async function runEditorCommand(
     action: () => Promise<EditorMutationResponse>,
@@ -121,12 +125,12 @@ export function useEditorCommands({
   async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
     if (!fileData.value) return;
 
-    documentSessionStore.searchQuery = query;
+    searchSessionStore.searchQuery = query;
     try {
-      documentSessionStore.isSearching = true;
+      searchSessionStore.isSearching = true;
       if (!(await flushPendingCellChanges())) return;
 
-      documentSessionStore.searchResults = await api.search(
+      searchSessionStore.searchResults = await api.search(
         query,
         scope,
         scope === "currentSheet" ? currentSheetIndex.value : null
@@ -134,7 +138,7 @@ export function useEditorCommands({
     } catch (error) {
       ElMessage.error(`Search failed: ${error}`);
     } finally {
-      documentSessionStore.isSearching = false;
+      searchSessionStore.isSearching = false;
     }
   }
 
@@ -147,7 +151,7 @@ export function useEditorCommands({
   }
 
   function handleClearSearch() {
-    documentSessionStore.clearSearch();
+    searchSessionStore.clearSearch();
   }
 
   function handleSelectCell(row: number, col: number) {
@@ -157,14 +161,14 @@ export function useEditorCommands({
   async function handleColumnResize(colIndex: number, width: number) {
     if (!fileData.value) return;
     const sheetIndex = currentSheetIndex.value;
-    const oldWidth = documentSessionStore.sheetColumnWidths[sheetIndex]?.[colIndex];
+    const oldWidth = sheetLayoutStore.sheetColumnWidths[sheetIndex]?.[colIndex];
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      documentSessionStore.setColumnWidth(sheetIndex, colIndex, width);
+      sheetLayoutStore.setColumnWidth(sheetIndex, colIndex, width);
       applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
     } catch (error) {
-      documentSessionStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
+      sheetLayoutStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
       ElMessage.error(`Failed to resize column: ${error}`);
     } finally {
       isLoading.value = false;
@@ -174,14 +178,14 @@ export function useEditorCommands({
   async function handleRowResize(rowIndex: number, height: number) {
     if (!fileData.value) return;
     const sheetIndex = currentSheetIndex.value;
-    const oldHeight = documentSessionStore.sheetRowHeights[sheetIndex]?.[rowIndex];
+    const oldHeight = sheetLayoutStore.sheetRowHeights[sheetIndex]?.[rowIndex];
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      documentSessionStore.setRowHeight(sheetIndex, rowIndex, height);
+      sheetLayoutStore.setRowHeight(sheetIndex, rowIndex, height);
       applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
     } catch (error) {
-      documentSessionStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
+      sheetLayoutStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
       ElMessage.error(`Failed to resize row: ${error}`);
     } finally {
       isLoading.value = false;

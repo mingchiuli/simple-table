@@ -5,7 +5,9 @@ use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
     SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
-use crate::types::{AppliedOperationResult, CellPosition, FileData, SheetCellChange};
+use crate::types::{
+    AppliedOperationResult, CellPosition, FileData, FormulaStatus, SheetCellChange,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
 
@@ -17,6 +19,18 @@ pub struct ExecutedOperation {
     pub cell_changes: Vec<SheetCellChange>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSource {
+    Index,
+    ScanFallback,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchExecution {
+    pub positions: Vec<CellPosition>,
+    pub source: SearchSource,
+}
+
 struct HistoryEntry {
     memento: DocumentMemento,
 }
@@ -24,6 +38,7 @@ struct HistoryEntry {
 /// 编辑器状态管理器
 pub struct EditorState {
     document_id: u64,
+    revision: u64,
     document: SpreadsheetDocument,
     history: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
@@ -40,6 +55,7 @@ impl EditorState {
         let content_hash = document.content_hash();
         Self {
             document_id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
             document,
             history: Vec::new(),
             redo_stack: Vec::new(),
@@ -53,6 +69,18 @@ impl EditorState {
 
     pub fn file_data(&self) -> &FileData {
         self.document.projection()
+    }
+
+    pub fn document_id(&self) -> u64 {
+        self.document_id
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn formula_status(&self) -> FormulaStatus {
+        self.document.formula_status()
     }
 
     pub fn search_index_stamp(&self) -> SearchIndexStamp {
@@ -74,10 +102,17 @@ impl EditorState {
         self.search_index.mark_stale(self.document_id)
     }
 
-    pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {
-        self.search_index
-            .search_sheet(sheet_index, query, limit)
-            .unwrap_or_else(|| self.scan_sheet(sheet_index, query, limit))
+    pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> SearchExecution {
+        if let Some(positions) = self.search_index.search_sheet(sheet_index, query, limit) {
+            return SearchExecution {
+                positions,
+                source: SearchSource::Index,
+            };
+        }
+        SearchExecution {
+            positions: self.scan_sheet(sheet_index, query, limit),
+            source: SearchSource::ScanFallback,
+        }
     }
 
     pub fn search_writer_handle(
@@ -141,8 +176,9 @@ impl EditorState {
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         let operation = command.resolve(self.file_data())?;
         let should_mark_search_stale = operation.requires_search_rebuild();
+        let before = self.document.capture_memento_side(&operation);
         if operation.is_noop() {
-            let result = self.document.execute_operation(&operation)?;
+            let result = self.document.execute_operation(&operation, &before)?;
             self.update_flags();
             self.refresh_content_hash();
             return Ok(ExecutedOperation {
@@ -151,13 +187,12 @@ impl EditorState {
             });
         }
 
-        let before = self.document.clone();
-        let result = self.document.execute_operation(&operation)?;
-        let after = self.document.clone();
-        let memento =
-            SpreadsheetDocument::create_memento(&before, &after, &operation, &result.cell_changes);
+        let result = self.document.execute_operation(&operation, &before)?;
+        let after = self.document.capture_memento_side(&operation);
+        let memento = SpreadsheetDocument::create_memento(before, after);
         self.history.push(HistoryEntry { memento });
         self.redo_stack.clear();
+        self.bump_revision();
         if should_mark_search_stale {
             self.mark_search_index_stale();
         }
@@ -175,6 +210,7 @@ impl EditorState {
             self.document
                 .restore_memento(&entry.memento, MementoSide::Before)?;
             self.redo_stack.push(entry);
+            self.bump_revision();
             self.mark_search_index_stale();
             self.update_flags();
             self.refresh_content_hash();
@@ -193,6 +229,7 @@ impl EditorState {
             self.document
                 .restore_memento(&entry.memento, MementoSide::After)?;
             self.history.push(entry);
+            self.bump_revision();
             self.mark_search_index_stale();
             self.update_flags();
             self.refresh_content_hash();
@@ -212,6 +249,10 @@ impl EditorState {
 
     fn refresh_content_hash(&mut self) {
         self.current_content_hash = self.document.content_hash();
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
@@ -834,5 +875,76 @@ mod tests {
         let sheet = saved.sheet(0).expect("sheet");
         assert_eq!(sheet.cell("A1").expect("A1").value(), "csv");
         assert_eq!(sheet.cell("B1").expect("B1").value(), "xlsx");
+    }
+
+    #[test]
+    fn batched_cell_edits_share_one_history_entry_and_patch_workbook() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_string("a");
+            sheet.cell_mut("B1").set_value_string("b");
+            sheet.cell_mut("C1").set_formula("A1&B1");
+            sheet.cell_mut("C1").set_formula_result_string("ab");
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "batch.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::SetCells {
+                changes: vec![
+                    crate::types::SetCellRequest {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 0,
+                        new_value: CellValue::String("x".to_string()),
+                    },
+                    crate::types::SetCellRequest {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 1,
+                        new_value: CellValue::String("y".to_string()),
+                    },
+                ],
+            })
+            .expect("batch edit");
+
+        assert!(state.can_undo);
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("x".to_string())
+        );
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][1],
+            CellValue::String("y".to_string())
+        );
+        state.undo().expect("undo").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("a".to_string())
+        );
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][1],
+            CellValue::String("b".to_string())
+        );
+        state.redo().expect("redo").expect("redo result");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("batch.xlsx")
+            .expect("save");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let sheet = saved.sheet(0).expect("sheet");
+        assert_eq!(sheet.cell("A1").expect("A1").value(), "x");
+        assert_eq!(sheet.cell("B1").expect("B1").value(), "y");
+        assert!(sheet.cell("C1").expect("C1").cell_value().is_formula());
     }
 }
