@@ -3,6 +3,15 @@ import type { CellValue, MergeRange } from '@/types';
 import { CellView, ColumnHeaderCell, EditableCell, RowNumberCell } from '@/components/cell';
 import { usePlatform } from '@/composables/usePlatform';
 import { cellToDisplayString, cellToEditorString } from '@/composables/usePendingCellSave';
+import {
+  areNumberRecordsEqual,
+  buildOffsets,
+  collectColumnResizeHandles,
+  collectVisibleItems,
+  offsetAt,
+  spanSize,
+  type GridItem,
+} from '@/table-geometry/gridGeometry';
 
 const { isTouchDevice } = usePlatform();
 
@@ -13,12 +22,6 @@ const ROW_HEADER_WIDTH = 60;
 const MIN_COLUMN_WIDTH = 56;
 const MIN_ROW_HEIGHT = 36;
 const OVERSCAN_PX = 240;
-
-type RowItem = {
-  index: number;
-  top: number;
-  height: number;
-};
 
 type ColumnItem = {
   index: number;
@@ -109,30 +112,28 @@ const viewportWidth = computed(() => Math.max(0, tableSize.value.width - ROW_HEA
 const viewportHeight = computed(() => Math.max(0, tableSize.value.height - HEADER_HEIGHT));
 
 const columnOffsets = computed(() => {
-  const offsets = [0];
-  for (let colIndex = 0; colIndex < props.columns.length; colIndex += 1) {
-    offsets.push(offsets[colIndex] + getColumnWidth(colIndex));
-  }
-  return offsets;
+  return buildOffsets(props.columns.length, getColumnWidth);
 });
 
 const rowOffsets = computed(() => {
-  const offsets = [0];
-  for (let rowIndex = 0; rowIndex < props.data.length; rowIndex += 1) {
-    offsets.push(offsets[rowIndex] + getRowHeight(rowIndex));
-  }
-  return offsets;
+  return buildOffsets(props.data.length, getRowHeight);
 });
 
 const totalColumnsWidth = computed(() => columnOffsets.value.at(-1) ?? 0);
 const totalRowsHeight = computed(() => rowOffsets.value.at(-1) ?? 0);
 
-const visibleRows = computed<RowItem[]>(() => {
-  return collectVisibleItems(rowOffsets.value, props.data.length, scrollTop.value, viewportHeight.value);
+const visibleRows = computed<GridItem[]>(() => {
+  return collectVisibleItems(rowOffsets.value, props.data.length, scrollTop.value, viewportHeight.value, OVERSCAN_PX);
 });
 
 const visibleColumns = computed<ColumnItem[]>(() => {
-  return collectVisibleItems(columnOffsets.value, props.columns.length, scrollLeft.value, viewportWidth.value)
+  return collectVisibleItems(
+    columnOffsets.value,
+    props.columns.length,
+    scrollLeft.value,
+    viewportWidth.value,
+    OVERSCAN_PX
+  )
     .map((item) => ({
       index: item.index,
       title: props.columns[item.index] ?? '',
@@ -201,58 +202,14 @@ const visibleMergeCells = computed<MergeOverlayCell[]>(() => {
 });
 
 const visibleColumnResizeHandles = computed(() => {
-  const handles: Array<{ colIndex: number; left: number }> = [];
-  let boundary = ROW_HEADER_WIDTH - scrollLeft.value;
-  for (let colIndex = 0; colIndex < props.columns.length; colIndex += 1) {
-    boundary += getColumnWidth(colIndex);
-    if (boundary >= ROW_HEADER_WIDTH && boundary <= tableSize.value.width) {
-      handles.push({ colIndex, left: boundary });
-    }
-    if (boundary > tableSize.value.width) break;
-  }
-  return handles;
+  return collectColumnResizeHandles(
+    props.columns.length,
+    ROW_HEADER_WIDTH,
+    scrollLeft.value,
+    tableSize.value.width,
+    getColumnWidth
+  );
 });
-
-function collectVisibleItems(
-  offsets: number[],
-  count: number,
-  scrollStart: number,
-  viewportSize: number
-): RowItem[] {
-  if (count <= 0) return [];
-
-  const start = Math.max(0, scrollStart - OVERSCAN_PX);
-  const end = scrollStart + viewportSize + OVERSCAN_PX;
-  const firstIndex = findFirstVisibleIndex(offsets, start);
-  const items: RowItem[] = [];
-
-  for (let index = firstIndex; index < count; index += 1) {
-    const top = offsets[index] ?? 0;
-    const nextTop = offsets[index + 1] ?? top;
-    if (top > end) break;
-    items.push({ index, top, height: nextTop - top });
-  }
-
-  return items;
-}
-
-function findFirstVisibleIndex(offsets: number[], start: number): number {
-  let low = 0;
-  let high = Math.max(0, offsets.length - 2);
-  let result = 0;
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    if ((offsets[mid + 1] ?? 0) < start) {
-      low = mid + 1;
-    } else {
-      result = mid;
-      high = mid - 1;
-    }
-  }
-
-  return result;
-}
 
 function getColumnWidth(colIndex: number): number {
   return columnWidths.value[colIndex] || DEFAULT_COLUMN_WIDTH;
@@ -263,8 +220,7 @@ function getRowHeight(rowIndex: number): number {
 }
 
 function getRowOffset(rowIndex: number): number {
-  const clamped = Math.max(0, Math.min(rowIndex, rowOffsets.value.length - 1));
-  return rowOffsets.value[clamped] ?? totalRowsHeight.value;
+  return offsetAt(rowOffsets.value, rowIndex, totalRowsHeight.value);
 }
 
 function getColumnOffset(colIndex: number): number {
@@ -272,30 +228,15 @@ function getColumnOffset(colIndex: number): number {
 }
 
 function getDataColumnOffset(colIndex: number): number {
-  const clamped = Math.max(0, Math.min(colIndex, columnOffsets.value.length - 1));
-  return columnOffsets.value[clamped] ?? totalColumnsWidth.value;
+  return offsetAt(columnOffsets.value, colIndex, totalColumnsWidth.value);
 }
 
 function getColumnSpanWidth(startCol: number, endCol: number): number {
-  const start = getDataColumnOffset(startCol);
-  const end = getDataColumnOffset(endCol + 1);
-  return Math.max(0, end - start);
+  return spanSize(columnOffsets.value, startCol, endCol, totalColumnsWidth.value);
 }
 
 function getRowSpanHeight(startRow: number, endRow: number): number {
-  const start = getRowOffset(startRow);
-  const end = getRowOffset(endRow + 1);
-  return Math.max(0, end - start);
-}
-
-function areNumberRecordsEqual(
-  current: Record<number, number>,
-  next: Record<number, number>
-): boolean {
-  const currentKeys = Object.keys(current);
-  const nextKeys = Object.keys(next);
-  if (currentKeys.length !== nextKeys.length) return false;
-  return currentKeys.every((key) => current[Number(key)] === next[Number(key)]);
+  return spanSize(rowOffsets.value, startRow, endRow, totalRowsHeight.value);
 }
 
 function handleViewportScroll() {

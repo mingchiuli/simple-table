@@ -396,19 +396,33 @@ pub enum OperationResult {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub enum EditorMutationResponseKind {
-    Snapshot,
-    CellDelta,
+pub struct LayoutPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub column_widths: HashMap<usize, Option<u32>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub row_heights: HashMap<usize, Option<u32>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type", content = "data")]
+pub enum EditorPatch {
+    #[serde(rename = "Cells")]
+    Cells { changes: Vec<SheetCellChange> },
+    #[serde(rename = "Layout")]
+    Layout { patch: LayoutPatch },
+    #[serde(rename = "FullSnapshot")]
+    FullSnapshot {
+        #[serde(rename = "fileData")]
+        file_data: FileData,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
-    pub kind: EditorMutationResponseKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_data: Option<FileData>,
     pub editor_state: EditorStateInfo,
-    pub operation: Option<OperationResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cell_changes: Vec<SheetCellChange>,
+    pub patches: Vec<EditorPatch>,
 }

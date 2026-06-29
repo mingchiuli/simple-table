@@ -1,11 +1,11 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
+use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
 use crate::state::state::EditorStateInfo;
 use crate::types::{
-    EditorMutationResponse, EditorMutationResponseKind, OperationResult, SheetCellChange,
+    EditorMutationResponse, EditorPatch, LayoutPatch, OperationResult, SheetCellChange,
 };
 
 /// 获取编辑器状态信息
@@ -19,14 +19,13 @@ pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
 
 pub fn snapshot_mutation_response(
     editor_state: &EditorState,
-    operation: Option<OperationResult>,
+    _operation: Option<OperationResult>,
 ) -> EditorMutationResponse {
     EditorMutationResponse {
-        kind: EditorMutationResponseKind::Snapshot,
-        file_data: Some(editor_state.file_data().clone()),
         editor_state: editor_state_info(editor_state),
-        operation,
-        cell_changes: Vec::new(),
+        patches: vec![EditorPatch::FullSnapshot {
+            file_data: editor_state.file_data().clone(),
+        }],
     }
 }
 
@@ -48,11 +47,24 @@ pub fn cell_delta_mutation_response(
     }
 
     EditorMutationResponse {
-        kind: EditorMutationResponseKind::CellDelta,
-        file_data: None,
         editor_state: editor_state_info(editor_state),
-        operation: Some(operation),
-        cell_changes,
+        patches: if cell_changes.is_empty() {
+            Vec::new()
+        } else {
+            vec![EditorPatch::Cells {
+                changes: cell_changes,
+            }]
+        },
+    }
+}
+
+pub fn layout_mutation_response(
+    editor_state: &EditorState,
+    patch: LayoutPatch,
+) -> EditorMutationResponse {
+    EditorMutationResponse {
+        editor_state: editor_state_info(editor_state),
+        patches: vec![EditorPatch::Layout { patch }],
     }
 }
 
@@ -100,7 +112,7 @@ pub fn do_undo(
             Some(editor_state) => {
                 if let Some(result) = editor_state.undo()? {
                     editor_state.mark_search_index_stale();
-                    snapshot_mutation_response(editor_state, Some(result.operation))
+                    snapshot_mutation_response(editor_state, result.operation)
                 } else {
                     return Err(AppError::NothingToUndo);
                 }
@@ -109,8 +121,7 @@ pub fn do_undo(
         }
     };
 
-    // 异步重建索引
-    spawn_rebuild_all_sheets_index(state);
+    schedule_index_for_response(&response, state);
 
     Ok(response)
 }
@@ -125,7 +136,7 @@ pub fn do_redo(
             Some(editor_state) => {
                 if let Some(result) = editor_state.redo()? {
                     editor_state.mark_search_index_stale();
-                    snapshot_mutation_response(editor_state, Some(result.operation))
+                    snapshot_mutation_response(editor_state, result.operation)
                 } else {
                     return Err(AppError::NothingToRedo);
                 }
@@ -134,8 +145,7 @@ pub fn do_redo(
         }
     };
 
-    // 异步重建索引
-    spawn_rebuild_all_sheets_index(state);
+    schedule_index_for_response(&response, state);
 
     Ok(response)
 }

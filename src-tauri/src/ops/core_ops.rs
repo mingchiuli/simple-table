@@ -1,6 +1,6 @@
 use crate::types::{
-    CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData, OperationResult, RowChange,
-    RowHeightChange, SheetData,
+    CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData, MergeRange, OperationResult,
+    RowChange, RowHeightChange, SheetData,
 };
 use serde::{Deserialize, Serialize};
 
@@ -86,13 +86,9 @@ impl Operation {
                 new_value,
                 ..
             } => {
-                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index)
-                    && let Some(row_data) = sheet.rows.get_mut(*row)
-                    && *col < row_data.len()
-                {
-                    // 先更新值
-                    row_data[*col] = new_value.clone();
-                    // 索引重建由调用方异步处理
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    ensure_cell_exists(sheet, *row, *col);
+                    sheet.rows[*row][*col] = new_value.clone();
                 }
                 OperationResult::SetCell {
                     sheet_index: *sheet_index,
@@ -112,13 +108,14 @@ impl Operation {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     // 使用传入的 row_data，如果为空则创建空行
                     let new_row = if row_data.is_empty() {
-                        let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                        let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
                         vec![CellValue::Null; col_count]
                     } else {
                         row_data.clone()
                     };
                     sheet.rows.insert(*row_index, new_row);
                     shift_layout_map_on_insert(sheet.row_heights.as_mut(), *row_index);
+                    shift_row_merges_on_insert(&mut sheet.merges, *row_index);
                     if let Some(height) = row_height {
                         sheet
                             .row_heights
@@ -145,6 +142,7 @@ impl Operation {
                 {
                     sheet.rows.remove(*row_index);
                     shift_layout_map_on_delete(sheet.row_heights.as_mut(), *row_index);
+                    shift_row_merges_on_delete(&mut sheet.merges, *row_index);
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteRow {
@@ -164,8 +162,7 @@ impl Operation {
                     file_data
                         .sheets
                         .get(*sheet_index)
-                        .and_then(|s| s.rows.first())
-                        .map(|r| r.len())
+                        .map(|s| s.rows.iter().map(Vec::len).max().unwrap_or(0))
                         .unwrap_or(0)
                 });
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
@@ -182,6 +179,7 @@ impl Operation {
                         row.insert(pos, value);
                     }
                     shift_layout_map_on_insert(sheet.column_widths.as_mut(), actual_col_index);
+                    shift_column_merges_on_insert(&mut sheet.merges, actual_col_index);
                     if let Some(width) = column_width {
                         sheet
                             .column_widths
@@ -210,6 +208,7 @@ impl Operation {
                         }
                     }
                     shift_layout_map_on_delete(sheet.column_widths.as_mut(), *col_index);
+                    shift_column_merges_on_delete(&mut sheet.merges, *col_index);
                     // 索引重建由调用方异步处理
                 }
                 OperationResult::DeleteColumn {
@@ -364,6 +363,74 @@ fn shift_layout_map_on_insert(
         })
         .collect();
     *map = shifted;
+}
+
+fn ensure_cell_exists(sheet: &mut SheetData, row: usize, col: usize) {
+    let target_width = col + 1;
+    while sheet.rows.len() <= row {
+        sheet.rows.push(vec![CellValue::Null; target_width]);
+    }
+    for row_data in &mut sheet.rows {
+        if row_data.len() < target_width {
+            row_data.resize(target_width, CellValue::Null);
+        }
+    }
+}
+
+fn shift_row_merges_on_insert(merges: &mut Vec<MergeRange>, row_index: usize) {
+    let row = row_index as u32;
+    for merge in merges {
+        if merge.start_row >= row {
+            merge.start_row += 1;
+            merge.end_row += 1;
+        } else if merge.end_row >= row {
+            merge.end_row += 1;
+        }
+    }
+}
+
+fn shift_row_merges_on_delete(merges: &mut Vec<MergeRange>, row_index: usize) {
+    let row = row_index as u32;
+    merges.retain_mut(|merge| {
+        if merge.start_row == row && merge.end_row == row {
+            return false;
+        }
+        if merge.start_row > row {
+            merge.start_row -= 1;
+            merge.end_row -= 1;
+        } else if merge.end_row >= row {
+            merge.end_row = merge.end_row.saturating_sub(1);
+        }
+        merge.start_row <= merge.end_row && merge.start_col <= merge.end_col
+    });
+}
+
+fn shift_column_merges_on_insert(merges: &mut Vec<MergeRange>, col_index: usize) {
+    let col = col_index as u16;
+    for merge in merges {
+        if merge.start_col >= col {
+            merge.start_col += 1;
+            merge.end_col += 1;
+        } else if merge.end_col >= col {
+            merge.end_col += 1;
+        }
+    }
+}
+
+fn shift_column_merges_on_delete(merges: &mut Vec<MergeRange>, col_index: usize) {
+    let col = col_index as u16;
+    merges.retain_mut(|merge| {
+        if merge.start_col == col && merge.end_col == col {
+            return false;
+        }
+        if merge.start_col > col {
+            merge.start_col -= 1;
+            merge.end_col -= 1;
+        } else if merge.end_col >= col {
+            merge.end_col = merge.end_col.saturating_sub(1);
+        }
+        merge.start_row <= merge.end_row && merge.start_col <= merge.end_col
+    });
 }
 
 fn shift_layout_map_on_delete(

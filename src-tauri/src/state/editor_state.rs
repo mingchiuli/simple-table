@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::io::document_model::SpreadsheetDocument;
+use crate::io::document_model::{DocumentMemento, MementoSide, SpreadsheetDocument};
 use crate::ops::Operation;
 use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
@@ -10,15 +10,19 @@ use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
-    pub operation: OperationResult,
+    pub operation: Option<OperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
+}
+
+struct HistoryEntry {
+    memento: DocumentMemento,
 }
 
 /// 编辑器状态管理器
 pub struct EditorState {
     document: SpreadsheetDocument,
-    pub history: Vec<Operation>,
-    pub redo_stack: Vec<Operation>,
+    history: Vec<HistoryEntry>,
+    redo_stack: Vec<HistoryEntry>,
     pub can_undo: bool,
     pub can_redo: bool,
     pub current_content_hash: ContentHash,
@@ -149,7 +153,7 @@ impl EditorState {
                         self.update_flags();
                         self.refresh_content_hash();
                         return Ok(ExecutedOperation {
-                            operation: result.operation,
+                            operation: Some(result.operation),
                             cell_changes: result.cell_changes,
                         });
                     }
@@ -176,7 +180,7 @@ impl EditorState {
                 if col_index.is_none() && *sheet_index < self.file_data().sheets.len() {
                     // 正常添加列，补充列索引
                     if let Some(sheet) = self.file_data().sheets.get(*sheet_index) {
-                        let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                        let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
                         // 新列被添加到末尾，索引就是当前列数（添加前）
                         operation = Operation::AddColumn {
                             sheet_index: *sheet_index,
@@ -199,7 +203,7 @@ impl EditorState {
                     && *sheet_index < self.file_data().sheets.len()
                     && let Some(sheet) = self.file_data().sheets.get(*sheet_index)
                 {
-                    let col_count = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                    let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
                     operation = Operation::AddRow {
                         sheet_index: *sheet_index,
                         row_index: *row_index,
@@ -240,7 +244,7 @@ impl EditorState {
                     self.update_flags();
                     self.refresh_content_hash();
                     return Ok(ExecutedOperation {
-                        operation: result.operation,
+                        operation: Some(result.operation),
                         cell_changes: result.cell_changes,
                     });
                 }
@@ -270,7 +274,7 @@ impl EditorState {
                     self.update_flags();
                     self.refresh_content_hash();
                     return Ok(ExecutedOperation {
-                        operation: result.operation,
+                        operation: Some(result.operation),
                         cell_changes: result.cell_changes,
                     });
                 }
@@ -304,39 +308,32 @@ impl EditorState {
             _ => {}
         }
 
+        let before = self.document.clone();
         let result = self.document.execute_operation(&operation)?;
-        self.history.push(operation);
+        let after = self.document.clone();
+        let memento =
+            SpreadsheetDocument::create_memento(&before, &after, &operation, &result.cell_changes);
+        self.history.push(HistoryEntry { memento });
         self.redo_stack.clear();
         self.update_flags();
         self.refresh_content_hash();
         Ok(ExecutedOperation {
-            operation: result.operation,
+            operation: Some(result.operation),
             cell_changes: result.cell_changes,
         })
     }
 
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
-        if let Some(operation) = self.history.pop() {
-            let undo_operation = operation.create_undo_op();
-            let result = match self.document.execute_operation(&undo_operation) {
-                Ok(result) => result,
-                Err(error) => {
-                    self.history.push(operation);
-                    self.update_flags();
-                    self.refresh_content_hash();
-                    return Err(error);
-                }
-            };
-            // 获取 redo 操作
-            let redo_op = operation.create_redo_op();
-            self.redo_stack.push(redo_op);
-
+        if let Some(entry) = self.history.pop() {
+            self.document
+                .restore_memento(&entry.memento, MementoSide::Before)?;
+            self.redo_stack.push(entry);
             self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
-                operation: result.operation,
-                cell_changes: result.cell_changes,
+                operation: None,
+                cell_changes: Vec::new(),
             }))
         } else {
             Ok(None)
@@ -345,22 +342,15 @@ impl EditorState {
 
     /// 重做上一个被撤销的操作
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
-        if let Some(operation) = self.redo_stack.pop() {
-            let result = match self.document.execute_operation(&operation) {
-                Ok(result) => result,
-                Err(error) => {
-                    self.redo_stack.push(operation);
-                    self.update_flags();
-                    self.refresh_content_hash();
-                    return Err(error);
-                }
-            };
-            self.history.push(operation);
+        if let Some(entry) = self.redo_stack.pop() {
+            self.document
+                .restore_memento(&entry.memento, MementoSide::After)?;
+            self.history.push(entry);
             self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
-                operation: result.operation,
-                cell_changes: result.cell_changes,
+                operation: None,
+                cell_changes: Vec::new(),
             }))
         } else {
             Ok(None)
@@ -801,5 +791,231 @@ mod tests {
                 .iter()
                 .any(|column| { column.col_num() == 1 && (column.width() - 25.0).abs() < 0.001 })
         );
+    }
+
+    #[test]
+    fn set_cell_extends_sparse_projection_and_saved_workbook() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "sparse.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("A1".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(Operation::SetCell {
+                sheet_index: 0,
+                row: 3,
+                col: 4,
+                old_value: CellValue::Null,
+                new_value: CellValue::String("E4".to_string()),
+            })
+            .expect("set sparse cell");
+
+        assert_eq!(
+            state.file_data().sheets[0].rows[3][4],
+            CellValue::String("E4".to_string())
+        );
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("sparse.xlsx")
+            .expect("save sparse workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        assert_eq!(
+            saved
+                .sheet(0)
+                .expect("sheet")
+                .cell("E4")
+                .expect("E4")
+                .value(),
+            "E4"
+        );
+    }
+
+    #[test]
+    fn set_cell_undo_restores_sparse_projection_shape() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "sparse.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("A1".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(Operation::SetCell {
+                sheet_index: 0,
+                row: 3,
+                col: 4,
+                old_value: CellValue::Null,
+                new_value: CellValue::String("E4".to_string()),
+            })
+            .expect("set sparse cell");
+        state.undo().expect("undo").expect("undo result");
+
+        assert_eq!(state.file_data().sheets[0].rows.len(), 1);
+        assert_eq!(state.file_data().sheets[0].rows[0].len(), 1);
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("A1".to_string())
+        );
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("sparse.xlsx")
+            .expect("save sparse workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        assert!(saved.sheet(0).expect("sheet").cell("E4").is_none());
+    }
+
+    #[test]
+    fn undo_redo_restores_workbook_snapshot_styles() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_string("styled");
+            sheet
+                .cell_mut("A1")
+                .style_mut()
+                .set_background_color(Color::COLOR_RED_STR);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "styled-undo.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(Operation::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                old_value: CellValue::String("styled".to_string()),
+                new_value: CellValue::String("changed".to_string()),
+            })
+            .expect("set cell");
+        state.undo().expect("undo").expect("undo result");
+        state.redo().expect("redo").expect("redo result");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("styled-undo.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let cell = saved.sheet(0).expect("sheet").cell("A1").expect("A1");
+
+        assert_eq!(cell.value(), "changed");
+        assert_eq!(
+            cell.style()
+                .background_color()
+                .map(|color| color.argb_str()),
+            Some(Color::COLOR_RED_STR.to_string())
+        );
+    }
+
+    #[test]
+    fn structure_edits_adjust_and_save_merge_ranges() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_string("merged");
+            sheet.add_merge_cells("A1:C3");
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "merged-structure.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(Operation::DeleteRow {
+                sheet_index: 0,
+                row_index: 0,
+                row_data: vec![CellValue::String("merged".to_string())],
+                row_height: None,
+            })
+            .expect("delete first row");
+        state
+            .execute(Operation::DeleteColumn {
+                sheet_index: 0,
+                col_index: 2,
+                col_data: vec![],
+                column_width: None,
+            })
+            .expect("delete last merged column");
+
+        let merges = &state.file_data().sheets[0].merges;
+        assert_eq!(merges.len(), 1);
+        assert_eq!(merges[0].start_row, 0);
+        assert_eq!(merges[0].end_row, 1);
+        assert_eq!(merges[0].start_col, 0);
+        assert_eq!(merges[0].end_col, 1);
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("merged-structure.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let saved_sheet = saved.sheet(0).expect("sheet");
+        let saved_merges = saved_sheet.merge_cells();
+        assert_eq!(saved_merges.len(), 1);
+        assert_eq!(saved_merges[0].coordinate_start_row().unwrap().num(), 1);
+        assert_eq!(saved_merges[0].coordinate_start_col().unwrap().num(), 1);
+        assert_eq!(saved_merges[0].coordinate_end_row().unwrap().num(), 2);
+        assert_eq!(saved_merges[0].coordinate_end_col().unwrap().num(), 2);
+    }
+
+    #[test]
+    fn csv_document_can_export_xlsx_from_projection() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: "input.csv".to_string(),
+                file_name: "input.csv".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("csv".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(Operation::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 1,
+                old_value: CellValue::Null,
+                new_value: CellValue::String("xlsx".to_string()),
+            })
+            .expect("edit csv projection");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("export.xlsx")
+            .expect("export projection as xlsx");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let sheet = saved.sheet(0).expect("sheet");
+        assert_eq!(sheet.cell("A1").expect("A1").value(), "csv");
+        assert_eq!(sheet.cell("B1").expect("B1").value(), "xlsx");
     }
 }

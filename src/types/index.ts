@@ -100,10 +100,18 @@ export interface EditorStateInfo {
   isDirty: boolean;
 }
 
+export interface LayoutPatch {
+  sheetIndex: number;
+  columnWidths?: Record<number, number | null>;
+  rowHeights?: Record<number, number | null>;
+}
+
+export type EditorPatch =
+  | { type: 'Cells'; data: { changes: SheetCellChange[] } }
+  | { type: 'Layout'; data: { patch: LayoutPatch } }
+  | { type: 'FullSnapshot'; data: { fileData: FileData } };
+
 export interface EditorMutationResponse {
-  kind: 'snapshot' | 'cellDelta';
-  fileData?: FileData;
   editorState: EditorStateInfo;
-  operation?: OperationResult | null;
-  cellChanges?: SheetCellChange[];
+  patches?: EditorPatch[];
 }

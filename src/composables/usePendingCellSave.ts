@@ -1,17 +1,10 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
+import { useDocumentUiStore, type PendingCellChange } from '@/stores/documentUi';
 import type { CellValue, EditorMutationResponse, FileData, SheetData } from '@/types';
 import { getCellKey } from '@/utils/cellKey';
 
 type CellPosition = { row: number; col: number };
-
-type PendingCellChange = {
-  sheetIndex: number;
-  row: number;
-  col: number;
-  value: string;
-  oldValue: CellValue;
-};
 
 type UsePendingCellSaveOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -82,10 +75,11 @@ export function usePendingCellSave({
   markPendingContentChange,
   clearPendingContentChange,
 }: UsePendingCellSaveOptions) {
+  const documentUiStore = useDocumentUiStore();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const pendingChanges = new Map<string, PendingCellChange>();
-  const inFlightChanges = new Map<string, PendingCellChange>();
-  const draftCellValues = reactive(new Map<string, string>());
+  const pendingChanges = documentUiStore.pendingCellChanges;
+  const inFlightChanges = documentUiStore.inFlightCellChanges;
+  const draftCellValues = documentUiStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
   let needsSaveAfterInFlight = false;
 

@@ -7,7 +7,7 @@ use tantivy::{Term, doc};
 
 use crate::state::editor_state::EditorState;
 use crate::state::search_index::{SearchIndexStamp, build_sheet_index};
-use crate::types::CellValue;
+use crate::types::{CellValue, EditorMutationResponse, EditorPatch};
 
 enum IndexJob {
     Rebuild {
@@ -23,67 +23,26 @@ enum IndexJob {
         new_text: String,
         state: Arc<RwLock<Option<EditorState>>>,
     },
-    AppendRow {
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        row_index: usize,
-        row_data: Vec<CellValue>,
-        state: Arc<RwLock<Option<EditorState>>>,
-    },
-    AppendColumn {
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        col_index: usize,
-        col_data: Vec<CellValue>,
-        state: Arc<RwLock<Option<EditorState>>>,
-    },
-    DeleteLastRow {
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        row_index: usize,
-        col_count: usize,
-        state: Arc<RwLock<Option<EditorState>>>,
-    },
-    DeleteLastColumn {
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        col_index: usize,
-        row_count: usize,
-        state: Arc<RwLock<Option<EditorState>>>,
-    },
 }
 
 impl IndexJob {
     fn sheet_index(&self) -> usize {
         match self {
-            IndexJob::Rebuild { sheet_index, .. }
-            | IndexJob::UpdateCell { sheet_index, .. }
-            | IndexJob::AppendRow { sheet_index, .. }
-            | IndexJob::AppendColumn { sheet_index, .. }
-            | IndexJob::DeleteLastRow { sheet_index, .. }
-            | IndexJob::DeleteLastColumn { sheet_index, .. } => *sheet_index,
+            IndexJob::Rebuild { sheet_index, .. } | IndexJob::UpdateCell { sheet_index, .. } => {
+                *sheet_index
+            }
         }
     }
 
     fn stamp(&self) -> SearchIndexStamp {
         match self {
-            IndexJob::Rebuild { stamp, .. }
-            | IndexJob::UpdateCell { stamp, .. }
-            | IndexJob::AppendRow { stamp, .. }
-            | IndexJob::AppendColumn { stamp, .. }
-            | IndexJob::DeleteLastRow { stamp, .. }
-            | IndexJob::DeleteLastColumn { stamp, .. } => *stamp,
+            IndexJob::Rebuild { stamp, .. } | IndexJob::UpdateCell { stamp, .. } => *stamp,
         }
     }
 
     fn state(&self) -> &Arc<RwLock<Option<EditorState>>> {
         match self {
-            IndexJob::Rebuild { state, .. }
-            | IndexJob::UpdateCell { state, .. }
-            | IndexJob::AppendRow { state, .. }
-            | IndexJob::AppendColumn { state, .. }
-            | IndexJob::DeleteLastRow { state, .. }
-            | IndexJob::DeleteLastColumn { state, .. } => state,
+            IndexJob::Rebuild { state, .. } | IndexJob::UpdateCell { state, .. } => state,
         }
     }
 }
@@ -244,72 +203,6 @@ fn run_incremental(
                     return false;
                 }
             }
-            IndexJob::AppendRow {
-                row_index,
-                row_data,
-                ..
-            } => {
-                for (col_idx, cell) in row_data.iter().enumerate() {
-                    let text = cell.to_display_string();
-                    if text.is_empty() {
-                        continue;
-                    }
-                    if let Err(error) = writer.add_document(doc!(
-                        handle.text_field => text,
-                        handle.row_field => *row_index as u64,
-                        handle.col_field => col_idx as u64,
-                        handle.cell_id_field => format!("{}:{}", row_index, col_idx),
-                    )) {
-                        eprintln!("incremental append row failed: {error:?}");
-                        return false;
-                    }
-                }
-            }
-            IndexJob::AppendColumn {
-                col_index,
-                col_data,
-                ..
-            } => {
-                for (row_idx, cell) in col_data.iter().enumerate() {
-                    let text = cell.to_display_string();
-                    if text.is_empty() {
-                        continue;
-                    }
-                    if let Err(error) = writer.add_document(doc!(
-                        handle.text_field => text,
-                        handle.row_field => row_idx as u64,
-                        handle.col_field => *col_index as u64,
-                        handle.cell_id_field => format!("{}:{}", row_idx, col_index),
-                    )) {
-                        eprintln!("incremental append column failed: {error:?}");
-                        return false;
-                    }
-                }
-            }
-            IndexJob::DeleteLastRow {
-                row_index,
-                col_count,
-                ..
-            } => {
-                for col in 0..*col_count {
-                    writer.delete_term(Term::from_field_text(
-                        handle.cell_id_field,
-                        &format!("{}:{}", row_index, col),
-                    ));
-                }
-            }
-            IndexJob::DeleteLastColumn {
-                col_index,
-                row_count,
-                ..
-            } => {
-                for row in 0..*row_count {
-                    writer.delete_term(Term::from_field_text(
-                        handle.cell_id_field,
-                        &format!("{}:{}", row, col_index),
-                    ));
-                }
-            }
             IndexJob::Rebuild { .. } => unreachable!("rebuild handled by dispatcher"),
         }
     }
@@ -364,96 +257,32 @@ pub fn spawn_update_cell_index(
     });
 }
 
-#[allow(dead_code)]
-pub fn spawn_append_row_index(
-    sheet_index: usize,
-    row_index: usize,
-    row_data: Vec<CellValue>,
+pub fn schedule_index_for_response(
+    response: &EditorMutationResponse,
     state: Arc<RwLock<Option<EditorState>>>,
 ) {
-    let stamp = match state.read() {
-        Ok(guard) => guard
-            .as_ref()
-            .map(|editor| editor.search_index_stamp())
-            .unwrap_or_default(),
-        Err(_) => SearchIndexStamp::default(),
-    };
-    let _ = index_queue().send(IndexJob::AppendRow {
-        sheet_index,
-        stamp,
-        row_index,
-        row_data,
-        state,
-    });
-}
+    let mut needs_rebuild = false;
+    for patch in &response.patches {
+        match patch {
+            EditorPatch::Cells { changes } => {
+                for change in changes {
+                    spawn_update_cell_index(
+                        change.sheet_index,
+                        change.row,
+                        change.col,
+                        &change.value,
+                        state.clone(),
+                    );
+                }
+            }
+            EditorPatch::FullSnapshot { .. } => needs_rebuild = true,
+            EditorPatch::Layout { .. } => {}
+        }
+    }
 
-#[allow(dead_code)]
-pub fn spawn_append_column_index(
-    sheet_index: usize,
-    col_index: usize,
-    col_data: Vec<CellValue>,
-    state: Arc<RwLock<Option<EditorState>>>,
-) {
-    let stamp = match state.read() {
-        Ok(guard) => guard
-            .as_ref()
-            .map(|editor| editor.search_index_stamp())
-            .unwrap_or_default(),
-        Err(_) => SearchIndexStamp::default(),
-    };
-    let _ = index_queue().send(IndexJob::AppendColumn {
-        sheet_index,
-        stamp,
-        col_index,
-        col_data,
-        state,
-    });
-}
-
-#[allow(dead_code)]
-pub fn spawn_delete_last_row_index(
-    sheet_index: usize,
-    row_index: usize,
-    col_count: usize,
-    state: Arc<RwLock<Option<EditorState>>>,
-) {
-    let stamp = match state.read() {
-        Ok(guard) => guard
-            .as_ref()
-            .map(|editor| editor.search_index_stamp())
-            .unwrap_or_default(),
-        Err(_) => SearchIndexStamp::default(),
-    };
-    let _ = index_queue().send(IndexJob::DeleteLastRow {
-        sheet_index,
-        stamp,
-        row_index,
-        col_count,
-        state,
-    });
-}
-
-#[allow(dead_code)]
-pub fn spawn_delete_last_column_index(
-    sheet_index: usize,
-    col_index: usize,
-    row_count: usize,
-    state: Arc<RwLock<Option<EditorState>>>,
-) {
-    let stamp = match state.read() {
-        Ok(guard) => guard
-            .as_ref()
-            .map(|editor| editor.search_index_stamp())
-            .unwrap_or_default(),
-        Err(_) => SearchIndexStamp::default(),
-    };
-    let _ = index_queue().send(IndexJob::DeleteLastColumn {
-        sheet_index,
-        stamp,
-        col_index,
-        row_count,
-        state,
-    });
+    if needs_rebuild {
+        spawn_rebuild_all_sheets_index(state);
+    }
 }
 
 #[cfg(test)]

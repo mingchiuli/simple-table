@@ -2,10 +2,12 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
 use crate::ops::Operation;
-use crate::ops::editor_ops::{cell_delta_mutation_response, snapshot_mutation_response};
-use crate::ops::index_ops::{spawn_rebuild_all_sheets_index, spawn_update_cell_index};
+use crate::ops::editor_ops::{
+    cell_delta_mutation_response, layout_mutation_response, snapshot_mutation_response,
+};
+use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
-use crate::types::{CellValue, EditorMutationResponse, SheetData};
+use crate::types::{CellValue, EditorMutationResponse, LayoutPatch, SheetData};
 
 /// 设置单元格值
 pub fn do_set_cell(
@@ -13,7 +15,7 @@ pub fn do_set_cell(
     sheet_index: usize,
     row: usize,
     col: usize,
-    old_value: CellValue,
+    _old_value: CellValue,
     new_value: CellValue,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
@@ -25,37 +27,36 @@ pub fn do_set_cell(
                     .sheets
                     .get(sheet_index)
                     .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-                if row >= sheet.rows.len() || sheet.rows.get(row).is_none_or(|r| col >= r.len()) {
-                    return Err(AppError::InvalidCellPosition { row, col });
-                }
+                let real_old = sheet
+                    .rows
+                    .get(row)
+                    .and_then(|row_data| row_data.get(col))
+                    .cloned()
+                    .unwrap_or(CellValue::Null);
                 let operation = Operation::SetCell {
                     sheet_index,
                     row,
                     col,
-                    old_value,
+                    old_value: real_old,
                     new_value,
                 };
                 let result = editor_state.execute(operation)?;
-                Ok(cell_delta_mutation_response(
-                    editor_state,
-                    result.operation,
-                    result.cell_changes,
-                ))
+                if let Some(operation) = result.operation {
+                    Ok(cell_delta_mutation_response(
+                        editor_state,
+                        operation,
+                        result.cell_changes,
+                    ))
+                } else {
+                    Ok(snapshot_mutation_response(editor_state, None))
+                }
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
     if let Ok(response) = &response {
-        for change in &response.cell_changes {
-            spawn_update_cell_index(
-                change.sheet_index,
-                change.row,
-                change.col,
-                &change.value,
-                state.clone(),
-            );
-        }
+        schedule_index_for_response(response, state);
     }
 
     response
@@ -86,17 +87,14 @@ pub fn do_add_row(
                 };
                 let result = editor_state.execute(operation)?;
                 editor_state.mark_search_index_stale();
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
+                Ok(snapshot_mutation_response(editor_state, result.operation))
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
-    if response.is_ok() {
-        spawn_rebuild_all_sheets_index(state);
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
     }
 
     response
@@ -135,17 +133,14 @@ pub fn do_delete_row(
                 };
                 let result = editor_state.execute(operation)?;
                 editor_state.mark_search_index_stale();
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
+                Ok(snapshot_mutation_response(editor_state, result.operation))
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
-    if response.is_ok() {
-        spawn_rebuild_all_sheets_index(state);
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
     }
 
     response
@@ -172,17 +167,14 @@ pub fn do_add_column(
                 };
                 let result = editor_state.execute(operation)?;
                 editor_state.mark_search_index_stale();
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
+                Ok(snapshot_mutation_response(editor_state, result.operation))
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
-    if response.is_ok() {
-        spawn_rebuild_all_sheets_index(state);
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
     }
 
     response
@@ -203,7 +195,7 @@ pub fn do_delete_column(
                     .sheets
                     .get(sheet_index)
                     .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-                let total_cols = sheet.rows.first().map(|r| r.len()).unwrap_or(0);
+                let total_cols = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
                 if col_index >= total_cols {
                     return Err(AppError::InvalidCellPosition {
                         row: 0,
@@ -228,17 +220,14 @@ pub fn do_delete_column(
                 };
                 let result = editor_state.execute(operation)?;
                 editor_state.mark_search_index_stale();
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
+                Ok(snapshot_mutation_response(editor_state, result.operation))
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
-    if response.is_ok() {
-        spawn_rebuild_all_sheets_index(state);
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
     }
 
     response
@@ -268,10 +257,10 @@ pub fn do_set_column_width(
                 old_width,
                 new_width: width,
             };
-            let result = editor_state.execute(operation)?;
-            Ok(snapshot_mutation_response(
+            let _result = editor_state.execute(operation)?;
+            Ok(layout_mutation_response(
                 editor_state,
-                Some(result.operation),
+                column_width_patch(sheet_index, col_index, width),
             ))
         }
         None => Err(AppError::NoFileLoaded),
@@ -302,13 +291,29 @@ pub fn do_set_row_height(
                 old_height,
                 new_height: height,
             };
-            let result = editor_state.execute(operation)?;
-            Ok(snapshot_mutation_response(
+            let _result = editor_state.execute(operation)?;
+            Ok(layout_mutation_response(
                 editor_state,
-                Some(result.operation),
+                row_height_patch(sheet_index, row_index, height),
             ))
         }
         None => Err(AppError::NoFileLoaded),
+    }
+}
+
+fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutPatch {
+    LayoutPatch {
+        sheet_index,
+        column_widths: [(col_index, width)].into_iter().collect(),
+        row_heights: Default::default(),
+    }
+}
+
+fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -> LayoutPatch {
+    LayoutPatch {
+        sheet_index,
+        column_widths: Default::default(),
+        row_heights: [(row_index, height)].into_iter().collect(),
     }
 }
 
@@ -328,17 +333,14 @@ pub fn do_add_sheet(
                 };
                 let result = editor_state.execute(operation)?;
                 editor_state.mark_search_index_stale();
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
+                Ok(snapshot_mutation_response(editor_state, result.operation))
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
-    if response.is_ok() {
-        spawn_rebuild_all_sheets_index(state);
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
     }
 
     response
@@ -366,17 +368,14 @@ pub fn do_delete_sheet(
                 };
                 let result = editor_state.execute(operation)?;
                 editor_state.mark_search_index_stale();
-                Ok(snapshot_mutation_response(
-                    editor_state,
-                    Some(result.operation),
-                ))
+                Ok(snapshot_mutation_response(editor_state, result.operation))
             }
             None => Err(AppError::NoFileLoaded),
         }
     };
 
-    if response.is_ok() {
-        spawn_rebuild_all_sheets_index(state);
+    if let Ok(response) = &response {
+        schedule_index_for_response(response, state);
     }
 
     response

@@ -44,7 +44,7 @@ npm run preview  # Preview production build
 
 ### Backend Structure (`src-tauri/src/`)
 - `commands/` - Tauri command handlers (common.rs, android.rs, ios.rs)
-- `ops/` - Business logic operations (cell_ops, editor_ops, index_ops, search_ops, history_ops)
+- `ops/` - Business logic operations (cell_ops, editor_ops, index_ops, search_ops)
 - `io/` - File I/O, codecs, platform adapters, and workbook patching
 - `recent/` - Recent files management (types.rs, store.rs, thumbnail.rs, ops.rs)
 - `utils.rs` - Utility functions

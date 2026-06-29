@@ -47,16 +47,4 @@ impl RecentFile {
             original_path: None,
         }
     }
-
-    #[allow(dead_code)]
-    pub fn with_storage_type(mut self, storage_type: StorageType) -> Self {
-        self.storage_type = storage_type;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_original_path(mut self, original_path: String) -> Self {
-        self.original_path = Some(original_path);
-        self
-    }
 }

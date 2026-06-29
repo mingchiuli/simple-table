@@ -5,6 +5,7 @@ import { useDocumentStatus } from '@/composables/useDocumentStatus';
 import { useFileActions } from '@/composables/useFileActions';
 import { cellToEditorString, usePendingCellSave } from '@/composables/usePendingCellSave';
 import { useFileDataStore } from '@/stores/fileData';
+import { useDocumentUiStore } from '@/stores/documentUi';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
@@ -12,24 +13,26 @@ import { SearchPanel } from '@/components/search';
 import * as api from '@/api';
 import { getCellKey } from '@/utils/cellKey';
 import { colToLetter } from '@/utils/excel';
-import type { CellValue, EditorMutationResponse, FileData, SearchResult } from '@/types';
+import type { EditorMutationResponse, SearchResult } from '@/types';
 const route = useRoute();
 const fileDataStore = useFileDataStore();
+const documentUiStore = useDocumentUiStore();
 const { isMobileOrTablet } = usePlatform();
 
 // ========== State refs (must be declared before composables use them) ==========
 const isLoading = ref(false);
 const isFileLoading = ref(false);
-const currentSheetIndex = ref(0);
-const selectedCell = ref<{ row: number; col: number } | null>(null);
-const cellEditorValue = ref<string>('');
-const autoScroll = ref(false);
-const searchResults = ref<SearchResult[]>([]);
-const searchQuery = ref('');
-const isSearching = ref(false);
-const sheetSelectedCells = ref<Map<number, { row: number; col: number }>>(new Map());
-const sheetColumnWidths = ref<Record<number, Record<number, number>>>({});
-const sheetRowHeights = ref<Record<number, Record<number, number>>>({});
+const {
+  currentSheetIndex,
+  selectedCell,
+  cellEditorValue,
+  autoScroll,
+  searchResults,
+  searchQuery,
+  isSearching,
+  sheetColumnWidths,
+  sheetRowHeights,
+} = storeToRefs(documentUiStore);
 
 // ========== Computed values ==========
 const fileData = computed(() => fileDataStore.data);
@@ -68,10 +71,11 @@ const {
 } = useDocumentStatus();
 
 function applyMutationResponse(response: EditorMutationResponse) {
-  const nextFileData = applyMutationFileData(response);
+  const nextFileData = fileDataStore.applyPatches(response.patches);
   if (!nextFileData) return;
 
   applyEditorState(response.editorState);
+  syncLayoutMapsFromPatches(response);
 
   if (currentSheetIndex.value >= nextFileData.sheets.length) {
     currentSheetIndex.value = Math.max(0, nextFileData.sheets.length - 1);
@@ -93,57 +97,19 @@ function applyMutationResponse(response: EditorMutationResponse) {
   }
 }
 
-function applyMutationFileData(response: EditorMutationResponse): FileData | null {
-  if (response.kind === 'snapshot') {
-    if (!response.fileData) return fileDataStore.data;
-    const currentFileData = fileDataStore.data;
-    const nextFileData = {
-      ...response.fileData,
-      path: currentFileData?.path ?? response.fileData.path,
-      fileName: currentFileData?.fileName ?? response.fileData.fileName,
-    };
-    fileDataStore.setData(nextFileData);
-    return nextFileData;
-  }
-
-  const currentFileData = fileDataStore.data;
-  if (!currentFileData) return null;
-  const changes = response.cellChanges ?? [];
-  if (!changes.length) return currentFileData;
-
-  const nextFileData: FileData = {
-    ...currentFileData,
-    sheets: [...currentFileData.sheets],
-  };
-  const clonedRowsBySheet = new Map<number, CellValue[][]>();
-
-  for (const change of changes) {
-    const sheet = currentFileData.sheets[change.sheetIndex];
-    if (!sheet) continue;
-    let rows = clonedRowsBySheet.get(change.sheetIndex);
-    if (!rows) {
-      rows = [...sheet.rows];
-      clonedRowsBySheet.set(change.sheetIndex, rows);
-      nextFileData.sheets[change.sheetIndex] = {
-        ...sheet,
-        rows,
-      };
+function syncLayoutMapsFromPatches(response: EditorMutationResponse) {
+  for (const patch of response.patches ?? []) {
+    if (patch.type === 'FullSnapshot') {
+      documentUiStore.hydrateLayout(fileData.value);
+    } else if (patch.type === 'Layout') {
+      const { sheetIndex, columnWidths = {}, rowHeights = {} } = patch.data.patch;
+      for (const [key, value] of Object.entries(columnWidths)) {
+        documentUiStore.setColumnWidth(sheetIndex, Number(key), value ?? undefined);
+      }
+      for (const [key, value] of Object.entries(rowHeights)) {
+        documentUiStore.setRowHeight(sheetIndex, Number(key), value ?? undefined);
+      }
     }
-    ensureCellExists(rows, change.row, change.col);
-    rows[change.row][change.col] = change.value;
-  }
-
-  fileDataStore.setData(nextFileData);
-  return nextFileData;
-}
-
-function ensureCellExists(rows: CellValue[][], row: number, col: number) {
-  while (rows.length <= row) {
-    rows.push([]);
-  }
-  rows[row] = [...rows[row]];
-  while (rows[row].length <= col) {
-    rows[row].push(null);
   }
 }
 
@@ -167,18 +133,10 @@ const {
 });
 
 watch(() => fileDataStore.documentVersion, () => {
-  selectedCell.value = null;
-  cellEditorValue.value = '';
-  autoScroll.value = false;
-  searchResults.value = [];
-  searchQuery.value = '';
-  sheetSelectedCells.value = new Map();
-  sheetColumnWidths.value = {};
-  sheetRowHeights.value = {};
-  hydrateLayoutMapsFromFileData();
+  documentUiStore.resetForDocument(fileData.value);
 });
 
-watch(() => fileData.value, hydrateLayoutMapsFromFileData, { immediate: true });
+watch(() => fileData.value, (data) => documentUiStore.hydrateLayout(data), { immediate: true });
 
 const {
   loadFileFromPath,
@@ -273,8 +231,7 @@ async function handleAddSheet() {
   try {
     isLoading.value = true;
     applyMutationResponse(await api.addSheet());
-    selectedCell.value = null;
-    cellEditorValue.value = '';
+    documentUiStore.clearSelection();
     currentSheetIndex.value = newSheetIndex;
   } catch (error) {
     ElMessage.error(`Failed to add sheet: ${error}`);
@@ -305,21 +262,9 @@ async function handleDeleteSheet() {
 }
 
 function handleSheetChange(index: number) {
-  if (selectedCell.value !== null) {
-    sheetSelectedCells.value.set(currentSheetIndex.value, selectedCell.value);
-  }
-
+  documentUiStore.rememberCurrentSheetSelection();
   cellEditorValue.value = '';
-  currentSheetIndex.value = index;
-
-  const savedCell = sheetSelectedCells.value.get(index);
-  if (savedCell) {
-    selectedCell.value = savedCell;
-    cellEditorValue.value = getEditorValue(index, savedCell.row, savedCell.col);
-    autoScroll.value = true;
-  } else {
-    selectedCell.value = null;
-  }
+  documentUiStore.restoreSheetSelection(index, (cell) => getEditorValue(index, cell.row, cell.col));
 }
 
 // ========== Undo/Redo ==========
@@ -378,19 +323,16 @@ function handleSearchResultClick(result: SearchResult) {
   if (result.sheetIndex !== currentSheetIndex.value) {
     currentSheetIndex.value = result.sheetIndex;
   }
-  autoScroll.value = true;
-  selectedCell.value = { row: result.row, col: result.col };
+  documentUiStore.selectCell(result.row, result.col, true);
   cellEditorValue.value = getEditorValue(result.sheetIndex, result.row, result.col);
 }
 
 function handleClearSearch() {
-  searchResults.value = [];
-  searchQuery.value = '';
+  documentUiStore.clearSearch();
 }
 
 function handleSelectCell(row: number, col: number) {
-  autoScroll.value = false;
-  selectedCell.value = { row, col };
+  documentUiStore.selectCell(row, col, false);
 }
 
 // ========== Column resize ==========
@@ -401,10 +343,10 @@ async function handleColumnResize(colIndex: number, width: number) {
   try {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
-    setLocalColumnWidth(sheetIndex, colIndex, width);
+    documentUiStore.setColumnWidth(sheetIndex, colIndex, width);
     applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
   } catch (error) {
-    setLocalColumnWidth(sheetIndex, colIndex, oldWidth);
+    documentUiStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
     ElMessage.error(`Failed to resize column: ${error}`);
   } finally {
     isLoading.value = false;
@@ -418,70 +360,14 @@ async function handleRowResize(rowIndex: number, height: number) {
   try {
     isLoading.value = true;
     if (!(await flushPendingCellChanges())) return;
-    setLocalRowHeight(sheetIndex, rowIndex, height);
+    documentUiStore.setRowHeight(sheetIndex, rowIndex, height);
     applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
   } catch (error) {
-    setLocalRowHeight(sheetIndex, rowIndex, oldHeight);
+    documentUiStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
     ElMessage.error(`Failed to resize row: ${error}`);
   } finally {
     isLoading.value = false;
   }
-}
-
-function setLocalColumnWidth(sheetIndex: number, colIndex: number, width: number | undefined) {
-  const sheetWidths = { ...(sheetColumnWidths.value[sheetIndex] ?? {}) };
-  if (width === undefined) {
-    delete sheetWidths[colIndex];
-  } else {
-    sheetWidths[colIndex] = width;
-  }
-  const next = { ...sheetColumnWidths.value };
-  if (Object.keys(sheetWidths).length) {
-    next[sheetIndex] = sheetWidths;
-  } else {
-    delete next[sheetIndex];
-  }
-  sheetColumnWidths.value = {
-    ...next,
-  };
-}
-
-function setLocalRowHeight(sheetIndex: number, rowIndex: number, height: number | undefined) {
-  const sheetHeights = { ...(sheetRowHeights.value[sheetIndex] ?? {}) };
-  if (height === undefined) {
-    delete sheetHeights[rowIndex];
-  } else {
-    sheetHeights[rowIndex] = height;
-  }
-  const next = { ...sheetRowHeights.value };
-  if (Object.keys(sheetHeights).length) {
-    next[sheetIndex] = sheetHeights;
-  } else {
-    delete next[sheetIndex];
-  }
-  sheetRowHeights.value = {
-    ...next,
-  };
-}
-
-function hydrateLayoutMapsFromFileData() {
-  const data = fileData.value;
-  if (!data) {
-    sheetColumnWidths.value = {};
-    sheetRowHeights.value = {};
-    return;
-  }
-
-  sheetColumnWidths.value = Object.fromEntries(
-    data.sheets
-      .map((sheet, index) => [index, sheet.columnWidths ?? {}] as const)
-      .filter(([, widths]) => Object.keys(widths).length > 0)
-  );
-  sheetRowHeights.value = Object.fromEntries(
-    data.sheets
-      .map((sheet, index) => [index, sheet.rowHeights ?? {}] as const)
-      .filter(([, heights]) => Object.keys(heights).length > 0)
-  );
 }
 
 // ========== Lifecycle ==========

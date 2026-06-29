@@ -52,7 +52,7 @@ Frontend source lives in `src/`:
 Rust backend source lives in `src-tauri/src/`:
 
 - `commands/` - Tauri command entry points.
-- `ops/` - Editor operations, undo/redo, search, sorting, and indexing.
+- `ops/` - Editor operations, undo/redo, search, and indexing.
 - `io/` - File readers/writers and platform I/O.
 - `state/` - Global editor state, content hash dirty tracking, and state info.
 - `types/` - Rust data structures serialized to/from the frontend.
@@ -81,7 +81,7 @@ Column and row resizing are persisted document edits and should participate in `
 
 - Open/new file initializes Rust `EditorState`.
 - Content operations go through Rust operations where possible.
-- Cell editing uses a frontend debounce layer; pending edits must be flushed before save, undo/redo, sort, search, sheet changes that depend on committed data, or navigation.
+- Cell editing uses a frontend debounce layer; pending edits must be flushed before save, undo/redo, search, sheet changes that depend on committed data, or navigation.
 - After `saveFile(...)` succeeds, call `markFileSaved()` through document status to update Rust saved hash.
 - Do not manually set unsaved UI state in random components. Refresh editor state via the document status composable.
 

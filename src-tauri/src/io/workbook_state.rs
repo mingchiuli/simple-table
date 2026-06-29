@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use crate::error::AppError;
 use crate::io::codec::reader::read_worksheet;
 use crate::io::codec::writer::{
-    px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
+    coordinate, px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
 };
 use crate::ops::Operation;
 use crate::types::{FileData, OperationResult, SheetCellChange, SheetData};
@@ -47,6 +49,7 @@ pub fn patch_after_operation(
                 if let Some(height) = row_height {
                     patch_row_height(worksheet, *row_index, Some(*height));
                 }
+                sync_merge_ranges(worksheet, file_data, *sheet_index);
             }
             adjust_workbook_formulas(
                 workbook,
@@ -67,6 +70,7 @@ pub fn patch_after_operation(
             let sheet_name = sheet_name(workbook, *sheet_index)?;
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.remove_row(*row_index as u32 + 1, 1);
+                sync_merge_ranges(worksheet, file_data, *sheet_index);
             }
             adjust_workbook_formulas(
                 workbook,
@@ -104,6 +108,7 @@ pub fn patch_after_operation(
                 if let Some(width) = column_width {
                     patch_column_width(worksheet, actual_col_index, Some(*width));
                 }
+                sync_merge_ranges(worksheet, file_data, *sheet_index);
             }
             adjust_workbook_formulas(
                 workbook,
@@ -124,6 +129,7 @@ pub fn patch_after_operation(
             let sheet_name = sheet_name(workbook, *sheet_index)?;
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.remove_column_by_index(*col_index as u32 + 1, 1);
+                sync_merge_ranges(worksheet, file_data, *sheet_index);
             }
             adjust_workbook_formulas(
                 workbook,
@@ -188,6 +194,49 @@ pub fn patch_formula_changes(
     patch_cell_changes(workbook, file_data, cell_changes)
 }
 
+pub fn patch_layout_dimensions(
+    workbook: &mut Workbook,
+    sheet_index: usize,
+    column_widths: &HashMap<usize, Option<u32>>,
+    row_heights: &HashMap<usize, Option<u32>>,
+) -> Result<(), AppError> {
+    if let Some(worksheet) = sheet_mut(workbook, sheet_index)? {
+        for (col_index, width) in column_widths {
+            patch_column_width(worksheet, *col_index, *width);
+        }
+        for (row_index, height) in row_heights {
+            patch_row_height(worksheet, *row_index, *height);
+        }
+    }
+    Ok(())
+}
+
+pub fn patch_cell_shapes(
+    workbook: &mut Workbook,
+    sheet_shapes: &[(usize, Vec<usize>)],
+) -> Result<(), AppError> {
+    for (sheet_index, row_lengths) in sheet_shapes {
+        let Some(worksheet) = sheet_mut(workbook, *sheet_index)? else {
+            continue;
+        };
+        let (highest_col, highest_row) = worksheet.highest_column_and_row();
+        let target_rows = row_lengths.len() as u32;
+
+        for row in 1..=highest_row {
+            let target_width = row
+                .checked_sub(1)
+                .and_then(|row_index| row_lengths.get(row_index as usize).copied())
+                .unwrap_or(0) as u32;
+            for col in 1..=highest_col {
+                if row > target_rows || col > target_width {
+                    worksheet.remove_cell((col, row));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn patch_cell_changes(
     workbook: &mut Workbook,
     file_data: &mut FileData,
@@ -225,6 +274,21 @@ fn patch_column_cells(
     }
 }
 
+fn sync_merge_ranges(worksheet: &mut Worksheet, file_data: &FileData, sheet_index: usize) {
+    worksheet.merge_cells_mut().clear();
+    let Some(sheet) = file_data.sheets.get(sheet_index) else {
+        return;
+    };
+    for merge in &sheet.merges {
+        let range = format!(
+            "{}:{}",
+            coordinate(merge.start_col as u32 + 1, merge.start_row + 1),
+            coordinate(merge.end_col as u32 + 1, merge.end_row + 1)
+        );
+        worksheet.add_merge_cells(range);
+    }
+}
+
 fn adjust_workbook_formulas(
     workbook: &mut Workbook,
     target_sheet_name: &str,
@@ -258,6 +322,10 @@ fn adjust_formula_references(
     current_sheet_name: &str,
     shift: StructureShift,
 ) -> String {
+    if formualizer_parse::parser::parse(formula).is_err() {
+        return formula.to_string();
+    }
+
     let mut adjusted = String::with_capacity(formula.len());
     let bytes = formula.as_bytes();
     let mut segment_start = 0;
@@ -757,6 +825,22 @@ mod tests {
                 },
             ),
             r#""Inputs!A1"&Inputs!A2"#
+        );
+    }
+
+    #[test]
+    fn leaves_unparseable_formulas_unchanged() {
+        assert_eq!(
+            adjust_formula_references(
+                r#"SOME_UNSUPPORTED_FUNC("Inputs!A1", )"#,
+                "Inputs",
+                "Other",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            ),
+            r#"SOME_UNSUPPORTED_FUNC("Inputs!A1", )"#
         );
     }
 
