@@ -53,6 +53,13 @@ pub struct SearchWriterHandle {
     pub cell_id_field: Field,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchCellText {
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
+}
+
 static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub struct SearchIndexStore {
@@ -248,7 +255,23 @@ impl SearchMatcher {
     }
 }
 
-pub fn build_sheet_index(rows: &[Vec<CellValue>]) -> Option<SearchSheetIndex> {
+pub fn collect_sheet_search_text(rows: &[Vec<CellValue>]) -> Vec<SearchCellText> {
+    rows.iter()
+        .enumerate()
+        .flat_map(|(row_idx, row)| {
+            row.iter().enumerate().filter_map(move |(col_idx, cell)| {
+                let text = cell.to_display_string();
+                (!text.is_empty()).then_some(SearchCellText {
+                    row: row_idx,
+                    col: col_idx,
+                    text,
+                })
+            })
+        })
+        .collect()
+}
+
+pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
     let (index, schema, fields) = match create_tantivy_index() {
         Ok(index) => index,
         Err(error) => {
@@ -265,19 +288,14 @@ pub fn build_sheet_index(rows: &[Vec<CellValue>]) -> Option<SearchSheetIndex> {
         }
     };
 
-    for (row_idx, row) in rows.iter().enumerate() {
-        for (col_idx, cell) in row.iter().enumerate() {
-            let text = cell.to_display_string();
-            if !text.is_empty()
-                && let Err(error) = writer.add_document(doc!(
-                    fields.text => text,
-                    fields.row => row_idx as u64,
-                    fields.col => col_idx as u64,
-                    fields.cell_id => format!("{}:{}", row_idx, col_idx),
-                ))
-            {
-                eprintln!("Failed to add document: {error:?}");
-            }
+    for cell in cells {
+        if let Err(error) = writer.add_document(doc!(
+            fields.text => cell.text.clone(),
+            fields.row => cell.row as u64,
+            fields.col => cell.col as u64,
+            fields.cell_id => format!("{}:{}", cell.row, cell.col),
+        )) {
+            eprintln!("Failed to add document: {error:?}");
         }
     }
 
@@ -413,10 +431,15 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Cell
 mod tests {
     use super::*;
 
+    fn index_rows(rows: &[Vec<CellValue>]) -> SearchSheetIndex {
+        let cells = collect_sheet_search_text(rows);
+        build_sheet_index(&cells).expect("index")
+    }
+
     #[test]
     fn stale_indexes_are_not_used_until_matching_replacement_installs() {
         let rows = vec![vec![CellValue::String("indexed text".to_string())]];
-        let index = build_sheet_index(&rows).expect("index");
+        let index = index_rows(&rows);
         let mut store = SearchIndexStore::default();
         let document_id = 42;
         let original_stamp = store.stamp(document_id);
@@ -430,11 +453,11 @@ mod tests {
         let stale_stamp = store.mark_stale(document_id);
         assert_eq!(store.search_sheet(0, "indexed", 10), None);
 
-        let stale_index = build_sheet_index(&rows).expect("stale index");
+        let stale_index = index_rows(&rows);
         store.install_sheet_index(document_id, 0, original_stamp, Some(stale_index));
         assert_eq!(store.search_sheet(0, "indexed", 10), None);
 
-        let replacement_index = build_sheet_index(&rows).expect("replacement index");
+        let replacement_index = index_rows(&rows);
         store.install_sheet_index(document_id, 0, stale_stamp, Some(replacement_index));
         assert_eq!(
             store.search_sheet(0, "indexed", 10),
@@ -445,7 +468,7 @@ mod tests {
     #[test]
     fn sheet_stale_state_returns_no_index_until_marked_fresh() {
         let rows = vec![vec![CellValue::String("old indexed text".to_string())]];
-        let index = build_sheet_index(&rows).expect("index");
+        let index = index_rows(&rows);
         let mut store = SearchIndexStore::default();
         let document_id = 7;
         let stamp = store.stamp(document_id);

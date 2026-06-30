@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
 
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
+const MAX_HISTORY_ENTRIES: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
@@ -201,7 +202,7 @@ impl EditorState {
         let after = self.document.capture_memento_side(&operation);
         let memento = SpreadsheetDocument::create_memento(before, after);
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
-        self.history.push(HistoryEntry { memento });
+        self.push_history(HistoryEntry { memento });
         self.redo_stack.clear();
         self.bump_revision();
         if should_mark_search_stale {
@@ -241,7 +242,7 @@ impl EditorState {
         if let Some(entry) = self.redo_stack.pop() {
             self.document
                 .restore_memento(&entry.memento, MementoSide::After)?;
-            self.history.push(entry);
+            self.push_history(entry);
             self.bump_revision();
             self.mark_search_index_stale();
             self.update_flags();
@@ -266,6 +267,13 @@ impl EditorState {
 
     fn bump_revision(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn push_history(&mut self, entry: HistoryEntry) {
+        self.history.push(entry);
+        if self.history.len() > MAX_HISTORY_ENTRIES {
+            self.history.remove(0);
+        }
     }
 }
 
@@ -335,7 +343,7 @@ mod tests {
                 sheet_index: 0,
                 row: 0,
                 col: 0,
-                new_value: CellValue::Number(Value::from(42)),
+                text: "42".to_string(),
             })
             .expect("set cell");
 
@@ -793,7 +801,7 @@ mod tests {
                 sheet_index: 0,
                 row: 3,
                 col: 4,
-                new_value: CellValue::String("E4".to_string()),
+                text: "E4".to_string(),
             })
             .expect("set sparse cell");
 
@@ -837,7 +845,7 @@ mod tests {
                 sheet_index: 0,
                 row: 3,
                 col: 4,
-                new_value: CellValue::String("E4".to_string()),
+                text: "E4".to_string(),
             })
             .expect("set sparse cell");
         state.undo().expect("undo").expect("undo result");
@@ -884,7 +892,7 @@ mod tests {
                 sheet_index: 0,
                 row: 0,
                 col: 0,
-                new_value: CellValue::String("changed".to_string()),
+                text: "changed".to_string(),
             })
             .expect("set cell");
         state.undo().expect("undo").expect("undo result");
@@ -978,7 +986,7 @@ mod tests {
                 sheet_index: 0,
                 row: 0,
                 col: 1,
-                new_value: CellValue::String("xlsx".to_string()),
+                text: "xlsx".to_string(),
             })
             .expect("edit csv projection");
 
@@ -1020,13 +1028,13 @@ mod tests {
                         sheet_index: 0,
                         row: 0,
                         col: 0,
-                        new_value: CellValue::String("x".to_string()),
+                        text: "x".to_string(),
                     },
                     crate::types::SetCellRequest {
                         sheet_index: 0,
                         row: 0,
                         col: 1,
-                        new_value: CellValue::String("y".to_string()),
+                        text: "y".to_string(),
                     },
                 ],
             })
@@ -1088,13 +1096,13 @@ mod tests {
                         sheet_index: 0,
                         row: 0,
                         col: 1,
-                        new_value: CellValue::formula("=SUM(", CellValue::Null),
+                        text: "=SUM(".to_string(),
                     },
                     crate::types::SetCellRequest {
                         sheet_index: 0,
                         row: 0,
                         col: 0,
-                        new_value: CellValue::Number(Value::from(10)),
+                        text: "10".to_string(),
                     },
                 ],
             })
@@ -1120,12 +1128,86 @@ mod tests {
                 sheet_index: 0,
                 row: 0,
                 col: 0,
-                new_value: CellValue::Number(Value::from(20)),
+                text: "20".to_string(),
             })
             .expect("dependency edit");
         assert_eq!(
             state.file_data().sheets[0].rows[0][2].to_display_string(),
             "22.0"
         );
+    }
+
+    #[test]
+    fn delete_sheet_invalidates_external_formula_references() {
+        let mut source = umya_spreadsheet::new_file();
+        source.new_sheet("Calc").expect("calc sheet");
+        {
+            let inputs = source.sheet_mut(0).expect("inputs");
+            inputs.set_name("Inputs");
+            inputs.cell_mut("A1").set_value_number(1);
+        }
+        {
+            let calc = source.sheet_mut(1).expect("calc");
+            calc.cell_mut("A1").set_formula("Inputs!A1+1");
+            calc.cell_mut("A1").set_formula_result_number(2.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "delete-sheet-ref.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::DeleteSheet { sheet_index: 0 })
+            .expect("delete referenced sheet");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("delete-sheet-ref.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let formula = saved
+            .sheet(0)
+            .expect("calc")
+            .cell("A1")
+            .expect("A1")
+            .formula()
+            .to_string();
+        assert!(formula.contains("#REF!"), "formula was {formula}");
+    }
+
+    #[test]
+    fn history_is_bounded() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "history.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::Null]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        for index in 0..105 {
+            state
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: index.to_string(),
+                })
+                .expect("edit");
+        }
+
+        assert_eq!(state.history.len(), MAX_HISTORY_ENTRIES);
+        assert!(state.can_undo);
     }
 }

@@ -6,6 +6,7 @@ import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from '@/com
 import { useGridGeometry } from '@/table-geometry/useGridGeometry';
 import { useGridResize } from '@/table-geometry/useGridResize';
 import { useCellEditing } from '@/table-geometry/useCellEditing';
+import { useGridViewport } from '@/table-geometry/useGridViewport';
 
 const { isTouchDevice } = usePlatform();
 
@@ -40,11 +41,15 @@ const emit = defineEmits<{
   (e: 'row-resize', rowIndex: number, height: number): void;
 }>();
 
-const containerRef = ref<HTMLElement | null>(null);
-const scrollViewportRef = ref<HTMLElement | null>(null);
-const tableSize = ref({ width: 800, height: 600 });
-const scrollLeft = ref(0);
-const scrollTop = ref(0);
+const {
+  tableSize,
+  scrollLeft,
+  scrollTop,
+  setContainerRef,
+  setScrollViewportRef,
+  handleViewportScroll,
+  scrollCellIntoView,
+} = useGridViewport();
 
 const mergeRanges = computed(() => props.merges ?? []);
 const {
@@ -103,13 +108,6 @@ const {
   emitCancel: (rowIndex, colIndex) => emit('cell-edit-cancel', rowIndex, colIndex),
 });
 
-function handleViewportScroll() {
-  const viewport = scrollViewportRef.value;
-  if (!viewport) return;
-  scrollLeft.value = viewport.scrollLeft;
-  scrollTop.value = viewport.scrollTop;
-}
-
 const {
   resizingColumn,
   resizingRow,
@@ -154,36 +152,15 @@ watch(() => props.selectedCell, (newCell) => {
   const newKey = getKey(newCell.row, newCell.col);
   syncSelectedCell(newKey);
 
-  if (props.autoScroll && scrollViewportRef.value) {
-    const targetTop = getRowOffset(newCell.row) - viewportHeight.value / 2 + getRowHeight(newCell.row) / 2;
-    const targetLeft = getDataColumnOffset(newCell.col) - viewportWidth.value / 2 + getColumnWidth(newCell.col) / 2;
-    scrollViewportRef.value.scrollTo({
-      top: Math.max(0, targetTop),
-      left: Math.max(0, targetLeft),
-    });
-  }
+  scrollCellIntoView(newCell, props.autoScroll, {
+    getRowOffset,
+    getColumnOffset: getDataColumnOffset,
+    getRowHeight,
+    getColumnWidth,
+    viewportWidth: viewportWidth.value,
+    viewportHeight: viewportHeight.value,
+  });
 }, { deep: true });
-
-let resizeObserver: ResizeObserver | null = null;
-
-onMounted(() => {
-  if (!containerRef.value) return;
-
-  const updateSize = () => {
-    tableSize.value = {
-      width: containerRef.value!.clientWidth,
-      height: containerRef.value!.clientHeight,
-    };
-  };
-
-  updateSize();
-  resizeObserver = new ResizeObserver(updateSize);
-  resizeObserver.observe(containerRef.value);
-});
-
-onUnmounted(() => {
-  resizeObserver?.disconnect();
-});
 
 function getCellValue(cell: CellValue | undefined): string {
   return cellToEditorString(cell);
@@ -250,7 +227,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
 
 <template>
   <div
-    ref="containerRef"
+    :ref="setContainerRef"
     class="table-container"
     :style="{
       '--row-header-width': `${ROW_HEADER_WIDTH}px`,
@@ -268,7 +245,7 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
       @delete-column="handleDeleteColumn"
     />
 
-    <div ref="scrollViewportRef" class="data-viewport" @scroll="handleViewportScroll">
+    <div :ref="setScrollViewportRef" class="data-viewport" @scroll="handleViewportScroll">
       <div
         class="data-scroll-content"
         :style="{

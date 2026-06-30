@@ -41,7 +41,7 @@ export interface SetCellRequest {
   sheetIndex: number;
   row: number;
   col: number;
-  newValue: CellValue;
+  text: string;
 }
 
 export interface SearchResult {

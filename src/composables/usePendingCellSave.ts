@@ -38,33 +38,6 @@ export function isFormulaCell(value: CellValue | undefined): value is Extract<Ce
     && value.type === 'formula';
 }
 
-function normalizeFormula(value: string): string {
-  return value.startsWith('=') ? value : `=${value}`;
-}
-
-export function parseCellValue(value: string): CellValue {
-  if (value === '') return null;
-  if (value.startsWith('=')) {
-    return {
-      type: 'formula',
-      formula: normalizeFormula(value),
-      cachedValue: null,
-    };
-  }
-  if (/^0\d/.test(value)) return value;
-  if (/^-?\d+$/.test(value)) {
-    const num = Number(value);
-    return Number.isSafeInteger(num) ? num : value;
-  }
-  if (/^-?\d+\.\d+$/.test(value)) {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : value;
-  }
-  if (value.toLowerCase() === 'true') return true;
-  if (value.toLowerCase() === 'false') return false;
-  return value;
-}
-
 export function usePendingCellSave({
   fileData,
   currentSheet,
@@ -140,11 +113,6 @@ export function usePendingCellSave({
     return fileData.value?.sheets[sheetIndex]?.rows[row]?.[col] ?? null;
   }
 
-  function visibleBaseCellValue(sheetIndex: number, row: number, col: number): CellValue {
-    const { active } = saveState(sheetIndex, row, col);
-    return active ? parseCellValue(active.value) : committedCellValue(sheetIndex, row, col);
-  }
-
   function visibleBaseEditorString(sheetIndex: number, row: number, col: number): string {
     const { active } = saveState(sheetIndex, row, col);
     return active?.value ?? cellToEditorString(committedCellValue(sheetIndex, row, col));
@@ -158,7 +126,6 @@ export function usePendingCellSave({
   function updateDraftCell(sheetIndex: number, row: number, col: number, value: string) {
     const { key, active: activeSave, queued } = saveState(sheetIndex, row, col);
     const committedValue = committedCellValue(sheetIndex, row, col);
-    const visibleBaseValue = activeSave ? parseCellValue(activeSave.value) : committedValue;
 
     if (activeSave && value === activeSave.value) {
       draftCellValues.set(key, value);
@@ -169,7 +136,7 @@ export function usePendingCellSave({
 
     if (activeSave && value === cellToEditorString(activeSave.oldValue)) {
       draftCellValues.set(key, value);
-      queueCellSave(sheetIndex, row, col, value, visibleBaseValue);
+      queueCellSave(sheetIndex, row, col, value, committedValue);
       markPendingContentChange();
       schedulePendingSave();
       return;
@@ -187,7 +154,7 @@ export function usePendingCellSave({
     }
 
     draftCellValues.set(key, value);
-    queueCellSave(sheetIndex, row, col, value, visibleBaseValue);
+    queueCellSave(sheetIndex, row, col, value, committedValue);
     markPendingContentChange();
     schedulePendingSave();
   }
@@ -241,7 +208,7 @@ export function usePendingCellSave({
         sheetIndex: change.sheetIndex,
         row: change.row,
         col: change.col,
-        newValue: parseCellValue(change.value),
+        text: change.value,
       };
     });
 
@@ -372,7 +339,7 @@ export function usePendingCellSave({
     if (activeSave) {
       const revertValue = cellToEditorString(activeSave.oldValue);
       draftCellValues.set(key, revertValue);
-      queueCellSave(sheetIndex, row, col, revertValue, visibleBaseCellValue(sheetIndex, row, col));
+      queueCellSave(sheetIndex, row, col, revertValue, committedCellValue(sheetIndex, row, col));
       markPendingContentChange();
       schedulePendingSave();
     }

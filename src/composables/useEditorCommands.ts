@@ -1,8 +1,8 @@
 import type { ComputedRef, Ref } from "vue";
 import * as api from "@/api";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useSearchSessionStore } from "@/stores/searchSession";
-import { useSheetLayoutStore } from "@/stores/sheetLayout";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
 
 type UseEditorCommandsOptions = {
@@ -27,8 +27,8 @@ export function useEditorCommands({
   applyMutationResponse,
 }: UseEditorCommandsOptions) {
   const documentSessionStore = useDocumentSessionStore();
+  const documentStatusStore = useDocumentStatusStore();
   const searchSessionStore = useSearchSessionStore();
-  const sheetLayoutStore = useSheetLayoutStore();
 
   async function runEditorCommand(
     action: () => Promise<EditorMutationResponse>,
@@ -113,12 +113,12 @@ export function useEditorCommands({
   }
 
   async function handleUndo() {
-    if (!documentSessionStore.canUndo) return;
+    if (!documentStatusStore.canUndo) return;
     await runEditorCommand(() => api.undo(), "Failed to undo");
   }
 
   async function handleRedo() {
-    if (!documentSessionStore.canRedo) return;
+    if (!documentStatusStore.canRedo) return;
     await runEditorCommand(() => api.redo(), "Failed to redo");
   }
 
@@ -161,14 +161,11 @@ export function useEditorCommands({
   async function handleColumnResize(colIndex: number, width: number) {
     if (!fileData.value) return;
     const sheetIndex = currentSheetIndex.value;
-    const oldWidth = sheetLayoutStore.sheetColumnWidths[sheetIndex]?.[colIndex];
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      sheetLayoutStore.setColumnWidth(sheetIndex, colIndex, width);
       applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
     } catch (error) {
-      sheetLayoutStore.setColumnWidth(sheetIndex, colIndex, oldWidth);
       ElMessage.error(`Failed to resize column: ${error}`);
     } finally {
       isLoading.value = false;
@@ -178,14 +175,11 @@ export function useEditorCommands({
   async function handleRowResize(rowIndex: number, height: number) {
     if (!fileData.value) return;
     const sheetIndex = currentSheetIndex.value;
-    const oldHeight = sheetLayoutStore.sheetRowHeights[sheetIndex]?.[rowIndex];
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      sheetLayoutStore.setRowHeight(sheetIndex, rowIndex, height);
       applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
     } catch (error) {
-      sheetLayoutStore.setRowHeight(sheetIndex, rowIndex, oldHeight);
       ElMessage.error(`Failed to resize row: ${error}`);
     } finally {
       isLoading.value = false;

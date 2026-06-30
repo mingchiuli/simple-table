@@ -2,6 +2,7 @@ use crate::error::AppError;
 use crate::types::{
     AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData,
     MergeRange, RowChange, RowHeightChange, SetCellRequest, SheetCellChange, SheetData,
+    parse_cell_text,
 };
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +16,7 @@ pub enum EditorCommand {
         sheet_index: usize,
         row: usize,
         col: usize,
-        new_value: CellValue,
+        text: String,
     },
     SetCells {
         changes: Vec<SetCellRequest>,
@@ -123,7 +124,7 @@ impl EditorCommand {
                 sheet_index,
                 row,
                 col,
-                new_value,
+                text,
             } => {
                 require_sheet(file_data, sheet_index)?;
                 let old_value = file_data.sheets[sheet_index]
@@ -137,7 +138,7 @@ impl EditorCommand {
                     row,
                     col,
                     old_value,
-                    new_value,
+                    new_value: parse_cell_text(&text),
                 })
             }
             EditorCommand::SetCells { changes } => {
@@ -160,7 +161,7 @@ impl EditorCommand {
                         row: change.row,
                         col: change.col,
                         old_value,
-                        new_value: change.new_value,
+                        new_value: parse_cell_text(&change.text),
                     });
                 }
                 Ok(AppliedOperation::SetCells { changes: resolved })

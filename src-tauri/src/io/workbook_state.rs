@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::error::AppError;
-use crate::formula::reference_rewrite::{StructureShift, adjust_formula_references};
+use crate::formula::reference_rewrite::{
+    StructureShift, adjust_formula_references, invalidate_deleted_sheet_references,
+};
 use crate::io::codec::reader::read_worksheet;
 use crate::io::codec::writer::{
     coordinate, px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
@@ -46,24 +48,12 @@ pub fn patch_after_operation(
             row_height,
             ..
         } => {
-            let sheet_name = sheet_name(workbook, *sheet_index)?;
-            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
-                worksheet.insert_new_row(*row_index as u32 + 1, 1);
-                patch_row_cells(worksheet, *row_index, row_data);
-                if let Some(height) = row_height {
-                    patch_row_height(worksheet, *row_index, Some(*height));
-                }
-                sync_merge_ranges(worksheet, file_data, *sheet_index);
-            }
-            adjust_workbook_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::InsertRows {
-                    row_index: *row_index,
-                    count: 1,
-                },
-            );
-            refresh_projection(workbook, file_data);
+            WorkbookStructureEditor::new(workbook, file_data).insert_row(
+                *sheet_index,
+                *row_index,
+                row_data,
+                *row_height,
+            )?;
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
         AppliedOperation::DeleteRow {
@@ -71,20 +61,8 @@ pub fn patch_after_operation(
             row_index,
             ..
         } => {
-            let sheet_name = sheet_name(workbook, *sheet_index)?;
-            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
-                worksheet.remove_row(*row_index as u32 + 1, 1);
-                sync_merge_ranges(worksheet, file_data, *sheet_index);
-            }
-            adjust_workbook_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::DeleteRows {
-                    row_index: *row_index,
-                    count: 1,
-                },
-            );
-            refresh_projection(workbook, file_data);
+            WorkbookStructureEditor::new(workbook, file_data)
+                .delete_row(*sheet_index, *row_index)?;
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
         AppliedOperation::AddColumn {
@@ -98,24 +76,12 @@ pub fn patch_after_operation(
                 AppliedOperationResult::AddColumn { column, .. } => column.index,
                 _ => *col_index,
             };
-            let sheet_name = sheet_name(workbook, *sheet_index)?;
-            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
-                worksheet.insert_new_column_by_index(actual_col_index as u32 + 1, 1);
-                patch_column_cells(worksheet, actual_col_index, col_data);
-                if let Some(width) = column_width {
-                    patch_column_width(worksheet, actual_col_index, Some(*width));
-                }
-                sync_merge_ranges(worksheet, file_data, *sheet_index);
-            }
-            adjust_workbook_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::InsertColumns {
-                    col_index: actual_col_index,
-                    count: 1,
-                },
-            );
-            refresh_projection(workbook, file_data);
+            WorkbookStructureEditor::new(workbook, file_data).insert_column(
+                *sheet_index,
+                actual_col_index,
+                col_data,
+                *column_width,
+            )?;
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
         AppliedOperation::DeleteColumn {
@@ -123,20 +89,8 @@ pub fn patch_after_operation(
             col_index,
             ..
         } => {
-            let sheet_name = sheet_name(workbook, *sheet_index)?;
-            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
-                worksheet.remove_column_by_index(*col_index as u32 + 1, 1);
-                sync_merge_ranges(worksheet, file_data, *sheet_index);
-            }
-            adjust_workbook_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::DeleteColumns {
-                    col_index: *col_index,
-                    count: 1,
-                },
-            );
-            refresh_projection(workbook, file_data);
+            WorkbookStructureEditor::new(workbook, file_data)
+                .delete_column(*sheet_index, *col_index)?;
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
         AppliedOperation::SetColumnWidth {
@@ -173,6 +127,7 @@ pub fn patch_after_operation(
         }
         AppliedOperation::DeleteSheet { .. } => {
             if let AppliedOperationResult::DeleteSheet { sheet_index, .. } = result {
+                invalidate_sheet_references_before_delete(workbook, *sheet_index)?;
                 remove_sheet(workbook, *sheet_index)?;
                 refresh_projection(workbook, file_data);
                 patch_cell_changes(workbook, file_data, cell_changes)?;
@@ -181,6 +136,118 @@ pub fn patch_after_operation(
     }
 
     Ok(())
+}
+
+struct WorkbookStructureEditor<'a> {
+    workbook: &'a mut Workbook,
+    file_data: &'a mut FileData,
+}
+
+impl<'a> WorkbookStructureEditor<'a> {
+    fn new(workbook: &'a mut Workbook, file_data: &'a mut FileData) -> Self {
+        Self {
+            workbook,
+            file_data,
+        }
+    }
+
+    fn insert_row(
+        &mut self,
+        sheet_index: usize,
+        row_index: usize,
+        row_data: &[crate::types::CellValue],
+        row_height: Option<u32>,
+    ) -> Result<(), AppError> {
+        let sheet_name = sheet_name(self.workbook, sheet_index)?;
+        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
+            worksheet.insert_new_row(row_index as u32 + 1, 1);
+            patch_row_cells(worksheet, row_index, row_data);
+            if let Some(height) = row_height {
+                patch_row_height(worksheet, row_index, Some(height));
+            }
+            sync_merge_ranges(worksheet, self.file_data, sheet_index);
+        }
+        self.adjust_other_sheet_formulas(
+            &sheet_name,
+            StructureShift::InsertRows {
+                row_index,
+                count: 1,
+            },
+        );
+        refresh_projection(self.workbook, self.file_data);
+        Ok(())
+    }
+
+    fn delete_row(&mut self, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
+        let sheet_name = sheet_name(self.workbook, sheet_index)?;
+        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
+            worksheet.remove_row(row_index as u32 + 1, 1);
+            sync_merge_ranges(worksheet, self.file_data, sheet_index);
+        }
+        self.adjust_other_sheet_formulas(
+            &sheet_name,
+            StructureShift::DeleteRows {
+                row_index,
+                count: 1,
+            },
+        );
+        refresh_projection(self.workbook, self.file_data);
+        Ok(())
+    }
+
+    fn insert_column(
+        &mut self,
+        sheet_index: usize,
+        col_index: usize,
+        col_data: &[crate::types::CellValue],
+        column_width: Option<u32>,
+    ) -> Result<(), AppError> {
+        let sheet_name = sheet_name(self.workbook, sheet_index)?;
+        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
+            worksheet.insert_new_column_by_index(col_index as u32 + 1, 1);
+            patch_column_cells(worksheet, col_index, col_data);
+            if let Some(width) = column_width {
+                patch_column_width(worksheet, col_index, Some(width));
+            }
+            sync_merge_ranges(worksheet, self.file_data, sheet_index);
+        }
+        self.adjust_other_sheet_formulas(
+            &sheet_name,
+            StructureShift::InsertColumns {
+                col_index,
+                count: 1,
+            },
+        );
+        refresh_projection(self.workbook, self.file_data);
+        Ok(())
+    }
+
+    fn delete_column(&mut self, sheet_index: usize, col_index: usize) -> Result<(), AppError> {
+        let sheet_name = sheet_name(self.workbook, sheet_index)?;
+        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
+            worksheet.remove_column_by_index(col_index as u32 + 1, 1);
+            sync_merge_ranges(worksheet, self.file_data, sheet_index);
+        }
+        self.adjust_other_sheet_formulas(
+            &sheet_name,
+            StructureShift::DeleteColumns {
+                col_index,
+                count: 1,
+            },
+        );
+        refresh_projection(self.workbook, self.file_data);
+        Ok(())
+    }
+
+    fn adjust_other_sheet_formulas(&mut self, target_sheet_name: &str, shift: StructureShift) {
+        for worksheet in self.workbook.sheet_collection_mut() {
+            let current_sheet_name = worksheet.name().to_string();
+            if current_sheet_name == target_sheet_name {
+                continue;
+            }
+            adjust_worksheet_formulas(worksheet, target_sheet_name, &current_sheet_name, shift);
+        }
+    }
 }
 
 pub fn patch_formula_changes(
@@ -286,31 +353,49 @@ fn sync_merge_ranges(worksheet: &mut Worksheet, file_data: &FileData, sheet_inde
     }
 }
 
-fn adjust_workbook_formulas(
-    workbook: &mut Workbook,
+fn adjust_worksheet_formulas(
+    worksheet: &mut Worksheet,
     target_sheet_name: &str,
+    current_sheet_name: &str,
     shift: StructureShift,
 ) {
-    for worksheet in workbook.sheet_collection_mut() {
-        let current_sheet_name = worksheet.name().to_string();
-        if current_sheet_name == target_sheet_name {
+    for cell in worksheet.cells_mut() {
+        if !cell.is_formula() {
             continue;
         }
+        let adjusted =
+            adjust_formula_references(cell.formula(), target_sheet_name, current_sheet_name, shift);
+        if adjusted != cell.formula() {
+            cell.set_formula(adjusted);
+        }
+    }
+}
+
+fn invalidate_sheet_references_before_delete(
+    workbook: &mut Workbook,
+    sheet_index: usize,
+) -> Result<(), AppError> {
+    let deleted_sheet_name = sheet_name(workbook, sheet_index)?;
+    for (current_index, worksheet) in workbook.sheet_collection_mut().iter_mut().enumerate() {
+        if current_index == sheet_index {
+            continue;
+        }
+        let current_sheet_name = worksheet.name().to_string();
         for cell in worksheet.cells_mut() {
             if !cell.is_formula() {
                 continue;
             }
-            let adjusted = adjust_formula_references(
+            let adjusted = invalidate_deleted_sheet_references(
                 cell.formula(),
-                target_sheet_name,
+                &deleted_sheet_name,
                 &current_sheet_name,
-                shift,
             );
             if adjusted != cell.formula() {
                 cell.set_formula(adjusted);
             }
         }
     }
+    Ok(())
 }
 
 fn patch_cell(

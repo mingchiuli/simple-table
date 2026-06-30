@@ -110,6 +110,46 @@ pub fn normalize_formula_text(formula: String) -> String {
     }
 }
 
+pub fn parse_cell_text(text: &str) -> CellValue {
+    if text.is_empty() {
+        return CellValue::Null;
+    }
+    if text.starts_with('=') {
+        return CellValue::formula(text, CellValue::Null);
+    }
+    if has_leading_zero(text) {
+        return CellValue::String(text.to_string());
+    }
+    if let Ok(value) = text.parse::<i64>() {
+        if (JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&value) {
+            return CellValue::Number(Value::from(value));
+        }
+        return CellValue::String(text.to_string());
+    }
+    if let Ok(value) = text.parse::<f64>()
+        && value.is_finite()
+    {
+        return CellValue::Number(Value::from(value));
+    }
+    if text.eq_ignore_ascii_case("true") {
+        return CellValue::Boolean(true);
+    }
+    if text.eq_ignore_ascii_case("false") {
+        return CellValue::Boolean(false);
+    }
+    CellValue::String(text.to_string())
+}
+
+fn has_leading_zero(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let digits = if bytes.first() == Some(&b'-') || bytes.first() == Some(&b'+') {
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    digits.len() > 1 && digits[0] == b'0' && digits.iter().all(|b| b.is_ascii_digit())
+}
+
 impl<'de> Deserialize<'de> for CellValue {
     fn deserialize<D>(deserializer: D) -> Result<CellValue, D::Error>
     where
@@ -256,7 +296,7 @@ pub struct SetCellRequest {
     pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
-    pub new_value: CellValue,
+    pub text: String,
 }
 
 /// 行变化
@@ -446,4 +486,22 @@ pub struct EditorMutationResponse {
 pub enum FormulaStatus {
     Ready,
     Degraded { message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_user_cell_text_on_backend() {
+        assert_eq!(parse_cell_text(""), CellValue::Null);
+        assert_eq!(parse_cell_text("007"), CellValue::String("007".to_string()));
+        assert_eq!(parse_cell_text("42"), CellValue::Number(Value::from(42)));
+        assert_eq!(parse_cell_text("3.5"), CellValue::Number(Value::from(3.5)));
+        assert_eq!(parse_cell_text("true"), CellValue::Boolean(true));
+        assert_eq!(
+            parse_cell_text("=A1+1"),
+            CellValue::formula("=A1+1", CellValue::Null)
+        );
+    }
 }

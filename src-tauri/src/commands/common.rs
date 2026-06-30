@@ -5,9 +5,7 @@ use crate::io::platform::desktop;
 use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{get_state, state::EditorSessionInfo};
-use crate::types::{
-    CellValue, EditorMutationResponse, FileData, SearchResult, SearchScope, SetCellRequest,
-};
+use crate::types::{EditorMutationResponse, FileData, SearchResult, SearchScope, SetCellRequest};
 use tauri::AppHandle;
 
 // ==================== File Operations ====================
@@ -66,9 +64,9 @@ pub fn set_cell(
     sheet_index: usize,
     row: usize,
     col: usize,
-    new_value: CellValue,
+    text: String,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_set_cell(get_state(), sheet_index, row, col, new_value)
+    cell_ops::do_set_cell(get_state(), sheet_index, row, col, text)
 }
 
 #[tauri::command(rename_all = "camelCase")]

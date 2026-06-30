@@ -633,14 +633,17 @@ impl SpreadsheetDocument {
                 }
             }
             AppliedOperation::SetCells { changes } => {
-                let changed_cells = changes.iter().map(|change| FormulaCellRef {
-                    sheet_index: change.sheet_index,
-                    row: change.row,
-                    col: change.col,
-                });
+                let changed_cell_refs: Vec<FormulaCellRef> = changes
+                    .iter()
+                    .map(|change| FormulaCellRef {
+                        sheet_index: change.sheet_index,
+                        row: change.row,
+                        col: change.col,
+                    })
+                    .collect();
                 match self
                     .formula_runtime
-                    .sync_cells_and_recalculate(&mut self.projection, changed_cells)
+                    .sync_cells_and_recalculate(&mut self.projection, changed_cell_refs)
                 {
                     Ok(changes) => {
                         self.formula_status = FormulaStatus::Ready;
@@ -648,8 +651,19 @@ impl SpreadsheetDocument {
                     }
                     Err(error) => {
                         eprintln!("Formula recalculation failed: {error}");
+                        let error = error.to_string();
+                        let mut formula_errors = Vec::new();
+                        for change in changes {
+                            formula_errors.extend(self.formula_error_change(
+                                change.sheet_index,
+                                change.row,
+                                change.col,
+                                &change.new_value,
+                                error.clone(),
+                            ));
+                        }
                         self.rebuild_formula_runtime();
-                        Vec::new()
+                        formula_errors
                     }
                 }
             }

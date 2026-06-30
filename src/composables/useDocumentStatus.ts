@@ -1,19 +1,22 @@
 import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { useDocumentStatusStore } from '@/stores/documentStatus';
 import type { EditorSessionInfo, EditorStateInfo } from '@/types';
 
 export function useDocumentStatus() {
   const documentSessionStore = useDocumentSessionStore();
+  const documentStatusStore = useDocumentStatusStore();
   const {
     canUndo,
     canRedo,
     isContentDirty,
     hasPendingContentChange,
     hasUnsavedChanges,
-  } = storeToRefs(documentSessionStore);
+    formulaStatus,
+  } = storeToRefs(documentStatusStore);
 
   function applyEditorState(state: EditorStateInfo | null | undefined) {
-    documentSessionStore.applyEditorState(state);
+    documentStatusStore.applyEditorState(state);
   }
 
   function applyEditorSession(info: EditorSessionInfo | null | undefined) {
@@ -30,20 +33,20 @@ export function useDocumentStatus() {
   }
 
   function markPendingContentChange() {
-    documentSessionStore.markPendingContentChange();
+    documentStatusStore.markPendingContentChange();
   }
 
   function clearPendingContentChange() {
-    documentSessionStore.clearPendingContentChange();
+    documentStatusStore.clearPendingContentChange();
   }
 
   function resetDocumentStatus() {
-    documentSessionStore.resetDocumentStatus();
+    documentStatusStore.reset();
   }
 
   async function markSaved() {
     await api.markFileSaved();
-    documentSessionStore.clearPendingContentChange();
+    documentStatusStore.clearPendingContentChange();
     await refreshEditorState();
   }
 
@@ -51,6 +54,7 @@ export function useDocumentStatus() {
     canUndo,
     canRedo,
     hasUnsavedChanges,
+    formulaStatus,
     isContentDirty,
     hasPendingContentChange,
     applyEditorState,

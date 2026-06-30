@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   FileData,
   RecentFile,
-  CellValue,
   SetCellRequest,
   SearchResult,
   EditorMutationResponse,
@@ -37,9 +36,9 @@ export async function setCell(
   sheetIndex: number,
   row: number,
   col: number,
-  newValue: CellValue
+  text: string
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("set_cell", { sheetIndex, row, col, newValue });
+  return invoke<EditorMutationResponse>("set_cell", { sheetIndex, row, col, text });
 }
 
 export async function setCells(changes: SetCellRequest[]): Promise<EditorMutationResponse> {

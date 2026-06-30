@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use tantivy::{Term, doc};
 
 use crate::state::editor_state::EditorState;
-use crate::state::search_index::{SearchIndexStamp, build_sheet_index};
+use crate::state::search_index::{
+    SearchCellText, SearchIndexStamp, build_sheet_index, collect_sheet_search_text,
+};
 use crate::types::{CellValue, EditorMutationResponse, EditorPatch};
 
 enum IndexJob {
@@ -141,7 +143,7 @@ fn run_rebuild(
     stamp: SearchIndexStamp,
     state: &Arc<RwLock<Option<EditorState>>>,
 ) {
-    let rows_snapshot = match state.read() {
+    let search_text_snapshot: Option<Vec<SearchCellText>> = match state.read() {
         Ok(guard) => guard.as_ref().and_then(|editor| {
             if editor.search_index_stamp() != stamp {
                 return None;
@@ -150,12 +152,14 @@ fn run_rebuild(
                 .file_data()
                 .sheets
                 .get(sheet_index)
-                .map(|sheet| sheet.rows.clone())
+                .map(|sheet| collect_sheet_search_text(&sheet.rows))
         }),
         Err(_) => None,
     };
-    let Some(rows) = rows_snapshot else { return };
-    let built_index = build_sheet_index(&rows);
+    let Some(search_text) = search_text_snapshot else {
+        return;
+    };
+    let built_index = build_sheet_index(&search_text);
 
     if let Ok(mut guard) = state.write()
         && let Some(editor_state) = guard.as_mut()
@@ -371,7 +375,7 @@ mod tests {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
-                    new_value: s("orange"),
+                    text: "orange".to_string(),
                 })
                 .unwrap();
         }
@@ -410,7 +414,7 @@ mod tests {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
-                    new_value: s("new"),
+                    text: "new".to_string(),
                 })
                 .unwrap();
             editor.search_index_stamp()
@@ -453,7 +457,7 @@ mod tests {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
-                    new_value: s("orange"),
+                    text: "orange".to_string(),
                 })
                 .unwrap();
             editor.mark_search_index_stale();

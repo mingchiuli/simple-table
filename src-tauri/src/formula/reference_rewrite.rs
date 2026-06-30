@@ -41,6 +41,37 @@ pub fn adjust_formula_references(
     }
 }
 
+pub fn invalidate_deleted_sheet_references(
+    formula: &str,
+    deleted_sheet_name: &str,
+    current_sheet_name: &str,
+) -> String {
+    let has_equals = formula.starts_with('=');
+    let formula_to_parse = if has_equals {
+        formula.to_string()
+    } else {
+        format!("={formula}")
+    };
+    let mut ast = match parse(&formula_to_parse) {
+        Ok(ast) => ast,
+        Err(_) => return formula.to_string(),
+    };
+
+    if !invalidate_ast_sheet_references(&mut ast, deleted_sheet_name, current_sheet_name) {
+        return formula.to_string();
+    }
+
+    let adjusted = canonical_formula(&ast);
+    if has_equals {
+        adjusted
+    } else {
+        adjusted
+            .strip_prefix('=')
+            .unwrap_or(adjusted.as_str())
+            .to_string()
+    }
+}
+
 fn rewrite_ast_references(
     ast: &mut ASTNode,
     target_sheet_name: &str,
@@ -97,6 +128,61 @@ fn rewrite_ast_references(
                 for item in row {
                     changed |=
                         rewrite_ast_references(item, target_sheet_name, current_sheet_name, shift);
+                }
+            }
+            changed
+        }
+        ASTNodeType::Literal(_) => false,
+    }
+}
+
+fn invalidate_ast_sheet_references(
+    ast: &mut ASTNode,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+) -> bool {
+    match &mut ast.node_type {
+        ASTNodeType::Reference {
+            original,
+            reference,
+        } => {
+            if !reference_targets_sheet(reference, target_sheet_name, current_sheet_name) {
+                return false;
+            }
+            *original = "#REF!".to_string();
+            *reference = ReferenceType::NamedRange("#REF!".to_string());
+            true
+        }
+        ASTNodeType::UnaryOp { expr, .. } => {
+            invalidate_ast_sheet_references(expr, target_sheet_name, current_sheet_name)
+        }
+        ASTNodeType::BinaryOp { left, right, .. } => {
+            let left_changed =
+                invalidate_ast_sheet_references(left, target_sheet_name, current_sheet_name);
+            let right_changed =
+                invalidate_ast_sheet_references(right, target_sheet_name, current_sheet_name);
+            left_changed || right_changed
+        }
+        ASTNodeType::Function { args, .. } => args.iter_mut().fold(false, |changed, arg| {
+            invalidate_ast_sheet_references(arg, target_sheet_name, current_sheet_name) || changed
+        }),
+        ASTNodeType::Call { callee, args } => {
+            let callee_changed =
+                invalidate_ast_sheet_references(callee, target_sheet_name, current_sheet_name);
+            args.iter_mut().fold(callee_changed, |changed, arg| {
+                invalidate_ast_sheet_references(arg, target_sheet_name, current_sheet_name)
+                    || changed
+            })
+        }
+        ASTNodeType::Array(rows) => {
+            let mut changed = false;
+            for row in rows {
+                for item in row {
+                    changed |= invalidate_ast_sheet_references(
+                        item,
+                        target_sheet_name,
+                        current_sheet_name,
+                    );
                 }
             }
             changed

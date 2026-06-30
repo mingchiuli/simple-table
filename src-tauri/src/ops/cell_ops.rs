@@ -8,14 +8,14 @@ use crate::ops::editor_ops::{
 };
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
-use crate::types::{CellValue, EditorMutationResponse, LayoutPatch, SetCellRequest};
+use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
 
 pub fn do_set_cell(
     state: Arc<RwLock<Option<EditorState>>>,
     sheet_index: usize,
     row: usize,
     col: usize,
-    new_value: CellValue,
+    text: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = execute_cell_delta(
         state.clone(),
@@ -23,7 +23,7 @@ pub fn do_set_cell(
             sheet_index,
             row,
             col,
-            new_value,
+            text,
         },
     );
 

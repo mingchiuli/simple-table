@@ -8,7 +8,6 @@ import { cellToEditorString, usePendingCellSave } from '@/composables/usePending
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
 import { useSearchSessionStore } from '@/stores/searchSession';
-import { useSheetLayoutStore } from '@/stores/sheetLayout';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
@@ -21,7 +20,6 @@ const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const pendingCellSavesStore = usePendingCellSavesStore();
 const searchSessionStore = useSearchSessionStore();
-const sheetLayoutStore = useSheetLayoutStore();
 const { isMobileOrTablet } = usePlatform();
 
 // ========== State refs (must be declared before composables use them) ==========
@@ -32,17 +30,12 @@ const {
   selectedCell,
   cellEditorValue,
   autoScroll,
-  formulaStatus,
 } = storeToRefs(documentSessionStore);
 const {
   searchResults,
   searchQuery,
   isSearching,
 } = storeToRefs(searchSessionStore);
-const {
-  sheetColumnWidths,
-  sheetRowHeights,
-} = storeToRefs(sheetLayoutStore);
 const {
   draftCellValues,
 } = storeToRefs(pendingCellSavesStore);
@@ -64,8 +57,8 @@ const columns = computed(() => {
   const extent = calculateSheetExtent(
     tableData.value,
     currentSheet.value?.merges ?? [],
-    sheetColumnWidths.value[currentSheetIndex.value],
-    sheetRowHeights.value[currentSheetIndex.value]
+    currentSheet.value?.columnWidths,
+    currentSheet.value?.rowHeights
   );
   return Array.from({ length: extent.columnCount }, (_, i) => colToLetter(i));
 });
@@ -79,6 +72,7 @@ const {
   canUndo,
   canRedo,
   hasUnsavedChanges,
+  formulaStatus,
   refreshEditorState,
   markPendingContentChange,
   clearPendingContentChange,
@@ -229,8 +223,8 @@ onMounted(async () => {
               :merges="currentSheet?.merges"
               :selected-cell="selectedCell"
               :auto-scroll="autoScroll"
-              :column-widths="sheetColumnWidths[currentSheetIndex]"
-              :row-heights="sheetRowHeights[currentSheetIndex]"
+              :column-widths="currentSheet?.columnWidths"
+              :row-heights="currentSheet?.rowHeights"
               @cell-change="handleCellChange"
               @cell-editing="handleCellEditing"
               @cell-edit-cancel="handleCellEditCancel"
