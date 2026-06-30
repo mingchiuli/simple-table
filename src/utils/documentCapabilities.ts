@@ -1,11 +1,8 @@
-export type NativeSaveExtension = 'xlsx';
-export type ExportExtension = NativeSaveExtension | 'csv';
+import * as api from "@/api";
+import type { DocumentCapabilities } from "@/types";
 
-export type DocumentCapabilities = {
-  nativeSaveExtension: NativeSaveExtension | null;
-  exportExtension: ExportExtension;
-  requiresSaveAsForNativeSave: boolean;
-};
+export type NativeSaveExtension = "xlsx";
+export type ExportExtension = NativeSaveExtension | "csv";
 
 export function nativeSaveExtension(fileName: string): NativeSaveExtension | null {
   const extension = extensionOf(fileName) || 'xlsx';
@@ -17,16 +14,11 @@ export function exportExtension(fileName: string): ExportExtension | null {
   return extension === 'xlsx' || extension === 'csv' ? extension : null;
 }
 
-export function documentCapabilities(fileName: string, currentPath: string | null): DocumentCapabilities {
-  const sourceName = currentPath || fileName;
-  const nativeExtension = nativeSaveExtension(sourceName);
-  const exportExt = exportExtension(fileName) ?? 'xlsx';
-
-  return {
-    nativeSaveExtension: nativeExtension,
-    exportExtension: exportExt,
-    requiresSaveAsForNativeSave: !nativeExtension,
-  };
+export async function documentCapabilities(
+  fileName: string,
+  currentPath: string | null
+): Promise<DocumentCapabilities> {
+  return api.getDocumentCapabilities(fileName, currentPath);
 }
 
 function extensionOf(fileName: string): string | null {

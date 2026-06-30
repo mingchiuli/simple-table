@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
-use crate::state::{editor_state::EditorState, get_state};
-use crate::types::FileData;
+use crate::state::{editor_state::EditorState, get_registry};
+use crate::types::{DocumentCapabilities, FileData};
 use umya_spreadsheet::Workbook;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
@@ -47,26 +47,86 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 pub fn generate_current_file_bytes_for_target(
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    let state = get_state();
-    let state_guard = state.read().expect("Editor state lock poisoned");
+    let registry = get_registry();
+    let registry_guard = registry.read().expect("Document registry lock poisoned");
 
-    if let Some(editor_state) = state_guard.as_ref() {
+    if let Some(editor_state) = registry_guard.active() {
         return editor_state.generate_file_bytes_for_target(target_path_or_name);
     }
 
     Err(AppError::NoFileLoaded)
 }
 
+pub fn document_capabilities(
+    file_name: String,
+    current_path: Option<String>,
+) -> DocumentCapabilities {
+    let source_name = current_path.as_deref().unwrap_or(&file_name);
+    let native_extension = native_save_extension(source_name);
+    let export_extension = export_extension(&file_name).unwrap_or_else(|| "xlsx".to_string());
+
+    DocumentCapabilities {
+        requires_save_as_for_native_save: native_extension.is_none(),
+        native_save_extension: native_extension,
+        export_extension,
+    }
+}
+
 fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> FileData {
-    let state = get_state();
+    let registry = get_registry();
     let initialized_file_data;
+    let document_id;
     {
-        let mut state_guard = state.write().expect("Editor state lock poisoned");
+        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
         let editor_state = EditorState::with_workbook(file_data, workbook);
         initialized_file_data = editor_state.file_data().clone();
-        *state_guard = Some(editor_state);
+        document_id = editor_state.document_id();
+        registry_guard.replace_active(editor_state);
     }
     // 异步构建索引（后台线程）
-    spawn_rebuild_all_sheets_index(state);
+    spawn_rebuild_all_sheets_index(registry, document_id);
     initialized_file_data
+}
+
+fn native_save_extension(file_name: &str) -> Option<String> {
+    let extension = extension_of(file_name).unwrap_or_else(|| "xlsx".to_string());
+    (extension == "xlsx").then_some(extension)
+}
+
+fn export_extension(file_name: &str) -> Option<String> {
+    let extension = extension_of(file_name).unwrap_or_else(|| "xlsx".to_string());
+    matches!(extension.as_str(), "xlsx" | "csv").then_some(extension)
+}
+
+fn extension_of(file_name: &str) -> Option<String> {
+    Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_capabilities_are_computed_by_backend() {
+        assert_eq!(
+            document_capabilities("book.xlsx".to_string(), None),
+            DocumentCapabilities {
+                native_save_extension: Some("xlsx".to_string()),
+                export_extension: "xlsx".to_string(),
+                requires_save_as_for_native_save: false,
+            }
+        );
+        assert_eq!(
+            document_capabilities("data.csv".to_string(), Some("/tmp/data.csv".to_string())),
+            DocumentCapabilities {
+                native_save_extension: None,
+                export_extension: "csv".to_string(),
+                requires_save_as_for_native_save: true,
+            }
+        );
+    }
 }

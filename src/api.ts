@@ -6,10 +6,18 @@ import type {
   SearchResult,
   EditorMutationResponse,
   EditorSessionInfo,
+  DocumentCapabilities,
 } from "@/types";
 
 export async function initFile(fileData: FileData): Promise<void> {
   return invoke<void>("init_file", { fileData });
+}
+
+export async function getDocumentCapabilities(
+  fileName: string,
+  currentPath: string | null
+): Promise<DocumentCapabilities> {
+  return invoke<DocumentCapabilities>("get_document_capabilities", { fileName, currentPath });
 }
 
 // ==================== Editor Operations ====================

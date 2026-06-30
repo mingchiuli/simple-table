@@ -50,8 +50,6 @@ export function usePendingCellSave({
 }: UsePendingCellSaveOptions) {
   const pendingCellSavesStore = usePendingCellSavesStore();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const queuedSaves = pendingCellSavesStore.queuedCellSaves;
-  const activeSaves = pendingCellSavesStore.activeCellSaves;
   const draftCellValues = pendingCellSavesStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
 
@@ -60,17 +58,11 @@ export function usePendingCellSave({
   }
 
   function saveState(sheetIndex: number, row: number, col: number) {
-    const key = cellKey(sheetIndex, row, col);
-    return {
-      key,
-      draft: draftCellValues.get(key),
-      queued: queuedSaves.get(key),
-      active: activeSaves.get(key),
-    };
+    return pendingCellSavesStore.stateFor(cellKey(sheetIndex, row, col));
   }
 
   function hasPendingWork() {
-    return queuedSaves.size > 0 || activeSaves.size > 0 || pendingSavePromise !== null;
+    return !pendingCellSavesStore.isIdle() || pendingSavePromise !== null;
   }
 
   const currentCellValue = computed(() => {
@@ -128,14 +120,14 @@ export function usePendingCellSave({
     const committedValue = committedCellValue(sheetIndex, row, col);
 
     if (activeSave && value === activeSave.value) {
-      draftCellValues.set(key, value);
-      queuedSaves.delete(key);
+      pendingCellSavesStore.setDraft(key, value);
+      pendingCellSavesStore.dropQueued(key);
       clearPendingContentChangeIfIdle();
       return;
     }
 
     if (activeSave && value === cellToEditorString(activeSave.oldValue)) {
-      draftCellValues.set(key, value);
+      pendingCellSavesStore.setDraft(key, value);
       queueCellSave(sheetIndex, row, col, value, committedValue);
       markPendingContentChange();
       schedulePendingSave();
@@ -143,8 +135,8 @@ export function usePendingCellSave({
     }
 
     if (!activeSave && value === cellToEditorString(committedValue)) {
-      draftCellValues.delete(key);
-      queuedSaves.delete(key);
+      pendingCellSavesStore.clearDraft(key);
+      pendingCellSavesStore.dropQueued(key);
       clearPendingContentChangeIfIdle();
       return;
     }
@@ -153,20 +145,20 @@ export function usePendingCellSave({
       return;
     }
 
-    draftCellValues.set(key, value);
+    pendingCellSavesStore.setDraft(key, value);
     queueCellSave(sheetIndex, row, col, value, committedValue);
     markPendingContentChange();
     schedulePendingSave();
   }
 
   function queueCellSave(sheetIndex: number, row: number, col: number, value: string, oldValue: CellValue) {
-    const { key, queued: existing, active: activeSave } = saveState(sheetIndex, row, col);
-    queuedSaves.set(key, {
+    const key = cellKey(sheetIndex, row, col);
+    pendingCellSavesStore.queueSave(key, {
       sheetIndex,
       row,
       col,
       value,
-      oldValue: existing?.oldValue ?? activeSave?.oldValue ?? oldValue,
+      oldValue,
     });
   }
 
@@ -187,11 +179,11 @@ export function usePendingCellSave({
 
     pendingSavePromise = debouncedSave().finally(() => {
       pendingSavePromise = null;
-      if (queuedSaves.size && !debounceTimer) {
+      if (pendingCellSavesStore.hasQueuedSaves && !debounceTimer) {
         startPendingSave();
         return;
       }
-      if (!queuedSaves.size && !activeSaves.size) {
+      if (pendingCellSavesStore.isIdle()) {
         clearPendingContentChange();
       }
     });
@@ -218,13 +210,7 @@ export function usePendingCellSave({
     const response = await api.setCells(payload);
     applyMutationResponse(response);
 
-    for (const change of changes) {
-      const key = cellKey(change.sheetIndex, change.row, change.col);
-      activeSaves.delete(key);
-      if (draftCellValues.get(key) === change.value) {
-        draftCellValues.delete(key);
-      }
-    }
+    pendingCellSavesStore.completeBatch(changes);
 
     if (selectedCell.value && selectedKey) {
       cellEditorValue.value = editorStringForCell(
@@ -236,44 +222,27 @@ export function usePendingCellSave({
   }
 
   async function debouncedSave(): Promise<boolean> {
-    if (!queuedSaves.size) {
+    if (!pendingCellSavesStore.hasQueuedSaves) {
       clearPendingContentChange();
       return true;
     }
 
-    const changes = Array.from(queuedSaves.values());
-    queuedSaves.clear();
-    for (const change of changes) {
-      activeSaves.set(cellKey(change.sheetIndex, change.row, change.col), change);
-    }
+    const changes = pendingCellSavesStore.takeQueuedBatch();
 
     try {
       await commitCellBatch(changes);
     } catch (error) {
-      for (const change of changes) {
-        activeSaves.delete(cellKey(change.sheetIndex, change.row, change.col));
-        clearDraftIfUnchanged(change);
-      }
+      pendingCellSavesStore.failBatch(changes);
       ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
-      if (!queuedSaves.size && !activeSaves.size) {
+      if (pendingCellSavesStore.isIdle()) {
         clearPendingContentChange();
       }
       return false;
     }
-    if (!queuedSaves.size && !activeSaves.size) {
+    if (pendingCellSavesStore.isIdle()) {
       clearPendingContentChange();
     }
     return true;
-  }
-
-  function clearDraftIfUnchanged(change: CellSaveRequest) {
-    const key = cellKey(change.sheetIndex, change.row, change.col);
-    if (draftCellValues.get(key) === change.value) {
-      draftCellValues.delete(key);
-    }
-    if (queuedSaves.get(key)?.value === change.value) {
-      queuedSaves.delete(key);
-    }
   }
 
   function clearPendingContentChangeIfIdle() {
@@ -292,7 +261,7 @@ export function usePendingCellSave({
       if (pendingSavePromise) {
         const saved = await pendingSavePromise;
         if (!saved) return false;
-      } else if (queuedSaves.size) {
+      } else if (pendingCellSavesStore.hasQueuedSaves) {
         startPendingSave();
         if (!pendingSavePromise) return false;
         const saved = await pendingSavePromise;
@@ -303,7 +272,7 @@ export function usePendingCellSave({
         clearTimeout(debounceTimer);
         debounceTimer = null;
       }
-      if (queuedSaves.size) {
+      if (pendingCellSavesStore.hasQueuedSaves) {
         continue;
       }
       if (!pendingSavePromise) {
@@ -333,12 +302,12 @@ export function usePendingCellSave({
 
     const sheetIndex = currentSheetIndex.value;
     const { key, active: activeSave } = saveState(sheetIndex, row, col);
-    draftCellValues.delete(key);
-    queuedSaves.delete(key);
+    pendingCellSavesStore.clearDraft(key);
+    pendingCellSavesStore.dropQueued(key);
 
     if (activeSave) {
       const revertValue = cellToEditorString(activeSave.oldValue);
-      draftCellValues.set(key, revertValue);
+      pendingCellSavesStore.setDraft(key, revertValue);
       queueCellSave(sheetIndex, row, col, revertValue, committedCellValue(sheetIndex, row, col));
       markPendingContentChange();
       schedulePendingSave();
@@ -348,7 +317,7 @@ export function usePendingCellSave({
       cellEditorValue.value = editorStringForCell(sheetIndex, row, col);
     }
 
-    if (!queuedSaves.size && debounceTimer) {
+    if (!pendingCellSavesStore.hasQueuedSaves && debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }

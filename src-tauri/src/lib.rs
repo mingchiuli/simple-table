@@ -22,9 +22,10 @@ use commands::ios::{
 };
 use commands::{
     add_column, add_recent_file_with_thumbnail, add_row, add_sheet, check_file_exists,
-    delete_column, delete_row, delete_sheet, generate_current_thumbnail_bytes, get_editor_state,
-    get_file_size, get_recent_files, init_file, mark_file_saved, redo, remove_recent_file, search,
-    set_cell, set_cells, set_column_width, set_row_height, undo, update_recent_file_path,
+    delete_column, delete_row, delete_sheet, generate_current_thumbnail_bytes,
+    get_document_capabilities, get_editor_state, get_file_size, get_recent_files, init_file,
+    mark_file_saved, redo, remove_recent_file, search, set_cell, set_cells, set_column_width,
+    set_row_height, undo, update_recent_file_path,
 };
 #[cfg(desktop)]
 use commands::{read_file_desktop, save_file_desktop};
@@ -68,6 +69,7 @@ pub fn run() {
             #[cfg(desktop)]
             save_file_desktop,
             generate_current_thumbnail_bytes,
+            get_document_capabilities,
             init_file,
             undo,
             redo,

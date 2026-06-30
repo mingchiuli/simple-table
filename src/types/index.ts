@@ -30,6 +30,12 @@ export interface FileData {
   sheets: SheetData[];
 }
 
+export interface DocumentCapabilities {
+  nativeSaveExtension: 'xlsx' | null;
+  exportExtension: 'xlsx' | 'csv';
+  requiresSaveAsForNativeSave: boolean;
+}
+
 export interface SheetCellChange {
   sheetIndex: number;
   row: number;

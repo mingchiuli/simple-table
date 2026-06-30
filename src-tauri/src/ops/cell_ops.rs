@@ -7,18 +7,18 @@ use crate::ops::editor_ops::{
     snapshot_mutation_response,
 };
 use crate::ops::index_ops::schedule_index_for_response;
-use crate::state::editor_state::EditorState;
+use crate::state::state::DocumentRegistry;
 use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
 
 pub fn do_set_cell(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
     row: usize,
     col: usize,
     text: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = execute_cell_delta(
-        state.clone(),
+        registry.clone(),
         EditorCommand::SetCell {
             sheet_index,
             row,
@@ -28,32 +28,32 @@ pub fn do_set_cell(
     );
 
     if let Ok(response) = &response {
-        schedule_index_for_response(response, state);
+        schedule_index_for_response(response, registry);
     }
 
     response
 }
 
 pub fn do_set_cells(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     changes: Vec<SetCellRequest>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = execute_cell_delta(state.clone(), EditorCommand::SetCells { changes });
+    let response = execute_cell_delta(registry.clone(), EditorCommand::SetCells { changes });
 
     if let Ok(response) = &response {
-        schedule_index_for_response(response, state);
+        schedule_index_for_response(response, registry);
     }
 
     response
 }
 
 pub fn do_add_row(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_sheet_snapshot(
-        state,
+        registry,
         EditorCommand::AddRow {
             sheet_index,
             row_index,
@@ -63,12 +63,12 @@ pub fn do_add_row(
 }
 
 pub fn do_delete_row(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_sheet_snapshot(
-        state,
+        registry,
         EditorCommand::DeleteRow {
             sheet_index,
             row_index,
@@ -78,19 +78,23 @@ pub fn do_delete_row(
 }
 
 pub fn do_add_column(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_sheet_snapshot(state, EditorCommand::AddColumn { sheet_index }, sheet_index)
+    execute_sheet_snapshot(
+        registry,
+        EditorCommand::AddColumn { sheet_index },
+        sheet_index,
+    )
 }
 
 pub fn do_delete_column(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_sheet_snapshot(
-        state,
+        registry,
         EditorCommand::DeleteColumn {
             sheet_index,
             col_index,
@@ -100,13 +104,13 @@ pub fn do_delete_column(
 }
 
 pub fn do_set_column_width(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_layout(
-        state,
+        registry,
         EditorCommand::SetColumnWidth {
             sheet_index,
             col_index,
@@ -117,13 +121,13 @@ pub fn do_set_column_width(
 }
 
 pub fn do_set_row_height(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_layout(
-        state,
+        registry,
         EditorCommand::SetRowHeight {
             sheet_index,
             row_index,
@@ -134,24 +138,24 @@ pub fn do_set_row_height(
 }
 
 pub fn do_add_sheet(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_structural_snapshot(state, EditorCommand::AddSheet { name: None })
+    execute_structural_snapshot(registry, EditorCommand::AddSheet { name: None })
 }
 
 pub fn do_delete_sheet(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_structural_snapshot(state, EditorCommand::DeleteSheet { sheet_index })
+    execute_structural_snapshot(registry, EditorCommand::DeleteSheet { sheet_index })
 }
 
 fn execute_cell_delta(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
-    let mut state_guard = state.write().expect("Editor state lock poisoned");
-    let editor_state = state_guard.as_mut().ok_or(AppError::NoFileLoaded)?;
+    let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+    let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
     let result = editor_state.execute(command)?;
     if let Some(operation) = result.operation {
         Ok(cell_delta_mutation_response(
@@ -165,45 +169,45 @@ fn execute_cell_delta(
 }
 
 fn execute_structural_snapshot(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
-        let mut state_guard = state.write().expect("Editor state lock poisoned");
-        let editor_state = state_guard.as_mut().ok_or(AppError::NoFileLoaded)?;
+        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
         let result = editor_state.execute(command)?;
         snapshot_mutation_response(editor_state, result.operation)
     };
 
-    schedule_index_for_response(&response, state);
+    schedule_index_for_response(&response, registry);
 
     Ok(response)
 }
 
 fn execute_sheet_snapshot(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     command: EditorCommand,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
-        let mut state_guard = state.write().expect("Editor state lock poisoned");
-        let editor_state = state_guard.as_mut().ok_or(AppError::NoFileLoaded)?;
+        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
         let _result = editor_state.execute(command)?;
         sheet_snapshot_mutation_response(editor_state, sheet_index)
     };
 
-    schedule_index_for_response(&response, state);
+    schedule_index_for_response(&response, registry);
 
     Ok(response)
 }
 
 fn execute_layout(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     command: EditorCommand,
     patch: LayoutPatch,
 ) -> Result<EditorMutationResponse, AppError> {
-    let mut state_guard = state.write().expect("Editor state lock poisoned");
-    let editor_state = state_guard.as_mut().ok_or(AppError::NoFileLoaded)?;
+    let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+    let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
     let _result = editor_state.execute(command)?;
     Ok(layout_mutation_response(editor_state, patch))
 }
@@ -227,10 +231,12 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::editor_state::EditorState;
+    use crate::state::state::DocumentRegistry;
     use crate::types::{CellValue, EditorPatch, FileData, SheetData};
 
-    fn make_state() -> Arc<RwLock<Option<EditorState>>> {
-        Arc::new(RwLock::new(Some(EditorState::with_workbook(
+    fn make_registry() -> Arc<RwLock<DocumentRegistry>> {
+        let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
                 file_name: "test.xlsx".to_string(),
@@ -241,18 +247,21 @@ mod tests {
                 }],
             },
             None,
-        ))))
+        );
+        let mut registry = DocumentRegistry::new_for_test();
+        registry.replace_active(editor);
+        Arc::new(RwLock::new(registry))
     }
 
     #[test]
     fn row_and_column_structure_edits_return_sheet_snapshots() {
-        let add_row_response = do_add_row(make_state(), 0, 1).expect("add row");
+        let add_row_response = do_add_row(make_registry(), 0, 1).expect("add row");
         assert!(matches!(
             add_row_response.patches.as_slice(),
             [EditorPatch::SheetSnapshot { sheet_index: 0, .. }]
         ));
 
-        let add_column_response = do_add_column(make_state(), 0).expect("add column");
+        let add_column_response = do_add_column(make_registry(), 0).expect("add column");
         assert!(matches!(
             add_column_response.patches.as_slice(),
             [EditorPatch::SheetSnapshot { sheet_index: 0, .. }]

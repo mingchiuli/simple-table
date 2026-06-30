@@ -143,6 +143,12 @@ struct WorkbookStructureEditor<'a> {
     file_data: &'a mut FileData,
 }
 
+// Workbook structure edits deliberately support the workbook surface that
+// Simple Table currently projects: cells, formulas, merge ranges, row heights,
+// and column widths. OOXML objects outside that projection, such as defined
+// names, tables, charts, conditional formatting, and drawing anchors, are kept
+// in the original workbook when possible but are not fully semantically moved
+// by this layer yet.
 impl<'a> WorkbookStructureEditor<'a> {
     fn new(workbook: &'a mut Workbook, file_data: &'a mut FileData) -> Self {
         Self {

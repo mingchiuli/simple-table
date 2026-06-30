@@ -101,6 +101,56 @@ pub struct SpreadsheetDocument {
     formula_status: FormulaStatus,
 }
 
+struct DocumentTransaction<'a> {
+    document: &'a mut SpreadsheetDocument,
+    operation: &'a AppliedOperation,
+    rollback: &'a DocumentMementoSide,
+}
+
+impl<'a> DocumentTransaction<'a> {
+    fn new(
+        document: &'a mut SpreadsheetDocument,
+        operation: &'a AppliedOperation,
+        rollback: &'a DocumentMementoSide,
+    ) -> Self {
+        Self {
+            document,
+            operation,
+            rollback,
+        }
+    }
+
+    fn commit(&mut self) -> Result<DocumentOperationResult, AppError> {
+        let result = self.operation.execute(&mut self.document.projection);
+
+        if let Err(error) =
+            self.document
+                .patch_workbook_after_operation(self.operation, &result, &[])
+        {
+            self.rollback();
+            return Err(error);
+        }
+
+        let cell_changes = self.document.recalculate_after_operation(self.operation);
+
+        if !cell_changes.is_empty()
+            && let Err(error) = self.document.patch_workbook_formula_changes(&cell_changes)
+        {
+            self.rollback();
+            return Err(error);
+        }
+
+        Ok(DocumentOperationResult {
+            operation: result,
+            cell_changes,
+        })
+    }
+
+    fn rollback(&mut self) {
+        let _ = self.document.restore_memento_side(self.rollback);
+    }
+}
+
 impl Clone for SpreadsheetDocument {
     fn clone(&self) -> Self {
         let mut projection = self.projection.clone();
@@ -190,26 +240,7 @@ impl SpreadsheetDocument {
         operation: &AppliedOperation,
         rollback: &DocumentMementoSide,
     ) -> Result<DocumentOperationResult, AppError> {
-        let result = operation.execute(&mut self.projection);
-
-        if let Err(error) = self.patch_workbook_after_operation(operation, &result, &[]) {
-            let _ = self.restore_memento_side(rollback);
-            return Err(error);
-        }
-
-        let cell_changes = self.recalculate_after_operation(operation);
-
-        if !cell_changes.is_empty()
-            && let Err(error) = self.patch_workbook_formula_changes(&cell_changes)
-        {
-            let _ = self.restore_memento_side(rollback);
-            return Err(error);
-        }
-
-        Ok(DocumentOperationResult {
-            operation: result,
-            cell_changes,
-        })
+        DocumentTransaction::new(self, operation, rollback).commit()
     }
 
     pub fn create_memento(
@@ -677,8 +708,7 @@ impl SpreadsheetDocument {
                 }
                 Err(error) => {
                     eprintln!("Formula recalculation failed: {error}");
-                    self.rebuild_formula_runtime();
-                    Vec::new()
+                    self.formula_error_changes_for_all_formulas(error.to_string())
                 }
             },
         }
@@ -713,6 +743,29 @@ impl SpreadsheetDocument {
             col,
             value: cell.clone(),
         }]
+    }
+
+    fn formula_error_changes_for_all_formulas(&mut self, error: String) -> Vec<SheetCellChange> {
+        let mut changes = Vec::new();
+        for (sheet_index, sheet) in self.projection.sheets.iter_mut().enumerate() {
+            for (row, row_data) in sheet.rows.iter_mut().enumerate() {
+                for (col, cell) in row_data.iter_mut().enumerate() {
+                    if !matches!(cell, CellValue::Formula { .. }) {
+                        continue;
+                    }
+                    *cell = cell.with_formula_result(CellValue::Null, Some(error.clone()));
+                    changes.push(SheetCellChange {
+                        sheet_index,
+                        row,
+                        col,
+                        value: cell.clone(),
+                    });
+                }
+            }
+        }
+        self.formula_runtime = FormulaRuntime::empty();
+        self.formula_status = FormulaStatus::Degraded { message: error };
+        changes
     }
 
     fn rebuild_formula_runtime(&mut self) {

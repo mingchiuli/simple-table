@@ -270,6 +270,14 @@ pub struct FileData {
     pub sheets: Vec<SheetData>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentCapabilities {
+    pub native_save_extension: Option<String>,
+    pub export_extension: String,
+    pub requires_save_as_for_native_save: bool,
+}
+
 /// 单元格变化
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

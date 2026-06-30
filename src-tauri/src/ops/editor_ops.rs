@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
-use crate::state::state::{EditorSessionInfo, EditorStateInfo};
+use crate::state::state::{DocumentRegistry, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
     AppliedOperationResult, EditorMutationResponse, EditorPatch, LayoutPatch, SheetCellChange,
 };
@@ -115,9 +115,9 @@ fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: 
     }
 }
 
-fn get_editor_session_info(state: &Arc<RwLock<Option<EditorState>>>) -> Option<EditorSessionInfo> {
-    let state = state.read().expect("Editor state lock poisoned");
-    state.as_ref().map(|editor_state| EditorSessionInfo {
+fn get_editor_session_info(registry: &Arc<RwLock<DocumentRegistry>>) -> Option<EditorSessionInfo> {
+    let registry = registry.read().expect("Document registry lock poisoned");
+    registry.active().map(|editor_state| EditorSessionInfo {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
         formula_status: editor_state.formula_status(),
@@ -127,15 +127,15 @@ fn get_editor_session_info(state: &Arc<RwLock<Option<EditorState>>>) -> Option<E
 
 /// 获取编辑器状态（包含能否撤销/重做）
 pub fn do_get_editor_state(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
-    Ok(get_editor_session_info(&state))
+    Ok(get_editor_session_info(&registry))
 }
 
 /// 标记当前编辑器内容已经成功保存
-pub fn do_mark_file_saved(state: Arc<RwLock<Option<EditorState>>>) -> Result<(), AppError> {
-    let mut state = state.write().expect("Editor state lock poisoned");
-    match state.as_mut() {
+pub fn do_mark_file_saved(registry: Arc<RwLock<DocumentRegistry>>) -> Result<(), AppError> {
+    let mut registry = registry.write().expect("Document registry lock poisoned");
+    match registry.active_mut() {
         Some(editor_state) => {
             editor_state.mark_saved();
             Ok(())
@@ -146,11 +146,11 @@ pub fn do_mark_file_saved(state: Arc<RwLock<Option<EditorState>>>) -> Result<(),
 
 /// 撤销操作
 pub fn do_undo(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
-        let mut state = state.write().expect("Editor state lock poisoned");
-        match state.as_mut() {
+        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        match registry_guard.active_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.undo()? {
                     snapshot_mutation_response(editor_state, result.operation)
@@ -162,18 +162,18 @@ pub fn do_undo(
         }
     };
 
-    schedule_index_for_response(&response, state);
+    schedule_index_for_response(&response, registry);
 
     Ok(response)
 }
 
 /// 重做操作
 pub fn do_redo(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
-        let mut state = state.write().expect("Editor state lock poisoned");
-        match state.as_mut() {
+        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        match registry_guard.active_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.redo()? {
                     snapshot_mutation_response(editor_state, result.operation)
@@ -185,7 +185,7 @@ pub fn do_redo(
         }
     };
 
-    schedule_index_for_response(&response, state);
+    schedule_index_for_response(&response, registry);
 
     Ok(response)
 }

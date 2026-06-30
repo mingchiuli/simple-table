@@ -1,5 +1,5 @@
+use formualizer_parse::parse;
 use formualizer_parse::parser::{ASTNode, ASTNodeType, ReferenceType};
-use formualizer_parse::{canonical_formula, parse};
 
 #[derive(Clone, Copy)]
 pub enum StructureShift {
@@ -15,30 +15,12 @@ pub fn adjust_formula_references(
     current_sheet_name: &str,
     shift: StructureShift,
 ) -> String {
-    let has_equals = formula.starts_with('=');
-    let formula_to_parse = if has_equals {
-        formula.to_string()
-    } else {
-        format!("={formula}")
-    };
-    let mut ast = match parse(&formula_to_parse) {
-        Ok(ast) => ast,
-        Err(_) => return formula.to_string(),
-    };
-
-    if !rewrite_ast_references(&mut ast, target_sheet_name, current_sheet_name, shift) {
-        return formula.to_string();
-    }
-
-    let adjusted = canonical_formula(&ast);
-    if has_equals {
-        adjusted
-    } else {
-        adjusted
-            .strip_prefix('=')
-            .unwrap_or(adjusted.as_str())
-            .to_string()
-    }
+    rewrite_formula_references(
+        formula,
+        target_sheet_name,
+        current_sheet_name,
+        ReferenceRewrite::Shift(shift),
+    )
 }
 
 pub fn invalidate_deleted_sheet_references(
@@ -46,149 +28,225 @@ pub fn invalidate_deleted_sheet_references(
     deleted_sheet_name: &str,
     current_sheet_name: &str,
 ) -> String {
-    let has_equals = formula.starts_with('=');
-    let formula_to_parse = if has_equals {
-        formula.to_string()
-    } else {
-        format!("={formula}")
-    };
-    let mut ast = match parse(&formula_to_parse) {
+    rewrite_formula_references(
+        formula,
+        deleted_sheet_name,
+        current_sheet_name,
+        ReferenceRewrite::DeletedSheet,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ReferenceRewrite {
+    Shift(StructureShift),
+    DeletedSheet,
+}
+
+struct FormulaSource<'a> {
+    original: &'a str,
+    parsed: String,
+    added_equals: bool,
+}
+
+impl<'a> FormulaSource<'a> {
+    fn new(original: &'a str) -> Self {
+        let added_equals = !original.starts_with('=');
+        let parsed = if added_equals {
+            format!("={original}")
+        } else {
+            original.to_string()
+        };
+        Self {
+            original,
+            parsed,
+            added_equals,
+        }
+    }
+
+    fn original_span(&self, start: usize, end: usize) -> Option<(usize, usize)> {
+        let offset = usize::from(self.added_equals);
+        let start = start.checked_sub(offset)?;
+        let end = end.checked_sub(offset)?;
+        if start >= end
+            || end > self.original.len()
+            || !self.original.is_char_boundary(start)
+            || !self.original.is_char_boundary(end)
+        {
+            return None;
+        }
+        Some((start, end))
+    }
+}
+
+#[derive(Clone)]
+struct FormulaTextEdit {
+    start: usize,
+    end: usize,
+    replacement: String,
+}
+
+fn rewrite_formula_references(
+    formula: &str,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+    rewrite: ReferenceRewrite,
+) -> String {
+    let source = FormulaSource::new(formula);
+    let ast = match parse(&source.parsed) {
         Ok(ast) => ast,
         Err(_) => return formula.to_string(),
     };
 
-    if !invalidate_ast_sheet_references(&mut ast, deleted_sheet_name, current_sheet_name) {
+    let mut edits = Vec::new();
+    collect_reference_edits(
+        &ast,
+        &source,
+        target_sheet_name,
+        current_sheet_name,
+        rewrite,
+        &mut edits,
+    );
+    if edits.is_empty() {
         return formula.to_string();
     }
 
-    let adjusted = canonical_formula(&ast);
-    if has_equals {
-        adjusted
-    } else {
-        adjusted
-            .strip_prefix('=')
-            .unwrap_or(adjusted.as_str())
-            .to_string()
-    }
+    apply_text_edits(formula, edits).unwrap_or_else(|| formula.to_string())
 }
 
-fn rewrite_ast_references(
-    ast: &mut ASTNode,
+fn collect_reference_edits(
+    ast: &ASTNode,
+    source: &FormulaSource<'_>,
     target_sheet_name: &str,
     current_sheet_name: &str,
-    shift: StructureShift,
-) -> bool {
-    match &mut ast.node_type {
-        ASTNodeType::Reference {
-            original,
-            reference,
-        } => {
+    rewrite: ReferenceRewrite,
+    edits: &mut Vec<FormulaTextEdit>,
+) {
+    match &ast.node_type {
+        ASTNodeType::Reference { reference, .. } => {
             if !reference_targets_sheet(reference, target_sheet_name, current_sheet_name) {
-                return false;
+                return;
             }
-            let Some(next_reference) = adjust_reference(reference.clone(), shift) else {
-                *original = "#REF!".to_string();
-                *reference = ReferenceType::NamedRange("#REF!".to_string());
-                return true;
+            let Some(token) = ast.source_token.as_ref() else {
+                return;
             };
-            *original = next_reference.normalise();
-            *reference = next_reference;
-            true
+            let Some((start, end)) = source.original_span(token.start, token.end) else {
+                return;
+            };
+            let replacement = match rewrite {
+                ReferenceRewrite::Shift(shift) => adjust_reference(reference.clone(), shift)
+                    .map(|reference| reference.normalise())
+                    .unwrap_or_else(|| "#REF!".to_string()),
+                ReferenceRewrite::DeletedSheet => "#REF!".to_string(),
+            };
+            edits.push(FormulaTextEdit {
+                start,
+                end,
+                replacement,
+            });
         }
         ASTNodeType::UnaryOp { expr, .. } => {
-            rewrite_ast_references(expr, target_sheet_name, current_sheet_name, shift)
+            collect_reference_edits(
+                expr,
+                source,
+                target_sheet_name,
+                current_sheet_name,
+                rewrite,
+                edits,
+            );
         }
         ASTNodeType::BinaryOp { left, right, .. } => {
-            let left_changed =
-                rewrite_ast_references(left, target_sheet_name, current_sheet_name, shift);
-            let right_changed =
-                rewrite_ast_references(right, target_sheet_name, current_sheet_name, shift);
-            left_changed || right_changed
+            collect_reference_edits(
+                left,
+                source,
+                target_sheet_name,
+                current_sheet_name,
+                rewrite,
+                edits,
+            );
+            collect_reference_edits(
+                right,
+                source,
+                target_sheet_name,
+                current_sheet_name,
+                rewrite,
+                edits,
+            );
         }
         ASTNodeType::Function { args, .. } => {
-            let mut changed = false;
             for arg in args {
-                changed |=
-                    rewrite_ast_references(arg, target_sheet_name, current_sheet_name, shift);
+                collect_reference_edits(
+                    arg,
+                    source,
+                    target_sheet_name,
+                    current_sheet_name,
+                    rewrite,
+                    edits,
+                );
             }
-            changed
         }
         ASTNodeType::Call { callee, args } => {
-            let mut changed =
-                rewrite_ast_references(callee, target_sheet_name, current_sheet_name, shift);
+            collect_reference_edits(
+                callee,
+                source,
+                target_sheet_name,
+                current_sheet_name,
+                rewrite,
+                edits,
+            );
             for arg in args {
-                changed |=
-                    rewrite_ast_references(arg, target_sheet_name, current_sheet_name, shift);
+                collect_reference_edits(
+                    arg,
+                    source,
+                    target_sheet_name,
+                    current_sheet_name,
+                    rewrite,
+                    edits,
+                );
             }
-            changed
         }
         ASTNodeType::Array(rows) => {
-            let mut changed = false;
             for row in rows {
                 for item in row {
-                    changed |=
-                        rewrite_ast_references(item, target_sheet_name, current_sheet_name, shift);
-                }
-            }
-            changed
-        }
-        ASTNodeType::Literal(_) => false,
-    }
-}
-
-fn invalidate_ast_sheet_references(
-    ast: &mut ASTNode,
-    target_sheet_name: &str,
-    current_sheet_name: &str,
-) -> bool {
-    match &mut ast.node_type {
-        ASTNodeType::Reference {
-            original,
-            reference,
-        } => {
-            if !reference_targets_sheet(reference, target_sheet_name, current_sheet_name) {
-                return false;
-            }
-            *original = "#REF!".to_string();
-            *reference = ReferenceType::NamedRange("#REF!".to_string());
-            true
-        }
-        ASTNodeType::UnaryOp { expr, .. } => {
-            invalidate_ast_sheet_references(expr, target_sheet_name, current_sheet_name)
-        }
-        ASTNodeType::BinaryOp { left, right, .. } => {
-            let left_changed =
-                invalidate_ast_sheet_references(left, target_sheet_name, current_sheet_name);
-            let right_changed =
-                invalidate_ast_sheet_references(right, target_sheet_name, current_sheet_name);
-            left_changed || right_changed
-        }
-        ASTNodeType::Function { args, .. } => args.iter_mut().fold(false, |changed, arg| {
-            invalidate_ast_sheet_references(arg, target_sheet_name, current_sheet_name) || changed
-        }),
-        ASTNodeType::Call { callee, args } => {
-            let callee_changed =
-                invalidate_ast_sheet_references(callee, target_sheet_name, current_sheet_name);
-            args.iter_mut().fold(callee_changed, |changed, arg| {
-                invalidate_ast_sheet_references(arg, target_sheet_name, current_sheet_name)
-                    || changed
-            })
-        }
-        ASTNodeType::Array(rows) => {
-            let mut changed = false;
-            for row in rows {
-                for item in row {
-                    changed |= invalidate_ast_sheet_references(
+                    collect_reference_edits(
                         item,
+                        source,
                         target_sheet_name,
                         current_sheet_name,
+                        rewrite,
+                        edits,
                     );
                 }
             }
-            changed
         }
-        ASTNodeType::Literal(_) => false,
+        ASTNodeType::Literal(_) => {}
     }
+}
+
+fn apply_text_edits(source: &str, mut edits: Vec<FormulaTextEdit>) -> Option<String> {
+    edits.sort_by_key(|edit| edit.start);
+
+    let mut previous_end = 0;
+    for edit in &edits {
+        if edit.start < previous_end
+            || edit.start >= edit.end
+            || edit.end > source.len()
+            || !source.is_char_boundary(edit.start)
+            || !source.is_char_boundary(edit.end)
+        {
+            return None;
+        }
+        previous_end = edit.end;
+    }
+
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    for edit in edits {
+        output.push_str(&source[cursor..edit.start]);
+        output.push_str(&edit.replacement);
+        cursor = edit.end;
+    }
+    output.push_str(&source[cursor..]);
+    Some(output)
 }
 
 fn reference_targets_sheet(
@@ -529,7 +587,7 @@ mod tests {
                     count: 1,
                 },
             ),
-            "Inputs!A1 + #REF!"
+            "Inputs!A1+#REF!"
         );
     }
 
@@ -545,7 +603,7 @@ mod tests {
                     count: 1,
                 },
             ),
-            r#""Inputs!A1" & Inputs!A2"#
+            r#""Inputs!A1"&Inputs!A2"#
         );
     }
 
@@ -667,7 +725,35 @@ mod tests {
                     count: 1,
                 },
             ),
-            "Other!A1 + Inputs!A2"
+            "Other!A1+Inputs!A2"
+        );
+    }
+
+    #[test]
+    fn preserves_formula_text_outside_rewritten_reference_tokens() {
+        assert_eq!(
+            adjust_formula_references(
+                "=sum(  Inputs!a1 , \"Inputs!A1\" , Other!A1 )",
+                "Inputs",
+                "Other",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            ),
+            "=sum(  Inputs!A2 , \"Inputs!A1\" , Other!A1 )"
+        );
+    }
+
+    #[test]
+    fn invalidates_deleted_sheet_without_reformatting_formula() {
+        assert_eq!(
+            invalidate_deleted_sheet_references(
+                "=if( Inputs!A1>0 , \"Inputs!A1\" , Other!A1 )",
+                "Inputs",
+                "Other",
+            ),
+            "=if( #REF!>0 , \"Inputs!A1\" , Other!A1 )"
         );
     }
 }

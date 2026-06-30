@@ -114,7 +114,7 @@ export function useFileActions({
 
       const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
-      const capabilities = documentCapabilities(fileData.value.fileName, existingPath);
+      const capabilities = await documentCapabilities(fileData.value.fileName, existingPath);
 
       if (existingPath && capabilities.nativeSaveExtension && !capabilities.requiresSaveAsForNativeSave) {
         isLoading.value = true;
@@ -188,7 +188,10 @@ export function useFileActions({
       const defaultName = isNewFile
         ? 'untitled'
         : fileData.value.fileName.replace(/\.[^.]+$/, '');
-      const capabilities = documentCapabilities(fileData.value.fileName, documentSessionStore.currentFilePath);
+      const capabilities = await documentCapabilities(
+        fileData.value.fileName,
+        documentSessionStore.currentFilePath
+      );
       const extension = isNewFile ? 'xlsx' : capabilities.exportExtension;
       const storageType = await getStorageType();
 

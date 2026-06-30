@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { CellValue, MergeRange } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
-import { cellToDisplayString, cellToEditorString } from '@/composables/usePendingCellSave';
 import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from '@/components/table-grid';
 import { useGridGeometry } from '@/table-geometry/useGridGeometry';
 import { useGridResize } from '@/table-geometry/useGridResize';
-import { useCellEditing } from '@/table-geometry/useCellEditing';
 import { useGridViewport } from '@/table-geometry/useGridViewport';
+import { useTableInteractionController } from '@/table-geometry/useTableInteractionController';
 
 const { isTouchDevice } = usePlatform();
 
@@ -52,6 +51,15 @@ const {
 } = useGridViewport();
 
 const mergeRanges = computed(() => props.merges ?? []);
+
+function getDraftKey(rowIndex: number, colIndex: number): string {
+  return `${props.sheetIndex},${rowIndex},${colIndex}`;
+}
+
+function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
+  return props.draftCellValues?.get(getDraftKey(rowIndex, colIndex));
+}
+
 const {
   viewportWidth,
   viewportHeight,
@@ -92,17 +100,29 @@ const {
   editingValue,
   isManualClick,
   isEditing,
-  beginEdit,
-  resetEditing,
+  getCellKey,
+  getDisplayValue,
+  handleCellClick,
+  handleCellDoubleClick,
   handleInput,
-  commit: commitEdit,
-  cancel: cancelEdit,
-  syncSelectedCell,
-} = useCellEditing({
-  getCellKey: getKey,
-  getInitialValue: (rowIndex, colIndex) => getDraftValue(rowIndex, colIndex)
-    ?? getCellValue(props.data[rowIndex]?.[colIndex])
-    ?? '',
+  handleCommit,
+  handleCancel,
+} = useTableInteractionController({
+  data: computed(() => props.data),
+  selectedCell: computed(() => props.selectedCell),
+  autoScroll: computed(() => props.autoScroll),
+  getDraftValue,
+  normalizeCellPosition,
+  scrollCellIntoView,
+  scrollGeometry: {
+    getRowOffset,
+    getColumnOffset: getDataColumnOffset,
+    getRowHeight,
+    getColumnWidth,
+    viewportWidth,
+    viewportHeight,
+  },
+  emitSelectCell: (rowIndex, colIndex) => emit('select-cell', rowIndex, colIndex),
   emitEditing: (rowIndex, colIndex, value) => emit('cell-editing', rowIndex, colIndex, value),
   emitChange: (rowIndex, colIndex, value) => emit('cell-change', rowIndex, colIndex, value),
   emitCancel: (rowIndex, colIndex) => emit('cell-edit-cancel', rowIndex, colIndex),
@@ -132,66 +152,6 @@ const {
   commitRowHeight: (rowIndex, height) => emit('row-resize', rowIndex, height),
 });
 
-watch(() => props.data, () => {
-  if (!props.selectedCell) return;
-
-  const key = getKey(props.selectedCell.row, props.selectedCell.col);
-  if (editingValue.value[key] === undefined) return;
-
-  editingValue.value[key] = getDraftValue(props.selectedCell.row, props.selectedCell.col)
-    ?? getCellValue(props.data[props.selectedCell.row]?.[props.selectedCell.col])
-    ?? '';
-}, { deep: true });
-
-watch(() => props.selectedCell, (newCell) => {
-  if (!newCell) {
-    resetEditing();
-    return;
-  }
-
-  const newKey = getKey(newCell.row, newCell.col);
-  syncSelectedCell(newKey);
-
-  scrollCellIntoView(newCell, props.autoScroll, {
-    getRowOffset,
-    getColumnOffset: getDataColumnOffset,
-    getRowHeight,
-    getColumnWidth,
-    viewportWidth: viewportWidth.value,
-    viewportHeight: viewportHeight.value,
-  });
-}, { deep: true });
-
-function getCellValue(cell: CellValue | undefined): string {
-  return cellToEditorString(cell);
-}
-
-function getKey(rowIndex: number, colIndex: number): string {
-  return `${rowIndex}-${colIndex}`;
-}
-
-function getDraftKey(rowIndex: number, colIndex: number): string {
-  return `${props.sheetIndex},${rowIndex},${colIndex}`;
-}
-
-function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
-  return props.draftCellValues?.get(getDraftKey(rowIndex, colIndex));
-}
-
-function handleBlur(rowIndex: number, colIndex: number, value: string) {
-  const originalValue = getCellValue(props.data[rowIndex]?.[colIndex]);
-
-  if (value !== originalValue || getDraftValue(rowIndex, colIndex) !== undefined) {
-    commitEdit(rowIndex, colIndex, value);
-  } else {
-    resetEditing();
-  }
-}
-
-function handleCancelEdit(rowIndex: number, colIndex: number) {
-  cancelEdit(rowIndex, colIndex);
-}
-
 function handleDeleteRow(index: number) {
   emit('delete-row', index);
 }
@@ -200,29 +160,6 @@ function handleDeleteColumn(index: number) {
   emit('delete-column', index);
 }
 
-function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValue | undefined): string {
-  const key = getKey(rowIndex, colIndex);
-  if (editingValue.value[key] !== undefined) return editingValue.value[key];
-
-  const draftValue = getDraftValue(rowIndex, colIndex);
-  if (draftValue !== undefined) return draftValue;
-
-  return cellToDisplayString(cellValue);
-}
-
-function handleCellClick(rowIndex: number, colIndex: number) {
-  const normalized = normalizeCellPosition(rowIndex, colIndex);
-  emit('select-cell', normalized.rowIndex, normalized.colIndex);
-}
-
-function handleCellDoubleClick(rowIndex: number, colIndex: number) {
-  const normalized = normalizeCellPosition(rowIndex, colIndex);
-  rowIndex = normalized.rowIndex;
-  colIndex = normalized.colIndex;
-
-  emit('select-cell', rowIndex, colIndex);
-  beginEdit(rowIndex, colIndex);
-}
 </script>
 
 <template>
@@ -258,29 +195,29 @@ function handleCellDoubleClick(rowIndex: number, colIndex: number) {
           :selected-cell="selectedCell"
           :is-manual-click="isManualClick"
           :editing-value="editingValue"
-          :get-key="getKey"
+          :get-key="getCellKey"
           :get-draft-value="getDraftValue"
           :get-display-value="getDisplayValue"
           :is-editing="isEditing"
           @cell-click="handleCellClick"
           @cell-double-click="handleCellDoubleClick"
           @input="handleInput"
-          @commit="handleBlur"
-          @cancel="handleCancelEdit"
+          @commit="handleCommit"
+          @cancel="handleCancel"
         />
 
         <MergeCellsLayer
           :cells="visibleMergeCells"
           :is-manual-click="isManualClick"
           :editing-value="editingValue"
-          :get-key="getKey"
+          :get-key="getCellKey"
           :get-display-value="getDisplayValue"
           :is-editing="isEditing"
           @cell-click="handleCellClick"
           @cell-double-click="handleCellDoubleClick"
           @input="handleInput"
-          @commit="handleBlur"
-          @cancel="handleCancelEdit"
+          @commit="handleCommit"
+          @cancel="handleCancel"
         />
       </div>
     </div>

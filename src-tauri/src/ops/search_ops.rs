@@ -1,7 +1,8 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::state::editor_state::{EditorState, SearchSource};
+use crate::state::editor_state::SearchSource;
+use crate::state::state::DocumentRegistry;
 use crate::types::{SearchResult, SearchScope};
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
@@ -26,7 +27,7 @@ fn col_to_letter(col: usize) -> String {
 
 /// 搜索单元格
 pub fn do_search(
-    state: Arc<RwLock<Option<EditorState>>>,
+    registry: Arc<RwLock<DocumentRegistry>>,
     query: String,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
@@ -35,9 +36,9 @@ pub fn do_search(
         return Ok(vec![]);
     }
 
-    let state = state.read().expect("Editor state lock poisoned");
+    let registry = registry.read().expect("Document registry lock poisoned");
 
-    let editor_state = match state.as_ref() {
+    let editor_state = match registry.active() {
         Some(s) => s,
         None => return Err(AppError::NoFileLoaded),
     };
