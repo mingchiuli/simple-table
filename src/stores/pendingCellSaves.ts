@@ -15,11 +15,15 @@ export type CellSaveState = {
   active?: CellSaveRequest;
 };
 
+export type PendingCellSavePhase = "idle" | "debouncing" | "saving" | "failed";
+
 export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   state: () => ({
     draftCellValues: new Map<string, string>(),
     queuedCellSaves: new Map<string, CellSaveRequest>(),
     activeCellSaves: new Map<string, CellSaveRequest>(),
+    phase: "idle" as PendingCellSavePhase,
+    lastError: null as string | null,
   }),
   getters: {
     hasQueuedSaves: (state) => state.queuedCellSaves.size > 0,
@@ -39,6 +43,10 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     },
     clearDraft(key: string) {
       this.draftCellValues.delete(key);
+    },
+    setPhase(phase: PendingCellSavePhase, error: string | null = null) {
+      this.phase = phase;
+      this.lastError = error;
     },
     queueSave(key: string, request: CellSaveRequest) {
       const existing = this.queuedCellSaves.get(key);
@@ -90,6 +98,8 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       this.draftCellValues.clear();
       this.queuedCellSaves.clear();
       this.activeCellSaves.clear();
+      this.phase = "idle";
+      this.lastError = null;
     },
   },
 });

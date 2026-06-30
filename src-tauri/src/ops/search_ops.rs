@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
 use crate::state::editor_state::SearchSource;
-use crate::state::state::DocumentRegistry;
+use crate::state::state::ActiveDocumentStore;
 use crate::types::{SearchResult, SearchScope};
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
@@ -27,7 +27,7 @@ fn col_to_letter(col: usize) -> String {
 
 /// 搜索单元格
 pub fn do_search(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     query: String,
     scope: SearchScope,
     current_sheet_index: Option<usize>,

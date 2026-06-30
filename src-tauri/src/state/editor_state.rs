@@ -311,7 +311,7 @@ mod tests {
     use crate::ops::EditorCommand;
     use crate::types::CellValue;
     use serde_json::Value;
-    use umya_spreadsheet::{Color, reader, writer};
+    use umya_spreadsheet::{Color, DefinedName, reader, writer};
 
     #[test]
     fn opened_workbook_is_patched_and_saved_from_editor_state() {
@@ -520,6 +520,71 @@ mod tests {
     }
 
     #[test]
+    fn structure_undo_redo_restores_cross_sheet_formula_rewrites() {
+        let mut source = umya_spreadsheet::new_file();
+        source.new_sheet("Other").expect("other sheet");
+        {
+            let inputs = source.sheet_mut(0).expect("input sheet");
+            inputs.set_name("Inputs");
+            inputs.cell_mut("A1").set_value_number(1);
+            inputs.cell_mut("A2").set_value_number(2);
+        }
+        {
+            let other = source.sheet_mut(1).expect("other sheet");
+            other.cell_mut("A1").set_formula("Inputs!A2");
+            other.cell_mut("A1").set_formula_result_number(2.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "cross-sheet-formula-undo.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("add row");
+        match &state.file_data().sheets[1].rows[0][0] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A3"),
+            value => panic!("expected adjusted formula, got {value:?}"),
+        }
+
+        state.undo().expect("undo add row").expect("undo result");
+        match &state.file_data().sheets[1].rows[0][0] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A2"),
+            value => panic!("expected restored formula, got {value:?}"),
+        }
+
+        state.redo().expect("redo add row").expect("redo result");
+        match &state.file_data().sheets[1].rows[0][0] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A3"),
+            value => panic!("expected adjusted formula after redo, got {value:?}"),
+        }
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("cross-sheet-formula-undo.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        assert_eq!(
+            saved
+                .sheet(1)
+                .expect("sheet")
+                .cell("A1")
+                .expect("A1")
+                .formula(),
+            "Inputs!A3"
+        );
+    }
+
+    #[test]
     fn structure_patch_refreshes_projection_for_merges_layout_and_formulas() {
         let mut source = umya_spreadsheet::new_file();
         {
@@ -592,6 +657,49 @@ mod tests {
                 .row_dimensions()
                 .iter()
                 .any(|row| row.row_num() == 2 && (row.height() - 84.0).abs() < 0.001)
+        );
+    }
+
+    #[test]
+    fn structure_edit_rejects_workbooks_with_unsupported_features() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("sheet")
+            .cell_mut("A1")
+            .set_value_number(1);
+        let mut defined_name = DefinedName::default();
+        defined_name.set_name("Inputs");
+        defined_name.set_address("Sheet1!$A$1");
+        source.add_defined_names(defined_name);
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "defined-name.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        let error = state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect_err("structure edit should be rejected");
+
+        match error {
+            AppError::UnsupportedWorkbookStructure(message) => {
+                assert!(message.contains("defined names"), "message was {message}");
+            }
+            error => panic!("unexpected error: {error:?}"),
+        }
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0].to_display_string(),
+            "1"
         );
     }
 
@@ -782,6 +890,47 @@ mod tests {
     }
 
     #[test]
+    fn projection_only_structure_undo_preserves_other_sheets() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "generated.xlsx".to_string(),
+                sheets: vec![
+                    crate::types::SheetData {
+                        name: "One".to_string(),
+                        rows: vec![vec![CellValue::String("first".to_string())]],
+                        ..Default::default()
+                    },
+                    crate::types::SheetData {
+                        name: "Two".to_string(),
+                        rows: vec![vec![CellValue::String("second".to_string())]],
+                        ..Default::default()
+                    },
+                ],
+            },
+            None,
+        );
+
+        state
+            .execute(EditorCommand::DeleteRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("delete row");
+        state.undo().expect("undo row delete").expect("undo result");
+
+        assert_eq!(state.file_data().sheets.len(), 2);
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("first".to_string())
+        );
+        assert_eq!(
+            state.file_data().sheets[1].rows[0][0],
+            CellValue::String("second".to_string())
+        );
+    }
+
+    #[test]
     fn set_cell_extends_sparse_projection_and_saved_workbook() {
         let mut state = EditorState::with_workbook(
             FileData {
@@ -939,19 +1088,8 @@ mod tests {
                 row_index: 0,
             })
             .expect("delete first row");
-        state
-            .execute(EditorCommand::DeleteColumn {
-                sheet_index: 0,
-                col_index: 2,
-            })
-            .expect("delete last merged column");
-
         let merges = &state.file_data().sheets[0].merges;
-        assert_eq!(merges.len(), 1);
-        assert_eq!(merges[0].start_row, 0);
-        assert_eq!(merges[0].end_row, 1);
-        assert_eq!(merges[0].start_col, 0);
-        assert_eq!(merges[0].end_col, 1);
+        assert!(merges.is_empty());
 
         let (_, saved_bytes) = state
             .generate_file_bytes_for_target("merged-structure.xlsx")
@@ -959,11 +1097,7 @@ mod tests {
         let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
         let saved_sheet = saved.sheet(0).expect("sheet");
         let saved_merges = saved_sheet.merge_cells();
-        assert_eq!(saved_merges.len(), 1);
-        assert_eq!(saved_merges[0].coordinate_start_row().unwrap().num(), 1);
-        assert_eq!(saved_merges[0].coordinate_start_col().unwrap().num(), 1);
-        assert_eq!(saved_merges[0].coordinate_end_row().unwrap().num(), 2);
-        assert_eq!(saved_merges[0].coordinate_end_col().unwrap().num(), 2);
+        assert!(saved_merges.is_empty());
     }
 
     #[test]

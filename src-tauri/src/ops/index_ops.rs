@@ -8,7 +8,7 @@ use tantivy::{Term, doc};
 use crate::state::search_index::{
     SearchCellText, SearchIndexStamp, build_sheet_index, collect_sheet_search_text,
 };
-use crate::state::state::DocumentRegistry;
+use crate::state::state::ActiveDocumentStore;
 use crate::types::{CellValue, EditorMutationResponse, EditorPatch};
 
 enum IndexJob {
@@ -16,7 +16,7 @@ enum IndexJob {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        registry: Arc<RwLock<DocumentRegistry>>,
+        registry: Arc<RwLock<ActiveDocumentStore>>,
     },
     UpdateCell {
         document_id: u64,
@@ -25,7 +25,7 @@ enum IndexJob {
         row: usize,
         col: usize,
         new_text: String,
-        registry: Arc<RwLock<DocumentRegistry>>,
+        registry: Arc<RwLock<ActiveDocumentStore>>,
     },
 }
 
@@ -52,7 +52,7 @@ impl IndexJob {
         }
     }
 
-    fn registry(&self) -> &Arc<RwLock<DocumentRegistry>> {
+    fn registry(&self) -> &Arc<RwLock<ActiveDocumentStore>> {
         match self {
             IndexJob::Rebuild { registry, .. } | IndexJob::UpdateCell { registry, .. } => registry,
         }
@@ -63,7 +63,7 @@ struct SheetPending {
     document_id: u64,
     rebuild: Option<SearchIndexStamp>,
     incremental: Vec<IndexJob>,
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 }
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -167,7 +167,7 @@ fn run_rebuild(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
-    registry: &Arc<RwLock<DocumentRegistry>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
     let search_text_snapshot: Option<Vec<SearchCellText>> = match registry.read() {
         Ok(guard) => guard.get(document_id).and_then(|editor| {
@@ -197,7 +197,7 @@ fn run_rebuild(
 fn run_incremental(
     document_id: u64,
     sheet_index: usize,
-    registry: &Arc<RwLock<DocumentRegistry>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     ops: &[IndexJob],
 ) -> bool {
     let Some((stamp, handle)) = registry.read().ok().and_then(|guard| {
@@ -255,7 +255,10 @@ fn run_incremental(
     true
 }
 
-pub fn spawn_rebuild_all_sheets_index(registry: Arc<RwLock<DocumentRegistry>>, document_id: u64) {
+pub fn spawn_rebuild_all_sheets_index(
+    registry: Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) {
     let (count, stamp) = match registry.read() {
         Ok(guard) => guard
             .get(document_id)
@@ -281,7 +284,7 @@ pub fn spawn_update_cell_index(
     row: usize,
     col: usize,
     new_value: &CellValue,
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 ) {
     let stamp = match registry.read() {
         Ok(guard) => guard
@@ -303,7 +306,7 @@ pub fn spawn_update_cell_index(
 
 pub fn schedule_index_for_response(
     response: &EditorMutationResponse,
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 ) {
     let document_id = response.document_id;
     let mut needs_rebuild = false;
@@ -338,14 +341,14 @@ mod tests {
     use super::*;
     use crate::ops::EditorCommand;
     use crate::state::editor_state::{EditorState, SearchSource};
-    use crate::state::state::DocumentRegistry;
+    use crate::state::state::ActiveDocumentStore;
     use crate::types::{FileData, SheetData};
 
     fn s(value: &str) -> CellValue {
         CellValue::String(value.to_string())
     }
 
-    fn make_registry(rows: Vec<Vec<CellValue>>) -> (Arc<RwLock<DocumentRegistry>>, u64) {
+    fn make_registry(rows: Vec<Vec<CellValue>>) -> (Arc<RwLock<ActiveDocumentStore>>, u64) {
         let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -359,13 +362,13 @@ mod tests {
             None,
         );
         let document_id = editor.document_id();
-        let mut registry = DocumentRegistry::new_for_test();
+        let mut registry = ActiveDocumentStore::new_for_test();
         registry.replace_active(editor);
         (Arc::new(RwLock::new(registry)), document_id)
     }
 
     fn rows_of(
-        registry: &Arc<RwLock<DocumentRegistry>>,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
         query: &str,
     ) -> Vec<(usize, usize)> {
@@ -382,7 +385,7 @@ mod tests {
     }
 
     fn search_source(
-        registry: &Arc<RwLock<DocumentRegistry>>,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
         query: &str,
     ) -> SearchSource {
@@ -395,7 +398,7 @@ mod tests {
     }
 
     fn current_stamp(
-        registry: &Arc<RwLock<DocumentRegistry>>,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
     ) -> SearchIndexStamp {
         let guard = registry.read().unwrap();

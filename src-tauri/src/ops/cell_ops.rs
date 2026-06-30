@@ -7,11 +7,11 @@ use crate::ops::editor_ops::{
     snapshot_mutation_response,
 };
 use crate::ops::index_ops::schedule_index_for_response;
-use crate::state::state::DocumentRegistry;
+use crate::state::state::ActiveDocumentStore;
 use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
 
 pub fn do_set_cell(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row: usize,
     col: usize,
@@ -35,7 +35,7 @@ pub fn do_set_cell(
 }
 
 pub fn do_set_cells(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     changes: Vec<SetCellRequest>,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = execute_cell_delta(registry.clone(), EditorCommand::SetCells { changes });
@@ -48,7 +48,7 @@ pub fn do_set_cells(
 }
 
 pub fn do_add_row(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -63,7 +63,7 @@ pub fn do_add_row(
 }
 
 pub fn do_delete_row(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -78,7 +78,7 @@ pub fn do_delete_row(
 }
 
 pub fn do_add_column(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_sheet_snapshot(
@@ -89,7 +89,7 @@ pub fn do_add_column(
 }
 
 pub fn do_delete_column(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -104,7 +104,7 @@ pub fn do_delete_column(
 }
 
 pub fn do_set_column_width(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
@@ -121,7 +121,7 @@ pub fn do_set_column_width(
 }
 
 pub fn do_set_row_height(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
@@ -138,20 +138,20 @@ pub fn do_set_row_height(
 }
 
 pub fn do_add_sheet(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_structural_snapshot(registry, EditorCommand::AddSheet { name: None })
 }
 
 pub fn do_delete_sheet(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_structural_snapshot(registry, EditorCommand::DeleteSheet { sheet_index })
 }
 
 fn execute_cell_delta(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
     let mut registry_guard = registry.write().expect("Document registry lock poisoned");
@@ -169,7 +169,7 @@ fn execute_cell_delta(
 }
 
 fn execute_structural_snapshot(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
@@ -185,7 +185,7 @@ fn execute_structural_snapshot(
 }
 
 fn execute_sheet_snapshot(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -202,7 +202,7 @@ fn execute_sheet_snapshot(
 }
 
 fn execute_layout(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
     patch: LayoutPatch,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -232,10 +232,10 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
 mod tests {
     use super::*;
     use crate::state::editor_state::EditorState;
-    use crate::state::state::DocumentRegistry;
+    use crate::state::state::ActiveDocumentStore;
     use crate::types::{CellValue, EditorPatch, FileData, SheetData};
 
-    fn make_registry() -> Arc<RwLock<DocumentRegistry>> {
+    fn make_registry() -> Arc<RwLock<ActiveDocumentStore>> {
         let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -248,7 +248,7 @@ mod tests {
             },
             None,
         );
-        let mut registry = DocumentRegistry::new_for_test();
+        let mut registry = ActiveDocumentStore::new_for_test();
         registry.replace_active(editor);
         Arc::new(RwLock::new(registry))
     }

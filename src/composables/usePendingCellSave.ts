@@ -166,6 +166,7 @@ export function usePendingCellSave({
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
+    pendingCellSavesStore.setPhase('debouncing');
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       startPendingSave();
@@ -177,6 +178,7 @@ export function usePendingCellSave({
       return;
     }
 
+    pendingCellSavesStore.setPhase('saving');
     pendingSavePromise = debouncedSave().finally(() => {
       pendingSavePromise = null;
       if (pendingCellSavesStore.hasQueuedSaves && !debounceTimer) {
@@ -184,6 +186,7 @@ export function usePendingCellSave({
         return;
       }
       if (pendingCellSavesStore.isIdle()) {
+        pendingCellSavesStore.setPhase('idle');
         clearPendingContentChange();
       }
     });
@@ -233,6 +236,7 @@ export function usePendingCellSave({
       await commitCellBatch(changes);
     } catch (error) {
       pendingCellSavesStore.failBatch(changes);
+      pendingCellSavesStore.setPhase('failed', String(error));
       ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
       if (pendingCellSavesStore.isIdle()) {
         clearPendingContentChange();
@@ -240,6 +244,7 @@ export function usePendingCellSave({
       return false;
     }
     if (pendingCellSavesStore.isIdle()) {
+      pendingCellSavesStore.setPhase('idle');
       clearPendingContentChange();
     }
     return true;
@@ -247,6 +252,7 @@ export function usePendingCellSave({
 
   function clearPendingContentChangeIfIdle() {
     if (!hasPendingWork()) {
+      pendingCellSavesStore.setPhase('idle');
       clearPendingContentChange();
     }
   }
@@ -255,6 +261,9 @@ export function usePendingCellSave({
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
+      if (pendingCellSavesStore.hasQueuedSaves) {
+        pendingCellSavesStore.setPhase('saving');
+      }
     }
 
     while (true) {
@@ -320,6 +329,9 @@ export function usePendingCellSave({
     if (!pendingCellSavesStore.hasQueuedSaves && debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
+      if (!pendingCellSavesStore.hasActiveSaves) {
+        pendingCellSavesStore.setPhase('idle');
+      }
     }
     clearPendingContentChangeIfIdle();
   }
@@ -341,6 +353,9 @@ export function usePendingCellSave({
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
+    }
+    if (!pendingSavePromise && pendingCellSavesStore.isIdle()) {
+      pendingCellSavesStore.setPhase('idle');
     }
   });
 

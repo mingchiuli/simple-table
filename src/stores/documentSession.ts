@@ -61,6 +61,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (response.revision < this.revision) {
         return this.data;
       }
+      if (response.revision === this.revision && response.patches?.length) {
+        useDocumentStatusStore().formulaStatus = response.formulaStatus;
+        useDocumentStatusStore().applyEditorState(response.editorState);
+        return this.data;
+      }
       this.revision = response.revision;
       const nextData = applyDocumentPatches(this.data, response.patches);
       this.data = nextData;

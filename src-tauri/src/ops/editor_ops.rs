@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
-use crate::state::state::{DocumentRegistry, EditorSessionInfo, EditorStateInfo};
+use crate::state::state::{ActiveDocumentStore, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
     AppliedOperationResult, EditorMutationResponse, EditorPatch, LayoutPatch, SheetCellChange,
 };
@@ -115,7 +115,9 @@ fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: 
     }
 }
 
-fn get_editor_session_info(registry: &Arc<RwLock<DocumentRegistry>>) -> Option<EditorSessionInfo> {
+fn get_editor_session_info(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+) -> Option<EditorSessionInfo> {
     let registry = registry.read().expect("Document registry lock poisoned");
     registry.active().map(|editor_state| EditorSessionInfo {
         document_id: editor_state.document_id(),
@@ -127,13 +129,13 @@ fn get_editor_session_info(registry: &Arc<RwLock<DocumentRegistry>>) -> Option<E
 
 /// 获取编辑器状态（包含能否撤销/重做）
 pub fn do_get_editor_state(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
     Ok(get_editor_session_info(&registry))
 }
 
 /// 标记当前编辑器内容已经成功保存
-pub fn do_mark_file_saved(registry: Arc<RwLock<DocumentRegistry>>) -> Result<(), AppError> {
+pub fn do_mark_file_saved(registry: Arc<RwLock<ActiveDocumentStore>>) -> Result<(), AppError> {
     let mut registry = registry.write().expect("Document registry lock poisoned");
     match registry.active_mut() {
         Some(editor_state) => {
@@ -146,7 +148,7 @@ pub fn do_mark_file_saved(registry: Arc<RwLock<DocumentRegistry>>) -> Result<(),
 
 /// 撤销操作
 pub fn do_undo(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
         let mut registry_guard = registry.write().expect("Document registry lock poisoned");
@@ -169,7 +171,7 @@ pub fn do_undo(
 
 /// 重做操作
 pub fn do_redo(
-    registry: Arc<RwLock<DocumentRegistry>>,
+    registry: Arc<RwLock<ActiveDocumentStore>>,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
         let mut registry_guard = registry.write().expect("Document registry lock poisoned");

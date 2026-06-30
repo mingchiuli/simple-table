@@ -4,7 +4,7 @@ use crate::io::document;
 use crate::io::platform::desktop;
 use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
-use crate::state::{get_registry, state::EditorSessionInfo};
+use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, SearchResult, SearchScope,
     SetCellRequest,
@@ -50,22 +50,22 @@ pub fn get_document_capabilities(
 
 #[tauri::command]
 pub fn get_editor_state() -> Result<Option<EditorSessionInfo>, AppError> {
-    editor_ops::do_get_editor_state(get_registry())
+    editor_ops::do_get_editor_state(active_document_store())
 }
 
 #[tauri::command]
 pub fn mark_file_saved() -> Result<(), AppError> {
-    editor_ops::do_mark_file_saved(get_registry())
+    editor_ops::do_mark_file_saved(active_document_store())
 }
 
 #[tauri::command]
 pub fn undo() -> Result<EditorMutationResponse, AppError> {
-    editor_ops::do_undo(get_registry())
+    editor_ops::do_undo(active_document_store())
 }
 
 #[tauri::command]
 pub fn redo() -> Result<EditorMutationResponse, AppError> {
-    editor_ops::do_redo(get_registry())
+    editor_ops::do_redo(active_document_store())
 }
 
 // ==================== Cell Operations ====================
@@ -77,17 +77,17 @@ pub fn set_cell(
     col: usize,
     text: String,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_set_cell(get_registry(), sheet_index, row, col, text)
+    cell_ops::do_set_cell(active_document_store(), sheet_index, row, col, text)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_cells(changes: Vec<SetCellRequest>) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_set_cells(get_registry(), changes)
+    cell_ops::do_set_cells(active_document_store(), changes)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_row(sheet_index: usize, row_index: usize) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_add_row(get_registry(), sheet_index, row_index)
+    cell_ops::do_add_row(active_document_store(), sheet_index, row_index)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -95,12 +95,12 @@ pub fn delete_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_delete_row(get_registry(), sheet_index, row_index)
+    cell_ops::do_delete_row(active_document_store(), sheet_index, row_index)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_column(sheet_index: usize) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_add_column(get_registry(), sheet_index)
+    cell_ops::do_add_column(active_document_store(), sheet_index)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -108,7 +108,7 @@ pub fn delete_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_delete_column(get_registry(), sheet_index, col_index)
+    cell_ops::do_delete_column(active_document_store(), sheet_index, col_index)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -117,7 +117,7 @@ pub fn set_column_width(
     col_index: usize,
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_set_column_width(get_registry(), sheet_index, col_index, width)
+    cell_ops::do_set_column_width(active_document_store(), sheet_index, col_index, width)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -126,19 +126,19 @@ pub fn set_row_height(
     row_index: usize,
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_set_row_height(get_registry(), sheet_index, row_index, height)
+    cell_ops::do_set_row_height(active_document_store(), sheet_index, row_index, height)
 }
 
 // ==================== Sheet Operations ====================
 
 #[tauri::command]
 pub fn add_sheet() -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_add_sheet(get_registry())
+    cell_ops::do_add_sheet(active_document_store())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_sheet(sheet_index: usize) -> Result<EditorMutationResponse, AppError> {
-    cell_ops::do_delete_sheet(get_registry(), sheet_index)
+    cell_ops::do_delete_sheet(active_document_store(), sheet_index)
 }
 
 // ==================== Search Operations ====================
@@ -149,7 +149,7 @@ pub fn search(
     scope: SearchScope,
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
-    search_ops::do_search(get_registry(), query, scope, current_sheet_index)
+    search_ops::do_search(active_document_store(), query, scope, current_sheet_index)
 }
 
 // ==================== Recent Files Operations ====================

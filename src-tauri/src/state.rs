@@ -5,4 +5,4 @@ pub mod editor_state;
 pub mod search_index;
 pub mod state;
 
-pub use state::get_registry;
+pub use state::active_document_store;

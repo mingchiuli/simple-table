@@ -32,6 +32,10 @@ pub enum AppError {
     CannotDeleteLastSheet,
     #[error("Workbook patch failed: {0}")]
     WorkbookPatchFailed(String),
+    #[error(
+        "Structure editing is disabled for this workbook because it contains unsupported Excel features: {0}"
+    )]
+    UnsupportedWorkbookStructure(String),
 
     // 内部错误
     #[error("Internal error: {0}")]

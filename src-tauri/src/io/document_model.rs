@@ -7,9 +7,9 @@ use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
-use crate::types::FormulaStatus;
 use crate::types::{AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData};
-use umya_spreadsheet::{Workbook, Worksheet};
+use crate::types::{FormulaDiagnostics, FormulaStatus};
+use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
 pub struct DocumentOperationResult {
@@ -70,19 +70,8 @@ pub(crate) struct SheetSnapshot {
 }
 
 enum BodyStructureMemento {
-    ExcelSheets {
-        sheet_count: usize,
-        sheets: Vec<WorksheetSnapshot>,
-    },
-    ExcelWorkbook {
-        workbook: Box<Workbook>,
-    },
+    ExcelWorkbook { workbook: Box<Workbook> },
     ProjectionOnly,
-}
-
-struct WorksheetSnapshot {
-    sheet_index: usize,
-    worksheet: Worksheet,
 }
 
 pub(crate) enum MementoSide {
@@ -121,7 +110,9 @@ impl<'a> DocumentTransaction<'a> {
     }
 
     fn commit(&mut self) -> Result<DocumentOperationResult, AppError> {
-        let result = self.operation.execute(&mut self.document.projection);
+        let result = self
+            .document
+            .apply_operation_to_body_and_projection(self.operation)?;
 
         if let Err(error) =
             self.document
@@ -168,14 +159,15 @@ impl Clone for SpreadsheetDocument {
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
         let (formula_runtime, formula_status) = match FormulaRuntime::new(&mut projection) {
-            Ok(runtime) => (runtime, FormulaStatus::Ready),
+            Ok(runtime) => {
+                let status = FormulaStatus::ready(runtime.diagnostics());
+                (runtime, status)
+            }
             Err(error) => {
                 eprintln!("Formula runtime initialization failed: {error}");
                 (
                     FormulaRuntime::empty(),
-                    FormulaStatus::Degraded {
-                        message: error.to_string(),
-                    },
+                    FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default()),
                 )
             }
         };
@@ -283,18 +275,14 @@ impl SpreadsheetDocument {
                 None,
                 Some(*row_index),
             )),
-            AppliedOperation::AddRow { sheet_index, .. }
-            | AppliedOperation::DeleteRow { sheet_index, .. }
-            | AppliedOperation::AddColumn { sheet_index, .. }
-            | AppliedOperation::DeleteColumn { sheet_index, .. } => {
-                DocumentMementoSide::Structure(self.sheet_structure_memento([*sheet_index]))
+            AppliedOperation::AddRow { .. }
+            | AppliedOperation::DeleteRow { .. }
+            | AppliedOperation::AddColumn { .. }
+            | AppliedOperation::DeleteColumn { .. } => {
+                DocumentMementoSide::Structure(self.structure_memento())
             }
-            AppliedOperation::AddSheet { sheet_index, .. }
-            | AppliedOperation::DeleteSheet { sheet_index } => {
-                let start = *sheet_index;
-                DocumentMementoSide::Structure(
-                    self.workbook_structure_memento(start..self.projection.sheets.len()),
-                )
+            AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => {
+                DocumentMementoSide::Structure(self.structure_memento())
             }
         }
     }
@@ -321,7 +309,7 @@ impl SpreadsheetDocument {
     fn cell_memento(&self, changed_cells: impl IntoIterator<Item = FormulaCellRef>) -> CellMemento {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
         let formula_cells = match &self.formula_status {
-            FormulaStatus::Ready => self
+            FormulaStatus::Ready { .. } => self
                 .formula_runtime
                 .impacted_formula_cells_for(changed_cells.iter().copied()),
             FormulaStatus::Degraded { .. } => self.formula_cell_positions(),
@@ -444,44 +432,9 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn sheet_structure_memento(
-        &self,
-        sheet_indexes: impl IntoIterator<Item = usize>,
-    ) -> StructureMemento {
-        let sheet_indexes: Vec<usize> = sheet_indexes.into_iter().collect();
+    fn structure_memento(&self) -> StructureMemento {
         StructureMemento {
-            projection: self.projection_structure_memento(&sheet_indexes),
-            body: match &self.body {
-                SpreadsheetDocumentBody::Excel(body) => BodyStructureMemento::ExcelSheets {
-                    sheet_count: body.workbook.sheet_count(),
-                    sheets: sheet_indexes
-                        .iter()
-                        .filter_map(|sheet_index| {
-                            body.workbook
-                                .sheet(*sheet_index)
-                                .ok()
-                                .cloned()
-                                .map(|worksheet| WorksheetSnapshot {
-                                    sheet_index: *sheet_index,
-                                    worksheet,
-                                })
-                        })
-                        .collect(),
-                },
-                SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => {
-                    BodyStructureMemento::ProjectionOnly
-                }
-            },
-        }
-    }
-
-    fn workbook_structure_memento(
-        &self,
-        sheet_indexes: impl IntoIterator<Item = usize>,
-    ) -> StructureMemento {
-        let sheet_indexes: Vec<usize> = sheet_indexes.into_iter().collect();
-        StructureMemento {
-            projection: self.projection_structure_memento(&sheet_indexes),
+            projection: self.projection_structure_memento(),
             body: match &self.body {
                 SpreadsheetDocumentBody::Excel(body) => BodyStructureMemento::ExcelWorkbook {
                     workbook: body.workbook.clone(),
@@ -493,21 +446,16 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn projection_structure_memento(&self, sheet_indexes: &[usize]) -> FileStructureMemento {
+    fn projection_structure_memento(&self) -> FileStructureMemento {
         FileStructureMemento {
             sheet_count: self.projection.sheets.len(),
-            sheets: sheet_indexes
+            sheets: self
+                .projection
+                .sheets
                 .iter()
-                .filter_map(|sheet_index| {
-                    self.projection
-                        .sheets
-                        .get(*sheet_index)
-                        .cloned()
-                        .map(|sheet| SheetSnapshot {
-                            sheet_index: *sheet_index,
-                            sheet,
-                        })
-                })
+                .cloned()
+                .enumerate()
+                .map(|(sheet_index, sheet)| SheetSnapshot { sheet_index, sheet })
                 .collect(),
         }
     }
@@ -600,17 +548,6 @@ impl SpreadsheetDocument {
 
     fn restore_structure(&mut self, memento: &StructureMemento) -> Result<(), AppError> {
         match &memento.body {
-            BodyStructureMemento::ExcelSheets {
-                sheet_count,
-                sheets,
-            } => {
-                if let SpreadsheetDocumentBody::Excel(body) = &mut self.body {
-                    restore_workbook_sheets(&mut body.workbook, *sheet_count, sheets)?;
-                    self.refresh_projection_from_workbook();
-                } else {
-                    restore_projection_sheets(&mut self.projection, &memento.projection);
-                }
-            }
             BodyStructureMemento::ExcelWorkbook { workbook } => {
                 self.body = SpreadsheetDocumentBody::Excel(ExcelDocumentBody {
                     workbook: workbook.clone(),
@@ -646,7 +583,8 @@ impl SpreadsheetDocument {
 
                 match result {
                     Ok(changes) => {
-                        self.formula_status = FormulaStatus::Ready;
+                        self.formula_status =
+                            FormulaStatus::ready(self.formula_runtime.diagnostics());
                         changes
                     }
                     Err(error) => {
@@ -677,7 +615,8 @@ impl SpreadsheetDocument {
                     .sync_cells_and_recalculate(&mut self.projection, changed_cell_refs)
                 {
                     Ok(changes) => {
-                        self.formula_status = FormulaStatus::Ready;
+                        self.formula_status =
+                            FormulaStatus::ready(self.formula_runtime.diagnostics());
                         changes
                     }
                     Err(error) => {
@@ -701,10 +640,13 @@ impl SpreadsheetDocument {
             AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
                 Vec::new()
             }
-            _ => match self.formula_runtime.rebuild(&mut self.projection) {
-                Ok(changes) => {
-                    self.formula_status = FormulaStatus::Ready;
-                    changes
+            _ => match self
+                .formula_runtime
+                .rebuild_with_diagnostics(&mut self.projection)
+            {
+                Ok(result) => {
+                    self.formula_status = FormulaStatus::ready(result.diagnostics);
+                    result.changes
                 }
                 Err(error) => {
                     eprintln!("Formula recalculation failed: {error}");
@@ -764,21 +706,23 @@ impl SpreadsheetDocument {
             }
         }
         self.formula_runtime = FormulaRuntime::empty();
-        self.formula_status = FormulaStatus::Degraded { message: error };
+        self.formula_status = FormulaStatus::degraded(error, FormulaDiagnostics::default());
         changes
     }
 
     fn rebuild_formula_runtime(&mut self) {
-        match self.formula_runtime.rebuild(&mut self.projection) {
-            Ok(_) => {
-                self.formula_status = FormulaStatus::Ready;
+        match self
+            .formula_runtime
+            .rebuild_with_diagnostics(&mut self.projection)
+        {
+            Ok(result) => {
+                self.formula_status = FormulaStatus::ready(result.diagnostics);
             }
             Err(error) => {
                 eprintln!("Formula runtime rebuild failed: {error}");
                 self.formula_runtime = FormulaRuntime::empty();
-                self.formula_status = FormulaStatus::Degraded {
-                    message: error.to_string(),
-                };
+                self.formula_status =
+                    FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default());
             }
         }
     }
@@ -786,19 +730,46 @@ impl SpreadsheetDocument {
     fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
-        result: &AppliedOperationResult,
+        _result: &AppliedOperationResult,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
         match &mut self.body {
+            SpreadsheetDocumentBody::Excel(_) if operation.is_structure_change() => Ok(()),
             SpreadsheetDocumentBody::Excel(body) => workbook_state::patch_after_operation(
                 &mut body.workbook,
                 &mut self.projection,
                 operation,
-                result,
                 cell_changes,
             )
             .map_err(|error| AppError::WorkbookPatchFailed(error.to_string())),
             SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(()),
+        }
+    }
+
+    fn apply_operation_to_body_and_projection(
+        &mut self,
+        operation: &AppliedOperation,
+    ) -> Result<AppliedOperationResult, AppError> {
+        match &mut self.body {
+            SpreadsheetDocumentBody::Excel(_) if operation.is_structure_change() => {
+                if let SpreadsheetDocumentBody::Excel(body) = &mut self.body {
+                    workbook_state::apply_structure_operation(&mut body.workbook, operation)?;
+                }
+                self.refresh_projection_from_workbook();
+                if let SpreadsheetDocumentBody::Excel(body) = &mut self.body {
+                    workbook_state::sync_all_merge_ranges_from_projection(
+                        &mut body.workbook,
+                        &self.projection,
+                    )?;
+                }
+                self.refresh_projection_from_workbook();
+                Ok(operation.projected_result_from_current_file(&self.projection))
+            }
+            SpreadsheetDocumentBody::Excel(_)
+            | SpreadsheetDocumentBody::Csv
+            | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(operation
+                .execute_cells_and_layout(&mut self.projection)
+                .unwrap_or_else(|| operation.execute(&mut self.projection))),
         }
     }
 
@@ -893,29 +864,6 @@ fn restore_projection_sheets(file_data: &mut FileData, memento: &FileStructureMe
     }
 
     file_data.sheets.truncate(memento.sheet_count);
-}
-
-fn restore_workbook_sheets(
-    workbook: &mut Workbook,
-    sheet_count: usize,
-    sheets: &[WorksheetSnapshot],
-) -> Result<(), AppError> {
-    while workbook.sheet_count() > sheet_count {
-        workbook
-            .remove_sheet(workbook.sheet_count() - 1)
-            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))?;
-    }
-
-    {
-        let workbook_sheets = workbook.sheet_collection_mut();
-        for snapshot in sheets {
-            if let Some(target) = workbook_sheets.get_mut(snapshot.sheet_index) {
-                *target = snapshot.worksheet.clone();
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn push_unique_position(

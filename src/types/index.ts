@@ -76,9 +76,16 @@ export interface EditorStateInfo {
   isDirty: boolean;
 }
 
+export interface FormulaDiagnostics {
+  invalidFormulaCount: number;
+  volatileFormulaCount: number;
+  unsupportedDependencyCount: number;
+  largeRangeDependencyCount: number;
+}
+
 export type FormulaStatus =
-  | { state: 'ready' }
-  | { state: 'degraded'; message: string };
+  | { state: 'ready'; diagnostics?: FormulaDiagnostics }
+  | { state: 'degraded'; message: string; diagnostics?: FormulaDiagnostics };
 
 export interface LayoutPatch {
   sheetIndex: number;

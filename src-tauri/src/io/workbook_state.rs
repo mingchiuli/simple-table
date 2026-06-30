@@ -9,14 +9,13 @@ use crate::io::codec::writer::{
     coordinate, px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
 };
 use crate::ops::AppliedOperation;
-use crate::types::{AppliedOperationResult, FileData, SheetCellChange, SheetData};
+use crate::types::{FileData, SheetCellChange, SheetData};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub fn patch_after_operation(
     workbook: &mut Workbook,
     file_data: &mut FileData,
     operation: &AppliedOperation,
-    result: &AppliedOperationResult,
     cell_changes: &[SheetCellChange],
 ) -> Result<(), AppError> {
     match operation {
@@ -41,58 +40,12 @@ pub fn patch_after_operation(
             }
             patch_cell_changes(workbook, file_data, cell_changes)?;
         }
-        AppliedOperation::AddRow {
-            sheet_index,
-            row_index,
-            row_data,
-            row_height,
-            ..
-        } => {
-            WorkbookStructureEditor::new(workbook, file_data).insert_row(
-                *sheet_index,
-                *row_index,
-                row_data,
-                *row_height,
-            )?;
-            patch_cell_changes(workbook, file_data, cell_changes)?;
-        }
-        AppliedOperation::DeleteRow {
-            sheet_index,
-            row_index,
-            ..
-        } => {
-            WorkbookStructureEditor::new(workbook, file_data)
-                .delete_row(*sheet_index, *row_index)?;
-            patch_cell_changes(workbook, file_data, cell_changes)?;
-        }
-        AppliedOperation::AddColumn {
-            sheet_index,
-            col_index,
-            col_data,
-            column_width,
-            ..
-        } => {
-            let actual_col_index = match result {
-                AppliedOperationResult::AddColumn { column, .. } => column.index,
-                _ => *col_index,
-            };
-            WorkbookStructureEditor::new(workbook, file_data).insert_column(
-                *sheet_index,
-                actual_col_index,
-                col_data,
-                *column_width,
-            )?;
-            patch_cell_changes(workbook, file_data, cell_changes)?;
-        }
-        AppliedOperation::DeleteColumn {
-            sheet_index,
-            col_index,
-            ..
-        } => {
-            WorkbookStructureEditor::new(workbook, file_data)
-                .delete_column(*sheet_index, *col_index)?;
-            patch_cell_changes(workbook, file_data, cell_changes)?;
-        }
+        AppliedOperation::AddRow { .. }
+        | AppliedOperation::DeleteRow { .. }
+        | AppliedOperation::AddColumn { .. }
+        | AppliedOperation::DeleteColumn { .. }
+        | AppliedOperation::AddSheet { .. }
+        | AppliedOperation::DeleteSheet { .. } => {}
         AppliedOperation::SetColumnWidth {
             sheet_index,
             col_index,
@@ -113,146 +66,156 @@ pub fn patch_after_operation(
                 patch_row_height(worksheet, *row_index, *new_height);
             }
         }
-        AppliedOperation::AddSheet { .. } => {
-            if let AppliedOperationResult::AddSheet {
-                sheet_index,
-                sheet_data,
-                ..
-            } = result
-            {
-                insert_sheet(workbook, *sheet_index, sheet_data)?;
-                refresh_projection(workbook, file_data);
-                patch_cell_changes(workbook, file_data, cell_changes)?;
-            }
-        }
-        AppliedOperation::DeleteSheet { .. } => {
-            if let AppliedOperationResult::DeleteSheet { sheet_index, .. } = result {
-                invalidate_sheet_references_before_delete(workbook, *sheet_index)?;
-                remove_sheet(workbook, *sheet_index)?;
-                refresh_projection(workbook, file_data);
-                patch_cell_changes(workbook, file_data, cell_changes)?;
-            }
-        }
     }
 
     Ok(())
 }
 
-struct WorkbookStructureEditor<'a> {
-    workbook: &'a mut Workbook,
-    file_data: &'a mut FileData,
+pub fn apply_structure_operation(
+    workbook: &mut Workbook,
+    operation: &AppliedOperation,
+) -> Result<(), AppError> {
+    let unsupported = unsupported_structure_features(workbook);
+    if !unsupported.is_empty() {
+        return Err(AppError::UnsupportedWorkbookStructure(
+            unsupported.join(", "),
+        ));
+    }
+
+    match operation {
+        AppliedOperation::AddRow {
+            sheet_index,
+            row_index,
+            ..
+        } => {
+            let sheet_name = sheet_name(workbook, *sheet_index)?;
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                worksheet.insert_new_row(*row_index as u32 + 1, 1);
+            }
+            adjust_other_sheet_formulas(
+                workbook,
+                &sheet_name,
+                StructureShift::InsertRows {
+                    row_index: *row_index,
+                    count: 1,
+                },
+            );
+        }
+        AppliedOperation::DeleteRow {
+            sheet_index,
+            row_index,
+        } => {
+            let sheet_name = sheet_name(workbook, *sheet_index)?;
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                worksheet.remove_row(*row_index as u32 + 1, 1);
+            }
+            adjust_other_sheet_formulas(
+                workbook,
+                &sheet_name,
+                StructureShift::DeleteRows {
+                    row_index: *row_index,
+                    count: 1,
+                },
+            );
+        }
+        AppliedOperation::AddColumn {
+            sheet_index,
+            col_index,
+            ..
+        } => {
+            let sheet_name = sheet_name(workbook, *sheet_index)?;
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                worksheet.insert_new_column_by_index(*col_index as u32 + 1, 1);
+            }
+            adjust_other_sheet_formulas(
+                workbook,
+                &sheet_name,
+                StructureShift::InsertColumns {
+                    col_index: *col_index,
+                    count: 1,
+                },
+            );
+        }
+        AppliedOperation::DeleteColumn {
+            sheet_index,
+            col_index,
+        } => {
+            let sheet_name = sheet_name(workbook, *sheet_index)?;
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                worksheet.remove_column_by_index(*col_index as u32 + 1, 1);
+            }
+            adjust_other_sheet_formulas(
+                workbook,
+                &sheet_name,
+                StructureShift::DeleteColumns {
+                    col_index: *col_index,
+                    count: 1,
+                },
+            );
+        }
+        AppliedOperation::AddSheet {
+            sheet_index,
+            sheet_data,
+        } => {
+            insert_sheet(workbook, *sheet_index, sheet_data)?;
+        }
+        AppliedOperation::DeleteSheet { sheet_index } => {
+            invalidate_sheet_references_before_delete(workbook, *sheet_index)?;
+            remove_sheet(workbook, *sheet_index)?;
+        }
+        AppliedOperation::SetCell { .. }
+        | AppliedOperation::SetCells { .. }
+        | AppliedOperation::SetColumnWidth { .. }
+        | AppliedOperation::SetRowHeight { .. } => {}
+    }
+
+    Ok(())
 }
 
-// Workbook structure edits deliberately support the workbook surface that
-// Simple Table currently projects: cells, formulas, merge ranges, row heights,
-// and column widths. OOXML objects outside that projection, such as defined
-// names, tables, charts, conditional formatting, and drawing anchors, are kept
-// in the original workbook when possible but are not fully semantically moved
-// by this layer yet.
-impl<'a> WorkbookStructureEditor<'a> {
-    fn new(workbook: &'a mut Workbook, file_data: &'a mut FileData) -> Self {
-        Self {
-            workbook,
-            file_data,
+fn unsupported_structure_features(workbook: &Workbook) -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if !workbook.defined_names().is_empty() {
+        features.push("workbook defined names");
+    }
+    if workbook.workbook_protection().is_some() {
+        features.push("workbook protection");
+    }
+    for worksheet in workbook.sheet_collection() {
+        if !worksheet.defined_names().is_empty() {
+            features.push("sheet defined names");
+        }
+        if worksheet.has_table() {
+            features.push("tables");
+        }
+        if worksheet.has_pivot_table() {
+            features.push("pivot tables");
+        }
+        if !worksheet.chart_collection().is_empty() {
+            features.push("charts");
+        }
+        if worksheet.data_validations().is_some() || worksheet.data_validations_2010().is_some() {
+            features.push("data validations");
+        }
+        if worksheet.sheet_protection().is_some() {
+            features.push("sheet protection");
         }
     }
+    features.sort_unstable();
+    features.dedup();
+    features
+}
 
-    fn insert_row(
-        &mut self,
-        sheet_index: usize,
-        row_index: usize,
-        row_data: &[crate::types::CellValue],
-        row_height: Option<u32>,
-    ) -> Result<(), AppError> {
-        let sheet_name = sheet_name(self.workbook, sheet_index)?;
-        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
-            worksheet.insert_new_row(row_index as u32 + 1, 1);
-            patch_row_cells(worksheet, row_index, row_data);
-            if let Some(height) = row_height {
-                patch_row_height(worksheet, row_index, Some(height));
-            }
-            sync_merge_ranges(worksheet, self.file_data, sheet_index);
+fn adjust_other_sheet_formulas(
+    workbook: &mut Workbook,
+    target_sheet_name: &str,
+    shift: StructureShift,
+) {
+    for worksheet in workbook.sheet_collection_mut() {
+        let current_sheet_name = worksheet.name().to_string();
+        if current_sheet_name == target_sheet_name {
+            continue;
         }
-        self.adjust_other_sheet_formulas(
-            &sheet_name,
-            StructureShift::InsertRows {
-                row_index,
-                count: 1,
-            },
-        );
-        refresh_projection(self.workbook, self.file_data);
-        Ok(())
-    }
-
-    fn delete_row(&mut self, sheet_index: usize, row_index: usize) -> Result<(), AppError> {
-        let sheet_name = sheet_name(self.workbook, sheet_index)?;
-        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
-            worksheet.remove_row(row_index as u32 + 1, 1);
-            sync_merge_ranges(worksheet, self.file_data, sheet_index);
-        }
-        self.adjust_other_sheet_formulas(
-            &sheet_name,
-            StructureShift::DeleteRows {
-                row_index,
-                count: 1,
-            },
-        );
-        refresh_projection(self.workbook, self.file_data);
-        Ok(())
-    }
-
-    fn insert_column(
-        &mut self,
-        sheet_index: usize,
-        col_index: usize,
-        col_data: &[crate::types::CellValue],
-        column_width: Option<u32>,
-    ) -> Result<(), AppError> {
-        let sheet_name = sheet_name(self.workbook, sheet_index)?;
-        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
-            worksheet.insert_new_column_by_index(col_index as u32 + 1, 1);
-            patch_column_cells(worksheet, col_index, col_data);
-            if let Some(width) = column_width {
-                patch_column_width(worksheet, col_index, Some(width));
-            }
-            sync_merge_ranges(worksheet, self.file_data, sheet_index);
-        }
-        self.adjust_other_sheet_formulas(
-            &sheet_name,
-            StructureShift::InsertColumns {
-                col_index,
-                count: 1,
-            },
-        );
-        refresh_projection(self.workbook, self.file_data);
-        Ok(())
-    }
-
-    fn delete_column(&mut self, sheet_index: usize, col_index: usize) -> Result<(), AppError> {
-        let sheet_name = sheet_name(self.workbook, sheet_index)?;
-        if let Some(worksheet) = sheet_mut(self.workbook, sheet_index)? {
-            worksheet.remove_column_by_index(col_index as u32 + 1, 1);
-            sync_merge_ranges(worksheet, self.file_data, sheet_index);
-        }
-        self.adjust_other_sheet_formulas(
-            &sheet_name,
-            StructureShift::DeleteColumns {
-                col_index,
-                count: 1,
-            },
-        );
-        refresh_projection(self.workbook, self.file_data);
-        Ok(())
-    }
-
-    fn adjust_other_sheet_formulas(&mut self, target_sheet_name: &str, shift: StructureShift) {
-        for worksheet in self.workbook.sheet_collection_mut() {
-            let current_sheet_name = worksheet.name().to_string();
-            if current_sheet_name == target_sheet_name {
-                continue;
-            }
-            adjust_worksheet_formulas(worksheet, target_sheet_name, &current_sheet_name, shift);
-        }
+        adjust_worksheet_formulas(worksheet, target_sheet_name, &current_sheet_name, shift);
     }
 }
 
@@ -307,6 +270,30 @@ pub fn patch_cell_shapes(
     Ok(())
 }
 
+pub fn sync_all_merge_ranges_from_projection(
+    workbook: &mut Workbook,
+    file_data: &FileData,
+) -> Result<(), AppError> {
+    for sheet_index in 0..file_data.sheets.len() {
+        let Some(worksheet) = sheet_mut(workbook, sheet_index)? else {
+            continue;
+        };
+        worksheet.merge_cells_mut().clear();
+        let Some(sheet) = file_data.sheets.get(sheet_index) else {
+            continue;
+        };
+        for merge in &sheet.merges {
+            let range = format!(
+                "{}:{}",
+                coordinate(merge.start_col as u32 + 1, merge.start_row + 1),
+                coordinate(merge.end_col as u32 + 1, merge.end_row + 1)
+            );
+            worksheet.add_merge_cells(range);
+        }
+    }
+    Ok(())
+}
+
 fn patch_cell_changes(
     workbook: &mut Workbook,
     file_data: &mut FileData,
@@ -322,41 +309,6 @@ fn patch_cell_changes(
         )?;
     }
     Ok(())
-}
-
-fn patch_row_cells(
-    worksheet: &mut Worksheet,
-    row_index: usize,
-    row_data: &[crate::types::CellValue],
-) {
-    for (col_index, cell) in row_data.iter().enumerate() {
-        write_cell(worksheet, row_index as u32 + 1, col_index as u32 + 1, cell);
-    }
-}
-
-fn patch_column_cells(
-    worksheet: &mut Worksheet,
-    col_index: usize,
-    col_data: &[crate::types::CellValue],
-) {
-    for (row_index, cell) in col_data.iter().enumerate() {
-        write_cell(worksheet, row_index as u32 + 1, col_index as u32 + 1, cell);
-    }
-}
-
-fn sync_merge_ranges(worksheet: &mut Worksheet, file_data: &FileData, sheet_index: usize) {
-    worksheet.merge_cells_mut().clear();
-    let Some(sheet) = file_data.sheets.get(sheet_index) else {
-        return;
-    };
-    for merge in &sheet.merges {
-        let range = format!(
-            "{}:{}",
-            coordinate(merge.start_col as u32 + 1, merge.start_row + 1),
-            coordinate(merge.end_col as u32 + 1, merge.end_row + 1)
-        );
-        worksheet.add_merge_cells(range);
-    }
 }
 
 fn adjust_worksheet_formulas(
@@ -432,10 +384,6 @@ pub fn refresh_projection_from_workbook(workbook: &Workbook, file_data: &mut Fil
         .iter()
         .map(read_worksheet)
         .collect();
-}
-
-fn refresh_projection(workbook: &Workbook, file_data: &mut FileData) {
-    refresh_projection_from_workbook(workbook, file_data);
 }
 
 fn patch_column_width(worksheet: &mut Worksheet, col_index: usize, width: Option<u32>) {

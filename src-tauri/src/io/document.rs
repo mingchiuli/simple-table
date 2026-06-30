@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
-use crate::state::{editor_state::EditorState, get_registry};
+use crate::state::{active_document_store, editor_state::EditorState};
 use crate::types::{DocumentCapabilities, FileData};
 use umya_spreadsheet::Workbook;
 
@@ -47,7 +47,7 @@ pub fn init_file(file_data: FileData) -> Result<(), AppError> {
 pub fn generate_current_file_bytes_for_target(
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    let registry = get_registry();
+    let registry = active_document_store();
     let registry_guard = registry.read().expect("Document registry lock poisoned");
 
     if let Some(editor_state) = registry_guard.active() {
@@ -73,7 +73,7 @@ pub fn document_capabilities(
 }
 
 fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> FileData {
-    let registry = get_registry();
+    let registry = active_document_store();
     let initialized_file_data;
     let document_id;
     {

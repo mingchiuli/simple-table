@@ -489,11 +489,40 @@ pub struct EditorMutationResponse {
     pub patches: Vec<EditorPatch>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaDiagnostics {
+    pub invalid_formula_count: usize,
+    pub volatile_formula_count: usize,
+    pub unsupported_dependency_count: usize,
+    pub large_range_dependency_count: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum FormulaStatus {
-    Ready,
-    Degraded { message: String },
+    Ready {
+        #[serde(default)]
+        diagnostics: FormulaDiagnostics,
+    },
+    Degraded {
+        message: String,
+        #[serde(default)]
+        diagnostics: FormulaDiagnostics,
+    },
+}
+
+impl FormulaStatus {
+    pub fn ready(diagnostics: FormulaDiagnostics) -> Self {
+        Self::Ready { diagnostics }
+    }
+
+    pub fn degraded(message: String, diagnostics: FormulaDiagnostics) -> Self {
+        Self::Degraded {
+            message,
+            diagnostics,
+        }
+    }
 }
 
 #[cfg(test)]
