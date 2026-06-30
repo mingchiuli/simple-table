@@ -169,13 +169,15 @@ fn run_incremental(
     state: &Arc<RwLock<Option<EditorState>>>,
     ops: &[IndexJob],
 ) -> bool {
-    let Some(handle) = state.read().ok().and_then(|guard| {
+    let Some((stamp, handle)) = state.read().ok().and_then(|guard| {
         let editor = guard.as_ref()?;
         let stamp = ops.first()?.stamp();
         if ops.iter().any(|op| op.stamp() != stamp) {
             return None;
         }
-        editor.search_writer_handle(sheet_index, stamp)
+        editor
+            .search_writer_handle(sheet_index, stamp)
+            .map(|handle| (stamp, handle))
     }) else {
         return false;
     };
@@ -211,6 +213,14 @@ fn run_incremental(
         eprintln!("incremental commit failed: {error:?}");
         return false;
     }
+    drop(writer);
+
+    if let Ok(mut guard) = state.write()
+        && let Some(editor_state) = guard.as_mut()
+    {
+        editor_state.mark_search_sheet_fresh(sheet_index, stamp);
+    }
+
     true
 }
 
@@ -327,6 +337,11 @@ mod tests {
         rows
     }
 
+    fn search_source(state: &Arc<RwLock<Option<EditorState>>>, query: &str) -> SearchSource {
+        let guard = state.read().unwrap();
+        guard.as_ref().unwrap().search_sheet(0, query, 10).source
+    }
+
     fn current_stamp(state: &Arc<RwLock<Option<EditorState>>>) -> SearchIndexStamp {
         let guard = state.read().unwrap();
         guard.as_ref().unwrap().search_index_stamp()
@@ -375,9 +390,53 @@ mod tests {
         );
 
         assert!(ok);
+        assert_eq!(search_source(&state, "orange"), SearchSource::Index);
         assert!(rows_of(&state, "apple").is_empty());
         assert_eq!(rows_of(&state, "orange"), vec![(0, 0)]);
         assert_eq!(rows_of(&state, "banana"), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn edited_sheet_uses_scan_fallback_until_incremental_index_commits() {
+        let state = make_state(vec![vec![s("old")]]);
+        run_rebuild(0, current_stamp(&state), &state);
+        assert_eq!(search_source(&state, "old"), SearchSource::Index);
+
+        let stamp = {
+            let mut guard = state.write().unwrap();
+            let editor = guard.as_mut().unwrap();
+            editor
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    new_value: s("new"),
+                })
+                .unwrap();
+            editor.search_index_stamp()
+        };
+
+        assert_eq!(search_source(&state, "new"), SearchSource::ScanFallback);
+        assert!(rows_of(&state, "old").is_empty());
+        assert_eq!(rows_of(&state, "new"), vec![(0, 0)]);
+
+        let ok = run_incremental(
+            0,
+            &state,
+            &[IndexJob::UpdateCell {
+                sheet_index: 0,
+                stamp,
+                row: 0,
+                col: 0,
+                new_text: "new".to_string(),
+                state: state.clone(),
+            }],
+        );
+
+        assert!(ok);
+        assert_eq!(search_source(&state, "new"), SearchSource::Index);
+        assert!(rows_of(&state, "old").is_empty());
+        assert_eq!(rows_of(&state, "new"), vec![(0, 0)]);
     }
 
     #[test]

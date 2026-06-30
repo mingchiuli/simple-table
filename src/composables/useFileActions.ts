@@ -4,6 +4,7 @@ import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, re
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
+import { documentCapabilities, exportExtension, nativeSaveExtension } from '@/utils/documentCapabilities';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -15,19 +16,6 @@ type UseFileActionsOptions = {
   markSaved: () => Promise<void>;
   resetDocumentStatus: () => void;
 };
-
-type NativeSaveExtension = 'xlsx' | 'xlsm';
-type ExportExtension = NativeSaveExtension | 'csv';
-
-function nativeSaveExtension(fileName: string): NativeSaveExtension | null {
-  const extension = fileName.split('.').pop()?.toLowerCase() || 'xlsx';
-  return extension === 'xlsx' || extension === 'xlsm' ? extension : null;
-}
-
-function exportExtension(fileName: string): ExportExtension | null {
-  const extension = fileName.split('.').pop()?.toLowerCase() || 'xlsx';
-  return extension === 'xlsx' || extension === 'xlsm' || extension === 'csv' ? extension : null;
-}
 
 export function useFileActions({
   fileData,
@@ -126,9 +114,9 @@ export function useFileActions({
 
       const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
-      const existingNativeExtension = existingPath ? nativeSaveExtension(existingPath) : null;
+      const capabilities = documentCapabilities(fileData.value.fileName, existingPath);
 
-      if (existingPath && existingNativeExtension) {
+      if (existingPath && capabilities.nativeSaveExtension && !capabilities.requiresSaveAsForNativeSave) {
         isLoading.value = true;
         await saveFile(existingPath);
         await markSaved();
@@ -140,12 +128,12 @@ export function useFileActions({
         return;
       }
 
-      const fallbackExtension = nativeSaveExtension(fileData.value.fileName) || 'xlsx';
+      const fallbackExtension = capabilities.nativeSaveExtension || 'xlsx';
       const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
       if (!savePath) return;
 
       if (!nativeSaveExtension(savePath)) {
-        ElMessage.error('Native save is only supported as .xlsx or .xlsm. Use export for CSV.');
+        ElMessage.error('Native save is only supported as .xlsx. Use export for CSV.');
         return;
       }
 
@@ -200,7 +188,22 @@ export function useFileActions({
       const defaultName = isNewFile
         ? 'untitled'
         : fileData.value.fileName.replace(/\.[^.]+$/, '');
-      const extension = isNewFile ? 'xlsx' : exportExtension(fileData.value.fileName) || 'xlsx';
+      const capabilities = documentCapabilities(fileData.value.fileName, documentSessionStore.currentFilePath);
+      const extension = isNewFile ? 'xlsx' : capabilities.exportExtension;
+      const storageType = await getStorageType();
+
+      if (storageType === 'desktopPath') {
+        if (!(await flushPendingCellChanges())) return;
+        const exportedPath = await exportFile(
+          documentSessionStore.currentFilePath ?? '',
+          `${defaultName}.${extension}`
+        );
+        if (exportedPath) {
+          ElMessage.success('File exported successfully');
+        }
+        return;
+      }
+
       const sourcePath = await ensureSandboxPathForExport(defaultName, extension);
       if (!sourcePath) return;
 

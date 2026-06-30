@@ -5,7 +5,7 @@
 ## Features
 
 ### Core Features
-- Open and edit Excel files (.xlsx, .xlsm)
+- Open and edit Excel files (.xlsx)
 - Open and edit CSV files
 - Multi-sheet support (add/delete sheets)
 - Add/delete rows and columns

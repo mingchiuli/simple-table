@@ -55,7 +55,7 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["xlsx", "xlsm"],
+        "ext": ["xlsx"],
         "name": "Excel",
         "description": "Microsoft Excel Spreadsheet",
         "role": "Editor"

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value};
-use tantivy::tokenizer::TextAnalyzer;
+use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
@@ -32,6 +32,12 @@ struct SearchSheetIndexEntry {
     index: SearchSheetIndex,
 }
 
+enum SearchSheetSlot {
+    Fresh(SearchSheetIndexEntry),
+    Stale(Option<SearchSheetIndexEntry>),
+    Missing,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SearchIndexStamp {
     pub document_id: u64,
@@ -52,7 +58,7 @@ static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
 pub struct SearchIndexStore {
     generation: u64,
     revision: u64,
-    sheets: Vec<Option<SearchSheetIndexEntry>>,
+    sheets: Vec<SearchSheetSlot>,
 }
 
 impl Default for SearchIndexStore {
@@ -76,7 +82,50 @@ impl SearchIndexStore {
 
     pub fn mark_stale(&mut self, document_id: u64) -> SearchIndexStamp {
         self.revision = self.revision.wrapping_add(1);
+        for slot in &mut self.sheets {
+            if let SearchSheetSlot::Fresh(_) = slot {
+                let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
+                *slot = match previous {
+                    SearchSheetSlot::Fresh(entry) => SearchSheetSlot::Stale(Some(entry)),
+                    other => other,
+                };
+            }
+        }
         self.stamp(document_id)
+    }
+
+    pub fn mark_sheet_stale(&mut self, sheet_index: usize) {
+        self.ensure_sheet_slot(sheet_index);
+        let previous = std::mem::replace(&mut self.sheets[sheet_index], SearchSheetSlot::Missing);
+        self.sheets[sheet_index] = match previous {
+            SearchSheetSlot::Fresh(entry) | SearchSheetSlot::Stale(Some(entry)) => {
+                SearchSheetSlot::Stale(Some(entry))
+            }
+            SearchSheetSlot::Stale(None) | SearchSheetSlot::Missing => SearchSheetSlot::Stale(None),
+        };
+    }
+
+    pub fn mark_sheet_fresh(
+        &mut self,
+        document_id: u64,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+    ) {
+        if stamp != self.stamp(document_id) {
+            return;
+        }
+        if let Some(slot) = self.sheets.get_mut(sheet_index)
+            && matches!(slot, SearchSheetSlot::Stale(_))
+        {
+            let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
+            *slot = match previous {
+                SearchSheetSlot::Stale(Some(entry)) if entry.revision == stamp.revision => {
+                    SearchSheetSlot::Fresh(entry)
+                }
+                SearchSheetSlot::Stale(entry) => SearchSheetSlot::Stale(entry),
+                other => other,
+            };
+        }
     }
 
     pub fn install_sheet_index(
@@ -89,13 +138,15 @@ impl SearchIndexStore {
         if stamp != self.stamp(document_id) {
             return;
         }
-        if self.sheets.len() <= sheet_index {
-            self.sheets.resize_with(sheet_index + 1, || None);
-        }
-        self.sheets[sheet_index] = index.map(|index| SearchSheetIndexEntry {
-            revision: stamp.revision,
-            index,
-        });
+        self.ensure_sheet_slot(sheet_index);
+        self.sheets[sheet_index] = index
+            .map(|index| {
+                SearchSheetSlot::Fresh(SearchSheetIndexEntry {
+                    revision: stamp.revision,
+                    index,
+                })
+            })
+            .unwrap_or(SearchSheetSlot::Missing);
     }
 
     pub fn truncate(&mut self, sheet_count: usize) {
@@ -111,7 +162,11 @@ impl SearchIndexStore {
         if stamp != self.stamp(document_id) {
             return None;
         }
-        let entry = self.sheets.get(sheet_index)?.as_ref()?;
+        let entry = match self.sheets.get(sheet_index)? {
+            SearchSheetSlot::Fresh(entry) => entry,
+            SearchSheetSlot::Stale(Some(entry)) => entry,
+            SearchSheetSlot::Stale(None) | SearchSheetSlot::Missing => return None,
+        };
         if entry.revision != stamp.revision {
             return None;
         }
@@ -137,12 +192,59 @@ impl SearchIndexStore {
             return Some(vec![]);
         }
 
-        let entry = self.sheets.get(sheet_index)?.as_ref()?;
+        let entry = match self.sheets.get(sheet_index)? {
+            SearchSheetSlot::Fresh(entry) => entry,
+            SearchSheetSlot::Stale(_) | SearchSheetSlot::Missing => return None,
+        };
         if entry.revision != self.revision {
             return None;
         };
 
         Some(search_index(&entry.index, query, limit))
+    }
+
+    fn ensure_sheet_slot(&mut self, sheet_index: usize) {
+        if self.sheets.len() <= sheet_index {
+            self.sheets
+                .resize_with(sheet_index + 1, || SearchSheetSlot::Missing);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SearchMatcher {
+    query: String,
+    query_terms: Vec<String>,
+}
+
+impl SearchMatcher {
+    pub fn new(query: &str) -> Option<Self> {
+        let query = query.trim();
+        if query.is_empty() {
+            return None;
+        }
+        Some(Self {
+            query: query.to_lowercase(),
+            query_terms: tokenize_search_text(query),
+        })
+    }
+
+    pub fn matches(&self, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        let text_lower = text.to_lowercase();
+        if text_lower.contains(&self.query) {
+            return true;
+        }
+        if self.query_terms.is_empty() {
+            return false;
+        }
+        let text_terms = tokenize_search_text(text);
+        self.query_terms
+            .iter()
+            .all(|query_term| text_terms.iter().any(|text_term| text_term == query_term))
     }
 }
 
@@ -234,6 +336,23 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
     ))
 }
 
+fn search_analyzer() -> TextAnalyzer {
+    TextAnalyzer::builder(JiebaTokenizer::new()).build()
+}
+
+fn tokenize_search_text(text: &str) -> Vec<String> {
+    let mut analyzer = search_analyzer();
+    let mut stream = analyzer.token_stream(text);
+    let mut tokens = Vec::new();
+    while stream.advance() {
+        let token = stream.token();
+        if !token.text.is_empty() {
+            tokens.push(token.text.to_lowercase());
+        }
+    }
+    tokens
+}
+
 fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<CellPosition> {
     let row_field = match index.schema.get_field("row") {
         Ok(field) => field,
@@ -321,5 +440,33 @@ mod tests {
             store.search_sheet(0, "indexed", 10),
             Some(vec![CellPosition { row: 0, col: 0 }])
         );
+    }
+
+    #[test]
+    fn sheet_stale_state_returns_no_index_until_marked_fresh() {
+        let rows = vec![vec![CellValue::String("old indexed text".to_string())]];
+        let index = build_sheet_index(&rows).expect("index");
+        let mut store = SearchIndexStore::default();
+        let document_id = 7;
+        let stamp = store.stamp(document_id);
+
+        store.install_sheet_index(document_id, 0, stamp, Some(index));
+        assert!(store.search_sheet(0, "old", 10).is_some());
+
+        store.mark_sheet_stale(0);
+        assert_eq!(store.search_sheet(0, "old", 10), None);
+
+        store.mark_sheet_fresh(document_id, 0, stamp);
+        assert!(store.search_sheet(0, "old", 10).is_some());
+    }
+
+    #[test]
+    fn fallback_matcher_supports_substring_and_token_matches() {
+        let matcher = SearchMatcher::new("开发").expect("matcher");
+        assert!(matcher.matches("AI应用开发工程师"));
+
+        let matcher = SearchMatcher::new("indexed text").expect("matcher");
+        assert!(matcher.matches("old indexed text value"));
+        assert!(!matcher.matches("indexed only"));
     }
 }

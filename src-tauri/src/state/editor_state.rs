@@ -3,11 +3,12 @@ use crate::io::document_model::{DocumentMemento, MementoSide, SpreadsheetDocumen
 use crate::ops::EditorCommand;
 use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
-    SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
+    SearchIndexStamp, SearchIndexStore, SearchMatcher, SearchSheetIndex, SearchWriterHandle,
 };
 use crate::types::{
     AppliedOperationResult, CellPosition, FileData, FormulaStatus, SheetCellChange,
 };
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
 
@@ -102,6 +103,17 @@ impl EditorState {
         self.search_index.mark_stale(self.document_id)
     }
 
+    pub fn mark_search_sheets_stale(&mut self, sheet_indexes: impl IntoIterator<Item = usize>) {
+        for sheet_index in sheet_indexes {
+            self.search_index.mark_sheet_stale(sheet_index);
+        }
+    }
+
+    pub fn mark_search_sheet_fresh(&mut self, sheet_index: usize, stamp: SearchIndexStamp) {
+        self.search_index
+            .mark_sheet_fresh(self.document_id, sheet_index, stamp);
+    }
+
     pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> SearchExecution {
         if let Some(positions) = self.search_index.search_sheet(sheet_index, query, limit) {
             return SearchExecution {
@@ -133,15 +145,13 @@ impl EditorState {
         let Some(sheet) = self.file_data().sheets.get(sheet_index) else {
             return Vec::new();
         };
-        let query_lower = query.to_lowercase();
+        let Some(matcher) = SearchMatcher::new(query) else {
+            return Vec::new();
+        };
         let mut results = Vec::new();
         for (row_idx, row) in sheet.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
-                if cell
-                    .to_display_string()
-                    .to_lowercase()
-                    .contains(&query_lower)
-                {
+                if matcher.matches(&cell.to_display_string()) {
                     results.push(CellPosition {
                         row: row_idx,
                         col: col_idx,
@@ -190,11 +200,14 @@ impl EditorState {
         let result = self.document.execute_operation(&operation, &before)?;
         let after = self.document.capture_memento_side(&operation);
         let memento = SpreadsheetDocument::create_memento(before, after);
+        let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
         self.history.push(HistoryEntry { memento });
         self.redo_stack.clear();
         self.bump_revision();
         if should_mark_search_stale {
             self.mark_search_index_stale();
+        } else {
+            self.mark_search_sheets_stale(stale_sheets);
         }
         self.update_flags();
         self.refresh_content_hash();
@@ -253,6 +266,31 @@ impl EditorState {
 
     fn bump_revision(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+}
+
+trait SearchInvalidation {
+    fn search_stale_sheets(&self, formula_changes: &[SheetCellChange]) -> Vec<usize>;
+}
+
+impl SearchInvalidation for crate::ops::AppliedOperation {
+    fn search_stale_sheets(&self, formula_changes: &[SheetCellChange]) -> Vec<usize> {
+        let mut sheets = HashSet::new();
+        match self {
+            crate::ops::AppliedOperation::SetCell { sheet_index, .. } => {
+                sheets.insert(*sheet_index);
+            }
+            crate::ops::AppliedOperation::SetCells { changes } => {
+                for change in changes {
+                    sheets.insert(change.sheet_index);
+                }
+            }
+            _ => {}
+        }
+        for change in formula_changes {
+            sheets.insert(change.sheet_index);
+        }
+        sheets.into_iter().collect()
     }
 }
 
@@ -470,6 +508,82 @@ mod tests {
                 .expect("A1")
                 .formula(),
             "Inputs!A3"
+        );
+    }
+
+    #[test]
+    fn structure_patch_refreshes_projection_for_merges_layout_and_formulas() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_number(1);
+            sheet.cell_mut("A2").set_value_number(2);
+            sheet.cell_mut("B2").set_formula("SUM(A1:A2)");
+            sheet.cell_mut("B2").set_formula_result_number(3.0);
+            sheet.add_merge_cells("C1:D2");
+            sheet.row_dimension_mut(1).set_height(84.0);
+            sheet.column_dimension_by_number_mut(3).set_width(25.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "projection-refresh.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("add row");
+
+        let sheet = &state.file_data().sheets[0];
+        assert_eq!(
+            sheet
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&1)),
+            Some(&112)
+        );
+        assert_eq!(
+            sheet
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&2)),
+            Some(&180)
+        );
+        assert_eq!(sheet.merges.len(), 1);
+        assert_eq!(sheet.merges[0].start_row, 1);
+        assert_eq!(sheet.merges[0].end_row, 2);
+        match &sheet.rows[2][1] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=SUM(A2:A3)"),
+            value => panic!("expected formula after projection refresh, got {value:?}"),
+        }
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("projection-refresh.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let saved_sheet = saved.sheet(0).expect("sheet");
+        assert_eq!(saved_sheet.cell("B3").expect("B3").formula(), "SUM(A2:A3)");
+        assert_eq!(
+            saved_sheet.merge_cells()[0]
+                .coordinate_start_row()
+                .unwrap()
+                .num(),
+            2
+        );
+        assert!(
+            saved_sheet
+                .row_dimensions()
+                .iter()
+                .any(|row| row.row_num() == 2 && (row.height() - 84.0).abs() < 0.001)
         );
     }
 
@@ -946,5 +1060,72 @@ mod tests {
         assert_eq!(sheet.cell("A1").expect("A1").value(), "x");
         assert_eq!(sheet.cell("B1").expect("B1").value(), "y");
         assert!(sheet.cell("C1").expect("C1").cell_value().is_formula());
+    }
+
+    #[test]
+    fn batched_invalid_formula_returns_error_cell_and_keeps_dependencies_live() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "batch-formula.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![
+                        CellValue::Number(Value::from(1)),
+                        CellValue::formula("=A1+1", CellValue::Null),
+                        CellValue::formula("=A1+2", CellValue::Null),
+                    ]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        let result = state
+            .execute(EditorCommand::SetCells {
+                changes: vec![
+                    crate::types::SetCellRequest {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 1,
+                        new_value: CellValue::formula("=SUM(", CellValue::Null),
+                    },
+                    crate::types::SetCellRequest {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 0,
+                        new_value: CellValue::Number(Value::from(10)),
+                    },
+                ],
+            })
+            .expect("batch formula edit");
+
+        assert!(result.cell_changes.iter().any(|change| {
+            change.sheet_index == 0
+                && change.row == 0
+                && change.col == 1
+                && matches!(&change.value, CellValue::Formula { error: Some(_), .. })
+        }));
+        assert!(matches!(
+            &state.file_data().sheets[0].rows[0][1],
+            CellValue::Formula { error: Some(_), .. }
+        ));
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][2].to_display_string(),
+            "12.0"
+        );
+
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                new_value: CellValue::Number(Value::from(20)),
+            })
+            .expect("dependency edit");
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][2].to_display_string(),
+            "22.0"
+        );
     }
 }

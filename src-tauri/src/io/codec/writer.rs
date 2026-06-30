@@ -35,7 +35,7 @@ fn generate_file_bytes_for_name(
         .unwrap_or("untitled");
 
     match extension.as_str() {
-        "xlsx" | "xlsm" => {
+        "xlsx" => {
             let workbook = workbook_from_file_data(file_data)?;
             let bytes = write_workbook_to_bytes(&workbook)?;
             Ok((format!("{output_stem}.{extension}"), bytes))
@@ -68,7 +68,7 @@ pub fn generate_excel_bytes_from_workbook_for_target(
         .filter(|stem| !stem.is_empty())
         .unwrap_or("untitled");
 
-    if !matches!(extension.as_str(), "xlsx" | "xlsm") {
+    if extension != "xlsx" {
         return Err(AppError::UnsupportedFormat);
     }
 
@@ -130,6 +130,21 @@ pub fn sync_sheet_from_sheet_data(
     worksheet: &mut Worksheet,
     sheet: &crate::types::SheetData,
 ) -> Result<(), AppError> {
+    let target_column_widths = sheet.column_widths.as_ref();
+    worksheet.column_dimensions_mut().retain(|column| {
+        target_column_widths.is_some_and(|widths| {
+            widths.contains_key(&(column.col_num().saturating_sub(1) as usize))
+        })
+    });
+
+    let target_row_heights = sheet.row_heights.as_ref();
+    worksheet
+        .row_dimensions_to_hashmap_mut()
+        .retain(|row_num, _| {
+            target_row_heights
+                .is_some_and(|heights| heights.contains_key(&(row_num.saturating_sub(1) as usize)))
+        });
+
     for (col_idx, width) in sheet.column_widths.iter().flatten() {
         worksheet
             .column_dimension_by_number_mut(*col_idx as u32 + 1)
@@ -437,10 +452,76 @@ mod tests {
     }
 
     #[test]
-    fn supports_xlsm_output_extension() {
+    fn sync_sheet_removes_stale_row_heights_and_column_widths() {
+        let mut workbook = new_file();
+        {
+            let sheet = workbook.sheet_mut(0).expect("sheet");
+            sheet.column_dimension_by_number_mut(1).set_width(25.0);
+            sheet.column_dimension_by_number_mut(2).set_width(30.0);
+            sheet.row_dimension_mut(1).set_height(72.0);
+            sheet.row_dimension_mut(2).set_height(96.0);
+        }
+
+        let mut column_widths = HashMap::new();
+        column_widths.insert(1, 210);
+        let mut row_heights = HashMap::new();
+        row_heights.insert(1, 120);
+        let sheet_data = SheetData {
+            name: "Sheet1".to_string(),
+            rows: vec![vec![CellValue::String("layout".to_string())]],
+            column_widths: Some(column_widths),
+            row_heights: Some(row_heights),
+            ..Default::default()
+        };
+
+        sync_sheet_from_sheet_data(workbook.sheet_mut(0).expect("sheet"), &sheet_data)
+            .expect("sync sheet");
+        let bytes = write_workbook_to_bytes(&workbook).expect("write workbook");
+        let read_back = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "layout-cleanup.xlsx".to_string(),
+        )
+        .expect("read workbook")
+        .file_data;
+        let sheet = &read_back.sheets[0];
+
+        assert_eq!(
+            sheet
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&0)),
+            None
+        );
+        assert_eq!(
+            sheet
+                .column_widths
+                .as_ref()
+                .and_then(|widths| widths.get(&1)),
+            Some(&210)
+        );
+        assert_eq!(
+            sheet
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&0)),
+            None
+        );
+        assert_eq!(
+            sheet
+                .row_heights
+                .as_ref()
+                .and_then(|heights| heights.get(&1)),
+            Some(&120)
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_output_extension() {
         let file_data = FileData {
             path: String::new(),
-            file_name: "macro.xlsm".to_string(),
+            file_name: "unsupported.bin".to_string(),
             sheets: vec![SheetData {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("ok".to_string())]],
@@ -448,10 +529,9 @@ mod tests {
             }],
         };
 
-        let (name, bytes) =
-            generate_file_bytes_for_target(&file_data, "macro.xlsm").expect("write xlsm");
-
-        assert_eq!(name, "macro.xlsm");
-        assert!(!bytes.is_empty());
+        assert!(matches!(
+            generate_file_bytes_for_target(&file_data, "unsupported.bin"),
+            Err(AppError::UnsupportedFormat)
+        ));
     }
 }

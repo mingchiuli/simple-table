@@ -82,6 +82,24 @@ export function usePendingCellSave({
   const draftCellValues = pendingCellSavesStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
 
+  function cellKey(sheetIndex: number, row: number, col: number) {
+    return getCellKey(sheetIndex, row, col);
+  }
+
+  function saveState(sheetIndex: number, row: number, col: number) {
+    const key = cellKey(sheetIndex, row, col);
+    return {
+      key,
+      draft: draftCellValues.get(key),
+      queued: queuedSaves.get(key),
+      active: activeSaves.get(key),
+    };
+  }
+
+  function hasPendingWork() {
+    return queuedSaves.size > 0 || activeSaves.size > 0 || pendingSavePromise !== null;
+  }
+
   const currentCellValue = computed(() => {
     if (!selectedCell.value || !currentSheet.value) return undefined;
     return currentSheet.value.rows[selectedCell.value.row]?.[selectedCell.value.col];
@@ -115,7 +133,7 @@ export function usePendingCellSave({
 
   function selectedCellKey() {
     if (!selectedCell.value) return null;
-    return getCellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col);
+    return cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col);
   }
 
   function committedCellValue(sheetIndex: number, row: number, col: number): CellValue {
@@ -123,24 +141,22 @@ export function usePendingCellSave({
   }
 
   function visibleBaseCellValue(sheetIndex: number, row: number, col: number): CellValue {
-    const key = getCellKey(sheetIndex, row, col);
-    const activeSave = activeSaves.get(key);
-    return activeSave ? parseCellValue(activeSave.value) : committedCellValue(sheetIndex, row, col);
+    const { active } = saveState(sheetIndex, row, col);
+    return active ? parseCellValue(active.value) : committedCellValue(sheetIndex, row, col);
   }
 
   function visibleBaseEditorString(sheetIndex: number, row: number, col: number): string {
-    const key = getCellKey(sheetIndex, row, col);
-    return activeSaves.get(key)?.value ?? cellToEditorString(committedCellValue(sheetIndex, row, col));
+    const { active } = saveState(sheetIndex, row, col);
+    return active?.value ?? cellToEditorString(committedCellValue(sheetIndex, row, col));
   }
 
   function editorStringForCell(sheetIndex: number, row: number, col: number): string {
-    const key = getCellKey(sheetIndex, row, col);
-    return draftCellValues.get(key) ?? visibleBaseEditorString(sheetIndex, row, col);
+    const { draft } = saveState(sheetIndex, row, col);
+    return draft ?? visibleBaseEditorString(sheetIndex, row, col);
   }
 
   function updateDraftCell(sheetIndex: number, row: number, col: number, value: string) {
-    const key = getCellKey(sheetIndex, row, col);
-    const activeSave = activeSaves.get(key);
+    const { key, active: activeSave, queued } = saveState(sheetIndex, row, col);
     const committedValue = committedCellValue(sheetIndex, row, col);
     const visibleBaseValue = activeSave ? parseCellValue(activeSave.value) : committedValue;
 
@@ -166,7 +182,7 @@ export function usePendingCellSave({
       return;
     }
 
-    if (draftCellValues.get(key) === value && queuedSaves.get(key)?.value === value) {
+    if (draftCellValues.get(key) === value && queued?.value === value) {
       return;
     }
 
@@ -177,9 +193,7 @@ export function usePendingCellSave({
   }
 
   function queueCellSave(sheetIndex: number, row: number, col: number, value: string, oldValue: CellValue) {
-    const key = getCellKey(sheetIndex, row, col);
-    const existing = queuedSaves.get(key);
-    const activeSave = activeSaves.get(key);
+    const { key, queued: existing, active: activeSave } = saveState(sheetIndex, row, col);
     queuedSaves.set(key, {
       sheetIndex,
       row,
@@ -232,13 +246,13 @@ export function usePendingCellSave({
     });
 
     const selectedKey = selectedCell.value
-      ? getCellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
+      ? cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
       : null;
     const response = await api.setCells(payload);
     applyMutationResponse(response);
 
     for (const change of changes) {
-      const key = getCellKey(change.sheetIndex, change.row, change.col);
+      const key = cellKey(change.sheetIndex, change.row, change.col);
       activeSaves.delete(key);
       if (draftCellValues.get(key) === change.value) {
         draftCellValues.delete(key);
@@ -263,14 +277,14 @@ export function usePendingCellSave({
     const changes = Array.from(queuedSaves.values());
     queuedSaves.clear();
     for (const change of changes) {
-      activeSaves.set(getCellKey(change.sheetIndex, change.row, change.col), change);
+      activeSaves.set(cellKey(change.sheetIndex, change.row, change.col), change);
     }
 
     try {
       await commitCellBatch(changes);
     } catch (error) {
       for (const change of changes) {
-        activeSaves.delete(getCellKey(change.sheetIndex, change.row, change.col));
+        activeSaves.delete(cellKey(change.sheetIndex, change.row, change.col));
         clearDraftIfUnchanged(change);
       }
       ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
@@ -286,7 +300,7 @@ export function usePendingCellSave({
   }
 
   function clearDraftIfUnchanged(change: CellSaveRequest) {
-    const key = getCellKey(change.sheetIndex, change.row, change.col);
+    const key = cellKey(change.sheetIndex, change.row, change.col);
     if (draftCellValues.get(key) === change.value) {
       draftCellValues.delete(key);
     }
@@ -296,7 +310,7 @@ export function usePendingCellSave({
   }
 
   function clearPendingContentChangeIfIdle() {
-    if (!queuedSaves.size && !activeSaves.size && !pendingSavePromise) {
+    if (!hasPendingWork()) {
       clearPendingContentChange();
     }
   }
@@ -351,8 +365,7 @@ export function usePendingCellSave({
     if (!currentSheet.value) return;
 
     const sheetIndex = currentSheetIndex.value;
-    const key = getCellKey(sheetIndex, row, col);
-    const activeSave = activeSaves.get(key);
+    const { key, active: activeSave } = saveState(sheetIndex, row, col);
     draftCellValues.delete(key);
     queuedSaves.delete(key);
 

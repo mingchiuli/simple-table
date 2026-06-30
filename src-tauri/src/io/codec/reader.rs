@@ -26,7 +26,7 @@ pub fn read_file_with_workbook_from_bytes(
     let cursor = Cursor::new(bytes);
 
     match extension.to_lowercase().as_str() {
-        "xlsx" | "xlsm" => read_xlsx_from_bytes(cursor, path, file_name),
+        "xlsx" => read_xlsx_from_bytes(cursor, path, file_name),
         "csv" => read_csv_from_bytes(cursor, path, file_name),
         _ => Err(AppError::UnsupportedFormat),
     }

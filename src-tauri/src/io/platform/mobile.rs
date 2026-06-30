@@ -123,7 +123,7 @@ pub fn export_file(
     let dest = match app
         .dialog()
         .file()
-        .add_filter("Spreadsheet", &["xlsx", "xlsm", "csv", "*"])
+        .add_filter("Spreadsheet", &["xlsx", "csv", "*"])
         .set_picker_mode(PickerMode::Document)
         .set_file_name(default_name)
         .blocking_save_file()

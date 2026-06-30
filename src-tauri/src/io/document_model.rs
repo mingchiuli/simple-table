@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::AppError;
-use crate::formula::engine::FormulaRuntime;
+use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
 use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
@@ -169,7 +169,7 @@ impl SpreadsheetDocument {
             .unwrap_or_else(|| "xlsx".to_string());
 
         match extension.as_str() {
-            "xlsx" | "xlsm" => match &self.body {
+            "xlsx" => match &self.body {
                 SpreadsheetDocumentBody::Excel(body) => {
                     writer::generate_excel_bytes_from_workbook_for_target(
                         &body.workbook,
@@ -226,7 +226,11 @@ impl SpreadsheetDocument {
                 row,
                 col,
                 ..
-            } => DocumentMementoSide::Cells(self.cell_memento(*sheet_index, *row, *col)),
+            } => DocumentMementoSide::Cells(self.cell_memento([FormulaCellRef {
+                sheet_index: *sheet_index,
+                row: *row,
+                col: *col,
+            }])),
             AppliedOperation::SetCells { changes } => {
                 DocumentMementoSide::Cells(self.cell_batch_memento(changes))
             }
@@ -283,19 +287,31 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn cell_memento(&self, sheet_index: usize, row: usize, col: usize) -> CellMemento {
-        self.cell_positions_memento([(sheet_index, row, col)])
+    fn cell_memento(&self, changed_cells: impl IntoIterator<Item = FormulaCellRef>) -> CellMemento {
+        let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
+        let formula_cells = match &self.formula_status {
+            FormulaStatus::Ready => self
+                .formula_runtime
+                .impacted_formula_cells_for(changed_cells.iter().copied()),
+            FormulaStatus::Degraded { .. } => self.formula_cell_positions(),
+        };
+        self.cell_positions_memento(
+            changed_cells
+                .into_iter()
+                .chain(formula_cells)
+                .map(|cell| (cell.sheet_index, cell.row, cell.col)),
+        )
     }
 
     fn cell_batch_memento(
         &self,
         changes: &[crate::ops::core_ops::ResolvedCellEdit],
     ) -> CellMemento {
-        self.cell_positions_memento(
-            changes
-                .iter()
-                .map(|change| (change.sheet_index, change.row, change.col)),
-        )
+        self.cell_memento(changes.iter().map(|change| FormulaCellRef {
+            sheet_index: change.sheet_index,
+            row: change.row,
+            col: change.col,
+        }))
     }
 
     fn cell_positions_memento(
@@ -307,16 +323,6 @@ impl SpreadsheetDocument {
         for (sheet_index, row, col) in positions_to_capture {
             push_unique_position(&mut positions, &mut seen, sheet_index, row, col);
         }
-        for (formula_sheet_index, formula_row, formula_col) in self.formula_cell_positions() {
-            push_unique_position(
-                &mut positions,
-                &mut seen,
-                formula_sheet_index,
-                formula_row,
-                formula_col,
-            );
-        }
-
         let sheet_shapes = positions
             .iter()
             .map(|(sheet_index, _, _)| *sheet_index)
@@ -349,27 +355,26 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn formula_cell_positions(&self) -> Vec<(usize, usize, usize)> {
-        self.projection
-            .sheets
-            .iter()
-            .enumerate()
-            .flat_map(|(sheet_index, sheet)| {
-                sheet
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(row, row_data)| {
-                        row_data.iter().enumerate().filter_map(move |(col, cell)| {
-                            matches!(cell, CellValue::Formula { .. }).then_some((
-                                sheet_index,
-                                row,
-                                col,
-                            ))
-                        })
-                    })
-            })
-            .collect()
+    fn formula_cell_positions(&self) -> Vec<FormulaCellRef> {
+        let mut positions = self.formula_runtime.all_formula_cells();
+        let mut seen: HashSet<_> = positions.iter().copied().collect();
+        for (sheet_index, sheet) in self.projection.sheets.iter().enumerate() {
+            for (row, row_data) in sheet.rows.iter().enumerate() {
+                for (col, cell) in row_data.iter().enumerate() {
+                    if matches!(cell, CellValue::Formula { .. }) {
+                        let cell_ref = FormulaCellRef {
+                            sheet_index,
+                            row,
+                            col,
+                        };
+                        if seen.insert(cell_ref) {
+                            positions.push(cell_ref);
+                        }
+                    }
+                }
+            }
+        }
+        positions
     }
 
     fn layout_memento(
@@ -627,8 +632,16 @@ impl SpreadsheetDocument {
                     }
                 }
             }
-            AppliedOperation::SetCells { .. } => {
-                match self.formula_runtime.rebuild(&mut self.projection) {
+            AppliedOperation::SetCells { changes } => {
+                let changed_cells = changes.iter().map(|change| FormulaCellRef {
+                    sheet_index: change.sheet_index,
+                    row: change.row,
+                    col: change.col,
+                });
+                match self
+                    .formula_runtime
+                    .sync_cells_and_recalculate(&mut self.projection, changed_cells)
+                {
                     Ok(changes) => {
                         self.formula_status = FormulaStatus::Ready;
                         changes

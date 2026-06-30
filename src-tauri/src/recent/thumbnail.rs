@@ -22,7 +22,7 @@ enum ThumbnailCell {
 
 fn get_format_from_extension(ext: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
-        "xlsx" | "xlsm" => Some("xlsx"),
+        "xlsx" => Some("xlsx"),
         "csv" => Some("csv"),
         _ => None,
     }

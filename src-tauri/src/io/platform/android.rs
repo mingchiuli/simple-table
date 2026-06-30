@@ -31,25 +31,26 @@ fn supported_extension_from_name(file_name: &str) -> Option<String> {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase())?;
     match ext.as_str() {
-        "xlsx" | "xlsm" | "csv" => Some(ext),
+        "xlsx" | "csv" => Some(ext),
         _ => None,
     }
 }
 
-fn extension_for_import(file_name: &str, bytes: &[u8]) -> String {
+fn extension_for_import(file_name: &str, bytes: &[u8]) -> Result<String, AppError> {
     if let Some(ext) = supported_extension_from_name(file_name) {
-        return ext;
+        return Ok(ext);
     }
 
-    if bytes.starts_with(b"PK") {
-        return "xlsx".to_string();
+    let has_extension = Path::new(file_name).extension().is_some();
+    if !has_extension && bytes.starts_with(b"PK") {
+        return Ok("xlsx".to_string());
     }
 
-    if str::from_utf8(bytes).is_ok() {
-        return "csv".to_string();
+    if !has_extension && str::from_utf8(bytes).is_ok() {
+        return Ok("csv".to_string());
     }
 
-    "xlsx".to_string()
+    Err(AppError::UnsupportedFormat)
 }
 
 fn normalize_display_name(file_name: String, extension: &str) -> String {
@@ -71,7 +72,6 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
             "Spreadsheet",
             &[
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "application/vnd.ms-excel",
                 "text/csv",
                 "*/*",
             ],
@@ -90,7 +90,7 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
         .read(source)
         .map_err(|e| AppError::ReadError(format!("Failed to read selected file: {}", e)))?;
 
-    let extension = extension_for_import(&raw_file_name, &bytes);
+    let extension = extension_for_import(&raw_file_name, &bytes)?;
     let file_name = normalize_display_name(raw_file_name, &extension);
     let sandbox_path = unique_import_path(app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
@@ -121,4 +121,29 @@ pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<String,
         extension_from_name(default_name)
     ));
     Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_extension_requires_supported_extension_for_zip_files() {
+        assert_eq!(
+            extension_for_import("book.xlsx", b"PK\x03\x04").expect("xlsx"),
+            "xlsx"
+        );
+        assert_eq!(
+            extension_for_import("data.csv", b"a,b").expect("csv"),
+            "csv"
+        );
+        assert_eq!(
+            extension_for_import("unknown", b"PK\x03\x04").expect("extensionless xlsx"),
+            "xlsx"
+        );
+        assert!(matches!(
+            extension_for_import("unsupported.bin", b"PK\x03\x04"),
+            Err(AppError::UnsupportedFormat)
+        ));
+    }
 }

@@ -9,11 +9,11 @@ use crate::types::{CellValue, FileData, SheetCellChange};
 
 const MAX_RANGE_DEPENDENCY_CELLS: u32 = 10_000;
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct FormulaCellRef {
-    sheet_index: usize,
-    row: usize,
-    col: usize,
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct FormulaCellRef {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
 }
 
 #[derive(Default)]
@@ -124,19 +124,96 @@ impl FormulaRuntime {
         Ok(changes)
     }
 
+    pub fn sync_cells_and_recalculate(
+        &mut self,
+        file_data: &mut FileData,
+        changed_cells: impl IntoIterator<Item = FormulaCellRef>,
+    ) -> Result<Vec<SheetCellChange>, AppError> {
+        let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
+        let mut changes = Vec::new();
+        let mut dependency_graph_needs_rebuild = false;
+
+        for cell_ref in &changed_cells {
+            let sheet = file_data
+                .sheets
+                .get(cell_ref.sheet_index)
+                .ok_or(AppError::InvalidSheetIndex(cell_ref.sheet_index))?;
+            let cell = sheet
+                .rows
+                .get(cell_ref.row)
+                .and_then(|row_data| row_data.get(cell_ref.col))
+                .ok_or(AppError::InvalidCellPosition {
+                    row: cell_ref.row,
+                    col: cell_ref.col,
+                })?;
+            let was_formula = self.dependency_index.formulas.contains(cell_ref);
+            let is_formula = matches!(cell, CellValue::Formula { .. });
+
+            let registration_result = set_workbook_cell(
+                &mut self.workbook,
+                &sheet.name,
+                cell_ref.sheet_index,
+                cell_ref.row,
+                cell_ref.col,
+                cell,
+            )?;
+            changes.extend(registration_result.invalid_formulas);
+            if registration_result.registered_formulas.contains(cell_ref) {
+                self.registered_formulas.insert(*cell_ref);
+            } else {
+                self.registered_formulas.remove(cell_ref);
+            }
+            dependency_graph_needs_rebuild |= was_formula || is_formula;
+        }
+
+        apply_cell_changes(file_data, &changes);
+
+        if dependency_graph_needs_rebuild {
+            self.dependency_index = build_dependency_index(file_data, &self.registered_formulas);
+        }
+
+        let mut targets = HashSet::new();
+        for cell_ref in &changed_cells {
+            targets.extend(self.impacted_formula_cells(cell_ref));
+            if self.dependency_index.formulas.contains(cell_ref) {
+                targets.insert(*cell_ref);
+            }
+        }
+        changes.extend(self.recalculate_formula_cells(file_data, targets.iter())?);
+        Ok(changes)
+    }
+
+    pub fn impacted_formula_cells_for(
+        &self,
+        changed_cells: impl IntoIterator<Item = FormulaCellRef>,
+    ) -> Vec<FormulaCellRef> {
+        let mut impacted = HashSet::new();
+        for cell_ref in changed_cells {
+            impacted.extend(self.impacted_formula_cells(&cell_ref));
+            if self.dependency_index.formulas.contains(&cell_ref) {
+                impacted.insert(cell_ref);
+            }
+        }
+        impacted.into_iter().collect()
+    }
+
+    pub fn all_formula_cells(&self) -> Vec<FormulaCellRef> {
+        self.dependency_index.formulas.iter().copied().collect()
+    }
+
     fn impacted_formula_cells(&self, changed_cell: &FormulaCellRef) -> HashSet<FormulaCellRef> {
         let mut impacted = self.dependency_index.always_recalculate.clone();
         let mut queue = VecDeque::new();
-        queue.push_back(changed_cell.clone());
-        queue.extend(impacted.iter().cloned());
+        queue.push_back(*changed_cell);
+        queue.extend(impacted.iter().copied());
 
         while let Some(source) = queue.pop_front() {
             let Some(dependents) = self.dependency_index.dependents_by_source.get(&source) else {
                 continue;
             };
             for dependent in dependents {
-                if impacted.insert(dependent.clone()) {
-                    queue.push_back(dependent.clone());
+                if impacted.insert(*dependent) {
+                    queue.push_back(*dependent);
                 }
             }
         }
@@ -148,7 +225,7 @@ impl FormulaRuntime {
         &mut self,
         file_data: &mut FileData,
     ) -> Result<Vec<SheetCellChange>, AppError> {
-        let targets: Vec<FormulaCellRef> = self.dependency_index.formulas.iter().cloned().collect();
+        let targets: Vec<FormulaCellRef> = self.dependency_index.formulas.iter().copied().collect();
         self.recalculate_formula_cells(file_data, targets.iter())
     }
 
@@ -572,6 +649,67 @@ mod tests {
             .expect("incremental recalc");
 
         assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "12.0");
+        assert!(matches!(
+            &file_data.sheets[0].rows[0][1],
+            CellValue::Formula { error: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn batch_formula_edit_returns_cell_error_and_keeps_other_formulas_live() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "formula.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![
+                    CellValue::Number(Value::from(1)),
+                    CellValue::formula("=A1+1", CellValue::Null),
+                    CellValue::formula("=A1+2", CellValue::Null),
+                    CellValue::Number(Value::from(0)),
+                ]],
+                ..Default::default()
+            }],
+        };
+
+        let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
+        file_data.sheets[0].rows[0][1] = CellValue::formula("=SUM(", CellValue::Null);
+        file_data.sheets[0].rows[0][3] = CellValue::formula("=A1+3", CellValue::Null);
+
+        let changes = runtime
+            .sync_cells_and_recalculate(
+                &mut file_data,
+                [
+                    FormulaCellRef {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 1,
+                    },
+                    FormulaCellRef {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 3,
+                    },
+                ],
+            )
+            .expect("batch recalc isolates invalid formulas");
+
+        assert!(changes.iter().any(|change| {
+            change.sheet_index == 0
+                && change.row == 0
+                && change.col == 1
+                && matches!(&change.value, CellValue::Formula { error: Some(_), .. })
+        }));
+        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "3.0");
+        assert_eq!(file_data.sheets[0].rows[0][3].to_display_string(), "4.0");
+
+        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 0)
+            .expect("incremental recalc remains live");
+
+        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "12.0");
+        assert_eq!(file_data.sheets[0].rows[0][3].to_display_string(), "13.0");
         assert!(matches!(
             &file_data.sheets[0].rows[0][1],
             CellValue::Formula { error: Some(_), .. }
