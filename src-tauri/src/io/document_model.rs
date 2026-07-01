@@ -7,7 +7,9 @@ use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
-use crate::types::{AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData};
+use crate::types::{
+    AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData, WorkbookCapabilities,
+};
 use crate::types::{FormulaDiagnostics, FormulaStatus};
 use umya_spreadsheet::Workbook;
 
@@ -32,10 +34,26 @@ pub(crate) struct DocumentMemento {
     after: DocumentMementoSide,
 }
 
+impl DocumentMemento {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        self.before.estimated_bytes() + self.after.estimated_bytes()
+    }
+}
+
 pub(crate) enum DocumentMementoSide {
     Cells(CellMemento),
     Layout(LayoutMemento),
     Structure(StructureMemento),
+}
+
+impl DocumentMementoSide {
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            DocumentMementoSide::Cells(memento) => memento.estimated_bytes(),
+            DocumentMementoSide::Layout(memento) => memento.estimated_bytes(),
+            DocumentMementoSide::Structure(memento) => memento.estimated_bytes(),
+        }
+    }
 }
 
 pub(crate) struct CellMemento {
@@ -43,9 +61,29 @@ pub(crate) struct CellMemento {
     sheet_shapes: Vec<SheetShapeMemento>,
 }
 
+impl CellMemento {
+    fn estimated_bytes(&self) -> usize {
+        self.cells
+            .iter()
+            .map(estimate_sheet_cell_change_bytes)
+            .sum::<usize>()
+            + self
+                .sheet_shapes
+                .iter()
+                .map(SheetShapeMemento::estimated_bytes)
+                .sum::<usize>()
+    }
+}
+
 struct SheetShapeMemento {
     sheet_index: usize,
     row_lengths: Vec<usize>,
+}
+
+impl SheetShapeMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + self.row_lengths.len() * std::mem::size_of::<usize>()
+    }
 }
 
 pub(crate) struct LayoutMemento {
@@ -54,9 +92,21 @@ pub(crate) struct LayoutMemento {
     row_heights: HashMap<usize, Option<u32>>,
 }
 
+impl LayoutMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + (self.column_widths.len() + self.row_heights.len()) * 32
+    }
+}
+
 pub(crate) struct StructureMemento {
     projection: FileStructureMemento,
     body: BodyStructureMemento,
+}
+
+impl StructureMemento {
+    fn estimated_bytes(&self) -> usize {
+        self.projection.estimated_bytes() + self.body.estimated_bytes()
+    }
 }
 
 pub(crate) struct FileStructureMemento {
@@ -64,14 +114,40 @@ pub(crate) struct FileStructureMemento {
     sheets: Vec<SheetSnapshot>,
 }
 
+impl FileStructureMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .sheets
+                .iter()
+                .map(SheetSnapshot::estimated_bytes)
+                .sum::<usize>()
+    }
+}
+
 pub(crate) struct SheetSnapshot {
     sheet_index: usize,
     sheet: SheetData,
 }
 
+impl SheetSnapshot {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + estimate_sheet_data_bytes(&self.sheet)
+    }
+}
+
 enum BodyStructureMemento {
     ExcelWorkbook { workbook: Box<Workbook> },
     ProjectionOnly,
+}
+
+impl BodyStructureMemento {
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            BodyStructureMemento::ExcelWorkbook { .. } => 8 * 1024 * 1024,
+            BodyStructureMemento::ProjectionOnly => 0,
+        }
+    }
 }
 
 pub(crate) enum MementoSide {
@@ -198,6 +274,19 @@ impl SpreadsheetDocument {
 
     pub fn formula_status(&self) -> FormulaStatus {
         self.formula_status.clone()
+    }
+
+    pub fn capabilities(&self) -> WorkbookCapabilities {
+        match &self.body {
+            SpreadsheetDocumentBody::Excel(body) => {
+                workbook_state::workbook_capabilities(&body.workbook)
+            }
+            SpreadsheetDocumentBody::Csv => WorkbookCapabilities {
+                can_native_save: false,
+                ..Default::default()
+            },
+            SpreadsheetDocumentBody::GeneratedWorkbook => WorkbookCapabilities::default(),
+        }
     }
 
     pub fn generate_file_bytes_for_target(
@@ -886,6 +975,88 @@ fn ensure_projection_cell_exists(sheet: &mut crate::types::SheetData, row: usize
     for row_data in &mut sheet.rows {
         if row_data.len() < target_width {
             row_data.resize(target_width, CellValue::Null);
+        }
+    }
+}
+
+fn estimate_sheet_cell_change_bytes(change: &SheetCellChange) -> usize {
+    std::mem::size_of::<SheetCellChange>() + estimate_cell_value_bytes(&change.value)
+}
+
+fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
+    std::mem::size_of::<SheetData>()
+        + sheet.name.len()
+        + sheet
+            .rows
+            .iter()
+            .map(|row| {
+                std::mem::size_of::<Vec<CellValue>>()
+                    + row.iter().map(estimate_cell_value_bytes).sum::<usize>()
+            })
+            .sum::<usize>()
+        + sheet.merges.len() * std::mem::size_of::<crate::types::MergeRange>()
+        + sheet
+            .column_widths
+            .as_ref()
+            .map(|widths| widths.len() * 24)
+            .unwrap_or_default()
+        + sheet
+            .row_heights
+            .as_ref()
+            .map(|heights| heights.len() * 24)
+            .unwrap_or_default()
+        + sheet
+            .rich
+            .cell_styles
+            .iter()
+            .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
+            .sum::<usize>()
+        + sheet.rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
+}
+
+fn estimate_cell_style_projection_bytes(style: &crate::types::CellStyleProjection) -> usize {
+    style
+        .font_color
+        .as_ref()
+        .map(String::len)
+        .unwrap_or_default()
+        + style
+            .background_color
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .horizontal_align
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .vertical_align
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .number_format
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + std::mem::size_of::<crate::types::CellStyleProjection>()
+}
+
+fn estimate_cell_value_bytes(cell: &CellValue) -> usize {
+    match cell {
+        CellValue::Null | CellValue::Boolean(_) => std::mem::size_of::<CellValue>(),
+        CellValue::String(value) => std::mem::size_of::<CellValue>() + value.len(),
+        CellValue::Number(value) => std::mem::size_of::<CellValue>() + value.to_string().len(),
+        CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } => {
+            std::mem::size_of::<CellValue>()
+                + formula.len()
+                + estimate_cell_value_bytes(cached_value)
+                + error.as_ref().map(String::len).unwrap_or_default()
         }
     }
 }

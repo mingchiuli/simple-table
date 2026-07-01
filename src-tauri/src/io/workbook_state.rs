@@ -9,7 +9,7 @@ use crate::io::codec::writer::{
     coordinate, px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
 };
 use crate::ops::AppliedOperation;
-use crate::types::{FileData, SheetCellChange, SheetData};
+use crate::types::{FileData, SheetCellChange, SheetData, WorkbookCapabilities};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub fn patch_after_operation(
@@ -172,37 +172,158 @@ pub fn apply_structure_operation(
     Ok(())
 }
 
-fn unsupported_structure_features(workbook: &Workbook) -> Vec<&'static str> {
-    let mut features = Vec::new();
+pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
+    let mut detected_features = Vec::new();
+    let mut blocked_structure_reasons = Vec::new();
+
     if !workbook.defined_names().is_empty() {
-        features.push("workbook defined names");
+        push_detected_feature(
+            &mut detected_features,
+            &mut blocked_structure_reasons,
+            "workbook defined names",
+            true,
+        );
     }
     if workbook.workbook_protection().is_some() {
-        features.push("workbook protection");
+        push_detected_feature(
+            &mut detected_features,
+            &mut blocked_structure_reasons,
+            "workbook protection",
+            true,
+        );
+    }
+    if workbook.has_threaded_comments() {
+        push_detected_feature(
+            &mut detected_features,
+            &mut blocked_structure_reasons,
+            "threaded comments",
+            true,
+        );
     }
     for worksheet in workbook.sheet_collection() {
         if !worksheet.defined_names().is_empty() {
-            features.push("sheet defined names");
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "sheet defined names",
+                true,
+            );
         }
         if worksheet.has_table() {
-            features.push("tables");
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "tables",
+                true,
+            );
         }
         if worksheet.has_pivot_table() {
-            features.push("pivot tables");
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "pivot tables",
+                true,
+            );
         }
         if !worksheet.chart_collection().is_empty() {
-            features.push("charts");
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "charts",
+                true,
+            );
+        }
+        if !worksheet.image_collection().is_empty() || worksheet.has_drawing_object() {
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "drawings/images",
+                true,
+            );
         }
         if worksheet.data_validations().is_some() || worksheet.data_validations_2010().is_some() {
-            features.push("data validations");
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "data validations",
+                true,
+            );
+        }
+        if !worksheet.conditional_formatting_collection().is_empty() {
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "conditional formatting",
+                true,
+            );
+        }
+        if worksheet.auto_filter().is_some() {
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "auto filters",
+                true,
+            );
+        }
+        if worksheet.has_comments() {
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "comments",
+                true,
+            );
+        }
+        if worksheet.has_threaded_comments() {
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "threaded comments",
+                true,
+            );
         }
         if worksheet.sheet_protection().is_some() {
-            features.push("sheet protection");
+            push_detected_feature(
+                &mut detected_features,
+                &mut blocked_structure_reasons,
+                "sheet protection",
+                true,
+            );
         }
     }
-    features.sort_unstable();
-    features.dedup();
-    features
+
+    detected_features.sort_unstable();
+    detected_features.dedup();
+    blocked_structure_reasons.sort_unstable();
+    blocked_structure_reasons.dedup();
+
+    let is_protected = blocked_structure_reasons
+        .iter()
+        .any(|reason| reason.contains("protection"));
+
+    WorkbookCapabilities {
+        can_edit_cells: !is_protected,
+        can_resize_rows_columns: !is_protected,
+        can_edit_structure: blocked_structure_reasons.is_empty(),
+        can_native_save: true,
+        blocked_structure_reasons,
+        detected_features,
+    }
+}
+
+pub fn unsupported_structure_features(workbook: &Workbook) -> Vec<String> {
+    workbook_capabilities(workbook).blocked_structure_reasons
+}
+
+fn push_detected_feature(
+    detected_features: &mut Vec<String>,
+    blocked_structure_reasons: &mut Vec<String>,
+    feature: &str,
+    blocks_structure: bool,
+) {
+    detected_features.push(feature.to_string());
+    if blocks_structure {
+        blocked_structure_reasons.push(feature.to_string());
+    }
 }
 
 fn adjust_other_sheet_formulas(

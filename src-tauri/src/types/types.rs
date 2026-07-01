@@ -260,6 +260,10 @@ pub struct SheetData {
     /// 行高配置（持久化到 Excel，属于文档状态）
     #[serde(default)]
     pub row_heights: Option<HashMap<usize, u32>>,
+    /// Optional rich Excel projection. This is display metadata only; the
+    /// original workbook remains the persistence source for styles and drawings.
+    #[serde(default)]
+    pub rich: SheetRichProjection,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -270,12 +274,89 @@ pub struct FileData {
     pub sheets: Vec<SheetData>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetRichProjection {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cell_styles: HashMap<String, CellStyleProjection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drawings: Vec<DrawingProjection>,
+    #[serde(default)]
+    pub has_more_drawings: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellStyleProjection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizontal_align: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_align: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DrawingProjection {
+    pub kind: DrawingKind,
+    pub from_row: u32,
+    pub from_col: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_row: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_col: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum DrawingKind {
+    Image,
+    Chart,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentCapabilities {
     pub native_save_extension: Option<String>,
     pub export_extension: String,
     pub requires_save_as_for_native_save: bool,
+    #[serde(default)]
+    pub workbook: WorkbookCapabilities,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbookCapabilities {
+    pub can_edit_cells: bool,
+    pub can_resize_rows_columns: bool,
+    pub can_edit_structure: bool,
+    pub can_native_save: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_structure_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detected_features: Vec<String>,
+}
+
+impl Default for WorkbookCapabilities {
+    fn default() -> Self {
+        Self {
+            can_edit_cells: true,
+            can_resize_rows_columns: true,
+            can_edit_structure: true,
+            can_native_save: true,
+            blocked_structure_reasons: Vec::new(),
+            detected_features: Vec::new(),
+        }
+    }
 }
 
 /// 单元格变化
@@ -484,6 +565,8 @@ pub struct EditorMutationResponse {
     pub document_id: u64,
     pub revision: u64,
     pub formula_status: FormulaStatus,
+    #[serde(default)]
+    pub capabilities: WorkbookCapabilities,
     pub editor_state: EditorStateInfo,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,

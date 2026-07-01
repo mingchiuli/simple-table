@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FileData } from '@/types';
+import type { FileData, WorkbookCapabilities } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
 import {
@@ -28,6 +28,7 @@ const props = defineProps<{
   currentSheetIndex: number;
   canUndo: boolean;
   canRedo: boolean;
+  capabilities: WorkbookCapabilities;
   isSearching: boolean;
 }>();
 
@@ -85,6 +86,7 @@ function handleCheckUpdate() {
         <SheetButtons
           class="sheet-buttons"
           :sheet-count="props.sheetNames.length"
+          :can-edit-structure="props.capabilities.canEditStructure"
           @add-sheet="emit('add-sheet')"
           @delete-sheet="emit('delete-sheet')"
         />
@@ -101,6 +103,7 @@ function handleCheckUpdate() {
         v-if="props.fileData"
         :can-undo="props.canUndo"
         :can-redo="props.canRedo"
+        :can-edit-structure="props.capabilities.canEditStructure"
         @undo="emit('undo')"
         @redo="emit('redo')"
         @add-row="emit('add-row')"
@@ -171,17 +174,32 @@ function handleCheckUpdate() {
       >
         <el-icon><RefreshRight /></el-icon>
       </el-button>
-      <el-button @click="emit('add-row')" size="small" title="Add Row">
+      <el-button
+        :disabled="!props.capabilities.canEditStructure"
+        @click="emit('add-row')"
+        size="small"
+        title="Add Row"
+      >
         <el-icon><Plus /></el-icon>
       </el-button>
-      <el-button @click="emit('add-column')" size="small" title="Add Column">
+      <el-button
+        :disabled="!props.capabilities.canEditStructure"
+        @click="emit('add-column')"
+        size="small"
+        title="Add Column"
+      >
         <el-icon><Plus /></el-icon>
       </el-button>
-      <el-button @click="emit('add-sheet')" size="small" title="Add Sheet">
+      <el-button
+        :disabled="!props.capabilities.canEditStructure"
+        @click="emit('add-sheet')"
+        size="small"
+        title="Add Sheet"
+      >
         <el-icon><CirclePlus /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.sheetNames.length <= 1"
+        :disabled="props.sheetNames.length <= 1 || !props.capabilities.canEditStructure"
         @click="emit('delete-sheet')"
         size="small"
         title="Delete Sheet"

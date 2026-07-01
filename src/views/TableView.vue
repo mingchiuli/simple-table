@@ -73,6 +73,7 @@ const {
   canRedo,
   hasUnsavedChanges,
   formulaStatus,
+  capabilities,
   refreshEditorState,
   markPendingContentChange,
   clearPendingContentChange,
@@ -104,6 +105,7 @@ const {
   currentSheetIndex,
   selectedCell,
   cellEditorValue,
+  canEditCells: computed(() => capabilities.value.canEditCells),
   applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
@@ -180,6 +182,7 @@ onMounted(async () => {
       :current-sheet-index="currentSheetIndex"
       :can-undo="canUndo"
       :can-redo="canRedo"
+      :capabilities="capabilities"
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"
@@ -210,6 +213,7 @@ onMounted(async () => {
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
             :cell-position="selectedCell"
+            :disabled="!capabilities.canEditCells"
             @submit="handleCellEditorSubmit"
             @close="handleDeselectCell"
           />
@@ -223,6 +227,8 @@ onMounted(async () => {
               :merges="currentSheet?.merges"
               :selected-cell="selectedCell"
               :auto-scroll="autoScroll"
+              :can-edit-cells="capabilities.canEditCells"
+              :can-resize-rows-columns="capabilities.canResizeRowsColumns"
               :column-widths="currentSheet?.columnWidths"
               :row-heights="currentSheet?.rowHeights"
               @cell-change="handleCellChange"

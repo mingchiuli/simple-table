@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, MergeRange, SheetData};
+use crate::types::{
+    CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData, MergeRange,
+    SheetData, SheetRichProjection,
+};
 use csv::ReaderBuilder;
 use serde_json::Value;
 use umya_spreadsheet::{Cell, Workbook, Worksheet, reader};
@@ -77,6 +80,7 @@ pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
         merges: read_merge_ranges(worksheet),
         column_widths: read_column_widths(worksheet),
         row_heights: read_row_heights(worksheet),
+        rich: read_rich_projection(worksheet),
     }
 }
 
@@ -175,6 +179,102 @@ fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
         })
         .collect();
     (!heights.is_empty()).then_some(heights)
+}
+
+fn read_rich_projection(worksheet: &Worksheet) -> SheetRichProjection {
+    SheetRichProjection {
+        cell_styles: read_cell_styles(worksheet),
+        drawings: read_drawings(worksheet),
+        has_more_drawings: false,
+    }
+}
+
+fn read_cell_styles(worksheet: &Worksheet) -> HashMap<String, CellStyleProjection> {
+    worksheet
+        .cells()
+        .into_iter()
+        .filter_map(|cell| {
+            let style = cell.style();
+            let font = style.font();
+            let projection = CellStyleProjection {
+                font_color: font
+                    .map(|font| font.color().argb_str())
+                    .filter(|value| !value.is_empty()),
+                background_color: style
+                    .background_color()
+                    .map(|color| color.argb_str())
+                    .filter(|value| !value.is_empty()),
+                bold: font.map(|font| font.bold()).filter(|value| *value),
+                italic: font.map(|font| font.italic()).filter(|value| *value),
+                horizontal_align: style
+                    .alignment()
+                    .map(|alignment| format!("{:?}", alignment.horizontal()))
+                    .filter(|value| !value.is_empty()),
+                vertical_align: style
+                    .alignment()
+                    .map(|alignment| format!("{:?}", alignment.vertical()))
+                    .filter(|value| !value.is_empty()),
+                number_format: style
+                    .numbering_format()
+                    .map(|format| format.format_code().to_string())
+                    .filter(|value| !value.is_empty()),
+            };
+            has_style_projection(&projection).then(|| (cell.coordinate().to_string(), projection))
+        })
+        .collect()
+}
+
+fn has_style_projection(style: &CellStyleProjection) -> bool {
+    style.font_color.is_some()
+        || style.background_color.is_some()
+        || style.bold.is_some()
+        || style.italic.is_some()
+        || style.horizontal_align.is_some()
+        || style.vertical_align.is_some()
+        || style.number_format.is_some()
+}
+
+fn read_drawings(worksheet: &Worksheet) -> Vec<DrawingProjection> {
+    let mut drawings = Vec::new();
+    drawings.extend(worksheet.image_collection().iter().map(|image| {
+        let from = image.from_marker_type();
+        let to = image.to_marker_type();
+        DrawingProjection {
+            kind: DrawingKind::Image,
+            from_row: from.row(),
+            from_col: from.col(),
+            to_row: to.map(|marker| marker.row()),
+            to_col: to.map(|marker| marker.col()),
+        }
+    }));
+    drawings.extend(worksheet.chart_collection().iter().filter_map(|chart| {
+        let (col, row) = parse_coordinate_1_based(&chart.coordinate())?;
+        Some(DrawingProjection {
+            kind: DrawingKind::Chart,
+            from_row: row.saturating_sub(1),
+            from_col: col.saturating_sub(1),
+            to_row: None,
+            to_col: None,
+        })
+    }));
+    drawings
+}
+
+fn parse_coordinate_1_based(coordinate: &str) -> Option<(u32, u32)> {
+    let mut col = 0u32;
+    let mut row = 0u32;
+    for byte in coordinate.bytes() {
+        if byte.is_ascii_alphabetic() {
+            col = col
+                .saturating_mul(26)
+                .saturating_add(u32::from(byte.to_ascii_uppercase() - b'A' + 1));
+        } else if byte.is_ascii_digit() {
+            row = row
+                .saturating_mul(10)
+                .saturating_add(u32::from(byte - b'0'));
+        }
+    }
+    (col > 0 && row > 0).then_some((col, row))
 }
 
 fn excel_column_width_to_px(width: f64) -> u32 {

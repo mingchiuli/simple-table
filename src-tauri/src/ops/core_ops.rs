@@ -605,6 +605,20 @@ impl AppliedOperation {
                 | AppliedOperation::DeleteSheet { .. }
         )
     }
+
+    pub fn is_layout_change(&self) -> bool {
+        matches!(
+            self,
+            AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. }
+        )
+    }
+
+    pub fn is_cell_edit(&self) -> bool {
+        matches!(
+            self,
+            AppliedOperation::SetCell { .. } | AppliedOperation::SetCells { .. }
+        )
+    }
 }
 
 fn require_sheet(file_data: &FileData, sheet_index: usize) -> Result<&SheetData, AppError> {

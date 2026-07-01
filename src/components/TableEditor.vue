@@ -25,6 +25,8 @@ const props = defineProps<{
   merges?: MergeRange[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
+  canEditCells?: boolean;
+  canResizeRowsColumns?: boolean;
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
 }>();
@@ -111,6 +113,7 @@ const {
   data: computed(() => props.data),
   selectedCell: computed(() => props.selectedCell),
   autoScroll: computed(() => props.autoScroll),
+  canEditCells: computed(() => props.canEditCells ?? true),
   getDraftValue,
   normalizeCellPosition,
   scrollCellIntoView,
@@ -137,6 +140,7 @@ const {
   startRowResize,
 } = useGridResize({
   isTouchDevice,
+  canResize: computed(() => props.canResizeRowsColumns ?? true),
   headerHeight: HEADER_HEIGHT,
   minColumnWidth: MIN_COLUMN_WIDTH,
   minRowHeight: MIN_ROW_HEIGHT,

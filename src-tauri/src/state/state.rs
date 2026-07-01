@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::state::editor_state::EditorState;
-use crate::types::FormulaStatus;
+use crate::types::{FormulaStatus, WorkbookCapabilities};
 
 /// 获取编辑器状态信息
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -18,6 +18,7 @@ pub struct EditorSessionInfo {
     pub document_id: u64,
     pub revision: u64,
     pub formula_status: FormulaStatus,
+    pub capabilities: WorkbookCapabilities,
     pub editor_state: EditorStateInfo,
 }
 

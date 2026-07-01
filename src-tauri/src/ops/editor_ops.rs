@@ -28,6 +28,7 @@ fn mutation_response(
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
         formula_status: editor_state.formula_status(),
+        capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
         patches,
     }
@@ -86,11 +87,12 @@ pub fn layout_mutation_response(
     mutation_response(editor_state, vec![EditorPatch::Layout { patch }])
 }
 
-pub fn sheet_snapshot_mutation_response(
+pub fn sheet_snapshot_with_cell_changes_mutation_response(
     editor_state: &EditorState,
     sheet_index: usize,
+    cell_changes: Vec<SheetCellChange>,
 ) -> EditorMutationResponse {
-    let patches = editor_state
+    let mut patches = editor_state
         .file_data()
         .sheets
         .get(sheet_index)
@@ -101,6 +103,12 @@ pub fn sheet_snapshot_mutation_response(
             }]
         })
         .unwrap_or_default();
+
+    if !cell_changes.is_empty() {
+        patches.push(EditorPatch::Cells {
+            changes: cell_changes,
+        });
+    }
 
     mutation_response(editor_state, patches)
 }
@@ -123,6 +131,7 @@ fn get_editor_session_info(
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
         formula_status: editor_state.formula_status(),
+        capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
     })
 }

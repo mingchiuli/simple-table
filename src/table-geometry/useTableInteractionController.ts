@@ -18,6 +18,7 @@ type UseTableInteractionControllerOptions = {
   data: ComputedRef<CellValue[][]>;
   selectedCell: ComputedRef<CellPosition | null | undefined>;
   autoScroll: ComputedRef<boolean | undefined>;
+  canEditCells: ComputedRef<boolean>;
   getDraftValue: (rowIndex: number, colIndex: number) => string | undefined;
   normalizeCellPosition: (rowIndex: number, colIndex: number) => {
     rowIndex: number;
@@ -46,6 +47,7 @@ export function useTableInteractionController({
   data,
   selectedCell,
   autoScroll,
+  canEditCells,
   getDraftValue,
   normalizeCellPosition,
   scrollCellIntoView,
@@ -139,6 +141,7 @@ export function useTableInteractionController({
   }
 
   function handleCellDoubleClick(rowIndex: number, colIndex: number) {
+    if (!canEditCells.value) return;
     const normalized = normalizeCellPosition(rowIndex, colIndex);
     emitSelectCell(normalized.rowIndex, normalized.colIndex);
     beginEdit(normalized.rowIndex, normalized.colIndex);

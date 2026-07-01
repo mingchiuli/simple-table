@@ -13,6 +13,7 @@ export function useDocumentStatus() {
     hasPendingContentChange,
     hasUnsavedChanges,
     formulaStatus,
+    capabilities,
   } = storeToRefs(documentStatusStore);
 
   function applyEditorState(state: EditorStateInfo | null | undefined) {
@@ -55,6 +56,7 @@ export function useDocumentStatus() {
     canRedo,
     hasUnsavedChanges,
     formulaStatus,
+    capabilities,
     isContentDirty,
     hasPendingContentChange,
     applyEditorState,

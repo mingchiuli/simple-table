@@ -7,6 +7,7 @@ use crate::state::search_index::{
 };
 use crate::types::{
     AppliedOperationResult, CellPosition, FileData, FormulaStatus, SheetCellChange,
+    WorkbookCapabilities,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,6 +15,7 @@ use umya_spreadsheet::Workbook;
 
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_HISTORY_ENTRIES: usize = 100;
+const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
@@ -35,6 +37,17 @@ pub struct SearchExecution {
 
 struct HistoryEntry {
     memento: DocumentMemento,
+    estimated_bytes: usize,
+}
+
+impl HistoryEntry {
+    fn new(memento: DocumentMemento) -> Self {
+        let estimated_bytes = memento.estimated_bytes().max(1);
+        Self {
+            memento,
+            estimated_bytes,
+        }
+    }
 }
 
 /// 编辑器状态管理器
@@ -44,6 +57,8 @@ pub struct EditorState {
     document: SpreadsheetDocument,
     history: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
+    history_estimated_bytes: usize,
+    redo_estimated_bytes: usize,
     pub can_undo: bool,
     pub can_redo: bool,
     pub current_content_hash: ContentHash,
@@ -61,6 +76,8 @@ impl EditorState {
             document,
             history: Vec::new(),
             redo_stack: Vec::new(),
+            history_estimated_bytes: 0,
+            redo_estimated_bytes: 0,
             can_undo: false,
             can_redo: false,
             current_content_hash: content_hash,
@@ -83,6 +100,10 @@ impl EditorState {
 
     pub fn formula_status(&self) -> FormulaStatus {
         self.document.formula_status()
+    }
+
+    pub fn capabilities(&self) -> WorkbookCapabilities {
+        self.document.capabilities()
     }
 
     pub fn search_index_stamp(&self) -> SearchIndexStamp {
@@ -186,6 +207,7 @@ impl EditorState {
     /// 执行命令并记录到历史，返回增量结果。
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         let operation = command.resolve(self.file_data())?;
+        self.ensure_operation_supported(&operation)?;
         let should_mark_search_stale = operation.requires_search_rebuild();
         let before = self.document.capture_memento_side(&operation);
         if operation.is_noop() {
@@ -202,8 +224,8 @@ impl EditorState {
         let after = self.document.capture_memento_side(&operation);
         let memento = SpreadsheetDocument::create_memento(before, after);
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
-        self.push_history(HistoryEntry { memento });
-        self.redo_stack.clear();
+        self.push_history(HistoryEntry::new(memento));
+        self.clear_redo_stack();
         self.bump_revision();
         if should_mark_search_stale {
             self.mark_search_index_stale();
@@ -221,9 +243,12 @@ impl EditorState {
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         if let Some(entry) = self.history.pop() {
+            self.history_estimated_bytes = self
+                .history_estimated_bytes
+                .saturating_sub(entry.estimated_bytes);
             self.document
                 .restore_memento(&entry.memento, MementoSide::Before)?;
-            self.redo_stack.push(entry);
+            self.push_redo(entry);
             self.bump_revision();
             self.mark_search_index_stale();
             self.update_flags();
@@ -240,6 +265,9 @@ impl EditorState {
     /// 重做上一个被撤销的操作
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         if let Some(entry) = self.redo_stack.pop() {
+            self.redo_estimated_bytes = self
+                .redo_estimated_bytes
+                .saturating_sub(entry.estimated_bytes);
             self.document
                 .restore_memento(&entry.memento, MementoSide::After)?;
             self.push_history(entry);
@@ -270,10 +298,63 @@ impl EditorState {
     }
 
     fn push_history(&mut self, entry: HistoryEntry) {
+        self.history_estimated_bytes += entry.estimated_bytes;
         self.history.push(entry);
-        if self.history.len() > MAX_HISTORY_ENTRIES {
-            self.history.remove(0);
+        while self.history.len() > MAX_HISTORY_ENTRIES
+            || self.history_estimated_bytes > MAX_HISTORY_BYTES
+        {
+            let evicted = self.history.remove(0);
+            self.history_estimated_bytes = self
+                .history_estimated_bytes
+                .saturating_sub(evicted.estimated_bytes);
+            if self.history.is_empty() {
+                break;
+            }
         }
+    }
+
+    fn clear_redo_stack(&mut self) {
+        self.redo_stack.clear();
+        self.redo_estimated_bytes = 0;
+    }
+
+    fn push_redo(&mut self, entry: HistoryEntry) {
+        self.redo_estimated_bytes += entry.estimated_bytes;
+        self.redo_stack.push(entry);
+        while self.redo_stack.len() > MAX_HISTORY_ENTRIES
+            || self.redo_estimated_bytes > MAX_HISTORY_BYTES
+        {
+            let evicted = self.redo_stack.remove(0);
+            self.redo_estimated_bytes = self
+                .redo_estimated_bytes
+                .saturating_sub(evicted.estimated_bytes);
+            if self.redo_stack.is_empty() {
+                break;
+            }
+        }
+    }
+
+    fn ensure_operation_supported(
+        &self,
+        operation: &crate::ops::AppliedOperation,
+    ) -> Result<(), AppError> {
+        let capabilities = self.capabilities();
+        if operation.is_structure_change() && !capabilities.can_edit_structure {
+            return Err(AppError::UnsupportedWorkbookStructure(
+                capabilities.blocked_structure_reasons.join(", "),
+            ));
+        }
+        if operation.is_layout_change() && !capabilities.can_resize_rows_columns {
+            return Err(AppError::UnsupportedWorkbookStructure(
+                "row/column resizing is disabled for this workbook".to_string(),
+            ));
+        }
+        if operation.is_cell_edit() && !capabilities.can_edit_cells {
+            return Err(AppError::UnsupportedWorkbookStructure(
+                "cell editing is disabled for this workbook".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -311,7 +392,7 @@ mod tests {
     use crate::ops::EditorCommand;
     use crate::types::CellValue;
     use serde_json::Value;
-    use umya_spreadsheet::{Color, DefinedName, reader, writer};
+    use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
     #[test]
     fn opened_workbook_is_patched_and_saved_from_editor_state() {
@@ -701,6 +782,61 @@ mod tests {
             state.file_data().sheets[0].rows[0][0].to_display_string(),
             "1"
         );
+    }
+
+    #[test]
+    fn workbook_capabilities_disable_protected_workbook_edits() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("sheet")
+            .set_sheet_protection(SheetProtection::default());
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "protected.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        let capabilities = state.capabilities();
+        assert!(!capabilities.can_edit_cells);
+        assert!(!capabilities.can_resize_rows_columns);
+        assert!(!capabilities.can_edit_structure);
+        assert!(
+            capabilities
+                .blocked_structure_reasons
+                .contains(&"sheet protection".to_string())
+        );
+
+        assert!(matches!(
+            state.execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "blocked".to_string(),
+            }),
+            Err(AppError::UnsupportedWorkbookStructure(_))
+        ));
+        assert!(matches!(
+            state.execute(EditorCommand::SetRowHeight {
+                sheet_index: 0,
+                row_index: 0,
+                height: Some(80),
+            }),
+            Err(AppError::UnsupportedWorkbookStructure(_))
+        ));
+        assert!(matches!(
+            state.execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            }),
+            Err(AppError::UnsupportedWorkbookStructure(_))
+        ));
     }
 
     #[test]
@@ -1342,6 +1478,39 @@ mod tests {
         }
 
         assert_eq!(state.history.len(), MAX_HISTORY_ENTRIES);
+        assert!(state.history_estimated_bytes <= MAX_HISTORY_BYTES);
+        assert!(state.can_undo);
+    }
+
+    #[test]
+    fn history_is_bounded_by_estimated_bytes() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "history-memory.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::Null]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let large_text = "x".repeat(2 * 1024 * 1024);
+
+        for index in 0..40 {
+            state
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: format!("{large_text}{index}"),
+                })
+                .expect("edit");
+        }
+
+        assert!(state.history.len() < 40);
+        assert!(state.history_estimated_bytes <= MAX_HISTORY_BYTES);
         assert!(state.can_undo);
     }
 }

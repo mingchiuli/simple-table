@@ -7,8 +7,6 @@ use serde_json::Value;
 use crate::error::AppError;
 use crate::types::{CellValue, FileData, FormulaDiagnostics, SheetCellChange};
 
-const MAX_RANGE_DEPENDENCY_CELLS: u32 = 10_000;
-
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct FormulaCellRef {
     pub sheet_index: usize,
@@ -16,10 +14,28 @@ pub struct FormulaCellRef {
     pub col: usize,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct FormulaRangeRef {
+    sheet_index: usize,
+    start_row: usize,
+    start_col: usize,
+    end_row: usize,
+    end_col: usize,
+}
+
+impl FormulaRangeRef {
+    fn contains(&self, cell: FormulaCellRef) -> bool {
+        self.sheet_index == cell.sheet_index
+            && (self.start_row..=self.end_row).contains(&cell.row)
+            && (self.start_col..=self.end_col).contains(&cell.col)
+    }
+}
+
 #[derive(Default)]
 struct FormulaDependencyIndex {
     formulas: HashSet<FormulaCellRef>,
     dependents_by_source: HashMap<FormulaCellRef, HashSet<FormulaCellRef>>,
+    range_dependents: Vec<(FormulaRangeRef, FormulaCellRef)>,
     always_recalculate: HashSet<FormulaCellRef>,
     diagnostics: FormulaDiagnostics,
 }
@@ -236,11 +252,16 @@ impl FormulaRuntime {
         queue.extend(impacted.iter().copied());
 
         while let Some(source) = queue.pop_front() {
-            let Some(dependents) = self.dependency_index.dependents_by_source.get(&source) else {
-                continue;
-            };
-            for dependent in dependents {
-                if impacted.insert(*dependent) {
+            if let Some(dependents) = self.dependency_index.dependents_by_source.get(&source) {
+                for dependent in dependents {
+                    if impacted.insert(*dependent) {
+                        queue.push_back(*dependent);
+                    }
+                }
+            }
+
+            for (range, dependent) in &self.dependency_index.range_dependents {
+                if range.contains(source) && impacted.insert(*dependent) {
                     queue.push_back(*dependent);
                 }
             }
@@ -431,11 +452,6 @@ fn build_dependency_index(
                             index.always_recalculate.insert(formula_ref);
                             continue;
                         }
-                        DependencyCollection::LargeRange => {
-                            index.diagnostics.large_range_dependency_count += 1;
-                            index.always_recalculate.insert(formula_ref);
-                            continue;
-                        }
                         DependencyCollection::Unsupported => {
                             index.diagnostics.unsupported_dependency_count += 1;
                             index.always_recalculate.insert(formula_ref);
@@ -443,12 +459,15 @@ fn build_dependency_index(
                         }
                     };
 
-                for dependency in dependencies {
+                for dependency in dependencies.cells {
                     index
                         .dependents_by_source
                         .entry(dependency)
                         .or_default()
                         .insert(formula_ref.clone());
+                }
+                for dependency in dependencies.ranges {
+                    index.range_dependents.push((dependency, formula_ref));
                 }
             }
         }
@@ -489,10 +508,15 @@ fn count_unregistered_formula_cells(
         .sum()
 }
 
+#[derive(Default)]
+struct FormulaDependencies {
+    cells: HashSet<FormulaCellRef>,
+    ranges: Vec<FormulaRangeRef>,
+}
+
 enum DependencyCollection {
-    Precise(HashSet<FormulaCellRef>),
+    Precise(FormulaDependencies),
     Volatile,
-    LargeRange,
     Unsupported,
 }
 
@@ -510,13 +534,13 @@ fn collect_formula_dependencies(
         return DependencyCollection::Volatile;
     }
 
-    let mut dependencies = HashSet::new();
+    let mut dependencies = FormulaDependencies::default();
     for reference in ast.collect_references(&CollectPolicy::default()) {
         match reference {
             ReferenceType::Cell {
                 sheet, row, col, ..
             } => {
-                dependencies.insert(FormulaCellRef {
+                dependencies.cells.insert(FormulaCellRef {
                     sheet_index: match resolve_reference_sheet(
                         sheet.as_deref(),
                         current_sheet_index,
@@ -554,26 +578,25 @@ fn collect_formula_dependencies(
                 if start_row > end_row || start_col > end_col {
                     return DependencyCollection::Unsupported;
                 }
-                let height = end_row.saturating_sub(start_row) + 1;
-                let width = end_col.saturating_sub(start_col) + 1;
-                if height.saturating_mul(width) > MAX_RANGE_DEPENDENCY_CELLS {
-                    return DependencyCollection::LargeRange;
-                }
-                for row in start_row..=end_row {
-                    for col in start_col..=end_col {
-                        dependencies.insert(FormulaCellRef {
-                            sheet_index,
-                            row: match to_zero_based(row) {
-                                Some(row) => row,
-                                None => return DependencyCollection::Unsupported,
-                            },
-                            col: match to_zero_based(col) {
-                                Some(col) => col,
-                                None => return DependencyCollection::Unsupported,
-                            },
-                        });
-                    }
-                }
+                dependencies.ranges.push(FormulaRangeRef {
+                    sheet_index,
+                    start_row: match to_zero_based(start_row) {
+                        Some(row) => row,
+                        None => return DependencyCollection::Unsupported,
+                    },
+                    start_col: match to_zero_based(start_col) {
+                        Some(col) => col,
+                        None => return DependencyCollection::Unsupported,
+                    },
+                    end_row: match to_zero_based(end_row) {
+                        Some(row) => row,
+                        None => return DependencyCollection::Unsupported,
+                    },
+                    end_col: match to_zero_based(end_col) {
+                        Some(col) => col,
+                        None => return DependencyCollection::Unsupported,
+                    },
+                });
             }
             _ => return DependencyCollection::Unsupported,
         }
@@ -783,8 +806,34 @@ mod tests {
 
         assert_eq!(diagnostics.invalid_formula_count, 1);
         assert_eq!(diagnostics.volatile_formula_count, 1);
-        assert_eq!(diagnostics.large_range_dependency_count, 1);
+        assert_eq!(diagnostics.large_range_dependency_count, 0);
         assert_eq!(diagnostics.unsupported_dependency_count, 1);
+    }
+
+    #[test]
+    fn large_bounded_ranges_use_range_dependencies() {
+        let mut row = vec![CellValue::Null; 2];
+        row[0] = CellValue::Number(Value::from(1));
+        row[1] = CellValue::formula("=SUM(A1:A10001)", CellValue::Null);
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "range.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![row],
+                ..Default::default()
+            }],
+        };
+
+        let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
+        assert_eq!(runtime.diagnostics().large_range_dependency_count, 0);
+
+        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(5));
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 0)
+            .expect("incremental range recalc");
+
+        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "5.0");
     }
 
     #[test]
@@ -1044,5 +1093,41 @@ mod tests {
 
         assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "3.0");
         assert_eq!(file_data.sheets[0].rows[0][3].to_display_string(), "stale");
+    }
+
+    #[test]
+    fn range_formula_cache_is_not_refreshed_for_outside_edit() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "range.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![
+                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(Value::from(2)),
+                    CellValue::Formula {
+                        formula: "=SUM(A1:B1)".to_string(),
+                        cached_value: Box::new(CellValue::String("stale".to_string())),
+                        error: None,
+                    },
+                    CellValue::Number(Value::from(5)),
+                ]],
+                ..Default::default()
+            }],
+        };
+
+        let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
+        file_data.sheets[0].rows[0][2] = CellValue::Formula {
+            formula: "=SUM(A1:B1)".to_string(),
+            cached_value: Box::new(CellValue::String("stale".to_string())),
+            error: None,
+        };
+
+        file_data.sheets[0].rows[0][3] = CellValue::Number(Value::from(10));
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 3)
+            .expect("incremental recalc");
+
+        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "stale");
     }
 }

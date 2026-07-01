@@ -12,6 +12,7 @@ type UsePendingCellSaveOptions = {
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<CellPosition | null>;
   cellEditorValue: Ref<string>;
+  canEditCells: ComputedRef<boolean>;
   applyMutationResponse: (response: EditorMutationResponse) => void;
   markPendingContentChange: () => void;
   clearPendingContentChange: () => void;
@@ -44,6 +45,7 @@ export function usePendingCellSave({
   currentSheetIndex,
   selectedCell,
   cellEditorValue,
+  canEditCells,
   applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
@@ -90,7 +92,7 @@ export function usePendingCellSave({
   });
 
   watch(cellEditorValue, (newValue) => {
-    if (!selectedCell.value || !currentSheet.value) return;
+    if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
 
     const { row, col } = selectedCell.value;
     updateDraftCell(currentSheetIndex.value, row, col, newValue);
@@ -291,13 +293,14 @@ export function usePendingCellSave({
   }
 
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
-    if (!currentSheet.value) return;
+    if (!canEditCells.value || !currentSheet.value) return;
 
     updateDraftCell(currentSheetIndex.value, rowIndex, colIndex, value);
     void flushPendingCellChanges();
   }
 
   function handleCellEditing(row: number, col: number, value: string) {
+    if (!canEditCells.value) return;
     if (selectedCell.value?.row === row && selectedCell.value?.col === col) {
       cellEditorValue.value = value;
     }
@@ -307,7 +310,7 @@ export function usePendingCellSave({
   }
 
   function handleCellEditCancel(row: number, col: number) {
-    if (!currentSheet.value) return;
+    if (!canEditCells.value || !currentSheet.value) return;
 
     const sheetIndex = currentSheetIndex.value;
     const { key, active: activeSave } = saveState(sheetIndex, row, col);
@@ -337,7 +340,7 @@ export function usePendingCellSave({
   }
 
   function handleCellEditorSubmit() {
-    if (!selectedCell.value || !currentSheet.value) return;
+    if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
 
     const { row, col } = selectedCell.value;
     updateDraftCell(currentSheetIndex.value, row, col, cellEditorValue.value);

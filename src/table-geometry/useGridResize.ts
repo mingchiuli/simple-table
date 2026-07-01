@@ -4,6 +4,7 @@ type MaybeReadonlyRef<T> = Ref<T> | ComputedRef<T>;
 
 type UseGridResizeOptions = {
   isTouchDevice: MaybeReadonlyRef<boolean>;
+  canResize?: MaybeReadonlyRef<boolean>;
   headerHeight: number;
   minColumnWidth: number;
   minRowHeight: number;
@@ -21,6 +22,7 @@ type UseGridResizeOptions = {
 
 export function useGridResize({
   isTouchDevice,
+  canResize,
   headerHeight,
   minColumnWidth,
   minRowHeight,
@@ -45,6 +47,7 @@ export function useGridResize({
   const resizeLineY = ref(0);
 
   function startColumnResize(event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number) {
+    if (canResize?.value === false) return;
     event.preventDefault();
     resizingColumn.value = colIndex;
     startX.value = getClientX(event);
@@ -54,6 +57,7 @@ export function useGridResize({
   }
 
   function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number, boundaryY?: number) {
+    if (canResize?.value === false) return;
     event.preventDefault();
     resizingRow.value = rowIndex;
     startY.value = getClientY(event);

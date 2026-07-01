@@ -63,6 +63,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       }
       if (response.revision === this.revision && response.patches?.length) {
         useDocumentStatusStore().formulaStatus = response.formulaStatus;
+        useDocumentStatusStore().capabilities = response.capabilities;
         useDocumentStatusStore().applyEditorState(response.editorState);
         return this.data;
       }
@@ -70,6 +71,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       const nextData = applyDocumentPatches(this.data, response.patches);
       this.data = nextData;
       useDocumentStatusStore().formulaStatus = response.formulaStatus;
+      useDocumentStatusStore().capabilities = response.capabilities;
       useDocumentStatusStore().applyEditorState(response.editorState);
       this.clampSelectionToCurrentSheet();
       return nextData;

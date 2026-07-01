@@ -6,6 +6,7 @@ const modelValue = defineModel<string>({ required: true });
 
 const props = defineProps<{
   cellPosition: { row: number; col: number } | null;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -21,6 +22,7 @@ const displayPosition = computed(() => {
 const isFormula = computed(() => modelValue.value.trimStart().startsWith('='));
 
 function handleKeydown(event: KeyboardEvent) {
+  if (props.disabled) return;
   if (event.key === 'Enter' && !event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
     event.preventDefault();
     emit('submit');
@@ -41,12 +43,19 @@ function handleKeydown(event: KeyboardEvent) {
     <textarea
       v-model="modelValue"
       class="formula-input"
+      :disabled="props.disabled"
       spellcheck="false"
       placeholder="Value or formula"
       @keydown="handleKeydown"
-      @blur="emit('submit')"
+      @blur="!props.disabled && emit('submit')"
     />
-    <button class="formula-action" type="button" title="Apply" @click="emit('submit')">
+    <button
+      class="formula-action"
+      type="button"
+      title="Apply"
+      :disabled="props.disabled"
+      @click="emit('submit')"
+    >
       <el-icon><Check /></el-icon>
     </button>
     <button class="formula-action" type="button" title="Close" @click="emit('close')">
@@ -110,6 +119,12 @@ function handleKeydown(event: KeyboardEvent) {
 
 .formula-input:focus {
   border-color: var(--el-color-primary);
+}
+
+.formula-input:disabled,
+.formula-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .formula-action {

@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::state::{active_document_store, editor_state::EditorState};
-use crate::types::{DocumentCapabilities, FileData};
+use crate::types::{DocumentCapabilities, FileData, WorkbookCapabilities};
 use umya_spreadsheet::Workbook;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
@@ -63,13 +63,46 @@ pub fn document_capabilities(
 ) -> DocumentCapabilities {
     let source_name = current_path.as_deref().unwrap_or(&file_name);
     let native_extension = native_save_extension(source_name);
+    let native_save_allowed = native_extension.is_some();
     let export_extension = export_extension(&file_name).unwrap_or_else(|| "xlsx".to_string());
 
     DocumentCapabilities {
         requires_save_as_for_native_save: native_extension.is_none(),
         native_save_extension: native_extension,
         export_extension,
+        workbook: active_workbook_capabilities(
+            &file_name,
+            current_path.as_deref(),
+            native_save_allowed,
+        ),
     }
+}
+
+fn active_workbook_capabilities(
+    file_name: &str,
+    current_path: Option<&str>,
+    native_save_allowed: bool,
+) -> WorkbookCapabilities {
+    let registry = active_document_store();
+    let registry_guard = registry.read().expect("Document registry lock poisoned");
+    registry_guard
+        .active()
+        .filter(|editor_state| {
+            let active_file = editor_state.file_data();
+            match current_path {
+                Some(path) if !path.is_empty() => path == active_file.path,
+                _ => active_file.file_name == file_name,
+            }
+        })
+        .map(|editor_state| {
+            let mut capabilities = editor_state.capabilities();
+            capabilities.can_native_save = native_save_allowed && capabilities.can_native_save;
+            capabilities
+        })
+        .unwrap_or_else(|| WorkbookCapabilities {
+            can_native_save: native_save_allowed,
+            ..Default::default()
+        })
 }
 
 fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> FileData {
@@ -118,6 +151,7 @@ mod tests {
                 native_save_extension: Some("xlsx".to_string()),
                 export_extension: "xlsx".to_string(),
                 requires_save_as_for_native_save: false,
+                workbook: WorkbookCapabilities::default(),
             }
         );
         assert_eq!(
@@ -126,6 +160,10 @@ mod tests {
                 native_save_extension: None,
                 export_extension: "csv".to_string(),
                 requires_save_as_for_native_save: true,
+                workbook: WorkbookCapabilities {
+                    can_native_save: false,
+                    ..Default::default()
+                },
             }
         );
     }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineProps<{
   sheetCount: number;
+  canEditStructure: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -11,13 +12,17 @@ const emit = defineEmits<{
 
 <template>
   <div class="sheet-buttons">
-    <el-button size="small" @click="emit('add-sheet')">
+    <el-button
+      size="small"
+      :disabled="!canEditStructure"
+      @click="emit('add-sheet')"
+    >
       + Sheet
     </el-button>
     <el-button
       size="small"
       type="danger"
-      :disabled="sheetCount <= 1"
+      :disabled="sheetCount <= 1 || !canEditStructure"
       @click="emit('delete-sheet')"
     >
       - Sheet

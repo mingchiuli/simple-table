@@ -22,6 +22,7 @@ export interface SheetData {
   merges: MergeRange[];
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
+  rich?: SheetRichProjection;
 }
 
 export interface FileData {
@@ -30,10 +31,46 @@ export interface FileData {
   sheets: SheetData[];
 }
 
+export interface SheetRichProjection {
+  cellStyles?: Record<string, CellStyleProjection>;
+  drawings?: DrawingProjection[];
+  hasMoreDrawings?: boolean;
+}
+
+export interface CellStyleProjection {
+  fontColor?: string;
+  backgroundColor?: string;
+  bold?: boolean;
+  italic?: boolean;
+  horizontalAlign?: string;
+  verticalAlign?: string;
+  numberFormat?: string;
+}
+
+export interface DrawingProjection {
+  kind: DrawingKind;
+  fromRow: number;
+  fromCol: number;
+  toRow?: number;
+  toCol?: number;
+}
+
+export type DrawingKind = 'image' | 'chart';
+
+export interface WorkbookCapabilities {
+  canEditCells: boolean;
+  canResizeRowsColumns: boolean;
+  canEditStructure: boolean;
+  canNativeSave: boolean;
+  blockedStructureReasons?: string[];
+  detectedFeatures?: string[];
+}
+
 export interface DocumentCapabilities {
   nativeSaveExtension: 'xlsx' | null;
   exportExtension: 'xlsx' | 'csv';
   requiresSaveAsForNativeSave: boolean;
+  workbook: WorkbookCapabilities;
 }
 
 export interface SheetCellChange {
@@ -104,6 +141,7 @@ export interface EditorMutationResponse {
   documentId: number;
   revision: number;
   formulaStatus: FormulaStatus;
+  capabilities: WorkbookCapabilities;
   editorState: EditorStateInfo;
   patches?: EditorPatch[];
 }
@@ -112,5 +150,17 @@ export interface EditorSessionInfo {
   documentId: number;
   revision: number;
   formulaStatus: FormulaStatus;
+  capabilities: WorkbookCapabilities;
   editorState: EditorStateInfo;
+}
+
+export function defaultWorkbookCapabilities(): WorkbookCapabilities {
+  return {
+    canEditCells: true,
+    canResizeRowsColumns: true,
+    canEditStructure: true,
+    canNativeSave: true,
+    blockedStructureReasons: [],
+    detectedFeatures: [],
+  };
 }
