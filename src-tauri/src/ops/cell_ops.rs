@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::EditorCommand;
 use crate::ops::editor_ops::{
-    cell_delta_mutation_response, layout_mutation_response,
-    sheet_snapshot_with_cell_changes_mutation_response, snapshot_mutation_response,
+    cell_delta_mutation_response, layout_mutation_response, snapshot_mutation_response,
+    structural_delta_mutation_response,
 };
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::state::ActiveDocumentStore;
@@ -176,7 +176,12 @@ fn execute_structural_snapshot(
         let mut registry_guard = registry.write().expect("Document registry lock poisoned");
         let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
         let result = editor_state.execute(command)?;
-        snapshot_mutation_response(editor_state, result.operation)
+        match result.operation {
+            Some(operation) => {
+                structural_delta_mutation_response(editor_state, operation, result.cell_changes)
+            }
+            None => snapshot_mutation_response(editor_state, None),
+        }
     };
 
     schedule_index_for_response(&response, registry);
@@ -187,17 +192,18 @@ fn execute_structural_snapshot(
 fn execute_sheet_snapshot(
     registry: Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
-    sheet_index: usize,
+    _sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
         let mut registry_guard = registry.write().expect("Document registry lock poisoned");
         let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
         let result = editor_state.execute(command)?;
-        sheet_snapshot_with_cell_changes_mutation_response(
-            editor_state,
-            sheet_index,
-            result.cell_changes,
-        )
+        match result.operation {
+            Some(operation) => {
+                structural_delta_mutation_response(editor_state, operation, result.cell_changes)
+            }
+            None => snapshot_mutation_response(editor_state, None),
+        }
     };
 
     schedule_index_for_response(&response, registry);
@@ -258,17 +264,17 @@ mod tests {
     }
 
     #[test]
-    fn row_and_column_structure_edits_return_sheet_snapshots() {
+    fn row_and_column_structure_edits_return_structural_patches() {
         let add_row_response = do_add_row(make_registry(), 0, 1).expect("add row");
         assert!(matches!(
             add_row_response.patches.first(),
-            Some(EditorPatch::SheetSnapshot { sheet_index: 0, .. })
+            Some(EditorPatch::RowInserted { patch }) if patch.sheet_index == 0
         ));
 
         let add_column_response = do_add_column(make_registry(), 0).expect("add column");
         assert!(matches!(
             add_column_response.patches.first(),
-            Some(EditorPatch::SheetSnapshot { sheet_index: 0, .. })
+            Some(EditorPatch::ColumnInserted { patch }) if patch.sheet_index == 0
         ));
     }
 }

@@ -3,7 +3,7 @@ use crate::io::document_model::{DocumentMemento, MementoSide, SpreadsheetDocumen
 use crate::ops::EditorCommand;
 use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
-    SearchIndexStamp, SearchIndexStore, SearchMatcher, SearchSheetIndex, SearchWriterHandle,
+    SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
 use crate::types::{
     AppliedOperationResult, CellPosition, FileData, FormulaStatus, SheetCellChange,
@@ -23,16 +23,18 @@ pub struct ExecutedOperation {
     pub cell_changes: Vec<SheetCellChange>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchSource {
-    Index,
-    ScanFallback,
+#[derive(Debug, Clone)]
+pub struct SearchCellSnapshot {
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct SearchExecution {
-    pub positions: Vec<CellPosition>,
-    pub source: SearchSource,
+pub struct SearchSheetSnapshot {
+    pub sheet_index: usize,
+    pub sheet_name: String,
+    pub cells: Vec<SearchCellSnapshot>,
 }
 
 struct HistoryEntry {
@@ -136,19 +138,6 @@ impl EditorState {
             .mark_sheet_fresh(self.document_id, sheet_index, stamp);
     }
 
-    pub fn search_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> SearchExecution {
-        if let Some(positions) = self.search_index.search_sheet(sheet_index, query, limit) {
-            return SearchExecution {
-                positions,
-                source: SearchSource::Index,
-            };
-        }
-        SearchExecution {
-            positions: self.scan_sheet(sheet_index, query, limit),
-            source: SearchSource::ScanFallback,
-        }
-    }
-
     pub fn search_writer_handle(
         &self,
         sheet_index: usize,
@@ -158,33 +147,36 @@ impl EditorState {
             .writer_handle(self.document_id, sheet_index, stamp)
     }
 
-    fn scan_sheet(&self, sheet_index: usize, query: &str, limit: usize) -> Vec<CellPosition> {
-        let query = query.trim();
-        if query.is_empty() || limit == 0 {
-            return Vec::new();
-        }
+    pub fn indexed_search_sheet(
+        &self,
+        sheet_index: usize,
+        query: &str,
+        limit: usize,
+    ) -> Option<Vec<CellPosition>> {
+        self.search_index.search_sheet(sheet_index, query, limit)
+    }
 
-        let Some(sheet) = self.file_data().sheets.get(sheet_index) else {
-            return Vec::new();
-        };
-        let Some(matcher) = SearchMatcher::new(query) else {
-            return Vec::new();
-        };
-        let mut results = Vec::new();
-        for (row_idx, row) in sheet.rows.iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
-                if matcher.matches(&cell.to_display_string()) {
-                    results.push(CellPosition {
-                        row: row_idx,
-                        col: col_idx,
-                    });
-                    if results.len() >= limit {
-                        return results;
-                    }
-                }
-            }
-        }
-        results
+    pub fn search_sheet_snapshot(&self, sheet_index: usize) -> Option<SearchSheetSnapshot> {
+        let sheet = self.file_data().sheets.get(sheet_index)?;
+        Some(SearchSheetSnapshot {
+            sheet_index,
+            sheet_name: sheet.name.clone(),
+            cells: sheet
+                .rows
+                .iter()
+                .enumerate()
+                .flat_map(|(row_idx, row)| {
+                    row.iter().enumerate().filter_map(move |(col_idx, cell)| {
+                        let text = cell.to_display_string();
+                        (!text.is_empty()).then_some(SearchCellSnapshot {
+                            row: row_idx,
+                            col: col_idx,
+                            text,
+                        })
+                    })
+                })
+                .collect(),
+        })
     }
 
     pub fn is_dirty(&self) -> bool {

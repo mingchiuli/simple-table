@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CellValue } from '@/types';
-import { cellToDisplayString, isFormulaCell } from '@/composables/usePendingCellSave';
+import { cellKind, cellToDisplayString } from '@/composables/usePendingCellSave';
 
 const props = withDefaults(defineProps<{
   value: CellValue | undefined;
@@ -18,11 +18,7 @@ const displayValue = computed(() => {
 });
 
 const valueKind = computed(() => {
-  if (props.value === null || props.value === undefined) return 'blank';
-  if (isFormulaCell(props.value)) return props.value.error ? 'error' : 'formula';
-  if (typeof props.value === 'number') return 'number';
-  if (typeof props.value === 'boolean') return 'boolean';
-  return 'text';
+  return cellKind(props.value);
 });
 
 const height = computed(() => `${Math.max(36, props.rowHeight)}px`);

@@ -111,6 +111,7 @@ impl StructureMemento {
 
 pub(crate) struct FileStructureMemento {
     sheet_count: usize,
+    truncate_from: Option<usize>,
     sheets: Vec<SheetSnapshot>,
 }
 
@@ -368,10 +369,10 @@ impl SpreadsheetDocument {
             | AppliedOperation::DeleteRow { .. }
             | AppliedOperation::AddColumn { .. }
             | AppliedOperation::DeleteColumn { .. } => {
-                DocumentMementoSide::Structure(self.structure_memento())
+                DocumentMementoSide::Structure(self.structure_memento(operation))
             }
             AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => {
-                DocumentMementoSide::Structure(self.structure_memento())
+                DocumentMementoSide::Structure(self.structure_memento(operation))
             }
         }
     }
@@ -521,9 +522,9 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn structure_memento(&self) -> StructureMemento {
+    fn structure_memento(&self, operation: &AppliedOperation) -> StructureMemento {
         StructureMemento {
-            projection: self.projection_structure_memento(),
+            projection: self.projection_structure_memento(operation),
             body: match &self.body {
                 SpreadsheetDocumentBody::Excel(body) => BodyStructureMemento::ExcelWorkbook {
                     workbook: body.workbook.clone(),
@@ -535,16 +536,36 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn projection_structure_memento(&self) -> FileStructureMemento {
+    fn projection_structure_memento(&self, operation: &AppliedOperation) -> FileStructureMemento {
+        let sheet_count = self.projection.sheets.len();
+        let (sheet_indexes, truncate_from) = match operation {
+            AppliedOperation::AddRow { sheet_index, .. }
+            | AppliedOperation::DeleteRow { sheet_index, .. }
+            | AppliedOperation::AddColumn { sheet_index, .. }
+            | AppliedOperation::DeleteColumn { sheet_index, .. } => (vec![*sheet_index], None),
+            AppliedOperation::AddSheet { sheet_index, .. }
+            | AppliedOperation::DeleteSheet { sheet_index } => (
+                (*sheet_index..sheet_count).collect::<Vec<_>>(),
+                Some(*sheet_index),
+            ),
+            AppliedOperation::SetCell { .. }
+            | AppliedOperation::SetCells { .. }
+            | AppliedOperation::SetColumnWidth { .. }
+            | AppliedOperation::SetRowHeight { .. } => (Vec::new(), None),
+        };
+
         FileStructureMemento {
-            sheet_count: self.projection.sheets.len(),
-            sheets: self
-                .projection
-                .sheets
-                .iter()
-                .cloned()
-                .enumerate()
-                .map(|(sheet_index, sheet)| SheetSnapshot { sheet_index, sheet })
+            sheet_count,
+            truncate_from,
+            sheets: sheet_indexes
+                .into_iter()
+                .filter_map(|sheet_index| {
+                    self.projection
+                        .sheets
+                        .get(sheet_index)
+                        .cloned()
+                        .map(|sheet| SheetSnapshot { sheet_index, sheet })
+                })
                 .collect(),
         }
     }
@@ -926,32 +947,36 @@ impl SpreadsheetDocument {
 }
 
 fn restore_projection_sheets(file_data: &mut FileData, memento: &FileStructureMemento) {
-    if memento.sheets.is_empty() {
+    if let Some(truncate_from) = memento.truncate_from {
+        file_data.sheets.truncate(truncate_from);
+
+        for snapshot in &memento.sheets {
+            if file_data.sheets.len() < snapshot.sheet_index {
+                file_data
+                    .sheets
+                    .resize_with(snapshot.sheet_index, SheetData::default);
+            }
+            if file_data.sheets.len() == snapshot.sheet_index {
+                file_data.sheets.push(snapshot.sheet.clone());
+            } else {
+                file_data.sheets[snapshot.sheet_index] = snapshot.sheet.clone();
+            }
+        }
+
         file_data.sheets.truncate(memento.sheet_count);
         return;
     }
 
-    let min_index = memento
-        .sheets
-        .iter()
-        .map(|sheet| sheet.sheet_index)
-        .min()
-        .unwrap_or(0);
-    file_data.sheets.truncate(min_index);
-
+    if file_data.sheets.len() < memento.sheet_count {
+        file_data
+            .sheets
+            .resize_with(memento.sheet_count, SheetData::default);
+    }
     for snapshot in &memento.sheets {
-        if file_data.sheets.len() < snapshot.sheet_index {
-            file_data
-                .sheets
-                .resize_with(snapshot.sheet_index, SheetData::default);
-        }
-        if file_data.sheets.len() == snapshot.sheet_index {
-            file_data.sheets.push(snapshot.sheet.clone());
-        } else {
+        if snapshot.sheet_index < file_data.sheets.len() {
             file_data.sheets[snapshot.sheet_index] = snapshot.sheet.clone();
         }
     }
-
     file_data.sheets.truncate(memento.sheet_count);
 }
 

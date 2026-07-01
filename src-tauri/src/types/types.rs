@@ -25,42 +25,42 @@ impl Serialize for CellValue {
     where
         S: serde::Serializer,
     {
-        match self {
-            CellValue::Null => serializer.serialize_none(),
-            CellValue::String(s) => serializer.serialize_str(s),
-            CellValue::Number(v) => {
-                // 如果是整数且超出 JavaScript 安全范围，序列化为字符串
-                if let Some(i) = v.as_i64()
-                    && !(JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&i)
-                {
-                    return serializer.serialize_str(&i.to_string());
-                }
-                // 否则正常序列化
-                v.serialize(serializer)
-            }
-            CellValue::Boolean(b) => serializer.serialize_bool(*b),
-            CellValue::Formula {
+        use serde::ser::SerializeMap;
+
+        let mut len = 4;
+        if matches!(self, CellValue::Formula { .. }) {
+            len += 1;
+        }
+
+        let mut map = serializer.serialize_map(Some(len))?;
+        map.serialize_entry("type", "cell")?;
+        map.serialize_entry("kind", self.kind())?;
+        map.serialize_entry("raw", &self.raw_json_value())?;
+        map.serialize_entry("display", &self.to_display_string())?;
+        if let CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } = self
+        {
+            let formula_projection = FormulaCellProjection {
                 formula,
                 cached_value,
-                error,
-            } => {
-                use serde::ser::SerializeMap;
-
-                let mut len = 3;
-                if error.is_some() {
-                    len += 1;
-                }
-                let mut map = serializer.serialize_map(Some(len))?;
-                map.serialize_entry("type", "formula")?;
-                map.serialize_entry("formula", formula)?;
-                map.serialize_entry("cachedValue", cached_value)?;
-                if let Some(error) = error {
-                    map.serialize_entry("error", error)?;
-                }
-                map.end()
-            }
+                error: error.as_deref(),
+            };
+            map.serialize_entry("formula", &formula_projection)?;
         }
+        map.end()
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FormulaCellProjection<'a> {
+    formula: &'a str,
+    cached_value: &'a CellValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 impl CellValue {
@@ -79,6 +79,39 @@ impl CellValue {
             } => error
                 .clone()
                 .unwrap_or_else(|| cached_value.to_display_string()),
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            CellValue::Null => "blank",
+            CellValue::String(_) => "text",
+            CellValue::Number(_) => "number",
+            CellValue::Boolean(_) => "boolean",
+            CellValue::Formula { error, .. } => {
+                if error.is_some() {
+                    "error"
+                } else {
+                    "formula"
+                }
+            }
+        }
+    }
+
+    fn raw_json_value(&self) -> Value {
+        match self {
+            CellValue::Null => Value::Null,
+            CellValue::String(value) => Value::String(value.clone()),
+            CellValue::Number(value) => {
+                if let Some(i) = value.as_i64()
+                    && !(JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&i)
+                {
+                    return Value::String(i.to_string());
+                }
+                value.clone()
+            }
+            CellValue::Boolean(value) => Value::Bool(*value),
+            CellValue::Formula { cached_value, .. } => cached_value.raw_json_value(),
         }
     }
 
@@ -176,6 +209,41 @@ impl<'de> Deserialize<'de> for CellValue {
                 Ok(CellValue::String(s))
             }
             Value::Object(mut object) => {
+                if object.get("type").and_then(Value::as_str) == Some("cell") {
+                    let formula = object.remove("formula");
+                    if let Some(Value::Object(mut formula)) = formula {
+                        let formula_text = formula
+                            .remove("formula")
+                            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                            .unwrap_or_default();
+                        let cached_value = formula
+                            .remove("cachedValue")
+                            .or_else(|| formula.remove("cached_value"))
+                            .or_else(|| object.remove("raw"))
+                            .map(CellValue::deserialize)
+                            .transpose()
+                            .map_err(serde::de::Error::custom)?
+                            .unwrap_or(CellValue::Null);
+                        let error = formula
+                            .remove("error")
+                            .and_then(|value| value.as_str().map(ToOwned::to_owned));
+
+                        return Ok(CellValue::Formula {
+                            formula: normalize_formula_text(formula_text),
+                            cached_value: Box::new(cached_value),
+                            error,
+                        });
+                    }
+
+                    return object
+                        .remove("raw")
+                        .map(CellValue::deserialize)
+                        .transpose()
+                        .map_err(serde::de::Error::custom)?
+                        .map(Ok)
+                        .unwrap_or(Ok(CellValue::Null));
+                }
+
                 if object.get("type").and_then(Value::as_str) == Some("formula") {
                     let formula = object
                         .remove("formula")
@@ -539,12 +607,101 @@ pub struct LayoutPatch {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RowInsertedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "rowIndex")]
+    pub row_index: usize,
+    pub row: Vec<CellValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_height: Option<u32>,
+    pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub row_heights: HashMap<usize, u32>,
+    #[serde(default)]
+    pub rich: SheetRichProjection,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RowDeletedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "rowIndex")]
+    pub row_index: usize,
+    pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub row_heights: HashMap<usize, u32>,
+    #[serde(default)]
+    pub rich: SheetRichProjection,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnInsertedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "colIndex")]
+    pub col_index: usize,
+    pub column: Vec<CellValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_width: Option<u32>,
+    pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub column_widths: HashMap<usize, u32>,
+    #[serde(default)]
+    pub rich: SheetRichProjection,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnDeletedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "colIndex")]
+    pub col_index: usize,
+    pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub column_widths: HashMap<usize, u32>,
+    #[serde(default)]
+    pub rich: SheetRichProjection,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetInsertedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    pub sheet: SheetData,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetDeletedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum EditorPatch {
     #[serde(rename = "Cells")]
     Cells { changes: Vec<SheetCellChange> },
     #[serde(rename = "Layout")]
     Layout { patch: LayoutPatch },
+    #[serde(rename = "RowInserted")]
+    RowInserted { patch: RowInsertedPatch },
+    #[serde(rename = "RowDeleted")]
+    RowDeleted { patch: RowDeletedPatch },
+    #[serde(rename = "ColumnInserted")]
+    ColumnInserted { patch: ColumnInsertedPatch },
+    #[serde(rename = "ColumnDeleted")]
+    ColumnDeleted { patch: ColumnDeletedPatch },
+    #[serde(rename = "SheetInserted")]
+    SheetInserted { patch: SheetInsertedPatch },
+    #[serde(rename = "SheetDeleted")]
+    SheetDeleted { patch: SheetDeletedPatch },
     #[serde(rename = "SheetSnapshot")]
     SheetSnapshot {
         #[serde(rename = "sheetIndex")]

@@ -7,6 +7,8 @@ use serde_json::Value;
 use crate::error::AppError;
 use crate::types::{CellValue, FileData, FormulaDiagnostics, SheetCellChange};
 
+const MAX_INDEXED_RANGE_ROWS: usize = 512;
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct FormulaCellRef {
     pub sheet_index: usize,
@@ -35,9 +37,66 @@ impl FormulaRangeRef {
 struct FormulaDependencyIndex {
     formulas: HashSet<FormulaCellRef>,
     dependents_by_source: HashMap<FormulaCellRef, HashSet<FormulaCellRef>>,
-    range_dependents: Vec<(FormulaRangeRef, FormulaCellRef)>,
+    range_dependents: FormulaRangeDependencyIndex,
     always_recalculate: HashSet<FormulaCellRef>,
     diagnostics: FormulaDiagnostics,
+}
+
+#[derive(Default)]
+struct FormulaRangeDependencyIndex {
+    sheets: HashMap<usize, SheetRangeDependencyIndex>,
+}
+
+#[derive(Default)]
+struct SheetRangeDependencyIndex {
+    dependencies: Vec<(FormulaRangeRef, FormulaCellRef)>,
+    rows: HashMap<usize, Vec<usize>>,
+    large_dependencies: Vec<(FormulaRangeRef, FormulaCellRef)>,
+}
+
+impl FormulaRangeDependencyIndex {
+    fn insert(&mut self, range: FormulaRangeRef, dependent: FormulaCellRef) {
+        let sheet = self.sheets.entry(range.sheet_index).or_default();
+        if range
+            .end_row
+            .saturating_sub(range.start_row)
+            .saturating_add(1)
+            > MAX_INDEXED_RANGE_ROWS
+        {
+            sheet.large_dependencies.push((range, dependent));
+            return;
+        }
+
+        let dependency_index = sheet.dependencies.len();
+        sheet.dependencies.push((range, dependent));
+        for row in range.start_row..=range.end_row {
+            sheet.rows.entry(row).or_default().push(dependency_index);
+        }
+    }
+
+    fn dependents_for(&self, source: FormulaCellRef) -> Vec<FormulaCellRef> {
+        let Some(sheet) = self.sheets.get(&source.sheet_index) else {
+            return Vec::new();
+        };
+        let mut dependents = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(dependency_indexes) = sheet.rows.get(&source.row) {
+            for dependency_index in dependency_indexes {
+                let Some((range, dependent)) = sheet.dependencies.get(*dependency_index) else {
+                    continue;
+                };
+                if range.contains(source) && seen.insert(*dependent) {
+                    dependents.push(*dependent);
+                }
+            }
+        }
+        for (range, dependent) in &sheet.large_dependencies {
+            if range.contains(source) && seen.insert(*dependent) {
+                dependents.push(*dependent);
+            }
+        }
+        dependents
+    }
 }
 
 #[derive(Default)]
@@ -260,9 +319,13 @@ impl FormulaRuntime {
                 }
             }
 
-            for (range, dependent) in &self.dependency_index.range_dependents {
-                if range.contains(source) && impacted.insert(*dependent) {
-                    queue.push_back(*dependent);
+            for dependent in self
+                .dependency_index
+                .range_dependents
+                .dependents_for(source)
+            {
+                if impacted.insert(dependent) {
+                    queue.push_back(dependent);
                 }
             }
         }
@@ -467,7 +530,7 @@ fn build_dependency_index(
                         .insert(formula_ref.clone());
                 }
                 for dependency in dependencies.ranges {
-                    index.range_dependents.push((dependency, formula_ref));
+                    index.range_dependents.insert(dependency, formula_ref);
                 }
             }
         }

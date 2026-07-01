@@ -20,16 +20,34 @@ type UsePendingCellSaveOptions = {
 
 export function cellToEditorString(value: CellValue | undefined): string {
   if (value === null || value === undefined) return '';
+  if (isCellData(value)) return value.formula?.formula ?? scalarToString(value.raw);
   if (isFormulaCell(value)) return value.formula;
   return String(value);
 }
 
 export function cellToDisplayString(value: CellValue | undefined): string {
   if (value === null || value === undefined) return '';
+  if (isCellData(value)) return value.formula?.error ?? value.display ?? scalarToString(value.raw);
   if (isFormulaCell(value)) {
     return value.error ?? cellToDisplayString(value.cachedValue);
   }
   return String(value);
+}
+
+export function cellKind(value: CellValue | undefined): string {
+  if (value === null || value === undefined) return 'blank';
+  if (isCellData(value)) return value.kind;
+  if (isFormulaCell(value)) return value.error ? 'error' : 'formula';
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  return 'text';
+}
+
+export function isCellData(value: CellValue | undefined): value is Extract<CellValue, { type: 'cell' }> {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && value.type === 'cell';
 }
 
 export function isFormulaCell(value: CellValue | undefined): value is Extract<CellValue, { type: 'formula' }> {
@@ -37,6 +55,12 @@ export function isFormulaCell(value: CellValue | undefined): value is Extract<Ce
     && value !== null
     && !Array.isArray(value)
     && value.type === 'formula';
+}
+
+function scalarToString(value: CellValue | undefined): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return cellToDisplayString(value);
+  return String(value);
 }
 
 export function usePendingCellSave({

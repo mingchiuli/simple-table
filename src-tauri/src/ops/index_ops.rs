@@ -324,9 +324,14 @@ pub fn schedule_index_for_response(
                     );
                 }
             }
-            EditorPatch::FullSnapshot { .. } | EditorPatch::SheetSnapshot { .. } => {
-                needs_rebuild = true
-            }
+            EditorPatch::FullSnapshot { .. }
+            | EditorPatch::SheetSnapshot { .. }
+            | EditorPatch::RowInserted { .. }
+            | EditorPatch::RowDeleted { .. }
+            | EditorPatch::ColumnInserted { .. }
+            | EditorPatch::ColumnDeleted { .. }
+            | EditorPatch::SheetInserted { .. }
+            | EditorPatch::SheetDeleted { .. } => needs_rebuild = true,
             EditorPatch::Layout { .. } => {}
         }
     }
@@ -340,9 +345,10 @@ pub fn schedule_index_for_response(
 mod tests {
     use super::*;
     use crate::ops::EditorCommand;
-    use crate::state::editor_state::{EditorState, SearchSource};
+    use crate::ops::search_ops::do_search;
+    use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;
-    use crate::types::{FileData, SheetData};
+    use crate::types::{FileData, SearchScope, SheetData};
 
     fn s(value: &str) -> CellValue {
         CellValue::String(value.to_string())
@@ -375,26 +381,31 @@ mod tests {
         let guard = registry.read().unwrap();
         let editor = guard.get(document_id).unwrap();
         let mut rows: Vec<_> = editor
-            .search_sheet(0, query, 10)
-            .positions
-            .iter()
+            .indexed_search_sheet(0, query, 10)
+            .unwrap_or_default()
+            .into_iter()
             .map(|position| (position.row, position.col))
             .collect();
         rows.sort();
         rows
     }
 
-    fn search_source(
+    fn rows_of_current_search(
         registry: &Arc<RwLock<ActiveDocumentStore>>,
-        document_id: u64,
         query: &str,
-    ) -> SearchSource {
-        let guard = registry.read().unwrap();
-        guard
-            .get(document_id)
-            .unwrap()
-            .search_sheet(0, query, 10)
-            .source
+    ) -> Vec<(usize, usize)> {
+        let mut rows: Vec<_> = do_search(
+            registry.clone(),
+            query.to_string(),
+            SearchScope::CurrentSheet,
+            Some(0),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|result| (result.row, result.col))
+        .collect();
+        rows.sort();
+        rows
     }
 
     fn current_stamp(
@@ -460,10 +471,6 @@ mod tests {
         );
 
         assert!(ok);
-        assert_eq!(
-            search_source(&registry, document_id, "orange"),
-            SearchSource::Index
-        );
         assert!(rows_of(&registry, document_id, "apple").is_empty());
         assert_eq!(rows_of(&registry, document_id, "orange"), vec![(0, 0)]);
         assert_eq!(rows_of(&registry, document_id, "banana"), vec![(0, 1)]);
@@ -478,10 +485,7 @@ mod tests {
             current_stamp(&registry, document_id),
             &registry,
         );
-        assert_eq!(
-            search_source(&registry, document_id, "old"),
-            SearchSource::Index
-        );
+        assert_eq!(rows_of(&registry, document_id, "old"), vec![(0, 0)]);
 
         let stamp = {
             let mut guard = registry.write().unwrap();
@@ -497,12 +501,8 @@ mod tests {
             editor.search_index_stamp()
         };
 
-        assert_eq!(
-            search_source(&registry, document_id, "new"),
-            SearchSource::ScanFallback
-        );
-        assert!(rows_of(&registry, document_id, "old").is_empty());
-        assert_eq!(rows_of(&registry, document_id, "new"), vec![(0, 0)]);
+        assert!(rows_of_current_search(&registry, "old").is_empty());
+        assert_eq!(rows_of_current_search(&registry, "new"), vec![(0, 0)]);
 
         let ok = run_incremental(
             document_id,
@@ -520,10 +520,6 @@ mod tests {
         );
 
         assert!(ok);
-        assert_eq!(
-            search_source(&registry, document_id, "new"),
-            SearchSource::Index
-        );
         assert!(rows_of(&registry, document_id, "old").is_empty());
         assert_eq!(rows_of(&registry, document_id, "new"), vec![(0, 0)]);
     }
@@ -553,16 +549,8 @@ mod tests {
             editor.mark_search_index_stale();
         }
 
-        {
-            let guard = registry.read().unwrap();
-            let editor = guard.get(document_id).unwrap();
-            assert_eq!(
-                editor.search_sheet(0, "orange", 10).source,
-                SearchSource::ScanFallback
-            );
-        }
-        assert!(rows_of(&registry, document_id, "apple").is_empty());
-        assert_eq!(rows_of(&registry, document_id, "orange"), vec![(0, 0)]);
+        assert!(rows_of_current_search(&registry, "apple").is_empty());
+        assert_eq!(rows_of_current_search(&registry, "orange"), vec![(0, 0)]);
 
         run_rebuild(
             document_id,
@@ -591,7 +579,6 @@ mod tests {
             },
             None,
         );
-        let new_document_id = new_editor.document_id();
         {
             let mut guard = registry.write().unwrap();
             guard.replace_active(new_editor);
@@ -599,11 +586,7 @@ mod tests {
 
         run_rebuild(old_document_id, 0, old_stamp, &registry);
 
-        assert_eq!(
-            search_source(&registry, new_document_id, "new"),
-            SearchSource::ScanFallback
-        );
-        assert_eq!(rows_of(&registry, new_document_id, "new"), vec![(0, 0)]);
+        assert_eq!(rows_of_current_search(&registry, "new"), vec![(0, 0)]);
         assert!(registry.read().unwrap().get(old_document_id).is_none());
     }
 }

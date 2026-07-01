@@ -5,7 +5,9 @@ use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
 use crate::state::state::{ActiveDocumentStore, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
-    AppliedOperationResult, EditorMutationResponse, EditorPatch, LayoutPatch, SheetCellChange,
+    AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
+    EditorPatch, LayoutPatch, RowDeletedPatch, RowInsertedPatch, SheetCellChange,
+    SheetDeletedPatch, SheetInsertedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -87,22 +89,12 @@ pub fn layout_mutation_response(
     mutation_response(editor_state, vec![EditorPatch::Layout { patch }])
 }
 
-pub fn sheet_snapshot_with_cell_changes_mutation_response(
+pub fn structural_delta_mutation_response(
     editor_state: &EditorState,
-    sheet_index: usize,
+    operation: AppliedOperationResult,
     cell_changes: Vec<SheetCellChange>,
 ) -> EditorMutationResponse {
-    let mut patches = editor_state
-        .file_data()
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            vec![EditorPatch::SheetSnapshot {
-                sheet_index,
-                sheet: sheet.clone(),
-            }]
-        })
-        .unwrap_or_default();
+    let mut patches = structural_patches(editor_state, operation);
 
     if !cell_changes.is_empty() {
         patches.push(EditorPatch::Cells {
@@ -111,6 +103,117 @@ pub fn sheet_snapshot_with_cell_changes_mutation_response(
     }
 
     mutation_response(editor_state, patches)
+}
+
+fn structural_patches(
+    editor_state: &EditorState,
+    operation: AppliedOperationResult,
+) -> Vec<EditorPatch> {
+    match operation {
+        AppliedOperationResult::AddRow { sheet_index, row } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::RowInserted {
+                    patch: RowInsertedPatch {
+                        sheet_index,
+                        row_index: row.index,
+                        row: row.values,
+                        row_height: sheet
+                            .row_heights
+                            .as_ref()
+                            .and_then(|heights| heights.get(&row.index).copied()),
+                        merges: sheet.merges.clone(),
+                        row_heights: sheet.row_heights.clone().unwrap_or_default(),
+                        rich: sheet.rich.clone(),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::DeleteRow {
+            sheet_index,
+            row_index,
+        } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::RowDeleted {
+                    patch: RowDeletedPatch {
+                        sheet_index,
+                        row_index,
+                        merges: sheet.merges.clone(),
+                        row_heights: sheet.row_heights.clone().unwrap_or_default(),
+                        rich: sheet.rich.clone(),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::AddColumn {
+            sheet_index,
+            column,
+            col_data,
+        } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::ColumnInserted {
+                    patch: ColumnInsertedPatch {
+                        sheet_index,
+                        col_index: column.index,
+                        column: col_data,
+                        column_width: sheet
+                            .column_widths
+                            .as_ref()
+                            .and_then(|widths| widths.get(&column.index).copied()),
+                        merges: sheet.merges.clone(),
+                        column_widths: sheet.column_widths.clone().unwrap_or_default(),
+                        rich: sheet.rich.clone(),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::DeleteColumn {
+            sheet_index,
+            column_index,
+        } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::ColumnDeleted {
+                    patch: ColumnDeletedPatch {
+                        sheet_index,
+                        col_index: column_index,
+                        merges: sheet.merges.clone(),
+                        column_widths: sheet.column_widths.clone().unwrap_or_default(),
+                        rich: sheet.rich.clone(),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::AddSheet {
+            sheet_index,
+            sheet_data,
+            ..
+        } => vec![EditorPatch::SheetInserted {
+            patch: SheetInsertedPatch {
+                sheet_index,
+                sheet: sheet_data,
+            },
+        }],
+        AppliedOperationResult::DeleteSheet { sheet_index, .. } => {
+            vec![EditorPatch::SheetDeleted {
+                patch: SheetDeletedPatch { sheet_index },
+            }]
+        }
+        AppliedOperationResult::SetCell { .. }
+        | AppliedOperationResult::SetCells { .. }
+        | AppliedOperationResult::SetColumnWidth { .. }
+        | AppliedOperationResult::SetRowHeight { .. } => Vec::new(),
+    }
 }
 
 fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: SheetCellChange) {
