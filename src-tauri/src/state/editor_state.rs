@@ -331,7 +331,17 @@ impl EditorState {
         operation: &crate::ops::AppliedOperation,
     ) -> Result<(), AppError> {
         let capabilities = self.capabilities();
-        if operation.is_structure_change() && !capabilities.can_edit_structure {
+        if operation.is_row_structure_change() && !capabilities.can_insert_delete_rows {
+            return Err(AppError::UnsupportedWorkbookStructure(
+                capabilities.blocked_structure_reasons.join(", "),
+            ));
+        }
+        if operation.is_column_structure_change() && !capabilities.can_insert_delete_columns {
+            return Err(AppError::UnsupportedWorkbookStructure(
+                capabilities.blocked_structure_reasons.join(", "),
+            ));
+        }
+        if operation.is_sheet_structure_change() && !capabilities.can_insert_delete_sheets {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_structure_reasons.join(", "),
             ));
@@ -798,7 +808,9 @@ mod tests {
         let capabilities = state.capabilities();
         assert!(!capabilities.can_edit_cells);
         assert!(!capabilities.can_resize_rows_columns);
-        assert!(!capabilities.can_edit_structure);
+        assert!(!capabilities.can_insert_delete_rows);
+        assert!(!capabilities.can_insert_delete_columns);
+        assert!(!capabilities.can_insert_delete_sheets);
         assert!(
             capabilities
                 .blocked_structure_reasons

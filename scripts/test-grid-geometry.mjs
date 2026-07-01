@@ -24,6 +24,15 @@ assert.deepEqual(
   ]
 );
 assert.deepEqual(
+  geometry.collectVisibleItems(offsets, 3, 40, 60, 0),
+  [
+    { index: 0, top: 0, height: 40 },
+    { index: 1, top: 40, height: 60 },
+    { index: 2, top: 100, height: 80 },
+  ],
+  'visible collection keeps boundary-touching rows so grid lines do not disappear'
+);
+assert.deepEqual(
   geometry.collectVisibleItems(offsets, 3, 45, 50, 20),
   [
     { index: 0, top: 0, height: 40 },
@@ -39,11 +48,27 @@ assert.deepEqual(
   ]
 );
 assert.deepEqual(
+  geometry.collectColumnResizeHandles(3, 60, 0, 260, (index) => [100, 120, 80][index]),
+  [
+    { colIndex: 0, left: 160 },
+    { colIndex: 1, left: 280 },
+  ].filter((handle) => handle.left <= 260),
+  'column resize handles are placed on rendered column boundaries'
+);
+assert.deepEqual(
   geometry.collectRowResizeHandles(3, 50, 10, 160, (index) => [40, 60, 80][index]),
   [
     { rowIndex: 0, top: 80 },
     { rowIndex: 1, top: 140 },
   ]
+);
+assert.deepEqual(
+  geometry.collectRowResizeHandles(3, 50, 0, 150, (index) => [40, 60, 80][index]),
+  [
+    { rowIndex: 0, top: 90 },
+    { rowIndex: 1, top: 150 },
+  ],
+  'row resize handles are placed on rendered row boundaries'
 );
 
 assert.equal(

@@ -46,7 +46,7 @@ export function useEditorCommands({
   }
 
   async function handleAddRow() {
-    if (!currentSheet.value || !ensureStructureEditingAllowed()) return;
+    if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const rowIndex = currentSheet.value.rows.length;
     await runEditorCommand(
       () => api.addRow(currentSheetIndex.value, rowIndex),
@@ -55,7 +55,7 @@ export function useEditorCommands({
   }
 
   async function handleDeleteRow(index: number) {
-    if (!currentSheet.value || !ensureStructureEditingAllowed()) return;
+    if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     await runEditorCommand(
       () => api.deleteRow(currentSheetIndex.value, index),
       "Failed to delete row"
@@ -63,7 +63,7 @@ export function useEditorCommands({
   }
 
   async function handleAddColumn() {
-    if (!currentSheet.value || !ensureStructureEditingAllowed()) return;
+    if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     await runEditorCommand(
       () => api.addColumn(currentSheetIndex.value),
       "Failed to add column"
@@ -71,7 +71,7 @@ export function useEditorCommands({
   }
 
   async function handleDeleteColumn(index: number) {
-    if (!currentSheet.value || !ensureStructureEditingAllowed()) return;
+    if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     await runEditorCommand(
       () => api.deleteColumn(currentSheetIndex.value, index),
       "Failed to delete column"
@@ -79,7 +79,7 @@ export function useEditorCommands({
   }
 
   async function handleAddSheet() {
-    if (!fileData.value || !ensureStructureEditingAllowed()) return;
+    if (!fileData.value || !ensureStructureEditingAllowed("sheets")) return;
     const newSheetIndex = fileData.value.sheets.length;
     await runEditorCommand(async () => {
       const response = await api.addSheet();
@@ -90,7 +90,7 @@ export function useEditorCommands({
   }
 
   async function handleDeleteSheet() {
-    if (!ensureStructureEditingAllowed()) return;
+    if (!ensureStructureEditingAllowed("sheets")) return;
     if (!fileData.value || fileData.value.sheets.length <= 1) {
       ElMessage.warning("Cannot delete the last sheet");
       return;
@@ -187,15 +187,25 @@ export function useEditorCommands({
     }
   }
 
-  function ensureStructureEditingAllowed(): boolean {
-    if (documentStatusStore.capabilities.canEditStructure) return true;
+  function ensureStructureEditingAllowed(kind: "rows" | "columns" | "sheets"): boolean {
+    const capabilities = documentStatusStore.capabilities;
+    const allowed = kind === "rows"
+      ? capabilities.canInsertDeleteRows
+      : kind === "columns"
+        ? capabilities.canInsertDeleteColumns
+        : capabilities.canInsertDeleteSheets;
+    if (allowed) return true;
     const reason = documentStatusStore.capabilities.blockedStructureReasons?.join(", ");
     ElMessage.warning(
       reason
-        ? `Structure editing is disabled for this workbook: ${reason}`
-        : "Structure editing is disabled for this workbook"
+        ? `${structureLabel(kind)} editing is disabled for this workbook: ${reason}`
+        : `${structureLabel(kind)} editing is disabled for this workbook`
     );
     return false;
+  }
+
+  function structureLabel(kind: "rows" | "columns" | "sheets"): string {
+    return kind === "rows" ? "Row" : kind === "columns" ? "Column" : "Sheet";
   }
 
   function ensureResizeAllowed(): boolean {

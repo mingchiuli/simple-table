@@ -1,32 +1,19 @@
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-
 use crate::error::AppError;
 use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
-use crate::io::codec::writer;
-use crate::io::workbook_state;
+use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
 use crate::types::{
     AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData, WorkbookCapabilities,
 };
 use crate::types::{FormulaDiagnostics, FormulaStatus};
+use std::collections::{HashMap, HashSet};
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
 pub struct DocumentOperationResult {
     pub operation: AppliedOperationResult,
     pub cell_changes: Vec<SheetCellChange>,
-}
-
-enum SpreadsheetDocumentBody {
-    Excel(ExcelDocumentBody),
-    Csv,
-    GeneratedWorkbook,
-}
-
-struct ExcelDocumentBody {
-    workbook: Box<Workbook>,
 }
 
 pub(crate) struct DocumentMemento {
@@ -137,20 +124,6 @@ impl SheetSnapshot {
     }
 }
 
-enum BodyStructureMemento {
-    ExcelWorkbook { workbook: Box<Workbook> },
-    ProjectionOnly,
-}
-
-impl BodyStructureMemento {
-    fn estimated_bytes(&self) -> usize {
-        match self {
-            BodyStructureMemento::ExcelWorkbook { .. } => 8 * 1024 * 1024,
-            BodyStructureMemento::ProjectionOnly => 0,
-        }
-    }
-}
-
 pub(crate) enum MementoSide {
     Before,
     After,
@@ -249,13 +222,7 @@ impl SpreadsheetDocument {
             }
         };
 
-        let body = match workbook {
-            Some(workbook) => SpreadsheetDocumentBody::Excel(ExcelDocumentBody {
-                workbook: Box::new(workbook),
-            }),
-            None if is_csv_document(&projection) => SpreadsheetDocumentBody::Csv,
-            None => SpreadsheetDocumentBody::GeneratedWorkbook,
-        };
+        let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
 
         Self {
             projection,
@@ -278,43 +245,15 @@ impl SpreadsheetDocument {
     }
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
-        match &self.body {
-            SpreadsheetDocumentBody::Excel(body) => {
-                workbook_state::workbook_capabilities(&body.workbook)
-            }
-            SpreadsheetDocumentBody::Csv => WorkbookCapabilities {
-                can_native_save: false,
-                ..Default::default()
-            },
-            SpreadsheetDocumentBody::GeneratedWorkbook => WorkbookCapabilities::default(),
-        }
+        self.body.capabilities()
     }
 
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
-        let extension = Path::new(target_path_or_name)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_lowercase())
-            .unwrap_or_else(|| "xlsx".to_string());
-
-        match extension.as_str() {
-            "xlsx" => match &self.body {
-                SpreadsheetDocumentBody::Excel(body) => {
-                    writer::generate_excel_bytes_from_workbook_for_target(
-                        &body.workbook,
-                        target_path_or_name,
-                    )
-                }
-                SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => {
-                    writer::generate_file_bytes_for_target(&self.projection, target_path_or_name)
-                }
-            },
-            "csv" => writer::generate_file_bytes_for_target(&self.projection, target_path_or_name),
-            _ => Err(AppError::UnsupportedFormat),
-        }
+        self.body
+            .generate_file_bytes_for_target(&self.projection, target_path_or_name)
     }
 
     pub fn execute_operation(
@@ -525,14 +464,7 @@ impl SpreadsheetDocument {
     fn structure_memento(&self, operation: &AppliedOperation) -> StructureMemento {
         StructureMemento {
             projection: self.projection_structure_memento(operation),
-            body: match &self.body {
-                SpreadsheetDocumentBody::Excel(body) => BodyStructureMemento::ExcelWorkbook {
-                    workbook: body.workbook.clone(),
-                },
-                SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => {
-                    BodyStructureMemento::ProjectionOnly
-                }
-            },
+            body: self.body.capture_structure_memento(),
         }
     }
 
@@ -657,14 +589,11 @@ impl SpreadsheetDocument {
     }
 
     fn restore_structure(&mut self, memento: &StructureMemento) -> Result<(), AppError> {
-        match &memento.body {
-            BodyStructureMemento::ExcelWorkbook { workbook } => {
-                self.body = SpreadsheetDocumentBody::Excel(ExcelDocumentBody {
-                    workbook: workbook.clone(),
-                });
+        match self.body.restore_structure_memento(&memento.body) {
+            BodyRestoreAction::RefreshProjectionFromWorkbook => {
                 self.refresh_projection_from_workbook();
             }
-            BodyStructureMemento::ProjectionOnly => {
+            BodyRestoreAction::RestoreProjectionOnly => {
                 restore_projection_sheets(&mut self.projection, &memento.projection);
             }
         }
@@ -843,106 +772,64 @@ impl SpreadsheetDocument {
         _result: &AppliedOperationResult,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
-        match &mut self.body {
-            SpreadsheetDocumentBody::Excel(_) if operation.is_structure_change() => Ok(()),
-            SpreadsheetDocumentBody::Excel(body) => workbook_state::patch_after_operation(
-                &mut body.workbook,
-                &mut self.projection,
-                operation,
-                cell_changes,
-            )
-            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string())),
-            SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(()),
-        }
+        self.body
+            .patch_after_operation(&mut self.projection, operation, cell_changes)
+            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
     }
 
     fn apply_operation_to_body_and_projection(
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
-        match &mut self.body {
-            SpreadsheetDocumentBody::Excel(_) if operation.is_structure_change() => {
-                if let SpreadsheetDocumentBody::Excel(body) = &mut self.body {
-                    workbook_state::apply_structure_operation(&mut body.workbook, operation)?;
-                }
-                self.refresh_projection_from_workbook();
-                if let SpreadsheetDocumentBody::Excel(body) = &mut self.body {
-                    workbook_state::sync_all_merge_ranges_from_projection(
-                        &mut body.workbook,
-                        &self.projection,
-                    )?;
-                }
-                self.refresh_projection_from_workbook();
-                Ok(operation.projected_result_from_current_file(&self.projection))
-            }
-            SpreadsheetDocumentBody::Excel(_)
-            | SpreadsheetDocumentBody::Csv
-            | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(operation
-                .execute_cells_and_layout(&mut self.projection)
-                .unwrap_or_else(|| operation.execute(&mut self.projection))),
+        if operation.is_structure_change() && self.body.apply_structure_operation(operation)? {
+            self.refresh_projection_from_workbook();
+            self.body
+                .sync_all_merge_ranges_from_projection(&self.projection)?;
+            self.refresh_projection_from_workbook();
+            return Ok(operation.projected_result_from_current_file(&self.projection));
         }
+
+        Ok(operation
+            .execute_cells_and_layout(&mut self.projection)
+            .unwrap_or_else(|| operation.execute(&mut self.projection)))
     }
 
     fn patch_workbook_formula_changes(
         &mut self,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
-        match &mut self.body {
-            SpreadsheetDocumentBody::Excel(body) => workbook_state::patch_formula_changes(
-                &mut body.workbook,
-                &mut self.projection,
-                cell_changes,
-            )
-            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string())),
-            SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(()),
-        }
+        self.body
+            .patch_formula_changes(&mut self.projection, cell_changes)
+            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
     }
 
     fn patch_workbook_layout(&mut self, memento: &LayoutMemento) -> Result<(), AppError> {
-        match &mut self.body {
-            SpreadsheetDocumentBody::Excel(body) => workbook_state::patch_layout_dimensions(
-                &mut body.workbook,
+        self.body
+            .patch_layout_dimensions(
                 memento.sheet_index,
                 &memento.column_widths,
                 &memento.row_heights,
             )
-            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string())),
-            SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(()),
-        }
+            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
     }
 
     fn patch_workbook_cell_shapes(&mut self, shapes: &[SheetShapeMemento]) -> Result<(), AppError> {
-        match &mut self.body {
-            SpreadsheetDocumentBody::Excel(body) => {
-                let sheet_shapes: Vec<(usize, Vec<usize>)> = shapes
-                    .iter()
-                    .map(|shape| (shape.sheet_index, shape.row_lengths.clone()))
-                    .collect();
-                workbook_state::patch_cell_shapes(&mut body.workbook, &sheet_shapes)
-                    .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
-            }
-            SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => Ok(()),
-        }
+        let sheet_shapes: Vec<(usize, Vec<usize>)> = shapes
+            .iter()
+            .map(|shape| (shape.sheet_index, shape.row_lengths.clone()))
+            .collect();
+        self.body
+            .patch_cell_shapes(&sheet_shapes)
+            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
     }
 
     fn refresh_projection_from_workbook(&mut self) {
-        if let SpreadsheetDocumentBody::Excel(body) = &self.body {
-            workbook_state::refresh_projection_from_workbook(&body.workbook, &mut self.projection);
-        }
+        self.body
+            .refresh_projection_from_workbook(&mut self.projection);
     }
 
     fn clone_body(&self) -> SpreadsheetDocumentBody {
-        match &self.body {
-            SpreadsheetDocumentBody::Excel(body) => {
-                SpreadsheetDocumentBody::Excel(ExcelDocumentBody {
-                    workbook: body.workbook.clone(),
-                })
-            }
-            SpreadsheetDocumentBody::Csv => SpreadsheetDocumentBody::Csv,
-            SpreadsheetDocumentBody::GeneratedWorkbook => {
-                SpreadsheetDocumentBody::GeneratedWorkbook
-            }
-        }
+        self.body.clone_body()
     }
 }
 
@@ -1084,12 +971,4 @@ fn estimate_cell_value_bytes(cell: &CellValue) -> usize {
                 + error.as_ref().map(String::len).unwrap_or_default()
         }
     }
-}
-
-fn is_csv_document(file_data: &FileData) -> bool {
-    Path::new(&file_data.file_name)
-        .extension()
-        .or_else(|| Path::new(&file_data.path).extension())
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
 }

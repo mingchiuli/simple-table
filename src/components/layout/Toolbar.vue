@@ -86,7 +86,7 @@ function handleCheckUpdate() {
         <SheetButtons
           class="sheet-buttons"
           :sheet-count="props.sheetNames.length"
-          :can-edit-structure="props.capabilities.canEditStructure"
+          :can-insert-delete-sheets="props.capabilities.canInsertDeleteSheets"
           @add-sheet="emit('add-sheet')"
           @delete-sheet="emit('delete-sheet')"
         />
@@ -103,7 +103,8 @@ function handleCheckUpdate() {
         v-if="props.fileData"
         :can-undo="props.canUndo"
         :can-redo="props.canRedo"
-        :can-edit-structure="props.capabilities.canEditStructure"
+        :can-insert-delete-rows="props.capabilities.canInsertDeleteRows"
+        :can-insert-delete-columns="props.capabilities.canInsertDeleteColumns"
         @undo="emit('undo')"
         @redo="emit('redo')"
         @add-row="emit('add-row')"
@@ -175,7 +176,7 @@ function handleCheckUpdate() {
         <el-icon><RefreshRight /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.capabilities.canEditStructure"
+        :disabled="!props.capabilities.canInsertDeleteRows"
         @click="emit('add-row')"
         size="small"
         title="Add Row"
@@ -183,7 +184,7 @@ function handleCheckUpdate() {
         <el-icon><Plus /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.capabilities.canEditStructure"
+        :disabled="!props.capabilities.canInsertDeleteColumns"
         @click="emit('add-column')"
         size="small"
         title="Add Column"
@@ -191,7 +192,7 @@ function handleCheckUpdate() {
         <el-icon><Plus /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.capabilities.canEditStructure"
+        :disabled="!props.capabilities.canInsertDeleteSheets"
         @click="emit('add-sheet')"
         size="small"
         title="Add Sheet"
@@ -199,7 +200,7 @@ function handleCheckUpdate() {
         <el-icon><CirclePlus /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.sheetNames.length <= 1 || !props.capabilities.canEditStructure"
+        :disabled="props.sheetNames.length <= 1 || !props.capabilities.canInsertDeleteSheets"
         @click="emit('delete-sheet')"
         size="small"
         title="Delete Sheet"

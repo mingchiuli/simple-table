@@ -2,7 +2,8 @@
 defineProps<{
   canUndo: boolean;
   canRedo: boolean;
-  canEditStructure: boolean;
+  canInsertDeleteRows: boolean;
+  canInsertDeleteColumns: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -22,13 +23,13 @@ const emit = defineEmits<{
       Redo
     </el-button>
     <el-button
-      :disabled="!canEditStructure"
+      :disabled="!canInsertDeleteRows"
       @click="emit('add-row')"
     >
       + Row
     </el-button>
     <el-button
-      :disabled="!canEditStructure"
+      :disabled="!canInsertDeleteColumns"
       @click="emit('add-column')"
     >
       + Column

@@ -264,17 +264,17 @@ mod tests {
     }
 
     #[test]
-    fn row_and_column_structure_edits_return_structural_patches() {
+    fn row_and_column_structure_edits_return_sheet_snapshots() {
         let add_row_response = do_add_row(make_registry(), 0, 1).expect("add row");
         assert!(matches!(
             add_row_response.patches.first(),
-            Some(EditorPatch::RowInserted { patch }) if patch.sheet_index == 0
+            Some(EditorPatch::SheetSnapshot { sheet_index, .. }) if *sheet_index == 0
         ));
 
         let add_column_response = do_add_column(make_registry(), 0).expect("add column");
         assert!(matches!(
             add_column_response.patches.first(),
-            Some(EditorPatch::ColumnInserted { patch }) if patch.sheet_index == 0
+            Some(EditorPatch::SheetSnapshot { sheet_index, .. }) if *sheet_index == 0
         ));
     }
 }

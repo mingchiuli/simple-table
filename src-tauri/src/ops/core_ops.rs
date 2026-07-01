@@ -606,6 +606,27 @@ impl AppliedOperation {
         )
     }
 
+    pub fn is_row_structure_change(&self) -> bool {
+        matches!(
+            self,
+            AppliedOperation::AddRow { .. } | AppliedOperation::DeleteRow { .. }
+        )
+    }
+
+    pub fn is_column_structure_change(&self) -> bool {
+        matches!(
+            self,
+            AppliedOperation::AddColumn { .. } | AppliedOperation::DeleteColumn { .. }
+        )
+    }
+
+    pub fn is_sheet_structure_change(&self) -> bool {
+        matches!(
+            self,
+            AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. }
+        )
+    }
+
     pub fn is_layout_change(&self) -> bool {
         matches!(
             self,

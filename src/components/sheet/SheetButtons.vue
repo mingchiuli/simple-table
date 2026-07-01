@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineProps<{
   sheetCount: number;
-  canEditStructure: boolean;
+  canInsertDeleteSheets: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -14,7 +14,7 @@ const emit = defineEmits<{
   <div class="sheet-buttons">
     <el-button
       size="small"
-      :disabled="!canEditStructure"
+      :disabled="!canInsertDeleteSheets"
       @click="emit('add-sheet')"
     >
       + Sheet
@@ -22,7 +22,7 @@ const emit = defineEmits<{
     <el-button
       size="small"
       type="danger"
-      :disabled="sheetCount <= 1 || !canEditStructure"
+      :disabled="sheetCount <= 1 || !canInsertDeleteSheets"
       @click="emit('delete-sheet')"
     >
       - Sheet

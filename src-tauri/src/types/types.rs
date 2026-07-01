@@ -406,7 +406,12 @@ pub struct DocumentCapabilities {
 pub struct WorkbookCapabilities {
     pub can_edit_cells: bool,
     pub can_resize_rows_columns: bool,
-    pub can_edit_structure: bool,
+    #[serde(default)]
+    pub can_insert_delete_rows: bool,
+    #[serde(default)]
+    pub can_insert_delete_columns: bool,
+    #[serde(default)]
+    pub can_insert_delete_sheets: bool,
     pub can_native_save: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_structure_reasons: Vec<String>,
@@ -419,7 +424,9 @@ impl Default for WorkbookCapabilities {
         Self {
             can_edit_cells: true,
             can_resize_rows_columns: true,
-            can_edit_structure: true,
+            can_insert_delete_rows: true,
+            can_insert_delete_columns: true,
+            can_insert_delete_sheets: true,
             can_native_save: true,
             blocked_structure_reasons: Vec::new(),
             detected_features: Vec::new(),
@@ -608,68 +615,6 @@ pub struct LayoutPatch {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct RowInsertedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-    pub row: Vec<CellValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub row_height: Option<u32>,
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub row_heights: HashMap<usize, u32>,
-    #[serde(default)]
-    pub rich: SheetRichProjection,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct RowDeletedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub row_heights: HashMap<usize, u32>,
-    #[serde(default)]
-    pub rich: SheetRichProjection,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ColumnInsertedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "colIndex")]
-    pub col_index: usize,
-    pub column: Vec<CellValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column_width: Option<u32>,
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub column_widths: HashMap<usize, u32>,
-    #[serde(default)]
-    pub rich: SheetRichProjection,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ColumnDeletedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "colIndex")]
-    pub col_index: usize,
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub column_widths: HashMap<usize, u32>,
-    #[serde(default)]
-    pub rich: SheetRichProjection,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct SheetInsertedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -690,14 +635,6 @@ pub enum EditorPatch {
     Cells { changes: Vec<SheetCellChange> },
     #[serde(rename = "Layout")]
     Layout { patch: LayoutPatch },
-    #[serde(rename = "RowInserted")]
-    RowInserted { patch: RowInsertedPatch },
-    #[serde(rename = "RowDeleted")]
-    RowDeleted { patch: RowDeletedPatch },
-    #[serde(rename = "ColumnInserted")]
-    ColumnInserted { patch: ColumnInsertedPatch },
-    #[serde(rename = "ColumnDeleted")]
-    ColumnDeleted { patch: ColumnDeletedPatch },
     #[serde(rename = "SheetInserted")]
     SheetInserted { patch: SheetInsertedPatch },
     #[serde(rename = "SheetDeleted")]

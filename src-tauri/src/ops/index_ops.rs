@@ -326,10 +326,6 @@ pub fn schedule_index_for_response(
             }
             EditorPatch::FullSnapshot { .. }
             | EditorPatch::SheetSnapshot { .. }
-            | EditorPatch::RowInserted { .. }
-            | EditorPatch::RowDeleted { .. }
-            | EditorPatch::ColumnInserted { .. }
-            | EditorPatch::ColumnDeleted { .. }
             | EditorPatch::SheetInserted { .. }
             | EditorPatch::SheetDeleted { .. } => needs_rebuild = true,
             EditorPatch::Layout { .. } => {}

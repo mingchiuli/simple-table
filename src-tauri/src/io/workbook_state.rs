@@ -300,10 +300,14 @@ pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
         .iter()
         .any(|reason| reason.contains("protection"));
 
+    let can_structure_shift = blocked_structure_reasons.is_empty();
+
     WorkbookCapabilities {
         can_edit_cells: !is_protected,
         can_resize_rows_columns: !is_protected,
-        can_edit_structure: blocked_structure_reasons.is_empty(),
+        can_insert_delete_rows: can_structure_shift,
+        can_insert_delete_columns: can_structure_shift,
+        can_insert_delete_sheets: can_structure_shift,
         can_native_save: true,
         blocked_structure_reasons,
         detected_features,
