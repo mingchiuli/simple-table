@@ -1,12 +1,5 @@
 export type ScalarCellValue = string | number | boolean | null;
 
-export type FormulaCellValue = {
-  type: 'formula';
-  formula: string;
-  cachedValue: CellValue;
-  error?: string;
-};
-
 export interface CellFormatProjection {
   numberFormat?: string;
   styleId?: string;
@@ -29,7 +22,7 @@ export interface CellData {
   format?: CellFormatProjection;
 }
 
-export type CellValue = ScalarCellValue | FormulaCellValue | CellData;
+export type CellValue = CellData;
 
 export interface MergeRange {
   startRow: number;
@@ -163,9 +156,47 @@ export interface SheetDeletedPatch {
   sheetIndex: number;
 }
 
+export interface RowInsertedPatch {
+  sheetIndex: number;
+  rowIndex: number;
+  row: CellValue[];
+  merges: MergeRange[];
+  rowHeights?: Record<number, number>;
+  rich?: SheetRichProjection;
+}
+
+export interface RowDeletedPatch {
+  sheetIndex: number;
+  rowIndex: number;
+  merges: MergeRange[];
+  rowHeights?: Record<number, number>;
+  rich?: SheetRichProjection;
+}
+
+export interface ColumnInsertedPatch {
+  sheetIndex: number;
+  columnIndex: number;
+  values: CellValue[];
+  merges: MergeRange[];
+  columnWidths?: Record<number, number>;
+  rich?: SheetRichProjection;
+}
+
+export interface ColumnDeletedPatch {
+  sheetIndex: number;
+  columnIndex: number;
+  merges: MergeRange[];
+  columnWidths?: Record<number, number>;
+  rich?: SheetRichProjection;
+}
+
 export type EditorPatch =
   | { type: 'Cells'; data: { changes: SheetCellChange[] } }
   | { type: 'Layout'; data: { patch: LayoutPatch } }
+  | { type: 'RowInserted'; data: { patch: RowInsertedPatch } }
+  | { type: 'RowDeleted'; data: { patch: RowDeletedPatch } }
+  | { type: 'ColumnInserted'; data: { patch: ColumnInsertedPatch } }
+  | { type: 'ColumnDeleted'; data: { patch: ColumnDeletedPatch } }
   | { type: 'SheetInserted'; data: { patch: SheetInsertedPatch } }
   | { type: 'SheetDeleted'; data: { patch: SheetDeletedPatch } }
   | { type: 'SheetSnapshot'; data: { sheetIndex: number; sheet: SheetData } }

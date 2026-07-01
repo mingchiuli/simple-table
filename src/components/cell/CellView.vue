@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CellValue } from '@/types';
-import { cellKind, cellToDisplayString } from '@/composables/usePendingCellSave';
+import { cellKind, cellToDisplayString } from '@/utils/cellValue';
 
 const props = withDefaults(defineProps<{
   value: CellValue | undefined;

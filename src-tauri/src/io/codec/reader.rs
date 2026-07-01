@@ -40,8 +40,7 @@ fn read_xlsx_from_bytes(
     path: String,
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
-    let workbook =
-        reader::xlsx::read_reader(cursor, true).map_err(|e| AppError::ReadError(e.to_string()))?;
+    let workbook = read_workbook_from_reader(cursor)?;
     let mut sheets = Vec::new();
 
     for worksheet in workbook.sheet_collection() {
@@ -56,6 +55,14 @@ fn read_xlsx_from_bytes(
         },
         workbook: Some(workbook),
     })
+}
+
+pub fn read_workbook_from_xlsx_bytes(bytes: Vec<u8>) -> Result<Workbook, AppError> {
+    read_workbook_from_reader(Cursor::new(bytes))
+}
+
+fn read_workbook_from_reader(cursor: Cursor<Vec<u8>>) -> Result<Workbook, AppError> {
+    reader::xlsx::read_reader(cursor, true).map_err(|e| AppError::ReadError(e.to_string()))
 }
 
 pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {

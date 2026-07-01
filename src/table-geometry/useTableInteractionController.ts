@@ -1,6 +1,6 @@
 import type { ComputedRef } from "vue";
 import type { CellValue } from "@/types";
-import { cellToDisplayString, cellToEditorString } from "@/composables/usePendingCellSave";
+import { cellToDisplayString, cellToEditorString } from "@/utils/cellValue";
 import { useCellEditing } from "@/table-geometry/useCellEditing";
 
 type CellPosition = { row: number; col: number };

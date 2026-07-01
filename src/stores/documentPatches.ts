@@ -1,7 +1,11 @@
 import type {
   CellValue,
+  ColumnDeletedPatch,
+  ColumnInsertedPatch,
   EditorPatch,
   FileData,
+  RowDeletedPatch,
+  RowInsertedPatch,
   SheetCellChange,
   SheetDeletedPatch,
   SheetInsertedPatch,
@@ -28,6 +32,18 @@ export function applyDocumentPatches(
           patch.data.patch.rowHeights ?? {}
         );
         break;
+      case "RowInserted":
+        nextData = applyRowInserted(nextData, patch.data.patch);
+        break;
+      case "RowDeleted":
+        nextData = applyRowDeleted(nextData, patch.data.patch);
+        break;
+      case "ColumnInserted":
+        nextData = applyColumnInserted(nextData, patch.data.patch);
+        break;
+      case "ColumnDeleted":
+        nextData = applyColumnDeleted(nextData, patch.data.patch);
+        break;
       case "SheetInserted":
         nextData = applySheetInserted(nextData, patch.data.patch);
         break;
@@ -42,6 +58,68 @@ export function applyDocumentPatches(
     }
   }
   return nextData;
+}
+
+function applyRowInserted(data: FileData | null, patch: RowInsertedPatch): FileData | null {
+  const sheet = data?.sheets[patch.sheetIndex];
+  if (!data || !sheet) return data;
+  const rows = [...sheet.rows];
+  rows.splice(Math.min(patch.rowIndex, rows.length), 0, patch.row);
+  return replaceSheet(data, patch.sheetIndex, {
+    ...sheet,
+    rows,
+    merges: patch.merges,
+    rowHeights: patch.rowHeights,
+    rich: patch.rich ?? sheet.rich,
+  });
+}
+
+function applyRowDeleted(data: FileData | null, patch: RowDeletedPatch): FileData | null {
+  const sheet = data?.sheets[patch.sheetIndex];
+  if (!data || !sheet) return data;
+  const rows = [...sheet.rows];
+  if (patch.rowIndex < rows.length) rows.splice(patch.rowIndex, 1);
+  return replaceSheet(data, patch.sheetIndex, {
+    ...sheet,
+    rows,
+    merges: patch.merges,
+    rowHeights: patch.rowHeights,
+    rich: patch.rich ?? sheet.rich,
+  });
+}
+
+function applyColumnInserted(data: FileData | null, patch: ColumnInsertedPatch): FileData | null {
+  const sheet = data?.sheets[patch.sheetIndex];
+  if (!data || !sheet) return data;
+  const rows = sheet.rows.map((row, rowIndex) => {
+    const nextRow = [...row];
+    nextRow.splice(Math.min(patch.columnIndex, nextRow.length), 0, patch.values[rowIndex] ?? blankCell());
+    return nextRow;
+  });
+  return replaceSheet(data, patch.sheetIndex, {
+    ...sheet,
+    rows,
+    merges: patch.merges,
+    columnWidths: patch.columnWidths,
+    rich: patch.rich ?? sheet.rich,
+  });
+}
+
+function applyColumnDeleted(data: FileData | null, patch: ColumnDeletedPatch): FileData | null {
+  const sheet = data?.sheets[patch.sheetIndex];
+  if (!data || !sheet) return data;
+  const rows = sheet.rows.map((row) => {
+    const nextRow = [...row];
+    if (patch.columnIndex < nextRow.length) nextRow.splice(patch.columnIndex, 1);
+    return nextRow;
+  });
+  return replaceSheet(data, patch.sheetIndex, {
+    ...sheet,
+    rows,
+    merges: patch.merges,
+    columnWidths: patch.columnWidths,
+    rich: patch.rich ?? sheet.rich,
+  });
 }
 
 function applySheetInserted(data: FileData | null, patch: SheetInsertedPatch): FileData | null {
@@ -80,6 +158,16 @@ function applySheetSnapshot(
   };
   nextData.sheets[sheetIndex] = sheetSnapshot;
   return nextData;
+}
+
+function replaceSheet(
+  data: FileData,
+  sheetIndex: number,
+  sheet: FileData["sheets"][number]
+): FileData {
+  const sheets = [...data.sheets];
+  sheets[sheetIndex] = sheet;
+  return { ...data, sheets };
 }
 
 function applyCellChanges(data: FileData | null, changes: SheetCellChange[]): FileData | null {
@@ -138,7 +226,7 @@ function ensureCellExists(rows: CellValue[][], row: number, col: number) {
   }
   rows[row] = [...rows[row]];
   while (rows[row].length <= col) {
-    rows[row].push(null);
+    rows[row].push(blankCell());
   }
 }
 
@@ -159,4 +247,13 @@ function patchNumberRecord(
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled editor patch: ${JSON.stringify(value)}`);
+}
+
+function blankCell(): CellValue {
+  return {
+    type: "cell",
+    kind: "blank",
+    raw: null,
+    display: "",
+  };
 }

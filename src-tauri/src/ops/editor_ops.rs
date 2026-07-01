@@ -5,8 +5,9 @@ use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::EditorState;
 use crate::state::state::{ActiveDocumentStore, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
-    AppliedOperationResult, EditorMutationResponse, EditorPatch, LayoutPatch, SheetCellChange,
-    SheetDeletedPatch, SheetInsertedPatch,
+    AppliedOperationResult, CellValue, ColumnDeletedPatch, ColumnInsertedPatch,
+    EditorMutationResponse, EditorPatch, LayoutPatch, RowDeletedPatch, RowInsertedPatch,
+    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -109,17 +110,85 @@ fn structural_patches(
     operation: AppliedOperationResult,
 ) -> Vec<EditorPatch> {
     match operation {
-        AppliedOperationResult::AddRow { sheet_index, .. }
-        | AppliedOperationResult::DeleteRow { sheet_index, .. }
-        | AppliedOperationResult::AddColumn { sheet_index, .. }
-        | AppliedOperationResult::DeleteColumn { sheet_index, .. } => editor_state
+        AppliedOperationResult::AddRow {
+            sheet_index, row, ..
+        } => editor_state
             .file_data()
             .sheets
             .get(sheet_index)
             .map(|sheet| {
-                vec![EditorPatch::SheetSnapshot {
-                    sheet_index,
-                    sheet: sheet.clone(),
+                vec![EditorPatch::RowInserted {
+                    patch: RowInsertedPatch {
+                        sheet_index,
+                        row_index: row.index,
+                        row: sheet.rows.get(row.index).cloned().unwrap_or_default(),
+                        merges: sheet.merges.clone(),
+                        row_heights: sheet.row_heights.clone(),
+                        rich: Some(sheet.rich.clone()),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::DeleteRow {
+            sheet_index,
+            row_index,
+        } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::RowDeleted {
+                    patch: RowDeletedPatch {
+                        sheet_index,
+                        row_index,
+                        merges: sheet.merges.clone(),
+                        row_heights: sheet.row_heights.clone(),
+                        rich: Some(sheet.rich.clone()),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::AddColumn {
+            sheet_index,
+            column,
+            ..
+        } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::ColumnInserted {
+                    patch: ColumnInsertedPatch {
+                        sheet_index,
+                        column_index: column.index,
+                        values: sheet
+                            .rows
+                            .iter()
+                            .map(|row| row.get(column.index).cloned().unwrap_or(CellValue::Null))
+                            .collect(),
+                        merges: sheet.merges.clone(),
+                        column_widths: sheet.column_widths.clone(),
+                        rich: Some(sheet.rich.clone()),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::DeleteColumn {
+            sheet_index,
+            column_index,
+        } => editor_state
+            .file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::ColumnDeleted {
+                    patch: ColumnDeletedPatch {
+                        sheet_index,
+                        column_index,
+                        merges: sheet.merges.clone(),
+                        column_widths: sheet.column_widths.clone(),
+                        rich: Some(sheet.rich.clone()),
+                    },
                 }]
             })
             .unwrap_or_default(),

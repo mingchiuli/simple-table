@@ -80,4 +80,60 @@ assert.equal(
   false
 );
 
+const mergedScenario = {
+  columnWidths: [100, 150, 90, 120],
+  rowHeights: [48, 72, 64, 80],
+  rowHeaderWidth: 60,
+  headerHeight: 50,
+};
+const mergedColumnOffsets = geometry.buildOffsets(
+  mergedScenario.columnWidths.length,
+  (index) => mergedScenario.columnWidths[index]
+);
+const mergedRowOffsets = geometry.buildOffsets(
+  mergedScenario.rowHeights.length,
+  (index) => mergedScenario.rowHeights[index]
+);
+const mergedCell = {
+  left: geometry.offsetAt(mergedColumnOffsets, 1, 0),
+  top: geometry.offsetAt(mergedRowOffsets, 1, 0),
+  width: geometry.spanSize(mergedColumnOffsets, 1, 2, 0),
+  height: geometry.spanSize(mergedRowOffsets, 1, 2, 0),
+};
+assert.deepEqual(
+  mergedCell,
+  { left: 100, top: 48, width: 240, height: 136 },
+  'merged cells use accumulated row and column geometry instead of first-cell size'
+);
+assert.deepEqual(
+  geometry.collectColumnResizeHandles(
+    mergedScenario.columnWidths.length,
+    mergedScenario.rowHeaderWidth,
+    0,
+    420,
+    (index) => mergedScenario.columnWidths[index]
+  ),
+  [
+    { colIndex: 0, left: 160 },
+    { colIndex: 1, left: 310 },
+    { colIndex: 2, left: 400 },
+  ],
+  'column resize handles stay on visible grid boundaries with merged cells present'
+);
+assert.deepEqual(
+  geometry.collectRowResizeHandles(
+    mergedScenario.rowHeights.length,
+    mergedScenario.headerHeight,
+    0,
+    300,
+    (index) => mergedScenario.rowHeights[index]
+  ),
+  [
+    { rowIndex: 0, top: 98 },
+    { rowIndex: 1, top: 170 },
+    { rowIndex: 2, top: 234 },
+  ],
+  'row resize handles stay on visible grid boundaries with merged cells present'
+);
+
 console.log('grid geometry tests passed');

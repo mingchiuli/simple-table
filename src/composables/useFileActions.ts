@@ -4,7 +4,7 @@ import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, re
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
-import { documentCapabilities, exportExtension, nativeSaveExtension } from '@/utils/documentCapabilities';
+import { documentCapabilities, exportExtensionFromName, nativeSaveExtensionFromName } from '@/utils/documentCapabilities';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -132,7 +132,7 @@ export function useFileActions({
       const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
       if (!savePath) return;
 
-      if (!nativeSaveExtension(savePath)) {
+      if (!nativeSaveExtensionFromName(savePath)) {
         ElMessage.error('Native save is only supported as .xlsx. Use export for CSV.');
         return;
       }
@@ -160,7 +160,7 @@ export function useFileActions({
     let path = documentSessionStore.currentFilePath;
     const storageType = await getStorageType();
 
-    if (!path || !exportExtension(path)) {
+    if (!path || !exportExtensionFromName(path)) {
       if (storageType === 'desktopPath') {
         throw new Error('Export is only supported for mobile sandbox files');
       }

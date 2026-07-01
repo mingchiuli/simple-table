@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::error::AppError;
+use crate::io::codec::reader::read_workbook_from_xlsx_bytes;
 use crate::io::codec::writer;
 use crate::io::workbook_state;
 use crate::ops::AppliedOperation;
@@ -18,14 +19,18 @@ pub struct ExcelDocumentBody {
 }
 
 pub enum BodyStructureMemento {
-    ExcelWorkbook { workbook: Box<Workbook> },
+    ExcelWorkbookBytes { bytes: Box<[u8]> },
+    ExcelWorkbookClone { workbook: Box<Workbook> },
     ProjectionOnly,
 }
 
 impl BodyStructureMemento {
     pub fn estimated_bytes(&self) -> usize {
         match self {
-            BodyStructureMemento::ExcelWorkbook { workbook } => estimate_workbook_bytes(workbook),
+            BodyStructureMemento::ExcelWorkbookBytes { bytes } => bytes.len(),
+            BodyStructureMemento::ExcelWorkbookClone { workbook } => {
+                estimate_workbook_bytes(workbook)
+            }
             BodyStructureMemento::ProjectionOnly => 0,
         }
     }
@@ -54,8 +59,13 @@ impl SpreadsheetDocumentBody {
 
     pub fn capture_structure_memento(&self) -> BodyStructureMemento {
         match self {
-            Self::Excel(body) => BodyStructureMemento::ExcelWorkbook {
-                workbook: body.workbook.clone(),
+            Self::Excel(body) => match writer::write_workbook_to_bytes(&body.workbook) {
+                Ok(bytes) => BodyStructureMemento::ExcelWorkbookBytes {
+                    bytes: bytes.into_boxed_slice(),
+                },
+                Err(_) => BodyStructureMemento::ExcelWorkbookClone {
+                    workbook: body.workbook.clone(),
+                },
             },
             Self::Csv | Self::GeneratedWorkbook => BodyStructureMemento::ProjectionOnly,
         }
@@ -64,15 +74,22 @@ impl SpreadsheetDocumentBody {
     pub fn restore_structure_memento(
         &mut self,
         memento: &BodyStructureMemento,
-    ) -> BodyRestoreAction {
+    ) -> Result<BodyRestoreAction, AppError> {
         match memento {
-            BodyStructureMemento::ExcelWorkbook { workbook } => {
+            BodyStructureMemento::ExcelWorkbookBytes { bytes } => {
+                let workbook = read_workbook_from_xlsx_bytes(bytes.to_vec())?;
+                *self = Self::Excel(ExcelDocumentBody {
+                    workbook: Box::new(workbook),
+                });
+                Ok(BodyRestoreAction::RefreshProjectionFromWorkbook)
+            }
+            BodyStructureMemento::ExcelWorkbookClone { workbook } => {
                 *self = Self::Excel(ExcelDocumentBody {
                     workbook: workbook.clone(),
                 });
-                BodyRestoreAction::RefreshProjectionFromWorkbook
+                Ok(BodyRestoreAction::RefreshProjectionFromWorkbook)
             }
-            BodyStructureMemento::ProjectionOnly => BodyRestoreAction::RestoreProjectionOnly,
+            BodyStructureMemento::ProjectionOnly => Ok(BodyRestoreAction::RestoreProjectionOnly),
         }
     }
 

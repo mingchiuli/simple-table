@@ -6,6 +6,7 @@ import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
 import { openFile, getStorageType } from "@/platform";
+import { blankCell } from "@/utils/cellValue";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
@@ -52,11 +53,11 @@ async function handleNewFile() {
       {
         name: "Sheet1",
         rows: [
-          [null, null, null, null, null],
-          [null, null, null, null, null],
-          [null, null, null, null, null],
-          [null, null, null, null, null],
-          [null, null, null, null, null],
+          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
         ],
         merges: [],
       },

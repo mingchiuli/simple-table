@@ -589,7 +589,7 @@ impl SpreadsheetDocument {
     }
 
     fn restore_structure(&mut self, memento: &StructureMemento) -> Result<(), AppError> {
-        match self.body.restore_structure_memento(&memento.body) {
+        match self.body.restore_structure_memento(&memento.body)? {
             BodyRestoreAction::RefreshProjectionFromWorkbook => {
                 self.refresh_projection_from_workbook();
             }
