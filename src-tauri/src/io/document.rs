@@ -67,6 +67,15 @@ pub fn current_file_data() -> Result<FileData, AppError> {
         .ok_or(AppError::NoFileLoaded)
 }
 
+pub fn update_current_file_identity(path: String, file_name: String) -> Result<(), AppError> {
+    let registry = active_document_store();
+    let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+
+    let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+    editor_state.update_identity(path, file_name);
+    Ok(())
+}
+
 pub fn document_capabilities(
     file_name: String,
     current_path: Option<String>,

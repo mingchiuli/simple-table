@@ -44,6 +44,11 @@ pub fn get_current_file_data() -> Result<FileData, AppError> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn update_document_identity(path: String, file_name: String) -> Result<(), AppError> {
+    document::update_current_file_identity(path, file_name)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn get_document_capabilities(
     file_name: String,
     current_path: Option<String>,

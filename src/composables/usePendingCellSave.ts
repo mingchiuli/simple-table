@@ -1,9 +1,11 @@
 import type { ComputedRef, Ref } from 'vue';
 import * as api from '@/api';
 import { usePendingCellSavesStore, type CellSaveRequest } from '@/stores/pendingCellSaves';
+import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { CellValue, EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
 import { blankCell, cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
+import { enqueueEditorMutation } from '@/composables/useEditorMutationQueue';
 
 type CellPosition = { row: number; col: number };
 
@@ -31,6 +33,7 @@ export function usePendingCellSave({
   clearPendingContentChange,
 }: UsePendingCellSaveOptions) {
   const pendingCellSavesStore = usePendingCellSavesStore();
+  const documentSessionStore = useDocumentSessionStore();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const draftCellValues = pendingCellSavesStore.draftCellValues;
   let pendingSavePromise: Promise<boolean> | null = null;
@@ -173,8 +176,10 @@ export function usePendingCellSave({
     const selectedKey = selectedCell.value
       ? cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
       : null;
-    const response = await api.setCells(payload);
-    await applyMutationResponse(response);
+    await enqueueEditorMutation(async () => {
+      const response = await api.setCells(payload);
+      await applyMutationResponse(response);
+    });
 
     pendingCellSavesStore.completeBatch(changes);
 
@@ -198,6 +203,7 @@ export function usePendingCellSave({
     try {
       await commitCellBatch(changes);
     } catch (error) {
+      await refreshSessionAfterMutationError();
       pendingCellSavesStore.failBatch(changes);
       pendingCellSavesStore.setPhase('failed', String(error));
       ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
@@ -211,6 +217,14 @@ export function usePendingCellSave({
       clearPendingContentChange();
     }
     return true;
+  }
+
+  async function refreshSessionAfterMutationError() {
+    try {
+      documentSessionStore.applyEditorSession(await api.getEditorState());
+    } catch (error) {
+      console.error('Failed to refresh editor state after cell save error:', error);
+    }
   }
 
   function clearPendingContentChangeIfIdle() {

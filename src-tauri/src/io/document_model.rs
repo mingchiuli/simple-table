@@ -37,7 +37,7 @@ pub(crate) enum DocumentMementoSide {
 }
 
 impl DocumentMementoSide {
-    fn estimated_bytes(&self) -> usize {
+    pub(crate) fn estimated_bytes(&self) -> usize {
         match self {
             DocumentMementoSide::Cells(memento) => memento.estimated_bytes(),
             DocumentMementoSide::Layout(memento) => memento.estimated_bytes(),
@@ -238,6 +238,7 @@ pub struct SpreadsheetDocument {
     formula_runtime: FormulaRuntime,
     formula_status: FormulaStatus,
     pending_structure_diagnostics: StructurePatchDiagnostics,
+    transaction_failure: Option<String>,
 }
 
 struct DocumentTransaction<'a> {
@@ -301,7 +302,7 @@ impl<'a> DocumentTransaction<'a> {
             self.document
                 .patch_workbook_after_operation(self.operation, &result, &[])
         {
-            self.rollback();
+            self.rollback_after_failure(&error)?;
             return Err(error);
         }
 
@@ -310,7 +311,7 @@ impl<'a> DocumentTransaction<'a> {
         if !cell_changes.is_empty()
             && let Err(error) = self.document.patch_workbook_formula_changes(&cell_changes)
         {
-            self.rollback();
+            self.rollback_after_failure(&error)?;
             return Err(error);
         }
 
@@ -320,8 +321,21 @@ impl<'a> DocumentTransaction<'a> {
         })
     }
 
-    fn rollback(&mut self) {
-        let _ = self.document.restore_memento_side(self.rollback);
+    fn rollback_after_failure(&mut self, operation_error: &AppError) -> Result<(), AppError> {
+        match self.document.restore_memento_side(self.rollback) {
+            Ok(_) => Ok(()),
+            Err(rollback_error) => {
+                let operation_error = operation_error.to_string();
+                let rollback_error = rollback_error.to_string();
+                self.document.mark_transaction_failed(format!(
+                    "operation failed ({operation_error}) and rollback failed ({rollback_error})"
+                ));
+                Err(AppError::TransactionRollbackFailed {
+                    operation_error,
+                    rollback_error,
+                })
+            }
+        }
     }
 }
 
@@ -336,6 +350,7 @@ impl Clone for SpreadsheetDocument {
             formula_runtime,
             formula_status: self.formula_status.clone(),
             pending_structure_diagnostics: StructurePatchDiagnostics::default(),
+            transaction_failure: self.transaction_failure.clone(),
         }
     }
 }
@@ -364,11 +379,17 @@ impl SpreadsheetDocument {
             formula_runtime,
             formula_status,
             pending_structure_diagnostics: StructurePatchDiagnostics::default(),
+            transaction_failure: None,
         }
     }
 
     pub fn projection(&self) -> &FileData {
         &self.projection
+    }
+
+    pub fn update_identity(&mut self, path: String, file_name: String) {
+        self.projection.path = path;
+        self.projection.file_name = file_name;
     }
 
     pub fn content_hash(&self) -> ContentHash {
@@ -380,13 +401,35 @@ impl SpreadsheetDocument {
     }
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
-        self.body.capabilities()
+        let mut capabilities = self.body.capabilities();
+        if let Some(reason) = &self.transaction_failure {
+            capabilities.can_edit_cells = false;
+            capabilities.can_resize_rows_columns = false;
+            capabilities.can_insert_delete_rows = false;
+            capabilities.can_insert_delete_columns = false;
+            capabilities.can_insert_delete_sheets = false;
+            capabilities.can_native_save = false;
+            push_unique_reason(&mut capabilities.blocked_edit_reasons, reason);
+            push_unique_reason(&mut capabilities.blocked_resize_reasons, reason);
+            push_unique_reason(&mut capabilities.blocked_row_structure_reasons, reason);
+            push_unique_reason(&mut capabilities.blocked_column_structure_reasons, reason);
+            push_unique_reason(&mut capabilities.blocked_sheet_structure_reasons, reason);
+            push_unique_reason(&mut capabilities.blocked_structure_reasons, reason);
+            push_unique_reason(
+                &mut capabilities.detected_features,
+                "failed editor transaction",
+            );
+        }
+        capabilities
     }
 
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
+        if let Some(reason) = &self.transaction_failure {
+            return Err(AppError::DocumentStateInvalid(reason.clone()));
+        }
         self.body
             .generate_file_bytes_for_target(&self.projection, target_path_or_name)
     }
@@ -1039,11 +1082,27 @@ impl SpreadsheetDocument {
         self.body.clone_body()
     }
 
+    pub fn transaction_failure(&self) -> Option<&str> {
+        self.transaction_failure.as_deref()
+    }
+
+    fn mark_transaction_failed(&mut self, reason: String) {
+        self.transaction_failure = Some(reason.clone());
+        self.formula_status = FormulaStatus::degraded(reason, FormulaDiagnostics::default());
+    }
+
     fn merge_structure_diagnostics(&mut self, diagnostics: &mut FormulaDiagnostics) {
         diagnostics.skipped_reference_rewrite_count += self
             .pending_structure_diagnostics
             .skipped_formula_reference_rewrites;
         self.pending_structure_diagnostics = StructurePatchDiagnostics::default();
+    }
+}
+
+fn push_unique_reason(reasons: &mut Vec<String>, reason: impl Into<String>) {
+    let reason = reason.into();
+    if !reasons.iter().any(|existing| existing == &reason) {
+        reasons.push(reason);
     }
 }
 

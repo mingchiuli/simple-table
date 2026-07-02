@@ -66,8 +66,14 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (response.revision < this.revision) {
         return { data: this.data, resyncRequired: false };
       }
+      if (response.revision > this.revision + 1) {
+        this.revision = response.revision;
+        this.applyResponseStatus(response);
+        return { data: this.data, resyncRequired: true };
+      }
       if (response.revision === this.revision && response.patches?.length) {
-        throw new Error(`Duplicate editor mutation revision with patches: ${response.revision}`);
+        this.applyResponseStatus(response);
+        return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision) {
         this.applyResponseStatus(response);
@@ -84,9 +90,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       };
     },
     replaceProjection(data: FileData) {
+      const currentFileName = this.data?.fileName;
       this.data = {
         ...data,
         path: this.currentFilePath ?? data.path,
+        fileName: currentFileName ?? data.fileName,
       };
       this.clampSelectionToCurrentSheet();
     },

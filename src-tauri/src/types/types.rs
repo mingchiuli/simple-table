@@ -287,13 +287,6 @@ impl<'de> Deserialize<'de> for CellValue {
     }
 }
 
-/// 单元格位置
-#[derive(Serialize, Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct CellPosition {
-    pub row: usize,
-    pub col: usize,
-}
-
 /// 搜索结果
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

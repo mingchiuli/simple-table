@@ -8,7 +8,7 @@ use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
-use crate::types::{CellPosition, CellValue};
+use crate::types::CellValue;
 
 const WRITER_ARENA_BYTES: usize = 15_000_000;
 
@@ -193,7 +193,7 @@ impl SearchIndexStore {
         sheet_index: usize,
         query: &str,
         limit: usize,
-    ) -> Option<Vec<CellPosition>> {
+    ) -> Option<Vec<SearchCellText>> {
         let query = query.trim();
         if query.is_empty() {
             return Some(vec![]);
@@ -318,11 +318,13 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
 
     let text_field = schema_builder.add_text_field(
         "text",
-        TextOptions::default().set_indexing_options(
-            TextFieldIndexing::default()
-                .set_tokenizer("jieba")
-                .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-        ),
+        TextOptions::default()
+            .set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer("jieba")
+                    .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+            )
+            .set_stored(),
     );
     let row_field =
         schema_builder.add_u64_field("row", tantivy::schema::FAST | tantivy::schema::STORED);
@@ -371,7 +373,7 @@ fn tokenize_search_text(text: &str) -> Vec<String> {
     tokens
 }
 
-fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<CellPosition> {
+fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<SearchCellText> {
     let row_field = match index.schema.get_field("row") {
         Ok(field) => field,
         Err(_) => return vec![],
@@ -414,13 +416,18 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Cell
     let mut results = Vec::new();
     for (_score, doc_address) in top_docs {
         if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address)
-            && let (Some(row_val), Some(col_val)) =
-                (doc.get_first(row_field), doc.get_first(col_field))
-            && let (Some(row), Some(col)) = (row_val.as_u64(), col_val.as_u64())
+            && let (Some(row_val), Some(col_val), Some(text_val)) = (
+                doc.get_first(row_field),
+                doc.get_first(col_field),
+                doc.get_first(index.text_field),
+            )
+            && let (Some(row), Some(col), Some(text)) =
+                (row_val.as_u64(), col_val.as_u64(), text_val.as_str())
         {
-            results.push(CellPosition {
+            results.push(SearchCellText {
                 row: row as usize,
                 col: col as usize,
+                text: text.to_string(),
             });
         }
     }
@@ -447,7 +454,11 @@ mod tests {
         store.install_sheet_index(document_id, 0, original_stamp, Some(index));
         assert_eq!(
             store.search_sheet(0, "indexed", 10),
-            Some(vec![CellPosition { row: 0, col: 0 }])
+            Some(vec![SearchCellText {
+                row: 0,
+                col: 0,
+                text: "indexed text".to_string(),
+            }])
         );
 
         let stale_stamp = store.mark_stale(document_id);
@@ -461,7 +472,11 @@ mod tests {
         store.install_sheet_index(document_id, 0, stale_stamp, Some(replacement_index));
         assert_eq!(
             store.search_sheet(0, "indexed", 10),
-            Some(vec![CellPosition { row: 0, col: 0 }])
+            Some(vec![SearchCellText {
+                row: 0,
+                col: 0,
+                text: "indexed text".to_string(),
+            }])
         );
     }
 

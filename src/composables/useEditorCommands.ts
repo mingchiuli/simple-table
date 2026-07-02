@@ -4,6 +4,7 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
+import { enqueueEditorMutation, waitForEditorMutations } from "@/composables/useEditorMutationQueue";
 
 type UseEditorCommandsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -37,8 +38,11 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await applyMutationResponse(await action());
+      await enqueueEditorMutation(async () => {
+        await applyMutationResponse(await action());
+      });
     } catch (error) {
+      await refreshSessionAfterMutationError();
       ElMessage.error(`${message}: ${error}`);
     } finally {
       isLoading.value = false;
@@ -130,6 +134,7 @@ export function useEditorCommands({
     try {
       searchSessionStore.isSearching = true;
       if (!(await flushPendingCellChanges())) return;
+      await waitForEditorMutations();
 
       searchSessionStore.searchResults = await api.search(
         query,
@@ -165,8 +170,11 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
+      await enqueueEditorMutation(async () => {
+        await applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
+      });
     } catch (error) {
+      await refreshSessionAfterMutationError();
       ElMessage.error(`Failed to resize column: ${error}`);
     } finally {
       isLoading.value = false;
@@ -179,8 +187,11 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
+      await enqueueEditorMutation(async () => {
+        await applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
+      });
     } catch (error) {
+      await refreshSessionAfterMutationError();
       ElMessage.error(`Failed to resize row: ${error}`);
     } finally {
       isLoading.value = false;
@@ -228,6 +239,14 @@ export function useEditorCommands({
         : "Row and column resizing is disabled for this workbook"
     );
     return false;
+  }
+
+  async function refreshSessionAfterMutationError() {
+    try {
+      documentSessionStore.applyEditorSession(await api.getEditorState());
+    } catch (error) {
+      console.error("Failed to refresh editor state after mutation error:", error);
+    }
   }
 
   return {

@@ -8,8 +8,7 @@ use crate::state::search_index::{
     SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
 use crate::types::{
-    AppliedOperationResult, CellPosition, FileData, FormulaStatus, SheetCellChange,
-    WorkbookCapabilities,
+    AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +17,7 @@ use umya_spreadsheet::Workbook;
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_HISTORY_ENTRIES: usize = 100;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SINGLE_HISTORY_ENTRY_BYTES: usize = MAX_HISTORY_BYTES / 2;
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
@@ -97,6 +97,10 @@ impl EditorState {
         self.document.projection()
     }
 
+    pub fn update_identity(&mut self, path: String, file_name: String) {
+        self.document.update_identity(path, file_name);
+    }
+
     pub fn document_id(&self) -> u64 {
         self.document_id
     }
@@ -111,6 +115,10 @@ impl EditorState {
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
         self.document.capabilities()
+    }
+
+    pub fn transaction_failure(&self) -> Option<&str> {
+        self.document.transaction_failure()
     }
 
     pub fn search_index_stamp(&self) -> SearchIndexStamp {
@@ -157,8 +165,26 @@ impl EditorState {
         sheet_index: usize,
         query: &str,
         limit: usize,
-    ) -> Option<Vec<CellPosition>> {
-        self.search_index.search_sheet(sheet_index, query, limit)
+    ) -> Option<Vec<SearchCellSnapshot>> {
+        self.search_index
+            .search_sheet(sheet_index, query, limit)
+            .map(|matches| {
+                matches
+                    .into_iter()
+                    .map(|cell| SearchCellSnapshot {
+                        row: cell.row,
+                        col: cell.col,
+                        text: cell.text,
+                    })
+                    .collect()
+            })
+    }
+
+    pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
+        self.file_data()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| sheet.name.clone())
     }
 
     pub fn search_sheet_snapshot(&self, sheet_index: usize) -> Option<SearchSheetSnapshot> {
@@ -219,13 +245,25 @@ impl EditorState {
         }
 
         let result = self.document.execute_operation(&operation, &before)?;
-        let after = self.document.capture_memento_side(&operation);
-        let memento = SpreadsheetDocument::create_memento(before, after);
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
         let operation_result = result.operation;
         let cell_changes = result.cell_changes;
-        self.push_history(HistoryEntry::new(memento, operation_result.clone()));
-        self.clear_redo_stack();
+
+        if before.estimated_bytes() > MAX_SINGLE_HISTORY_ENTRY_BYTES {
+            self.clear_history();
+            self.clear_redo_stack();
+        } else {
+            let after = self.document.capture_memento_side(&operation);
+            let memento = SpreadsheetDocument::create_memento(before, after);
+            let entry = HistoryEntry::new(memento, operation_result.clone());
+            if entry.estimated_bytes > MAX_SINGLE_HISTORY_ENTRY_BYTES {
+                self.clear_history();
+            } else {
+                self.push_history(entry);
+            }
+            self.clear_redo_stack();
+        }
+
         self.bump_revision();
         if should_mark_search_stale {
             self.mark_search_index_stale();
@@ -325,6 +363,11 @@ impl EditorState {
         self.redo_estimated_bytes = 0;
     }
 
+    fn clear_history(&mut self) {
+        self.history.clear();
+        self.history_estimated_bytes = 0;
+    }
+
     fn push_redo(&mut self, entry: HistoryEntry) {
         self.redo_estimated_bytes += entry.estimated_bytes;
         self.redo_stack.push(entry);
@@ -345,6 +388,9 @@ impl EditorState {
         &self,
         operation: &crate::ops::AppliedOperation,
     ) -> Result<(), AppError> {
+        if let Some(reason) = self.transaction_failure() {
+            return Err(AppError::DocumentStateInvalid(reason.to_string()));
+        }
         let capabilities = self.capabilities();
         if operation.is_row_structure_change() && !capabilities.can_insert_delete_rows {
             return Err(AppError::UnsupportedWorkbookStructure(
@@ -410,6 +456,31 @@ mod tests {
     use crate::types::CellValue;
     use serde_json::Value;
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
+
+    #[test]
+    fn updating_file_identity_does_not_mark_content_dirty() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: "/tmp/source.xlsx".to_string(),
+                file_name: "source.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("value".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let original_hash = state.current_content_hash;
+
+        state.update_identity("/tmp/renamed.xlsx".to_string(), "renamed.xlsx".to_string());
+        state.refresh_content_hash();
+
+        assert_eq!(state.file_data().path, "/tmp/renamed.xlsx");
+        assert_eq!(state.file_data().file_name, "renamed.xlsx");
+        assert_eq!(state.current_content_hash, original_hash);
+        assert!(!state.is_dirty());
+    }
 
     #[test]
     fn opened_workbook_is_patched_and_saved_from_editor_state() {

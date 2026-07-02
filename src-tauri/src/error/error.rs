@@ -33,6 +33,15 @@ pub enum AppError {
     #[error("Workbook patch failed: {0}")]
     WorkbookPatchFailed(String),
     #[error(
+        "Editor transaction failed and rollback also failed. Operation error: {operation_error}; rollback error: {rollback_error}"
+    )]
+    TransactionRollbackFailed {
+        operation_error: String,
+        rollback_error: String,
+    },
+    #[error("Document state is unavailable after a failed transaction: {0}")]
+    DocumentStateInvalid(String),
+    #[error(
         "Structure editing is disabled for this workbook because it contains unsupported Excel features: {0}"
     )]
     UnsupportedWorkbookStructure(String),

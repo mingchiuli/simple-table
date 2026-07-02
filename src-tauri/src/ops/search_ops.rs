@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::state::editor_state::{SearchCellSnapshot, SearchSheetSnapshot};
 use crate::state::search_index::SearchMatcher;
 use crate::state::state::ActiveDocumentStore;
-use crate::types::{CellPosition, SearchResult, SearchScope};
+use crate::types::{SearchResult, SearchScope};
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -66,30 +66,36 @@ pub fn do_search(
         let Some(input) = input else {
             continue;
         };
-        let positions = match input.positions {
-            Some(positions) => positions,
-            None => {
-                used_scan_fallback = true;
-                scan_sheet_snapshot(&input.snapshot, &query, 1000)
+        match input {
+            SearchInput::Indexed {
+                sheet_index,
+                sheet_name,
+                cells,
+            } => {
+                for cell in cells {
+                    results.push(SearchResult {
+                        sheet_index,
+                        sheet_name: sheet_name.clone(),
+                        row: cell.row,
+                        col: cell.col,
+                        value: cell.text,
+                        cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
+                    });
+                }
             }
-        };
-        for pos in positions {
-            let value = input
-                .snapshot
-                .cells
-                .iter()
-                .find(|cell| cell.row == pos.row && cell.col == pos.col)
-                .map(|cell| cell.text.clone())
-                .unwrap_or_default();
-
-            results.push(SearchResult {
-                sheet_index: input.snapshot.sheet_index,
-                sheet_name: input.snapshot.sheet_name.clone(),
-                row: pos.row,
-                col: pos.col,
-                value,
-                cell_position: format!("{}{}", col_to_letter(pos.col), pos.row + 1),
-            });
+            SearchInput::Scan(snapshot) => {
+                used_scan_fallback = true;
+                for cell in scan_sheet_snapshot(&snapshot, &query, 1000) {
+                    results.push(SearchResult {
+                        sheet_index: snapshot.sheet_index,
+                        sheet_name: snapshot.sheet_name.clone(),
+                        row: cell.row,
+                        col: cell.col,
+                        value: cell.text,
+                        cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
+                    });
+                }
+            }
         }
     }
 
@@ -100,9 +106,13 @@ pub fn do_search(
     Ok(results)
 }
 
-struct SearchInput {
-    snapshot: SearchSheetSnapshot,
-    positions: Option<Vec<CellPosition>>,
+enum SearchInput {
+    Indexed {
+        sheet_index: usize,
+        sheet_name: String,
+        cells: Vec<SearchCellSnapshot>,
+    },
+    Scan(SearchSheetSnapshot),
 }
 
 fn search_input_for_sheet(
@@ -110,28 +120,33 @@ fn search_input_for_sheet(
     sheet_index: usize,
     query: &str,
 ) -> Option<SearchInput> {
-    let positions = editor_state.indexed_search_sheet(sheet_index, query, 1000);
-    let snapshot = editor_state.search_sheet_snapshot(sheet_index)?;
-    Some(SearchInput {
-        snapshot,
-        positions,
-    })
+    if let Some(cells) = editor_state.indexed_search_sheet(sheet_index, query, 1000) {
+        return Some(SearchInput::Indexed {
+            sheet_index,
+            sheet_name: editor_state.sheet_name(sheet_index)?,
+            cells,
+        });
+    }
+    Some(SearchInput::Scan(
+        editor_state.search_sheet_snapshot(sheet_index)?,
+    ))
 }
 
 fn scan_sheet_snapshot(
     snapshot: &SearchSheetSnapshot,
     query: &str,
     limit: usize,
-) -> Vec<CellPosition> {
+) -> Vec<SearchCellSnapshot> {
     let Some(matcher) = SearchMatcher::new(query) else {
         return Vec::new();
     };
     let mut results = Vec::new();
     for SearchCellSnapshot { row, col, text } in &snapshot.cells {
         if matcher.matches(text) {
-            results.push(CellPosition {
+            results.push(SearchCellSnapshot {
                 row: *row,
                 col: *col,
+                text: text.clone(),
             });
             if results.len() >= limit {
                 break;
