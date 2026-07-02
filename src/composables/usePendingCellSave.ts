@@ -14,7 +14,7 @@ type UsePendingCellSaveOptions = {
   selectedCell: Ref<CellPosition | null>;
   cellEditorValue: Ref<string>;
   canEditCells: ComputedRef<boolean>;
-  applyMutationResponse: (response: EditorMutationResponse) => void;
+  applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
   markPendingContentChange: () => void;
   clearPendingContentChange: () => void;
 };
@@ -174,7 +174,7 @@ export function usePendingCellSave({
       ? cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
       : null;
     const response = await api.setCells(payload);
-    applyMutationResponse(response);
+    await applyMutationResponse(response);
 
     pendingCellSavesStore.completeBatch(changes);
 

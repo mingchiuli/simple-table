@@ -57,6 +57,16 @@ pub fn generate_current_file_bytes_for_target(
     Err(AppError::NoFileLoaded)
 }
 
+pub fn current_file_data() -> Result<FileData, AppError> {
+    let registry = active_document_store();
+    let registry_guard = registry.read().expect("Document registry lock poisoned");
+
+    registry_guard
+        .active()
+        .map(|editor_state| editor_state.file_data().clone())
+        .ok_or(AppError::NoFileLoaded)
+}
+
 pub fn document_capabilities(
     file_name: String,
     current_path: Option<String>,

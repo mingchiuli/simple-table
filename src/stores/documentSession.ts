@@ -10,6 +10,11 @@ import { useDocumentStatusStore } from "@/stores/documentStatus";
 
 type CellPosition = { row: number; col: number };
 
+export type MutationApplyResult = {
+  data: FileData | null;
+  resyncRequired: boolean;
+};
+
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
     data: null as FileData | null,
@@ -48,32 +53,42 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = 0;
       this.resetUiForCurrentDocument();
     },
-    applyMutationResponse(response: EditorMutationResponse): FileData | null {
+    applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
       if (response.protocolVersion !== 1) {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
       if (this.documentId !== null && response.documentId !== this.documentId) {
-        return this.data;
+        return { data: this.data, resyncRequired: false };
       }
       if (this.documentId === null) {
         this.documentId = response.documentId;
       }
       if (response.revision < this.revision) {
-        return this.data;
+        return { data: this.data, resyncRequired: false };
       }
       if (response.revision === this.revision && response.patches?.length) {
         throw new Error(`Duplicate editor mutation revision with patches: ${response.revision}`);
       }
       if (response.revision === this.revision) {
         this.applyResponseStatus(response);
-        return this.data;
+        return { data: this.data, resyncRequired: false };
       }
       this.revision = response.revision;
-      const nextData = applyDocumentPatches(this.data, response.patches);
-      this.data = nextData;
+      const result = applyDocumentPatches(this.data, response.patches);
+      this.data = result.data;
       this.applyResponseStatus(response);
       this.clampSelectionToCurrentSheet();
-      return nextData;
+      return {
+        data: result.data,
+        resyncRequired: result.resyncRequired,
+      };
+    },
+    replaceProjection(data: FileData) {
+      this.data = {
+        ...data,
+        path: this.currentFilePath ?? data.path,
+      };
+      this.clampSelectionToCurrentSheet();
     },
     applyResponseStatus(response: EditorMutationResponse) {
       useDocumentStatusStore().formulaStatus = response.formulaStatus;

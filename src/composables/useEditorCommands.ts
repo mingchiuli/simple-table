@@ -13,7 +13,7 @@ type UseEditorCommandsOptions = {
   isLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
-  applyMutationResponse: (response: EditorMutationResponse) => void;
+  applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
 };
 
 export function useEditorCommands({
@@ -37,7 +37,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      applyMutationResponse(await action());
+      await applyMutationResponse(await action());
     } catch (error) {
       ElMessage.error(`${message}: ${error}`);
     } finally {
@@ -165,7 +165,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
+      await applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
     } catch (error) {
       ElMessage.error(`Failed to resize column: ${error}`);
     } finally {
@@ -179,7 +179,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
+      await applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
     } catch (error) {
       ElMessage.error(`Failed to resize row: ${error}`);
     } finally {

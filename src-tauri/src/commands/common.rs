@@ -38,6 +38,11 @@ pub fn generate_current_thumbnail_bytes() -> Result<Vec<u8>, AppError> {
     Ok(bytes)
 }
 
+#[tauri::command]
+pub fn get_current_file_data() -> Result<FileData, AppError> {
+    document::current_file_data()
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_document_capabilities(
     file_name: String,

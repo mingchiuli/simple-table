@@ -721,6 +721,12 @@ pub struct SheetShapePatch {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ResyncRequiredPatch {
+    pub reason: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum EditorPatch {
     #[serde(rename = "Cells")]
@@ -741,11 +747,8 @@ pub enum EditorPatch {
     SheetDeleted { patch: SheetDeletedPatch },
     #[serde(rename = "SheetShape")]
     SheetShape { patch: SheetShapePatch },
-    #[serde(rename = "FullSnapshot")]
-    FullSnapshot {
-        #[serde(rename = "fileData")]
-        file_data: FileData,
-    },
+    #[serde(rename = "ResyncRequired")]
+    ResyncRequired { patch: ResyncRequiredPatch },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

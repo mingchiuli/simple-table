@@ -13,6 +13,10 @@ export async function initFile(fileData: FileData): Promise<void> {
   return invoke<void>("init_file", { fileData });
 }
 
+export async function getCurrentFileData(): Promise<FileData> {
+  return invoke<FileData>("get_current_file_data");
+}
+
 export async function getDocumentCapabilities(
   fileName: string,
   currentPath: string | null

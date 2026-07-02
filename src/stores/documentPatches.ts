@@ -13,16 +13,19 @@ import type {
 } from "@/types";
 import { blankCell } from "@/utils/cellValue";
 
+export type PatchApplyResult = {
+  data: FileData | null;
+  resyncRequired: boolean;
+};
+
 export function applyDocumentPatches(
   data: FileData | null,
   patches: EditorPatch[] | undefined
-): FileData | null {
+): PatchApplyResult {
   let nextData = data;
+  let resyncRequired = false;
   for (const patch of patches ?? []) {
     switch (patch.type) {
-      case "FullSnapshot":
-        nextData = applySnapshot(nextData, patch.data.fileData);
-        break;
       case "Cells":
         nextData = applyCellChanges(nextData, patch.data.changes);
         break;
@@ -55,11 +58,14 @@ export function applyDocumentPatches(
       case "SheetShape":
         nextData = applySheetShape(nextData, patch.data.patch);
         break;
+      case "ResyncRequired":
+        resyncRequired = true;
+        break;
       default:
         assertNever(patch);
     }
   }
-  return nextData;
+  return { data: nextData, resyncRequired };
 }
 
 function applyRowInserted(data: FileData | null, patch: RowInsertedPatch): FileData | null {
@@ -158,14 +164,6 @@ function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileDat
     ...sheet,
     rows,
   });
-}
-
-function applySnapshot(current: FileData | null, snapshot: FileData): FileData {
-  return {
-    ...snapshot,
-    path: current?.path ?? snapshot.path,
-    fileName: current?.fileName ?? snapshot.fileName,
-  };
 }
 
 function replaceSheet(

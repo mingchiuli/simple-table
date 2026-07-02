@@ -4,30 +4,66 @@ use crate::types::{CellValue, FileData, MergeRange, SheetData};
 
 pub type ContentHash = [u8; 32];
 
-pub fn hash_file_content(file_data: &FileData) -> ContentHash {
+pub struct ContentFingerprint<'a> {
+    sheets: Vec<SheetFingerprint<'a>>,
+}
+
+struct SheetFingerprint<'a> {
+    name: &'a str,
+    rows: &'a [Vec<CellValue>],
+    merges: &'a [MergeRange],
+    column_widths: Option<&'a std::collections::HashMap<usize, u32>>,
+    row_heights: Option<&'a std::collections::HashMap<usize, u32>>,
+}
+
+impl<'a> ContentFingerprint<'a> {
+    pub fn from_file_data(file_data: &'a FileData) -> Self {
+        Self {
+            sheets: file_data
+                .sheets
+                .iter()
+                .map(SheetFingerprint::from_sheet_data)
+                .collect(),
+        }
+    }
+}
+
+impl<'a> SheetFingerprint<'a> {
+    fn from_sheet_data(sheet: &'a SheetData) -> Self {
+        Self {
+            name: &sheet.name,
+            rows: &sheet.rows,
+            merges: &sheet.merges,
+            column_widths: sheet.column_widths.as_ref(),
+            row_heights: sheet.row_heights.as_ref(),
+        }
+    }
+}
+
+pub fn hash_content_fingerprint(fingerprint: &ContentFingerprint<'_>) -> ContentHash {
     let mut hasher = Sha256::new();
-    write_usize(&mut hasher, file_data.sheets.len());
-    for sheet in &file_data.sheets {
+    write_usize(&mut hasher, fingerprint.sheets.len());
+    for sheet in &fingerprint.sheets {
         hash_sheet_content(sheet, &mut hasher);
     }
     hasher.finalize().into()
 }
 
-fn hash_sheet_content(sheet: &SheetData, hasher: &mut Sha256) {
-    write_str(hasher, &sheet.name);
+fn hash_sheet_content(sheet: &SheetFingerprint<'_>, hasher: &mut Sha256) {
+    write_str(hasher, sheet.name);
     write_usize(hasher, sheet.rows.len());
-    for row in &sheet.rows {
+    for row in sheet.rows {
         write_usize(hasher, row.len());
         for cell in row {
             hash_cell_value(cell, hasher);
         }
     }
     write_usize(hasher, sheet.merges.len());
-    for merge in &sheet.merges {
+    for merge in sheet.merges {
         hash_merge_range(merge, hasher);
     }
-    hash_layout_map(sheet.column_widths.as_ref(), hasher);
-    hash_layout_map(sheet.row_heights.as_ref(), hasher);
+    hash_layout_map(sheet.column_widths, hasher);
+    hash_layout_map(sheet.row_heights, hasher);
 }
 
 fn hash_cell_value(cell: &CellValue, hasher: &mut Sha256) {
@@ -100,7 +136,7 @@ fn write_u16(hasher: &mut Sha256, value: u16) {
 mod tests {
     use std::collections::HashMap;
 
-    use super::hash_file_content;
+    use super::{ContentFingerprint, hash_content_fingerprint};
     use crate::types::{CellValue, FileData, SheetData};
 
     fn file_data() -> FileData {
@@ -114,6 +150,10 @@ mod tests {
                 ..Default::default()
             }],
         }
+    }
+
+    fn hash_file_content(file_data: &FileData) -> super::ContentHash {
+        hash_content_fingerprint(&ContentFingerprint::from_file_data(file_data))
     }
 
     #[test]

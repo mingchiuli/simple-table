@@ -202,6 +202,10 @@ export interface SheetShapePatch {
   rowLengths: number[];
 }
 
+export interface ResyncRequiredPatch {
+  reason: string;
+}
+
 export type EditorPatch =
   | { type: 'Cells'; data: { changes: SheetCellChange[] } }
   | { type: 'Layout'; data: { patch: LayoutPatch } }
@@ -212,7 +216,7 @@ export type EditorPatch =
   | { type: 'SheetInserted'; data: { patch: SheetInsertedPatch } }
   | { type: 'SheetDeleted'; data: { patch: SheetDeletedPatch } }
   | { type: 'SheetShape'; data: { patch: SheetShapePatch } }
-  | { type: 'FullSnapshot'; data: { fileData: FileData } };
+  | { type: 'ResyncRequired'; data: { patch: ResyncRequiredPatch } };
 
 export interface EditorMutationResponse {
   protocolVersion: 1;

@@ -3,10 +3,11 @@ use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
 use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
-use crate::state::content_hash::{ContentHash, hash_file_content};
+use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_fingerprint};
 use crate::types::{
-    AppliedOperationResult, CellValue, FileData, LayoutPatch, MergeRange, SheetCellChange,
-    SheetData, SheetRichProjection, WorkbookCapabilities,
+    AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, MergeRange,
+    ResyncRequiredPatch, SheetCellChange, SheetData, SheetRichProjection, SheetShapePatch,
+    WorkbookCapabilities,
 };
 use crate::types::{FormulaDiagnostics, FormulaStatus};
 use std::collections::{HashMap, HashSet};
@@ -216,25 +217,13 @@ pub(crate) enum MementoSide {
 
 #[derive(Debug, Clone)]
 pub struct DocumentRestoreResult {
-    pub cell_changes: Vec<SheetCellChange>,
-    pub layout_patches: Vec<LayoutPatch>,
-    pub shape_patches: Vec<SheetShapeRestorePatch>,
-    pub restored_structure: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct SheetShapeRestorePatch {
-    pub sheet_index: usize,
-    pub row_lengths: Vec<usize>,
+    pub patches: Vec<EditorPatch>,
 }
 
 impl DocumentRestoreResult {
     fn empty() -> Self {
         Self {
-            cell_changes: Vec::new(),
-            layout_patches: Vec::new(),
-            shape_patches: Vec::new(),
-            restored_structure: false,
+            patches: Vec::new(),
         }
     }
 }
@@ -383,7 +372,7 @@ impl SpreadsheetDocument {
     }
 
     pub fn content_hash(&self) -> ContentHash {
-        hash_file_content(&self.projection)
+        hash_content_fingerprint(&ContentFingerprint::from_file_data(&self.projection))
     }
 
     pub fn formula_status(&self) -> FormulaStatus {
@@ -612,11 +601,7 @@ impl SpreadsheetDocument {
 
     fn structure_memento(&self, operation: &AppliedOperation) -> StructureMemento {
         let body = self.body.capture_structure_memento();
-        let projection = if matches!(body, BodyStructureMemento::ProjectionOnly) {
-            self.projection_structure_memento(operation)
-        } else {
-            FileStructureMemento::empty(self.projection.sheets.len())
-        };
+        let projection = self.projection_structure_memento(operation);
 
         StructureMemento { projection, body }
     }
@@ -722,12 +707,14 @@ impl SpreadsheetDocument {
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
         self.rebuild_formula_runtime();
-        Ok(DocumentRestoreResult {
-            cell_changes: memento.cells.clone(),
-            layout_patches: Vec::new(),
-            shape_patches: shape_restore_patches(&memento.sheet_shapes),
-            restored_structure: false,
-        })
+        let mut patches = Vec::new();
+        if !memento.cells.is_empty() {
+            patches.push(EditorPatch::Cells {
+                changes: memento.cells.clone(),
+            });
+        }
+        patches.extend(shape_restore_patches(&memento.sheet_shapes));
+        Ok(DocumentRestoreResult { patches })
     }
 
     fn restore_cell_shapes(&mut self, shapes: &[SheetShapeMemento]) {
@@ -792,14 +779,13 @@ impl SpreadsheetDocument {
 
         self.patch_workbook_layout(memento)?;
         Ok(DocumentRestoreResult {
-            cell_changes: Vec::new(),
-            layout_patches: vec![LayoutPatch {
-                sheet_index: memento.sheet_index,
-                column_widths: memento.column_widths.clone(),
-                row_heights: memento.row_heights.clone(),
+            patches: vec![EditorPatch::Layout {
+                patch: LayoutPatch {
+                    sheet_index: memento.sheet_index,
+                    column_widths: memento.column_widths.clone(),
+                    row_heights: memento.row_heights.clone(),
+                },
             }],
-            shape_patches: Vec::new(),
-            restored_structure: false,
         })
     }
 
@@ -817,10 +803,11 @@ impl SpreadsheetDocument {
         }
         self.rebuild_formula_runtime();
         Ok(DocumentRestoreResult {
-            cell_changes: Vec::new(),
-            layout_patches: Vec::new(),
-            shape_patches: Vec::new(),
-            restored_structure: true,
+            patches: vec![EditorPatch::ResyncRequired {
+                patch: ResyncRequiredPatch {
+                    reason: "structure restore changed workbook projection".to_string(),
+                },
+            }],
         })
     }
 
@@ -1162,12 +1149,14 @@ fn push_unique_position(
     }
 }
 
-fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<SheetShapeRestorePatch> {
+fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<EditorPatch> {
     shapes
         .iter()
-        .map(|shape| SheetShapeRestorePatch {
-            sheet_index: shape.sheet_index,
-            row_lengths: shape.row_lengths.clone(),
+        .map(|shape| EditorPatch::SheetShape {
+            patch: SheetShapePatch {
+                sheet_index: shape.sheet_index,
+                row_lengths: shape.row_lengths.clone(),
+            },
         })
         .collect()
 }

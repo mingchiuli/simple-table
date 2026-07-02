@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::EditorCommand;
 use crate::ops::editor_ops::{
-    cell_delta_mutation_response, full_snapshot_mutation_response, layout_mutation_response,
+    cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
     structural_delta_mutation_response,
 };
 use crate::ops::index_ops::schedule_index_for_response;
@@ -164,7 +164,10 @@ fn execute_cell_delta(
             result.cell_changes,
         ))
     } else {
-        Ok(full_snapshot_mutation_response(editor_state, None))
+        Ok(resync_required_mutation_response(
+            editor_state,
+            "cell edit completed without an operation result",
+        ))
     }
 }
 
@@ -180,7 +183,10 @@ fn execute_structural_snapshot(
             Some(operation) => {
                 structural_delta_mutation_response(editor_state, operation, result.cell_changes)
             }
-            None => full_snapshot_mutation_response(editor_state, None),
+            None => resync_required_mutation_response(
+                editor_state,
+                "structure edit completed without an operation result",
+            ),
         }
     };
 
@@ -202,7 +208,10 @@ fn execute_structural_delta(
             Some(operation) => {
                 structural_delta_mutation_response(editor_state, operation, result.cell_changes)
             }
-            None => full_snapshot_mutation_response(editor_state, None),
+            None => resync_required_mutation_response(
+                editor_state,
+                "structure edit completed without an operation result",
+            ),
         }
     };
 
@@ -279,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_returns_delta_patches_instead_of_full_snapshot() {
+    fn undo_returns_delta_patches_without_resync() {
         let registry = make_registry();
         do_set_cell(registry.clone(), 0, 0, 0, "changed".to_string()).expect("set cell");
 
@@ -289,7 +298,7 @@ mod tests {
             !response
                 .patches
                 .iter()
-                .any(|patch| matches!(patch, EditorPatch::FullSnapshot { .. }))
+                .any(|patch| matches!(patch, EditorPatch::ResyncRequired { .. }))
         );
         assert!(
             response

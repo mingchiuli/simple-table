@@ -6,8 +6,8 @@ use crate::state::editor_state::{EditorState, ExecutedOperation};
 use crate::state::state::{ActiveDocumentStore, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
     AppliedOperationResult, CellValue, ColumnDeletedPatch, ColumnInsertedPatch,
-    EditorMutationResponse, EditorPatch, LayoutPatch, RowDeletedPatch, RowInsertedPatch,
-    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
+    EditorMutationResponse, EditorPatch, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch,
+    RowInsertedPatch, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -36,14 +36,16 @@ fn mutation_response(
     }
 }
 
-pub fn full_snapshot_mutation_response(
+pub fn resync_required_mutation_response(
     editor_state: &EditorState,
-    _operation: Option<AppliedOperationResult>,
+    reason: impl Into<String>,
 ) -> EditorMutationResponse {
     mutation_response(
         editor_state,
-        vec![EditorPatch::FullSnapshot {
-            file_data: editor_state.file_data().clone(),
+        vec![EditorPatch::ResyncRequired {
+            patch: ResyncRequiredPatch {
+                reason: reason.into(),
+            },
         }],
     )
 }
@@ -108,48 +110,15 @@ pub fn structural_delta_mutation_response(
 pub fn restore_mutation_response(
     editor_state: &EditorState,
     result: ExecutedOperation,
-    side: crate::io::document_model::MementoSide,
 ) -> EditorMutationResponse {
     let Some(restore) = result.restore else {
-        return full_snapshot_mutation_response(editor_state, result.operation);
+        return resync_required_mutation_response(
+            editor_state,
+            "restore completed without patch details",
+        );
     };
 
-    if restore.restored_structure {
-        let Some(operation) = result.operation else {
-            return full_snapshot_mutation_response(editor_state, None);
-        };
-        let mut patches = structural_restore_patches(editor_state, operation, side);
-        push_restore_projection_patches(&mut patches, restore);
-        return mutation_response(editor_state, patches);
-    }
-
-    let mut patches = Vec::new();
-    push_restore_projection_patches(&mut patches, restore);
-    mutation_response(editor_state, patches)
-}
-
-fn push_restore_projection_patches(
-    patches: &mut Vec<EditorPatch>,
-    restore: crate::io::document_model::DocumentRestoreResult,
-) {
-    for layout_patch in restore.layout_patches {
-        patches.push(EditorPatch::Layout {
-            patch: layout_patch,
-        });
-    }
-    if !restore.cell_changes.is_empty() {
-        patches.push(EditorPatch::Cells {
-            changes: restore.cell_changes,
-        });
-    }
-    for shape_patch in restore.shape_patches {
-        patches.push(EditorPatch::SheetShape {
-            patch: SheetShapePatch {
-                sheet_index: shape_patch.sheet_index,
-                row_lengths: shape_patch.row_lengths,
-            },
-        });
-    }
+    mutation_response(editor_state, restore.patches)
 }
 
 fn structural_patches(
@@ -261,147 +230,6 @@ fn structural_patches(
     }
 }
 
-fn structural_restore_patches(
-    editor_state: &EditorState,
-    operation: AppliedOperationResult,
-    side: crate::io::document_model::MementoSide,
-) -> Vec<EditorPatch> {
-    let undone = matches!(side, crate::io::document_model::MementoSide::Before);
-    match operation {
-        AppliedOperationResult::AddRow {
-            sheet_index, row, ..
-        } if undone => row_deleted_patch(editor_state, sheet_index, row.index),
-        AppliedOperationResult::DeleteRow {
-            sheet_index,
-            row_index,
-            ..
-        } if undone => row_inserted_patch(editor_state, sheet_index, row_index),
-        AppliedOperationResult::AddColumn {
-            sheet_index,
-            column,
-            ..
-        } if undone => column_deleted_patch(editor_state, sheet_index, column.index),
-        AppliedOperationResult::DeleteColumn {
-            sheet_index,
-            column_index,
-            ..
-        } if undone => column_inserted_patch(editor_state, sheet_index, column_index),
-        AppliedOperationResult::AddSheet { sheet_index, .. } if undone => {
-            vec![EditorPatch::SheetDeleted {
-                patch: SheetDeletedPatch { sheet_index },
-            }]
-        }
-        AppliedOperationResult::DeleteSheet {
-            sheet_index,
-            sheet_data,
-        } if undone => vec![EditorPatch::SheetInserted {
-            patch: SheetInsertedPatch {
-                sheet_index,
-                sheet: sheet_data,
-            },
-        }],
-        other => structural_patches(editor_state, other),
-    }
-}
-
-fn row_inserted_patch(
-    editor_state: &EditorState,
-    sheet_index: usize,
-    row_index: usize,
-) -> Vec<EditorPatch> {
-    editor_state
-        .file_data()
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            vec![EditorPatch::RowInserted {
-                patch: RowInsertedPatch {
-                    sheet_index,
-                    row_index,
-                    row: sheet.rows.get(row_index).cloned().unwrap_or_default(),
-                    merges: sheet.merges.clone(),
-                    row_heights: sheet.row_heights.clone(),
-                    rich: Some(sheet.rich.clone()),
-                },
-            }]
-        })
-        .unwrap_or_default()
-}
-
-fn row_deleted_patch(
-    editor_state: &EditorState,
-    sheet_index: usize,
-    row_index: usize,
-) -> Vec<EditorPatch> {
-    editor_state
-        .file_data()
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            vec![EditorPatch::RowDeleted {
-                patch: RowDeletedPatch {
-                    sheet_index,
-                    row_index,
-                    merges: sheet.merges.clone(),
-                    row_heights: sheet.row_heights.clone(),
-                    rich: Some(sheet.rich.clone()),
-                },
-            }]
-        })
-        .unwrap_or_default()
-}
-
-fn column_inserted_patch(
-    editor_state: &EditorState,
-    sheet_index: usize,
-    column_index: usize,
-) -> Vec<EditorPatch> {
-    editor_state
-        .file_data()
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            vec![EditorPatch::ColumnInserted {
-                patch: ColumnInsertedPatch {
-                    sheet_index,
-                    column_index,
-                    values: sheet
-                        .rows
-                        .iter()
-                        .map(|row| row.get(column_index).cloned().unwrap_or(CellValue::Null))
-                        .collect(),
-                    merges: sheet.merges.clone(),
-                    column_widths: sheet.column_widths.clone(),
-                    rich: Some(sheet.rich.clone()),
-                },
-            }]
-        })
-        .unwrap_or_default()
-}
-
-fn column_deleted_patch(
-    editor_state: &EditorState,
-    sheet_index: usize,
-    column_index: usize,
-) -> Vec<EditorPatch> {
-    editor_state
-        .file_data()
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            vec![EditorPatch::ColumnDeleted {
-                patch: ColumnDeletedPatch {
-                    sheet_index,
-                    column_index,
-                    merges: sheet.merges.clone(),
-                    column_widths: sheet.column_widths.clone(),
-                    rich: Some(sheet.rich.clone()),
-                },
-            }]
-        })
-        .unwrap_or_default()
-}
-
 fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: SheetCellChange) {
     if !cell_changes.iter().any(|existing| {
         existing.sheet_index == change.sheet_index
@@ -453,11 +281,7 @@ pub fn do_undo(
         match registry_guard.active_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.undo()? {
-                    restore_mutation_response(
-                        editor_state,
-                        result,
-                        crate::io::document_model::MementoSide::Before,
-                    )
+                    restore_mutation_response(editor_state, result)
                 } else {
                     return Err(AppError::NothingToUndo);
                 }
@@ -480,11 +304,7 @@ pub fn do_redo(
         match registry_guard.active_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.redo()? {
-                    restore_mutation_response(
-                        editor_state,
-                        result,
-                        crate::io::document_model::MementoSide::After,
-                    )
+                    restore_mutation_response(editor_state, result)
                 } else {
                     return Err(AppError::NothingToRedo);
                 }

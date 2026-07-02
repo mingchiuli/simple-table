@@ -12,6 +12,7 @@ import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
+import * as api from '@/api';
 import { getCellKey } from '@/utils/cellKey';
 import { cellToEditorString } from '@/utils/cellValue';
 import { colToLetter } from '@/utils/excel';
@@ -82,9 +83,12 @@ const {
   markSaved,
 } = useDocumentStatus();
 
-function applyMutationResponse(response: EditorMutationResponse) {
-  const nextFileData = documentSessionStore.applyMutationResponse(response);
-  if (!nextFileData || !selectedCell.value) return;
+async function applyMutationResponse(response: EditorMutationResponse) {
+  const result = documentSessionStore.applyMutationResponse(response);
+  if (result.resyncRequired) {
+    documentSessionStore.replaceProjection(await api.getCurrentFileData());
+  }
+  if (!documentSessionStore.data || !selectedCell.value) return;
 
   cellEditorValue.value = getEditorValue(
     currentSheetIndex.value,
