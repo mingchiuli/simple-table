@@ -167,34 +167,24 @@ export interface RowInsertedPatch {
   sheetIndex: number;
   rowIndex: number;
   row: CellValue[];
-  merges: MergeRange[];
-  rowHeights?: Record<number, number>;
-  rich?: SheetRichProjection;
+  rowHeight?: number;
 }
 
 export interface RowDeletedPatch {
   sheetIndex: number;
   rowIndex: number;
-  merges: MergeRange[];
-  rowHeights?: Record<number, number>;
-  rich?: SheetRichProjection;
 }
 
 export interface ColumnInsertedPatch {
   sheetIndex: number;
   columnIndex: number;
   values: CellValue[];
-  merges: MergeRange[];
-  columnWidths?: Record<number, number>;
-  rich?: SheetRichProjection;
+  columnWidth?: number;
 }
 
 export interface ColumnDeletedPatch {
   sheetIndex: number;
   columnIndex: number;
-  merges: MergeRange[];
-  columnWidths?: Record<number, number>;
-  rich?: SheetRichProjection;
 }
 
 export interface SheetShapePatch {

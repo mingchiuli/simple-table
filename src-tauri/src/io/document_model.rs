@@ -5,9 +5,10 @@ use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_fingerprint};
 use crate::types::{
-    AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, MergeRange,
-    ResyncRequiredPatch, SheetCellChange, SheetData, SheetRichProjection, SheetShapePatch,
-    WorkbookCapabilities,
+    AppliedOperationResult, CellValue, ColumnDeletedPatch, ColumnInsertedPatch, EditorPatch,
+    FileData, LayoutPatch, MergeRange, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
+    SheetCellChange, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetRichProjection,
+    SheetShapePatch, WorkbookCapabilities,
 };
 use crate::types::{FormulaDiagnostics, FormulaStatus};
 use std::collections::{HashMap, HashSet};
@@ -235,6 +236,7 @@ impl DocumentRestoreResult {
 pub struct SpreadsheetDocument {
     projection: FileData,
     body: SpreadsheetDocumentBody,
+    cached_capabilities: WorkbookCapabilities,
     formula_runtime: FormulaRuntime,
     formula_status: FormulaStatus,
     pending_structure_diagnostics: StructurePatchDiagnostics,
@@ -255,17 +257,19 @@ impl FormulaProjectionService {
         status: &mut FormulaStatus,
         pending_structure_diagnostics: &mut StructurePatchDiagnostics,
         projection: &mut FileData,
-    ) {
+    ) -> Vec<SheetCellChange> {
         match runtime.rebuild_with_diagnostics(projection) {
             Ok(result) => {
                 let mut diagnostics = result.diagnostics;
                 Self::merge_structure_diagnostics(pending_structure_diagnostics, &mut diagnostics);
                 *status = FormulaStatus::ready(diagnostics);
+                result.changes
             }
             Err(error) => {
                 eprintln!("Formula runtime rebuild failed: {error}");
                 *runtime = FormulaRuntime::empty();
                 *status = FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default());
+                Vec::new()
             }
         }
     }
@@ -347,6 +351,7 @@ impl Clone for SpreadsheetDocument {
         Self {
             projection,
             body: self.clone_body(),
+            cached_capabilities: self.cached_capabilities.clone(),
             formula_runtime,
             formula_status: self.formula_status.clone(),
             pending_structure_diagnostics: StructurePatchDiagnostics::default(),
@@ -372,10 +377,12 @@ impl SpreadsheetDocument {
         };
 
         let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
+        let cached_capabilities = body.capabilities();
 
         Self {
             projection,
             body,
+            cached_capabilities,
             formula_runtime,
             formula_status,
             pending_structure_diagnostics: StructurePatchDiagnostics::default(),
@@ -401,7 +408,7 @@ impl SpreadsheetDocument {
     }
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
-        let mut capabilities = self.body.capabilities();
+        let mut capabilities = self.cached_capabilities.clone();
         if let Some(reason) = &self.transaction_failure {
             capabilities.can_edit_cells = false;
             capabilities.can_resize_rows_columns = false;
@@ -643,7 +650,7 @@ impl SpreadsheetDocument {
     }
 
     fn structure_memento(&self, operation: &AppliedOperation) -> StructureMemento {
-        let body = self.body.capture_structure_memento();
+        let body = self.body.capture_structure_memento(operation);
         let projection = self.projection_structure_memento(operation);
 
         StructureMemento { projection, body }
@@ -836,6 +843,7 @@ impl SpreadsheetDocument {
         &mut self,
         memento: &StructureMemento,
     ) -> Result<DocumentRestoreResult, AppError> {
+        let current_shape = CurrentStructureShape::capture(&self.projection, &memento.projection);
         match self.body.restore_structure_memento(&memento.body)? {
             BodyRestoreAction::RefreshProjectionFromWorkbook => {
                 self.refresh_projection_from_workbook();
@@ -844,14 +852,23 @@ impl SpreadsheetDocument {
                 restore_projection_structure(&mut self.projection, &memento.projection);
             }
         }
-        self.rebuild_formula_runtime();
-        Ok(DocumentRestoreResult {
-            patches: vec![EditorPatch::ResyncRequired {
+        self.refresh_capabilities();
+        let formula_changes = self.rebuild_formula_runtime();
+        let mut patches =
+            restore_structure_patches(&current_shape, &memento.projection, &self.projection);
+        if patches.is_empty() {
+            patches.push(EditorPatch::ResyncRequired {
                 patch: ResyncRequiredPatch {
                     reason: "structure restore changed workbook projection".to_string(),
                 },
-            }],
-        })
+            });
+        }
+        if !formula_changes.is_empty() {
+            patches.push(EditorPatch::Cells {
+                changes: formula_changes,
+            });
+        }
+        Ok(DocumentRestoreResult { patches })
     }
 
     fn recalculate_after_operation(
@@ -1004,13 +1021,13 @@ impl SpreadsheetDocument {
         changes
     }
 
-    fn rebuild_formula_runtime(&mut self) {
+    fn rebuild_formula_runtime(&mut self) -> Vec<SheetCellChange> {
         FormulaProjectionService::rebuild(
             &mut self.formula_runtime,
             &mut self.formula_status,
             &mut self.pending_structure_diagnostics,
             &mut self.projection,
-        );
+        )
     }
 
     fn patch_workbook_after_operation(
@@ -1036,6 +1053,7 @@ impl SpreadsheetDocument {
             self.body
                 .sync_all_merge_ranges_from_projection(&self.projection)?;
             self.refresh_projection_from_workbook();
+            self.refresh_capabilities();
             return Ok(operation.projected_result_from_current_file(&self.projection));
         }
 
@@ -1082,11 +1100,16 @@ impl SpreadsheetDocument {
         self.body.clone_body()
     }
 
+    fn refresh_capabilities(&mut self) {
+        self.cached_capabilities = self.body.capabilities();
+    }
+
     pub fn transaction_failure(&self) -> Option<&str> {
         self.transaction_failure.as_deref()
     }
 
     fn mark_transaction_failed(&mut self, reason: String) {
+        self.refresh_capabilities();
         self.transaction_failure = Some(reason.clone());
         self.formula_status = FormulaStatus::degraded(reason, FormulaDiagnostics::default());
     }
@@ -1103,6 +1126,192 @@ fn push_unique_reason(reasons: &mut Vec<String>, reason: impl Into<String>) {
     let reason = reason.into();
     if !reasons.iter().any(|existing| existing == &reason) {
         reasons.push(reason);
+    }
+}
+
+enum CurrentStructureShape {
+    Empty,
+    Row {
+        sheet_index: usize,
+        row_index: usize,
+        row_count: usize,
+    },
+    Column {
+        sheet_index: usize,
+        column_index: usize,
+        row_lengths: Vec<usize>,
+    },
+    Sheets {
+        sheet_index: usize,
+        sheet_count: usize,
+    },
+}
+
+impl CurrentStructureShape {
+    fn capture(file_data: &FileData, target: &FileStructureMemento) -> Self {
+        match target {
+            FileStructureMemento::Empty { .. } => Self::Empty,
+            FileStructureMemento::Row(memento) => Self::Row {
+                sheet_index: memento.sheet_index,
+                row_index: memento.row_index,
+                row_count: file_data
+                    .sheets
+                    .get(memento.sheet_index)
+                    .map(|sheet| sheet.rows.len())
+                    .unwrap_or_default(),
+            },
+            FileStructureMemento::Column(memento) => Self::Column {
+                sheet_index: memento.sheet_index,
+                column_index: memento.col_index,
+                row_lengths: file_data
+                    .sheets
+                    .get(memento.sheet_index)
+                    .map(|sheet| sheet.rows.iter().map(Vec::len).collect())
+                    .unwrap_or_default(),
+            },
+            FileStructureMemento::Sheets(memento) => Self::Sheets {
+                sheet_index: memento.truncate_from,
+                sheet_count: file_data.sheets.len(),
+            },
+        }
+    }
+}
+
+fn restore_structure_patches(
+    current_shape: &CurrentStructureShape,
+    target_memento: &FileStructureMemento,
+    restored: &FileData,
+) -> Vec<EditorPatch> {
+    match (current_shape, target_memento) {
+        (
+            CurrentStructureShape::Row {
+                sheet_index,
+                row_index,
+                row_count,
+            },
+            FileStructureMemento::Row(target),
+        ) if *sheet_index == target.sheet_index && *row_index == target.row_index => {
+            let target_count = target.row_count;
+            if target_count > *row_count {
+                return restored
+                    .sheets
+                    .get(target.sheet_index)
+                    .map(|sheet| {
+                        vec![EditorPatch::RowInserted {
+                            patch: RowInsertedPatch {
+                                sheet_index: target.sheet_index,
+                                row_index: target.row_index,
+                                row: sheet
+                                    .rows
+                                    .get(target.row_index)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                                row_height: sheet
+                                    .row_heights
+                                    .as_ref()
+                                    .and_then(|heights| heights.get(&target.row_index).copied()),
+                            },
+                        }]
+                    })
+                    .unwrap_or_default();
+            }
+            if target_count < *row_count {
+                return vec![EditorPatch::RowDeleted {
+                    patch: RowDeletedPatch {
+                        sheet_index: target.sheet_index,
+                        row_index: target.row_index,
+                    },
+                }];
+            }
+            Vec::new()
+        }
+        (
+            CurrentStructureShape::Column {
+                sheet_index,
+                column_index,
+                row_lengths,
+            },
+            FileStructureMemento::Column(target),
+        ) if *sheet_index == target.sheet_index && *column_index == target.col_index => {
+            let inserted = target
+                .row_lengths
+                .iter()
+                .zip(row_lengths.iter().chain(std::iter::repeat(&0)))
+                .any(|(target_len, current_len)| target_len > current_len);
+            let deleted = row_lengths
+                .iter()
+                .zip(target.row_lengths.iter().chain(std::iter::repeat(&0)))
+                .any(|(current_len, target_len)| current_len > target_len);
+
+            if inserted {
+                return restored
+                    .sheets
+                    .get(target.sheet_index)
+                    .map(|sheet| {
+                        vec![EditorPatch::ColumnInserted {
+                            patch: ColumnInsertedPatch {
+                                sheet_index: target.sheet_index,
+                                column_index: target.col_index,
+                                values: sheet
+                                    .rows
+                                    .iter()
+                                    .map(|row| {
+                                        row.get(target.col_index)
+                                            .cloned()
+                                            .unwrap_or(CellValue::Null)
+                                    })
+                                    .collect(),
+                                column_width: sheet
+                                    .column_widths
+                                    .as_ref()
+                                    .and_then(|widths| widths.get(&target.col_index).copied()),
+                            },
+                        }]
+                    })
+                    .unwrap_or_default();
+            }
+            if deleted {
+                return vec![EditorPatch::ColumnDeleted {
+                    patch: ColumnDeletedPatch {
+                        sheet_index: target.sheet_index,
+                        column_index: target.col_index,
+                    },
+                }];
+            }
+            Vec::new()
+        }
+        (
+            CurrentStructureShape::Sheets {
+                sheet_index,
+                sheet_count,
+            },
+            FileStructureMemento::Sheets(target),
+        ) if *sheet_index == target.truncate_from => {
+            if target.sheet_count > *sheet_count {
+                return restored
+                    .sheets
+                    .get(target.truncate_from)
+                    .cloned()
+                    .map(|sheet| {
+                        vec![EditorPatch::SheetInserted {
+                            patch: SheetInsertedPatch {
+                                sheet_index: target.truncate_from,
+                                sheet,
+                            },
+                        }]
+                    })
+                    .unwrap_or_default();
+            }
+            if target.sheet_count < *sheet_count {
+                return vec![EditorPatch::SheetDeleted {
+                    patch: SheetDeletedPatch {
+                        sheet_index: target.truncate_from,
+                    },
+                }];
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
 }
 

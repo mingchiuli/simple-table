@@ -6,6 +6,8 @@ use crate::state::search_index::SearchMatcher;
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{SearchResult, SearchScope};
 
+const SEARCH_RESULT_LIMIT: usize = 1000;
+
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
     let mut result = String::new();
@@ -37,7 +39,7 @@ pub fn do_search(
         return Ok(vec![]);
     }
 
-    let search_inputs = {
+    let sheet_indexes = {
         let registry = registry.read().expect("Document registry lock poisoned");
         let editor_state = match registry.active() {
             Some(s) => s,
@@ -45,16 +47,13 @@ pub fn do_search(
         };
 
         match scope {
-            SearchScope::CurrentSheet => {
-                let sheet_idx = current_sheet_index.unwrap_or(0);
-                vec![search_input_for_sheet(editor_state, sheet_idx, &query)]
-            }
+            SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
             SearchScope::AllSheets => editor_state
                 .file_data()
                 .sheets
                 .iter()
                 .enumerate()
-                .map(|(sheet_idx, _)| search_input_for_sheet(editor_state, sheet_idx, &query))
+                .map(|(sheet_idx, _)| sheet_idx)
                 .collect(),
         }
     };
@@ -62,7 +61,18 @@ pub fn do_search(
     let mut results = Vec::new();
     let mut used_scan_fallback = false;
 
-    for input in search_inputs {
+    for sheet_index in sheet_indexes {
+        if results.len() >= SEARCH_RESULT_LIMIT {
+            break;
+        }
+        let remaining = SEARCH_RESULT_LIMIT - results.len();
+        let input = {
+            let registry = registry.read().expect("Document registry lock poisoned");
+            let Some(editor_state) = registry.active() else {
+                return Err(AppError::NoFileLoaded);
+            };
+            search_input_for_sheet(editor_state, sheet_index, &query, remaining)
+        };
         let Some(input) = input else {
             continue;
         };
@@ -72,7 +82,7 @@ pub fn do_search(
                 sheet_name,
                 cells,
             } => {
-                for cell in cells {
+                for cell in cells.into_iter().take(remaining) {
                     results.push(SearchResult {
                         sheet_index,
                         sheet_name: sheet_name.clone(),
@@ -85,7 +95,7 @@ pub fn do_search(
             }
             SearchInput::Scan(snapshot) => {
                 used_scan_fallback = true;
-                for cell in scan_sheet_snapshot(&snapshot, &query, 1000) {
+                for cell in scan_sheet_snapshot(&snapshot, &query, remaining) {
                     results.push(SearchResult {
                         sheet_index: snapshot.sheet_index,
                         sheet_name: snapshot.sheet_name.clone(),
@@ -119,8 +129,9 @@ fn search_input_for_sheet(
     editor_state: &crate::state::editor_state::EditorState,
     sheet_index: usize,
     query: &str,
+    limit: usize,
 ) -> Option<SearchInput> {
-    if let Some(cells) = editor_state.indexed_search_sheet(sheet_index, query, 1000) {
+    if let Some(cells) = editor_state.indexed_search_sheet(sheet_index, query, limit) {
         return Some(SearchInput::Indexed {
             sheet_index,
             sheet_name: editor_state.sheet_name(sheet_index)?,

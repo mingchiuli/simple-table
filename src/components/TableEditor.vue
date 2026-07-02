@@ -7,6 +7,7 @@ import { useGridGeometry } from '@/table-geometry/useGridGeometry';
 import { useGridResize } from '@/table-geometry/useGridResize';
 import { useGridViewport } from '@/table-geometry/useGridViewport';
 import { useTableInteractionController } from '@/table-geometry/useTableInteractionController';
+import { createSheetViewportModel } from '@/table-geometry/sheetViewportModel';
 
 const { isTouchDevice } = usePlatform();
 
@@ -55,8 +56,6 @@ const {
   scrollCellIntoView,
 } = useGridViewport();
 
-const mergeRanges = computed(() => props.merges ?? []);
-
 function getDraftKey(rowIndex: number, colIndex: number): string {
   return `${props.sheetIndex},${rowIndex},${colIndex}`;
 }
@@ -64,6 +63,17 @@ function getDraftKey(rowIndex: number, colIndex: number): string {
 function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
   return props.draftCellValues?.get(getDraftKey(rowIndex, colIndex));
 }
+
+const viewportModel = computed(() =>
+  createSheetViewportModel({
+    rows: props.data,
+    columns: props.columns,
+    merges: props.merges ?? [],
+    columnWidths: props.columnWidths,
+    rowHeights: props.rowHeights,
+    rich: props.rich,
+  })
+);
 
 const {
   viewportWidth,
@@ -86,13 +96,8 @@ const {
   resetLayoutFromSource,
   normalizeCellPosition,
 } = useGridGeometry({
-  data: computed(() => props.data),
-  columns: computed(() => props.columns),
-  merges: mergeRanges,
+  sheet: viewportModel,
   selectedCell: computed(() => props.selectedCell),
-  columnWidths: computed(() => props.columnWidths),
-  rowHeights: computed(() => props.rowHeights),
-  rich: computed(() => props.rich),
   tableSize,
   scrollLeft,
   scrollTop,

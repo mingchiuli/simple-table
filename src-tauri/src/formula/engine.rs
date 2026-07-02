@@ -575,7 +575,7 @@ mod tests {
 
         assert_eq!(diagnostics.invalid_formula_count, 1);
         assert_eq!(diagnostics.volatile_formula_count, 1);
-        assert_eq!(diagnostics.large_range_dependency_count, 0);
+        assert_eq!(diagnostics.large_range_dependency_count, 1);
         assert_eq!(diagnostics.unsupported_dependency_count, 1);
     }
 
@@ -595,7 +595,7 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(runtime.diagnostics().large_range_dependency_count, 0);
+        assert_eq!(runtime.diagnostics().large_range_dependency_count, 1);
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(5));
         runtime

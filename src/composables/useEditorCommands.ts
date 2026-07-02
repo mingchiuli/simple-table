@@ -40,7 +40,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await enqueueEditorMutation(async () => {
+      await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
         await applyMutationResponse(await action());
       });
     } catch (error) {
@@ -136,7 +136,7 @@ export function useEditorCommands({
     try {
       searchSessionStore.isSearching = true;
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations();
+      await waitForEditorMutations(documentSessionStore.mutationScope);
 
       searchSessionStore.searchResults = await api.search(
         query,
@@ -172,7 +172,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await enqueueEditorMutation(async () => {
+      await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
         await applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
       });
     } catch (error) {
@@ -189,7 +189,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await enqueueEditorMutation(async () => {
+      await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
         await applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
       });
     } catch (error) {

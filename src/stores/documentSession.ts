@@ -21,6 +21,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     currentFilePath: null as string | null,
     documentId: null as number | null,
     revision: 0,
+    mutationScope: 0,
 
     currentSheetIndex: 0,
     selectedCell: null as CellPosition | null,
@@ -30,6 +31,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
   }),
   actions: {
     openDocument(data: FileData, path: string | null = null) {
+      this.mutationScope += 1;
       this.data = data;
       this.currentFilePath = path;
       this.documentId = null;
@@ -47,6 +49,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
     },
     clearDocument() {
+      this.mutationScope += 1;
       this.data = null;
       this.currentFilePath = null;
       this.documentId = null;

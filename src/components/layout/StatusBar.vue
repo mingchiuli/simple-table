@@ -77,4 +77,23 @@ const formulaWarning = computed(() => formulaWarningText(props.formulaStatus));
 .formula-warning {
   color: var(--el-color-danger);
 }
+
+@media (max-width: 640px), (pointer: coarse) {
+  .statusbar {
+    padding: 6px 10px max(6px, env(safe-area-inset-bottom));
+    gap: 8px;
+  }
+
+  .statusbar > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .statusbar-right {
+    flex-shrink: 0;
+    gap: 8px;
+  }
+}
 </style>

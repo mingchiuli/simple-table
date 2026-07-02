@@ -1,5 +1,6 @@
 import type { ComputedRef, Ref } from "vue";
-import type { CellFormatProjection, CellStyleProjection, CellValue, MergeRange, SheetRichProjection } from "@/types";
+import type { CellFormatProjection, CellStyleProjection, CellValue } from "@/types";
+import type { SheetViewportModel } from "@/table-geometry/sheetViewportModel";
 import {
   areNumberRecordsEqual,
   buildOffsets,
@@ -39,13 +40,8 @@ export type MergeOverlayCell = CellItem & {
 };
 
 type UseGridGeometryOptions = {
-  data: ComputedRef<CellValue[][]>;
-  columns: ComputedRef<string[]>;
-  merges: ComputedRef<MergeRange[]>;
+  sheet: ComputedRef<SheetViewportModel>;
   selectedCell: ComputedRef<{ row: number; col: number } | null | undefined>;
-  columnWidths: ComputedRef<Record<number, number> | undefined>;
-  rowHeights: ComputedRef<Record<number, number> | undefined>;
-  rich: ComputedRef<SheetRichProjection | undefined>;
   tableSize: Ref<{ width: number; height: number }>;
   scrollLeft: Ref<number>;
   scrollTop: Ref<number>;
@@ -58,13 +54,8 @@ type UseGridGeometryOptions = {
 };
 
 export function useGridGeometry({
-  data,
-  columns,
-  merges,
+  sheet,
   selectedCell,
-  columnWidths: sourceColumnWidths,
-  rowHeights: sourceRowHeights,
-  rich,
   tableSize,
   scrollLeft,
   scrollTop,
@@ -79,6 +70,12 @@ export function useGridGeometry({
   const committedRowHeights = ref<Record<number, number>>({});
   const previewColumnWidths = ref<Record<number, number>>({});
   const previewRowHeights = ref<Record<number, number>>({});
+  const rows = computed(() => sheet.value.rows);
+  const columns = computed(() => sheet.value.columns);
+  const merges = computed(() => sheet.value.merges);
+  const sourceColumnWidths = computed(() => sheet.value.columnWidths);
+  const sourceRowHeights = computed(() => sheet.value.rowHeights);
+  const rich = computed(() => sheet.value.rich);
   const { getMergesIntersecting, isMergedCell, normalizeCellPosition } = useMergeLookup(merges);
 
   function syncColumnWidths() {
@@ -114,7 +111,7 @@ export function useGridGeometry({
     ...previewRowHeights.value,
   }));
   const sheetExtent = computed(() =>
-    calculateSheetExtent(data.value, merges.value, effectiveColumnWidths.value, effectiveRowHeights.value)
+    calculateSheetExtent(rows.value, merges.value, effectiveColumnWidths.value, effectiveRowHeights.value)
   );
 
   const columnCount = computed(() => Math.max(columns.value.length, sheetExtent.value.columnCount));
@@ -157,7 +154,7 @@ export function useGridGeometry({
           left: column.left,
           width: column.width,
           height: row.height,
-          value: data.value[row.index]?.[column.index],
+          value: rows.value[row.index]?.[column.index],
           format: cellFormat(row.index, column.index),
           style: cellStyle(row.index, column.index),
         });
@@ -210,7 +207,7 @@ export function useGridGeometry({
         left,
         width,
         height,
-        value: data.value[merge.startRow]?.[merge.startCol],
+        value: rows.value[merge.startRow]?.[merge.startCol],
         format: cellFormat(merge.startRow, merge.startCol),
         style: cellStyle(merge.startRow, merge.startCol),
         draftValue: getDraftValue(merge.startRow, merge.startCol),

@@ -655,11 +655,8 @@ pub struct RowInsertedPatch {
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
     pub row: Vec<CellValue>,
-    pub merges: Vec<MergeRange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub row_heights: Option<HashMap<usize, u32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rich: Option<SheetRichProjection>,
+    pub row_height: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -669,11 +666,6 @@ pub struct RowDeletedPatch {
     pub sheet_index: usize,
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub row_heights: Option<HashMap<usize, u32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rich: Option<SheetRichProjection>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -684,11 +676,8 @@ pub struct ColumnInsertedPatch {
     #[serde(rename = "columnIndex")]
     pub column_index: usize,
     pub values: Vec<CellValue>,
-    pub merges: Vec<MergeRange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column_widths: Option<HashMap<usize, u32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rich: Option<SheetRichProjection>,
+    pub column_width: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -698,11 +687,6 @@ pub struct ColumnDeletedPatch {
     pub sheet_index: usize,
     #[serde(rename = "columnIndex")]
     pub column_index: usize,
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column_widths: Option<HashMap<usize, u32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rich: Option<SheetRichProjection>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

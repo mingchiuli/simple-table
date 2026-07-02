@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { HomeFilled } from '@element-plus/icons-vue';
-import { usePlatform } from '@/composables/usePlatform';
 import { useDocumentStatus } from '@/composables/useDocumentStatus';
 import { useEditorCommands } from '@/composables/useEditorCommands';
 import { useFileActions } from '@/composables/useFileActions';
@@ -22,7 +21,6 @@ const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const pendingCellSavesStore = usePendingCellSavesStore();
 const searchSessionStore = useSearchSessionStore();
-const { isMobileOrTablet } = usePlatform();
 
 // ========== State refs (must be declared before composables use them) ==========
 const isLoading = ref(false);
@@ -268,7 +266,7 @@ onMounted(async () => {
     </main>
 
     <StatusBar
-      v-if="fileData && !isMobileOrTablet"
+      v-if="fileData"
       :file-name="fileData.fileName"
       :has-changes="hasUnsavedChanges"
       :formula-status="formulaStatus"

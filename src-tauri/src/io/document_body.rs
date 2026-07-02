@@ -1,11 +1,11 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use crate::error::AppError;
 use crate::io::codec::writer;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
 use crate::types::{FileData, SheetCellChange, WorkbookCapabilities};
-use umya_spreadsheet::Workbook;
+use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {
     Excel(ExcelDocumentBody),
@@ -18,17 +18,24 @@ pub struct ExcelDocumentBody {
 }
 
 pub enum BodyStructureMemento {
-    ExcelWorkbookClone {
-        workbook: Box<Workbook>,
+    ExcelWorksheetSnapshots {
+        sheet_count: usize,
+        replace_tail_from: Option<usize>,
+        sheets: Vec<WorksheetSnapshot>,
         estimated_bytes: usize,
     },
     ProjectionOnly,
 }
 
+pub struct WorksheetSnapshot {
+    sheet_index: usize,
+    worksheet: Box<Worksheet>,
+}
+
 impl BodyStructureMemento {
     pub fn estimated_bytes(&self) -> usize {
         match self {
-            BodyStructureMemento::ExcelWorkbookClone {
+            BodyStructureMemento::ExcelWorksheetSnapshots {
                 estimated_bytes, ..
             } => *estimated_bytes,
             BodyStructureMemento::ProjectionOnly => 0,
@@ -57,12 +64,9 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn capture_structure_memento(&self) -> BodyStructureMemento {
+    pub fn capture_structure_memento(&self, operation: &AppliedOperation) -> BodyStructureMemento {
         match self {
-            Self::Excel(body) => BodyStructureMemento::ExcelWorkbookClone {
-                workbook: body.workbook.clone(),
-                estimated_bytes: estimate_workbook_bytes(&body.workbook),
-            },
+            Self::Excel(body) => capture_excel_structure_memento(&body.workbook, operation),
             Self::Csv | Self::GeneratedWorkbook => BodyStructureMemento::ProjectionOnly,
         }
     }
@@ -72,10 +76,24 @@ impl SpreadsheetDocumentBody {
         memento: &BodyStructureMemento,
     ) -> Result<BodyRestoreAction, AppError> {
         match memento {
-            BodyStructureMemento::ExcelWorkbookClone { workbook, .. } => {
-                *self = Self::Excel(ExcelDocumentBody {
-                    workbook: workbook.clone(),
-                });
+            BodyStructureMemento::ExcelWorksheetSnapshots {
+                sheet_count,
+                replace_tail_from,
+                sheets,
+                ..
+            } => {
+                let workbook = match self {
+                    Self::Excel(body) => &mut body.workbook,
+                    Self::Csv | Self::GeneratedWorkbook => {
+                        return Ok(BodyRestoreAction::RestoreProjectionOnly);
+                    }
+                };
+                restore_excel_structure_memento(
+                    workbook,
+                    *sheet_count,
+                    *replace_tail_from,
+                    sheets,
+                )?;
                 Ok(BodyRestoreAction::RefreshProjectionFromWorkbook)
             }
             BodyStructureMemento::ProjectionOnly => Ok(BodyRestoreAction::RestoreProjectionOnly),
@@ -216,19 +234,167 @@ pub enum BodyRestoreAction {
     RestoreProjectionOnly,
 }
 
-fn estimate_workbook_bytes(workbook: &Workbook) -> usize {
-    let mut bytes = std::mem::size_of::<Workbook>() + workbook.sheet_count() * 4096;
-    for worksheet in workbook.sheet_collection() {
-        let (highest_col, highest_row) = worksheet.highest_column_and_row();
-        bytes += worksheet.name().len();
-        bytes += highest_col as usize * 16;
-        bytes += highest_row as usize * 16;
-        bytes += worksheet.column_dimensions().len() * 64;
-        bytes += worksheet.row_dimensions().len() * 64;
-        bytes += worksheet.merge_cells().len() * 48;
-        bytes += worksheet.image_collection().len() * 1024;
-        bytes += worksheet.chart_collection().len() * 2048;
-        bytes += worksheet
+fn capture_excel_structure_memento(
+    workbook: &Workbook,
+    operation: &AppliedOperation,
+) -> BodyStructureMemento {
+    let sheet_count = workbook.sheet_count();
+    let replace_tail_from = match operation {
+        AppliedOperation::AddSheet { sheet_index, .. }
+        | AppliedOperation::DeleteSheet { sheet_index } => Some(*sheet_index),
+        _ => None,
+    };
+    let mut sheet_indexes = BTreeSet::new();
+    match replace_tail_from {
+        Some(start) => sheet_indexes.extend(start..sheet_count),
+        None => {
+            if let Some(sheet_index) =
+                affected_sheet_index(operation).filter(|sheet_index| *sheet_index < sheet_count)
+            {
+                sheet_indexes.insert(sheet_index);
+            }
+        }
+    }
+    sheet_indexes.extend(formula_sheet_indexes(workbook));
+
+    let sheets: Vec<WorksheetSnapshot> = sheet_indexes
+        .into_iter()
+        .filter_map(|sheet_index| {
+            workbook
+                .sheet(sheet_index)
+                .ok()
+                .map(|worksheet| WorksheetSnapshot {
+                    sheet_index,
+                    worksheet: Box::new(worksheet.clone()),
+                })
+        })
+        .collect();
+    let estimated_bytes = sheets
+        .iter()
+        .map(|snapshot| estimate_worksheet_bytes(&snapshot.worksheet))
+        .sum::<usize>()
+        + std::mem::size_of::<BodyStructureMemento>();
+
+    BodyStructureMemento::ExcelWorksheetSnapshots {
+        sheet_count,
+        replace_tail_from,
+        sheets,
+        estimated_bytes,
+    }
+}
+
+fn restore_excel_structure_memento(
+    workbook: &mut Workbook,
+    sheet_count: usize,
+    replace_tail_from: Option<usize>,
+    snapshots: &[WorksheetSnapshot],
+) -> Result<(), AppError> {
+    if let Some(start) = replace_tail_from {
+        restore_excel_sheet_slots(
+            workbook,
+            snapshots
+                .iter()
+                .filter(|snapshot| snapshot.sheet_index < start),
+        )?;
+        return restore_excel_sheet_tail(
+            workbook,
+            sheet_count,
+            start,
+            snapshots
+                .iter()
+                .filter(|snapshot| snapshot.sheet_index >= start),
+        );
+    }
+
+    restore_excel_sheet_slots(workbook, snapshots.iter())
+}
+
+fn restore_excel_sheet_slots<'a>(
+    workbook: &mut Workbook,
+    snapshots: impl IntoIterator<Item = &'a WorksheetSnapshot>,
+) -> Result<(), AppError> {
+    let sheets = workbook.sheet_collection_mut();
+    for snapshot in snapshots {
+        let Some(slot) = sheets.get_mut(snapshot.sheet_index) else {
+            return Err(AppError::UnsupportedWorkbookStructure(
+                "worksheet snapshot target is missing".to_string(),
+            ));
+        };
+        *slot = (*snapshot.worksheet).clone();
+    }
+    Ok(())
+}
+
+fn restore_excel_sheet_tail<'a>(
+    workbook: &mut Workbook,
+    sheet_count: usize,
+    start: usize,
+    snapshots: impl IntoIterator<Item = &'a WorksheetSnapshot>,
+) -> Result<(), AppError> {
+    let remove_from = start.min(workbook.sheet_count());
+    while workbook.sheet_count() > remove_from {
+        workbook
+            .remove_sheet(remove_from)
+            .map_err(|error| AppError::WriteError(error.to_string()))?;
+    }
+
+    for snapshot in snapshots {
+        workbook
+            .add_sheet((*snapshot.worksheet).clone())
+            .map_err(|error| AppError::WriteError(error.to_string()))?;
+    }
+
+    if workbook.sheet_count() != sheet_count {
+        return Err(AppError::UnsupportedWorkbookStructure(format!(
+            "worksheet snapshot restore expected {sheet_count} sheets, got {}",
+            workbook.sheet_count()
+        )));
+    }
+
+    Ok(())
+}
+
+fn formula_sheet_indexes(workbook: &Workbook) -> Vec<usize> {
+    workbook
+        .sheet_collection()
+        .iter()
+        .enumerate()
+        .filter_map(|(sheet_index, worksheet)| {
+            worksheet
+                .cells()
+                .iter()
+                .any(|cell| cell.is_formula())
+                .then_some(sheet_index)
+        })
+        .collect()
+}
+
+fn affected_sheet_index(operation: &AppliedOperation) -> Option<usize> {
+    match operation {
+        AppliedOperation::AddRow { sheet_index, .. }
+        | AppliedOperation::DeleteRow { sheet_index, .. }
+        | AppliedOperation::AddColumn { sheet_index, .. }
+        | AppliedOperation::DeleteColumn { sheet_index, .. }
+        | AppliedOperation::SetCell { sheet_index, .. }
+        | AppliedOperation::SetColumnWidth { sheet_index, .. }
+        | AppliedOperation::SetRowHeight { sheet_index, .. } => Some(*sheet_index),
+        AppliedOperation::SetCells { changes } => changes.first().map(|change| change.sheet_index),
+        AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => None,
+    }
+}
+
+fn estimate_worksheet_bytes(worksheet: &Worksheet) -> usize {
+    let (highest_col, highest_row) = worksheet.highest_column_and_row();
+    std::mem::size_of::<Worksheet>()
+        + worksheet.name().len()
+        + highest_col as usize * 16
+        + highest_row as usize * 16
+        + worksheet.column_dimensions().len() * 64
+        + worksheet.row_dimensions().len() * 64
+        + worksheet.merge_cells().len() * 48
+        + worksheet.image_collection().len() * 1024
+        + worksheet.chart_collection().len() * 2048
+        + worksheet
             .cells()
             .iter()
             .map(|cell| {
@@ -239,9 +405,7 @@ fn estimate_workbook_bytes(workbook: &Workbook) -> usize {
                         0
                     }
             })
-            .sum::<usize>();
-    }
-    bytes
+            .sum::<usize>()
 }
 
 fn is_csv_document(file_data: &FileData) -> bool {

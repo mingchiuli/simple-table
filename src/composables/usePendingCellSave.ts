@@ -176,7 +176,7 @@ export function usePendingCellSave({
     const selectedKey = selectedCell.value
       ? cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
       : null;
-    await enqueueEditorMutation(async () => {
+    await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
       const response = await api.setCells(payload);
       await applyMutationResponse(response);
     });

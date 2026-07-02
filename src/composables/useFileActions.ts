@@ -57,7 +57,7 @@ export function useFileActions({
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations();
+      await waitForEditorMutations(documentSessionStore.mutationScope);
 
       const loadedFileData = await readFile(filePath);
       documentSessionStore.openDocument(loadedFileData, filePath);
@@ -83,7 +83,7 @@ export function useFileActions({
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations();
+      await waitForEditorMutations(documentSessionStore.mutationScope);
 
       const result = await openFile();
       if (!result) return;
@@ -118,7 +118,7 @@ export function useFileActions({
 
     try {
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations();
+      await waitForEditorMutations(documentSessionStore.mutationScope);
 
       const isNewFile = fileData.value.fileName.startsWith('untitled');
       const defaultName = isNewFile
@@ -166,7 +166,7 @@ export function useFileActions({
 
   async function ensureSandboxPathForExport(defaultName: string, extension: string): Promise<string | null> {
     if (!(await flushPendingCellChanges())) return null;
-    await waitForEditorMutations();
+    await waitForEditorMutations(documentSessionStore.mutationScope);
     if (!fileData.value) return null;
 
     let path = documentSessionStore.currentFilePath;
@@ -206,7 +206,7 @@ export function useFileActions({
 
       if (storageType === 'desktopPath') {
         if (!(await flushPendingCellChanges())) return;
-        await waitForEditorMutations();
+        await waitForEditorMutations(documentSessionStore.mutationScope);
         const exportedPath = await exportFile(
           documentSessionStore.currentFilePath ?? '',
           `${defaultName}.${extension}`
@@ -233,7 +233,7 @@ export function useFileActions({
 
   async function handleBack() {
     if (!(await flushPendingCellChanges())) return;
-    await waitForEditorMutations();
+    await waitForEditorMutations(documentSessionStore.mutationScope);
 
     documentSessionStore.clearDocument();
     resetDocumentStatus();

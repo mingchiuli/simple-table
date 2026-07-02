@@ -138,9 +138,10 @@ fn structural_patches(
                         sheet_index,
                         row_index: row.index,
                         row: sheet.rows.get(row.index).cloned().unwrap_or_default(),
-                        merges: sheet.merges.clone(),
-                        row_heights: sheet.row_heights.clone(),
-                        rich: Some(sheet.rich.clone()),
+                        row_height: sheet
+                            .row_heights
+                            .as_ref()
+                            .and_then(|heights| heights.get(&row.index).copied()),
                     },
                 }]
             })
@@ -152,14 +153,11 @@ fn structural_patches(
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(|sheet| {
+            .map(|_| {
                 vec![EditorPatch::RowDeleted {
                     patch: RowDeletedPatch {
                         sheet_index,
                         row_index,
-                        merges: sheet.merges.clone(),
-                        row_heights: sheet.row_heights.clone(),
-                        rich: Some(sheet.rich.clone()),
                     },
                 }]
             })
@@ -182,9 +180,10 @@ fn structural_patches(
                             .iter()
                             .map(|row| row.get(column.index).cloned().unwrap_or(CellValue::Null))
                             .collect(),
-                        merges: sheet.merges.clone(),
-                        column_widths: sheet.column_widths.clone(),
-                        rich: Some(sheet.rich.clone()),
+                        column_width: sheet
+                            .column_widths
+                            .as_ref()
+                            .and_then(|widths| widths.get(&column.index).copied()),
                     },
                 }]
             })
@@ -196,14 +195,11 @@ fn structural_patches(
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(|sheet| {
+            .map(|_| {
                 vec![EditorPatch::ColumnDeleted {
                     patch: ColumnDeletedPatch {
                         sheet_index,
                         column_index,
-                        merges: sheet.merges.clone(),
-                        column_widths: sheet.column_widths.clone(),
-                        rich: Some(sheet.rich.clone()),
                     },
                 }]
             })

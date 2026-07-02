@@ -22,6 +22,12 @@ impl FormulaRangeRef {
             && (self.start_row..=self.end_row).contains(&cell.row)
             && (self.start_col..=self.end_col).contains(&cell.col)
     }
+
+    fn row_span(&self) -> usize {
+        self.end_row
+            .saturating_sub(self.start_row)
+            .saturating_add(1)
+    }
 }
 
 #[derive(Default)]
@@ -142,6 +148,9 @@ pub(crate) fn build_dependency_index(
                         .insert(formula_ref);
                 }
                 for dependency in dependencies.ranges {
+                    if dependency.row_span() > MAX_INDEXED_RANGE_ROWS {
+                        index.diagnostics.large_range_dependency_count += 1;
+                    }
                     index.range_dependents.insert(dependency, formula_ref);
                 }
             }
