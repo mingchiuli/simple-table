@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock, mpsc};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,6 +29,13 @@ enum IndexJob {
     },
 }
 
+struct CellIndexUpdate {
+    stamp: SearchIndexStamp,
+    row: usize,
+    col: usize,
+    new_text: String,
+}
+
 impl IndexJob {
     fn document_id(&self) -> u64 {
         match self {
@@ -46,12 +53,6 @@ impl IndexJob {
         }
     }
 
-    fn stamp(&self) -> SearchIndexStamp {
-        match self {
-            IndexJob::Rebuild { stamp, .. } | IndexJob::UpdateCell { stamp, .. } => *stamp,
-        }
-    }
-
     fn registry(&self) -> &Arc<RwLock<ActiveDocumentStore>> {
         match self {
             IndexJob::Rebuild { registry, .. } | IndexJob::UpdateCell { registry, .. } => registry,
@@ -62,23 +63,45 @@ impl IndexJob {
 struct SheetPending {
     document_id: u64,
     rebuild: Option<SearchIndexStamp>,
-    incremental: Vec<IndexJob>,
+    incremental: HashMap<(usize, usize), CellIndexUpdate>,
     registry: Arc<RwLock<ActiveDocumentStore>>,
 }
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
 
-static INDEX_QUEUE: OnceLock<mpsc::Sender<IndexJob>> = OnceLock::new();
+struct IndexScheduler {
+    state: Mutex<IndexSchedulerState>,
+    wake: Condvar,
+}
 
-fn index_queue() -> &'static mpsc::Sender<IndexJob> {
-    INDEX_QUEUE.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<IndexJob>();
+#[derive(Default)]
+struct IndexSchedulerState {
+    pending: HashMap<(u64, usize), SheetPending>,
+}
+
+static INDEX_SCHEDULER: OnceLock<Arc<IndexScheduler>> = OnceLock::new();
+
+fn index_scheduler() -> &'static Arc<IndexScheduler> {
+    INDEX_SCHEDULER.get_or_init(|| {
+        let scheduler = Arc::new(IndexScheduler {
+            state: Mutex::new(IndexSchedulerState::default()),
+            wake: Condvar::new(),
+        });
+        let worker_scheduler = scheduler.clone();
         thread::Builder::new()
             .name("simple-table-indexer".into())
-            .spawn(move || index_worker(rx))
+            .spawn(move || index_worker(worker_scheduler))
             .expect("failed to spawn index worker thread");
-        tx
+        scheduler
     })
+}
+
+fn enqueue_index_job(job: IndexJob) {
+    let scheduler = index_scheduler();
+    if let Ok(mut state) = scheduler.state.lock() {
+        merge_job(&mut state.pending, job);
+        scheduler.wake.notify_one();
+    }
 }
 
 fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
@@ -90,12 +113,12 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
         .or_insert_with(|| SheetPending {
             document_id,
             rebuild: None,
-            incremental: Vec::new(),
+            incremental: HashMap::new(),
             registry: registry.clone(),
         });
     match job {
         IndexJob::Rebuild { stamp, .. } => {
-            let latest_incremental = entry.incremental.iter().map(IndexJob::stamp).max();
+            let latest_incremental = entry.incremental.values().map(|update| update.stamp).max();
             let latest_seen = entry.rebuild.into_iter().chain(latest_incremental).max();
             if latest_seen.is_none_or(|latest| stamp >= latest) {
                 entry.registry = registry;
@@ -103,64 +126,103 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
                 entry.incremental.clear();
             }
         }
-        other => {
+        IndexJob::UpdateCell {
+            stamp,
+            row,
+            col,
+            new_text,
+            ..
+        } => {
             if entry.rebuild.is_none() {
+                let latest_incremental =
+                    entry.incremental.values().map(|update| update.stamp).max();
+                if latest_incremental.is_some_and(|latest| stamp < latest) {
+                    return;
+                }
+                if latest_incremental.is_some_and(|latest| stamp > latest) {
+                    entry.incremental.clear();
+                }
                 entry.registry = registry;
-                entry.incremental.push(other);
+                entry.incremental.insert(
+                    (row, col),
+                    CellIndexUpdate {
+                        stamp,
+                        row,
+                        col,
+                        new_text,
+                    },
+                );
             }
         }
     }
 }
 
-fn index_worker(rx: mpsc::Receiver<IndexJob>) {
+fn index_worker(scheduler: Arc<IndexScheduler>) {
     loop {
-        let first = match rx.recv() {
-            Ok(job) => job,
-            Err(_) => return,
-        };
-
-        let mut pending = HashMap::new();
-        merge_job(&mut pending, first);
-
-        let deadline = Instant::now() + INDEX_DEBOUNCE;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                break;
-            }
-            match rx.recv_timeout(deadline - now) {
-                Ok(job) => merge_job(&mut pending, job),
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            }
-        }
+        let pending = drain_pending_jobs(&scheduler);
 
         for ((_, sheet_index), pending) in pending {
             if let Some(stamp) = pending.rebuild {
                 run_rebuild(pending.document_id, sheet_index, stamp, &pending.registry);
-            } else if !pending.incremental.is_empty()
-                && !run_incremental(
-                    pending.document_id,
-                    sheet_index,
-                    &pending.registry,
-                    &pending.incremental,
-                )
-            {
+                continue;
+            }
+
+            if !pending.incremental.is_empty() {
                 let latest_stamp = pending
                     .incremental
-                    .iter()
-                    .map(IndexJob::stamp)
+                    .values()
+                    .map(|update| update.stamp)
                     .max()
                     .expect("incremental ops are non-empty");
-                run_rebuild(
+                let updates: Vec<CellIndexUpdate> = pending.incremental.into_values().collect();
+                if !run_incremental(
                     pending.document_id,
                     sheet_index,
-                    latest_stamp,
                     &pending.registry,
-                );
+                    &updates,
+                ) {
+                    run_rebuild(
+                        pending.document_id,
+                        sheet_index,
+                        latest_stamp,
+                        &pending.registry,
+                    );
+                }
             }
         }
     }
+}
+
+fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), SheetPending> {
+    let mut state = scheduler
+        .state
+        .lock()
+        .expect("search index scheduler lock poisoned");
+    while state.pending.is_empty() {
+        state = scheduler
+            .wake
+            .wait(state)
+            .expect("search index scheduler lock poisoned");
+    }
+
+    let deadline = Instant::now() + INDEX_DEBOUNCE;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let wait = deadline - now;
+        let (next_state, timeout) = scheduler
+            .wake
+            .wait_timeout(state, wait)
+            .expect("search index scheduler lock poisoned");
+        state = next_state;
+        if timeout.timed_out() {
+            break;
+        }
+    }
+
+    std::mem::take(&mut state.pending)
 }
 
 fn run_rebuild(
@@ -198,12 +260,12 @@ fn run_incremental(
     document_id: u64,
     sheet_index: usize,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
-    ops: &[IndexJob],
+    ops: &[CellIndexUpdate],
 ) -> bool {
     let Some((stamp, handle)) = registry.read().ok().and_then(|guard| {
         let editor = guard.get(document_id)?;
-        let stamp = ops.first()?.stamp();
-        if ops.iter().any(|op| op.stamp() != stamp) {
+        let stamp = ops.first()?.stamp;
+        if ops.iter().any(|op| op.stamp != stamp) {
             return None;
         }
         editor
@@ -218,25 +280,18 @@ fn run_incremental(
     };
 
     for op in ops {
-        match op {
-            IndexJob::UpdateCell {
-                row, col, new_text, ..
-            } => {
-                let cell_id = format!("{}:{}", row, col);
-                writer.delete_term(Term::from_field_text(handle.cell_id_field, &cell_id));
-                if !new_text.is_empty()
-                    && let Err(error) = writer.add_document(doc!(
-                        handle.text_field => new_text.clone(),
-                        handle.row_field => *row as u64,
-                        handle.col_field => *col as u64,
-                        handle.cell_id_field => cell_id,
-                    ))
-                {
-                    eprintln!("incremental add_document failed: {error:?}");
-                    return false;
-                }
-            }
-            IndexJob::Rebuild { .. } => unreachable!("rebuild handled by dispatcher"),
+        let cell_id = format!("{}:{}", op.row, op.col);
+        writer.delete_term(Term::from_field_text(handle.cell_id_field, &cell_id));
+        if !op.new_text.is_empty()
+            && let Err(error) = writer.add_document(doc!(
+                handle.text_field => op.new_text.clone(),
+                handle.row_field => op.row as u64,
+                handle.col_field => op.col as u64,
+                handle.cell_id_field => cell_id,
+            ))
+        {
+            eprintln!("incremental add_document failed: {error:?}");
+            return false;
         }
     }
 
@@ -267,9 +322,8 @@ pub fn spawn_rebuild_all_sheets_index(
         Err(_) => (0, SearchIndexStamp::default()),
     };
 
-    let queue = index_queue();
     for sheet_index in 0..count {
-        let _ = queue.send(IndexJob::Rebuild {
+        enqueue_index_job(IndexJob::Rebuild {
             document_id,
             sheet_index,
             stamp,
@@ -293,7 +347,7 @@ pub fn spawn_update_cell_index(
             .unwrap_or_default(),
         Err(_) => SearchIndexStamp::default(),
     };
-    let _ = index_queue().send(IndexJob::UpdateCell {
+    enqueue_index_job(IndexJob::UpdateCell {
         document_id,
         sheet_index,
         stamp,
@@ -417,6 +471,81 @@ mod tests {
     }
 
     #[test]
+    fn pending_index_jobs_coalesce_same_cell_update() {
+        let (registry, document_id) = make_registry(vec![vec![s("old")]]);
+        let stamp = current_stamp(&registry, document_id);
+        let mut pending = HashMap::new();
+
+        merge_job(
+            &mut pending,
+            IndexJob::UpdateCell {
+                document_id,
+                sheet_index: 0,
+                stamp,
+                row: 0,
+                col: 0,
+                new_text: "intermediate".to_string(),
+                registry: registry.clone(),
+            },
+        );
+        merge_job(
+            &mut pending,
+            IndexJob::UpdateCell {
+                document_id,
+                sheet_index: 0,
+                stamp,
+                row: 0,
+                col: 0,
+                new_text: "latest".to_string(),
+                registry: registry.clone(),
+            },
+        );
+
+        let sheet = pending.get(&(document_id, 0)).expect("pending sheet");
+        assert_eq!(sheet.incremental.len(), 1);
+        assert_eq!(
+            sheet
+                .incremental
+                .get(&(0, 0))
+                .map(|update| update.new_text.as_str()),
+            Some("latest")
+        );
+    }
+
+    #[test]
+    fn pending_rebuild_supersedes_cell_updates() {
+        let (registry, document_id) = make_registry(vec![vec![s("old")]]);
+        let stamp = current_stamp(&registry, document_id);
+        let mut pending = HashMap::new();
+
+        merge_job(
+            &mut pending,
+            IndexJob::UpdateCell {
+                document_id,
+                sheet_index: 0,
+                stamp,
+                row: 0,
+                col: 0,
+                new_text: "latest".to_string(),
+                registry: registry.clone(),
+            },
+        );
+        merge_job(
+            &mut pending,
+            IndexJob::Rebuild {
+                document_id,
+                sheet_index: 0,
+                stamp,
+                registry: registry.clone(),
+            },
+        );
+
+        let sheet = pending.get(&(document_id, 0)).expect("pending sheet");
+        assert_eq!(sheet.rebuild, Some(stamp));
+        assert!(sheet.incremental.is_empty());
+    }
+
+    #[test]
     fn rebuild_searches_existing_content() {
         let (registry, document_id) = make_registry(vec![
             vec![s("apple"), s("banana")],
@@ -459,14 +588,11 @@ mod tests {
             document_id,
             0,
             &registry,
-            &[IndexJob::UpdateCell {
-                document_id,
-                sheet_index: 0,
+            &[CellIndexUpdate {
                 stamp: current_stamp(&registry, document_id),
                 row: 0,
                 col: 0,
                 new_text: "orange".to_string(),
-                registry: registry.clone(),
             }],
         );
 
@@ -508,14 +634,11 @@ mod tests {
             document_id,
             0,
             &registry,
-            &[IndexJob::UpdateCell {
-                document_id,
-                sheet_index: 0,
+            &[CellIndexUpdate {
                 stamp,
                 row: 0,
                 col: 0,
                 new_text: "new".to_string(),
-                registry: registry.clone(),
             }],
         );
 

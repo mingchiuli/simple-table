@@ -1,21 +1,42 @@
 import type { ComputedRef } from "vue";
 import type { MergeRange } from "@/types";
 
+const MAX_INDEXED_MERGE_ROW_SPAN = 4096;
+
 export function useMergeLookup(merges: ComputedRef<MergeRange[]>) {
   const mergeIndex = computed(() => {
-    const covered = new Map<string, MergeRange>();
+    const byRow = new Map<number, MergeRange[]>();
+    const largeMerges: MergeRange[] = [];
+
     for (const merge of merges.value) {
+      const rowSpan = merge.endRow - merge.startRow + 1;
+      if (rowSpan > MAX_INDEXED_MERGE_ROW_SPAN) {
+        largeMerges.push(merge);
+        continue;
+      }
+
       for (let row = merge.startRow; row <= merge.endRow; row += 1) {
-        for (let col = merge.startCol; col <= merge.endCol; col += 1) {
-          covered.set(cellKey(row, col), merge);
-        }
+        const rowMerges = byRow.get(row) ?? [];
+        rowMerges.push(merge);
+        byRow.set(row, rowMerges);
       }
     }
-    return covered;
+
+    for (const rowMerges of byRow.values()) {
+      rowMerges.sort((a, b) => a.startCol - b.startCol || a.endCol - b.endCol);
+    }
+
+    return { byRow, largeMerges };
   });
 
   function getMergeInfo(rowIndex: number, colIndex: number): MergeRange | null {
-    return mergeIndex.value.get(cellKey(rowIndex, colIndex)) ?? null;
+    const indexed = mergeIndex.value.byRow.get(rowIndex);
+    const indexedMatch = findMergeInSortedRow(indexed, colIndex);
+    if (indexedMatch) return indexedMatch;
+
+    return mergeIndex.value.largeMerges.find((merge) =>
+      mergeContains(merge, rowIndex, colIndex)
+    ) ?? null;
   }
 
   function isMergedCell(rowIndex: number, colIndex: number): boolean {
@@ -33,13 +54,77 @@ export function useMergeLookup(merges: ComputedRef<MergeRange[]>) {
     };
   }
 
+  function getMergesIntersecting(
+    startRow: number,
+    endRow: number,
+    startCol: number,
+    endCol: number
+  ): MergeRange[] {
+    const seen = new Set<string>();
+    const matches: MergeRange[] = [];
+    const { byRow, largeMerges } = mergeIndex.value;
+
+    for (let row = startRow; row <= endRow; row += 1) {
+      const rowMerges = byRow.get(row);
+      if (!rowMerges) continue;
+      for (const merge of rowMerges) {
+        if (merge.startCol > endCol) break;
+        if (!mergeIntersects(merge, startRow, endRow, startCol, endCol)) continue;
+        pushUniqueMerge(matches, seen, merge);
+      }
+    }
+
+    for (const merge of largeMerges) {
+      if (mergeIntersects(merge, startRow, endRow, startCol, endCol)) {
+        pushUniqueMerge(matches, seen, merge);
+      }
+    }
+
+    return matches;
+  }
+
   return {
     getMergeInfo,
+    getMergesIntersecting,
     isMergedCell,
     normalizeCellPosition,
   };
 }
 
-function cellKey(rowIndex: number, colIndex: number): string {
-  return `${rowIndex}:${colIndex}`;
+function findMergeInSortedRow(rowMerges: MergeRange[] | undefined, colIndex: number) {
+  if (!rowMerges) return null;
+  for (const merge of rowMerges) {
+    if (merge.startCol > colIndex) break;
+    if (merge.startCol <= colIndex && merge.endCol >= colIndex) {
+      return merge;
+    }
+  }
+  return null;
+}
+
+function mergeContains(merge: MergeRange, rowIndex: number, colIndex: number): boolean {
+  return merge.startRow <= rowIndex
+    && merge.endRow >= rowIndex
+    && merge.startCol <= colIndex
+    && merge.endCol >= colIndex;
+}
+
+function mergeIntersects(
+  merge: MergeRange,
+  startRow: number,
+  endRow: number,
+  startCol: number,
+  endCol: number
+): boolean {
+  return merge.startRow <= endRow
+    && merge.endRow >= startRow
+    && merge.startCol <= endCol
+    && merge.endCol >= startCol;
+}
+
+function pushUniqueMerge(matches: MergeRange[], seen: Set<string>, merge: MergeRange) {
+  const key = `${merge.startRow}:${merge.startCol}:${merge.endRow}:${merge.endCol}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  matches.push(merge);
 }

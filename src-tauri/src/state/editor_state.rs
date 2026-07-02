@@ -634,6 +634,55 @@ mod tests {
     }
 
     #[test]
+    fn workbook_structure_patch_preserves_explicit_same_sheet_formula_references() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.set_name("Inputs");
+            sheet.cell_mut("A1").set_value_number(1);
+            sheet.cell_mut("B1").set_formula("Inputs!A1");
+            sheet.cell_mut("B1").set_formula_result_number(1.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "same-sheet-explicit-formula.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("add row");
+
+        match &state.file_data().sheets[0].rows[1][1] {
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A2"),
+            value => panic!("expected adjusted explicit same-sheet formula, got {value:?}"),
+        }
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("same-sheet-explicit-formula.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        assert_eq!(
+            saved
+                .sheet(0)
+                .expect("sheet")
+                .cell("B2")
+                .expect("B2")
+                .formula(),
+            "Inputs!A2"
+        );
+    }
+
+    #[test]
     fn workbook_structure_patch_refreshes_cross_sheet_formula_projection() {
         let mut source = umya_spreadsheet::new_file();
         source.new_sheet("Other").expect("other sheet");

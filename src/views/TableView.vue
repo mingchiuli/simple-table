@@ -27,6 +27,7 @@ const { isMobileOrTablet } = usePlatform();
 // ========== State refs (must be declared before composables use them) ==========
 const isLoading = ref(false);
 const isFileLoading = ref(false);
+const layoutResetKey = ref(0);
 const {
   currentSheetIndex,
   selectedCell,
@@ -86,7 +87,7 @@ const {
 async function applyMutationResponse(response: EditorMutationResponse) {
   const result = documentSessionStore.applyMutationResponse(response);
   if (result.resyncRequired) {
-    documentSessionStore.replaceProjection(await api.getCurrentFileData());
+    await refreshProjectionFromBackend();
   }
   if (!documentSessionStore.data || !selectedCell.value) return;
 
@@ -95,6 +96,11 @@ async function applyMutationResponse(response: EditorMutationResponse) {
     selectedCell.value.row,
     selectedCell.value.col
   );
+}
+
+async function refreshProjectionFromBackend() {
+  documentSessionStore.replaceProjection(await api.getCurrentFileData());
+  layoutResetKey.value += 1;
 }
 
 const {
@@ -165,6 +171,7 @@ const {
   flushPendingCellChanges,
   editorValueForCell: getEditorValue,
   applyMutationResponse,
+  refreshProjectionFromBackend,
 });
 
 // ========== Lifecycle ==========
@@ -236,6 +243,7 @@ onMounted(async () => {
               :can-resize-rows-columns="capabilities.canResizeRowsColumns"
               :column-widths="currentSheet?.columnWidths"
               :row-heights="currentSheet?.rowHeights"
+              :layout-reset-key="layoutResetKey"
               :rich="currentSheet?.rich"
               @cell-change="handleCellChange"
               @cell-editing="handleCellEditing"

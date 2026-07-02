@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use crate::error::AppError;
-use crate::io::codec::reader::read_workbook_from_xlsx_bytes;
 use crate::io::codec::writer;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
@@ -19,18 +18,19 @@ pub struct ExcelDocumentBody {
 }
 
 pub enum BodyStructureMemento {
-    ExcelWorkbookSnapshot { bytes: Box<[u8]> },
-    ExcelWorkbookClone { workbook: Box<Workbook> },
+    ExcelWorkbookClone {
+        workbook: Box<Workbook>,
+        estimated_bytes: usize,
+    },
     ProjectionOnly,
 }
 
 impl BodyStructureMemento {
     pub fn estimated_bytes(&self) -> usize {
         match self {
-            BodyStructureMemento::ExcelWorkbookSnapshot { bytes } => bytes.len(),
-            BodyStructureMemento::ExcelWorkbookClone { workbook } => {
-                estimate_workbook_bytes(workbook)
-            }
+            BodyStructureMemento::ExcelWorkbookClone {
+                estimated_bytes, ..
+            } => *estimated_bytes,
             BodyStructureMemento::ProjectionOnly => 0,
         }
     }
@@ -59,13 +59,9 @@ impl SpreadsheetDocumentBody {
 
     pub fn capture_structure_memento(&self) -> BodyStructureMemento {
         match self {
-            Self::Excel(body) => match writer::write_workbook_to_bytes(&body.workbook) {
-                Ok(bytes) => BodyStructureMemento::ExcelWorkbookSnapshot {
-                    bytes: bytes.into_boxed_slice(),
-                },
-                Err(_) => BodyStructureMemento::ExcelWorkbookClone {
-                    workbook: body.workbook.clone(),
-                },
+            Self::Excel(body) => BodyStructureMemento::ExcelWorkbookClone {
+                workbook: body.workbook.clone(),
+                estimated_bytes: estimate_workbook_bytes(&body.workbook),
             },
             Self::Csv | Self::GeneratedWorkbook => BodyStructureMemento::ProjectionOnly,
         }
@@ -76,14 +72,7 @@ impl SpreadsheetDocumentBody {
         memento: &BodyStructureMemento,
     ) -> Result<BodyRestoreAction, AppError> {
         match memento {
-            BodyStructureMemento::ExcelWorkbookSnapshot { bytes } => {
-                let workbook = read_workbook_from_xlsx_bytes(bytes.to_vec())?;
-                *self = Self::Excel(ExcelDocumentBody {
-                    workbook: Box::new(workbook),
-                });
-                Ok(BodyRestoreAction::RefreshProjectionFromWorkbook)
-            }
-            BodyStructureMemento::ExcelWorkbookClone { workbook } => {
+            BodyStructureMemento::ExcelWorkbookClone { workbook, .. } => {
                 *self = Self::Excel(ExcelDocumentBody {
                     workbook: workbook.clone(),
                 });
@@ -228,9 +217,31 @@ pub enum BodyRestoreAction {
 }
 
 fn estimate_workbook_bytes(workbook: &Workbook) -> usize {
-    writer::write_workbook_to_bytes(workbook)
-        .map(|bytes| bytes.len())
-        .unwrap_or(8 * 1024 * 1024)
+    let mut bytes = std::mem::size_of::<Workbook>() + workbook.sheet_count() * 4096;
+    for worksheet in workbook.sheet_collection() {
+        let (highest_col, highest_row) = worksheet.highest_column_and_row();
+        bytes += worksheet.name().len();
+        bytes += highest_col as usize * 16;
+        bytes += highest_row as usize * 16;
+        bytes += worksheet.column_dimensions().len() * 64;
+        bytes += worksheet.row_dimensions().len() * 64;
+        bytes += worksheet.merge_cells().len() * 48;
+        bytes += worksheet.image_collection().len() * 1024;
+        bytes += worksheet.chart_collection().len() * 2048;
+        bytes += worksheet
+            .cells()
+            .iter()
+            .map(|cell| {
+                128 + cell.value().as_ref().len()
+                    + if cell.is_formula() {
+                        cell.formula().len()
+                    } else {
+                        0
+                    }
+            })
+            .sum::<usize>();
+    }
+    bytes
 }
 
 fn is_csv_document(file_data: &FileData) -> bool {

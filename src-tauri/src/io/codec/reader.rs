@@ -57,10 +57,6 @@ fn read_xlsx_from_bytes(
     })
 }
 
-pub fn read_workbook_from_xlsx_bytes(bytes: Vec<u8>) -> Result<Workbook, AppError> {
-    read_workbook_from_reader(Cursor::new(bytes))
-}
-
 fn read_workbook_from_reader(cursor: Cursor<Vec<u8>>) -> Result<Workbook, AppError> {
     reader::xlsx::read_reader(cursor, true).map_err(|e| AppError::ReadError(e.to_string()))
 }

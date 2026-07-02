@@ -75,20 +75,26 @@ export function useGridGeometry({
   overscanPx,
   getDraftValue,
 }: UseGridGeometryOptions) {
-  const columnWidths = ref<Record<number, number>>({});
-  const rowHeights = ref<Record<number, number>>({});
-  const { isMergedCell, normalizeCellPosition } = useMergeLookup(merges);
+  const committedColumnWidths = ref<Record<number, number>>({});
+  const committedRowHeights = ref<Record<number, number>>({});
+  const previewColumnWidths = ref<Record<number, number>>({});
+  const previewRowHeights = ref<Record<number, number>>({});
+  const { getMergesIntersecting, isMergedCell, normalizeCellPosition } = useMergeLookup(merges);
 
   function syncColumnWidths() {
     const nextWidths = sourceColumnWidths.value ? { ...sourceColumnWidths.value } : {};
-    if (areNumberRecordsEqual(columnWidths.value, nextWidths)) return;
-    columnWidths.value = nextWidths;
+    if (!areNumberRecordsEqual(committedColumnWidths.value, nextWidths)) {
+      committedColumnWidths.value = nextWidths;
+    }
+    previewColumnWidths.value = {};
   }
 
   function syncRowHeights() {
     const nextHeights = sourceRowHeights.value ? { ...sourceRowHeights.value } : {};
-    if (areNumberRecordsEqual(rowHeights.value, nextHeights)) return;
-    rowHeights.value = nextHeights;
+    if (!areNumberRecordsEqual(committedRowHeights.value, nextHeights)) {
+      committedRowHeights.value = nextHeights;
+    }
+    previewRowHeights.value = {};
   }
 
   syncColumnWidths();
@@ -99,8 +105,16 @@ export function useGridGeometry({
 
   const viewportWidth = computed(() => Math.max(0, tableSize.value.width - rowHeaderWidth));
   const viewportHeight = computed(() => Math.max(0, tableSize.value.height - headerHeight));
+  const effectiveColumnWidths = computed(() => ({
+    ...committedColumnWidths.value,
+    ...previewColumnWidths.value,
+  }));
+  const effectiveRowHeights = computed(() => ({
+    ...committedRowHeights.value,
+    ...previewRowHeights.value,
+  }));
   const sheetExtent = computed(() =>
-    calculateSheetExtent(data.value, merges.value, columnWidths.value, rowHeights.value)
+    calculateSheetExtent(data.value, merges.value, effectiveColumnWidths.value, effectiveRowHeights.value)
   );
 
   const columnCount = computed(() => Math.max(columns.value.length, sheetExtent.value.columnCount));
@@ -158,7 +172,20 @@ export function useGridGeometry({
     const topLimit = scrollTop.value - overscanPx;
     const bottomLimit = scrollTop.value + viewportHeight.value + overscanPx;
 
-    return merges.value.flatMap((merge) => {
+    const firstRow = visibleRows.value[0]?.index;
+    const lastRow = visibleRows.value.at(-1)?.index;
+    const firstCol = visibleColumns.value[0]?.index;
+    const lastCol = visibleColumns.value.at(-1)?.index;
+    if (
+      firstRow === undefined
+      || lastRow === undefined
+      || firstCol === undefined
+      || lastCol === undefined
+    ) {
+      return [];
+    }
+
+    return getMergesIntersecting(firstRow, lastRow, firstCol, lastCol).flatMap((merge) => {
       const left = getDataColumnOffset(merge.startCol);
       const top = getRowOffset(merge.startRow);
       const width = getColumnSpanWidth(merge.startCol, merge.endCol);
@@ -213,11 +240,11 @@ export function useGridGeometry({
   );
 
   function getColumnWidth(colIndex: number): number {
-    return columnWidths.value[colIndex] || defaultColumnWidth;
+    return effectiveColumnWidths.value[colIndex] || defaultColumnWidth;
   }
 
   function getRowHeight(rowIndex: number): number {
-    return rowHeights.value[rowIndex] || defaultRowHeight;
+    return effectiveRowHeights.value[rowIndex] || defaultRowHeight;
   }
 
   function getRowOffset(rowIndex: number): number {
@@ -241,17 +268,22 @@ export function useGridGeometry({
   }
 
   function setColumnWidth(colIndex: number, width: number) {
-    columnWidths.value = {
-      ...columnWidths.value,
+    previewColumnWidths.value = {
+      ...previewColumnWidths.value,
       [colIndex]: width,
     };
   }
 
   function setRowHeight(rowIndex: number, height: number) {
-    rowHeights.value = {
-      ...rowHeights.value,
+    previewRowHeights.value = {
+      ...previewRowHeights.value,
       [rowIndex]: height,
     };
+  }
+
+  function resetLayoutFromSource() {
+    syncColumnWidths();
+    syncRowHeights();
   }
 
   function cellFormat(rowIndex: number, colIndex: number): CellFormatProjection | undefined {
@@ -280,6 +312,7 @@ export function useGridGeometry({
     getDataColumnOffset,
     setColumnWidth,
     setRowHeight,
+    resetLayoutFromSource,
     normalizeCellPosition,
   };
 }

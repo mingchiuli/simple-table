@@ -30,6 +30,7 @@ const props = defineProps<{
   canResizeRowsColumns?: boolean;
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
+  layoutResetKey?: number;
   rich?: SheetRichProjection;
 }>();
 
@@ -82,6 +83,7 @@ const {
   getDataColumnOffset,
   setColumnWidth: setPreviewColumnWidth,
   setRowHeight: setPreviewRowHeight,
+  resetLayoutFromSource,
   normalizeCellPosition,
 } = useGridGeometry({
   data: computed(() => props.data),
@@ -101,6 +103,9 @@ const {
   overscanPx: OVERSCAN_PX,
   getDraftValue,
 });
+
+watch(() => props.layoutResetKey, resetLayoutFromSource);
+
 const {
   editingValue,
   isManualClick,

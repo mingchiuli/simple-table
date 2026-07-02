@@ -15,6 +15,7 @@ type UseEditorCommandsOptions = {
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
   applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
+  refreshProjectionFromBackend: () => Promise<void>;
 };
 
 export function useEditorCommands({
@@ -26,6 +27,7 @@ export function useEditorCommands({
   flushPendingCellChanges,
   editorValueForCell,
   applyMutationResponse,
+  refreshProjectionFromBackend,
 }: UseEditorCommandsOptions) {
   const documentSessionStore = useDocumentSessionStore();
   const documentStatusStore = useDocumentStatusStore();
@@ -42,7 +44,7 @@ export function useEditorCommands({
         await applyMutationResponse(await action());
       });
     } catch (error) {
-      await refreshSessionAfterMutationError();
+      await refreshAfterMutationError();
       ElMessage.error(`${message}: ${error}`);
     } finally {
       isLoading.value = false;
@@ -174,7 +176,7 @@ export function useEditorCommands({
         await applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
       });
     } catch (error) {
-      await refreshSessionAfterMutationError();
+      await refreshAfterMutationError({ refreshProjection: true });
       ElMessage.error(`Failed to resize column: ${error}`);
     } finally {
       isLoading.value = false;
@@ -191,7 +193,7 @@ export function useEditorCommands({
         await applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
       });
     } catch (error) {
-      await refreshSessionAfterMutationError();
+      await refreshAfterMutationError({ refreshProjection: true });
       ElMessage.error(`Failed to resize row: ${error}`);
     } finally {
       isLoading.value = false;
@@ -241,9 +243,14 @@ export function useEditorCommands({
     return false;
   }
 
-  async function refreshSessionAfterMutationError() {
+  async function refreshAfterMutationError(
+    options: { refreshProjection?: boolean } = {}
+  ) {
     try {
       documentSessionStore.applyEditorSession(await api.getEditorState());
+      if (options.refreshProjection && fileData.value) {
+        await refreshProjectionFromBackend();
+      }
     } catch (error) {
       console.error("Failed to refresh editor state after mutation error:", error);
     }
