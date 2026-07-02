@@ -80,7 +80,7 @@ pub fn apply_structure_operation(
     workbook: &mut Workbook,
     operation: &AppliedOperation,
 ) -> Result<StructurePatchDiagnostics, AppError> {
-    let unsupported = unsupported_structure_features(workbook);
+    let unsupported = unsupported_structure_features(workbook, operation);
     if !unsupported.is_empty() {
         return Err(AppError::UnsupportedWorkbookStructure(
             unsupported.join(", "),
@@ -182,160 +182,169 @@ pub fn apply_structure_operation(
 
 pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
     let mut detected_features = Vec::new();
-    let mut blocked_structure_reasons = Vec::new();
+    let mut blocked_edit_reasons = Vec::new();
+    let mut blocked_resize_reasons = Vec::new();
+    let mut blocked_row_structure_reasons = Vec::new();
+    let mut blocked_column_structure_reasons = Vec::new();
+    let mut blocked_sheet_structure_reasons = Vec::new();
 
     if !workbook.defined_names().is_empty() {
-        push_detected_feature(
-            &mut detected_features,
-            &mut blocked_structure_reasons,
+        push_detected_feature(&mut detected_features, "workbook defined names");
+        push_block_reason(&mut blocked_row_structure_reasons, "workbook defined names");
+        push_block_reason(
+            &mut blocked_column_structure_reasons,
             "workbook defined names",
-            true,
+        );
+        push_block_reason(
+            &mut blocked_sheet_structure_reasons,
+            "workbook defined names",
         );
     }
     if workbook.workbook_protection().is_some() {
-        push_detected_feature(
-            &mut detected_features,
-            &mut blocked_structure_reasons,
-            "workbook protection",
-            true,
-        );
+        push_detected_feature(&mut detected_features, "workbook protection");
+        push_block_reason(&mut blocked_edit_reasons, "workbook protection");
+        push_block_reason(&mut blocked_resize_reasons, "workbook protection");
+        push_block_reason(&mut blocked_row_structure_reasons, "workbook protection");
+        push_block_reason(&mut blocked_column_structure_reasons, "workbook protection");
+        push_block_reason(&mut blocked_sheet_structure_reasons, "workbook protection");
     }
     if workbook.has_threaded_comments() {
-        push_detected_feature(
-            &mut detected_features,
-            &mut blocked_structure_reasons,
-            "threaded comments",
-            true,
-        );
+        push_detected_feature(&mut detected_features, "threaded comments");
+        push_block_reason(&mut blocked_row_structure_reasons, "threaded comments");
+        push_block_reason(&mut blocked_column_structure_reasons, "threaded comments");
+        push_block_reason(&mut blocked_sheet_structure_reasons, "threaded comments");
     }
     for worksheet in workbook.sheet_collection() {
         if !worksheet.defined_names().is_empty() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "sheet defined names",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "sheet defined names");
+            push_block_reason(&mut blocked_row_structure_reasons, "sheet defined names");
+            push_block_reason(&mut blocked_column_structure_reasons, "sheet defined names");
+            push_block_reason(&mut blocked_sheet_structure_reasons, "sheet defined names");
         }
         if worksheet.has_table() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "tables",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "tables");
+            push_block_reason(&mut blocked_row_structure_reasons, "tables");
+            push_block_reason(&mut blocked_column_structure_reasons, "tables");
         }
         if worksheet.has_pivot_table() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "pivot tables",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "pivot tables");
+            push_block_reason(&mut blocked_row_structure_reasons, "pivot tables");
+            push_block_reason(&mut blocked_column_structure_reasons, "pivot tables");
+            push_block_reason(&mut blocked_sheet_structure_reasons, "pivot tables");
         }
         if !worksheet.chart_collection().is_empty() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "charts",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "charts");
+            push_block_reason(&mut blocked_row_structure_reasons, "charts");
+            push_block_reason(&mut blocked_column_structure_reasons, "charts");
         }
         if !worksheet.image_collection().is_empty() || worksheet.has_drawing_object() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "drawings/images",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "drawings/images");
+            push_block_reason(&mut blocked_row_structure_reasons, "drawings/images");
+            push_block_reason(&mut blocked_column_structure_reasons, "drawings/images");
         }
         if worksheet.data_validations().is_some() || worksheet.data_validations_2010().is_some() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "data validations",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "data validations");
+            push_block_reason(&mut blocked_row_structure_reasons, "data validations");
+            push_block_reason(&mut blocked_column_structure_reasons, "data validations");
         }
         if !worksheet.conditional_formatting_collection().is_empty() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
+            push_detected_feature(&mut detected_features, "conditional formatting");
+            push_block_reason(&mut blocked_row_structure_reasons, "conditional formatting");
+            push_block_reason(
+                &mut blocked_column_structure_reasons,
                 "conditional formatting",
-                true,
             );
         }
         if worksheet.auto_filter().is_some() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "auto filters",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "auto filters");
+            push_block_reason(&mut blocked_row_structure_reasons, "auto filters");
         }
         if worksheet.has_comments() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "comments",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "comments");
+            push_block_reason(&mut blocked_row_structure_reasons, "comments");
+            push_block_reason(&mut blocked_column_structure_reasons, "comments");
         }
         if worksheet.has_threaded_comments() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "threaded comments",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "threaded comments");
+            push_block_reason(&mut blocked_row_structure_reasons, "threaded comments");
+            push_block_reason(&mut blocked_column_structure_reasons, "threaded comments");
         }
         if worksheet.sheet_protection().is_some() {
-            push_detected_feature(
-                &mut detected_features,
-                &mut blocked_structure_reasons,
-                "sheet protection",
-                true,
-            );
+            push_detected_feature(&mut detected_features, "sheet protection");
+            push_block_reason(&mut blocked_edit_reasons, "sheet protection");
+            push_block_reason(&mut blocked_resize_reasons, "sheet protection");
+            push_block_reason(&mut blocked_row_structure_reasons, "sheet protection");
+            push_block_reason(&mut blocked_column_structure_reasons, "sheet protection");
         }
     }
 
-    detected_features.sort_unstable();
-    detected_features.dedup();
-    blocked_structure_reasons.sort_unstable();
-    blocked_structure_reasons.dedup();
+    normalize_reasons(&mut detected_features);
+    normalize_reasons(&mut blocked_edit_reasons);
+    normalize_reasons(&mut blocked_resize_reasons);
+    normalize_reasons(&mut blocked_row_structure_reasons);
+    normalize_reasons(&mut blocked_column_structure_reasons);
+    normalize_reasons(&mut blocked_sheet_structure_reasons);
 
-    let is_protected = blocked_structure_reasons
-        .iter()
-        .any(|reason| reason.contains("protection"));
-
-    let can_structure_shift = blocked_structure_reasons.is_empty();
+    let blocked_structure_reasons = merged_reasons([
+        &blocked_row_structure_reasons,
+        &blocked_column_structure_reasons,
+        &blocked_sheet_structure_reasons,
+    ]);
 
     WorkbookCapabilities {
-        can_edit_cells: !is_protected,
-        can_resize_rows_columns: !is_protected,
-        can_insert_delete_rows: can_structure_shift,
-        can_insert_delete_columns: can_structure_shift,
-        can_insert_delete_sheets: can_structure_shift,
+        can_edit_cells: blocked_edit_reasons.is_empty(),
+        can_resize_rows_columns: blocked_resize_reasons.is_empty(),
+        can_insert_delete_rows: blocked_row_structure_reasons.is_empty(),
+        can_insert_delete_columns: blocked_column_structure_reasons.is_empty(),
+        can_insert_delete_sheets: blocked_sheet_structure_reasons.is_empty(),
         can_native_save: true,
         blocked_structure_reasons,
+        blocked_edit_reasons,
+        blocked_resize_reasons,
+        blocked_row_structure_reasons,
+        blocked_column_structure_reasons,
+        blocked_sheet_structure_reasons,
         detected_features,
     }
 }
 
-pub fn unsupported_structure_features(workbook: &Workbook) -> Vec<String> {
-    workbook_capabilities(workbook).blocked_structure_reasons
+pub fn unsupported_structure_features(
+    workbook: &Workbook,
+    operation: &AppliedOperation,
+) -> Vec<String> {
+    let capabilities = workbook_capabilities(workbook);
+    if operation.is_row_structure_change() {
+        return capabilities.blocked_row_structure_reasons;
+    }
+    if operation.is_column_structure_change() {
+        return capabilities.blocked_column_structure_reasons;
+    }
+    if operation.is_sheet_structure_change() {
+        return capabilities.blocked_sheet_structure_reasons;
+    }
+    Vec::new()
 }
 
-fn push_detected_feature(
-    detected_features: &mut Vec<String>,
-    blocked_structure_reasons: &mut Vec<String>,
-    feature: &str,
-    blocks_structure: bool,
-) {
+fn push_detected_feature(detected_features: &mut Vec<String>, feature: &str) {
     detected_features.push(feature.to_string());
-    if blocks_structure {
-        blocked_structure_reasons.push(feature.to_string());
+}
+
+fn push_block_reason(reasons: &mut Vec<String>, reason: &str) {
+    reasons.push(reason.to_string());
+}
+
+fn normalize_reasons(reasons: &mut Vec<String>) {
+    reasons.sort_unstable();
+    reasons.dedup();
+}
+
+fn merged_reasons<const N: usize>(groups: [&Vec<String>; N]) -> Vec<String> {
+    let mut reasons = Vec::new();
+    for group in groups {
+        reasons.extend(group.iter().cloned());
     }
+    normalize_reasons(&mut reasons);
+    reasons
 }
 
 fn adjust_other_sheet_formulas(

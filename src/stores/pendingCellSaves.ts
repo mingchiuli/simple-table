@@ -1,4 +1,5 @@
 import type { CellValue } from "@/types";
+import { cellToEditorString } from "@/utils/cellValue";
 
 export type CellSaveRequest = {
   sheetIndex: number;
@@ -16,6 +17,12 @@ export type CellSaveState = {
 };
 
 export type PendingCellSavePhase = "idle" | "debouncing" | "saving" | "failed";
+
+export type QueueDraftResult = {
+  queued: boolean;
+  shouldMarkPending: boolean;
+  shouldClearPendingIfIdle: boolean;
+};
 
 export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   state: () => ({
@@ -55,6 +62,51 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
         ...request,
         oldValue: existing?.oldValue ?? active?.oldValue ?? request.oldValue,
       });
+    },
+    applyDraft(
+      key: string,
+      request: CellSaveRequest,
+      committedValue: CellValue
+    ): QueueDraftResult {
+      const active = this.activeCellSaves.get(key);
+      const queued = this.queuedCellSaves.get(key);
+      const value = request.value;
+
+      if (active && value === active.value) {
+        this.setDraft(key, value);
+        this.dropQueued(key);
+        return { queued: false, shouldMarkPending: false, shouldClearPendingIfIdle: true };
+      }
+
+      if (active && value === cellToEditorString(active.oldValue)) {
+        this.setDraft(key, value);
+        this.queueSave(key, request);
+        return { queued: true, shouldMarkPending: true, shouldClearPendingIfIdle: false };
+      }
+
+      if (!active && value === cellToEditorString(committedValue)) {
+        this.clearDraft(key);
+        this.dropQueued(key);
+        return { queued: false, shouldMarkPending: false, shouldClearPendingIfIdle: true };
+      }
+
+      if (this.draftCellValues.get(key) === value && queued?.value === value) {
+        return { queued: false, shouldMarkPending: false, shouldClearPendingIfIdle: false };
+      }
+
+      this.setDraft(key, value);
+      this.queueSave(key, request);
+      return { queued: true, shouldMarkPending: true, shouldClearPendingIfIdle: false };
+    },
+    cancelDraft(key: string, requestForRevert?: CellSaveRequest): QueueDraftResult {
+      this.clearDraft(key);
+      this.dropQueued(key);
+      if (!requestForRevert) {
+        return { queued: false, shouldMarkPending: false, shouldClearPendingIfIdle: true };
+      }
+      this.setDraft(key, requestForRevert.value);
+      this.queueSave(key, requestForRevert);
+      return { queued: true, shouldMarkPending: true, shouldClearPendingIfIdle: false };
     },
     dropQueued(key: string) {
       this.queuedCellSaves.delete(key);

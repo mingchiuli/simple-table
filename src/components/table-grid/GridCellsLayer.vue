@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CellValue } from "@/types";
+import type { CellFormatProjection, CellStyleProjection, CellValue } from "@/types";
 import { CellView, EditableCell } from "@/components/cell";
 
 type CellItem = {
@@ -11,6 +11,8 @@ type CellItem = {
   width: number;
   height: number;
   value: CellValue | undefined;
+  format?: CellFormatProjection;
+  style?: CellStyleProjection;
 };
 
 defineProps<{
@@ -51,6 +53,8 @@ const emit = defineEmits<{
     <CellView
       v-if="!isEditing(cell.rowIndex, cell.colIndex)"
       :value="cell.value"
+      :format="cell.format"
+      :cell-style="cell.style"
       :draft-value="getDraftValue(cell.rowIndex, cell.colIndex)"
       :selected="false"
       :row-height="cell.height"

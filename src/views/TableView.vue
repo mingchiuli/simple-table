@@ -232,6 +232,7 @@ onMounted(async () => {
               :can-resize-rows-columns="capabilities.canResizeRowsColumns"
               :column-widths="currentSheet?.columnWidths"
               :row-heights="currentSheet?.rowHeights"
+              :rich="currentSheet?.rich"
               @cell-change="handleCellChange"
               @cell-editing="handleCellEditing"
               @cell-edit-cancel="handleCellEditCancel"

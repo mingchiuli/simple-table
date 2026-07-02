@@ -277,4 +277,25 @@ mod tests {
             Some(EditorPatch::ColumnInserted { patch }) if patch.sheet_index == 0 && patch.column_index == 1
         ));
     }
+
+    #[test]
+    fn undo_returns_delta_patches_instead_of_full_snapshot() {
+        let registry = make_registry();
+        do_set_cell(registry.clone(), 0, 0, 0, "changed".to_string()).expect("set cell");
+
+        let response = crate::ops::editor_ops::do_undo(registry).expect("undo");
+
+        assert!(
+            !response
+                .patches
+                .iter()
+                .any(|patch| matches!(patch, EditorPatch::FullSnapshot { .. }))
+        );
+        assert!(
+            response
+                .patches
+                .iter()
+                .any(|patch| matches!(patch, EditorPatch::Cells { .. }))
+        );
+    }
 }

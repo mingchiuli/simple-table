@@ -62,19 +62,23 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         return this.data;
       }
       if (response.revision === this.revision && response.patches?.length) {
-        useDocumentStatusStore().formulaStatus = response.formulaStatus;
-        useDocumentStatusStore().capabilities = response.capabilities;
-        useDocumentStatusStore().applyEditorState(response.editorState);
+        throw new Error(`Duplicate editor mutation revision with patches: ${response.revision}`);
+      }
+      if (response.revision === this.revision) {
+        this.applyResponseStatus(response);
         return this.data;
       }
       this.revision = response.revision;
       const nextData = applyDocumentPatches(this.data, response.patches);
       this.data = nextData;
+      this.applyResponseStatus(response);
+      this.clampSelectionToCurrentSheet();
+      return nextData;
+    },
+    applyResponseStatus(response: EditorMutationResponse) {
       useDocumentStatusStore().formulaStatus = response.formulaStatus;
       useDocumentStatusStore().capabilities = response.capabilities;
       useDocumentStatusStore().applyEditorState(response.editorState);
-      this.clampSelectionToCurrentSheet();
-      return nextData;
     },
     applyEditorSession(info: EditorSessionInfo | null | undefined) {
       if (!info) {

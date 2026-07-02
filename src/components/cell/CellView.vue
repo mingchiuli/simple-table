@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import type { CellValue } from '@/types';
+import type { CellFormatProjection, CellStyleProjection, CellValue } from '@/types';
 import { cellKind, cellToDisplayString } from '@/utils/cellValue';
 
 const props = withDefaults(defineProps<{
   value: CellValue | undefined;
+  format?: CellFormatProjection;
+  cellStyle?: CellStyleProjection;
   draftValue?: string;
   selected?: boolean;
   rowHeight?: number;
@@ -22,13 +24,51 @@ const valueKind = computed(() => {
 });
 
 const height = computed(() => `${Math.max(36, props.rowHeight)}px`);
+const cellViewStyle = computed(() => ({
+  height: height.value,
+  color: normalizeColor(props.cellStyle?.fontColor),
+  backgroundColor: normalizeColor(props.cellStyle?.backgroundColor),
+  fontWeight: props.cellStyle?.bold ? "700" : undefined,
+  fontStyle: props.cellStyle?.italic ? "italic" : undefined,
+  justifyContent: horizontalAlign(props.cellStyle?.horizontalAlign),
+  alignItems: verticalAlign(props.cellStyle?.verticalAlign),
+}));
+
+function normalizeColor(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const hex = value.replace(/^#/, "");
+  if (/^[0-9a-fA-F]{8}$/.test(hex)) {
+    return `#${hex.slice(2)}`;
+  }
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+    return `#${hex}`;
+  }
+  return undefined;
+}
+
+function horizontalAlign(value: string | undefined): string | undefined {
+  const normalized = value?.toLowerCase();
+  if (normalized?.includes("left")) return "flex-start";
+  if (normalized?.includes("right")) return "flex-end";
+  if (normalized?.includes("center")) return "center";
+  return undefined;
+}
+
+function verticalAlign(value: string | undefined): string | undefined {
+  const normalized = value?.toLowerCase();
+  if (normalized?.includes("top")) return "flex-start";
+  if (normalized?.includes("bottom")) return "flex-end";
+  if (normalized?.includes("center")) return "center";
+  return undefined;
+}
 </script>
 
 <template>
   <div
     class="cell-view"
     :class="[`kind-${valueKind}`, { selected }]"
-    :style="{ height }"
+    :style="cellViewStyle"
+    :title="format?.numberFormat"
   >
     <span v-if="displayValue" class="cell-content">{{ displayValue }}</span>
   </div>

@@ -47,6 +47,7 @@ export interface FileData {
 }
 
 export interface SheetRichProjection {
+  cellFormats?: Record<string, CellFormatProjection>;
   cellStyles?: Record<string, CellStyleProjection>;
   drawings?: DrawingProjection[];
   hasMoreDrawings?: boolean;
@@ -80,6 +81,11 @@ export interface WorkbookCapabilities {
   canInsertDeleteSheets: boolean;
   canNativeSave: boolean;
   blockedStructureReasons?: string[];
+  blockedEditReasons?: string[];
+  blockedResizeReasons?: string[];
+  blockedRowStructureReasons?: string[];
+  blockedColumnStructureReasons?: string[];
+  blockedSheetStructureReasons?: string[];
   detectedFeatures?: string[];
 }
 
@@ -191,6 +197,11 @@ export interface ColumnDeletedPatch {
   rich?: SheetRichProjection;
 }
 
+export interface SheetShapePatch {
+  sheetIndex: number;
+  rowLengths: number[];
+}
+
 export type EditorPatch =
   | { type: 'Cells'; data: { changes: SheetCellChange[] } }
   | { type: 'Layout'; data: { patch: LayoutPatch } }
@@ -200,6 +211,7 @@ export type EditorPatch =
   | { type: 'ColumnDeleted'; data: { patch: ColumnDeletedPatch } }
   | { type: 'SheetInserted'; data: { patch: SheetInsertedPatch } }
   | { type: 'SheetDeleted'; data: { patch: SheetDeletedPatch } }
+  | { type: 'SheetShape'; data: { patch: SheetShapePatch } }
   | { type: 'FullSnapshot'; data: { fileData: FileData } };
 
 export interface EditorMutationResponse {
@@ -229,6 +241,11 @@ export function defaultWorkbookCapabilities(): WorkbookCapabilities {
     canInsertDeleteSheets: true,
     canNativeSave: true,
     blockedStructureReasons: [],
+    blockedEditReasons: [],
+    blockedResizeReasons: [],
+    blockedRowStructureReasons: [],
+    blockedColumnStructureReasons: [],
+    blockedSheetStructureReasons: [],
     detectedFeatures: [],
   };
 }

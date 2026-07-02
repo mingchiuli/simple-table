@@ -9,6 +9,7 @@ import type {
   SheetCellChange,
   SheetDeletedPatch,
   SheetInsertedPatch,
+  SheetShapePatch,
 } from "@/types";
 import { blankCell } from "@/utils/cellValue";
 
@@ -50,6 +51,9 @@ export function applyDocumentPatches(
         break;
       case "SheetDeleted":
         nextData = applySheetDeleted(nextData, patch.data.patch);
+        break;
+      case "SheetShape":
+        nextData = applySheetShape(nextData, patch.data.patch);
         break;
       default:
         assertNever(patch);
@@ -134,6 +138,26 @@ function applySheetDeleted(data: FileData | null, patch: SheetDeletedPatch): Fil
     sheets.splice(patch.sheetIndex, 1);
   }
   return { ...data, sheets };
+}
+
+function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileData | null {
+  const sheet = data?.sheets[patch.sheetIndex];
+  if (!data || !sheet) return data;
+  const rows = [...sheet.rows];
+  rows.length = patch.rowLengths.length;
+  for (let rowIndex = 0; rowIndex < patch.rowLengths.length; rowIndex += 1) {
+    const targetLength = patch.rowLengths[rowIndex] ?? 0;
+    const row = [...(rows[rowIndex] ?? [])];
+    row.length = targetLength;
+    while (row.length < targetLength) {
+      row.push(blankCell());
+    }
+    rows[rowIndex] = row;
+  }
+  return replaceSheet(data, patch.sheetIndex, {
+    ...sheet,
+    rows,
+  });
 }
 
 function applySnapshot(current: FileData | null, snapshot: FileData): FileData {

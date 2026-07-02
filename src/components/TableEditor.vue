@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CellValue, MergeRange } from '@/types';
+import type { SheetRichProjection } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from '@/components/table-grid';
 import { useGridGeometry } from '@/table-geometry/useGridGeometry';
@@ -29,6 +30,7 @@ const props = defineProps<{
   canResizeRowsColumns?: boolean;
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
+  rich?: SheetRichProjection;
 }>();
 
 const emit = defineEmits<{
@@ -88,6 +90,7 @@ const {
   selectedCell: computed(() => props.selectedCell),
   columnWidths: computed(() => props.columnWidths),
   rowHeights: computed(() => props.rowHeights),
+  rich: computed(() => props.rich),
   tableSize,
   scrollLeft,
   scrollTop,

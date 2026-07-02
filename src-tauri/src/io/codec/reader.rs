@@ -3,8 +3,8 @@ use std::io::Cursor;
 
 use crate::error::AppError;
 use crate::types::{
-    CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData, MergeRange,
-    SheetData, SheetRichProjection,
+    CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
+    MergeRange, SheetData, SheetRichProjection,
 };
 use csv::ReaderBuilder;
 use serde_json::Value;
@@ -190,10 +190,34 @@ fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
 
 fn read_rich_projection(worksheet: &Worksheet) -> SheetRichProjection {
     SheetRichProjection {
+        cell_formats: read_cell_formats(worksheet),
         cell_styles: read_cell_styles(worksheet),
         drawings: read_drawings(worksheet),
         has_more_drawings: false,
     }
+}
+
+fn read_cell_formats(worksheet: &Worksheet) -> HashMap<String, CellFormatProjection> {
+    worksheet
+        .cells()
+        .into_iter()
+        .filter_map(|cell| {
+            let style = cell.style();
+            let number_format = style
+                .numbering_format()
+                .map(|format| format.format_code().to_string())
+                .filter(|value| !value.is_empty());
+            let projection = CellFormatProjection {
+                number_format,
+                style_id: None,
+            };
+            has_format_projection(&projection).then(|| (cell.coordinate().to_string(), projection))
+        })
+        .collect()
+}
+
+fn has_format_projection(format: &CellFormatProjection) -> bool {
+    format.number_format.is_some() || format.style_id.is_some()
 }
 
 fn read_cell_styles(worksheet: &Worksheet) -> HashMap<String, CellStyleProjection> {
@@ -400,5 +424,32 @@ mod tests {
     #[test]
     fn row_height_conversion_uses_pixels() {
         assert_eq!(points_to_px(54.0), 72);
+    }
+
+    #[test]
+    fn rich_projection_includes_cell_format_and_style_metadata() {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.sheet_mut(0).expect("sheet");
+        sheet.cell_mut("A1").set_value_string("styled");
+        sheet.cell_mut("A1").style_mut().font_mut().set_bold(true);
+        sheet
+            .cell_mut("A1")
+            .style_mut()
+            .numbering_format_mut()
+            .set_format_code("0.00");
+
+        let data = read_worksheet(sheet);
+
+        assert_eq!(
+            data.rich
+                .cell_formats
+                .get("A1")
+                .and_then(|format| format.number_format.as_deref()),
+            Some("0.00")
+        );
+        assert_eq!(
+            data.rich.cell_styles.get("A1").and_then(|style| style.bold),
+            Some(true)
+        );
     }
 }

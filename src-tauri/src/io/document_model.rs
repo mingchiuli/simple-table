@@ -5,8 +5,8 @@ use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
 use crate::types::{
-    AppliedOperationResult, CellValue, FileData, MergeRange, SheetCellChange, SheetData,
-    SheetRichProjection, WorkbookCapabilities,
+    AppliedOperationResult, CellValue, FileData, LayoutPatch, MergeRange, SheetCellChange,
+    SheetData, SheetRichProjection, WorkbookCapabilities,
 };
 use crate::types::{FormulaDiagnostics, FormulaStatus};
 use std::collections::{HashMap, HashSet};
@@ -214,6 +214,31 @@ pub(crate) enum MementoSide {
     After,
 }
 
+#[derive(Debug, Clone)]
+pub struct DocumentRestoreResult {
+    pub cell_changes: Vec<SheetCellChange>,
+    pub layout_patches: Vec<LayoutPatch>,
+    pub shape_patches: Vec<SheetShapeRestorePatch>,
+    pub restored_structure: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SheetShapeRestorePatch {
+    pub sheet_index: usize,
+    pub row_lengths: Vec<usize>,
+}
+
+impl DocumentRestoreResult {
+    fn empty() -> Self {
+        Self {
+            cell_changes: Vec::new(),
+            layout_patches: Vec::new(),
+            shape_patches: Vec::new(),
+            restored_structure: false,
+        }
+    }
+}
+
 /// Canonical spreadsheet document.
 ///
 /// Excel files keep the original `Workbook` as the persistence object. `FileData`
@@ -230,6 +255,39 @@ struct DocumentTransaction<'a> {
     document: &'a mut SpreadsheetDocument,
     operation: &'a AppliedOperation,
     rollback: &'a DocumentMementoSide,
+}
+
+struct FormulaProjectionService;
+
+impl FormulaProjectionService {
+    fn rebuild(
+        runtime: &mut FormulaRuntime,
+        status: &mut FormulaStatus,
+        pending_structure_diagnostics: &mut StructurePatchDiagnostics,
+        projection: &mut FileData,
+    ) {
+        match runtime.rebuild_with_diagnostics(projection) {
+            Ok(result) => {
+                let mut diagnostics = result.diagnostics;
+                Self::merge_structure_diagnostics(pending_structure_diagnostics, &mut diagnostics);
+                *status = FormulaStatus::ready(diagnostics);
+            }
+            Err(error) => {
+                eprintln!("Formula runtime rebuild failed: {error}");
+                *runtime = FormulaRuntime::empty();
+                *status = FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default());
+            }
+        }
+    }
+
+    fn merge_structure_diagnostics(
+        pending_structure_diagnostics: &mut StructurePatchDiagnostics,
+        diagnostics: &mut FormulaDiagnostics,
+    ) {
+        diagnostics.skipped_reference_rewrite_count +=
+            pending_structure_diagnostics.skipped_formula_reference_rewrites;
+        *pending_structure_diagnostics = StructurePatchDiagnostics::default();
+    }
 }
 
 impl<'a> DocumentTransaction<'a> {
@@ -408,14 +466,17 @@ impl SpreadsheetDocument {
         &mut self,
         memento: &DocumentMemento,
         side: MementoSide,
-    ) -> Result<(), AppError> {
+    ) -> Result<DocumentRestoreResult, AppError> {
         match side {
             MementoSide::Before => self.restore_memento_side(&memento.before),
             MementoSide::After => self.restore_memento_side(&memento.after),
         }
     }
 
-    fn restore_memento_side(&mut self, side: &DocumentMementoSide) -> Result<(), AppError> {
+    fn restore_memento_side(
+        &mut self,
+        side: &DocumentMementoSide,
+    ) -> Result<DocumentRestoreResult, AppError> {
         match side {
             DocumentMementoSide::Cells(memento) => self.restore_cells(memento),
             DocumentMementoSide::Layout(memento) => self.restore_layout(memento),
@@ -648,7 +709,7 @@ impl SpreadsheetDocument {
             .unwrap_or(CellValue::Null)
     }
 
-    fn restore_cells(&mut self, memento: &CellMemento) -> Result<(), AppError> {
+    fn restore_cells(&mut self, memento: &CellMemento) -> Result<DocumentRestoreResult, AppError> {
         for change in &memento.cells {
             let Some(sheet) = self.projection.sheets.get_mut(change.sheet_index) else {
                 continue;
@@ -661,7 +722,12 @@ impl SpreadsheetDocument {
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
         self.rebuild_formula_runtime();
-        Ok(())
+        Ok(DocumentRestoreResult {
+            cell_changes: memento.cells.clone(),
+            layout_patches: Vec::new(),
+            shape_patches: shape_restore_patches(&memento.sheet_shapes),
+            restored_structure: false,
+        })
     }
 
     fn restore_cell_shapes(&mut self, shapes: &[SheetShapeMemento]) {
@@ -678,9 +744,12 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn restore_layout(&mut self, memento: &LayoutMemento) -> Result<(), AppError> {
+    fn restore_layout(
+        &mut self,
+        memento: &LayoutMemento,
+    ) -> Result<DocumentRestoreResult, AppError> {
         let Some(sheet) = self.projection.sheets.get_mut(memento.sheet_index) else {
-            return Ok(());
+            return Ok(DocumentRestoreResult::empty());
         };
 
         for (col_index, width) in &memento.column_widths {
@@ -721,10 +790,23 @@ impl SpreadsheetDocument {
             }
         }
 
-        self.patch_workbook_layout(memento)
+        self.patch_workbook_layout(memento)?;
+        Ok(DocumentRestoreResult {
+            cell_changes: Vec::new(),
+            layout_patches: vec![LayoutPatch {
+                sheet_index: memento.sheet_index,
+                column_widths: memento.column_widths.clone(),
+                row_heights: memento.row_heights.clone(),
+            }],
+            shape_patches: Vec::new(),
+            restored_structure: false,
+        })
     }
 
-    fn restore_structure(&mut self, memento: &StructureMemento) -> Result<(), AppError> {
+    fn restore_structure(
+        &mut self,
+        memento: &StructureMemento,
+    ) -> Result<DocumentRestoreResult, AppError> {
         match self.body.restore_structure_memento(&memento.body)? {
             BodyRestoreAction::RefreshProjectionFromWorkbook => {
                 self.refresh_projection_from_workbook();
@@ -734,7 +816,12 @@ impl SpreadsheetDocument {
             }
         }
         self.rebuild_formula_runtime();
-        Ok(())
+        Ok(DocumentRestoreResult {
+            cell_changes: Vec::new(),
+            layout_patches: Vec::new(),
+            shape_patches: Vec::new(),
+            restored_structure: true,
+        })
     }
 
     fn recalculate_after_operation(
@@ -888,22 +975,12 @@ impl SpreadsheetDocument {
     }
 
     fn rebuild_formula_runtime(&mut self) {
-        match self
-            .formula_runtime
-            .rebuild_with_diagnostics(&mut self.projection)
-        {
-            Ok(result) => {
-                let mut diagnostics = result.diagnostics;
-                self.merge_structure_diagnostics(&mut diagnostics);
-                self.formula_status = FormulaStatus::ready(diagnostics);
-            }
-            Err(error) => {
-                eprintln!("Formula runtime rebuild failed: {error}");
-                self.formula_runtime = FormulaRuntime::empty();
-                self.formula_status =
-                    FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default());
-            }
-        }
+        FormulaProjectionService::rebuild(
+            &mut self.formula_runtime,
+            &mut self.formula_status,
+            &mut self.pending_structure_diagnostics,
+            &mut self.projection,
+        );
     }
 
     fn patch_workbook_after_operation(
@@ -1083,6 +1160,16 @@ fn push_unique_position(
     if seen.insert((sheet_index, row, col)) {
         positions.push((sheet_index, row, col));
     }
+}
+
+fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<SheetShapeRestorePatch> {
+    shapes
+        .iter()
+        .map(|shape| SheetShapeRestorePatch {
+            sheet_index: shape.sheet_index,
+            row_lengths: shape.row_lengths.clone(),
+        })
+        .collect()
 }
 
 fn ensure_projection_cell_exists(sheet: &mut crate::types::SheetData, row: usize, col: usize) {

@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::io::document_model::{DocumentMemento, MementoSide, SpreadsheetDocument};
+use crate::io::document_model::{
+    DocumentMemento, DocumentRestoreResult, MementoSide, SpreadsheetDocument,
+};
 use crate::ops::EditorCommand;
 use crate::state::content_hash::ContentHash;
 use crate::state::search_index::{
@@ -21,6 +23,7 @@ const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 pub struct ExecutedOperation {
     pub operation: Option<AppliedOperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
+    pub restore: Option<DocumentRestoreResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,14 +42,16 @@ pub struct SearchSheetSnapshot {
 
 struct HistoryEntry {
     memento: DocumentMemento,
+    operation: AppliedOperationResult,
     estimated_bytes: usize,
 }
 
 impl HistoryEntry {
-    fn new(memento: DocumentMemento) -> Self {
+    fn new(memento: DocumentMemento, operation: AppliedOperationResult) -> Self {
         let estimated_bytes = memento.estimated_bytes().max(1);
         Self {
             memento,
+            operation,
             estimated_bytes,
         }
     }
@@ -209,6 +214,7 @@ impl EditorState {
             return Ok(ExecutedOperation {
                 operation: Some(result.operation),
                 cell_changes: result.cell_changes,
+                restore: None,
             });
         }
 
@@ -216,7 +222,9 @@ impl EditorState {
         let after = self.document.capture_memento_side(&operation);
         let memento = SpreadsheetDocument::create_memento(before, after);
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
-        self.push_history(HistoryEntry::new(memento));
+        let operation_result = result.operation;
+        let cell_changes = result.cell_changes;
+        self.push_history(HistoryEntry::new(memento, operation_result.clone()));
         self.clear_redo_stack();
         self.bump_revision();
         if should_mark_search_stale {
@@ -227,8 +235,9 @@ impl EditorState {
         self.update_flags();
         self.refresh_content_hash();
         Ok(ExecutedOperation {
-            operation: Some(result.operation),
-            cell_changes: result.cell_changes,
+            operation: Some(operation_result),
+            cell_changes,
+            restore: None,
         })
     }
 
@@ -238,16 +247,19 @@ impl EditorState {
             self.history_estimated_bytes = self
                 .history_estimated_bytes
                 .saturating_sub(entry.estimated_bytes);
-            self.document
+            let restore = self
+                .document
                 .restore_memento(&entry.memento, MementoSide::Before)?;
+            let operation = entry.operation.clone();
             self.push_redo(entry);
             self.bump_revision();
             self.mark_search_index_stale();
             self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
-                operation: None,
+                operation: Some(operation),
                 cell_changes: Vec::new(),
+                restore: Some(restore),
             }))
         } else {
             Ok(None)
@@ -260,16 +272,19 @@ impl EditorState {
             self.redo_estimated_bytes = self
                 .redo_estimated_bytes
                 .saturating_sub(entry.estimated_bytes);
-            self.document
+            let restore = self
+                .document
                 .restore_memento(&entry.memento, MementoSide::After)?;
+            let operation = entry.operation.clone();
             self.push_history(entry);
             self.bump_revision();
             self.mark_search_index_stale();
             self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
-                operation: None,
+                operation: Some(operation),
                 cell_changes: Vec::new(),
+                restore: Some(restore),
             }))
         } else {
             Ok(None)
@@ -333,27 +348,27 @@ impl EditorState {
         let capabilities = self.capabilities();
         if operation.is_row_structure_change() && !capabilities.can_insert_delete_rows {
             return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_structure_reasons.join(", "),
+                capabilities.blocked_row_structure_reasons.join(", "),
             ));
         }
         if operation.is_column_structure_change() && !capabilities.can_insert_delete_columns {
             return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_structure_reasons.join(", "),
+                capabilities.blocked_column_structure_reasons.join(", "),
             ));
         }
         if operation.is_sheet_structure_change() && !capabilities.can_insert_delete_sheets {
             return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_structure_reasons.join(", "),
+                capabilities.blocked_sheet_structure_reasons.join(", "),
             ));
         }
         if operation.is_layout_change() && !capabilities.can_resize_rows_columns {
             return Err(AppError::UnsupportedWorkbookStructure(
-                "row/column resizing is disabled for this workbook".to_string(),
+                capabilities.blocked_resize_reasons.join(", "),
             ));
         }
         if operation.is_cell_edit() && !capabilities.can_edit_cells {
             return Err(AppError::UnsupportedWorkbookStructure(
-                "cell editing is disabled for this workbook".to_string(),
+                capabilities.blocked_edit_reasons.join(", "),
             ));
         }
         Ok(())
@@ -864,10 +879,10 @@ mod tests {
         assert!(!capabilities.can_resize_rows_columns);
         assert!(!capabilities.can_insert_delete_rows);
         assert!(!capabilities.can_insert_delete_columns);
-        assert!(!capabilities.can_insert_delete_sheets);
+        assert!(capabilities.can_insert_delete_sheets);
         assert!(
             capabilities
-                .blocked_structure_reasons
+                .blocked_row_structure_reasons
                 .contains(&"sheet protection".to_string())
         );
 

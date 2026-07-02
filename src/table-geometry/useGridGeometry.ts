@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from "vue";
-import type { CellValue, MergeRange } from "@/types";
+import type { CellFormatProjection, CellStyleProjection, CellValue, MergeRange, SheetRichProjection } from "@/types";
 import {
   areNumberRecordsEqual,
   buildOffsets,
@@ -29,6 +29,8 @@ export type CellItem = {
   width: number;
   height: number;
   value: CellValue | undefined;
+  format?: CellFormatProjection;
+  style?: CellStyleProjection;
 };
 
 export type MergeOverlayCell = CellItem & {
@@ -43,6 +45,7 @@ type UseGridGeometryOptions = {
   selectedCell: ComputedRef<{ row: number; col: number } | null | undefined>;
   columnWidths: ComputedRef<Record<number, number> | undefined>;
   rowHeights: ComputedRef<Record<number, number> | undefined>;
+  rich: ComputedRef<SheetRichProjection | undefined>;
   tableSize: Ref<{ width: number; height: number }>;
   scrollLeft: Ref<number>;
   scrollTop: Ref<number>;
@@ -61,6 +64,7 @@ export function useGridGeometry({
   selectedCell,
   columnWidths: sourceColumnWidths,
   rowHeights: sourceRowHeights,
+  rich,
   tableSize,
   scrollLeft,
   scrollTop,
@@ -140,6 +144,8 @@ export function useGridGeometry({
           width: column.width,
           height: row.height,
           value: data.value[row.index]?.[column.index],
+          format: cellFormat(row.index, column.index),
+          style: cellStyle(row.index, column.index),
         });
       }
     }
@@ -178,6 +184,8 @@ export function useGridGeometry({
         width,
         height,
         value: data.value[merge.startRow]?.[merge.startCol],
+        format: cellFormat(merge.startRow, merge.startCol),
+        style: cellStyle(merge.startRow, merge.startCol),
         draftValue: getDraftValue(merge.startRow, merge.startCol),
         selected: selectedCell.value?.row === merge.startRow && selectedCell.value?.col === merge.startCol,
       }];
@@ -246,6 +254,14 @@ export function useGridGeometry({
     };
   }
 
+  function cellFormat(rowIndex: number, colIndex: number): CellFormatProjection | undefined {
+    return rich.value?.cellFormats?.[excelCellKey(rowIndex, colIndex)];
+  }
+
+  function cellStyle(rowIndex: number, colIndex: number): CellStyleProjection | undefined {
+    return rich.value?.cellStyles?.[excelCellKey(rowIndex, colIndex)];
+  }
+
   return {
     viewportWidth,
     viewportHeight,
@@ -266,4 +282,15 @@ export function useGridGeometry({
     setRowHeight,
     normalizeCellPosition,
   };
+}
+
+function excelCellKey(rowIndex: number, colIndex: number): string {
+  let col = colIndex + 1;
+  let letters = "";
+  while (col > 0) {
+    const rem = (col - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    col = Math.floor((col - 1) / 26);
+  }
+  return `${letters}${rowIndex + 1}`;
 }

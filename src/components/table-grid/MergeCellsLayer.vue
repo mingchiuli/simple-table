@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CellValue } from "@/types";
+import type { CellFormatProjection, CellStyleProjection, CellValue } from "@/types";
 import { CellView, EditableCell } from "@/components/cell";
 
 type MergeCell = {
@@ -11,6 +11,8 @@ type MergeCell = {
   width: number;
   height: number;
   value: CellValue | undefined;
+  format?: CellFormatProjection;
+  style?: CellStyleProjection;
   draftValue?: string;
   selected: boolean;
 };
@@ -51,6 +53,8 @@ const emit = defineEmits<{
     <CellView
       v-if="!isEditing(mergeCell.rowIndex, mergeCell.colIndex)"
       :value="mergeCell.value"
+      :format="mergeCell.format"
+      :cell-style="mergeCell.style"
       :draft-value="mergeCell.draftValue"
       :selected="false"
       :row-height="mergeCell.height"

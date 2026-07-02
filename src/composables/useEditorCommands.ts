@@ -195,7 +195,7 @@ export function useEditorCommands({
         ? capabilities.canInsertDeleteColumns
         : capabilities.canInsertDeleteSheets;
     if (allowed) return true;
-    const reason = documentStatusStore.capabilities.blockedStructureReasons?.join(", ");
+    const reason = structureBlockReasons(kind).join(", ");
     ElMessage.warning(
       reason
         ? `${structureLabel(kind)} editing is disabled for this workbook: ${reason}`
@@ -208,9 +208,25 @@ export function useEditorCommands({
     return kind === "rows" ? "Row" : kind === "columns" ? "Column" : "Sheet";
   }
 
+  function structureBlockReasons(kind: "rows" | "columns" | "sheets"): string[] {
+    const capabilities = documentStatusStore.capabilities;
+    if (kind === "rows") {
+      return capabilities.blockedRowStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+    }
+    if (kind === "columns") {
+      return capabilities.blockedColumnStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+    }
+    return capabilities.blockedSheetStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+  }
+
   function ensureResizeAllowed(): boolean {
     if (documentStatusStore.capabilities.canResizeRowsColumns) return true;
-    ElMessage.warning("Row and column resizing is disabled for this workbook");
+    const reason = documentStatusStore.capabilities.blockedResizeReasons?.join(", ");
+    ElMessage.warning(
+      reason
+        ? `Row and column resizing is disabled for this workbook: ${reason}`
+        : "Row and column resizing is disabled for this workbook"
+    );
     return false;
   }
 

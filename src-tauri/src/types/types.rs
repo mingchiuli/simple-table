@@ -54,6 +54,15 @@ impl Serialize for CellValue {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CellFormatProjection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_id: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FormulaCellProjection<'a> {
@@ -346,6 +355,8 @@ pub struct FileData {
 #[serde(rename_all = "camelCase")]
 pub struct SheetRichProjection {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cell_formats: HashMap<String, CellFormatProjection>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cell_styles: HashMap<String, CellStyleProjection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drawings: Vec<DrawingProjection>,
@@ -416,6 +427,16 @@ pub struct WorkbookCapabilities {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_structure_reasons: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_edit_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_resize_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_row_structure_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_column_structure_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_sheet_structure_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detected_features: Vec<String>,
 }
 
@@ -429,6 +450,11 @@ impl Default for WorkbookCapabilities {
             can_insert_delete_sheets: true,
             can_native_save: true,
             blocked_structure_reasons: Vec::new(),
+            blocked_edit_reasons: Vec::new(),
+            blocked_resize_reasons: Vec::new(),
+            blocked_row_structure_reasons: Vec::new(),
+            blocked_column_structure_reasons: Vec::new(),
+            blocked_sheet_structure_reasons: Vec::new(),
             detected_features: Vec::new(),
         }
     }
@@ -687,6 +713,14 @@ pub struct ColumnDeletedPatch {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetShapePatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    pub row_lengths: Vec<usize>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum EditorPatch {
     #[serde(rename = "Cells")]
@@ -705,6 +739,8 @@ pub enum EditorPatch {
     SheetInserted { patch: SheetInsertedPatch },
     #[serde(rename = "SheetDeleted")]
     SheetDeleted { patch: SheetDeletedPatch },
+    #[serde(rename = "SheetShape")]
+    SheetShape { patch: SheetShapePatch },
     #[serde(rename = "FullSnapshot")]
     FullSnapshot {
         #[serde(rename = "fileData")]
