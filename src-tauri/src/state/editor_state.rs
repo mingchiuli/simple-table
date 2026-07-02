@@ -603,6 +603,60 @@ mod tests {
     }
 
     #[test]
+    fn structure_formula_rewrite_skips_are_reported_in_diagnostics() {
+        let mut source = umya_spreadsheet::new_file();
+        source.new_sheet("Other").expect("other sheet");
+        {
+            let inputs = source.sheet_mut(0).expect("input sheet");
+            inputs.set_name("Inputs");
+            inputs.cell_mut("A1").set_value_number(1);
+        }
+        {
+            let other = source.sheet_mut(1).expect("other sheet");
+            other.cell_mut("A1").set_formula("SUM(");
+            other.cell_mut("A1").set_formula_result_string("#VALUE!");
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "skipped-rewrite.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("add row");
+
+        match state.formula_status() {
+            FormulaStatus::Ready { diagnostics } => {
+                assert_eq!(diagnostics.skipped_reference_rewrite_count, 1);
+            }
+            status => panic!("expected ready status, got {status:?}"),
+        }
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("skipped-rewrite.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        assert_eq!(
+            saved
+                .sheet(1)
+                .expect("sheet")
+                .cell("A1")
+                .expect("A1")
+                .formula(),
+            "SUM("
+        );
+    }
+
+    #[test]
     fn structure_undo_redo_restores_cross_sheet_formula_rewrites() {
         let mut source = umya_spreadsheet::new_file();
         source.new_sheet("Other").expect("other sheet");

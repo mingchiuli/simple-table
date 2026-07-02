@@ -10,6 +10,7 @@ import type {
   SheetDeletedPatch,
   SheetInsertedPatch,
 } from "@/types";
+import { blankCell } from "@/utils/cellValue";
 
 export function applyDocumentPatches(
   data: FileData | null,
@@ -49,9 +50,6 @@ export function applyDocumentPatches(
         break;
       case "SheetDeleted":
         nextData = applySheetDeleted(nextData, patch.data.patch);
-        break;
-      case "SheetSnapshot":
-        nextData = applySheetSnapshot(nextData, patch.data.sheetIndex, patch.data.sheet);
         break;
       default:
         assertNever(patch);
@@ -146,20 +144,6 @@ function applySnapshot(current: FileData | null, snapshot: FileData): FileData {
   };
 }
 
-function applySheetSnapshot(
-  data: FileData | null,
-  sheetIndex: number,
-  sheetSnapshot: FileData["sheets"][number]
-): FileData | null {
-  if (!data || !data.sheets[sheetIndex]) return data;
-  const nextData = {
-    ...data,
-    sheets: [...data.sheets],
-  };
-  nextData.sheets[sheetIndex] = sheetSnapshot;
-  return nextData;
-}
-
 function replaceSheet(
   data: FileData,
   sheetIndex: number,
@@ -247,13 +231,4 @@ function patchNumberRecord(
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled editor patch: ${JSON.stringify(value)}`);
-}
-
-function blankCell(): CellValue {
-  return {
-    type: "cell",
-    kind: "blank",
-    raw: null,
-    display: "",
-  };
 }

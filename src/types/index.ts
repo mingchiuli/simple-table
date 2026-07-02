@@ -135,6 +135,7 @@ export interface FormulaDiagnostics {
   volatileFormulaCount: number;
   unsupportedDependencyCount: number;
   largeRangeDependencyCount: number;
+  skippedReferenceRewriteCount: number;
 }
 
 export type FormulaStatus =
@@ -199,7 +200,6 @@ export type EditorPatch =
   | { type: 'ColumnDeleted'; data: { patch: ColumnDeletedPatch } }
   | { type: 'SheetInserted'; data: { patch: SheetInsertedPatch } }
   | { type: 'SheetDeleted'; data: { patch: SheetDeletedPatch } }
-  | { type: 'SheetSnapshot'; data: { sheetIndex: number; sheet: SheetData } }
   | { type: 'FullSnapshot'; data: { fileData: FileData } };
 
 export interface EditorMutationResponse {

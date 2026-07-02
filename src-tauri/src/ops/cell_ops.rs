@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::EditorCommand;
 use crate::ops::editor_ops::{
-    cell_delta_mutation_response, layout_mutation_response, snapshot_mutation_response,
+    cell_delta_mutation_response, full_snapshot_mutation_response, layout_mutation_response,
     structural_delta_mutation_response,
 };
 use crate::ops::index_ops::schedule_index_for_response;
@@ -52,7 +52,7 @@ pub fn do_add_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_sheet_snapshot(
+    execute_structural_delta(
         registry,
         EditorCommand::AddRow {
             sheet_index,
@@ -67,7 +67,7 @@ pub fn do_delete_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_sheet_snapshot(
+    execute_structural_delta(
         registry,
         EditorCommand::DeleteRow {
             sheet_index,
@@ -81,7 +81,7 @@ pub fn do_add_column(
     registry: Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_sheet_snapshot(
+    execute_structural_delta(
         registry,
         EditorCommand::AddColumn { sheet_index },
         sheet_index,
@@ -93,7 +93,7 @@ pub fn do_delete_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    execute_sheet_snapshot(
+    execute_structural_delta(
         registry,
         EditorCommand::DeleteColumn {
             sheet_index,
@@ -164,7 +164,7 @@ fn execute_cell_delta(
             result.cell_changes,
         ))
     } else {
-        Ok(snapshot_mutation_response(editor_state, None))
+        Ok(full_snapshot_mutation_response(editor_state, None))
     }
 }
 
@@ -180,7 +180,7 @@ fn execute_structural_snapshot(
             Some(operation) => {
                 structural_delta_mutation_response(editor_state, operation, result.cell_changes)
             }
-            None => snapshot_mutation_response(editor_state, None),
+            None => full_snapshot_mutation_response(editor_state, None),
         }
     };
 
@@ -189,7 +189,7 @@ fn execute_structural_snapshot(
     Ok(response)
 }
 
-fn execute_sheet_snapshot(
+fn execute_structural_delta(
     registry: Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
     _sheet_index: usize,
@@ -202,7 +202,7 @@ fn execute_sheet_snapshot(
             Some(operation) => {
                 structural_delta_mutation_response(editor_state, operation, result.cell_changes)
             }
-            None => snapshot_mutation_response(editor_state, None),
+            None => full_snapshot_mutation_response(editor_state, None),
         }
     };
 

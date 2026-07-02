@@ -9,12 +9,18 @@ pub enum StructureShift {
     DeleteColumns { col_index: usize, count: usize },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormulaReferenceRewrite {
+    pub formula: String,
+    pub skipped: bool,
+}
+
 pub fn adjust_formula_references(
     formula: &str,
     target_sheet_name: &str,
     current_sheet_name: &str,
     shift: StructureShift,
-) -> String {
+) -> FormulaReferenceRewrite {
     rewrite_formula_references(
         formula,
         target_sheet_name,
@@ -27,7 +33,7 @@ pub fn invalidate_deleted_sheet_references(
     formula: &str,
     deleted_sheet_name: &str,
     current_sheet_name: &str,
-) -> String {
+) -> FormulaReferenceRewrite {
     rewrite_formula_references(
         formula,
         deleted_sheet_name,
@@ -90,11 +96,16 @@ fn rewrite_formula_references(
     target_sheet_name: &str,
     current_sheet_name: &str,
     rewrite: ReferenceRewrite,
-) -> String {
+) -> FormulaReferenceRewrite {
     let source = FormulaSource::new(formula);
     let ast = match parse(&source.parsed) {
         Ok(ast) => ast,
-        Err(_) => return formula.to_string(),
+        Err(_) => {
+            return FormulaReferenceRewrite {
+                formula: formula.to_string(),
+                skipped: true,
+            };
+        }
     };
 
     let mut edits = Vec::new();
@@ -107,10 +118,16 @@ fn rewrite_formula_references(
         &mut edits,
     );
     if edits.is_empty() {
-        return formula.to_string();
+        return FormulaReferenceRewrite {
+            formula: formula.to_string(),
+            skipped: false,
+        };
     }
 
-    apply_text_edits(formula, edits).unwrap_or_else(|| formula.to_string())
+    FormulaReferenceRewrite {
+        formula: apply_text_edits(formula, edits).unwrap_or_else(|| formula.to_string()),
+        skipped: false,
+    }
 }
 
 fn collect_reference_edits(
@@ -559,10 +576,15 @@ fn to_one_based(value: usize) -> Option<u32> {
 mod tests {
     use super::*;
 
+    fn rewritten(outcome: FormulaReferenceRewrite) -> String {
+        assert!(!outcome.skipped);
+        outcome.formula
+    }
+
     #[test]
     fn adjusts_formula_references_for_inserted_columns() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "SUM(Inputs!A1:B2)",
                 "Inputs",
                 "Other",
@@ -570,7 +592,7 @@ mod tests {
                     col_index: 1,
                     count: 1,
                 },
-            ),
+            )),
             "SUM(Inputs!A1:C2)"
         );
     }
@@ -578,7 +600,7 @@ mod tests {
     #[test]
     fn adjusts_formula_references_for_deleted_rows() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "Inputs!A1+Inputs!A2",
                 "Inputs",
                 "Other",
@@ -586,7 +608,7 @@ mod tests {
                     row_index: 1,
                     count: 1,
                 },
-            ),
+            )),
             "Inputs!A1+#REF!"
         );
     }
@@ -594,7 +616,7 @@ mod tests {
     #[test]
     fn leaves_reference_like_text_literals_unchanged() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 r#""Inputs!A1"&Inputs!A1"#,
                 "Inputs",
                 "Other",
@@ -602,31 +624,30 @@ mod tests {
                     row_index: 0,
                     count: 1,
                 },
-            ),
+            )),
             r#""Inputs!A1"&Inputs!A2"#
         );
     }
 
     #[test]
     fn leaves_unparseable_formulas_unchanged() {
-        assert_eq!(
-            adjust_formula_references(
-                r#"SOME_UNSUPPORTED_FUNC("Inputs!A1", )"#,
-                "Inputs",
-                "Other",
-                StructureShift::InsertRows {
-                    row_index: 0,
-                    count: 1,
-                },
-            ),
-            r#"SOME_UNSUPPORTED_FUNC("Inputs!A1", )"#
+        let outcome = adjust_formula_references(
+            "SUM(",
+            "Inputs",
+            "Other",
+            StructureShift::InsertRows {
+                row_index: 0,
+                count: 1,
+            },
         );
+        assert!(outcome.skipped);
+        assert_eq!(outcome.formula, "SUM(");
     }
 
     #[test]
     fn shrinks_ranges_when_deleted_rows_touch_range_edges() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "SUM(Inputs!A1:A3)",
                 "Inputs",
                 "Other",
@@ -634,12 +655,12 @@ mod tests {
                     row_index: 0,
                     count: 1,
                 },
-            ),
+            )),
             "SUM(Inputs!A1:A2)"
         );
 
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "SUM(Inputs!A1:A3)",
                 "Inputs",
                 "Other",
@@ -647,7 +668,7 @@ mod tests {
                     row_index: 2,
                     count: 1,
                 },
-            ),
+            )),
             "SUM(Inputs!A1:A2)"
         );
     }
@@ -655,7 +676,7 @@ mod tests {
     #[test]
     fn shrinks_ranges_when_deleted_columns_touch_range_edges() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "SUM(Inputs!A1:C1)",
                 "Inputs",
                 "Other",
@@ -663,12 +684,12 @@ mod tests {
                     col_index: 0,
                     count: 1,
                 },
-            ),
+            )),
             "SUM(Inputs!A1:B1)"
         );
 
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "SUM(Inputs!A1:C1)",
                 "Inputs",
                 "Other",
@@ -676,7 +697,7 @@ mod tests {
                     col_index: 2,
                     count: 1,
                 },
-            ),
+            )),
             "SUM(Inputs!A1:B1)"
         );
     }
@@ -684,7 +705,7 @@ mod tests {
     #[test]
     fn removes_ranges_only_when_deleted_rows_cover_whole_range() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "SUM(Inputs!A1:A3)",
                 "Inputs",
                 "Other",
@@ -692,7 +713,7 @@ mod tests {
                     row_index: 0,
                     count: 3,
                 },
-            ),
+            )),
             "SUM(#REF!)"
         );
     }
@@ -700,7 +721,7 @@ mod tests {
     #[test]
     fn adjusts_formula_references_with_locked_coordinates_and_quoted_sheets() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "'Input Sheet'!$A$1:$B2",
                 "Input Sheet",
                 "Other",
@@ -708,7 +729,7 @@ mod tests {
                     row_index: 1,
                     count: 1,
                 },
-            ),
+            )),
             "'Input Sheet'!$A$1:$B3"
         );
     }
@@ -716,7 +737,7 @@ mod tests {
     #[test]
     fn leaves_other_sheet_references_unchanged() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "Other!A1+Inputs!A1",
                 "Inputs",
                 "Current",
@@ -724,7 +745,7 @@ mod tests {
                     row_index: 0,
                     count: 1,
                 },
-            ),
+            )),
             "Other!A1+Inputs!A2"
         );
     }
@@ -732,7 +753,7 @@ mod tests {
     #[test]
     fn preserves_formula_text_outside_rewritten_reference_tokens() {
         assert_eq!(
-            adjust_formula_references(
+            rewritten(adjust_formula_references(
                 "=sum(  Inputs!a1 , \"Inputs!A1\" , Other!A1 )",
                 "Inputs",
                 "Other",
@@ -740,7 +761,7 @@ mod tests {
                     row_index: 0,
                     count: 1,
                 },
-            ),
+            )),
             "=sum(  Inputs!A2 , \"Inputs!A1\" , Other!A1 )"
         );
     }
@@ -748,11 +769,11 @@ mod tests {
     #[test]
     fn invalidates_deleted_sheet_without_reformatting_formula() {
         assert_eq!(
-            invalidate_deleted_sheet_references(
+            rewritten(invalidate_deleted_sheet_references(
                 "=if( Inputs!A1>0 , \"Inputs!A1\" , Other!A1 )",
                 "Inputs",
                 "Other",
-            ),
+            )),
             "=if( #REF!>0 , \"Inputs!A1\" , Other!A1 )"
         );
     }

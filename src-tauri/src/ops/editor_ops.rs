@@ -36,7 +36,7 @@ fn mutation_response(
     }
 }
 
-pub fn snapshot_mutation_response(
+pub fn full_snapshot_mutation_response(
     editor_state: &EditorState,
     _operation: Option<AppliedOperationResult>,
 ) -> EditorMutationResponse {
@@ -265,7 +265,7 @@ pub fn do_undo(
         match registry_guard.active_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.undo()? {
-                    snapshot_mutation_response(editor_state, result.operation)
+                    full_snapshot_mutation_response(editor_state, result.operation)
                 } else {
                     return Err(AppError::NothingToUndo);
                 }
@@ -288,7 +288,7 @@ pub fn do_redo(
         match registry_guard.active_mut() {
             Some(editor_state) => {
                 if let Some(result) = editor_state.redo()? {
-                    snapshot_mutation_response(editor_state, result.operation)
+                    full_snapshot_mutation_response(editor_state, result.operation)
                 } else {
                     return Err(AppError::NothingToRedo);
                 }

@@ -1,10 +1,12 @@
 use crate::error::AppError;
 use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
+use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, hash_file_content};
 use crate::types::{
-    AppliedOperationResult, CellValue, FileData, SheetCellChange, SheetData, WorkbookCapabilities,
+    AppliedOperationResult, CellValue, FileData, MergeRange, SheetCellChange, SheetData,
+    SheetRichProjection, WorkbookCapabilities,
 };
 use crate::types::{FormulaDiagnostics, FormulaStatus};
 use std::collections::{HashMap, HashSet};
@@ -96,29 +98,112 @@ impl StructureMemento {
     }
 }
 
-pub(crate) struct FileStructureMemento {
-    sheet_count: usize,
-    truncate_from: Option<usize>,
-    sheets: Vec<SheetSnapshot>,
+pub(crate) enum FileStructureMemento {
+    Empty { sheet_count: usize },
+    Row(RowStructureMemento),
+    Column(ColumnStructureMemento),
+    Sheets(SheetTailMemento),
 }
 
 impl FileStructureMemento {
+    fn empty(sheet_count: usize) -> Self {
+        Self::Empty { sheet_count }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Empty { .. } => std::mem::size_of::<Self>(),
+            Self::Row(memento) => memento.estimated_bytes(),
+            Self::Column(memento) => memento.estimated_bytes(),
+            Self::Sheets(memento) => memento.estimated_bytes(),
+        }
+    }
+}
+
+pub(crate) struct RowStructureMemento {
+    sheet_index: usize,
+    row_index: usize,
+    row_count: usize,
+    row: Option<Vec<CellValue>>,
+    merges: Vec<MergeRange>,
+    row_heights: Option<HashMap<usize, u32>>,
+    rich: SheetRichProjection,
+}
+
+impl RowStructureMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .row
+                .as_ref()
+                .map(|row| {
+                    std::mem::size_of::<Vec<CellValue>>()
+                        + row.iter().map(estimate_cell_value_bytes).sum::<usize>()
+                })
+                .unwrap_or_default()
+            + self.merges.len() * std::mem::size_of::<MergeRange>()
+            + self
+                .row_heights
+                .as_ref()
+                .map(|heights| heights.len() * 24)
+                .unwrap_or_default()
+            + estimate_sheet_rich_projection_bytes(&self.rich)
+    }
+}
+
+pub(crate) struct ColumnStructureMemento {
+    sheet_index: usize,
+    col_index: usize,
+    row_lengths: Vec<usize>,
+    values: Vec<Option<CellValue>>,
+    merges: Vec<MergeRange>,
+    column_widths: Option<HashMap<usize, u32>>,
+    rich: SheetRichProjection,
+}
+
+impl ColumnStructureMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.row_lengths.len() * std::mem::size_of::<usize>()
+            + self
+                .values
+                .iter()
+                .flatten()
+                .map(estimate_cell_value_bytes)
+                .sum::<usize>()
+            + self.merges.len() * std::mem::size_of::<MergeRange>()
+            + self
+                .column_widths
+                .as_ref()
+                .map(|widths| widths.len() * 24)
+                .unwrap_or_default()
+            + estimate_sheet_rich_projection_bytes(&self.rich)
+    }
+}
+
+pub(crate) struct SheetTailMemento {
+    sheet_count: usize,
+    truncate_from: usize,
+    sheets: Vec<ProjectionSheetSnapshot>,
+}
+
+impl SheetTailMemento {
     fn estimated_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + self
                 .sheets
                 .iter()
-                .map(SheetSnapshot::estimated_bytes)
+                .map(ProjectionSheetSnapshot::estimated_bytes)
                 .sum::<usize>()
     }
 }
 
-pub(crate) struct SheetSnapshot {
+pub(crate) struct ProjectionSheetSnapshot {
     sheet_index: usize,
     sheet: SheetData,
 }
 
-impl SheetSnapshot {
+impl ProjectionSheetSnapshot {
     fn estimated_bytes(&self) -> usize {
         std::mem::size_of::<Self>() + estimate_sheet_data_bytes(&self.sheet)
     }
@@ -138,6 +223,7 @@ pub struct SpreadsheetDocument {
     body: SpreadsheetDocumentBody,
     formula_runtime: FormulaRuntime,
     formula_status: FormulaStatus,
+    pending_structure_diagnostics: StructurePatchDiagnostics,
 }
 
 struct DocumentTransaction<'a> {
@@ -202,6 +288,7 @@ impl Clone for SpreadsheetDocument {
             body: self.clone_body(),
             formula_runtime,
             formula_status: self.formula_status.clone(),
+            pending_structure_diagnostics: StructurePatchDiagnostics::default(),
         }
     }
 }
@@ -229,6 +316,7 @@ impl SpreadsheetDocument {
             body,
             formula_runtime,
             formula_status,
+            pending_structure_diagnostics: StructurePatchDiagnostics::default(),
         }
     }
 
@@ -462,43 +550,91 @@ impl SpreadsheetDocument {
     }
 
     fn structure_memento(&self, operation: &AppliedOperation) -> StructureMemento {
-        StructureMemento {
-            projection: self.projection_structure_memento(operation),
-            body: self.body.capture_structure_memento(),
-        }
+        let body = self.body.capture_structure_memento();
+        let projection = if matches!(body, BodyStructureMemento::ProjectionOnly) {
+            self.projection_structure_memento(operation)
+        } else {
+            FileStructureMemento::empty(self.projection.sheets.len())
+        };
+
+        StructureMemento { projection, body }
     }
 
     fn projection_structure_memento(&self, operation: &AppliedOperation) -> FileStructureMemento {
         let sheet_count = self.projection.sheets.len();
-        let (sheet_indexes, truncate_from) = match operation {
-            AppliedOperation::AddRow { sheet_index, .. }
-            | AppliedOperation::DeleteRow { sheet_index, .. }
-            | AppliedOperation::AddColumn { sheet_index, .. }
-            | AppliedOperation::DeleteColumn { sheet_index, .. } => (vec![*sheet_index], None),
+        match operation {
+            AppliedOperation::AddRow {
+                sheet_index,
+                row_index,
+                ..
+            }
+            | AppliedOperation::DeleteRow {
+                sheet_index,
+                row_index,
+            } => self
+                .projection
+                .sheets
+                .get(*sheet_index)
+                .map(|sheet| {
+                    FileStructureMemento::Row(RowStructureMemento {
+                        sheet_index: *sheet_index,
+                        row_index: *row_index,
+                        row_count: sheet.rows.len(),
+                        row: sheet.rows.get(*row_index).cloned(),
+                        merges: sheet.merges.clone(),
+                        row_heights: sheet.row_heights.clone(),
+                        rich: sheet.rich.clone(),
+                    })
+                })
+                .unwrap_or_else(|| FileStructureMemento::empty(sheet_count)),
+            AppliedOperation::AddColumn {
+                sheet_index,
+                col_index,
+                ..
+            }
+            | AppliedOperation::DeleteColumn {
+                sheet_index,
+                col_index,
+            } => self
+                .projection
+                .sheets
+                .get(*sheet_index)
+                .map(|sheet| {
+                    FileStructureMemento::Column(ColumnStructureMemento {
+                        sheet_index: *sheet_index,
+                        col_index: *col_index,
+                        row_lengths: sheet.rows.iter().map(Vec::len).collect(),
+                        values: sheet
+                            .rows
+                            .iter()
+                            .map(|row| row.get(*col_index).cloned())
+                            .collect(),
+                        merges: sheet.merges.clone(),
+                        column_widths: sheet.column_widths.clone(),
+                        rich: sheet.rich.clone(),
+                    })
+                })
+                .unwrap_or_else(|| FileStructureMemento::empty(sheet_count)),
             AppliedOperation::AddSheet { sheet_index, .. }
-            | AppliedOperation::DeleteSheet { sheet_index } => (
-                (*sheet_index..sheet_count).collect::<Vec<_>>(),
-                Some(*sheet_index),
-            ),
+            | AppliedOperation::DeleteSheet { sheet_index } => {
+                FileStructureMemento::Sheets(SheetTailMemento {
+                    sheet_count,
+                    truncate_from: *sheet_index,
+                    sheets: (*sheet_index..sheet_count)
+                        .filter_map(|sheet_index| {
+                            self.projection
+                                .sheets
+                                .get(sheet_index)
+                                .cloned()
+                                .map(|sheet| ProjectionSheetSnapshot { sheet_index, sheet })
+                        })
+                        .collect(),
+                })
+            }
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
             | AppliedOperation::SetColumnWidth { .. }
-            | AppliedOperation::SetRowHeight { .. } => (Vec::new(), None),
-        };
-
-        FileStructureMemento {
-            sheet_count,
-            truncate_from,
-            sheets: sheet_indexes
-                .into_iter()
-                .filter_map(|sheet_index| {
-                    self.projection
-                        .sheets
-                        .get(sheet_index)
-                        .cloned()
-                        .map(|sheet| SheetSnapshot { sheet_index, sheet })
-                })
-                .collect(),
+            | AppliedOperation::SetRowHeight { .. } => FileStructureMemento::empty(sheet_count),
         }
     }
 
@@ -594,7 +730,7 @@ impl SpreadsheetDocument {
                 self.refresh_projection_from_workbook();
             }
             BodyRestoreAction::RestoreProjectionOnly => {
-                restore_projection_sheets(&mut self.projection, &memento.projection);
+                restore_projection_structure(&mut self.projection, &memento.projection);
             }
         }
         self.rebuild_formula_runtime();
@@ -684,7 +820,9 @@ impl SpreadsheetDocument {
                 .rebuild_with_diagnostics(&mut self.projection)
             {
                 Ok(result) => {
-                    self.formula_status = FormulaStatus::ready(result.diagnostics);
+                    let mut diagnostics = result.diagnostics;
+                    self.merge_structure_diagnostics(&mut diagnostics);
+                    self.formula_status = FormulaStatus::ready(diagnostics);
                     result.changes
                 }
                 Err(error) => {
@@ -755,7 +893,9 @@ impl SpreadsheetDocument {
             .rebuild_with_diagnostics(&mut self.projection)
         {
             Ok(result) => {
-                self.formula_status = FormulaStatus::ready(result.diagnostics);
+                let mut diagnostics = result.diagnostics;
+                self.merge_structure_diagnostics(&mut diagnostics);
+                self.formula_status = FormulaStatus::ready(diagnostics);
             }
             Err(error) => {
                 eprintln!("Formula runtime rebuild failed: {error}");
@@ -781,7 +921,10 @@ impl SpreadsheetDocument {
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
-        if operation.is_structure_change() && self.body.apply_structure_operation(operation)? {
+        if operation.is_structure_change()
+            && let Some(diagnostics) = self.body.apply_structure_operation(operation)?
+        {
+            self.pending_structure_diagnostics = diagnostics;
             self.refresh_projection_from_workbook();
             self.body
                 .sync_all_merge_ranges_from_projection(&self.projection)?;
@@ -831,39 +974,102 @@ impl SpreadsheetDocument {
     fn clone_body(&self) -> SpreadsheetDocumentBody {
         self.body.clone_body()
     }
+
+    fn merge_structure_diagnostics(&mut self, diagnostics: &mut FormulaDiagnostics) {
+        diagnostics.skipped_reference_rewrite_count += self
+            .pending_structure_diagnostics
+            .skipped_formula_reference_rewrites;
+        self.pending_structure_diagnostics = StructurePatchDiagnostics::default();
+    }
 }
 
-fn restore_projection_sheets(file_data: &mut FileData, memento: &FileStructureMemento) {
-    if let Some(truncate_from) = memento.truncate_from {
-        file_data.sheets.truncate(truncate_from);
-
-        for snapshot in &memento.sheets {
-            if file_data.sheets.len() < snapshot.sheet_index {
-                file_data
-                    .sheets
-                    .resize_with(snapshot.sheet_index, SheetData::default);
-            }
-            if file_data.sheets.len() == snapshot.sheet_index {
-                file_data.sheets.push(snapshot.sheet.clone());
-            } else {
-                file_data.sheets[snapshot.sheet_index] = snapshot.sheet.clone();
-            }
+fn restore_projection_structure(file_data: &mut FileData, memento: &FileStructureMemento) {
+    match memento {
+        FileStructureMemento::Empty { sheet_count } => {
+            file_data.sheets.truncate(*sheet_count);
         }
+        FileStructureMemento::Row(memento) => restore_projection_row(file_data, memento),
+        FileStructureMemento::Column(memento) => restore_projection_column(file_data, memento),
+        FileStructureMemento::Sheets(memento) => restore_projection_sheet_tail(file_data, memento),
+    }
+}
 
-        file_data.sheets.truncate(memento.sheet_count);
+fn restore_projection_row(file_data: &mut FileData, memento: &RowStructureMemento) {
+    let Some(sheet) = file_data.sheets.get_mut(memento.sheet_index) else {
         return;
+    };
+    if sheet.rows.len() > memento.row_count {
+        if memento.row_index < sheet.rows.len() {
+            sheet.rows.remove(memento.row_index);
+        }
+    } else if sheet.rows.len() < memento.row_count {
+        let row = memento.row.clone().unwrap_or_default();
+        sheet
+            .rows
+            .insert(memento.row_index.min(sheet.rows.len()), row);
+    } else if let Some(row) = &memento.row
+        && memento.row_index < sheet.rows.len()
+    {
+        sheet.rows[memento.row_index] = row.clone();
     }
 
-    if file_data.sheets.len() < memento.sheet_count {
-        file_data
-            .sheets
-            .resize_with(memento.sheet_count, SheetData::default);
+    sheet.rows.truncate(memento.row_count);
+    sheet.merges = memento.merges.clone();
+    sheet.row_heights = memento.row_heights.clone();
+    sheet.rich = memento.rich.clone();
+}
+
+fn restore_projection_column(file_data: &mut FileData, memento: &ColumnStructureMemento) {
+    let Some(sheet) = file_data.sheets.get_mut(memento.sheet_index) else {
+        return;
+    };
+
+    if sheet.rows.len() < memento.row_lengths.len() {
+        sheet.rows.resize_with(memento.row_lengths.len(), Vec::new);
     }
+    sheet.rows.truncate(memento.row_lengths.len());
+
+    for (row_index, target_len) in memento.row_lengths.iter().copied().enumerate() {
+        let row = &mut sheet.rows[row_index];
+        let value = memento.values.get(row_index).cloned().flatten();
+        if row.len() > target_len {
+            if memento.col_index < row.len() {
+                row.remove(memento.col_index);
+            }
+        } else if row.len() < target_len {
+            row.insert(
+                memento.col_index.min(row.len()),
+                value.unwrap_or(CellValue::Null),
+            );
+        } else if let Some(value) = value
+            && memento.col_index < row.len()
+        {
+            row[memento.col_index] = value;
+        }
+        row.truncate(target_len);
+    }
+
+    sheet.merges = memento.merges.clone();
+    sheet.column_widths = memento.column_widths.clone();
+    sheet.rich = memento.rich.clone();
+}
+
+fn restore_projection_sheet_tail(file_data: &mut FileData, memento: &SheetTailMemento) {
+    file_data.sheets.truncate(memento.truncate_from);
+
     for snapshot in &memento.sheets {
-        if snapshot.sheet_index < file_data.sheets.len() {
+        if file_data.sheets.len() < snapshot.sheet_index {
+            file_data
+                .sheets
+                .resize_with(snapshot.sheet_index, SheetData::default);
+        }
+        if file_data.sheets.len() == snapshot.sheet_index {
+            file_data.sheets.push(snapshot.sheet.clone());
+        } else {
             file_data.sheets[snapshot.sheet_index] = snapshot.sheet.clone();
         }
     }
+
     file_data.sheets.truncate(memento.sheet_count);
 }
 
@@ -924,6 +1130,16 @@ fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
             .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
             .sum::<usize>()
         + sheet.rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
+}
+
+fn estimate_sheet_rich_projection_bytes(rich: &SheetRichProjection) -> usize {
+    std::mem::size_of::<SheetRichProjection>()
+        + rich
+            .cell_styles
+            .iter()
+            .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
+            .sum::<usize>()
+        + rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
 }
 
 fn estimate_cell_style_projection_bytes(style: &crate::types::CellStyleProjection) -> usize {

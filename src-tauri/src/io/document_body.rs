@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::AppError;
 use crate::io::codec::reader::read_workbook_from_xlsx_bytes;
 use crate::io::codec::writer;
-use crate::io::workbook_state;
+use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
 use crate::types::{FileData, SheetCellChange, WorkbookCapabilities};
 use umya_spreadsheet::Workbook;
@@ -19,7 +19,7 @@ pub struct ExcelDocumentBody {
 }
 
 pub enum BodyStructureMemento {
-    ExcelWorkbookBytes { bytes: Box<[u8]> },
+    ExcelWorkbookSnapshot { bytes: Box<[u8]> },
     ExcelWorkbookClone { workbook: Box<Workbook> },
     ProjectionOnly,
 }
@@ -27,7 +27,7 @@ pub enum BodyStructureMemento {
 impl BodyStructureMemento {
     pub fn estimated_bytes(&self) -> usize {
         match self {
-            BodyStructureMemento::ExcelWorkbookBytes { bytes } => bytes.len(),
+            BodyStructureMemento::ExcelWorkbookSnapshot { bytes } => bytes.len(),
             BodyStructureMemento::ExcelWorkbookClone { workbook } => {
                 estimate_workbook_bytes(workbook)
             }
@@ -60,7 +60,7 @@ impl SpreadsheetDocumentBody {
     pub fn capture_structure_memento(&self) -> BodyStructureMemento {
         match self {
             Self::Excel(body) => match writer::write_workbook_to_bytes(&body.workbook) {
-                Ok(bytes) => BodyStructureMemento::ExcelWorkbookBytes {
+                Ok(bytes) => BodyStructureMemento::ExcelWorkbookSnapshot {
                     bytes: bytes.into_boxed_slice(),
                 },
                 Err(_) => BodyStructureMemento::ExcelWorkbookClone {
@@ -76,7 +76,7 @@ impl SpreadsheetDocumentBody {
         memento: &BodyStructureMemento,
     ) -> Result<BodyRestoreAction, AppError> {
         match memento {
-            BodyStructureMemento::ExcelWorkbookBytes { bytes } => {
+            BodyStructureMemento::ExcelWorkbookSnapshot { bytes } => {
                 let workbook = read_workbook_from_xlsx_bytes(bytes.to_vec())?;
                 *self = Self::Excel(ExcelDocumentBody {
                     workbook: Box::new(workbook),
@@ -133,13 +133,12 @@ impl SpreadsheetDocumentBody {
     pub fn apply_structure_operation(
         &mut self,
         operation: &AppliedOperation,
-    ) -> Result<bool, AppError> {
+    ) -> Result<Option<StructurePatchDiagnostics>, AppError> {
         match self {
-            Self::Excel(body) if operation.is_structure_change() => {
-                workbook_state::apply_structure_operation(&mut body.workbook, operation)?;
-                Ok(true)
-            }
-            Self::Excel(_) | Self::Csv | Self::GeneratedWorkbook => Ok(false),
+            Self::Excel(body) if operation.is_structure_change() => Ok(Some(
+                workbook_state::apply_structure_operation(&mut body.workbook, operation)?,
+            )),
+            Self::Excel(_) | Self::Csv | Self::GeneratedWorkbook => Ok(None),
         }
     }
 

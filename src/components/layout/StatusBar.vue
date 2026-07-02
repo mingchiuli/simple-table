@@ -27,6 +27,9 @@ function formulaWarningText(status: FormulaStatus): string | null {
   if (diagnostics.largeRangeDependencyCount) {
     warnings.push(`${diagnostics.largeRangeDependencyCount} large range`);
   }
+  if (diagnostics.skippedReferenceRewriteCount) {
+    warnings.push(`${diagnostics.skippedReferenceRewriteCount} unshifted ref`);
+  }
   return warnings.length ? `Formula warnings: ${warnings.join(', ')}` : null;
 }
 

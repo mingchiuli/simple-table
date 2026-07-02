@@ -705,12 +705,6 @@ pub enum EditorPatch {
     SheetInserted { patch: SheetInsertedPatch },
     #[serde(rename = "SheetDeleted")]
     SheetDeleted { patch: SheetDeletedPatch },
-    #[serde(rename = "SheetSnapshot")]
-    SheetSnapshot {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        sheet: SheetData,
-    },
     #[serde(rename = "FullSnapshot")]
     FullSnapshot {
         #[serde(rename = "fileData")]
@@ -739,6 +733,7 @@ pub struct FormulaDiagnostics {
     pub volatile_formula_count: usize,
     pub unsupported_dependency_count: usize,
     pub large_range_dependency_count: usize,
+    pub skipped_reference_rewrite_count: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

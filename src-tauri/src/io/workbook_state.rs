@@ -12,6 +12,11 @@ use crate::ops::AppliedOperation;
 use crate::types::{FileData, SheetCellChange, SheetData, WorkbookCapabilities};
 use umya_spreadsheet::{Workbook, Worksheet};
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StructurePatchDiagnostics {
+    pub skipped_formula_reference_rewrites: usize,
+}
+
 pub fn patch_after_operation(
     workbook: &mut Workbook,
     file_data: &mut FileData,
@@ -74,13 +79,15 @@ pub fn patch_after_operation(
 pub fn apply_structure_operation(
     workbook: &mut Workbook,
     operation: &AppliedOperation,
-) -> Result<(), AppError> {
+) -> Result<StructurePatchDiagnostics, AppError> {
     let unsupported = unsupported_structure_features(workbook);
     if !unsupported.is_empty() {
         return Err(AppError::UnsupportedWorkbookStructure(
             unsupported.join(", "),
         ));
     }
+
+    let mut diagnostics = StructurePatchDiagnostics::default();
 
     match operation {
         AppliedOperation::AddRow {
@@ -92,7 +99,7 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.insert_new_row(*row_index as u32 + 1, 1);
             }
-            adjust_other_sheet_formulas(
+            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
                 workbook,
                 &sheet_name,
                 StructureShift::InsertRows {
@@ -109,7 +116,7 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.remove_row(*row_index as u32 + 1, 1);
             }
-            adjust_other_sheet_formulas(
+            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
                 workbook,
                 &sheet_name,
                 StructureShift::DeleteRows {
@@ -127,7 +134,7 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.insert_new_column_by_index(*col_index as u32 + 1, 1);
             }
-            adjust_other_sheet_formulas(
+            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
                 workbook,
                 &sheet_name,
                 StructureShift::InsertColumns {
@@ -144,7 +151,7 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.remove_column_by_index(*col_index as u32 + 1, 1);
             }
-            adjust_other_sheet_formulas(
+            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
                 workbook,
                 &sheet_name,
                 StructureShift::DeleteColumns {
@@ -160,7 +167,8 @@ pub fn apply_structure_operation(
             insert_sheet(workbook, *sheet_index, sheet_data)?;
         }
         AppliedOperation::DeleteSheet { sheet_index } => {
-            invalidate_sheet_references_before_delete(workbook, *sheet_index)?;
+            diagnostics.skipped_formula_reference_rewrites +=
+                invalidate_sheet_references_before_delete(workbook, *sheet_index)?;
             remove_sheet(workbook, *sheet_index)?;
         }
         AppliedOperation::SetCell { .. }
@@ -169,7 +177,7 @@ pub fn apply_structure_operation(
         | AppliedOperation::SetRowHeight { .. } => {}
     }
 
-    Ok(())
+    Ok(diagnostics)
 }
 
 pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
@@ -334,14 +342,17 @@ fn adjust_other_sheet_formulas(
     workbook: &mut Workbook,
     target_sheet_name: &str,
     shift: StructureShift,
-) {
+) -> usize {
+    let mut skipped = 0;
     for worksheet in workbook.sheet_collection_mut() {
         let current_sheet_name = worksheet.name().to_string();
         if current_sheet_name == target_sheet_name {
             continue;
         }
-        adjust_worksheet_formulas(worksheet, target_sheet_name, &current_sheet_name, shift);
+        skipped +=
+            adjust_worksheet_formulas(worksheet, target_sheet_name, &current_sheet_name, shift);
     }
+    skipped
 }
 
 pub fn patch_formula_changes(
@@ -441,24 +452,31 @@ fn adjust_worksheet_formulas(
     target_sheet_name: &str,
     current_sheet_name: &str,
     shift: StructureShift,
-) {
+) -> usize {
+    let mut skipped = 0;
     for cell in worksheet.cells_mut() {
         if !cell.is_formula() {
             continue;
         }
-        let adjusted =
+        let rewrite =
             adjust_formula_references(cell.formula(), target_sheet_name, current_sheet_name, shift);
-        if adjusted != cell.formula() {
-            cell.set_formula(adjusted);
+        if rewrite.skipped {
+            skipped += 1;
+            continue;
+        }
+        if rewrite.formula != cell.formula() {
+            cell.set_formula(rewrite.formula);
         }
     }
+    skipped
 }
 
 fn invalidate_sheet_references_before_delete(
     workbook: &mut Workbook,
     sheet_index: usize,
-) -> Result<(), AppError> {
+) -> Result<usize, AppError> {
     let deleted_sheet_name = sheet_name(workbook, sheet_index)?;
+    let mut skipped = 0;
     for (current_index, worksheet) in workbook.sheet_collection_mut().iter_mut().enumerate() {
         if current_index == sheet_index {
             continue;
@@ -468,17 +486,21 @@ fn invalidate_sheet_references_before_delete(
             if !cell.is_formula() {
                 continue;
             }
-            let adjusted = invalidate_deleted_sheet_references(
+            let rewrite = invalidate_deleted_sheet_references(
                 cell.formula(),
                 &deleted_sheet_name,
                 &current_sheet_name,
             );
-            if adjusted != cell.formula() {
-                cell.set_formula(adjusted);
+            if rewrite.skipped {
+                skipped += 1;
+                continue;
+            }
+            if rewrite.formula != cell.formula() {
+                cell.set_formula(rewrite.formula);
             }
         }
     }
-    Ok(())
+    Ok(skipped)
 }
 
 fn patch_cell(
