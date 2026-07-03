@@ -542,7 +542,6 @@ pub fn refresh_projection_from_workbook(workbook: &Workbook, file_data: &mut Fil
         .collect();
 }
 
-#[cfg(any(test, debug_assertions))]
 pub fn validate_projection_consistency(
     workbook: &Workbook,
     projection: &FileData,
@@ -665,7 +664,6 @@ fn sheet_name(workbook: &Workbook, sheet_index: usize) -> Result<String, AppErro
         .map_err(|e| AppError::WriteError(e.to_string()))
 }
 
-#[cfg(any(test, debug_assertions))]
 fn sheet_difference(expected: &SheetData, actual: &SheetData) -> String {
     if expected.name != actual.name {
         return format!(
@@ -695,7 +693,6 @@ fn sheet_difference(expected: &SheetData, actual: &SheetData) -> String {
     "unknown difference".to_string()
 }
 
-#[cfg(any(test, debug_assertions))]
 fn sheets_are_consistent(expected: &SheetData, actual: &SheetData) -> bool {
     expected.name == actual.name
         && rows_are_consistent(&expected.rows, &actual.rows)
@@ -705,7 +702,6 @@ fn sheets_are_consistent(expected: &SheetData, actual: &SheetData) -> bool {
         && expected.rich == actual.rich
 }
 
-#[cfg(any(test, debug_assertions))]
 fn rows_are_consistent(expected: &[Vec<CellValue>], actual: &[Vec<CellValue>]) -> bool {
     expected.len() == actual.len()
         && expected.iter().zip(actual).all(|(expected, actual)| {
@@ -717,7 +713,6 @@ fn rows_are_consistent(expected: &[Vec<CellValue>], actual: &[Vec<CellValue>]) -
         })
 }
 
-#[cfg(any(test, debug_assertions))]
 fn cells_are_consistent(expected: &CellValue, actual: &CellValue) -> bool {
     match (expected, actual) {
         (CellValue::Null, CellValue::Null) => true,
@@ -753,7 +748,6 @@ fn cells_are_consistent(expected: &CellValue, actual: &CellValue) -> bool {
     }
 }
 
-#[cfg(any(test, debug_assertions))]
 fn formula_results_are_consistent(
     expected_cached: &CellValue,
     expected_error: Option<&str>,
@@ -778,7 +772,6 @@ fn formula_results_are_consistent(
     cells_are_consistent(expected_cached, actual_cached)
 }
 
-#[cfg(any(test, debug_assertions))]
 fn row_difference(expected: &[Vec<CellValue>], actual: &[Vec<CellValue>]) -> String {
     if expected.len() != actual.len() {
         return format!(

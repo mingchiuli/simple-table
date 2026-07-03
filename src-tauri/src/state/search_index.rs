@@ -8,12 +8,15 @@ use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
+#[cfg(test)]
 use crate::types::CellValue;
+use crate::types::SheetData;
 
 const WRITER_ARENA_BYTES: usize = 15_000_000;
 
 struct SchemaFields {
     text: Field,
+    display: Field,
     row: Field,
     col: Field,
     cell_id: Field,
@@ -23,6 +26,7 @@ pub struct SearchSheetIndex {
     index: Index,
     schema: Schema,
     text_field: Field,
+    display_field: Field,
     cell_id_field: Field,
     writer: Arc<Mutex<IndexWriter>>,
 }
@@ -48,6 +52,7 @@ pub struct SearchIndexStamp {
 pub struct SearchWriterHandle {
     pub writer: Arc<Mutex<IndexWriter>>,
     pub text_field: Field,
+    pub display_field: Field,
     pub row_field: Field,
     pub col_field: Field,
     pub cell_id_field: Field,
@@ -58,6 +63,7 @@ pub struct SearchCellText {
     pub row: usize,
     pub col: usize,
     pub text: String,
+    pub display: String,
 }
 
 static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -182,6 +188,7 @@ impl SearchIndexStore {
         Some(SearchWriterHandle {
             writer: entry.index.writer.clone(),
             text_field: entry.index.text_field,
+            display_field: entry.index.display_field,
             row_field,
             col_field,
             cell_id_field: entry.index.cell_id_field,
@@ -255,16 +262,20 @@ impl SearchMatcher {
     }
 }
 
-pub fn collect_sheet_search_text(rows: &[Vec<CellValue>]) -> Vec<SearchCellText> {
-    rows.iter()
+pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
+    sheet
+        .rows
+        .iter()
         .enumerate()
         .flat_map(|(row_idx, row)| {
-            row.iter().enumerate().filter_map(move |(col_idx, cell)| {
-                let text = cell.to_display_string();
+            row.iter().enumerate().filter_map(move |(col_idx, _cell)| {
+                let text = sheet.cell_search_text(row_idx, col_idx);
+                let display = sheet.cell_display_text(row_idx, col_idx);
                 (!text.is_empty()).then_some(SearchCellText {
                     row: row_idx,
                     col: col_idx,
                     text,
+                    display,
                 })
             })
         })
@@ -291,6 +302,7 @@ pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
     for cell in cells {
         if let Err(error) = writer.add_document(doc!(
             fields.text => cell.text.clone(),
+            fields.display => cell.display.clone(),
             fields.row => cell.row as u64,
             fields.col => cell.col as u64,
             fields.cell_id => format!("{}:{}", cell.row, cell.col),
@@ -308,6 +320,7 @@ pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
         index,
         schema,
         text_field: fields.text,
+        display_field: fields.display,
         cell_id_field: fields.cell_id,
         writer: Arc::new(Mutex::new(writer)),
     })
@@ -326,6 +339,8 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
             )
             .set_stored(),
     );
+    let display_field =
+        schema_builder.add_text_field("display", TextOptions::default().set_stored());
     let row_field =
         schema_builder.add_u64_field("row", tantivy::schema::FAST | tantivy::schema::STORED);
     let col_field =
@@ -349,6 +364,7 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
         schema,
         SchemaFields {
             text: text_field,
+            display: display_field,
             row: row_field,
             col: col_field,
             cell_id: cell_id_field,
@@ -379,6 +395,10 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
         Err(_) => return vec![],
     };
     let col_field = match index.schema.get_field("col") {
+        Ok(field) => field,
+        Err(_) => return vec![],
+    };
+    let display_field = match index.schema.get_field("display") {
         Ok(field) => field,
         Err(_) => return vec![],
     };
@@ -416,18 +436,19 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
     let mut results = Vec::new();
     for (_score, doc_address) in top_docs {
         if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address)
-            && let (Some(row_val), Some(col_val), Some(text_val)) = (
+            && let (Some(row_val), Some(col_val), Some(display_val)) = (
                 doc.get_first(row_field),
                 doc.get_first(col_field),
-                doc.get_first(index.text_field),
+                doc.get_first(display_field),
             )
-            && let (Some(row), Some(col), Some(text)) =
-                (row_val.as_u64(), col_val.as_u64(), text_val.as_str())
+            && let (Some(row), Some(col), Some(display)) =
+                (row_val.as_u64(), col_val.as_u64(), display_val.as_str())
         {
             results.push(SearchCellText {
                 row: row as usize,
                 col: col as usize,
-                text: text.to_string(),
+                text: display.to_string(),
+                display: display.to_string(),
             });
         }
     }
@@ -437,9 +458,17 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{CellFormatProjection, SheetRichProjection};
+    use serde_json::Value;
+    use std::collections::HashMap;
 
     fn index_rows(rows: &[Vec<CellValue>]) -> SearchSheetIndex {
-        let cells = collect_sheet_search_text(rows);
+        let sheet = SheetData {
+            name: "Test".to_string(),
+            rows: rows.to_vec(),
+            ..Default::default()
+        };
+        let cells = collect_sheet_search_text(&sheet);
         build_sheet_index(&cells).expect("index")
     }
 
@@ -458,6 +487,7 @@ mod tests {
                 row: 0,
                 col: 0,
                 text: "indexed text".to_string(),
+                display: "indexed text".to_string(),
             }])
         );
 
@@ -476,6 +506,7 @@ mod tests {
                 row: 0,
                 col: 0,
                 text: "indexed text".to_string(),
+                display: "indexed text".to_string(),
             }])
         );
     }
@@ -506,5 +537,30 @@ mod tests {
         let matcher = SearchMatcher::new("indexed text").expect("matcher");
         assert!(matcher.matches("old indexed text value"));
         assert!(!matcher.matches("indexed only"));
+    }
+
+    #[test]
+    fn collect_search_text_includes_raw_and_formatted_display() {
+        let sheet = SheetData {
+            name: "Test".to_string(),
+            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
+            rich: SheetRichProjection {
+                cell_formats: HashMap::from([(
+                    "A1".to_string(),
+                    CellFormatProjection {
+                        number_format: Some("0%".to_string()),
+                        style_id: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cells = collect_sheet_search_text(&sheet);
+
+        assert_eq!(cells[0].display, "40%");
+        assert!(cells[0].text.contains("40%"));
+        assert!(cells[0].text.contains("0.4"));
     }
 }

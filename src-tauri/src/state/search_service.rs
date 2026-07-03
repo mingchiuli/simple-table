@@ -9,7 +9,9 @@ use crate::state::search_index::{
     SearchCellText, SearchIndexStamp, build_sheet_index, collect_sheet_search_text,
 };
 use crate::state::state::ActiveDocumentStore;
-use crate::types::{CellValue, EditorMutationResponse, EditorPatch};
+#[cfg(test)]
+use crate::types::CellValue;
+use crate::types::{EditorMutationResponse, EditorPatch};
 
 enum IndexJob {
     Rebuild {
@@ -24,7 +26,8 @@ enum IndexJob {
         stamp: SearchIndexStamp,
         row: usize,
         col: usize,
-        new_text: String,
+        search_text: String,
+        display_text: String,
         registry: Arc<RwLock<ActiveDocumentStore>>,
     },
 }
@@ -33,7 +36,8 @@ struct CellIndexUpdate {
     stamp: SearchIndexStamp,
     row: usize,
     col: usize,
-    new_text: String,
+    search_text: String,
+    display_text: String,
 }
 
 impl IndexJob {
@@ -130,7 +134,8 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
             stamp,
             row,
             col,
-            new_text,
+            search_text,
+            display_text,
             ..
         } => {
             if entry.rebuild.is_none() {
@@ -149,7 +154,8 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
                         stamp,
                         row,
                         col,
-                        new_text,
+                        search_text,
+                        display_text,
                     },
                 );
             }
@@ -240,7 +246,7 @@ fn run_rebuild(
                 .file_data()
                 .sheets
                 .get(sheet_index)
-                .map(|sheet| collect_sheet_search_text(&sheet.rows))
+                .map(collect_sheet_search_text)
         }),
         Err(_) => None,
     };
@@ -282,9 +288,10 @@ fn run_incremental(
     for op in ops {
         let cell_id = format!("{}:{}", op.row, op.col);
         writer.delete_term(Term::from_field_text(handle.cell_id_field, &cell_id));
-        if !op.new_text.is_empty()
+        if !op.search_text.is_empty()
             && let Err(error) = writer.add_document(doc!(
-                handle.text_field => op.new_text.clone(),
+                handle.text_field => op.search_text.clone(),
+                handle.display_field => op.display_text.clone(),
                 handle.row_field => op.row as u64,
                 handle.col_field => op.col as u64,
                 handle.cell_id_field => cell_id,
@@ -337,15 +344,23 @@ pub fn spawn_update_cell_index(
     sheet_index: usize,
     row: usize,
     col: usize,
-    new_value: &CellValue,
     registry: Arc<RwLock<ActiveDocumentStore>>,
 ) {
-    let stamp = match registry.read() {
-        Ok(guard) => guard
-            .get(document_id)
-            .map(|editor| editor.search_index_stamp())
-            .unwrap_or_default(),
-        Err(_) => SearchIndexStamp::default(),
+    let (stamp, search_text, display_text) = match registry.read() {
+        Ok(guard) => {
+            let Some(editor) = guard.get(document_id) else {
+                return;
+            };
+            let Some(snapshot) = editor.search_cell_snapshot(sheet_index, row, col) else {
+                return;
+            };
+            (
+                editor.search_index_stamp(),
+                snapshot.search_text,
+                snapshot.text,
+            )
+        }
+        Err(_) => return,
     };
     enqueue_index_job(IndexJob::UpdateCell {
         document_id,
@@ -353,7 +368,8 @@ pub fn spawn_update_cell_index(
         stamp,
         row,
         col,
-        new_text: new_value.to_display_string(),
+        search_text,
+        display_text,
         registry,
     });
 }
@@ -373,7 +389,6 @@ pub fn schedule_index_for_response(
                         change.sheet_index,
                         change.row,
                         change.col,
-                        &change.value,
                         registry.clone(),
                     );
                 }
@@ -481,7 +496,8 @@ mod tests {
                 stamp,
                 row: 0,
                 col: 0,
-                new_text: "intermediate".to_string(),
+                search_text: "intermediate".to_string(),
+                display_text: "intermediate".to_string(),
                 registry: registry.clone(),
             },
         );
@@ -493,7 +509,8 @@ mod tests {
                 stamp,
                 row: 0,
                 col: 0,
-                new_text: "latest".to_string(),
+                search_text: "latest".to_string(),
+                display_text: "latest".to_string(),
                 registry: registry.clone(),
             },
         );
@@ -504,7 +521,7 @@ mod tests {
             sheet
                 .incremental
                 .get(&(0, 0))
-                .map(|update| update.new_text.as_str()),
+                .map(|update| update.search_text.as_str()),
             Some("latest")
         );
     }
@@ -523,7 +540,8 @@ mod tests {
                 stamp,
                 row: 0,
                 col: 0,
-                new_text: "latest".to_string(),
+                search_text: "latest".to_string(),
+                display_text: "latest".to_string(),
                 registry: registry.clone(),
             },
         );
@@ -589,7 +607,8 @@ mod tests {
                 stamp: current_stamp(&registry, document_id),
                 row: 0,
                 col: 0,
-                new_text: "orange".to_string(),
+                search_text: "orange".to_string(),
+                display_text: "orange".to_string(),
             }],
         );
 
@@ -635,7 +654,8 @@ mod tests {
                 stamp,
                 row: 0,
                 col: 0,
-                new_text: "new".to_string(),
+                search_text: "new".to_string(),
+                display_text: "new".to_string(),
             }],
         );
 

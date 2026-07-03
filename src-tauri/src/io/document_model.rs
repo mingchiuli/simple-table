@@ -319,6 +319,13 @@ impl<'a> DocumentTransaction<'a> {
             return Err(error);
         }
 
+        if self.operation.is_structure_change()
+            && let Err(error) = self.document.validate_persisted_projection_consistency()
+        {
+            self.rollback_after_failure(&error)?;
+            return Err(error);
+        }
+
         if let Err(error) = self.document.validate_projection_consistency() {
             self.rollback_after_failure(&error)?;
             return Err(error);
@@ -399,6 +406,18 @@ impl SpreadsheetDocument {
         &self.projection
     }
 
+    pub fn persistence_snapshot(&self) -> Self {
+        Self {
+            projection: self.projection.clone(),
+            body: self.clone_body(),
+            cached_capabilities: self.cached_capabilities.clone(),
+            formula_runtime: FormulaRuntime::empty(),
+            formula_status: self.formula_status.clone(),
+            pending_structure_diagnostics: self.pending_structure_diagnostics,
+            transaction_failure: self.transaction_failure.clone(),
+        }
+    }
+
     pub fn update_identity(&mut self, path: String, file_name: String) {
         self.projection.path = path;
         self.projection.file_name = file_name;
@@ -442,6 +461,7 @@ impl SpreadsheetDocument {
         if let Some(reason) = &self.transaction_failure {
             return Err(AppError::DocumentStateInvalid(reason.clone()));
         }
+        self.validate_persisted_projection_consistency()?;
         self.body
             .generate_file_bytes_for_target(&self.projection, target_path_or_name)
     }
@@ -871,6 +891,7 @@ impl SpreadsheetDocument {
         if !formula_changes.is_empty() {
             self.patch_workbook_formula_changes(&formula_changes)?;
         }
+        self.validate_persisted_projection_consistency()?;
         self.validate_projection_consistency()?;
         let mut patches =
             restore_structure_patches(&current_shape, &memento.projection, &self.projection);
@@ -1063,16 +1084,14 @@ impl SpreadsheetDocument {
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
-        if operation.is_structure_change()
-            && let Some(diagnostics) = self.body.apply_structure_operation(operation)?
+        if let Some(result) = self
+            .body
+            .apply_structure_operation(&mut self.projection, operation)?
         {
-            self.pending_structure_diagnostics = diagnostics;
-            self.refresh_projection_from_workbook();
-            self.body
-                .sync_all_merge_ranges_from_projection(&self.projection)?;
-            self.refresh_projection_from_workbook();
+            self.pending_structure_diagnostics = result.diagnostics;
             self.refresh_capabilities();
-            return Ok(operation.projected_result_from_current_file(&self.projection));
+            self.validate_persisted_projection_consistency()?;
+            return Ok(result.result);
         }
 
         Ok(operation
@@ -1130,6 +1149,11 @@ impl SpreadsheetDocument {
     #[cfg(not(any(test, debug_assertions)))]
     fn validate_projection_consistency(&self) -> Result<(), AppError> {
         Ok(())
+    }
+
+    fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
+        self.body
+            .validate_persisted_projection_consistency(&self.projection)
     }
 
     pub fn transaction_failure(&self) -> Option<&str> {

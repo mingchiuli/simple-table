@@ -31,6 +31,7 @@ pub struct SearchCellSnapshot {
     pub row: usize,
     pub col: usize,
     pub text: String,
+    pub search_text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,7 @@ impl EditorState {
                         row: cell.row,
                         col: cell.col,
                         text: cell.text,
+                        search_text: cell.display,
                     })
                     .collect()
             })
@@ -197,16 +199,28 @@ impl EditorState {
                 .iter()
                 .enumerate()
                 .flat_map(|(row_idx, row)| {
-                    row.iter().enumerate().filter_map(move |(col_idx, cell)| {
-                        let text = cell.to_display_string();
-                        (!text.is_empty()).then_some(SearchCellSnapshot {
-                            row: row_idx,
-                            col: col_idx,
-                            text,
-                        })
+                    row.iter().enumerate().filter_map(move |(col_idx, _cell)| {
+                        self.search_cell_snapshot(sheet_index, row_idx, col_idx)
+                            .filter(|cell| !cell.search_text.is_empty())
                     })
                 })
                 .collect(),
+        })
+    }
+
+    pub fn search_cell_snapshot(
+        &self,
+        sheet_index: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<SearchCellSnapshot> {
+        let sheet = self.file_data().sheets.get(sheet_index)?;
+        sheet.rows.get(row)?.get(col)?;
+        Some(SearchCellSnapshot {
+            row,
+            col,
+            text: sheet.cell_display_text(row, col),
+            search_text: sheet.cell_search_text(row, col),
         })
     }
 
@@ -219,12 +233,17 @@ impl EditorState {
         self.saved_content_hash = self.current_content_hash;
     }
 
+    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
         self.document
             .generate_file_bytes_for_target(target_path_or_name)
+    }
+
+    pub fn document_snapshot(&self) -> crate::io::document_model::SpreadsheetDocument {
+        self.document.persistence_snapshot()
     }
 
     /// 执行命令并记录到历史，返回增量结果。

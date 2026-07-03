@@ -1,4 +1,5 @@
 use crate::state::state::EditorStateInfo;
+use serde::ser::{SerializeMap, SerializeStruct};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -91,6 +92,35 @@ impl CellValue {
         }
     }
 
+    pub fn to_display_string_with_format(&self, format: Option<&CellFormatProjection>) -> String {
+        match self {
+            CellValue::Formula {
+                cached_value,
+                error,
+                ..
+            } => error
+                .clone()
+                .unwrap_or_else(|| cached_value.to_display_string_with_format(format)),
+            CellValue::Number(number) => format
+                .and_then(|format| format.number_format.as_deref())
+                .and_then(|pattern| format_number_with_excel_pattern(number, pattern))
+                .unwrap_or_else(|| self.to_display_string()),
+            _ => self.to_display_string(),
+        }
+    }
+
+    pub fn to_search_string_with_format(&self, format: Option<&CellFormatProjection>) -> String {
+        let display = self.to_display_string_with_format(format);
+        let raw = self.to_display_string();
+        if raw.is_empty() || raw == display {
+            display
+        } else if display.is_empty() {
+            raw
+        } else {
+            format!("{display}\n{raw}")
+        }
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             CellValue::Null => "blank",
@@ -142,6 +172,107 @@ impl CellValue {
             _ => self.clone(),
         }
     }
+}
+
+fn format_number_with_excel_pattern(number: &Value, pattern: &str) -> Option<String> {
+    let value = number.as_f64()?;
+    if !value.is_finite() {
+        return None;
+    }
+
+    let normalized = pattern.to_ascii_lowercase();
+    if normalized.contains("yy") || normalized.contains("dd") || normalized.contains("m/") {
+        return format_excel_date(value, pattern);
+    }
+
+    let percent = pattern.contains('%');
+    let displayed = if percent { value * 100.0 } else { value };
+    let decimals = decimal_places(pattern);
+    let formatted = format_fixed_number(displayed, decimals, pattern.contains(','));
+    let currency = pattern
+        .chars()
+        .find(|value| matches!(value, '$' | '¥' | '￥' | '€' | '£'))
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+
+    Some(format!(
+        "{currency}{formatted}{}",
+        if percent { "%" } else { "" }
+    ))
+}
+
+fn decimal_places(pattern: &str) -> usize {
+    let Some(decimal_start) = pattern.find('.') else {
+        return 0;
+    };
+    pattern[decimal_start + 1..]
+        .chars()
+        .take_while(|value| matches!(value, '0' | '#'))
+        .count()
+}
+
+fn format_fixed_number(value: f64, decimals: usize, use_grouping: bool) -> String {
+    let formatted = format!("{value:.decimals$}");
+    if !use_grouping {
+        return formatted;
+    }
+
+    let (negative, unsigned) = formatted
+        .strip_prefix('-')
+        .map(|value| (true, value))
+        .unwrap_or((false, formatted.as_str()));
+    let (integer, fraction) = unsigned
+        .split_once('.')
+        .map(|(integer, fraction)| (integer, Some(fraction)))
+        .unwrap_or((unsigned, None));
+
+    let mut grouped = String::new();
+    for (index, ch) in integer.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.insert(0, ',');
+        }
+        grouped.insert(0, ch);
+    }
+
+    if negative {
+        grouped.insert(0, '-');
+    }
+    if let Some(fraction) = fraction {
+        grouped.push('.');
+        grouped.push_str(fraction);
+    }
+    grouped
+}
+
+fn format_excel_date(value: f64, pattern: &str) -> Option<String> {
+    let days = value.round() as i64;
+    let (year, month, day) = excel_serial_date_to_ymd(days)?;
+    if pattern.contains('/') {
+        Some(format!("{year:04}/{month:02}/{day:02}"))
+    } else {
+        Some(format!("{year:04}-{month:02}-{day:02}"))
+    }
+}
+
+fn excel_serial_date_to_ymd(days: i64) -> Option<(i32, u32, u32)> {
+    // Excel's 1900 date system is represented here with the same 1899-12-30
+    // epoch used by the frontend display formatter.
+    civil_from_days(days - 25_569)
+}
+
+fn civil_from_days(days: i64) -> Option<(i32, u32, u32)> {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    Some((i32::try_from(year).ok()?, month as u32, day as u32))
 }
 
 pub fn normalize_formula_text(formula: String) -> String {
@@ -317,7 +448,7 @@ pub struct MergeRange {
     pub end_col: u16,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetData {
     pub name: String,
@@ -334,6 +465,171 @@ pub struct SheetData {
     /// original workbook remains the persistence source for styles and drawings.
     #[serde(default)]
     pub rich: SheetRichProjection,
+}
+
+impl Serialize for SheetData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("SheetData", 6)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("rows", &SheetRowsProjection { sheet: self })?;
+        state.serialize_field("merges", &self.merges)?;
+        if let Some(column_widths) = &self.column_widths {
+            state.serialize_field("columnWidths", column_widths)?;
+        }
+        if let Some(row_heights) = &self.row_heights {
+            state.serialize_field("rowHeights", row_heights)?;
+        }
+        state.serialize_field("rich", &self.rich)?;
+        state.end()
+    }
+}
+
+impl SheetData {
+    pub fn cell_format_at(&self, row: usize, col: usize) -> Option<CellFormatProjection> {
+        let key = excel_cell_key(row, col);
+        let explicit = self.rich.cell_formats.get(&key);
+        let style_number_format = self
+            .rich
+            .cell_styles
+            .get(&key)
+            .and_then(|style| style.number_format.clone());
+
+        if explicit.is_none() && style_number_format.is_none() {
+            return None;
+        }
+
+        Some(CellFormatProjection {
+            number_format: explicit
+                .and_then(|format| format.number_format.clone())
+                .or(style_number_format),
+            style_id: explicit.and_then(|format| format.style_id.clone()),
+        })
+    }
+
+    pub fn cell_display_text(&self, row: usize, col: usize) -> String {
+        self.rows
+            .get(row)
+            .and_then(|row_data| row_data.get(col))
+            .map(|cell| cell.to_display_string_with_format(self.cell_format_at(row, col).as_ref()))
+            .unwrap_or_default()
+    }
+
+    pub fn cell_search_text(&self, row: usize, col: usize) -> String {
+        self.rows
+            .get(row)
+            .and_then(|row_data| row_data.get(col))
+            .map(|cell| cell.to_search_string_with_format(self.cell_format_at(row, col).as_ref()))
+            .unwrap_or_default()
+    }
+}
+
+struct SheetRowsProjection<'a> {
+    sheet: &'a SheetData,
+}
+
+impl Serialize for SheetRowsProjection<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut rows = serializer.serialize_seq(Some(self.sheet.rows.len()))?;
+        for (row_index, row) in self.sheet.rows.iter().enumerate() {
+            rows.serialize_element(&SheetRowProjection {
+                sheet: self.sheet,
+                row_index,
+                row,
+            })?;
+        }
+        rows.end()
+    }
+}
+
+struct SheetRowProjection<'a> {
+    sheet: &'a SheetData,
+    row_index: usize,
+    row: &'a [CellValue],
+}
+
+impl Serialize for SheetRowProjection<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut row = serializer.serialize_seq(Some(self.row.len()))?;
+        for (col_index, cell) in self.row.iter().enumerate() {
+            row.serialize_element(&CellValueProjection {
+                cell,
+                format: self.sheet.cell_format_at(self.row_index, col_index),
+            })?;
+        }
+        row.end()
+    }
+}
+
+struct CellValueProjection<'a> {
+    cell: &'a CellValue,
+    format: Option<CellFormatProjection>,
+}
+
+impl Serialize for CellValueProjection<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut len = 4;
+        if matches!(self.cell, CellValue::Formula { .. }) {
+            len += 1;
+        }
+        if self.format.is_some() {
+            len += 1;
+        }
+
+        let mut map = serializer.serialize_map(Some(len))?;
+        map.serialize_entry("type", "cell")?;
+        map.serialize_entry("kind", self.cell.kind())?;
+        map.serialize_entry("raw", &self.cell.raw_json_value())?;
+        map.serialize_entry(
+            "display",
+            &self
+                .cell
+                .to_display_string_with_format(self.format.as_ref()),
+        )?;
+        if let Some(format) = &self.format {
+            map.serialize_entry("format", format)?;
+        }
+        if let CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } = self.cell
+        {
+            let formula_projection = FormulaCellProjection {
+                formula,
+                cached_value,
+                error: error.as_deref(),
+            };
+            map.serialize_entry("formula", &formula_projection)?;
+        }
+        map.end()
+    }
+}
+
+fn excel_cell_key(row_index: usize, col_index: usize) -> String {
+    let mut col = col_index + 1;
+    let mut letters = String::new();
+    while col > 0 {
+        let rem = (col - 1) % 26;
+        letters.insert(0, (b'A' + rem as u8) as char);
+        col = (col - 1) / 26;
+    }
+    format!("{letters}{}", row_index + 1)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -742,6 +1038,7 @@ impl FormulaStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn parses_user_cell_text_on_backend() {
@@ -754,5 +1051,29 @@ mod tests {
             parse_cell_text("=A1+1"),
             CellValue::formula("=A1+1", CellValue::Null)
         );
+    }
+
+    #[test]
+    fn sheet_serialization_projects_formatted_cell_display() {
+        let sheet = SheetData {
+            name: "Sheet1".to_string(),
+            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
+            rich: SheetRichProjection {
+                cell_formats: HashMap::from([(
+                    "A1".to_string(),
+                    CellFormatProjection {
+                        number_format: Some("0%".to_string()),
+                        style_id: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&sheet).expect("serialize sheet");
+        assert_eq!(json["rows"][0][0]["display"], "40%");
+        assert_eq!(json["rows"][0][0]["raw"], 0.4);
+        assert_eq!(json["rows"][0][0]["format"]["numberFormat"], "0%");
     }
 }

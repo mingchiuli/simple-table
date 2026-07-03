@@ -7,7 +7,7 @@ export function formatCellDisplay(
   if (!value) return "";
   if (value.formula?.error) return value.formula.error;
   const raw = value.raw;
-  const numberFormat = format?.numberFormat;
+  const numberFormat = format?.numberFormat ?? value.format?.numberFormat;
   if (numberFormat && typeof raw === "number") {
     return formatNumberWithExcelPattern(raw, numberFormat) ?? value.display ?? String(raw);
   }

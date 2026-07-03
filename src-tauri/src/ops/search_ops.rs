@@ -152,12 +152,19 @@ fn scan_sheet_snapshot(
         return Vec::new();
     };
     let mut results = Vec::new();
-    for SearchCellSnapshot { row, col, text } in &snapshot.cells {
-        if matcher.matches(text) {
+    for SearchCellSnapshot {
+        row,
+        col,
+        text,
+        search_text,
+    } in &snapshot.cells
+    {
+        if matcher.matches(search_text) {
             results.push(SearchCellSnapshot {
                 row: *row,
                 col: *col,
                 text: text.clone(),
+                search_text: search_text.clone(),
             });
             if results.len() >= limit {
                 break;

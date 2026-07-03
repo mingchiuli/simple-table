@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::io::codec::writer;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
-use crate::types::{FileData, SheetCellChange, WorkbookCapabilities};
+use crate::types::{AppliedOperationResult, FileData, SheetCellChange, WorkbookCapabilities};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {
@@ -30,6 +30,11 @@ pub enum BodyStructureMemento {
 pub struct WorksheetSnapshot {
     sheet_index: usize,
     worksheet: Box<Worksheet>,
+}
+
+pub struct BodyStructureOperationResult {
+    pub result: AppliedOperationResult,
+    pub diagnostics: StructurePatchDiagnostics,
 }
 
 impl BodyStructureMemento {
@@ -139,13 +144,32 @@ impl SpreadsheetDocumentBody {
 
     pub fn apply_structure_operation(
         &mut self,
+        projection: &mut FileData,
         operation: &AppliedOperation,
-    ) -> Result<Option<StructurePatchDiagnostics>, AppError> {
+    ) -> Result<Option<BodyStructureOperationResult>, AppError> {
+        if !operation.is_structure_change() {
+            return Ok(None);
+        }
+
         match self {
-            Self::Excel(body) if operation.is_structure_change() => Ok(Some(
-                workbook_state::apply_structure_operation(&mut body.workbook, operation)?,
-            )),
-            Self::Excel(_) | Self::Csv | Self::GeneratedWorkbook => Ok(None),
+            Self::Excel(body) => {
+                let diagnostics =
+                    workbook_state::apply_structure_operation(&mut body.workbook, operation)?;
+                workbook_state::refresh_projection_from_workbook(&body.workbook, projection);
+                workbook_state::sync_all_merge_ranges_from_projection(
+                    &mut body.workbook,
+                    projection,
+                )?;
+                workbook_state::refresh_projection_from_workbook(&body.workbook, projection);
+                Ok(Some(BodyStructureOperationResult {
+                    result: operation.projected_result_from_current_file(projection),
+                    diagnostics,
+                }))
+            }
+            Self::Csv | Self::GeneratedWorkbook => Ok(Some(BodyStructureOperationResult {
+                result: operation.execute(projection),
+                diagnostics: StructurePatchDiagnostics::default(),
+            })),
         }
     }
 
@@ -215,21 +239,20 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn sync_all_merge_ranges_from_projection(
-        &mut self,
-        projection: &FileData,
-    ) -> Result<(), AppError> {
+    #[cfg(any(test, debug_assertions))]
+    pub fn validate_projection_consistency(&self, projection: &FileData) -> Result<(), AppError> {
         match self {
-            Self::Excel(body) => workbook_state::sync_all_merge_ranges_from_projection(
-                &mut body.workbook,
-                projection,
-            ),
+            Self::Excel(body) => {
+                workbook_state::validate_projection_consistency(&body.workbook, projection)
+            }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
 
-    #[cfg(any(test, debug_assertions))]
-    pub fn validate_projection_consistency(&self, projection: &FileData) -> Result<(), AppError> {
+    pub fn validate_persisted_projection_consistency(
+        &self,
+        projection: &FileData,
+    ) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
                 workbook_state::validate_projection_consistency(&body.workbook, projection)
