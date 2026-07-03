@@ -61,4 +61,62 @@ describe("applyDocumentPatches", () => {
     expect(result.data?.sheets[0].rowHeights?.[0]).toBe(90);
     expect(result.data?.sheets[0].merges).toEqual(data.sheets[0].merges);
   });
+
+  it("applies row and column structure deltas without replacing the whole sheet", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [{
+        ...sheet("Sheet1", [[text("A1"), text("B1")], [text("A2"), text("B2")]]),
+        merges: [],
+        columnWidths: { 1: 140 },
+        rowHeights: { 0: 72 },
+      }],
+    };
+
+    const result = applyDocumentPatches(data, [
+      {
+        type: "RowsInserted",
+        data: { patch: { sheetIndex: 0, rowIndex: 1, rows: [[text("A-new"), text("B-new")]] } },
+      },
+      {
+        type: "ColumnsInserted",
+        data: { patch: { sheetIndex: 0, colIndex: 1, values: [text("inserted-1"), text("inserted-new"), text("inserted-2")] } },
+      },
+      {
+        type: "SheetMetadata",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            merges: [{ startRow: 0, startCol: 0, endRow: 0, endCol: 1 }],
+            columnWidths: { 0: 120 },
+            rowHeights: {},
+            rich: { cellStyles: { A1: { bold: true } } },
+          },
+        },
+      },
+    ]);
+
+    expect(result.data?.sheets[0].rows).toEqual([
+      [text("A1"), text("inserted-1"), text("B1")],
+      [text("A-new"), text("inserted-new"), text("B-new")],
+      [text("A2"), text("inserted-2"), text("B2")],
+    ]);
+    expect(result.data?.sheets[0].merges).toEqual([
+      { startRow: 0, startCol: 0, endRow: 0, endCol: 1 },
+    ]);
+    expect(result.data?.sheets[0].columnWidths).toEqual({ 0: 120 });
+    expect(result.data?.sheets[0].rowHeights).toBeUndefined();
+    expect(result.data?.sheets[0].rich?.cellStyles?.A1?.bold).toBe(true);
+
+    const removed = applyDocumentPatches(result.data, [
+      { type: "RowsDeleted", data: { patch: { sheetIndex: 0, rowIndex: 1, count: 1 } } },
+      { type: "ColumnsDeleted", data: { patch: { sheetIndex: 0, colIndex: 1, count: 1 } } },
+    ]);
+
+    expect(removed.data?.sheets[0].rows).toEqual([
+      [text("A1"), text("B1")],
+      [text("A2"), text("B2")],
+    ]);
+  });
 });

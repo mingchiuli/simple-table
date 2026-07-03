@@ -132,7 +132,6 @@ const {
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  refreshEditorState,
   markSaved,
   resetDocumentStatus,
 });

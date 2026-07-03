@@ -319,7 +319,7 @@ impl<'a> DocumentTransaction<'a> {
             return Err(error);
         }
 
-        if self.operation.is_structure_change()
+        if self.operation.impact().is_structure_change()
             && let Err(error) = self.document.validate_persisted_projection_consistency()
         {
             self.rollback_after_failure(&error)?;
@@ -1095,8 +1095,13 @@ impl SpreadsheetDocument {
         }
 
         Ok(operation
+            .projection_mutation()
             .execute_cells_and_layout(&mut self.projection)
-            .unwrap_or_else(|| operation.execute(&mut self.projection)))
+            .unwrap_or_else(|| {
+                operation
+                    .projection_mutation()
+                    .execute(&mut self.projection)
+            }))
     }
 
     fn patch_workbook_formula_changes(

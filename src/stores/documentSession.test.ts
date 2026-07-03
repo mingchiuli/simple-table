@@ -89,4 +89,29 @@ describe("documentSession store", () => {
     expect(result.resyncRequired).toBe(false);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
   });
+
+  it("opens a document response with backend session identity", () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "/tmp/opened.xlsx",
+      fileName: "opened.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 42,
+        revision: 7,
+        formulaStatus: { state: "ready" },
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: { canUndo: true, canRedo: false, isDirty: true },
+      },
+    }, data.path);
+
+    expect(store.documentId).toBe(42);
+    expect(store.revision).toBe(7);
+    expect(store.currentFilePath).toBe(data.path);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("A1"));
+  });
 });

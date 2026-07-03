@@ -1,4 +1,4 @@
-import type { FileData, RecentFile } from "@/types";
+import type { RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
 import { readFile, openFile, getStorageType } from "@/platform";
@@ -19,16 +19,15 @@ export const useRecentFilesStore = defineStore("recentFiles", {
       }
     },
 
-    async openFile(path: string): Promise<{ success: boolean; file?: FileData; needsRelocate?: boolean }> {
+    async openFile(path: string): Promise<{ success: boolean; needsRelocate?: boolean }> {
       const existingFile = this.files.find(f => f.path === path);
       const fileName = existingFile?.fileName || path.split("/").pop()?.split("?")[0] || "unknown";
 
       try {
-        // 直接调用 readFile（现在返回 FileData）
-        const fileData = await readFile(path);
+        const opened = await readFile(path);
 
         const documentSessionStore = useDocumentSessionStore();
-        documentSessionStore.openDocument(fileData, path);
+        documentSessionStore.openDocumentResponse(opened, path);
 
         const storageType = await getStorageType();
 
@@ -45,7 +44,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         );
         await this.load();
 
-        return { success: true, file: fileData };
+        return { success: true };
       } catch (e) {
         ElMessage.error(`Failed to open file: ${e}`);
         return { success: false, needsRelocate: true };
@@ -71,7 +70,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         }
 
         const documentSessionStore = useDocumentSessionStore();
-        documentSessionStore.openDocument(result.fileData, result.path);
+        documentSessionStore.openDocumentResponse(result, result.path);
 
         const storageType = await getStorageType();
 

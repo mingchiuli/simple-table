@@ -1,9 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
-import type { FileData } from "@/types";
+import type { OpenDocumentResponse } from "@/types";
 
-interface PickFileIOSResult {
-  fileData: FileData;
+interface PickFileIOSResult extends OpenDocumentResponse {
   info: {
     path: string;
     originalPath: string;
@@ -19,6 +18,7 @@ export const iosFileOps = {
 
     return {
       fileData: result.fileData,
+      editorSession: result.editorSession,
       path: result.info.path,
       fileName: result.info.fileName,
       originalPath: result.info.originalPath,
@@ -26,8 +26,8 @@ export const iosFileOps = {
   },
 
   /** iOS: 从 App 沙盒路径读取并解析（用于最近文件列表） */
-  readFile: (path: string): Promise<FileData> => {
-    return invoke<FileData>("read_file_ios", { path });
+  readFile: (path: string): Promise<OpenDocumentResponse> => {
+    return invoke<OpenDocumentResponse>("read_file_ios", { path });
   },
 
   /** iOS: 生成文件字节并写入 App 沙盒路径 */

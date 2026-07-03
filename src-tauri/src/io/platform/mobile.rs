@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::io::document;
-use crate::types::FileData;
+use crate::types::OpenDocumentResponse;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -19,7 +19,8 @@ pub struct PickedFileInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickFileResult {
-    pub file_data: FileData,
+    #[serde(flatten)]
+    pub document: OpenDocumentResponse,
     pub info: PickedFileInfo,
 }
 
@@ -76,7 +77,7 @@ pub(super) fn write_path_with_official_fs(
     write_with_official_fs(app, FilePath::from(path), bytes)
 }
 
-pub fn read_file(app: &AppHandle, path: &str) -> Result<FileData, AppError> {
+pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, AppError> {
     use tauri_plugin_fs::FsExt;
 
     let file_name = Path::new(path)

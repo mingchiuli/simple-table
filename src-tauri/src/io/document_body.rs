@@ -147,7 +147,7 @@ impl SpreadsheetDocumentBody {
         projection: &mut FileData,
         operation: &AppliedOperation,
     ) -> Result<Option<BodyStructureOperationResult>, AppError> {
-        if !operation.is_structure_change() {
+        if !operation.impact().is_structure_change() {
             return Ok(None);
         }
 
@@ -162,12 +162,14 @@ impl SpreadsheetDocumentBody {
                 )?;
                 workbook_state::refresh_projection_from_workbook(&body.workbook, projection);
                 Ok(Some(BodyStructureOperationResult {
-                    result: operation.projected_result_from_current_file(projection),
+                    result: operation
+                        .patch_projector()
+                        .projected_result_from_current_file(projection),
                     diagnostics,
                 }))
             }
             Self::Csv | Self::GeneratedWorkbook => Ok(Some(BodyStructureOperationResult {
-                result: operation.execute(projection),
+                result: operation.projection_mutation().execute(projection),
                 diagnostics: StructurePatchDiagnostics::default(),
             })),
         }
@@ -180,7 +182,7 @@ impl SpreadsheetDocumentBody {
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
         match self {
-            Self::Excel(_) if operation.is_structure_change() => Ok(()),
+            Self::Excel(_) if operation.impact().is_structure_change() => Ok(()),
             Self::Excel(body) => workbook_state::patch_after_operation(
                 &mut body.workbook,
                 projection,

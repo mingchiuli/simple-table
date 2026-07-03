@@ -2,6 +2,7 @@ import type {
   EditorMutationResponse,
   EditorSessionInfo,
   FileData,
+  OpenDocumentResponse,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
@@ -39,6 +40,18 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = null;
       this.revision = 0;
       this.resetUiForCurrentDocument();
+    },
+    openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
+      resetEditorMutationQueue(this.mutationScope);
+      this.mutationScope += 1;
+      this.data = response.fileData;
+      this.currentFilePath = path !== null ? path : response.fileData.path || null;
+      this.documentId = response.editorSession.documentId;
+      this.revision = response.editorSession.revision;
+      this.resetUiForCurrentDocument();
+      const statusStore = useDocumentStatusStore();
+      statusStore.reset();
+      statusStore.applyEditorSession(response.editorSession);
     },
     updateIdentity(path: string | null, fileName: string) {
       if (this.data) {

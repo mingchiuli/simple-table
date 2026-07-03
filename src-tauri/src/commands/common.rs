@@ -6,8 +6,8 @@ use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
-    DocumentCapabilities, EditorMutationResponse, FileData, SearchResult, SearchScope,
-    SetCellRequest,
+    DocumentCapabilities, EditorMutationResponse, FileData, OpenDocumentResponse, SearchResult,
+    SearchScope, SetCellRequest,
 };
 use tauri::AppHandle;
 
@@ -16,7 +16,7 @@ use tauri::AppHandle;
 /// Desktop: 从路径直接读取并解析文件
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn read_file_desktop(path: String) -> Result<FileData, AppError> {
+pub fn read_file_desktop(path: String) -> Result<OpenDocumentResponse, AppError> {
     desktop::read_file(&path)
 }
 
@@ -28,7 +28,7 @@ pub fn save_file_desktop(path: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-pub fn init_file(file_data: FileData) -> Result<(), AppError> {
+pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
     document::init_file(file_data)
 }
 

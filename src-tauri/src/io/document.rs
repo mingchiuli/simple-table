@@ -2,9 +2,10 @@ use std::path::Path;
 
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
+use crate::ops::editor_ops::editor_state_info;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
-use crate::state::{active_document_store, editor_state::EditorState};
-use crate::types::{DocumentCapabilities, FileData, WorkbookCapabilities};
+use crate::state::{active_document_store, editor_state::EditorState, state::EditorSessionInfo};
+use crate::types::{DocumentCapabilities, FileData, OpenDocumentResponse, WorkbookCapabilities};
 use umya_spreadsheet::Workbook;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
@@ -12,7 +13,7 @@ pub fn open_from_bytes(
     path: String,
     bytes: Vec<u8>,
     file_name: Option<String>,
-) -> Result<FileData, AppError> {
+) -> Result<OpenDocumentResponse, AppError> {
     let path_obj = Path::new(&path);
     let extension = path_obj
         .extension()
@@ -33,15 +34,14 @@ pub fn open_from_bytes(
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
     // 初始化编辑器状态
-    let file_data = init_editor_state(result.file_data, result.workbook);
+    let document = init_editor_state(result.file_data, result.workbook);
 
-    Ok(file_data)
+    Ok(document)
 }
 
 /// 初始化编辑器状态（用于新建文件）
-pub fn init_file(file_data: FileData) -> Result<(), AppError> {
-    init_editor_state(file_data, None);
-    Ok(())
+pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
+    Ok(init_editor_state(file_data, None))
 }
 
 pub fn generate_current_file_bytes_for_target(
@@ -126,20 +126,31 @@ fn active_workbook_capabilities(
         })
 }
 
-fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> FileData {
+fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> OpenDocumentResponse {
     let registry = active_document_store();
     let initialized_file_data;
+    let editor_session;
     let document_id;
     {
         let mut registry_guard = registry.write().expect("Document registry lock poisoned");
         let editor_state = EditorState::with_workbook(file_data, workbook);
         initialized_file_data = editor_state.file_data().clone();
+        editor_session = EditorSessionInfo {
+            document_id: editor_state.document_id(),
+            revision: editor_state.revision(),
+            formula_status: editor_state.formula_status(),
+            capabilities: editor_state.capabilities(),
+            editor_state: editor_state_info(&editor_state),
+        };
         document_id = editor_state.document_id();
         registry_guard.replace_active(editor_state);
     }
     // 异步构建索引（后台线程）
     spawn_rebuild_all_sheets_index(registry, document_id);
-    initialized_file_data
+    OpenDocumentResponse {
+        file_data: initialized_file_data,
+        editor_session,
+    }
 }
 
 fn native_save_extension(file_name: &str) -> Option<String> {

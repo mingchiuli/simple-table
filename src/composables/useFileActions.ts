@@ -13,7 +13,6 @@ type UseFileActionsOptions = {
   isLoading: Ref<boolean>;
   isFileLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
-  refreshEditorState: () => Promise<void>;
   markSaved: () => Promise<void>;
   resetDocumentStatus: () => void;
 };
@@ -24,7 +23,6 @@ export function useFileActions({
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  refreshEditorState,
   markSaved,
   resetDocumentStatus,
 }: UseFileActionsOptions) {
@@ -59,17 +57,14 @@ export function useFileActions({
       if (!(await flushPendingCellChanges())) return;
       await waitForEditorMutations(documentSessionStore.mutationScope);
 
-      const loadedFileData = await readFile(filePath);
-      documentSessionStore.openDocument(loadedFileData, filePath);
+      const opened = await readFile(filePath);
+      documentSessionStore.openDocumentResponse(opened, filePath);
       currentSheetIndex.value = 0;
-      resetDocumentStatus();
 
       const fileName = await getFileName(filePath);
       const storageType = await getStorageType();
       await updateRecentFileEntry(filePath, fileName, storageType);
       await recentFilesStore.load();
-
-      await refreshEditorState();
     } catch (error) {
       ElMessage.error(`Failed to open file: ${error}`);
     } finally {
@@ -88,9 +83,8 @@ export function useFileActions({
       const result = await openFile();
       if (!result) return;
 
-      documentSessionStore.openDocument(result.fileData, result.path);
+      documentSessionStore.openDocumentResponse(result, result.path);
       currentSheetIndex.value = 0;
-      resetDocumentStatus();
 
       const storageType = await getStorageType();
       const bytes = await api.generateCurrentThumbnailBytes();
@@ -103,8 +97,6 @@ export function useFileActions({
         storageType,
         result.originalPath
       );
-
-      await refreshEditorState();
     } catch (error) {
       ElMessage.error(`Failed to open file: ${error}`);
     } finally {

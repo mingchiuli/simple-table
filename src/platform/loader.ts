@@ -4,7 +4,7 @@
 import { getPlatform } from '@/utils/platform';
 import { basename } from '@tauri-apps/api/path';
 import type { PlatformAPI, OpenFileResult } from './types';
-import type { FileData } from '@/types';
+import type { OpenDocumentResponse } from '@/types';
 
 let cachedAPI: PlatformAPI | null = null;
 let loadingPromise: Promise<PlatformAPI> | null = null;
@@ -56,7 +56,7 @@ export async function openFile(): Promise<OpenFileResult | null> {
 }
 
 /** 从已知路径读取并解析（用于最近文件列表） */
-export async function readFile(path: string): Promise<FileData> {
+export async function readFile(path: string): Promise<OpenDocumentResponse> {
   const api = await getPlatformAPI();
   return api.fileOps.readFile(path);
 }

@@ -394,6 +394,11 @@ pub fn schedule_index_for_response(
                 }
             }
             EditorPatch::SheetUpdated { .. }
+            | EditorPatch::SheetMetadata { .. }
+            | EditorPatch::RowsInserted { .. }
+            | EditorPatch::RowsDeleted { .. }
+            | EditorPatch::ColumnsInserted { .. }
+            | EditorPatch::ColumnsDeleted { .. }
             | EditorPatch::SheetShape { .. }
             | EditorPatch::ResyncRequired { .. }
             | EditorPatch::SheetInserted { .. }

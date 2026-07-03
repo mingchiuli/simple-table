@@ -168,6 +168,38 @@ export interface SheetUpdatedPatch {
   sheet: SheetData;
 }
 
+export interface SheetMetadataPatch {
+  sheetIndex: number;
+  merges: MergeRange[];
+  columnWidths: Record<number, number>;
+  rowHeights: Record<number, number>;
+  rich: SheetRichProjection;
+}
+
+export interface RowsInsertedPatch {
+  sheetIndex: number;
+  rowIndex: number;
+  rows: CellValue[][];
+}
+
+export interface RowsDeletedPatch {
+  sheetIndex: number;
+  rowIndex: number;
+  count: number;
+}
+
+export interface ColumnsInsertedPatch {
+  sheetIndex: number;
+  colIndex: number;
+  values: CellValue[];
+}
+
+export interface ColumnsDeletedPatch {
+  sheetIndex: number;
+  colIndex: number;
+  count: number;
+}
+
 export interface SheetShapePatch {
   sheetIndex: number;
   rowLengths: number[];
@@ -183,6 +215,11 @@ export type EditorPatch =
   | { type: 'SheetInserted'; data: { patch: SheetInsertedPatch } }
   | { type: 'SheetDeleted'; data: { patch: SheetDeletedPatch } }
   | { type: 'SheetUpdated'; data: { patch: SheetUpdatedPatch } }
+  | { type: 'SheetMetadata'; data: { patch: SheetMetadataPatch } }
+  | { type: 'RowsInserted'; data: { patch: RowsInsertedPatch } }
+  | { type: 'RowsDeleted'; data: { patch: RowsDeletedPatch } }
+  | { type: 'ColumnsInserted'; data: { patch: ColumnsInsertedPatch } }
+  | { type: 'ColumnsDeleted'; data: { patch: ColumnsDeletedPatch } }
   | { type: 'SheetShape'; data: { patch: SheetShapePatch } }
   | { type: 'ResyncRequired'; data: { patch: ResyncRequiredPatch } };
 
@@ -202,6 +239,11 @@ export interface EditorSessionInfo {
   formulaStatus: FormulaStatus;
   capabilities: WorkbookCapabilities;
   editorState: EditorStateInfo;
+}
+
+export interface OpenDocumentResponse {
+  fileData: FileData;
+  editorSession: EditorSessionInfo;
 }
 
 export function defaultWorkbookCapabilities(): WorkbookCapabilities {

@@ -24,7 +24,7 @@ async function handleOpenFile() {
       return;
     }
 
-    documentSessionStore.openDocument(result.fileData, result.path);
+    documentSessionStore.openDocumentResponse(result, result.path);
 
     const storageType = await getStorageType();
     const bytes = await api.generateCurrentThumbnailBytes();
@@ -64,8 +64,8 @@ async function handleNewFile() {
     ],
   };
 
-  await api.initFile(newFileData);
-  documentSessionStore.openDocument(newFileData, null);
+  const opened = await api.initFile(newFileData);
+  documentSessionStore.openDocumentResponse(opened, null);
   router.push({ name: "table" });
 }
 

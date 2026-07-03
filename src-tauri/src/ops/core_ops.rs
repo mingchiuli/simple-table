@@ -117,6 +117,18 @@ pub struct ResolvedCellEdit {
     pub new_value: CellValue,
 }
 
+pub struct ProjectionMutation<'a> {
+    operation: &'a AppliedOperation,
+}
+
+pub struct OperationPatchProjector<'a> {
+    operation: &'a AppliedOperation,
+}
+
+pub struct MutationImpact<'a> {
+    operation: &'a AppliedOperation,
+}
+
 impl EditorCommand {
     pub fn resolve(self, file_data: &FileData) -> Result<AppliedOperation, AppError> {
         match self {
@@ -278,8 +290,22 @@ impl EditorCommand {
 }
 
 impl AppliedOperation {
+    pub fn projection_mutation(&self) -> ProjectionMutation<'_> {
+        ProjectionMutation { operation: self }
+    }
+
+    pub fn patch_projector(&self) -> OperationPatchProjector<'_> {
+        OperationPatchProjector { operation: self }
+    }
+
+    pub fn impact(&self) -> MutationImpact<'_> {
+        MutationImpact { operation: self }
+    }
+}
+
+impl ProjectionMutation<'_> {
     pub fn execute(&self, file_data: &mut FileData) -> AppliedOperationResult {
-        match self {
+        match self.operation {
             AppliedOperation::SetCell {
                 sheet_index,
                 row,
@@ -465,7 +491,7 @@ impl AppliedOperation {
         &self,
         file_data: &mut FileData,
     ) -> Option<AppliedOperationResult> {
-        match self {
+        match self.operation {
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
             | AppliedOperation::SetColumnWidth { .. }
@@ -478,12 +504,14 @@ impl AppliedOperation {
             | AppliedOperation::DeleteSheet { .. } => None,
         }
     }
+}
 
+impl OperationPatchProjector<'_> {
     pub fn projected_result_from_current_file(
         &self,
         file_data: &FileData,
     ) -> AppliedOperationResult {
-        match self {
+        match self.operation {
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
             | AppliedOperation::SetColumnWidth { .. }
@@ -557,9 +585,11 @@ impl AppliedOperation {
             },
         }
     }
+}
 
+impl MutationImpact<'_> {
     pub fn is_noop(&self) -> bool {
-        match self {
+        match self.operation {
             AppliedOperation::SetCell {
                 old_value,
                 new_value,
@@ -584,7 +614,7 @@ impl AppliedOperation {
 
     pub fn requires_search_rebuild(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::AddRow { .. }
                 | AppliedOperation::DeleteRow { .. }
                 | AppliedOperation::AddColumn { .. }
@@ -596,7 +626,7 @@ impl AppliedOperation {
 
     pub fn is_structure_change(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::AddRow { .. }
                 | AppliedOperation::DeleteRow { .. }
                 | AppliedOperation::AddColumn { .. }
@@ -608,35 +638,35 @@ impl AppliedOperation {
 
     pub fn is_row_structure_change(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::AddRow { .. } | AppliedOperation::DeleteRow { .. }
         )
     }
 
     pub fn is_column_structure_change(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::AddColumn { .. } | AppliedOperation::DeleteColumn { .. }
         )
     }
 
     pub fn is_sheet_structure_change(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. }
         )
     }
 
     pub fn is_layout_change(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. }
         )
     }
 
     pub fn is_cell_edit(&self) -> bool {
         matches!(
-            self,
+            self.operation,
             AppliedOperation::SetCell { .. } | AppliedOperation::SetCells { .. }
         )
     }

@@ -2,10 +2,9 @@
  * Platform-agnostic type definitions for dynamic platform loading
  */
 
-import type { FileData } from "@/types";
+import type { OpenDocumentResponse } from "@/types";
 
-export interface OpenFileResult {
-  fileData: FileData;
+export interface OpenFileResult extends OpenDocumentResponse {
   path: string;
   fileName: string;
   /** 原始选择来源路径（用于显示/诊断） */
@@ -16,7 +15,7 @@ export interface PlatformFileOps {
   /** 打开文件：选择器 + 读取 + 解析（一体化） */
   openFile(): Promise<OpenFileResult | null>;
   /** 从已知路径读取并解析（用于最近文件列表） */
-  readFile(path: string): Promise<FileData>;
+  readFile(path: string): Promise<OpenDocumentResponse>;
   /** 保存文件：生成字节 + 写入（一体化） */
   saveFile(path: string): Promise<void>;
   /** 选择保存位置 */

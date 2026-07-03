@@ -7,10 +7,11 @@ import type {
   EditorMutationResponse,
   EditorSessionInfo,
   DocumentCapabilities,
+  OpenDocumentResponse,
 } from "@/types";
 
-export async function initFile(fileData: FileData): Promise<void> {
-  return invoke<void>("init_file", { fileData });
+export async function initFile(fileData: FileData): Promise<OpenDocumentResponse> {
+  return invoke<OpenDocumentResponse>("init_file", { fileData });
 }
 
 export async function getCurrentFileData(): Promise<FileData> {

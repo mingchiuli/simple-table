@@ -1,6 +1,7 @@
 use crate::io::document_model::FileStructureMemento;
 use crate::types::{
-    EditorPatch, FileData, SheetDeletedPatch, SheetInsertedPatch, SheetUpdatedPatch,
+    CellValue, ColumnsDeletedPatch, ColumnsInsertedPatch, EditorPatch, FileData, RowsDeletedPatch,
+    RowsInsertedPatch, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetMetadataPatch,
 };
 
 pub(crate) enum CurrentStructureShape {
@@ -67,7 +68,12 @@ pub(crate) fn restore_structure_patches(
         ) if *sheet_index == target.sheet_index && *row_index == target.row_index => {
             let target_count = target.row_count;
             if target_count != *row_count {
-                return sheet_updated_patch_from(restored, target.sheet_index);
+                return row_structure_patch_from(
+                    restored,
+                    target.sheet_index,
+                    target.row_index,
+                    target_count > *row_count,
+                );
             }
             Vec::new()
         }
@@ -90,7 +96,12 @@ pub(crate) fn restore_structure_patches(
                     .any(|(current_len, target_len)| current_len != target_len);
 
             if changed {
-                return sheet_updated_patch_from(restored, target.sheet_index);
+                return column_structure_patch_from(
+                    restored,
+                    target.sheet_index,
+                    target.col_index,
+                    target.row_lengths.iter().sum::<usize>() > row_lengths.iter().sum::<usize>(),
+                );
             }
             Vec::new()
         }
@@ -129,15 +140,89 @@ pub(crate) fn restore_structure_patches(
     }
 }
 
-fn sheet_updated_patch_from(restored: &FileData, sheet_index: usize) -> Vec<EditorPatch> {
+fn row_structure_patch_from(
+    restored: &FileData,
+    sheet_index: usize,
+    row_index: usize,
+    inserted: bool,
+) -> Vec<EditorPatch> {
     restored
         .sheets
         .get(sheet_index)
-        .cloned()
         .map(|sheet| {
-            vec![EditorPatch::SheetUpdated {
-                patch: SheetUpdatedPatch { sheet_index, sheet },
-            }]
+            let mut patches = if inserted {
+                vec![EditorPatch::RowsInserted {
+                    patch: RowsInsertedPatch {
+                        sheet_index,
+                        row_index,
+                        rows: sheet
+                            .rows
+                            .get(row_index)
+                            .cloned()
+                            .map(|row| vec![row])
+                            .unwrap_or_default(),
+                    },
+                }]
+            } else {
+                vec![EditorPatch::RowsDeleted {
+                    patch: RowsDeletedPatch {
+                        sheet_index,
+                        row_index,
+                        count: 1,
+                    },
+                }]
+            };
+            patches.push(sheet_metadata_patch(sheet_index, sheet));
+            patches
         })
         .unwrap_or_default()
+}
+
+fn column_structure_patch_from(
+    restored: &FileData,
+    sheet_index: usize,
+    col_index: usize,
+    inserted: bool,
+) -> Vec<EditorPatch> {
+    restored
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| {
+            let mut patches = if inserted {
+                vec![EditorPatch::ColumnsInserted {
+                    patch: ColumnsInsertedPatch {
+                        sheet_index,
+                        col_index,
+                        values: sheet
+                            .rows
+                            .iter()
+                            .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
+                            .collect(),
+                    },
+                }]
+            } else {
+                vec![EditorPatch::ColumnsDeleted {
+                    patch: ColumnsDeletedPatch {
+                        sheet_index,
+                        col_index,
+                        count: 1,
+                    },
+                }]
+            };
+            patches.push(sheet_metadata_patch(sheet_index, sheet));
+            patches
+        })
+        .unwrap_or_default()
+}
+
+fn sheet_metadata_patch(sheet_index: usize, sheet: &SheetData) -> EditorPatch {
+    EditorPatch::SheetMetadata {
+        patch: SheetMetadataPatch {
+            sheet_index,
+            merges: sheet.merges.clone(),
+            column_widths: sheet.column_widths.clone().unwrap_or_default(),
+            row_heights: sheet.row_heights.clone().unwrap_or_default(),
+            rich: sheet.rich.clone(),
+        },
+    }
 }

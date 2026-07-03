@@ -2,7 +2,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
-import type { FileData } from "@/types";
+import type { OpenDocumentResponse } from "@/types";
 
 export const desktopFileOps = {
   /** Desktop: 打开文件选择器 + 直接调用 Rust 解析 */
@@ -16,18 +16,18 @@ export const desktopFileOps = {
     const fileName = decodeURIComponent(await basename(selected));
 
     // 直接调用 Rust 解析（一次调用）
-    const fileData = await invoke<FileData>("read_file_desktop", { path: selected });
+    const document = await invoke<OpenDocumentResponse>("read_file_desktop", { path: selected });
 
     return {
-      fileData,
+      ...document,
       path: selected,
       fileName,
     };
   },
 
   /** Desktop: 从已知路径读取并解析（用于最近文件列表） */
-  readFile: async (path: string): Promise<FileData> => {
-    return invoke<FileData>("read_file_desktop", { path });
+  readFile: async (path: string): Promise<OpenDocumentResponse> => {
+    return invoke<OpenDocumentResponse>("read_file_desktop", { path });
   },
 
   /** Desktop: 生成文件字节并写入路径 */

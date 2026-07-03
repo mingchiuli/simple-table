@@ -5,7 +5,7 @@ use crate::io::platform::mobile::PickFileResult;
 #[cfg(target_os = "android")]
 use crate::io::platform::{android, mobile};
 #[cfg(target_os = "android")]
-use crate::types::FileData;
+use crate::types::OpenDocumentResponse;
 #[cfg(target_os = "android")]
 use tauri::AppHandle;
 
@@ -19,7 +19,10 @@ pub async fn pick_file_android(app: AppHandle) -> Result<Option<PickFileResult>,
 /// Android: read and parse a sandboxed file path saved in recent files.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn read_file_android(app: AppHandle, path: String) -> Result<FileData, AppError> {
+pub async fn read_file_android(
+    app: AppHandle,
+    path: String,
+) -> Result<OpenDocumentResponse, AppError> {
     mobile::read_file(&app, &path)
 }
 

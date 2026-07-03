@@ -250,9 +250,9 @@ impl EditorState {
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         let operation = command.resolve(self.file_data())?;
         self.ensure_operation_supported(&operation)?;
-        let should_mark_search_stale = operation.requires_search_rebuild();
+        let should_mark_search_stale = operation.impact().requires_search_rebuild();
         let before = self.document.capture_memento_side(&operation);
-        if operation.is_noop() {
+        if operation.impact().is_noop() {
             let result = self.document.execute_operation(&operation, &before)?;
             self.update_flags();
             self.refresh_content_hash();
@@ -411,27 +411,30 @@ impl EditorState {
             return Err(AppError::DocumentStateInvalid(reason.to_string()));
         }
         let capabilities = self.capabilities();
-        if operation.is_row_structure_change() && !capabilities.can_insert_delete_rows {
+        if operation.impact().is_row_structure_change() && !capabilities.can_insert_delete_rows {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_row_structure_reasons.join(", "),
             ));
         }
-        if operation.is_column_structure_change() && !capabilities.can_insert_delete_columns {
+        if operation.impact().is_column_structure_change()
+            && !capabilities.can_insert_delete_columns
+        {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_column_structure_reasons.join(", "),
             ));
         }
-        if operation.is_sheet_structure_change() && !capabilities.can_insert_delete_sheets {
+        if operation.impact().is_sheet_structure_change() && !capabilities.can_insert_delete_sheets
+        {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_sheet_structure_reasons.join(", "),
             ));
         }
-        if operation.is_layout_change() && !capabilities.can_resize_rows_columns {
+        if operation.impact().is_layout_change() && !capabilities.can_resize_rows_columns {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_resize_reasons.join(", "),
             ));
         }
-        if operation.is_cell_edit() && !capabilities.can_edit_cells {
+        if operation.impact().is_cell_edit() && !capabilities.can_edit_cells {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_edit_reasons.join(", "),
             ));

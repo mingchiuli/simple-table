@@ -1,9 +1,9 @@
 use crate::error::AppError;
 use crate::io::document;
-use crate::types::FileData;
+use crate::types::OpenDocumentResponse;
 use std::fs;
 
-pub fn read_file(path: &str) -> Result<FileData, AppError> {
+pub fn read_file(path: &str) -> Result<OpenDocumentResponse, AppError> {
     let bytes = fs::read(path).map_err(|e| AppError::ReadError(e.to_string()))?;
     document::open_from_bytes(path.to_string(), bytes, None)
 }

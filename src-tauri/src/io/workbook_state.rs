@@ -313,13 +313,13 @@ pub fn unsupported_structure_features(
     operation: &AppliedOperation,
 ) -> Vec<String> {
     let capabilities = workbook_capabilities(workbook);
-    if operation.is_row_structure_change() {
+    if operation.impact().is_row_structure_change() {
         return capabilities.blocked_row_structure_reasons;
     }
-    if operation.is_column_structure_change() {
+    if operation.impact().is_column_structure_change() {
         return capabilities.blocked_column_structure_reasons;
     }
-    if operation.is_sheet_structure_change() {
+    if operation.impact().is_sheet_structure_change() {
         return capabilities.blocked_sheet_structure_reasons;
     }
     Vec::new()
