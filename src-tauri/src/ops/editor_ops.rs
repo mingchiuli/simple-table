@@ -5,9 +5,8 @@ use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::editor_state::{EditorState, ExecutedOperation};
 use crate::state::state::{ActiveDocumentStore, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
-    AppliedOperationResult, CellValue, ColumnDeletedPatch, ColumnInsertedPatch,
-    EditorMutationResponse, EditorPatch, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch,
-    RowInsertedPatch, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
+    AppliedOperationResult, EditorMutationResponse, EditorPatch, LayoutPatch, ResyncRequiredPatch,
+    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetUpdatedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -126,83 +125,33 @@ fn structural_patches(
     operation: AppliedOperationResult,
 ) -> Vec<EditorPatch> {
     match operation {
-        AppliedOperationResult::AddRow {
-            sheet_index, row, ..
-        } => editor_state
+        AppliedOperationResult::AddRow { sheet_index, .. } => editor_state
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(|sheet| {
-                vec![EditorPatch::RowInserted {
-                    patch: RowInsertedPatch {
-                        sheet_index,
-                        row_index: row.index,
-                        row: sheet.rows.get(row.index).cloned().unwrap_or_default(),
-                        row_height: sheet
-                            .row_heights
-                            .as_ref()
-                            .and_then(|heights| heights.get(&row.index).copied()),
-                    },
-                }]
-            })
+            .cloned()
+            .map(|sheet| vec![sheet_updated_patch(sheet_index, sheet)])
             .unwrap_or_default(),
-        AppliedOperationResult::DeleteRow {
-            sheet_index,
-            row_index,
-        } => editor_state
+        AppliedOperationResult::DeleteRow { sheet_index, .. } => editor_state
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(|_| {
-                vec![EditorPatch::RowDeleted {
-                    patch: RowDeletedPatch {
-                        sheet_index,
-                        row_index,
-                    },
-                }]
-            })
+            .cloned()
+            .map(|sheet| vec![sheet_updated_patch(sheet_index, sheet)])
             .unwrap_or_default(),
-        AppliedOperationResult::AddColumn {
-            sheet_index,
-            column,
-            ..
-        } => editor_state
+        AppliedOperationResult::AddColumn { sheet_index, .. } => editor_state
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(|sheet| {
-                vec![EditorPatch::ColumnInserted {
-                    patch: ColumnInsertedPatch {
-                        sheet_index,
-                        column_index: column.index,
-                        values: sheet
-                            .rows
-                            .iter()
-                            .map(|row| row.get(column.index).cloned().unwrap_or(CellValue::Null))
-                            .collect(),
-                        column_width: sheet
-                            .column_widths
-                            .as_ref()
-                            .and_then(|widths| widths.get(&column.index).copied()),
-                    },
-                }]
-            })
+            .cloned()
+            .map(|sheet| vec![sheet_updated_patch(sheet_index, sheet)])
             .unwrap_or_default(),
-        AppliedOperationResult::DeleteColumn {
-            sheet_index,
-            column_index,
-        } => editor_state
+        AppliedOperationResult::DeleteColumn { sheet_index, .. } => editor_state
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(|_| {
-                vec![EditorPatch::ColumnDeleted {
-                    patch: ColumnDeletedPatch {
-                        sheet_index,
-                        column_index,
-                    },
-                }]
-            })
+            .cloned()
+            .map(|sheet| vec![sheet_updated_patch(sheet_index, sheet)])
             .unwrap_or_default(),
         AppliedOperationResult::AddSheet {
             sheet_index,
@@ -223,6 +172,12 @@ fn structural_patches(
         | AppliedOperationResult::SetCells { .. }
         | AppliedOperationResult::SetColumnWidth { .. }
         | AppliedOperationResult::SetRowHeight { .. } => Vec::new(),
+    }
+}
+
+fn sheet_updated_patch(sheet_index: usize, sheet: crate::types::SheetData) -> EditorPatch {
+    EditorPatch::SheetUpdated {
+        patch: SheetUpdatedPatch { sheet_index, sheet },
     }
 }
 

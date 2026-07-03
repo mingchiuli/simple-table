@@ -7,6 +7,7 @@ import { applyDocumentPatches } from "@/stores/documentPatches";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import { resetEditorMutationQueue } from "@/composables/useEditorMutationQueue";
 
 type CellPosition = { row: number; col: number };
 
@@ -31,6 +32,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
   }),
   actions: {
     openDocument(data: FileData, path: string | null = null) {
+      resetEditorMutationQueue(this.mutationScope);
       this.mutationScope += 1;
       this.data = data;
       this.currentFilePath = path;
@@ -49,6 +51,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
     },
     clearDocument() {
+      resetEditorMutationQueue(this.mutationScope);
       this.mutationScope += 1;
       this.data = null;
       this.currentFilePath = null;

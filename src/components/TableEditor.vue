@@ -2,7 +2,7 @@
 import type { CellValue, MergeRange } from '@/types';
 import type { SheetRichProjection } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
-import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from '@/components/table-grid';
+import { GridViewportShell } from '@/components/table-grid';
 import { useGridGeometry } from '@/table-geometry/useGridGeometry';
 import { useGridResize } from '@/table-geometry/useGridResize';
 import { useGridViewport } from '@/table-geometry/useGridViewport';
@@ -188,65 +188,38 @@ function handleDeleteColumn(index: number) {
       '--table-header-height': `${HEADER_HEIGHT}px`,
     }"
   >
-    <GridHeaders
+    <GridViewportShell
       :columns="visibleColumns"
       :rows="visibleRows"
       :scroll-left="scrollLeft"
       :scroll-top="scrollTop"
       :total-columns-width="totalColumnsWidth"
       :total-rows-height="totalRowsHeight"
-      @delete-row="handleDeleteRow"
-      @delete-column="handleDeleteColumn"
-    />
-
-    <div :ref="setScrollViewportRef" class="data-viewport" @scroll="handleViewportScroll">
-      <div
-        class="data-scroll-content"
-        :style="{
-          width: `${totalColumnsWidth}px`,
-          height: `${totalRowsHeight}px`,
-        }"
-      >
-        <GridCellsLayer
-          :cells="visibleCellItems"
-          :selected-cell="selectedCell"
-          :is-manual-click="isManualClick"
-          :editing-value="editingValue"
-          :get-key="getCellKey"
-          :get-draft-value="getDraftValue"
-          :get-display-value="getDisplayValue"
-          :is-editing="isEditing"
-          @cell-click="handleCellClick"
-          @cell-double-click="handleCellDoubleClick"
-          @input="handleInput"
-          @commit="handleCommit"
-          @cancel="handleCancel"
-        />
-
-        <MergeCellsLayer
-          :cells="visibleMergeCells"
-          :is-manual-click="isManualClick"
-          :editing-value="editingValue"
-          :get-key="getCellKey"
-          :get-display-value="getDisplayValue"
-          :is-editing="isEditing"
-          @cell-click="handleCellClick"
-          @cell-double-click="handleCellDoubleClick"
-          @input="handleInput"
-          @commit="handleCommit"
-          @cancel="handleCancel"
-        />
-      </div>
-    </div>
-
-    <ResizeLayer
-      :column-handles="visibleColumnResizeHandles"
-      :row-handles="visibleRowResizeHandles"
+      :cells="visibleCellItems"
+      :merge-cells="visibleMergeCells"
+      :selected-cell="selectedCell"
+      :is-manual-click="isManualClick"
+      :editing-value="editingValue"
+      :get-key="getCellKey"
+      :get-draft-value="getDraftValue"
+      :get-display-value="getDisplayValue"
+      :is-editing="isEditing"
+      :column-resize-handles="visibleColumnResizeHandles"
+      :row-resize-handles="visibleRowResizeHandles"
       :resizing-column="resizingColumn"
       :resizing-row="resizingRow"
       :resize-line-x="resizeLineX"
       :resize-line-y="resizeLineY"
       :is-touch-device="isTouchDevice"
+      :set-scroll-viewport-ref="setScrollViewportRef"
+      @scroll="handleViewportScroll"
+      @delete-row="handleDeleteRow"
+      @delete-column="handleDeleteColumn"
+      @cell-click="handleCellClick"
+      @cell-double-click="handleCellDoubleClick"
+      @input="handleInput"
+      @commit="handleCommit"
+      @cancel="handleCancel"
       @column-resize-start="startColumnResize"
       @row-resize-start="startRowResize"
     />
@@ -303,8 +276,7 @@ function handleDeleteColumn(index: number) {
 }
 
 :deep(.column-header-strip),
-:deep(.row-header-strip),
-.data-scroll-content {
+:deep(.row-header-strip) {
   position: relative;
 }
 
@@ -337,23 +309,6 @@ function handleDeleteColumn(index: number) {
   box-shadow:
     inset -1px 0 0 var(--grid-border-color),
     inset 0 -1px 0 var(--grid-border-color);
-}
-
-.data-viewport {
-  position: absolute;
-  left: var(--row-header-width, 60px);
-  right: 0;
-  top: var(--table-header-height, 50px);
-  bottom: 0;
-  z-index: 10;
-  overflow: auto;
-  background: var(--el-bg-color);
-  overscroll-behavior: contain;
-}
-
-.data-scroll-content {
-  min-width: 100%;
-  min-height: 100%;
 }
 
 :deep(.data-cell),
@@ -471,10 +426,6 @@ function handleDeleteColumn(index: number) {
 @media (pointer: coarse) and (hover: none) {
   .table-container {
     font-size: 16px;
-  }
-
-  .data-viewport {
-    -webkit-overflow-scrolling: touch;
   }
 
   :deep(.column-resize-handle) {

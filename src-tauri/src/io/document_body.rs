@@ -227,6 +227,16 @@ impl SpreadsheetDocumentBody {
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
+
+    #[cfg(any(test, debug_assertions))]
+    pub fn validate_projection_consistency(&self, projection: &FileData) -> Result<(), AppError> {
+        match self {
+            Self::Excel(body) => {
+                workbook_state::validate_projection_consistency(&body.workbook, projection)
+            }
+            Self::Csv | Self::GeneratedWorkbook => Ok(()),
+        }
+    }
 }
 
 pub enum BodyRestoreAction {

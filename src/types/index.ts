@@ -163,28 +163,9 @@ export interface SheetDeletedPatch {
   sheetIndex: number;
 }
 
-export interface RowInsertedPatch {
+export interface SheetUpdatedPatch {
   sheetIndex: number;
-  rowIndex: number;
-  row: CellValue[];
-  rowHeight?: number;
-}
-
-export interface RowDeletedPatch {
-  sheetIndex: number;
-  rowIndex: number;
-}
-
-export interface ColumnInsertedPatch {
-  sheetIndex: number;
-  columnIndex: number;
-  values: CellValue[];
-  columnWidth?: number;
-}
-
-export interface ColumnDeletedPatch {
-  sheetIndex: number;
-  columnIndex: number;
+  sheet: SheetData;
 }
 
 export interface SheetShapePatch {
@@ -199,12 +180,9 @@ export interface ResyncRequiredPatch {
 export type EditorPatch =
   | { type: 'Cells'; data: { changes: SheetCellChange[] } }
   | { type: 'Layout'; data: { patch: LayoutPatch } }
-  | { type: 'RowInserted'; data: { patch: RowInsertedPatch } }
-  | { type: 'RowDeleted'; data: { patch: RowDeletedPatch } }
-  | { type: 'ColumnInserted'; data: { patch: ColumnInsertedPatch } }
-  | { type: 'ColumnDeleted'; data: { patch: ColumnDeletedPatch } }
   | { type: 'SheetInserted'; data: { patch: SheetInsertedPatch } }
   | { type: 'SheetDeleted'; data: { patch: SheetDeletedPatch } }
+  | { type: 'SheetUpdated'; data: { patch: SheetUpdatedPatch } }
   | { type: 'SheetShape'; data: { patch: SheetShapePatch } }
   | { type: 'ResyncRequired'; data: { patch: ResyncRequiredPatch } };
 

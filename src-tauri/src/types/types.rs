@@ -308,7 +308,7 @@ pub enum SearchScope {
 }
 
 /// 合并范围
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeRange {
     pub start_row: u32,
@@ -317,7 +317,7 @@ pub struct MergeRange {
     pub end_col: u16,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetData {
     pub name: String,
@@ -336,7 +336,7 @@ pub struct SheetData {
     pub rich: SheetRichProjection,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileData {
     pub path: String,
@@ -344,7 +344,7 @@ pub struct FileData {
     pub sheets: Vec<SheetData>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetRichProjection {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -357,7 +357,7 @@ pub struct SheetRichProjection {
     pub has_more_drawings: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CellStyleProjection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,7 +376,7 @@ pub struct CellStyleProjection {
     pub number_format: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DrawingProjection {
     pub kind: DrawingKind,
@@ -388,7 +388,7 @@ pub struct DrawingProjection {
     pub to_col: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DrawingKind {
     Image,
@@ -649,44 +649,10 @@ pub struct SheetDeletedPatch {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct RowInsertedPatch {
+pub struct SheetUpdatedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-    pub row: Vec<CellValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub row_height: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct RowDeletedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ColumnInsertedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "columnIndex")]
-    pub column_index: usize,
-    pub values: Vec<CellValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column_width: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ColumnDeletedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "columnIndex")]
-    pub column_index: usize,
+    pub sheet: SheetData,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -710,18 +676,12 @@ pub enum EditorPatch {
     Cells { changes: Vec<SheetCellChange> },
     #[serde(rename = "Layout")]
     Layout { patch: LayoutPatch },
-    #[serde(rename = "RowInserted")]
-    RowInserted { patch: RowInsertedPatch },
-    #[serde(rename = "RowDeleted")]
-    RowDeleted { patch: RowDeletedPatch },
-    #[serde(rename = "ColumnInserted")]
-    ColumnInserted { patch: ColumnInsertedPatch },
-    #[serde(rename = "ColumnDeleted")]
-    ColumnDeleted { patch: ColumnDeletedPatch },
     #[serde(rename = "SheetInserted")]
     SheetInserted { patch: SheetInsertedPatch },
     #[serde(rename = "SheetDeleted")]
     SheetDeleted { patch: SheetDeletedPatch },
+    #[serde(rename = "SheetUpdated")]
+    SheetUpdated { patch: SheetUpdatedPatch },
     #[serde(rename = "SheetShape")]
     SheetShape { patch: SheetShapePatch },
     #[serde(rename = "ResyncRequired")]

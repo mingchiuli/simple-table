@@ -11,7 +11,6 @@ import {
   spanSize,
   type GridItem,
 } from "@/table-geometry/gridGeometry";
-import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 import { useMergeLookup } from "@/table-geometry/useMergeLookup";
 
 export type ColumnItem = {
@@ -70,16 +69,14 @@ export function useGridGeometry({
   const committedRowHeights = ref<Record<number, number>>({});
   const previewColumnWidths = ref<Record<number, number>>({});
   const previewRowHeights = ref<Record<number, number>>({});
-  const rows = computed(() => sheet.value.rows);
   const columns = computed(() => sheet.value.columns);
   const merges = computed(() => sheet.value.merges);
   const sourceColumnWidths = computed(() => sheet.value.columnWidths);
   const sourceRowHeights = computed(() => sheet.value.rowHeights);
-  const rich = computed(() => sheet.value.rich);
   const { getMergesIntersecting, isMergedCell, normalizeCellPosition } = useMergeLookup(merges);
 
   function syncColumnWidths() {
-    const nextWidths = sourceColumnWidths.value ? { ...sourceColumnWidths.value } : {};
+    const nextWidths = { ...sourceColumnWidths.value };
     if (!areNumberRecordsEqual(committedColumnWidths.value, nextWidths)) {
       committedColumnWidths.value = nextWidths;
     }
@@ -87,7 +84,7 @@ export function useGridGeometry({
   }
 
   function syncRowHeights() {
-    const nextHeights = sourceRowHeights.value ? { ...sourceRowHeights.value } : {};
+    const nextHeights = { ...sourceRowHeights.value };
     if (!areNumberRecordsEqual(committedRowHeights.value, nextHeights)) {
       committedRowHeights.value = nextHeights;
     }
@@ -110,9 +107,7 @@ export function useGridGeometry({
     ...committedRowHeights.value,
     ...previewRowHeights.value,
   }));
-  const sheetExtent = computed(() =>
-    calculateSheetExtent(rows.value, merges.value, effectiveColumnWidths.value, effectiveRowHeights.value)
-  );
+  const sheetExtent = computed(() => sheet.value.extent);
 
   const columnCount = computed(() => Math.max(columns.value.length, sheetExtent.value.columnCount));
   const rowCount = computed(() => sheetExtent.value.rowCount);
@@ -154,7 +149,7 @@ export function useGridGeometry({
           left: column.left,
           width: column.width,
           height: row.height,
-          value: rows.value[row.index]?.[column.index],
+          value: sheet.value.cellAt(row.index, column.index),
           format: cellFormat(row.index, column.index),
           style: cellStyle(row.index, column.index),
         });
@@ -207,7 +202,7 @@ export function useGridGeometry({
         left,
         width,
         height,
-        value: rows.value[merge.startRow]?.[merge.startCol],
+        value: sheet.value.cellAt(merge.startRow, merge.startCol),
         format: cellFormat(merge.startRow, merge.startCol),
         style: cellStyle(merge.startRow, merge.startCol),
         draftValue: getDraftValue(merge.startRow, merge.startCol),
@@ -284,11 +279,11 @@ export function useGridGeometry({
   }
 
   function cellFormat(rowIndex: number, colIndex: number): CellFormatProjection | undefined {
-    return rich.value?.cellFormats?.[excelCellKey(rowIndex, colIndex)];
+    return sheet.value.formatAt(rowIndex, colIndex);
   }
 
   function cellStyle(rowIndex: number, colIndex: number): CellStyleProjection | undefined {
-    return rich.value?.cellStyles?.[excelCellKey(rowIndex, colIndex)];
+    return sheet.value.styleAt(rowIndex, colIndex);
   }
 
   return {
@@ -312,15 +307,4 @@ export function useGridGeometry({
     resetLayoutFromSource,
     normalizeCellPosition,
   };
-}
-
-function excelCellKey(rowIndex: number, colIndex: number): string {
-  let col = colIndex + 1;
-  let letters = "";
-  while (col > 0) {
-    const rem = (col - 1) % 26;
-    letters = String.fromCharCode(65 + rem) + letters;
-    col = Math.floor((col - 1) / 26);
-  }
-  return `${letters}${rowIndex + 1}`;
 }

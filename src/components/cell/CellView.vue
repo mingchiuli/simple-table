@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CellFormatProjection, CellStyleProjection, CellValue } from '@/types';
-import { cellKind, cellToDisplayString } from '@/utils/cellValue';
+import { formatCellDisplay } from '@/utils/cellFormat';
+import { cellKind } from '@/utils/cellValue';
 
 const props = withDefaults(defineProps<{
   value: CellValue | undefined;
@@ -16,7 +17,7 @@ const props = withDefaults(defineProps<{
 
 const displayValue = computed(() => {
   if (props.draftValue !== undefined) return props.draftValue;
-  return cellToDisplayString(props.value);
+  return formatCellDisplay(props.value, props.format);
 });
 
 const valueKind = computed(() => {

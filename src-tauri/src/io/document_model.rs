@@ -1,14 +1,14 @@
 use crate::error::AppError;
 use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
+use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
 use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_fingerprint};
 use crate::types::{
-    AppliedOperationResult, CellValue, ColumnDeletedPatch, ColumnInsertedPatch, EditorPatch,
-    FileData, LayoutPatch, MergeRange, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
-    SheetCellChange, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetRichProjection,
-    SheetShapePatch, WorkbookCapabilities,
+    AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, MergeRange,
+    ResyncRequiredPatch, SheetCellChange, SheetData, SheetRichProjection, SheetShapePatch,
+    WorkbookCapabilities,
 };
 use crate::types::{FormulaDiagnostics, FormulaStatus};
 use std::collections::{HashMap, HashSet};
@@ -123,9 +123,9 @@ impl FileStructureMemento {
 }
 
 pub(crate) struct RowStructureMemento {
-    sheet_index: usize,
-    row_index: usize,
-    row_count: usize,
+    pub(crate) sheet_index: usize,
+    pub(crate) row_index: usize,
+    pub(crate) row_count: usize,
     row: Option<Vec<CellValue>>,
     merges: Vec<MergeRange>,
     row_heights: Option<HashMap<usize, u32>>,
@@ -154,9 +154,9 @@ impl RowStructureMemento {
 }
 
 pub(crate) struct ColumnStructureMemento {
-    sheet_index: usize,
-    col_index: usize,
-    row_lengths: Vec<usize>,
+    pub(crate) sheet_index: usize,
+    pub(crate) col_index: usize,
+    pub(crate) row_lengths: Vec<usize>,
     values: Vec<Option<CellValue>>,
     merges: Vec<MergeRange>,
     column_widths: Option<HashMap<usize, u32>>,
@@ -184,8 +184,8 @@ impl ColumnStructureMemento {
 }
 
 pub(crate) struct SheetTailMemento {
-    sheet_count: usize,
-    truncate_from: usize,
+    pub(crate) sheet_count: usize,
+    pub(crate) truncate_from: usize,
     sheets: Vec<ProjectionSheetSnapshot>,
 }
 
@@ -315,6 +315,11 @@ impl<'a> DocumentTransaction<'a> {
         if !cell_changes.is_empty()
             && let Err(error) = self.document.patch_workbook_formula_changes(&cell_changes)
         {
+            self.rollback_after_failure(&error)?;
+            return Err(error);
+        }
+
+        if let Err(error) = self.document.validate_projection_consistency() {
             self.rollback_after_failure(&error)?;
             return Err(error);
         }
@@ -756,11 +761,19 @@ impl SpreadsheetDocument {
         self.patch_workbook_formula_changes(&memento.cells)?;
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
-        self.rebuild_formula_runtime();
+        let formula_changes = self.rebuild_formula_runtime();
+        if !formula_changes.is_empty() {
+            self.patch_workbook_formula_changes(&formula_changes)?;
+        }
+        self.validate_projection_consistency()?;
         let mut patches = Vec::new();
-        if !memento.cells.is_empty() {
+        let mut cell_changes = memento.cells.clone();
+        for change in formula_changes {
+            push_sheet_cell_change_if_missing(&mut cell_changes, change);
+        }
+        if !cell_changes.is_empty() {
             patches.push(EditorPatch::Cells {
-                changes: memento.cells.clone(),
+                changes: cell_changes,
             });
         }
         patches.extend(shape_restore_patches(&memento.sheet_shapes));
@@ -828,6 +841,7 @@ impl SpreadsheetDocument {
         }
 
         self.patch_workbook_layout(memento)?;
+        self.validate_projection_consistency()?;
         Ok(DocumentRestoreResult {
             patches: vec![EditorPatch::Layout {
                 patch: LayoutPatch {
@@ -854,6 +868,10 @@ impl SpreadsheetDocument {
         }
         self.refresh_capabilities();
         let formula_changes = self.rebuild_formula_runtime();
+        if !formula_changes.is_empty() {
+            self.patch_workbook_formula_changes(&formula_changes)?;
+        }
+        self.validate_projection_consistency()?;
         let mut patches =
             restore_structure_patches(&current_shape, &memento.projection, &self.projection);
         if patches.is_empty() {
@@ -1104,6 +1122,16 @@ impl SpreadsheetDocument {
         self.cached_capabilities = self.body.capabilities();
     }
 
+    #[cfg(any(test, debug_assertions))]
+    fn validate_projection_consistency(&self) -> Result<(), AppError> {
+        self.body.validate_projection_consistency(&self.projection)
+    }
+
+    #[cfg(not(any(test, debug_assertions)))]
+    fn validate_projection_consistency(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
     pub fn transaction_failure(&self) -> Option<&str> {
         self.transaction_failure.as_deref()
     }
@@ -1126,192 +1154,6 @@ fn push_unique_reason(reasons: &mut Vec<String>, reason: impl Into<String>) {
     let reason = reason.into();
     if !reasons.iter().any(|existing| existing == &reason) {
         reasons.push(reason);
-    }
-}
-
-enum CurrentStructureShape {
-    Empty,
-    Row {
-        sheet_index: usize,
-        row_index: usize,
-        row_count: usize,
-    },
-    Column {
-        sheet_index: usize,
-        column_index: usize,
-        row_lengths: Vec<usize>,
-    },
-    Sheets {
-        sheet_index: usize,
-        sheet_count: usize,
-    },
-}
-
-impl CurrentStructureShape {
-    fn capture(file_data: &FileData, target: &FileStructureMemento) -> Self {
-        match target {
-            FileStructureMemento::Empty { .. } => Self::Empty,
-            FileStructureMemento::Row(memento) => Self::Row {
-                sheet_index: memento.sheet_index,
-                row_index: memento.row_index,
-                row_count: file_data
-                    .sheets
-                    .get(memento.sheet_index)
-                    .map(|sheet| sheet.rows.len())
-                    .unwrap_or_default(),
-            },
-            FileStructureMemento::Column(memento) => Self::Column {
-                sheet_index: memento.sheet_index,
-                column_index: memento.col_index,
-                row_lengths: file_data
-                    .sheets
-                    .get(memento.sheet_index)
-                    .map(|sheet| sheet.rows.iter().map(Vec::len).collect())
-                    .unwrap_or_default(),
-            },
-            FileStructureMemento::Sheets(memento) => Self::Sheets {
-                sheet_index: memento.truncate_from,
-                sheet_count: file_data.sheets.len(),
-            },
-        }
-    }
-}
-
-fn restore_structure_patches(
-    current_shape: &CurrentStructureShape,
-    target_memento: &FileStructureMemento,
-    restored: &FileData,
-) -> Vec<EditorPatch> {
-    match (current_shape, target_memento) {
-        (
-            CurrentStructureShape::Row {
-                sheet_index,
-                row_index,
-                row_count,
-            },
-            FileStructureMemento::Row(target),
-        ) if *sheet_index == target.sheet_index && *row_index == target.row_index => {
-            let target_count = target.row_count;
-            if target_count > *row_count {
-                return restored
-                    .sheets
-                    .get(target.sheet_index)
-                    .map(|sheet| {
-                        vec![EditorPatch::RowInserted {
-                            patch: RowInsertedPatch {
-                                sheet_index: target.sheet_index,
-                                row_index: target.row_index,
-                                row: sheet
-                                    .rows
-                                    .get(target.row_index)
-                                    .cloned()
-                                    .unwrap_or_default(),
-                                row_height: sheet
-                                    .row_heights
-                                    .as_ref()
-                                    .and_then(|heights| heights.get(&target.row_index).copied()),
-                            },
-                        }]
-                    })
-                    .unwrap_or_default();
-            }
-            if target_count < *row_count {
-                return vec![EditorPatch::RowDeleted {
-                    patch: RowDeletedPatch {
-                        sheet_index: target.sheet_index,
-                        row_index: target.row_index,
-                    },
-                }];
-            }
-            Vec::new()
-        }
-        (
-            CurrentStructureShape::Column {
-                sheet_index,
-                column_index,
-                row_lengths,
-            },
-            FileStructureMemento::Column(target),
-        ) if *sheet_index == target.sheet_index && *column_index == target.col_index => {
-            let inserted = target
-                .row_lengths
-                .iter()
-                .zip(row_lengths.iter().chain(std::iter::repeat(&0)))
-                .any(|(target_len, current_len)| target_len > current_len);
-            let deleted = row_lengths
-                .iter()
-                .zip(target.row_lengths.iter().chain(std::iter::repeat(&0)))
-                .any(|(current_len, target_len)| current_len > target_len);
-
-            if inserted {
-                return restored
-                    .sheets
-                    .get(target.sheet_index)
-                    .map(|sheet| {
-                        vec![EditorPatch::ColumnInserted {
-                            patch: ColumnInsertedPatch {
-                                sheet_index: target.sheet_index,
-                                column_index: target.col_index,
-                                values: sheet
-                                    .rows
-                                    .iter()
-                                    .map(|row| {
-                                        row.get(target.col_index)
-                                            .cloned()
-                                            .unwrap_or(CellValue::Null)
-                                    })
-                                    .collect(),
-                                column_width: sheet
-                                    .column_widths
-                                    .as_ref()
-                                    .and_then(|widths| widths.get(&target.col_index).copied()),
-                            },
-                        }]
-                    })
-                    .unwrap_or_default();
-            }
-            if deleted {
-                return vec![EditorPatch::ColumnDeleted {
-                    patch: ColumnDeletedPatch {
-                        sheet_index: target.sheet_index,
-                        column_index: target.col_index,
-                    },
-                }];
-            }
-            Vec::new()
-        }
-        (
-            CurrentStructureShape::Sheets {
-                sheet_index,
-                sheet_count,
-            },
-            FileStructureMemento::Sheets(target),
-        ) if *sheet_index == target.truncate_from => {
-            if target.sheet_count > *sheet_count {
-                return restored
-                    .sheets
-                    .get(target.truncate_from)
-                    .cloned()
-                    .map(|sheet| {
-                        vec![EditorPatch::SheetInserted {
-                            patch: SheetInsertedPatch {
-                                sheet_index: target.truncate_from,
-                                sheet,
-                            },
-                        }]
-                    })
-                    .unwrap_or_default();
-            }
-            if target.sheet_count < *sheet_count {
-                return vec![EditorPatch::SheetDeleted {
-                    patch: SheetDeletedPatch {
-                        sheet_index: target.truncate_from,
-                    },
-                }];
-            }
-            Vec::new()
-        }
-        _ => Vec::new(),
     }
 }
 
@@ -1414,6 +1256,16 @@ fn push_unique_position(
 ) {
     if seen.insert((sheet_index, row, col)) {
         positions.push((sheet_index, row, col));
+    }
+}
+
+fn push_sheet_cell_change_if_missing(changes: &mut Vec<SheetCellChange>, change: SheetCellChange) {
+    if !changes.iter().any(|existing| {
+        existing.sheet_index == change.sheet_index
+            && existing.row == change.row
+            && existing.col == change.col
+    }) {
+        changes.push(change);
     }
 }
 

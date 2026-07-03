@@ -273,17 +273,17 @@ mod tests {
     }
 
     #[test]
-    fn row_and_column_structure_edits_return_local_structure_patches() {
+    fn row_and_column_structure_edits_return_authoritative_sheet_patches() {
         let add_row_response = do_add_row(make_registry(), 0, 1).expect("add row");
         assert!(matches!(
             add_row_response.patches.first(),
-            Some(EditorPatch::RowInserted { patch }) if patch.sheet_index == 0 && patch.row_index == 1
+            Some(EditorPatch::SheetUpdated { patch }) if patch.sheet_index == 0 && patch.sheet.rows.len() == 2
         ));
 
         let add_column_response = do_add_column(make_registry(), 0).expect("add column");
         assert!(matches!(
             add_column_response.patches.first(),
-            Some(EditorPatch::ColumnInserted { patch }) if patch.sheet_index == 0 && patch.column_index == 1
+            Some(EditorPatch::SheetUpdated { patch }) if patch.sheet_index == 0 && patch.sheet.rows[0].len() == 2
         ));
     }
 

@@ -378,10 +378,7 @@ pub fn schedule_index_for_response(
                     );
                 }
             }
-            EditorPatch::RowInserted { .. }
-            | EditorPatch::RowDeleted { .. }
-            | EditorPatch::ColumnInserted { .. }
-            | EditorPatch::ColumnDeleted { .. }
+            EditorPatch::SheetUpdated { .. }
             | EditorPatch::SheetShape { .. }
             | EditorPatch::ResyncRequired { .. }
             | EditorPatch::SheetInserted { .. }
