@@ -602,11 +602,13 @@ impl SpreadsheetDocument {
 
         let cells = positions
             .into_iter()
-            .map(|(sheet_index, row, col)| SheetCellChange {
-                sheet_index,
-                row,
-                col,
-                value: self.projection_cell(sheet_index, row, col),
+            .map(|(sheet_index, row, col)| {
+                SheetCellChange::new(
+                    sheet_index,
+                    row,
+                    col,
+                    self.projection_cell(sheet_index, row, col),
+                )
             })
             .collect();
 
@@ -1029,12 +1031,7 @@ impl SpreadsheetDocument {
         };
 
         *cell = cell.with_formula_result(CellValue::Null, Some(error));
-        vec![SheetCellChange {
-            sheet_index,
-            row,
-            col,
-            value: cell.clone(),
-        }]
+        vec![SheetCellChange::new(sheet_index, row, col, cell.clone())]
     }
 
     fn formula_error_changes_for_all_formulas(&mut self, error: String) -> Vec<SheetCellChange> {
@@ -1046,12 +1043,7 @@ impl SpreadsheetDocument {
                         continue;
                     }
                     *cell = cell.with_formula_result(CellValue::Null, Some(error.clone()));
-                    changes.push(SheetCellChange {
-                        sheet_index,
-                        row,
-                        col,
-                        value: cell.clone(),
-                    });
+                    changes.push(SheetCellChange::new(sheet_index, row, col, cell.clone()));
                 }
             }
         }

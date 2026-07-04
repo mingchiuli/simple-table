@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::AppError;
+use crate::formula::ast::FormulaAstService;
 use crate::formula::reference_rewrite::{
     StructureShift, adjust_formula_references, invalidate_deleted_sheet_references,
 };
@@ -353,13 +354,19 @@ fn adjust_other_sheet_formulas(
     shift: StructureShift,
 ) -> usize {
     let mut skipped = 0;
+    let mut ast_service = FormulaAstService::new();
     for worksheet in workbook.sheet_collection_mut() {
         let current_sheet_name = worksheet.name().to_string();
         if current_sheet_name == target_sheet_name {
             continue;
         }
-        skipped +=
-            adjust_worksheet_formulas(worksheet, target_sheet_name, &current_sheet_name, shift);
+        skipped += adjust_worksheet_formulas(
+            &mut ast_service,
+            worksheet,
+            target_sheet_name,
+            &current_sheet_name,
+            shift,
+        );
     }
     skipped
 }
@@ -457,6 +464,7 @@ fn patch_cell_changes(
 }
 
 fn adjust_worksheet_formulas(
+    ast_service: &mut FormulaAstService,
     worksheet: &mut Worksheet,
     target_sheet_name: &str,
     current_sheet_name: &str,
@@ -467,8 +475,13 @@ fn adjust_worksheet_formulas(
         if !cell.is_formula() {
             continue;
         }
-        let rewrite =
-            adjust_formula_references(cell.formula(), target_sheet_name, current_sheet_name, shift);
+        let rewrite = adjust_formula_references(
+            ast_service,
+            cell.formula(),
+            target_sheet_name,
+            current_sheet_name,
+            shift,
+        );
         if rewrite.skipped {
             skipped += 1;
             continue;
@@ -486,6 +499,7 @@ fn invalidate_sheet_references_before_delete(
 ) -> Result<usize, AppError> {
     let deleted_sheet_name = sheet_name(workbook, sheet_index)?;
     let mut skipped = 0;
+    let mut ast_service = FormulaAstService::new();
     for (current_index, worksheet) in workbook.sheet_collection_mut().iter_mut().enumerate() {
         if current_index == sheet_index {
             continue;
@@ -496,6 +510,7 @@ fn invalidate_sheet_references_before_delete(
                 continue;
             }
             let rewrite = invalidate_deleted_sheet_references(
+                &mut ast_service,
                 cell.formula(),
                 &deleted_sheet_name,
                 &current_sheet_name,

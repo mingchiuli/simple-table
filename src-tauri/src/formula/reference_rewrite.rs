@@ -1,5 +1,6 @@
-use formualizer_parse::parse;
-use formualizer_parse::parser::{ASTNode, ASTNodeType, ReferenceType};
+use formualizer_parse::parser::{ASTNodeType, ReferenceType};
+
+use crate::formula::ast::FormulaAstService;
 
 #[derive(Clone, Copy)]
 pub enum StructureShift {
@@ -16,12 +17,14 @@ pub struct FormulaReferenceRewrite {
 }
 
 pub fn adjust_formula_references(
+    ast_service: &mut FormulaAstService,
     formula: &str,
     target_sheet_name: &str,
     current_sheet_name: &str,
     shift: StructureShift,
 ) -> FormulaReferenceRewrite {
     rewrite_formula_references(
+        ast_service,
         formula,
         target_sheet_name,
         current_sheet_name,
@@ -30,11 +33,13 @@ pub fn adjust_formula_references(
 }
 
 pub fn invalidate_deleted_sheet_references(
+    ast_service: &mut FormulaAstService,
     formula: &str,
     deleted_sheet_name: &str,
     current_sheet_name: &str,
 ) -> FormulaReferenceRewrite {
     rewrite_formula_references(
+        ast_service,
         formula,
         deleted_sheet_name,
         current_sheet_name,
@@ -48,42 +53,6 @@ enum ReferenceRewrite {
     DeletedSheet,
 }
 
-struct FormulaSource<'a> {
-    original: &'a str,
-    parsed: String,
-    added_equals: bool,
-}
-
-impl<'a> FormulaSource<'a> {
-    fn new(original: &'a str) -> Self {
-        let added_equals = !original.starts_with('=');
-        let parsed = if added_equals {
-            format!("={original}")
-        } else {
-            original.to_string()
-        };
-        Self {
-            original,
-            parsed,
-            added_equals,
-        }
-    }
-
-    fn original_span(&self, start: usize, end: usize) -> Option<(usize, usize)> {
-        let offset = usize::from(self.added_equals);
-        let start = start.checked_sub(offset)?;
-        let end = end.checked_sub(offset)?;
-        if start >= end
-            || end > self.original.len()
-            || !self.original.is_char_boundary(start)
-            || !self.original.is_char_boundary(end)
-        {
-            return None;
-        }
-        Some((start, end))
-    }
-}
-
 #[derive(Clone)]
 struct FormulaTextEdit {
     start: usize,
@@ -92,14 +61,14 @@ struct FormulaTextEdit {
 }
 
 fn rewrite_formula_references(
+    ast_service: &mut FormulaAstService,
     formula: &str,
     target_sheet_name: &str,
     current_sheet_name: &str,
     rewrite: ReferenceRewrite,
 ) -> FormulaReferenceRewrite {
-    let source = FormulaSource::new(formula);
-    let ast = match parse(&source.parsed) {
-        Ok(ast) => ast,
+    let parsed = match ast_service.parse(formula) {
+        Ok(parsed) => parsed,
         Err(_) => {
             return FormulaReferenceRewrite {
                 formula: formula.to_string(),
@@ -109,14 +78,33 @@ fn rewrite_formula_references(
     };
 
     let mut edits = Vec::new();
-    collect_reference_edits(
-        &ast,
-        &source,
-        target_sheet_name,
-        current_sheet_name,
-        rewrite,
-        &mut edits,
-    );
+    let mut reference_nodes = Vec::new();
+    parsed.collect_reference_nodes(&mut reference_nodes);
+    for node in reference_nodes {
+        let ASTNodeType::Reference { reference, .. } = &node.node_type else {
+            continue;
+        };
+        if !reference_targets_sheet(reference, target_sheet_name, current_sheet_name) {
+            continue;
+        }
+        let Some(token) = node.source_token.as_ref() else {
+            continue;
+        };
+        let Some((start, end)) = parsed.source().original_span(token.start, token.end) else {
+            continue;
+        };
+        let replacement = match rewrite {
+            ReferenceRewrite::Shift(shift) => adjust_reference(reference.clone(), shift)
+                .map(|reference| reference.normalise())
+                .unwrap_or_else(|| "#REF!".to_string()),
+            ReferenceRewrite::DeletedSheet => "#REF!".to_string(),
+        };
+        edits.push(FormulaTextEdit {
+            start,
+            end,
+            replacement,
+        });
+    }
     if edits.is_empty() {
         return FormulaReferenceRewrite {
             formula: formula.to_string(),
@@ -127,115 +115,6 @@ fn rewrite_formula_references(
     FormulaReferenceRewrite {
         formula: apply_text_edits(formula, edits).unwrap_or_else(|| formula.to_string()),
         skipped: false,
-    }
-}
-
-fn collect_reference_edits(
-    ast: &ASTNode,
-    source: &FormulaSource<'_>,
-    target_sheet_name: &str,
-    current_sheet_name: &str,
-    rewrite: ReferenceRewrite,
-    edits: &mut Vec<FormulaTextEdit>,
-) {
-    match &ast.node_type {
-        ASTNodeType::Reference { reference, .. } => {
-            if !reference_targets_sheet(reference, target_sheet_name, current_sheet_name) {
-                return;
-            }
-            let Some(token) = ast.source_token.as_ref() else {
-                return;
-            };
-            let Some((start, end)) = source.original_span(token.start, token.end) else {
-                return;
-            };
-            let replacement = match rewrite {
-                ReferenceRewrite::Shift(shift) => adjust_reference(reference.clone(), shift)
-                    .map(|reference| reference.normalise())
-                    .unwrap_or_else(|| "#REF!".to_string()),
-                ReferenceRewrite::DeletedSheet => "#REF!".to_string(),
-            };
-            edits.push(FormulaTextEdit {
-                start,
-                end,
-                replacement,
-            });
-        }
-        ASTNodeType::UnaryOp { expr, .. } => {
-            collect_reference_edits(
-                expr,
-                source,
-                target_sheet_name,
-                current_sheet_name,
-                rewrite,
-                edits,
-            );
-        }
-        ASTNodeType::BinaryOp { left, right, .. } => {
-            collect_reference_edits(
-                left,
-                source,
-                target_sheet_name,
-                current_sheet_name,
-                rewrite,
-                edits,
-            );
-            collect_reference_edits(
-                right,
-                source,
-                target_sheet_name,
-                current_sheet_name,
-                rewrite,
-                edits,
-            );
-        }
-        ASTNodeType::Function { args, .. } => {
-            for arg in args {
-                collect_reference_edits(
-                    arg,
-                    source,
-                    target_sheet_name,
-                    current_sheet_name,
-                    rewrite,
-                    edits,
-                );
-            }
-        }
-        ASTNodeType::Call { callee, args } => {
-            collect_reference_edits(
-                callee,
-                source,
-                target_sheet_name,
-                current_sheet_name,
-                rewrite,
-                edits,
-            );
-            for arg in args {
-                collect_reference_edits(
-                    arg,
-                    source,
-                    target_sheet_name,
-                    current_sheet_name,
-                    rewrite,
-                    edits,
-                );
-            }
-        }
-        ASTNodeType::Array(rows) => {
-            for row in rows {
-                for item in row {
-                    collect_reference_edits(
-                        item,
-                        source,
-                        target_sheet_name,
-                        current_sheet_name,
-                        rewrite,
-                        edits,
-                    );
-                }
-            }
-        }
-        ASTNodeType::Literal(_) => {}
     }
 }
 
@@ -575,16 +454,47 @@ fn to_one_based(value: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formula::ast::FormulaAstService;
 
     fn rewritten(outcome: FormulaReferenceRewrite) -> String {
         assert!(!outcome.skipped);
         outcome.formula
     }
 
+    fn adjusted(
+        formula: &str,
+        target_sheet_name: &str,
+        current_sheet_name: &str,
+        shift: StructureShift,
+    ) -> FormulaReferenceRewrite {
+        let mut ast_service = FormulaAstService::new();
+        adjust_formula_references(
+            &mut ast_service,
+            formula,
+            target_sheet_name,
+            current_sheet_name,
+            shift,
+        )
+    }
+
+    fn invalidated(
+        formula: &str,
+        deleted_sheet_name: &str,
+        current_sheet_name: &str,
+    ) -> FormulaReferenceRewrite {
+        let mut ast_service = FormulaAstService::new();
+        invalidate_deleted_sheet_references(
+            &mut ast_service,
+            formula,
+            deleted_sheet_name,
+            current_sheet_name,
+        )
+    }
+
     #[test]
     fn adjusts_formula_references_for_inserted_columns() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "SUM(Inputs!A1:B2)",
                 "Inputs",
                 "Other",
@@ -600,7 +510,7 @@ mod tests {
     #[test]
     fn adjusts_formula_references_for_deleted_rows() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "Inputs!A1+Inputs!A2",
                 "Inputs",
                 "Other",
@@ -616,7 +526,7 @@ mod tests {
     #[test]
     fn leaves_reference_like_text_literals_unchanged() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 r#""Inputs!A1"&Inputs!A1"#,
                 "Inputs",
                 "Other",
@@ -631,7 +541,7 @@ mod tests {
 
     #[test]
     fn leaves_unparseable_formulas_unchanged() {
-        let outcome = adjust_formula_references(
+        let outcome = adjusted(
             "SUM(",
             "Inputs",
             "Other",
@@ -647,7 +557,7 @@ mod tests {
     #[test]
     fn shrinks_ranges_when_deleted_rows_touch_range_edges() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "SUM(Inputs!A1:A3)",
                 "Inputs",
                 "Other",
@@ -660,7 +570,7 @@ mod tests {
         );
 
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "SUM(Inputs!A1:A3)",
                 "Inputs",
                 "Other",
@@ -676,7 +586,7 @@ mod tests {
     #[test]
     fn shrinks_ranges_when_deleted_columns_touch_range_edges() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "SUM(Inputs!A1:C1)",
                 "Inputs",
                 "Other",
@@ -689,7 +599,7 @@ mod tests {
         );
 
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "SUM(Inputs!A1:C1)",
                 "Inputs",
                 "Other",
@@ -705,7 +615,7 @@ mod tests {
     #[test]
     fn removes_ranges_only_when_deleted_rows_cover_whole_range() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "SUM(Inputs!A1:A3)",
                 "Inputs",
                 "Other",
@@ -721,7 +631,7 @@ mod tests {
     #[test]
     fn adjusts_formula_references_with_locked_coordinates_and_quoted_sheets() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "'Input Sheet'!$A$1:$B2",
                 "Input Sheet",
                 "Other",
@@ -737,7 +647,7 @@ mod tests {
     #[test]
     fn leaves_other_sheet_references_unchanged() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "Other!A1+Inputs!A1",
                 "Inputs",
                 "Current",
@@ -753,7 +663,7 @@ mod tests {
     #[test]
     fn preserves_formula_text_outside_rewritten_reference_tokens() {
         assert_eq!(
-            rewritten(adjust_formula_references(
+            rewritten(adjusted(
                 "=sum(  Inputs!a1 , \"Inputs!A1\" , Other!A1 )",
                 "Inputs",
                 "Other",
@@ -769,7 +679,7 @@ mod tests {
     #[test]
     fn invalidates_deleted_sheet_without_reformatting_formula() {
         assert_eq!(
-            rewritten(invalidate_deleted_sheet_references(
+            rewritten(invalidated(
                 "=if( Inputs!A1>0 , \"Inputs!A1\" , Other!A1 )",
                 "Inputs",
                 "Other",

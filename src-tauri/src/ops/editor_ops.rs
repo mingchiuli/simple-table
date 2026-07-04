@@ -6,7 +6,7 @@ use crate::state::editor_state::{EditorState, ExecutedOperation};
 use crate::state::state::{ActiveDocumentStore, EditorSessionInfo, EditorStateInfo};
 use crate::types::{
     AppliedOperationResult, ColumnsDeletedPatch, ColumnsInsertedPatch, EditorMutationResponse,
-    EditorPatch, LayoutPatch, ResyncRequiredPatch, RowsDeletedPatch, RowsInsertedPatch,
+    EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowsDeletedPatch, RowsInsertedPatch,
     SheetCellChange, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetMetadataPatch,
 };
 
@@ -25,6 +25,7 @@ fn mutation_response(
     editor_state: &EditorState,
     patches: Vec<EditorPatch>,
 ) -> EditorMutationResponse {
+    let patches = project_patch_display_formats(editor_state.file_data(), patches);
     EditorMutationResponse {
         protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         document_id: editor_state.document_id(),
@@ -34,6 +35,76 @@ fn mutation_response(
         editor_state: editor_state_info(editor_state),
         patches,
     }
+}
+
+fn project_patch_display_formats(
+    file_data: &FileData,
+    patches: Vec<EditorPatch>,
+) -> Vec<EditorPatch> {
+    patches
+        .into_iter()
+        .map(|patch| match patch {
+            EditorPatch::Cells { changes } => EditorPatch::Cells {
+                changes: changes
+                    .into_iter()
+                    .map(|change| {
+                        let format = cell_display_format(
+                            file_data,
+                            change.sheet_index,
+                            change.row,
+                            change.col,
+                        );
+                        change.with_display_format(format)
+                    })
+                    .collect(),
+            },
+            EditorPatch::RowsInserted { mut patch } => {
+                patch.display_formats = patch
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .map(|(row_offset, row)| {
+                        row.iter()
+                            .enumerate()
+                            .map(|(col, _)| {
+                                cell_display_format(
+                                    file_data,
+                                    patch.sheet_index,
+                                    patch.row_index + row_offset,
+                                    col,
+                                )
+                            })
+                            .collect()
+                    })
+                    .collect();
+                EditorPatch::RowsInserted { patch }
+            }
+            EditorPatch::ColumnsInserted { mut patch } => {
+                patch.display_formats = patch
+                    .values
+                    .iter()
+                    .enumerate()
+                    .map(|(row, _)| {
+                        cell_display_format(file_data, patch.sheet_index, row, patch.col_index)
+                    })
+                    .collect();
+                EditorPatch::ColumnsInserted { patch }
+            }
+            other => other,
+        })
+        .collect()
+}
+
+fn cell_display_format(
+    file_data: &FileData,
+    sheet_index: usize,
+    row: usize,
+    col: usize,
+) -> Option<crate::types::CellFormatProjection> {
+    file_data
+        .sheets
+        .get(sheet_index)
+        .and_then(|sheet| sheet.cell_format_at(row, col))
 }
 
 pub fn resync_required_mutation_response(
@@ -58,12 +129,7 @@ pub fn cell_delta_mutation_response(
     if let AppliedOperationResult::SetCell { sheet_index, cell } = &operation {
         push_cell_change_if_missing(
             &mut cell_changes,
-            SheetCellChange {
-                sheet_index: *sheet_index,
-                row: cell.row,
-                col: cell.col,
-                value: cell.value.clone(),
-            },
+            SheetCellChange::new(*sheet_index, cell.row, cell.col, cell.value.clone()),
         );
     }
     if let AppliedOperationResult::SetCells { changes } = &operation {
@@ -143,6 +209,7 @@ fn structural_patches(
                             .cloned()
                             .map(|row| vec![row])
                             .unwrap_or_default(),
+                        display_formats: Vec::new(),
                     },
                 }];
                 patches.push(sheet_metadata_patch(sheet_index, sheet));
@@ -192,6 +259,7 @@ fn structural_patches(
                                         .unwrap_or(crate::types::CellValue::Null)
                                 })
                                 .collect(),
+                            display_formats: Vec::new(),
                         },
                     },
                     sheet_metadata_patch(sheet_index, sheet),

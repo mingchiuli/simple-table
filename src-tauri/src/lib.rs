@@ -1,4 +1,5 @@
 mod commands;
+mod display;
 mod error;
 mod formula;
 mod io;

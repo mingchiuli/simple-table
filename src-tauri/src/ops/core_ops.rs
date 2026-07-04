@@ -336,11 +336,13 @@ impl ProjectionMutation<'_> {
                 AppliedOperationResult::SetCells {
                     changes: changes
                         .iter()
-                        .map(|change| SheetCellChange {
-                            sheet_index: change.sheet_index,
-                            row: change.row,
-                            col: change.col,
-                            value: change.new_value.clone(),
+                        .map(|change| {
+                            SheetCellChange::new(
+                                change.sheet_index,
+                                change.row,
+                                change.col,
+                                change.new_value.clone(),
+                            )
                         })
                         .collect(),
                 }

@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use formualizer_parse::parser::{CollectPolicy, ReferenceType};
+use formualizer_parse::parser::ReferenceType;
 
+use crate::formula::ast::FormulaAstService;
 use crate::formula::engine::FormulaCellRef;
 use crate::types::{CellValue, FileData, FormulaDiagnostics};
 
@@ -99,6 +100,7 @@ impl FormulaRangeDependencyIndex {
 pub(crate) fn build_dependency_index(
     file_data: &FileData,
     registered_formulas: &HashSet<FormulaCellRef>,
+    ast_service: &mut FormulaAstService,
 ) -> FormulaDependencyIndex {
     let mut index = FormulaDependencyIndex::default();
     let sheet_indexes: HashMap<&str, usize> = file_data
@@ -125,20 +127,24 @@ pub(crate) fn build_dependency_index(
 
                 index.formulas.insert(formula_ref);
 
-                let dependencies =
-                    match collect_formula_dependencies(formula, sheet_index, &sheet_indexes) {
-                        DependencyCollection::Precise(dependencies) => dependencies,
-                        DependencyCollection::Volatile => {
-                            index.diagnostics.volatile_formula_count += 1;
-                            index.always_recalculate.insert(formula_ref);
-                            continue;
-                        }
-                        DependencyCollection::Unsupported => {
-                            index.diagnostics.unsupported_dependency_count += 1;
-                            index.always_recalculate.insert(formula_ref);
-                            continue;
-                        }
-                    };
+                let dependencies = match collect_formula_dependencies(
+                    formula,
+                    sheet_index,
+                    &sheet_indexes,
+                    ast_service,
+                ) {
+                    DependencyCollection::Precise(dependencies) => dependencies,
+                    DependencyCollection::Volatile => {
+                        index.diagnostics.volatile_formula_count += 1;
+                        index.always_recalculate.insert(formula_ref);
+                        continue;
+                    }
+                    DependencyCollection::Unsupported => {
+                        index.diagnostics.unsupported_dependency_count += 1;
+                        index.always_recalculate.insert(formula_ref);
+                        continue;
+                    }
+                };
 
                 for dependency in dependencies.cells {
                     index
@@ -208,10 +214,9 @@ fn collect_formula_dependencies(
     formula: &str,
     current_sheet_index: usize,
     sheet_indexes: &HashMap<&str, usize>,
+    ast_service: &mut FormulaAstService,
 ) -> DependencyCollection {
-    let Ok(ast) =
-        formualizer_parse::parse_with_volatility_classifier(formula, is_volatile_function)
-    else {
+    let Ok(ast) = ast_service.parse(formula) else {
         return DependencyCollection::Unsupported;
     };
     if ast.contains_volatile() {
@@ -219,7 +224,7 @@ fn collect_formula_dependencies(
     }
 
     let mut dependencies = FormulaDependencies::default();
-    for reference in ast.collect_references(&CollectPolicy::default()) {
+    for reference in ast.references() {
         match reference {
             ReferenceType::Cell {
                 sheet, row, col, ..
@@ -301,11 +306,4 @@ fn resolve_reference_sheet(
 
 fn to_zero_based(index: u32) -> Option<usize> {
     usize::try_from(index.checked_sub(1)?).ok()
-}
-
-fn is_volatile_function(name: &str) -> bool {
-    matches!(
-        name.to_ascii_uppercase().as_str(),
-        "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "OFFSET" | "INDIRECT" | "INFO" | "CELL"
-    )
 }

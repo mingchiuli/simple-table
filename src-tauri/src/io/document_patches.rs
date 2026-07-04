@@ -161,6 +161,7 @@ fn row_structure_patch_from(
                             .cloned()
                             .map(|row| vec![row])
                             .unwrap_or_default(),
+                        display_formats: Vec::new(),
                     },
                 }]
             } else {
@@ -198,6 +199,7 @@ fn column_structure_patch_from(
                             .iter()
                             .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
                             .collect(),
+                        display_formats: Vec::new(),
                     },
                 }]
             } else {

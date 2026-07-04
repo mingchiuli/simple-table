@@ -4,6 +4,7 @@ use formualizer_workbook::{LiteralValue, Workbook, WorkbookMode};
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::formula::ast::FormulaAstService;
 use crate::formula::index::{
     FormulaDependencyIndex, build_dependency_index, count_unregistered_formula_cells,
 };
@@ -24,6 +25,7 @@ struct FormulaRegistrationResult {
 
 pub struct FormulaRuntime {
     workbook: Workbook,
+    ast_service: FormulaAstService,
     dependency_index: FormulaDependencyIndex,
     registered_formulas: HashSet<FormulaCellRef>,
 }
@@ -43,6 +45,7 @@ impl FormulaRuntime {
     pub fn empty() -> Self {
         Self {
             workbook: Workbook::new_with_mode(WorkbookMode::Ephemeral),
+            ast_service: FormulaAstService::new(),
             dependency_index: FormulaDependencyIndex::default(),
             registered_formulas: HashSet::new(),
         }
@@ -63,7 +66,8 @@ impl FormulaRuntime {
                 .map_err(|error| AppError::Internal(error.to_string()))?;
         }
 
-        let mut registration_result = register_workbook_cells(&mut workbook, file_data)?;
+        let mut registration_result =
+            register_workbook_cells(&mut workbook, &mut self.ast_service, file_data)?;
         let mut changes = std::mem::take(&mut registration_result.invalid_formulas);
 
         let sheet_names: Vec<String> = file_data
@@ -78,7 +82,8 @@ impl FormulaRuntime {
         apply_cell_changes(file_data, &changes);
         self.workbook = workbook;
         self.registered_formulas = std::mem::take(&mut registration_result.registered_formulas);
-        self.dependency_index = build_dependency_index(file_data, &self.registered_formulas);
+        self.dependency_index =
+            build_dependency_index(file_data, &self.registered_formulas, &mut self.ast_service);
         self.refresh_formula_diagnostics(file_data);
         changes.extend(self.recalculate_all_formula_cells(file_data)?);
         Ok(FormulaRebuildResult {
@@ -115,8 +120,15 @@ impl FormulaRuntime {
         let was_formula = self.dependency_index.formulas.contains(&cell_ref);
         let is_formula = matches!(cell, CellValue::Formula { .. });
 
-        let registration_result =
-            set_workbook_cell(&mut self.workbook, &sheet.name, sheet_index, row, col, cell)?;
+        let registration_result = set_workbook_cell(
+            &mut self.workbook,
+            &mut self.ast_service,
+            &sheet.name,
+            sheet_index,
+            row,
+            col,
+            cell,
+        )?;
         let mut changes = registration_result.invalid_formulas;
         if registration_result.registered_formulas.contains(&cell_ref) {
             self.registered_formulas.insert(cell_ref.clone());
@@ -126,7 +138,8 @@ impl FormulaRuntime {
         apply_cell_changes(file_data, &changes);
 
         if was_formula || is_formula {
-            self.dependency_index = build_dependency_index(file_data, &self.registered_formulas);
+            self.dependency_index =
+                build_dependency_index(file_data, &self.registered_formulas, &mut self.ast_service);
         }
         self.refresh_formula_diagnostics(file_data);
 
@@ -165,6 +178,7 @@ impl FormulaRuntime {
 
             let registration_result = set_workbook_cell(
                 &mut self.workbook,
+                &mut self.ast_service,
                 &sheet.name,
                 cell_ref.sheet_index,
                 cell_ref.row,
@@ -183,7 +197,8 @@ impl FormulaRuntime {
         apply_cell_changes(file_data, &changes);
 
         if dependency_graph_needs_rebuild {
-            self.dependency_index = build_dependency_index(file_data, &self.registered_formulas);
+            self.dependency_index =
+                build_dependency_index(file_data, &self.registered_formulas, &mut self.ast_service);
         }
         self.refresh_formula_diagnostics(file_data);
 
@@ -294,12 +309,12 @@ impl FormulaRuntime {
                 }
             }
 
-            changes.push(SheetCellChange {
-                sheet_index: target.sheet_index,
-                row: target.row,
-                col: target.col,
-                value: cell.clone(),
-            });
+            changes.push(SheetCellChange::new(
+                target.sheet_index,
+                target.row,
+                target.col,
+                cell.clone(),
+            ));
         }
 
         Ok(changes)
@@ -308,6 +323,7 @@ impl FormulaRuntime {
 
 fn register_workbook_cells(
     workbook: &mut Workbook,
+    ast_service: &mut FormulaAstService,
     file_data: &mut FileData,
 ) -> Result<FormulaRegistrationResult, AppError> {
     let mut result = FormulaRegistrationResult::default();
@@ -315,8 +331,15 @@ fn register_workbook_cells(
     for (sheet_index, sheet) in file_data.sheets.iter_mut().enumerate() {
         for (row_idx, row) in sheet.rows.iter_mut().enumerate() {
             for (col_idx, cell) in row.iter_mut().enumerate() {
-                let cell_result =
-                    set_workbook_cell(workbook, &sheet.name, sheet_index, row_idx, col_idx, cell)?;
+                let cell_result = set_workbook_cell(
+                    workbook,
+                    ast_service,
+                    &sheet.name,
+                    sheet_index,
+                    row_idx,
+                    col_idx,
+                    cell,
+                )?;
                 result
                     .registered_formulas
                     .extend(cell_result.registered_formulas);
@@ -330,6 +353,7 @@ fn register_workbook_cells(
 
 fn set_workbook_cell(
     workbook: &mut Workbook,
+    ast_service: &mut FormulaAstService,
     sheet_name: &str,
     sheet_index: usize,
     row_idx: usize,
@@ -341,7 +365,7 @@ fn set_workbook_cell(
     let col = to_formula_index(col_idx);
     match cell {
         CellValue::Formula { formula, .. } => {
-            match validate_formula(formula).and_then(|_| {
+            match ast_service.validate(formula).and_then(|_| {
                 workbook
                     .set_formula(sheet_name, row, col, formula)
                     .map_err(|error| error.to_string())
@@ -358,12 +382,12 @@ fn set_workbook_cell(
                         .set_value(sheet_name, row, col, LiteralValue::Empty)
                         .map_err(|error| AppError::Internal(error.to_string()))?;
                     let value = cell.with_formula_result(CellValue::Null, Some(error));
-                    result.invalid_formulas.push(SheetCellChange {
+                    result.invalid_formulas.push(SheetCellChange::new(
                         sheet_index,
-                        row: row_idx,
-                        col: col_idx,
+                        row_idx,
+                        col_idx,
                         value,
-                    });
+                    ));
                 }
             }
         }
@@ -373,12 +397,6 @@ fn set_workbook_cell(
     }
 
     Ok(result)
-}
-
-fn validate_formula(formula: &str) -> Result<(), String> {
-    formualizer_parse::parser::parse(formula)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
 }
 
 fn apply_cell_changes(file_data: &mut FileData, changes: &[SheetCellChange]) {

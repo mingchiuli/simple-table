@@ -1,3 +1,4 @@
+use crate::display::DisplayProjection;
 use crate::state::state::{EditorSessionInfo, EditorStateInfo};
 use serde::ser::{SerializeMap, SerializeStruct};
 use serde::{Deserialize, Serialize};
@@ -92,35 +93,6 @@ impl CellValue {
         }
     }
 
-    pub fn to_display_string_with_format(&self, format: Option<&CellFormatProjection>) -> String {
-        match self {
-            CellValue::Formula {
-                cached_value,
-                error,
-                ..
-            } => error
-                .clone()
-                .unwrap_or_else(|| cached_value.to_display_string_with_format(format)),
-            CellValue::Number(number) => format
-                .and_then(|format| format.number_format.as_deref())
-                .and_then(|pattern| format_number_with_excel_pattern(number, pattern))
-                .unwrap_or_else(|| self.to_display_string()),
-            _ => self.to_display_string(),
-        }
-    }
-
-    pub fn to_search_string_with_format(&self, format: Option<&CellFormatProjection>) -> String {
-        let display = self.to_display_string_with_format(format);
-        let raw = self.to_display_string();
-        if raw.is_empty() || raw == display {
-            display
-        } else if display.is_empty() {
-            raw
-        } else {
-            format!("{display}\n{raw}")
-        }
-    }
-
     pub fn kind(&self) -> &'static str {
         match self {
             CellValue::Null => "blank",
@@ -172,107 +144,6 @@ impl CellValue {
             _ => self.clone(),
         }
     }
-}
-
-fn format_number_with_excel_pattern(number: &Value, pattern: &str) -> Option<String> {
-    let value = number.as_f64()?;
-    if !value.is_finite() {
-        return None;
-    }
-
-    let normalized = pattern.to_ascii_lowercase();
-    if normalized.contains("yy") || normalized.contains("dd") || normalized.contains("m/") {
-        return format_excel_date(value, pattern);
-    }
-
-    let percent = pattern.contains('%');
-    let displayed = if percent { value * 100.0 } else { value };
-    let decimals = decimal_places(pattern);
-    let formatted = format_fixed_number(displayed, decimals, pattern.contains(','));
-    let currency = pattern
-        .chars()
-        .find(|value| matches!(value, '$' | '¥' | '￥' | '€' | '£'))
-        .map(|value| value.to_string())
-        .unwrap_or_default();
-
-    Some(format!(
-        "{currency}{formatted}{}",
-        if percent { "%" } else { "" }
-    ))
-}
-
-fn decimal_places(pattern: &str) -> usize {
-    let Some(decimal_start) = pattern.find('.') else {
-        return 0;
-    };
-    pattern[decimal_start + 1..]
-        .chars()
-        .take_while(|value| matches!(value, '0' | '#'))
-        .count()
-}
-
-fn format_fixed_number(value: f64, decimals: usize, use_grouping: bool) -> String {
-    let formatted = format!("{value:.decimals$}");
-    if !use_grouping {
-        return formatted;
-    }
-
-    let (negative, unsigned) = formatted
-        .strip_prefix('-')
-        .map(|value| (true, value))
-        .unwrap_or((false, formatted.as_str()));
-    let (integer, fraction) = unsigned
-        .split_once('.')
-        .map(|(integer, fraction)| (integer, Some(fraction)))
-        .unwrap_or((unsigned, None));
-
-    let mut grouped = String::new();
-    for (index, ch) in integer.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            grouped.insert(0, ',');
-        }
-        grouped.insert(0, ch);
-    }
-
-    if negative {
-        grouped.insert(0, '-');
-    }
-    if let Some(fraction) = fraction {
-        grouped.push('.');
-        grouped.push_str(fraction);
-    }
-    grouped
-}
-
-fn format_excel_date(value: f64, pattern: &str) -> Option<String> {
-    let days = value.round() as i64;
-    let (year, month, day) = excel_serial_date_to_ymd(days)?;
-    if pattern.contains('/') {
-        Some(format!("{year:04}/{month:02}/{day:02}"))
-    } else {
-        Some(format!("{year:04}-{month:02}-{day:02}"))
-    }
-}
-
-fn excel_serial_date_to_ymd(days: i64) -> Option<(i32, u32, u32)> {
-    // Excel's 1900 date system is represented here with the same 1899-12-30
-    // epoch used by the frontend display formatter.
-    civil_from_days(days - 25_569)
-}
-
-fn civil_from_days(days: i64) -> Option<(i32, u32, u32)> {
-    let days = days + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = year + i64::from(month <= 2);
-    Some((i32::try_from(year).ok()?, month as u32, day as u32))
 }
 
 pub fn normalize_formula_text(formula: String) -> String {
@@ -513,7 +384,9 @@ impl SheetData {
         self.rows
             .get(row)
             .and_then(|row_data| row_data.get(col))
-            .map(|cell| cell.to_display_string_with_format(self.cell_format_at(row, col).as_ref()))
+            .map(|cell| {
+                DisplayProjection::display_text(cell, self.cell_format_at(row, col).as_ref())
+            })
             .unwrap_or_default()
     }
 
@@ -521,7 +394,9 @@ impl SheetData {
         self.rows
             .get(row)
             .and_then(|row_data| row_data.get(col))
-            .map(|cell| cell.to_search_string_with_format(self.cell_format_at(row, col).as_ref()))
+            .map(|cell| {
+                DisplayProjection::search_text(cell, self.cell_format_at(row, col).as_ref())
+            })
             .unwrap_or_default()
     }
 }
@@ -597,9 +472,7 @@ impl Serialize for CellValueProjection<'_> {
         map.serialize_entry("raw", &self.cell.raw_json_value())?;
         map.serialize_entry(
             "display",
-            &self
-                .cell
-                .to_display_string_with_format(self.format.as_ref()),
+            &DisplayProjection::display_text(self.cell, self.format.as_ref()),
         )?;
         if let Some(format) = &self.format {
             map.serialize_entry("format", format)?;
@@ -618,6 +491,79 @@ impl Serialize for CellValueProjection<'_> {
             map.serialize_entry("formula", &formula_projection)?;
         }
         map.end()
+    }
+}
+
+struct PatchRowsProjection<'a> {
+    rows: &'a [Vec<CellValue>],
+    formats: &'a [Vec<Option<CellFormatProjection>>],
+}
+
+impl Serialize for PatchRowsProjection<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut rows = serializer.serialize_seq(Some(self.rows.len()))?;
+        for (row_index, row) in self.rows.iter().enumerate() {
+            rows.serialize_element(&PatchRowProjection {
+                row,
+                formats: self.formats.get(row_index).map(Vec::as_slice),
+            })?;
+        }
+        rows.end()
+    }
+}
+
+struct PatchRowProjection<'a> {
+    row: &'a [CellValue],
+    formats: Option<&'a [Option<CellFormatProjection>]>,
+}
+
+impl Serialize for PatchRowProjection<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut row = serializer.serialize_seq(Some(self.row.len()))?;
+        for (col_index, cell) in self.row.iter().enumerate() {
+            row.serialize_element(&CellValueProjection {
+                cell,
+                format: self
+                    .formats
+                    .and_then(|formats| formats.get(col_index))
+                    .cloned()
+                    .flatten(),
+            })?;
+        }
+        row.end()
+    }
+}
+
+struct PatchColumnProjection<'a> {
+    values: &'a [CellValue],
+    formats: &'a [Option<CellFormatProjection>],
+}
+
+impl Serialize for PatchColumnProjection<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut values = serializer.serialize_seq(Some(self.values.len()))?;
+        for (row_index, cell) in self.values.iter().enumerate() {
+            values.serialize_element(&CellValueProjection {
+                cell,
+                format: self.formats.get(row_index).cloned().flatten(),
+            })?;
+        }
+        values.end()
     }
 }
 
@@ -766,13 +712,52 @@ pub struct CellChange {
 }
 
 /// 带 sheet 的单元格变化，用于高频编辑的增量响应。
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetCellChange {
     pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
     pub value: CellValue,
+    #[serde(default)]
+    pub display_format: Option<CellFormatProjection>,
+}
+
+impl SheetCellChange {
+    pub fn new(sheet_index: usize, row: usize, col: usize, value: CellValue) -> Self {
+        Self {
+            sheet_index,
+            row,
+            col,
+            value,
+            display_format: None,
+        }
+    }
+
+    pub fn with_display_format(mut self, format: Option<CellFormatProjection>) -> Self {
+        self.display_format = format;
+        self
+    }
+}
+
+impl Serialize for SheetCellChange {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("SheetCellChange", 4)?;
+        state.serialize_field("sheetIndex", &self.sheet_index)?;
+        state.serialize_field("row", &self.row)?;
+        state.serialize_field("col", &self.col)?;
+        state.serialize_field(
+            "value",
+            &CellValueProjection {
+                cell: &self.value,
+                format: self.display_format.clone(),
+            },
+        )?;
+        state.end()
+    }
 }
 
 /// 前端批量提交的单元格编辑请求。
@@ -969,7 +954,7 @@ pub struct SheetMetadataPatch {
     pub rich: SheetRichProjection,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RowsInsertedPatch {
     #[serde(rename = "sheetIndex")]
@@ -977,6 +962,8 @@ pub struct RowsInsertedPatch {
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
     pub rows: Vec<Vec<CellValue>>,
+    #[serde(default)]
+    pub display_formats: Vec<Vec<Option<CellFormatProjection>>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -989,7 +976,7 @@ pub struct RowsDeletedPatch {
     pub count: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnsInsertedPatch {
     #[serde(rename = "sheetIndex")]
@@ -997,6 +984,46 @@ pub struct ColumnsInsertedPatch {
     #[serde(rename = "colIndex")]
     pub col_index: usize,
     pub values: Vec<CellValue>,
+    #[serde(default)]
+    pub display_formats: Vec<Option<CellFormatProjection>>,
+}
+
+impl Serialize for RowsInsertedPatch {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("RowsInsertedPatch", 3)?;
+        state.serialize_field("sheetIndex", &self.sheet_index)?;
+        state.serialize_field("rowIndex", &self.row_index)?;
+        state.serialize_field(
+            "rows",
+            &PatchRowsProjection {
+                rows: &self.rows,
+                formats: &self.display_formats,
+            },
+        )?;
+        state.end()
+    }
+}
+
+impl Serialize for ColumnsInsertedPatch {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("ColumnsInsertedPatch", 3)?;
+        state.serialize_field("sheetIndex", &self.sheet_index)?;
+        state.serialize_field("colIndex", &self.col_index)?;
+        state.serialize_field(
+            "values",
+            &PatchColumnProjection {
+                values: &self.values,
+                formats: &self.display_formats,
+            },
+        )?;
+        state.end()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -252,7 +252,11 @@ mod tests {
     use super::*;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;
-    use crate::types::{CellValue, EditorPatch, FileData, SheetData};
+    use crate::types::{
+        CellFormatProjection, CellValue, EditorPatch, FileData, SheetData, SheetRichProjection,
+    };
+    use serde_json::Value;
+    use std::collections::HashMap;
 
     fn make_registry() -> Arc<RwLock<ActiveDocumentStore>> {
         let editor = EditorState::with_workbook(
@@ -262,6 +266,34 @@ mod tests {
                 sheets: vec![SheetData {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let mut registry = ActiveDocumentStore::new_for_test();
+        registry.replace_active(editor);
+        Arc::new(RwLock::new(registry))
+    }
+
+    fn make_formatted_registry() -> Arc<RwLock<ActiveDocumentStore>> {
+        let editor = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "test.xlsx".to_string(),
+                sheets: vec![SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::Number(Value::from(0.4))]],
+                    rich: SheetRichProjection {
+                        cell_formats: HashMap::from([(
+                            "A1".to_string(),
+                            CellFormatProjection {
+                                number_format: Some("0%".to_string()),
+                                style_id: None,
+                            },
+                        )]),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
             },
@@ -313,6 +345,22 @@ mod tests {
                 .patches
                 .iter()
                 .any(|patch| matches!(patch, EditorPatch::Cells { .. }))
+        );
+    }
+
+    #[test]
+    fn cell_delta_serializes_formatted_display_projection() {
+        let response = do_set_cell(make_formatted_registry(), 0, 0, 0, "0.5".to_string())
+            .expect("set formatted cell");
+        let json = serde_json::to_value(response).expect("serialize response");
+
+        assert_eq!(
+            json["patches"][0]["data"]["changes"][0]["value"]["display"],
+            "50%"
+        );
+        assert_eq!(
+            json["patches"][0]["data"]["changes"][0]["value"]["format"]["numberFormat"],
+            "0%"
         );
     }
 }
