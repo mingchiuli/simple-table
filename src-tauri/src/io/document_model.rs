@@ -1,16 +1,17 @@
 use crate::error::AppError;
-use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
+use crate::formula::engine::FormulaCellRef;
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
-use crate::io::workbook_state::StructurePatchDiagnostics;
+use crate::io::document_transaction::DocumentTransaction;
+use crate::io::formula_coordinator::FormulaCoordinator;
 use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_fingerprint};
+use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, MergeRange,
     ResyncRequiredPatch, SheetCellChange, SheetData, SheetRichProjection, SheetShapePatch,
     WorkbookCapabilities,
 };
-use crate::types::{FormulaDiagnostics, FormulaStatus};
 use std::collections::{HashMap, HashSet};
 use umya_spreadsheet::Workbook;
 
@@ -237,136 +238,19 @@ pub struct SpreadsheetDocument {
     projection: FileData,
     body: SpreadsheetDocumentBody,
     cached_capabilities: WorkbookCapabilities,
-    formula_runtime: FormulaRuntime,
-    formula_status: FormulaStatus,
-    pending_structure_diagnostics: StructurePatchDiagnostics,
+    formulas: FormulaCoordinator,
     transaction_failure: Option<String>,
-}
-
-struct DocumentTransaction<'a> {
-    document: &'a mut SpreadsheetDocument,
-    operation: &'a AppliedOperation,
-    rollback: &'a DocumentMementoSide,
-}
-
-struct FormulaProjectionService;
-
-impl FormulaProjectionService {
-    fn rebuild(
-        runtime: &mut FormulaRuntime,
-        status: &mut FormulaStatus,
-        pending_structure_diagnostics: &mut StructurePatchDiagnostics,
-        projection: &mut FileData,
-    ) -> Vec<SheetCellChange> {
-        match runtime.rebuild_with_diagnostics(projection) {
-            Ok(result) => {
-                let mut diagnostics = result.diagnostics;
-                Self::merge_structure_diagnostics(pending_structure_diagnostics, &mut diagnostics);
-                *status = FormulaStatus::ready(diagnostics);
-                result.changes
-            }
-            Err(error) => {
-                eprintln!("Formula runtime rebuild failed: {error}");
-                *runtime = FormulaRuntime::empty();
-                *status = FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default());
-                Vec::new()
-            }
-        }
-    }
-
-    fn merge_structure_diagnostics(
-        pending_structure_diagnostics: &mut StructurePatchDiagnostics,
-        diagnostics: &mut FormulaDiagnostics,
-    ) {
-        diagnostics.skipped_reference_rewrite_count +=
-            pending_structure_diagnostics.skipped_formula_reference_rewrites;
-        *pending_structure_diagnostics = StructurePatchDiagnostics::default();
-    }
-}
-
-impl<'a> DocumentTransaction<'a> {
-    fn new(
-        document: &'a mut SpreadsheetDocument,
-        operation: &'a AppliedOperation,
-        rollback: &'a DocumentMementoSide,
-    ) -> Self {
-        Self {
-            document,
-            operation,
-            rollback,
-        }
-    }
-
-    fn commit(&mut self) -> Result<DocumentOperationResult, AppError> {
-        let result = self
-            .document
-            .apply_operation_to_body_and_projection(self.operation)?;
-
-        if let Err(error) =
-            self.document
-                .patch_workbook_after_operation(self.operation, &result, &[])
-        {
-            self.rollback_after_failure(&error)?;
-            return Err(error);
-        }
-
-        let cell_changes = self.document.recalculate_after_operation(self.operation);
-
-        if !cell_changes.is_empty()
-            && let Err(error) = self.document.patch_workbook_formula_changes(&cell_changes)
-        {
-            self.rollback_after_failure(&error)?;
-            return Err(error);
-        }
-
-        if self.operation.impact().is_structure_change()
-            && let Err(error) = self.document.validate_persisted_projection_consistency()
-        {
-            self.rollback_after_failure(&error)?;
-            return Err(error);
-        }
-
-        if let Err(error) = self.document.validate_projection_consistency() {
-            self.rollback_after_failure(&error)?;
-            return Err(error);
-        }
-
-        Ok(DocumentOperationResult {
-            operation: result,
-            cell_changes,
-        })
-    }
-
-    fn rollback_after_failure(&mut self, operation_error: &AppError) -> Result<(), AppError> {
-        match self.document.restore_memento_side(self.rollback) {
-            Ok(_) => Ok(()),
-            Err(rollback_error) => {
-                let operation_error = operation_error.to_string();
-                let rollback_error = rollback_error.to_string();
-                self.document.mark_transaction_failed(format!(
-                    "operation failed ({operation_error}) and rollback failed ({rollback_error})"
-                ));
-                Err(AppError::TransactionRollbackFailed {
-                    operation_error,
-                    rollback_error,
-                })
-            }
-        }
-    }
 }
 
 impl Clone for SpreadsheetDocument {
     fn clone(&self) -> Self {
         let mut projection = self.projection.clone();
-        let formula_runtime =
-            FormulaRuntime::new(&mut projection).unwrap_or_else(|_| FormulaRuntime::empty());
+        let formulas = FormulaCoordinator::new(&mut projection);
         Self {
             projection,
             body: self.clone_body(),
             cached_capabilities: self.cached_capabilities.clone(),
-            formula_runtime,
-            formula_status: self.formula_status.clone(),
-            pending_structure_diagnostics: StructurePatchDiagnostics::default(),
+            formulas,
             transaction_failure: self.transaction_failure.clone(),
         }
     }
@@ -374,20 +258,7 @@ impl Clone for SpreadsheetDocument {
 
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
-        let (formula_runtime, formula_status) = match FormulaRuntime::new(&mut projection) {
-            Ok(runtime) => {
-                let status = FormulaStatus::ready(runtime.diagnostics());
-                (runtime, status)
-            }
-            Err(error) => {
-                eprintln!("Formula runtime initialization failed: {error}");
-                (
-                    FormulaRuntime::empty(),
-                    FormulaStatus::degraded(error.to_string(), FormulaDiagnostics::default()),
-                )
-            }
-        };
-
+        let formulas = FormulaCoordinator::new(&mut projection);
         let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
         let cached_capabilities = body.capabilities();
 
@@ -395,9 +266,7 @@ impl SpreadsheetDocument {
             projection,
             body,
             cached_capabilities,
-            formula_runtime,
-            formula_status,
-            pending_structure_diagnostics: StructurePatchDiagnostics::default(),
+            formulas,
             transaction_failure: None,
         }
     }
@@ -411,9 +280,10 @@ impl SpreadsheetDocument {
             projection: self.projection.clone(),
             body: self.clone_body(),
             cached_capabilities: self.cached_capabilities.clone(),
-            formula_runtime: FormulaRuntime::empty(),
-            formula_status: self.formula_status.clone(),
-            pending_structure_diagnostics: self.pending_structure_diagnostics,
+            formulas: FormulaCoordinator::snapshot(
+                self.formulas.status(),
+                self.formulas.pending_structure_diagnostics(),
+            ),
             transaction_failure: self.transaction_failure.clone(),
         }
     }
@@ -428,7 +298,7 @@ impl SpreadsheetDocument {
     }
 
     pub fn formula_status(&self) -> FormulaStatus {
-        self.formula_status.clone()
+        self.formulas.status()
     }
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
@@ -537,7 +407,7 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn restore_memento_side(
+    pub(crate) fn restore_memento_side(
         &mut self,
         side: &DocumentMementoSide,
     ) -> Result<DocumentRestoreResult, AppError> {
@@ -550,12 +420,9 @@ impl SpreadsheetDocument {
 
     fn cell_memento(&self, changed_cells: impl IntoIterator<Item = FormulaCellRef>) -> CellMemento {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
-        let formula_cells = match &self.formula_status {
-            FormulaStatus::Ready { .. } => self
-                .formula_runtime
-                .impacted_formula_cells_for(changed_cells.iter().copied()),
-            FormulaStatus::Degraded { .. } => self.formula_cell_positions(),
-        };
+        let formula_cells = self
+            .formulas
+            .impacted_cells_for_memento(changed_cells.iter().copied(), &self.projection);
         self.cell_positions_memento(
             changed_cells
                 .into_iter()
@@ -616,28 +483,6 @@ impl SpreadsheetDocument {
             cells,
             sheet_shapes,
         }
-    }
-
-    fn formula_cell_positions(&self) -> Vec<FormulaCellRef> {
-        let mut positions = self.formula_runtime.all_formula_cells();
-        let mut seen: HashSet<_> = positions.iter().copied().collect();
-        for (sheet_index, sheet) in self.projection.sheets.iter().enumerate() {
-            for (row, row_data) in sheet.rows.iter().enumerate() {
-                for (col, cell) in row_data.iter().enumerate() {
-                    if matches!(cell, CellValue::Formula { .. }) {
-                        let cell_ref = FormulaCellRef {
-                            sheet_index,
-                            row,
-                            col,
-                        };
-                        if seen.insert(cell_ref) {
-                            positions.push(cell_ref);
-                        }
-                    }
-                }
-            }
-        }
-        positions
     }
 
     fn layout_memento(
@@ -783,7 +628,7 @@ impl SpreadsheetDocument {
         self.patch_workbook_formula_changes(&memento.cells)?;
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
-        let formula_changes = self.rebuild_formula_runtime();
+        let formula_changes = self.formulas.rebuild(&mut self.projection);
         if !formula_changes.is_empty() {
             self.patch_workbook_formula_changes(&formula_changes)?;
         }
@@ -889,7 +734,7 @@ impl SpreadsheetDocument {
             }
         }
         self.refresh_capabilities();
-        let formula_changes = self.rebuild_formula_runtime();
+        let formula_changes = self.formulas.rebuild(&mut self.projection);
         if !formula_changes.is_empty() {
             self.patch_workbook_formula_changes(&formula_changes)?;
         }
@@ -912,156 +757,15 @@ impl SpreadsheetDocument {
         Ok(DocumentRestoreResult { patches })
     }
 
-    fn recalculate_after_operation(
+    pub(crate) fn recalculate_after_operation(
         &mut self,
         operation: &AppliedOperation,
     ) -> Vec<SheetCellChange> {
-        match operation {
-            AppliedOperation::SetCell {
-                sheet_index,
-                row,
-                col,
-                new_value,
-                ..
-            } => {
-                let result = self.formula_runtime.sync_cell_and_recalculate(
-                    &mut self.projection,
-                    *sheet_index,
-                    *row,
-                    *col,
-                );
-
-                match result {
-                    Ok(changes) => {
-                        self.formula_status =
-                            FormulaStatus::ready(self.formula_runtime.diagnostics());
-                        changes
-                    }
-                    Err(error) => {
-                        eprintln!("Formula recalculation failed: {error}");
-                        let changes = self.formula_error_change(
-                            *sheet_index,
-                            *row,
-                            *col,
-                            new_value,
-                            error.to_string(),
-                        );
-                        self.rebuild_formula_runtime();
-                        changes
-                    }
-                }
-            }
-            AppliedOperation::SetCells { changes } => {
-                let changed_cell_refs: Vec<FormulaCellRef> = changes
-                    .iter()
-                    .map(|change| FormulaCellRef {
-                        sheet_index: change.sheet_index,
-                        row: change.row,
-                        col: change.col,
-                    })
-                    .collect();
-                match self
-                    .formula_runtime
-                    .sync_cells_and_recalculate(&mut self.projection, changed_cell_refs)
-                {
-                    Ok(changes) => {
-                        self.formula_status =
-                            FormulaStatus::ready(self.formula_runtime.diagnostics());
-                        changes
-                    }
-                    Err(error) => {
-                        eprintln!("Formula recalculation failed: {error}");
-                        let error = error.to_string();
-                        let mut formula_errors = Vec::new();
-                        for change in changes {
-                            formula_errors.extend(self.formula_error_change(
-                                change.sheet_index,
-                                change.row,
-                                change.col,
-                                &change.new_value,
-                                error.clone(),
-                            ));
-                        }
-                        self.rebuild_formula_runtime();
-                        formula_errors
-                    }
-                }
-            }
-            AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
-                Vec::new()
-            }
-            _ => match self
-                .formula_runtime
-                .rebuild_with_diagnostics(&mut self.projection)
-            {
-                Ok(result) => {
-                    let mut diagnostics = result.diagnostics;
-                    self.merge_structure_diagnostics(&mut diagnostics);
-                    self.formula_status = FormulaStatus::ready(diagnostics);
-                    result.changes
-                }
-                Err(error) => {
-                    eprintln!("Formula recalculation failed: {error}");
-                    self.formula_error_changes_for_all_formulas(error.to_string())
-                }
-            },
-        }
+        self.formulas
+            .recalculate_after_operation(operation, &mut self.projection)
     }
 
-    fn formula_error_change(
-        &mut self,
-        sheet_index: usize,
-        row: usize,
-        col: usize,
-        value: &CellValue,
-        error: String,
-    ) -> Vec<SheetCellChange> {
-        if !matches!(value, CellValue::Formula { .. }) {
-            return Vec::new();
-        }
-
-        let Some(cell) = self
-            .projection
-            .sheets
-            .get_mut(sheet_index)
-            .and_then(|sheet| sheet.rows.get_mut(row))
-            .and_then(|row_data| row_data.get_mut(col))
-        else {
-            return Vec::new();
-        };
-
-        *cell = cell.with_formula_result(CellValue::Null, Some(error));
-        vec![SheetCellChange::new(sheet_index, row, col, cell.clone())]
-    }
-
-    fn formula_error_changes_for_all_formulas(&mut self, error: String) -> Vec<SheetCellChange> {
-        let mut changes = Vec::new();
-        for (sheet_index, sheet) in self.projection.sheets.iter_mut().enumerate() {
-            for (row, row_data) in sheet.rows.iter_mut().enumerate() {
-                for (col, cell) in row_data.iter_mut().enumerate() {
-                    if !matches!(cell, CellValue::Formula { .. }) {
-                        continue;
-                    }
-                    *cell = cell.with_formula_result(CellValue::Null, Some(error.clone()));
-                    changes.push(SheetCellChange::new(sheet_index, row, col, cell.clone()));
-                }
-            }
-        }
-        self.formula_runtime = FormulaRuntime::empty();
-        self.formula_status = FormulaStatus::degraded(error, FormulaDiagnostics::default());
-        changes
-    }
-
-    fn rebuild_formula_runtime(&mut self) -> Vec<SheetCellChange> {
-        FormulaProjectionService::rebuild(
-            &mut self.formula_runtime,
-            &mut self.formula_status,
-            &mut self.pending_structure_diagnostics,
-            &mut self.projection,
-        )
-    }
-
-    fn patch_workbook_after_operation(
+    pub(crate) fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
         _result: &AppliedOperationResult,
@@ -1072,7 +776,7 @@ impl SpreadsheetDocument {
             .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
     }
 
-    fn apply_operation_to_body_and_projection(
+    pub(crate) fn apply_operation_to_body_and_projection(
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
@@ -1080,7 +784,8 @@ impl SpreadsheetDocument {
             .body
             .apply_structure_operation(&mut self.projection, operation)?
         {
-            self.pending_structure_diagnostics = result.diagnostics;
+            self.formulas
+                .set_pending_structure_diagnostics(result.diagnostics);
             self.refresh_capabilities();
             self.validate_persisted_projection_consistency()?;
             return Ok(result.result);
@@ -1096,7 +801,7 @@ impl SpreadsheetDocument {
             }))
     }
 
-    fn patch_workbook_formula_changes(
+    pub(crate) fn patch_workbook_formula_changes(
         &mut self,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
@@ -1139,16 +844,16 @@ impl SpreadsheetDocument {
     }
 
     #[cfg(any(test, debug_assertions))]
-    fn validate_projection_consistency(&self) -> Result<(), AppError> {
+    pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {
         self.body.validate_projection_consistency(&self.projection)
     }
 
     #[cfg(not(any(test, debug_assertions)))]
-    fn validate_projection_consistency(&self) -> Result<(), AppError> {
+    pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {
         Ok(())
     }
 
-    fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
+    pub(crate) fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
         self.body
             .validate_persisted_projection_consistency(&self.projection)
     }
@@ -1157,17 +862,10 @@ impl SpreadsheetDocument {
         self.transaction_failure.as_deref()
     }
 
-    fn mark_transaction_failed(&mut self, reason: String) {
+    pub(crate) fn mark_transaction_failed(&mut self, reason: String) {
         self.refresh_capabilities();
         self.transaction_failure = Some(reason.clone());
-        self.formula_status = FormulaStatus::degraded(reason, FormulaDiagnostics::default());
-    }
-
-    fn merge_structure_diagnostics(&mut self, diagnostics: &mut FormulaDiagnostics) {
-        diagnostics.skipped_reference_rewrite_count += self
-            .pending_structure_diagnostics
-            .skipped_formula_reference_rewrites;
-        self.pending_structure_diagnostics = StructurePatchDiagnostics::default();
+        self.formulas.mark_degraded(reason);
     }
 }
 

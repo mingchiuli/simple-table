@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::error::AppError;
+use crate::io::projection_mapper::ProjectionMapper;
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
     MergeRange, SheetData, SheetRichProjection,
@@ -41,17 +42,12 @@ fn read_xlsx_from_bytes(
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
     let workbook = read_workbook_from_reader(cursor)?;
-    let mut sheets = Vec::new();
-
-    for worksheet in workbook.sheet_collection() {
-        sheets.push(read_worksheet(worksheet));
-    }
 
     Ok(ReadFileResult {
         file_data: FileData {
             path,
             file_name,
-            sheets,
+            sheets: ProjectionMapper::sheets_from_workbook(&workbook),
         },
         workbook: Some(workbook),
     })

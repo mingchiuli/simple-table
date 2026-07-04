@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use crate::error::AppError;
 use crate::io::codec::writer;
+use crate::io::projection_mapper::ProjectionMapper;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
 use crate::types::{AppliedOperationResult, FileData, SheetCellChange, WorkbookCapabilities};
@@ -155,12 +156,9 @@ impl SpreadsheetDocumentBody {
             Self::Excel(body) => {
                 let diagnostics =
                     workbook_state::apply_structure_operation(&mut body.workbook, operation)?;
-                workbook_state::refresh_projection_from_workbook(&body.workbook, projection);
-                workbook_state::sync_all_merge_ranges_from_projection(
-                    &mut body.workbook,
-                    projection,
-                )?;
-                workbook_state::refresh_projection_from_workbook(&body.workbook, projection);
+                ProjectionMapper::refresh_file_data_from_workbook(&body.workbook, projection);
+                ProjectionMapper::sync_merge_ranges_to_workbook(&mut body.workbook, projection)?;
+                ProjectionMapper::refresh_file_data_from_workbook(&body.workbook, projection);
                 Ok(Some(BodyStructureOperationResult {
                     result: operation
                         .patch_projector()
@@ -237,7 +235,7 @@ impl SpreadsheetDocumentBody {
 
     pub fn refresh_projection_from_workbook(&self, projection: &mut FileData) {
         if let Self::Excel(body) = self {
-            workbook_state::refresh_projection_from_workbook(&body.workbook, projection);
+            ProjectionMapper::refresh_file_data_from_workbook(&body.workbook, projection);
         }
     }
 
@@ -245,7 +243,7 @@ impl SpreadsheetDocumentBody {
     pub fn validate_projection_consistency(&self, projection: &FileData) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
-                workbook_state::validate_projection_consistency(&body.workbook, projection)
+                ProjectionMapper::validate_workbook_matches_projection(&body.workbook, projection)
             }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
@@ -257,7 +255,7 @@ impl SpreadsheetDocumentBody {
     ) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
-                workbook_state::validate_projection_consistency(&body.workbook, projection)
+                ProjectionMapper::validate_workbook_matches_projection(&body.workbook, projection)
             }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }

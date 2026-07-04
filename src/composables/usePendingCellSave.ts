@@ -1,11 +1,14 @@
-import type { ComputedRef, Ref } from 'vue';
+import { computed, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import * as api from '@/api';
-import { usePendingCellSavesStore, type CellSaveRequest } from '@/stores/pendingCellSaves';
-import { useDocumentSessionStore } from '@/stores/documentSession';
-import type { CellValue, EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
-import { blankCell, cellToEditorString } from '@/utils/cellValue';
-import { getCellKey } from '@/utils/cellKey';
+import { useCellEditTransactions } from '@/composables/useCellEditTransactions';
 import { enqueueEditorMutation } from '@/composables/useEditorMutationQueue';
+import { useDocumentSessionStore } from '@/stores/documentSession';
+import type { CellSaveRequest } from '@/stores/pendingCellSaves';
+import type { ComputedRef, Ref } from 'vue';
+import type { EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
+import { cellToEditorString } from '@/utils/cellValue';
+import { getCellKey } from '@/utils/cellKey';
 
 type CellPosition = { row: number; col: number };
 
@@ -32,45 +35,42 @@ export function usePendingCellSave({
   markPendingContentChange,
   clearPendingContentChange,
 }: UsePendingCellSaveOptions) {
-  const pendingCellSavesStore = usePendingCellSavesStore();
   const documentSessionStore = useDocumentSessionStore();
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const draftCellValues = pendingCellSavesStore.draftCellValues;
-  let pendingSavePromise: Promise<boolean> | null = null;
 
-  function cellKey(sheetIndex: number, row: number, col: number) {
-    return getCellKey(sheetIndex, row, col);
-  }
-
-  function saveState(sheetIndex: number, row: number, col: number) {
-    return pendingCellSavesStore.stateFor(cellKey(sheetIndex, row, col));
-  }
-
-  function hasPendingWork() {
-    return !pendingCellSavesStore.isIdle() || pendingSavePromise !== null;
-  }
+  const transactions = useCellEditTransactions({
+    fileData,
+    commitBatch,
+    markPendingContentChange,
+    clearPendingContentChange,
+    onBatchCommitted: refreshSelectedEditorValue,
+    onCommitFailed: handleCommitFailed,
+  });
 
   const currentCellValue = computed(() => {
     if (!selectedCell.value || !currentSheet.value) return undefined;
     return currentSheet.value.rows[selectedCell.value.row]?.[selectedCell.value.col];
   });
 
-  watch(selectedCell, (newCell) => {
-    if (newCell && currentSheet.value) {
-      cellEditorValue.value = editorStringForCell(currentSheetIndex.value, newCell.row, newCell.col);
-    } else {
-      cellEditorValue.value = '';
-    }
-  }, { immediate: true });
+  watch(
+    selectedCell,
+    (newCell) => {
+      if (newCell && currentSheet.value) {
+        cellEditorValue.value = transactions.editorStringForCell(
+          currentSheetIndex.value,
+          newCell.row,
+          newCell.col
+        );
+      } else {
+        cellEditorValue.value = '';
+      }
+    },
+    { immediate: true }
+  );
 
   watch(currentCellValue, () => {
     const key = selectedCellKey();
-    if (selectedCell.value && (!key || !draftCellValues.has(key))) {
-      cellEditorValue.value = editorStringForCell(
-        currentSheetIndex.value,
-        selectedCell.value.row,
-        selectedCell.value.col
-      );
+    if (selectedCell.value && (!key || !transactions.draftCellValues.has(key))) {
+      refreshSelectedEditorValue();
     }
   });
 
@@ -78,87 +78,10 @@ export function usePendingCellSave({
     if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
 
     const { row, col } = selectedCell.value;
-    updateDraftCell(currentSheetIndex.value, row, col, newValue);
+    transactions.updateDraftCell(currentSheetIndex.value, row, col, newValue);
   });
 
-  function selectedCellKey() {
-    if (!selectedCell.value) return null;
-    return cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col);
-  }
-
-  function committedCellValue(sheetIndex: number, row: number, col: number): CellValue {
-    return fileData.value?.sheets[sheetIndex]?.rows[row]?.[col] ?? blankCell();
-  }
-
-  function visibleBaseEditorString(sheetIndex: number, row: number, col: number): string {
-    const { active } = saveState(sheetIndex, row, col);
-    return active?.value ?? cellToEditorString(committedCellValue(sheetIndex, row, col));
-  }
-
-  function editorStringForCell(sheetIndex: number, row: number, col: number): string {
-    const { draft } = saveState(sheetIndex, row, col);
-    return draft ?? visibleBaseEditorString(sheetIndex, row, col);
-  }
-
-  function updateDraftCell(sheetIndex: number, row: number, col: number, value: string) {
-    const { key } = saveState(sheetIndex, row, col);
-    const committedValue = committedCellValue(sheetIndex, row, col);
-    const result = pendingCellSavesStore.applyDraft(key, {
-      sheetIndex,
-      row,
-      col,
-      value,
-      oldValue: committedValue,
-    }, committedValue);
-
-    handleQueueResult(result);
-  }
-
-  function handleQueueResult(result: {
-    queued: boolean;
-    shouldMarkPending: boolean;
-    shouldClearPendingIfIdle: boolean;
-  }) {
-    if (result.shouldMarkPending) {
-      markPendingContentChange();
-    }
-    if (result.queued) {
-      schedulePendingSave();
-      return;
-    }
-  }
-
-  function schedulePendingSave() {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-    pendingCellSavesStore.setPhase('debouncing');
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      startPendingSave();
-    }, 500);
-  }
-
-  function startPendingSave() {
-    if (pendingSavePromise) {
-      return;
-    }
-
-    pendingCellSavesStore.setPhase('saving');
-    pendingSavePromise = debouncedSave().finally(() => {
-      pendingSavePromise = null;
-      if (pendingCellSavesStore.hasQueuedSaves && !debounceTimer) {
-        startPendingSave();
-        return;
-      }
-      if (pendingCellSavesStore.isIdle()) {
-        pendingCellSavesStore.setPhase('idle');
-        clearPendingContentChange();
-      }
-    });
-  }
-
-  async function commitCellBatch(changes: CellSaveRequest[]) {
+  async function commitBatch(changes: CellSaveRequest[]) {
     const currentFileData = fileData.value;
     if (!currentFileData) throw new Error('No file is loaded');
 
@@ -173,50 +96,15 @@ export function usePendingCellSave({
       };
     });
 
-    const selectedKey = selectedCell.value
-      ? cellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col)
-      : null;
     await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
       const response = await api.setCells(payload);
       await applyMutationResponse(response);
     });
-
-    pendingCellSavesStore.completeBatch(changes);
-
-    if (selectedCell.value && selectedKey) {
-      cellEditorValue.value = editorStringForCell(
-        currentSheetIndex.value,
-        selectedCell.value.row,
-        selectedCell.value.col
-      );
-    }
   }
 
-  async function debouncedSave(): Promise<boolean> {
-    if (!pendingCellSavesStore.hasQueuedSaves) {
-      clearPendingContentChange();
-      return true;
-    }
-
-    const changes = pendingCellSavesStore.takeQueuedBatch();
-
-    try {
-      await commitCellBatch(changes);
-    } catch (error) {
-      await refreshSessionAfterMutationError();
-      pendingCellSavesStore.failBatch(changes);
-      pendingCellSavesStore.setPhase('failed', String(error));
-      ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
-      if (pendingCellSavesStore.isIdle()) {
-        clearPendingContentChange();
-      }
-      return false;
-    }
-    if (pendingCellSavesStore.isIdle()) {
-      pendingCellSavesStore.setPhase('idle');
-      clearPendingContentChange();
-    }
-    return true;
+  async function handleCommitFailed(error: unknown) {
+    await refreshSessionAfterMutationError();
+    ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
   }
 
   async function refreshSessionAfterMutationError() {
@@ -227,51 +115,25 @@ export function usePendingCellSave({
     }
   }
 
-  function clearPendingContentChangeIfIdle() {
-    if (!hasPendingWork()) {
-      pendingCellSavesStore.setPhase('idle');
-      clearPendingContentChange();
-    }
+  function selectedCellKey() {
+    if (!selectedCell.value) return null;
+    return getCellKey(currentSheetIndex.value, selectedCell.value.row, selectedCell.value.col);
   }
 
-  async function flushPendingCellChanges(): Promise<boolean> {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-      if (pendingCellSavesStore.hasQueuedSaves) {
-        pendingCellSavesStore.setPhase('saving');
-      }
-    }
-
-    while (true) {
-      if (pendingSavePromise) {
-        const saved = await pendingSavePromise;
-        if (!saved) return false;
-      } else if (pendingCellSavesStore.hasQueuedSaves) {
-        startPendingSave();
-        if (!pendingSavePromise) return false;
-        const saved = await pendingSavePromise;
-        if (!saved) return false;
-      }
-
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-      if (pendingCellSavesStore.hasQueuedSaves) {
-        continue;
-      }
-      if (!pendingSavePromise) {
-        return true;
-      }
-    }
+  function refreshSelectedEditorValue() {
+    if (!selectedCell.value) return;
+    cellEditorValue.value = transactions.editorStringForCell(
+      currentSheetIndex.value,
+      selectedCell.value.row,
+      selectedCell.value.col
+    );
   }
 
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
     if (!canEditCells.value || !currentSheet.value) return;
 
-    updateDraftCell(currentSheetIndex.value, rowIndex, colIndex, value);
-    void flushPendingCellChanges();
+    transactions.updateDraftCell(currentSheetIndex.value, rowIndex, colIndex, value);
+    void transactions.flushPendingCellChanges();
   }
 
   function handleCellEditing(row: number, col: number, value: string) {
@@ -281,41 +143,15 @@ export function usePendingCellSave({
     }
 
     if (!currentSheet.value) return;
-    updateDraftCell(currentSheetIndex.value, row, col, value);
+    transactions.updateDraftCell(currentSheetIndex.value, row, col, value);
   }
 
   function handleCellEditCancel(row: number, col: number) {
     if (!canEditCells.value || !currentSheet.value) return;
 
-    const sheetIndex = currentSheetIndex.value;
-    const { key, active: activeSave } = saveState(sheetIndex, row, col);
-    const result = pendingCellSavesStore.cancelDraft(
-      key,
-      activeSave
-        ? {
-            sheetIndex,
-            row,
-            col,
-            value: cellToEditorString(activeSave.oldValue),
-            oldValue: committedCellValue(sheetIndex, row, col),
-          }
-        : undefined
-    );
-    handleQueueResult(result);
-
+    transactions.cancelDraftCell(currentSheetIndex.value, row, col);
     if (selectedCell.value?.row === row && selectedCell.value?.col === col) {
-      cellEditorValue.value = editorStringForCell(sheetIndex, row, col);
-    }
-
-    if (!pendingCellSavesStore.hasQueuedSaves && debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-      if (!pendingCellSavesStore.hasActiveSaves) {
-        pendingCellSavesStore.setPhase('idle');
-      }
-    }
-    if (result.shouldClearPendingIfIdle) {
-      clearPendingContentChangeIfIdle();
+      refreshSelectedEditorValue();
     }
   }
 
@@ -323,8 +159,8 @@ export function usePendingCellSave({
     if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
 
     const { row, col } = selectedCell.value;
-    updateDraftCell(currentSheetIndex.value, row, col, cellEditorValue.value);
-    void flushPendingCellChanges();
+    transactions.updateDraftCell(currentSheetIndex.value, row, col, cellEditorValue.value);
+    void transactions.flushPendingCellChanges();
   }
 
   function handleDeselectCell() {
@@ -332,20 +168,10 @@ export function usePendingCellSave({
     cellEditorValue.value = '';
   }
 
-  onUnmounted(() => {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-    }
-    if (!pendingSavePromise && pendingCellSavesStore.isIdle()) {
-      pendingCellSavesStore.setPhase('idle');
-    }
-  });
-
   return {
     cellToEditorString,
-    draftCellValues,
-    flushPendingCellChanges,
+    draftCellValues: transactions.draftCellValues,
+    flushPendingCellChanges: transactions.flushPendingCellChanges,
     handleCellChange,
     handleCellEditing,
     handleCellEditCancel,
