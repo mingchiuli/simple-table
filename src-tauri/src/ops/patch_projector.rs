@@ -120,98 +120,20 @@ pub fn structural_patches(
     match operation {
         AppliedOperationResult::AddRow {
             sheet_index, row, ..
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                let mut patches = vec![EditorPatch::RowsInserted {
-                    patch: RowsInsertedPatch {
-                        sheet_index: *sheet_index,
-                        row_index: row.index,
-                        rows: sheet
-                            .rows
-                            .get(row.index)
-                            .cloned()
-                            .map(|row| vec![row])
-                            .unwrap_or_default(),
-                        display_formats: Vec::new(),
-                        displays: Vec::new(),
-                        formats: Vec::new(),
-                        styles: Vec::new(),
-                    },
-                }];
-                patches.push(sheet_metadata_patch(*sheet_index, sheet));
-                patches
-            })
-            .unwrap_or_default(),
+        } => inserted_row_patches(file_data, *sheet_index, row.index),
         AppliedOperationResult::DeleteRow {
             sheet_index,
             row_index,
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![
-                    EditorPatch::RowsDeleted {
-                        patch: RowsDeletedPatch {
-                            sheet_index: *sheet_index,
-                            row_index: *row_index,
-                            count: 1,
-                        },
-                    },
-                    sheet_metadata_patch(*sheet_index, sheet),
-                ]
-            })
-            .unwrap_or_default(),
+        } => deleted_row_patches(file_data, *sheet_index, *row_index, 1),
         AppliedOperationResult::AddColumn {
             sheet_index,
             column,
             ..
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![
-                    EditorPatch::ColumnsInserted {
-                        patch: ColumnsInsertedPatch {
-                            sheet_index: *sheet_index,
-                            col_index: column.index,
-                            values: sheet
-                                .rows
-                                .iter()
-                                .map(|row| {
-                                    row.get(column.index).cloned().unwrap_or(CellValue::Null)
-                                })
-                                .collect(),
-                            display_formats: Vec::new(),
-                            displays: Vec::new(),
-                            formats: Vec::new(),
-                            styles: Vec::new(),
-                        },
-                    },
-                    sheet_metadata_patch(*sheet_index, sheet),
-                ]
-            })
-            .unwrap_or_default(),
+        } => inserted_column_patches(file_data, *sheet_index, column.index),
         AppliedOperationResult::DeleteColumn {
             sheet_index,
             column_index,
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![
-                    EditorPatch::ColumnsDeleted {
-                        patch: ColumnsDeletedPatch {
-                            sheet_index: *sheet_index,
-                            col_index: *column_index,
-                            count: 1,
-                        },
-                    },
-                    sheet_metadata_patch(*sheet_index, sheet),
-                ]
-            })
-            .unwrap_or_default(),
+        } => deleted_column_patches(file_data, *sheet_index, *column_index, 1),
         AppliedOperationResult::AddSheet {
             sheet_index,
             sheet_data,
@@ -233,6 +155,133 @@ pub fn structural_patches(
         | AppliedOperationResult::SetCells { .. }
         | AppliedOperationResult::SetColumnWidth { .. }
         | AppliedOperationResult::SetRowHeight { .. } => Vec::new(),
+    }
+}
+
+pub(crate) fn inserted_row_patches(
+    file_data: &FileData,
+    sheet_index: usize,
+    row_index: usize,
+) -> Vec<EditorPatch> {
+    file_data
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| {
+            vec![
+                rows_inserted_patch(sheet_index, row_index, sheet),
+                sheet_metadata_patch(sheet_index, sheet),
+            ]
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn deleted_row_patches(
+    file_data: &FileData,
+    sheet_index: usize,
+    row_index: usize,
+    count: usize,
+) -> Vec<EditorPatch> {
+    file_data
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| {
+            vec![
+                rows_deleted_patch(sheet_index, row_index, count),
+                sheet_metadata_patch(sheet_index, sheet),
+            ]
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn inserted_column_patches(
+    file_data: &FileData,
+    sheet_index: usize,
+    col_index: usize,
+) -> Vec<EditorPatch> {
+    file_data
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| {
+            vec![
+                columns_inserted_patch(sheet_index, col_index, sheet),
+                sheet_metadata_patch(sheet_index, sheet),
+            ]
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn deleted_column_patches(
+    file_data: &FileData,
+    sheet_index: usize,
+    col_index: usize,
+    count: usize,
+) -> Vec<EditorPatch> {
+    file_data
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| {
+            vec![
+                columns_deleted_patch(sheet_index, col_index, count),
+                sheet_metadata_patch(sheet_index, sheet),
+            ]
+        })
+        .unwrap_or_default()
+}
+
+fn rows_inserted_patch(sheet_index: usize, row_index: usize, sheet: &SheetData) -> EditorPatch {
+    EditorPatch::RowsInserted {
+        patch: RowsInsertedPatch {
+            sheet_index,
+            row_index,
+            rows: sheet
+                .rows
+                .get(row_index)
+                .cloned()
+                .map(|row| vec![row])
+                .unwrap_or_default(),
+            display_formats: Vec::new(),
+            displays: Vec::new(),
+            formats: Vec::new(),
+            styles: Vec::new(),
+        },
+    }
+}
+
+fn rows_deleted_patch(sheet_index: usize, row_index: usize, count: usize) -> EditorPatch {
+    EditorPatch::RowsDeleted {
+        patch: RowsDeletedPatch {
+            sheet_index,
+            row_index,
+            count,
+        },
+    }
+}
+
+fn columns_inserted_patch(sheet_index: usize, col_index: usize, sheet: &SheetData) -> EditorPatch {
+    EditorPatch::ColumnsInserted {
+        patch: ColumnsInsertedPatch {
+            sheet_index,
+            col_index,
+            values: sheet
+                .rows
+                .iter()
+                .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
+                .collect(),
+            display_formats: Vec::new(),
+            displays: Vec::new(),
+            formats: Vec::new(),
+            styles: Vec::new(),
+        },
+    }
+}
+
+fn columns_deleted_patch(sheet_index: usize, col_index: usize, count: usize) -> EditorPatch {
+    EditorPatch::ColumnsDeleted {
+        patch: ColumnsDeletedPatch {
+            sheet_index,
+            col_index,
+            count,
+        },
     }
 }
 

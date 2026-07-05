@@ -57,10 +57,14 @@ fn read_workbook_from_reader(cursor: Cursor<Vec<u8>>) -> Result<Workbook, AppErr
 }
 
 pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
-    let (highest_col, highest_row) = worksheet.highest_column_and_row();
-    let mut rows = vec![vec![CellValue::Null; highest_col as usize]; highest_row as usize];
+    let mut rows: Vec<Vec<CellValue>> = Vec::new();
 
     for cell in worksheet.cells() {
+        let value = cell_to_value(cell);
+        if matches!(value, CellValue::Null) {
+            continue;
+        }
+
         let row_idx = cell.coordinate().row_num().saturating_sub(1) as usize;
         let col_idx = cell.coordinate().col_num().saturating_sub(1) as usize;
         if row_idx >= rows.len() {
@@ -69,8 +73,9 @@ pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
         if col_idx >= rows[row_idx].len() {
             rows[row_idx].resize(col_idx + 1, CellValue::Null);
         }
-        rows[row_idx][col_idx] = cell_to_value(cell);
+        rows[row_idx][col_idx] = value;
     }
+    trim_trailing_empty_projection(&mut rows);
 
     SheetData {
         name: worksheet.name().to_string(),
@@ -79,6 +84,20 @@ pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
         column_widths: read_column_widths(worksheet),
         row_heights: read_row_heights(worksheet),
         rich: read_rich_projection(worksheet),
+    }
+}
+
+fn trim_trailing_empty_projection(rows: &mut Vec<Vec<CellValue>>) {
+    for row in rows.iter_mut() {
+        while row
+            .last()
+            .is_some_and(|cell| matches!(cell, CellValue::Null))
+        {
+            row.pop();
+        }
+    }
+    while rows.last().is_some_and(Vec::is_empty) {
+        rows.pop();
     }
 }
 
@@ -404,6 +423,30 @@ mod tests {
         );
         assert_eq!(
             data.rich.cell_styles.get("A1").and_then(|style| style.bold),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn style_only_far_cells_do_not_expand_dense_rows() {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.sheet_mut(0).expect("sheet");
+        sheet.cell_mut("A1").set_value_string("value");
+        sheet
+            .cell_mut("Z1000")
+            .style_mut()
+            .font_mut()
+            .set_bold(true);
+
+        let data = read_worksheet(sheet);
+
+        assert_eq!(data.rows.len(), 1);
+        assert_eq!(data.rows[0].len(), 1);
+        assert_eq!(
+            data.rich
+                .cell_styles
+                .get("Z1000")
+                .and_then(|style| style.bold),
             Some(true)
         );
     }

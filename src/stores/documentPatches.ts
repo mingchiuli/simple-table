@@ -17,7 +17,13 @@ import type {
 } from "@/types";
 import { blankCell } from "@/utils/cellValue";
 import { defaultRichProjection } from "@/types";
-import { toCellPosition } from "@/utils/excel";
+import {
+  cellKey,
+  deleteRichColumns,
+  deleteRichRows,
+  shiftRichColumns,
+  shiftRichRows,
+} from "@/utils/cellAddress";
 
 export type PatchApplyResult = {
   data: FileData | null;
@@ -125,7 +131,7 @@ function applyRowsInserted(data: FileData | null, patch: RowsInsertedPatch): Fil
     )
   );
   const patchedSheet = applyInsertedRowsMetadata(
-    { ...sheet, rows },
+    insertSheetRows({ ...sheet, rows }, patch.rowIndex, patch.rows.length),
     patch.rowIndex,
     patch.formats ?? [],
     patch.styles ?? []
@@ -140,7 +146,7 @@ function applyRowsDeleted(data: FileData | null, patch: RowsDeletedPatch): FileD
   if (patch.rowIndex < rows.length) {
     rows.splice(patch.rowIndex, patch.count);
   }
-  return replaceSheet(data, patch.sheetIndex, { ...sheet, rows });
+  return replaceSheet(data, patch.sheetIndex, deleteSheetRows({ ...sheet, rows }, patch.rowIndex, patch.count));
 }
 
 function applyColumnsInserted(data: FileData | null, patch: ColumnsInsertedPatch): FileData | null {
@@ -161,7 +167,7 @@ function applyColumnsInserted(data: FileData | null, patch: ColumnsInsertedPatch
     rows[rowIndex] = row;
   }
   const patchedSheet = applyInsertedColumnsMetadata(
-    { ...sheet, rows },
+    insertSheetColumns({ ...sheet, rows }, patch.colIndex, 1),
     patch.colIndex,
     patch.formats ?? [],
     patch.styles ?? []
@@ -179,7 +185,7 @@ function applyColumnsDeleted(data: FileData | null, patch: ColumnsDeletedPatch):
     }
     return nextRow;
   });
-  return replaceSheet(data, patch.sheetIndex, { ...sheet, rows });
+  return replaceSheet(data, patch.sheetIndex, deleteSheetColumns({ ...sheet, rows }, patch.colIndex, patch.count));
 }
 
 function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileData | null {
@@ -312,7 +318,7 @@ function patchCellMetadata(
     cellFormats: { ...(sheet.rich?.cellFormats ?? {}) },
     cellStyles: { ...(sheet.rich?.cellStyles ?? {}) },
   };
-  const key = toCellPosition(row, col);
+  const key = cellKey(row, col);
   if (format) {
     rich.cellFormats[key] = format;
   }
@@ -320,6 +326,157 @@ function patchCellMetadata(
     rich.cellStyles[key] = style;
   }
   return { ...sheet, rich };
+}
+
+function insertSheetRows(
+  sheet: FileData["sheets"][number],
+  rowIndex: number,
+  count: number
+): FileData["sheets"][number] {
+  return {
+    ...sheet,
+    merges: sheet.merges.map((merge) => insertRowsIntoMerge(merge, rowIndex, count)),
+    rowHeights: shiftNumberRecordOnInsert(sheet.rowHeights, rowIndex, count),
+    rich: shiftRichRows(sheet.rich, rowIndex, count),
+  };
+}
+
+function deleteSheetRows(
+  sheet: FileData["sheets"][number],
+  rowIndex: number,
+  count: number
+): FileData["sheets"][number] {
+  return {
+    ...sheet,
+    merges: sheet.merges.flatMap((merge) => {
+      const shifted = deleteRowsFromMerge(merge, rowIndex, count);
+      return shifted ? [shifted] : [];
+    }),
+    rowHeights: shiftNumberRecordOnDelete(sheet.rowHeights, rowIndex, count),
+    rich: deleteRichRows(sheet.rich, rowIndex, count),
+  };
+}
+
+function insertSheetColumns(
+  sheet: FileData["sheets"][number],
+  colIndex: number,
+  count: number
+): FileData["sheets"][number] {
+  return {
+    ...sheet,
+    merges: sheet.merges.map((merge) => insertColumnsIntoMerge(merge, colIndex, count)),
+    columnWidths: shiftNumberRecordOnInsert(sheet.columnWidths, colIndex, count),
+    rich: shiftRichColumns(sheet.rich, colIndex, count),
+  };
+}
+
+function deleteSheetColumns(
+  sheet: FileData["sheets"][number],
+  colIndex: number,
+  count: number
+): FileData["sheets"][number] {
+  return {
+    ...sheet,
+    merges: sheet.merges.flatMap((merge) => {
+      const shifted = deleteColumnsFromMerge(merge, colIndex, count);
+      return shifted ? [shifted] : [];
+    }),
+    columnWidths: shiftNumberRecordOnDelete(sheet.columnWidths, colIndex, count),
+    rich: deleteRichColumns(sheet.rich, colIndex, count),
+  };
+}
+
+function insertRowsIntoMerge(
+  merge: FileData["sheets"][number]["merges"][number],
+  rowIndex: number,
+  count: number
+) {
+  if (merge.startRow >= rowIndex) {
+    return { ...merge, startRow: merge.startRow + count, endRow: merge.endRow + count };
+  }
+  if (merge.endRow >= rowIndex) {
+    return { ...merge, endRow: merge.endRow + count };
+  }
+  return merge;
+}
+
+function insertColumnsIntoMerge(
+  merge: FileData["sheets"][number]["merges"][number],
+  colIndex: number,
+  count: number
+) {
+  if (merge.startCol >= colIndex) {
+    return { ...merge, startCol: merge.startCol + count, endCol: merge.endCol + count };
+  }
+  if (merge.endCol >= colIndex) {
+    return { ...merge, endCol: merge.endCol + count };
+  }
+  return merge;
+}
+
+function deleteRowsFromMerge(
+  merge: FileData["sheets"][number]["merges"][number],
+  rowIndex: number,
+  count: number
+) {
+  const rows = deleteIndexRange(merge.startRow, merge.endRow, rowIndex, count);
+  if (!rows) return null;
+  return { ...merge, startRow: rows.start, endRow: rows.end };
+}
+
+function deleteColumnsFromMerge(
+  merge: FileData["sheets"][number]["merges"][number],
+  colIndex: number,
+  count: number
+) {
+  const columns = deleteIndexRange(merge.startCol, merge.endCol, colIndex, count);
+  if (!columns) return null;
+  return { ...merge, startCol: columns.start, endCol: columns.end };
+}
+
+function deleteIndexRange(
+  start: number,
+  end: number,
+  deletedStart: number,
+  count: number
+): { start: number; end: number } | null {
+  const deletedEnd = deletedStart + count - 1;
+  if (end < deletedStart) return { start, end };
+  if (start > deletedEnd) return { start: start - count, end: end - count };
+  if (start < deletedStart && end > deletedEnd) return { start, end: end - count };
+  if (start < deletedStart) return { start, end: deletedStart - 1 };
+  if (end > deletedEnd) return { start: deletedStart, end: end - count };
+  return null;
+}
+
+function shiftNumberRecordOnInsert(
+  current: Record<number, number> | undefined,
+  index: number,
+  count: number
+): Record<number, number> | undefined {
+  const next: Record<number, number> = {};
+  for (const [rawKey, value] of Object.entries(current ?? {})) {
+    const key = Number(rawKey);
+    next[key >= index ? key + count : key] = value;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
+function shiftNumberRecordOnDelete(
+  current: Record<number, number> | undefined,
+  index: number,
+  count: number
+): Record<number, number> | undefined {
+  const next: Record<number, number> = {};
+  for (const [rawKey, value] of Object.entries(current ?? {})) {
+    const key = Number(rawKey);
+    if (key < index) {
+      next[key] = value;
+    } else if (key >= index + count) {
+      next[key - count] = value;
+    }
+  }
+  return Object.keys(next).length ? next : undefined;
 }
 
 function applyLayoutPatch(

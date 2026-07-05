@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::io::document_model::{DocumentRestoreResult, MementoSide, SpreadsheetDocument};
+use crate::io::document_model::{
+    DocumentRestoreResult, MementoSide, PersistenceSnapshot, SpreadsheetDocument,
+};
 use crate::ops::EditorCommand;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
@@ -210,7 +212,7 @@ impl EditorState {
             .generate_file_bytes_for_target(target_path_or_name)
     }
 
-    pub fn document_snapshot(&self) -> crate::io::document_model::SpreadsheetDocument {
+    pub fn document_snapshot(&self) -> PersistenceSnapshot {
         self.document.persistence_snapshot()
     }
 

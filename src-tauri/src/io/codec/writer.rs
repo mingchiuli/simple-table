@@ -228,29 +228,24 @@ pub fn write_cell(worksheet: &mut Worksheet, row: u32, col: u32, cell: &CellValu
 }
 
 fn clear_cells_outside_sheet_data(worksheet: &mut Worksheet, sheet: &crate::types::SheetData) {
-    let (highest_col, highest_row) = worksheet.highest_column_and_row();
-    let new_highest_row = sheet.rows.len() as u32;
-    let new_highest_col = sheet
-        .rows
+    let existing_cells: Vec<(u32, u32)> = worksheet
+        .cells()
         .iter()
-        .map(|row| row.len() as u32)
-        .max()
-        .unwrap_or(0);
+        .map(|cell| (cell.coordinate().col_num(), cell.coordinate().row_num()))
+        .collect();
 
-    for row in 1..=highest_row.max(new_highest_row) {
-        for col in 1..=highest_col.max(new_highest_col) {
-            let in_file_data = (row as usize)
-                .checked_sub(1)
-                .and_then(|row_idx| sheet.rows.get(row_idx))
-                .and_then(|row_data| {
-                    (col as usize)
-                        .checked_sub(1)
-                        .and_then(|col_idx| row_data.get(col_idx))
-                })
-                .is_some();
-            if !in_file_data {
-                worksheet.cell_mut((col, row)).set_blank();
-            }
+    for (col, row) in existing_cells {
+        let in_file_data = (row as usize)
+            .checked_sub(1)
+            .and_then(|row_idx| sheet.rows.get(row_idx))
+            .and_then(|row_data| {
+                (col as usize)
+                    .checked_sub(1)
+                    .and_then(|col_idx| row_data.get(col_idx))
+            })
+            .is_some();
+        if !in_file_data {
+            worksheet.cell_mut((col, row)).set_blank();
         }
     }
 }

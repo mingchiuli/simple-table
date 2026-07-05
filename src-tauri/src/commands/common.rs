@@ -119,9 +119,12 @@ pub fn delete_row(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_column(sheet_index: usize) -> Result<EditorMutationResponse, AppError> {
+pub fn add_column(
+    sheet_index: usize,
+    col_index: usize,
+) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_column(&registry, sheet_index)
+    cell_ops::do_add_column(&registry, sheet_index, col_index)
 }
 
 #[tauri::command(rename_all = "camelCase")]

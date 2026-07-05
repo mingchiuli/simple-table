@@ -10,6 +10,7 @@ type UseEditorCommandsOptions = {
   fileData: ComputedRef<FileData | null>;
   currentSheet: ComputedRef<SheetData | null>;
   currentSheetIndex: Ref<number>;
+  selectedCell: Ref<{ row: number; col: number } | null>;
   cellEditorValue: Ref<string>;
   isLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
@@ -22,6 +23,7 @@ export function useEditorCommands({
   fileData,
   currentSheet,
   currentSheetIndex,
+  selectedCell,
   cellEditorValue,
   isLoading,
   flushPendingCellChanges,
@@ -70,8 +72,9 @@ export function useEditorCommands({
 
   async function handleAddColumn() {
     if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
+    const colIndex = selectedCell.value?.col ?? sheetColumnExtent(currentSheet.value);
     await runEditorCommand(
-      () => api.addColumn(currentSheetIndex.value),
+      () => api.addColumn(currentSheetIndex.value, colIndex),
       "Failed to add column"
     );
   }
@@ -273,4 +276,13 @@ export function useEditorCommands({
     handleColumnResize,
     handleRowResize,
   };
+}
+
+function sheetColumnExtent(sheet: SheetData): number {
+  const valueExtent = sheet.rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const mergeExtent = sheet.merges.reduce((max, merge) => Math.max(max, merge.endCol + 1), 0);
+  const layoutExtent = sheet.columnWidths
+    ? Object.keys(sheet.columnWidths).reduce((max, key) => Math.max(max, Number(key) + 1), 0)
+    : 0;
+  return Math.max(valueExtent, mergeExtent, layoutExtent);
 }

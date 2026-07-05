@@ -80,9 +80,17 @@ impl EditorCommand {
                     row_index,
                 })
             }
-            EditorCommand::AddColumn { sheet_index } => {
+            EditorCommand::AddColumn {
+                sheet_index,
+                col_index,
+            } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                let col_index = sheet_column_extent(sheet);
+                if col_index > sheet_column_extent(sheet) {
+                    return Err(AppError::InvalidCellPosition {
+                        row: 0,
+                        col: col_index,
+                    });
+                }
                 Ok(AppliedOperation::AddColumn {
                     sheet_index,
                     col_index,

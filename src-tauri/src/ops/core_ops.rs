@@ -26,6 +26,7 @@ pub enum EditorCommand {
     },
     AddColumn {
         sheet_index: usize,
+        col_index: usize,
     },
     DeleteColumn {
         sheet_index: usize,

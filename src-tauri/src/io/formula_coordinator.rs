@@ -35,20 +35,8 @@ impl FormulaCoordinator {
         }
     }
 
-    pub(crate) fn snapshot(status: FormulaStatus, pending: StructurePatchDiagnostics) -> Self {
-        Self {
-            runtime: FormulaRuntime::empty(),
-            status,
-            pending_structure_diagnostics: pending,
-        }
-    }
-
     pub(crate) fn status(&self) -> FormulaStatus {
         self.status.clone()
-    }
-
-    pub(crate) fn pending_structure_diagnostics(&self) -> StructurePatchDiagnostics {
-        self.pending_structure_diagnostics
     }
 
     pub(crate) fn set_pending_structure_diagnostics(

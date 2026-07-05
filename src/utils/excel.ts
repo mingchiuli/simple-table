@@ -1,3 +1,5 @@
+import { cellKey } from "@/utils/cellAddress";
+
 /**
  * 将列索引转换为 Excel 列名
  * @param col 列索引 (0-based)
@@ -21,5 +23,5 @@ export function colToLetter(col: number): string {
  * @returns Excel 格式的单元格位置 (如 "A1", "B2", "AA10")
  */
 export function toCellPosition(row: number, col: number): string {
-  return colToLetter(col) + (row + 1);
+  return cellKey(row, col);
 }

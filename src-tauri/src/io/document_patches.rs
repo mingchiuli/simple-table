@@ -1,9 +1,8 @@
 use crate::io::document_model::FileStructureMemento;
-use crate::ops::patch_projector::sheet_metadata_patch;
-use crate::types::{
-    CellValue, ColumnsDeletedPatch, ColumnsInsertedPatch, EditorPatch, FileData, RowsDeletedPatch,
-    RowsInsertedPatch, SheetDeletedPatch, SheetInsertedPatch,
+use crate::ops::patch_projector::{
+    deleted_column_patches, deleted_row_patches, inserted_column_patches, inserted_row_patches,
 };
+use crate::types::{EditorPatch, FileData, SheetDeletedPatch, SheetInsertedPatch};
 
 pub(crate) enum CurrentStructureShape {
     Empty,
@@ -147,40 +146,11 @@ fn row_structure_patch_from(
     row_index: usize,
     inserted: bool,
 ) -> Vec<EditorPatch> {
-    restored
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            let mut patches = if inserted {
-                vec![EditorPatch::RowsInserted {
-                    patch: RowsInsertedPatch {
-                        sheet_index,
-                        row_index,
-                        rows: sheet
-                            .rows
-                            .get(row_index)
-                            .cloned()
-                            .map(|row| vec![row])
-                            .unwrap_or_default(),
-                        display_formats: Vec::new(),
-                        displays: Vec::new(),
-                        formats: Vec::new(),
-                        styles: Vec::new(),
-                    },
-                }]
-            } else {
-                vec![EditorPatch::RowsDeleted {
-                    patch: RowsDeletedPatch {
-                        sheet_index,
-                        row_index,
-                        count: 1,
-                    },
-                }]
-            };
-            patches.push(sheet_metadata_patch(sheet_index, sheet));
-            patches
-        })
-        .unwrap_or_default()
+    if inserted {
+        inserted_row_patches(restored, sheet_index, row_index)
+    } else {
+        deleted_row_patches(restored, sheet_index, row_index, 1)
+    }
 }
 
 fn column_structure_patch_from(
@@ -189,37 +159,9 @@ fn column_structure_patch_from(
     col_index: usize,
     inserted: bool,
 ) -> Vec<EditorPatch> {
-    restored
-        .sheets
-        .get(sheet_index)
-        .map(|sheet| {
-            let mut patches = if inserted {
-                vec![EditorPatch::ColumnsInserted {
-                    patch: ColumnsInsertedPatch {
-                        sheet_index,
-                        col_index,
-                        values: sheet
-                            .rows
-                            .iter()
-                            .map(|row| row.get(col_index).cloned().unwrap_or(CellValue::Null))
-                            .collect(),
-                        display_formats: Vec::new(),
-                        displays: Vec::new(),
-                        formats: Vec::new(),
-                        styles: Vec::new(),
-                    },
-                }]
-            } else {
-                vec![EditorPatch::ColumnsDeleted {
-                    patch: ColumnsDeletedPatch {
-                        sheet_index,
-                        col_index,
-                        count: 1,
-                    },
-                }]
-            };
-            patches.push(sheet_metadata_patch(sheet_index, sheet));
-            patches
-        })
-        .unwrap_or_default()
+    if inserted {
+        inserted_column_patches(restored, sheet_index, col_index)
+    } else {
+        deleted_column_patches(restored, sheet_index, col_index, 1)
+    }
 }

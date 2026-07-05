@@ -80,10 +80,14 @@ pub fn do_delete_row(
 pub fn do_add_column(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
+    col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_structural_delta(
         registry,
-        EditorCommand::AddColumn { sheet_index },
+        EditorCommand::AddColumn {
+            sheet_index,
+            col_index,
+        },
         sheet_index,
     )
 }
@@ -326,7 +330,7 @@ mod tests {
         ));
 
         let registry = make_registry();
-        let add_column_response = do_add_column(&registry, 0).expect("add column");
+        let add_column_response = do_add_column(&registry, 0, 1).expect("add column");
         assert!(matches!(
             add_column_response.patches.first(),
             Some(EditorPatch::ColumnsInserted { patch }) if patch.sheet_index == 0 && patch.col_index == 1 && patch.values.len() == 1

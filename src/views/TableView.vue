@@ -158,6 +158,7 @@ const {
   fileData,
   currentSheet,
   currentSheetIndex,
+  selectedCell,
   cellEditorValue,
   isLoading,
   flushPendingCellChanges,
@@ -199,7 +200,6 @@ onMounted(async () => {
       @undo="handleUndo"
       @redo="handleRedo"
       @search="handleSearch"
-      @search-result-click="handleSearchResultClick"
       @clear-search="handleClearSearch"
     />
 

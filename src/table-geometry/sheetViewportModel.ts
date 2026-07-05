@@ -7,6 +7,7 @@ import type {
 } from "@/types";
 import { defaultRichProjection } from "@/types";
 import { calculateSheetExtent, type SheetExtent } from "@/table-geometry/sheetExtent";
+import { cellKey } from "@/utils/cellAddress";
 
 export type SheetViewportModel = {
   rows: CellValue[][];
@@ -49,7 +50,7 @@ export function createSheetViewportModel(source: SheetViewportSource): SheetView
     extent,
     cellAt: (rowIndex, colIndex) => rows[rowIndex]?.[colIndex],
     formatAt: (rowIndex, colIndex) => {
-      const key = excelCellKey(rowIndex, colIndex);
+      const key = cellKey(rowIndex, colIndex);
       const explicit = rich.cellFormats?.[key];
       const style = rich.cellStyles?.[key];
       if (!explicit && !style?.numberFormat) return undefined;
@@ -58,17 +59,6 @@ export function createSheetViewportModel(source: SheetViewportSource): SheetView
         numberFormat: explicit?.numberFormat ?? style?.numberFormat,
       };
     },
-    styleAt: (rowIndex, colIndex) => rich.cellStyles?.[excelCellKey(rowIndex, colIndex)],
+    styleAt: (rowIndex, colIndex) => rich.cellStyles?.[cellKey(rowIndex, colIndex)],
   };
-}
-
-function excelCellKey(rowIndex: number, colIndex: number): string {
-  let col = colIndex + 1;
-  let letters = "";
-  while (col > 0) {
-    const rem = (col - 1) % 26;
-    letters = String.fromCharCode(65 + rem) + letters;
-    col = Math.floor((col - 1) / 26);
-  }
-  return `${letters}${rowIndex + 1}`;
 }

@@ -8,9 +8,9 @@ use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_fingerprint};
 use crate::types::FormulaStatus;
 use crate::types::{
-    AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, MergeRange,
-    ReadOnlyRichProjection, ResyncRequiredPatch, SheetCellChange, SheetData, SheetShapePatch,
-    WorkbookCapabilities,
+    AppliedOperationResult, CellValue, DrawingProjection, EditorPatch, FileData, LayoutPatch,
+    MergeRange, ReadOnlyRichProjection, ResyncRequiredPatch, SheetCellChange, SheetData,
+    SheetShapePatch, WorkbookCapabilities,
 };
 use std::collections::{HashMap, HashSet};
 use umya_spreadsheet::Workbook;
@@ -130,7 +130,7 @@ pub(crate) struct RowStructureMemento {
     row: Option<Vec<CellValue>>,
     merges: Vec<MergeRange>,
     row_heights: Option<HashMap<usize, u32>>,
-    rich: ReadOnlyRichProjection,
+    rich: RichProjectionMemento,
 }
 
 impl RowStructureMemento {
@@ -150,7 +150,7 @@ impl RowStructureMemento {
                 .as_ref()
                 .map(|heights| heights.len() * 24)
                 .unwrap_or_default()
-            + estimate_sheet_rich_projection_bytes(&self.rich)
+            + self.rich.estimated_bytes()
     }
 }
 
@@ -161,7 +161,7 @@ pub(crate) struct ColumnStructureMemento {
     values: Vec<Option<CellValue>>,
     merges: Vec<MergeRange>,
     column_widths: Option<HashMap<usize, u32>>,
-    rich: ReadOnlyRichProjection,
+    rich: RichProjectionMemento,
 }
 
 impl ColumnStructureMemento {
@@ -180,8 +180,83 @@ impl ColumnStructureMemento {
                 .as_ref()
                 .map(|widths| widths.len() * 24)
                 .unwrap_or_default()
-            + estimate_sheet_rich_projection_bytes(&self.rich)
+            + self.rich.estimated_bytes()
     }
+}
+
+pub(crate) struct RichProjectionMemento {
+    scope: RichProjectionScope,
+    projection: ReadOnlyRichProjection,
+}
+
+impl RichProjectionMemento {
+    fn row_tail(source: &ReadOnlyRichProjection, row_index: usize) -> Self {
+        Self {
+            scope: RichProjectionScope::Rows { start: row_index },
+            projection: filter_rich_projection(
+                source,
+                |row, _| row >= row_index,
+                |drawing| drawing_row_scope_affected(drawing, row_index),
+            ),
+        }
+    }
+
+    fn column_tail(source: &ReadOnlyRichProjection, col_index: usize) -> Self {
+        Self {
+            scope: RichProjectionScope::Columns { start: col_index },
+            projection: filter_rich_projection(
+                source,
+                |_, col| col >= col_index,
+                |drawing| drawing_column_scope_affected(drawing, col_index),
+            ),
+        }
+    }
+
+    fn restore_into(&self, target: &mut ReadOnlyRichProjection) {
+        match self.scope {
+            RichProjectionScope::Rows { start } => {
+                target
+                    .cell_formats
+                    .retain(|key, _| !cell_key_matches(key, |row, _| row >= start));
+                target
+                    .cell_styles
+                    .retain(|key, _| !cell_key_matches(key, |row, _| row >= start));
+                target
+                    .drawings
+                    .retain(|drawing| !drawing_row_scope_affected(drawing, start));
+            }
+            RichProjectionScope::Columns { start } => {
+                target
+                    .cell_formats
+                    .retain(|key, _| !cell_key_matches(key, |_, col| col >= start));
+                target
+                    .cell_styles
+                    .retain(|key, _| !cell_key_matches(key, |_, col| col >= start));
+                target
+                    .drawings
+                    .retain(|drawing| !drawing_column_scope_affected(drawing, start));
+            }
+        }
+
+        target
+            .cell_formats
+            .extend(self.projection.cell_formats.clone());
+        target
+            .cell_styles
+            .extend(self.projection.cell_styles.clone());
+        target.drawings.extend(self.projection.drawings.clone());
+        target.has_more_drawings = self.projection.has_more_drawings;
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + estimate_sheet_rich_projection_bytes(&self.projection)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RichProjectionScope {
+    Rows { start: usize },
+    Columns { start: usize },
 }
 
 pub(crate) struct SheetTailMemento {
@@ -243,6 +318,27 @@ pub struct SpreadsheetDocument {
     transaction_failure: Option<String>,
 }
 
+pub struct PersistenceSnapshot {
+    projection: FileData,
+    body: SpreadsheetDocumentBody,
+    transaction_failure: Option<String>,
+}
+
+impl PersistenceSnapshot {
+    pub fn generate_file_bytes_for_target(
+        &self,
+        target_path_or_name: &str,
+    ) -> Result<(String, Vec<u8>), AppError> {
+        if let Some(reason) = &self.transaction_failure {
+            return Err(AppError::DocumentStateInvalid(reason.clone()));
+        }
+        self.body
+            .validate_persisted_projection_consistency(&self.projection)?;
+        self.body
+            .generate_file_bytes_for_target(&self.projection, target_path_or_name)
+    }
+}
+
 impl Clone for SpreadsheetDocument {
     fn clone(&self) -> Self {
         let mut projection = self.projection.clone();
@@ -276,15 +372,10 @@ impl SpreadsheetDocument {
         &self.projection
     }
 
-    pub fn persistence_snapshot(&self) -> Self {
-        Self {
+    pub fn persistence_snapshot(&self) -> PersistenceSnapshot {
+        PersistenceSnapshot {
             projection: self.projection.clone(),
             body: self.clone_body(),
-            cached_capabilities: self.cached_capabilities.clone(),
-            formulas: FormulaCoordinator::snapshot(
-                self.formulas.status(),
-                self.formulas.pending_structure_diagnostics(),
-            ),
             transaction_failure: self.transaction_failure.clone(),
         }
     }
@@ -325,6 +416,7 @@ impl SpreadsheetDocument {
         capabilities
     }
 
+    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
@@ -552,7 +644,7 @@ impl SpreadsheetDocument {
                         row: sheet.rows.get(*row_index).cloned(),
                         merges: sheet.merges.clone(),
                         row_heights: sheet.row_heights.clone(),
-                        rich: sheet.rich.clone(),
+                        rich: RichProjectionMemento::row_tail(&sheet.rich, *row_index),
                     })
                 })
                 .unwrap_or_else(|| FileStructureMemento::empty(sheet_count)),
@@ -580,7 +672,7 @@ impl SpreadsheetDocument {
                             .collect(),
                         merges: sheet.merges.clone(),
                         column_widths: sheet.column_widths.clone(),
-                        rich: sheet.rich.clone(),
+                        rich: RichProjectionMemento::column_tail(&sheet.rich, *col_index),
                     })
                 })
                 .unwrap_or_else(|| FileStructureMemento::empty(sheet_count)),
@@ -910,7 +1002,7 @@ fn restore_projection_row(file_data: &mut FileData, memento: &RowStructureMement
     sheet.rows.truncate(memento.row_count);
     sheet.merges = memento.merges.clone();
     sheet.row_heights = memento.row_heights.clone();
-    sheet.rich = memento.rich.clone();
+    memento.rich.restore_into(&mut sheet.rich);
 }
 
 fn restore_projection_column(file_data: &mut FileData, memento: &ColumnStructureMemento) {
@@ -945,7 +1037,7 @@ fn restore_projection_column(file_data: &mut FileData, memento: &ColumnStructure
 
     sheet.merges = memento.merges.clone();
     sheet.column_widths = memento.column_widths.clone();
-    sheet.rich = memento.rich.clone();
+    memento.rich.restore_into(&mut sheet.rich);
 }
 
 fn restore_projection_sheet_tail(file_data: &mut FileData, memento: &SheetTailMemento) {
@@ -965,6 +1057,72 @@ fn restore_projection_sheet_tail(file_data: &mut FileData, memento: &SheetTailMe
     }
 
     file_data.sheets.truncate(memento.sheet_count);
+}
+
+fn filter_rich_projection(
+    source: &ReadOnlyRichProjection,
+    cell_matches: impl Fn(usize, usize) -> bool,
+    drawing_matches: impl Fn(&DrawingProjection) -> bool,
+) -> ReadOnlyRichProjection {
+    ReadOnlyRichProjection {
+        cell_formats: filter_cell_projection_map(&source.cell_formats, &cell_matches),
+        cell_styles: filter_cell_projection_map(&source.cell_styles, &cell_matches),
+        drawings: source
+            .drawings
+            .iter()
+            .filter(|drawing| drawing_matches(drawing))
+            .cloned()
+            .collect(),
+        has_more_drawings: source.has_more_drawings,
+    }
+}
+
+fn filter_cell_projection_map<T: Clone>(
+    source: &HashMap<String, T>,
+    cell_matches: &impl Fn(usize, usize) -> bool,
+) -> HashMap<String, T> {
+    source
+        .iter()
+        .filter(|(key, _)| cell_key_matches(key, cell_matches))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn cell_key_matches(key: &str, matches: impl Fn(usize, usize) -> bool) -> bool {
+    parse_projection_cell_key(key).is_some_and(|(row, col)| matches(row, col))
+}
+
+fn parse_projection_cell_key(key: &str) -> Option<(usize, usize)> {
+    let mut col = 0usize;
+    let mut row = 0usize;
+    let mut saw_digit = false;
+    for byte in key.bytes() {
+        if byte.is_ascii_alphabetic() && !saw_digit {
+            col = col
+                .checked_mul(26)?
+                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
+        } else if byte.is_ascii_digit() {
+            saw_digit = true;
+            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
+        } else {
+            return None;
+        }
+    }
+    (col > 0 && row > 0).then_some((row - 1, col - 1))
+}
+
+fn drawing_row_scope_affected(drawing: &DrawingProjection, row_index: usize) -> bool {
+    drawing.from_row as usize >= row_index
+        || drawing
+            .to_row
+            .is_some_and(|to_row| to_row as usize >= row_index)
+}
+
+fn drawing_column_scope_affected(drawing: &DrawingProjection, col_index: usize) -> bool {
+    drawing.from_col as usize >= col_index
+        || drawing
+            .to_col
+            .is_some_and(|to_col| to_col as usize >= col_index)
 }
 
 fn push_unique_position(
@@ -1039,23 +1197,36 @@ fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
             .as_ref()
             .map(|heights| heights.len() * 24)
             .unwrap_or_default()
-        + sheet
-            .rich
-            .cell_styles
-            .iter()
-            .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
-            .sum::<usize>()
-        + sheet.rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
+        + estimate_sheet_rich_projection_bytes(&sheet.rich)
 }
 
 fn estimate_sheet_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize {
     std::mem::size_of::<ReadOnlyRichProjection>()
+        + rich
+            .cell_formats
+            .iter()
+            .map(|(cell, format)| cell.len() + estimate_cell_format_projection_bytes(format))
+            .sum::<usize>()
         + rich
             .cell_styles
             .iter()
             .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
             .sum::<usize>()
         + rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
+}
+
+fn estimate_cell_format_projection_bytes(format: &crate::types::CellFormatProjection) -> usize {
+    std::mem::size_of::<crate::types::CellFormatProjection>()
+        + format
+            .number_format
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + format
+            .style_id
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
 }
 
 fn estimate_cell_style_projection_bytes(style: &crate::types::CellStyleProjection) -> usize {

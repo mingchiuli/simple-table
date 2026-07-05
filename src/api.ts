@@ -70,8 +70,8 @@ export async function deleteRow(sheetIndex: number, rowIndex: number): Promise<E
   return invoke<EditorMutationResponse>("delete_row", { sheetIndex, rowIndex });
 }
 
-export async function addColumn(sheetIndex: number): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("add_column", { sheetIndex });
+export async function addColumn(sheetIndex: number, colIndex: number): Promise<EditorMutationResponse> {
+  return invoke<EditorMutationResponse>("add_column", { sheetIndex, colIndex });
 }
 
 export async function deleteColumn(sheetIndex: number, colIndex: number): Promise<EditorMutationResponse> {

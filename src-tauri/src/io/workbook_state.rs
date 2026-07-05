@@ -439,18 +439,20 @@ pub fn patch_cell_shapes(
         let Some(worksheet) = sheet_mut(workbook, *sheet_index)? else {
             continue;
         };
-        let (highest_col, highest_row) = worksheet.highest_column_and_row();
         let target_rows = row_lengths.len() as u32;
+        let existing_cells: Vec<(u32, u32)> = worksheet
+            .cells()
+            .iter()
+            .map(|cell| (cell.coordinate().col_num(), cell.coordinate().row_num()))
+            .collect();
 
-        for row in 1..=highest_row {
+        for (col, row) in existing_cells {
             let target_width = row
                 .checked_sub(1)
                 .and_then(|row_index| row_lengths.get(row_index as usize).copied())
                 .unwrap_or(0) as u32;
-            for col in 1..=highest_col {
-                if row > target_rows || col > target_width {
-                    worksheet.remove_cell((col, row));
-                }
+            if row > target_rows || col > target_width {
+                worksheet.remove_cell((col, row));
             }
         }
     }
