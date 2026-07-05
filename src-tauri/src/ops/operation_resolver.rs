@@ -121,6 +121,12 @@ impl EditorCommand {
                 width,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
+                if col_index >= resizable_column_extent(sheet) {
+                    return Err(AppError::InvalidCellPosition {
+                        row: 0,
+                        col: col_index,
+                    });
+                }
                 let old_width = sheet
                     .column_widths
                     .as_ref()
@@ -138,6 +144,9 @@ impl EditorCommand {
                 height,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
+                if row_index >= resizable_row_extent(sheet) {
+                    return Err(AppError::RowNotFound(row_index));
+                }
                 let old_height = sheet
                     .row_heights
                     .as_ref()
@@ -207,6 +216,14 @@ fn sheet_column_extent(sheet: &SheetData) -> usize {
         .and_then(|widths| widths.keys().max().map(|index| index + 1))
         .unwrap_or(0);
     row_extent.max(merge_extent).max(layout_extent)
+}
+
+fn resizable_row_extent(sheet: &SheetData) -> usize {
+    sheet_row_extent(sheet).max(1)
+}
+
+fn resizable_column_extent(sheet: &SheetData) -> usize {
+    sheet_column_extent(sheet).max(1)
 }
 
 fn empty_sheet(name: String) -> SheetData {

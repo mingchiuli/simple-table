@@ -85,18 +85,6 @@ describe("applyDocumentPatches", () => {
         type: "ColumnsInserted",
         data: { patch: { sheetIndex: 0, colIndex: 1, values: [text("inserted-1"), text("inserted-new"), text("inserted-2")] } },
       },
-      {
-        type: "SheetMetadata",
-        data: {
-          patch: {
-            sheetIndex: 0,
-            merges: [{ startRow: 0, startCol: 0, endRow: 0, endCol: 1 }],
-            columnWidths: { 0: 120 },
-            rowHeights: {},
-            rich: { ...defaultRichProjection(), cellStyles: { A1: { bold: true } } },
-          },
-        },
-      },
     ]);
 
     expect(result.data?.sheets[0].rows).toEqual([
@@ -104,12 +92,10 @@ describe("applyDocumentPatches", () => {
       [text("A-new"), text("inserted-new"), text("B-new")],
       [text("A2"), text("inserted-2"), text("B2")],
     ]);
-    expect(result.data?.sheets[0].merges).toEqual([
-      { startRow: 0, startCol: 0, endRow: 0, endCol: 1 },
-    ]);
-    expect(result.data?.sheets[0].columnWidths).toEqual({ 0: 120 });
-    expect(result.data?.sheets[0].rowHeights).toBeUndefined();
-    expect(result.data?.sheets[0].rich?.cellStyles?.A1?.bold).toBe(true);
+    expect(result.data?.sheets[0].merges).toEqual([]);
+    expect(result.data?.sheets[0].columnWidths).toEqual({ 2: 140 });
+    expect(result.data?.sheets[0].rowHeights).toEqual({ 0: 72 });
+    expect(result.data?.sheets[0].rich).toEqual(defaultRichProjection());
 
     const removed = applyDocumentPatches(result.data, [
       { type: "RowsDeleted", data: { patch: { sheetIndex: 0, rowIndex: 1, count: 1 } } },

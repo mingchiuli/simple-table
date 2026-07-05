@@ -318,41 +318,6 @@ pub struct SpreadsheetDocument {
     transaction_failure: Option<String>,
 }
 
-pub struct PersistenceSnapshot {
-    projection: FileData,
-    body: SpreadsheetDocumentBody,
-    transaction_failure: Option<String>,
-}
-
-impl PersistenceSnapshot {
-    pub fn generate_file_bytes_for_target(
-        &self,
-        target_path_or_name: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
-        if let Some(reason) = &self.transaction_failure {
-            return Err(AppError::DocumentStateInvalid(reason.clone()));
-        }
-        self.body
-            .validate_persisted_projection_consistency(&self.projection)?;
-        self.body
-            .generate_file_bytes_for_target(&self.projection, target_path_or_name)
-    }
-}
-
-impl Clone for SpreadsheetDocument {
-    fn clone(&self) -> Self {
-        let mut projection = self.projection.clone();
-        let formulas = FormulaCoordinator::new(&mut projection);
-        Self {
-            projection,
-            body: self.clone_body(),
-            cached_capabilities: self.cached_capabilities.clone(),
-            formulas,
-            transaction_failure: self.transaction_failure.clone(),
-        }
-    }
-}
-
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
         let formulas = FormulaCoordinator::new(&mut projection);
@@ -370,14 +335,6 @@ impl SpreadsheetDocument {
 
     pub fn projection(&self) -> &FileData {
         &self.projection
-    }
-
-    pub fn persistence_snapshot(&self) -> PersistenceSnapshot {
-        PersistenceSnapshot {
-            projection: self.projection.clone(),
-            body: self.clone_body(),
-            transaction_failure: self.transaction_failure.clone(),
-        }
     }
 
     pub fn update_identity(&mut self, path: String, file_name: String) {
@@ -416,7 +373,6 @@ impl SpreadsheetDocument {
         capabilities
     }
 
-    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
@@ -926,10 +882,6 @@ impl SpreadsheetDocument {
     fn refresh_projection_from_workbook(&mut self) {
         self.body
             .refresh_projection_from_workbook(&mut self.projection);
-    }
-
-    fn clone_body(&self) -> SpreadsheetDocumentBody {
-        self.body.clone_body()
     }
 
     fn refresh_capabilities(&mut self) {

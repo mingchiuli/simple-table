@@ -1111,18 +1111,6 @@ pub struct SheetUpdatedPatch {
     pub sheet: SheetData,
 }
 
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct SheetMetadataPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    pub merges: Vec<MergeRange>,
-    pub column_widths: HashMap<usize, u32>,
-    pub row_heights: HashMap<usize, u32>,
-    pub rich: ReadOnlyRichProjection,
-}
-
 #[derive(Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -1297,8 +1285,6 @@ pub enum EditorPatch {
     SheetDeleted { patch: SheetDeletedPatch },
     #[serde(rename = "SheetUpdated")]
     SheetUpdated { patch: SheetUpdatedPatch },
-    #[serde(rename = "SheetMetadata")]
-    SheetMetadata { patch: SheetMetadataPatch },
     #[serde(rename = "RowsInserted")]
     RowsInserted { patch: RowsInsertedPatch },
     #[serde(rename = "RowsDeleted")]

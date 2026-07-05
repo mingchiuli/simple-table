@@ -75,6 +75,25 @@ describe("documentSession store", () => {
     expect(store.revision).toBe(3);
   });
 
+  it("accepts status-only responses at the current revision", () => {
+    const store = useDocumentSessionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("current")]])],
+    });
+    store.applyMutationResponse(response({ revision: 1 }));
+
+    const result = store.applyMutationResponse(response({
+      revision: 1,
+      patches: [],
+      editorState: { canUndo: false, canRedo: false, isDirty: true },
+    }));
+
+    expect(result.resyncRequired).toBe(false);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+  });
+
   it("ignores stale responses from an older revision", () => {
     const store = useDocumentSessionStore();
     store.openDocument({

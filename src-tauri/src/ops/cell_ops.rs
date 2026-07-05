@@ -5,7 +5,7 @@ use crate::ops::EditorCommand;
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::ops::patch_projector::{
     cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
-    structural_delta_mutation_response,
+    status_mutation_response, structural_delta_mutation_response,
 };
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
@@ -170,10 +170,7 @@ fn execute_cell_delta(
             result.cell_changes,
         ))
     } else {
-        Ok(resync_required_mutation_response(
-            editor_state,
-            "cell edit completed without an operation result",
-        ))
+        Ok(status_mutation_response(editor_state))
     }
 }
 
@@ -239,8 +236,12 @@ fn execute_layout(
         .write()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
-    let _result = editor_state.execute(command)?;
-    Ok(layout_mutation_response(editor_state, patch))
+    let result = editor_state.execute(command)?;
+    if result.operation.is_some() {
+        Ok(layout_mutation_response(editor_state, patch))
+    } else {
+        Ok(status_mutation_response(editor_state))
+    }
 }
 
 fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutPatch {
@@ -324,10 +325,7 @@ mod tests {
             add_row_response.patches.first(),
             Some(EditorPatch::RowsInserted { patch }) if patch.sheet_index == 0 && patch.row_index == 1 && patch.rows.len() == 1
         ));
-        assert!(matches!(
-            add_row_response.patches.get(1),
-            Some(EditorPatch::SheetMetadata { patch }) if patch.sheet_index == 0
-        ));
+        assert_eq!(add_row_response.patches.len(), 1);
 
         let registry = make_registry();
         let add_column_response = do_add_column(&registry, 0, 1).expect("add column");
@@ -335,10 +333,33 @@ mod tests {
             add_column_response.patches.first(),
             Some(EditorPatch::ColumnsInserted { patch }) if patch.sheet_index == 0 && patch.col_index == 1 && patch.values.len() == 1
         ));
-        assert!(matches!(
-            add_column_response.patches.get(1),
-            Some(EditorPatch::SheetMetadata { patch }) if patch.sheet_index == 0
-        ));
+        assert_eq!(add_column_response.patches.len(), 1);
+    }
+
+    #[test]
+    fn no_op_cell_edit_returns_status_only_response() {
+        let registry = make_registry();
+        let response = do_set_cell(&registry, 0, 0, 0, "A1".to_string()).expect("set same cell");
+
+        assert_eq!(response.revision, 0);
+        assert!(response.patches.is_empty());
+    }
+
+    #[test]
+    fn no_op_layout_edit_returns_status_only_response() {
+        let registry = make_registry();
+        let response = do_set_column_width(&registry, 0, 0, None).expect("clear default width");
+
+        assert_eq!(response.revision, 0);
+        assert!(response.patches.is_empty());
+    }
+
+    #[test]
+    fn resize_rejects_indexes_outside_sheet_extent() {
+        let registry = make_registry();
+
+        assert!(do_set_column_width(&registry, 0, 5, Some(120)).is_err());
+        assert!(do_set_row_height(&registry, 0, 5, Some(72)).is_err());
     }
 
     #[test]

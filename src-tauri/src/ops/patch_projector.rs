@@ -4,7 +4,7 @@ use crate::types::{
     AppliedOperationResult, CellValue, ColumnsDeletedPatch, ColumnsInsertedPatch,
     EditorMutationResponse, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
     RowsDeletedPatch, RowsInsertedPatch, SheetCellChange, SheetData, SheetDeletedPatch,
-    SheetInsertedPatch, SheetMetadataPatch,
+    SheetInsertedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -45,6 +45,10 @@ pub fn resync_required_mutation_response(
             },
         }],
     )
+}
+
+pub fn status_mutation_response(editor_state: &EditorState) -> EditorMutationResponse {
+    mutation_response(editor_state, Vec::new())
 }
 
 pub fn cell_delta_mutation_response(
@@ -166,12 +170,7 @@ pub(crate) fn inserted_row_patches(
     file_data
         .sheets
         .get(sheet_index)
-        .map(|sheet| {
-            vec![
-                rows_inserted_patch(sheet_index, row_index, sheet),
-                sheet_metadata_patch(sheet_index, sheet),
-            ]
-        })
+        .map(|sheet| vec![rows_inserted_patch(sheet_index, row_index, sheet)])
         .unwrap_or_default()
 }
 
@@ -184,12 +183,7 @@ pub(crate) fn deleted_row_patches(
     file_data
         .sheets
         .get(sheet_index)
-        .map(|sheet| {
-            vec![
-                rows_deleted_patch(sheet_index, row_index, count),
-                sheet_metadata_patch(sheet_index, sheet),
-            ]
-        })
+        .map(|_| vec![rows_deleted_patch(sheet_index, row_index, count)])
         .unwrap_or_default()
 }
 
@@ -201,12 +195,7 @@ pub(crate) fn inserted_column_patches(
     file_data
         .sheets
         .get(sheet_index)
-        .map(|sheet| {
-            vec![
-                columns_inserted_patch(sheet_index, col_index, sheet),
-                sheet_metadata_patch(sheet_index, sheet),
-            ]
-        })
+        .map(|sheet| vec![columns_inserted_patch(sheet_index, col_index, sheet)])
         .unwrap_or_default()
 }
 
@@ -219,12 +208,7 @@ pub(crate) fn deleted_column_patches(
     file_data
         .sheets
         .get(sheet_index)
-        .map(|sheet| {
-            vec![
-                columns_deleted_patch(sheet_index, col_index, count),
-                sheet_metadata_patch(sheet_index, sheet),
-            ]
-        })
+        .map(|_| vec![columns_deleted_patch(sheet_index, col_index, count)])
         .unwrap_or_default()
 }
 
@@ -281,18 +265,6 @@ fn columns_deleted_patch(sheet_index: usize, col_index: usize, count: usize) -> 
             sheet_index,
             col_index,
             count,
-        },
-    }
-}
-
-pub fn sheet_metadata_patch(sheet_index: usize, sheet: &SheetData) -> EditorPatch {
-    EditorPatch::SheetMetadata {
-        patch: SheetMetadataPatch {
-            sheet_index,
-            merges: sheet.merges.clone(),
-            column_widths: sheet.column_widths.clone().unwrap_or_default(),
-            row_heights: sheet.row_heights.clone().unwrap_or_default(),
-            rich: sheet.rich.clone(),
         },
     }
 }

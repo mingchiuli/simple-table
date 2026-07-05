@@ -48,17 +48,13 @@ pub fn generate_current_file_bytes_for_target(
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     let registry = active_document_store();
-    let document = {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        registry_guard
-            .active()
-            .map(|editor_state| editor_state.document_snapshot())
-            .ok_or(AppError::NoFileLoaded)?
-    };
-
-    document.generate_file_bytes_for_target(target_path_or_name)
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    registry_guard
+        .active()
+        .ok_or(AppError::NoFileLoaded)?
+        .generate_file_bytes_for_target(target_path_or_name)
 }
 
 pub fn current_file_data() -> Result<FileData, AppError> {

@@ -62,16 +62,6 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn clone_body(&self) -> Self {
-        match self {
-            Self::Excel(body) => Self::Excel(ExcelDocumentBody {
-                workbook: body.workbook.clone(),
-            }),
-            Self::Csv => Self::Csv,
-            Self::GeneratedWorkbook => Self::GeneratedWorkbook,
-        }
-    }
-
     pub fn capture_structure_memento(&self, operation: &AppliedOperation) -> BodyStructureMemento {
         match self {
             Self::Excel(body) => capture_excel_structure_memento(&body.workbook, operation),

@@ -5,7 +5,6 @@ import type {
   EditorPatch,
   FileData,
   SheetCellChange,
-  SheetMetadataPatch,
   SheetDeletedPatch,
   SheetInsertedPatch,
   SheetUpdatedPatch,
@@ -58,9 +57,6 @@ export function applyDocumentPatches(
       case "SheetUpdated":
         nextData = applySheetUpdated(nextData, patch.data.patch);
         break;
-      case "SheetMetadata":
-        nextData = applySheetMetadata(nextData, patch.data.patch);
-        break;
       case "RowsInserted":
         nextData = applyRowsInserted(nextData, patch.data.patch);
         break;
@@ -105,18 +101,6 @@ function applySheetDeleted(data: FileData | null, patch: SheetDeletedPatch): Fil
 function applySheetUpdated(data: FileData | null, patch: SheetUpdatedPatch): FileData | null {
   if (!data) return data;
   return replaceSheet(data, patch.sheetIndex, patch.sheet);
-}
-
-function applySheetMetadata(data: FileData | null, patch: SheetMetadataPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
-  return replaceSheet(data, patch.sheetIndex, {
-    ...sheet,
-    merges: patch.merges,
-    columnWidths: emptyRecordToUndefined(patch.columnWidths),
-    rowHeights: emptyRecordToUndefined(patch.rowHeights),
-    rich: patch.rich,
-  });
 }
 
 function applyRowsInserted(data: FileData | null, patch: RowsInsertedPatch): FileData | null {
@@ -523,12 +507,6 @@ function patchNumberRecord(
     }
   }
   return Object.keys(next).length ? next : undefined;
-}
-
-function emptyRecordToUndefined(
-  value: Record<number, number> | undefined
-): Record<number, number> | undefined {
-  return value && Object.keys(value).length ? value : undefined;
 }
 
 function assertNever(value: never): never {

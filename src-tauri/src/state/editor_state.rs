@@ -1,7 +1,5 @@
 use crate::error::AppError;
-use crate::io::document_model::{
-    DocumentRestoreResult, MementoSide, PersistenceSnapshot, SpreadsheetDocument,
-};
+use crate::io::document_model::{DocumentRestoreResult, MementoSide, SpreadsheetDocument};
 use crate::ops::EditorCommand;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
@@ -203,17 +201,12 @@ impl EditorState {
         self.dirty.mark_saved(self.document.content_hash());
     }
 
-    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
         self.document
             .generate_file_bytes_for_target(target_path_or_name)
-    }
-
-    pub fn document_snapshot(&self) -> PersistenceSnapshot {
-        self.document.persistence_snapshot()
     }
 
     /// 执行命令并记录到历史，返回增量结果。
@@ -223,11 +216,10 @@ impl EditorState {
         let should_mark_search_stale = operation.impact().requires_search_rebuild();
         let before = self.document.capture_memento_side(&operation);
         if operation.impact().is_noop() {
-            let result = self.document.execute_operation(&operation, &before)?;
             self.refresh_content_hash();
             return Ok(ExecutedOperation {
-                operation: Some(result.operation),
-                cell_changes: result.cell_changes,
+                operation: None,
+                cell_changes: Vec::new(),
                 restore: None,
             });
         }
