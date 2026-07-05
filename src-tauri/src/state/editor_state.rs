@@ -1,23 +1,20 @@
 use crate::error::AppError;
-use crate::io::document_model::{
-    DocumentMemento, DocumentRestoreResult, MementoSide, SpreadsheetDocument,
-};
+use crate::io::document_model::{DocumentRestoreResult, MementoSide, SpreadsheetDocument};
 use crate::ops::EditorCommand;
+#[cfg(test)]
 use crate::state::content_hash::ContentHash;
-use crate::state::search_index::{
-    SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
-};
+use crate::state::dirty_tracker::DirtyTracker;
+use crate::state::editor_session::EditorSession;
+use crate::state::history_store::{HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES};
+#[cfg(test)]
+use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
+use crate::state::search_index::{SearchIndexStamp, SearchSheetIndex, SearchWriterHandle};
+use crate::state::search_session::SearchSession;
 use crate::types::{
     AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
 };
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
-
-static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
-const MAX_HISTORY_ENTRIES: usize = 100;
-const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
-const MAX_SINGLE_HISTORY_ENTRY_BYTES: usize = MAX_HISTORY_BYTES / 2;
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
@@ -41,37 +38,13 @@ pub struct SearchSheetSnapshot {
     pub cells: Vec<SearchCellSnapshot>,
 }
 
-struct HistoryEntry {
-    memento: DocumentMemento,
-    operation: AppliedOperationResult,
-    estimated_bytes: usize,
-}
-
-impl HistoryEntry {
-    fn new(memento: DocumentMemento, operation: AppliedOperationResult) -> Self {
-        let estimated_bytes = memento.estimated_bytes().max(1);
-        Self {
-            memento,
-            operation,
-            estimated_bytes,
-        }
-    }
-}
-
 /// 编辑器状态管理器
 pub struct EditorState {
-    document_id: u64,
-    revision: u64,
+    session: EditorSession,
     document: SpreadsheetDocument,
-    history: Vec<HistoryEntry>,
-    redo_stack: Vec<HistoryEntry>,
-    history_estimated_bytes: usize,
-    redo_estimated_bytes: usize,
-    pub can_undo: bool,
-    pub can_redo: bool,
-    pub current_content_hash: ContentHash,
-    pub saved_content_hash: ContentHash,
-    search_index: SearchIndexStore,
+    history: HistoryStore,
+    dirty: DirtyTracker,
+    search: SearchSession,
 }
 
 impl EditorState {
@@ -79,18 +52,11 @@ impl EditorState {
         let document = SpreadsheetDocument::new(file_data, workbook);
         let content_hash = document.content_hash();
         Self {
-            document_id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
-            revision: 0,
+            session: EditorSession::new(),
             document,
-            history: Vec::new(),
-            redo_stack: Vec::new(),
-            history_estimated_bytes: 0,
-            redo_estimated_bytes: 0,
-            can_undo: false,
-            can_redo: false,
-            current_content_hash: content_hash,
-            saved_content_hash: content_hash,
-            search_index: SearchIndexStore::default(),
+            history: HistoryStore::default(),
+            dirty: DirtyTracker::new(content_hash),
+            search: SearchSession::default(),
         }
     }
 
@@ -103,11 +69,24 @@ impl EditorState {
     }
 
     pub fn document_id(&self) -> u64 {
-        self.document_id
+        self.session.document_id()
     }
 
     pub fn revision(&self) -> u64 {
-        self.revision
+        self.session.revision()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    #[cfg(test)]
+    pub fn current_content_hash(&self) -> ContentHash {
+        self.dirty.current_hash()
     }
 
     pub fn formula_status(&self) -> FormulaStatus {
@@ -123,7 +102,7 @@ impl EditorState {
     }
 
     pub fn search_index_stamp(&self) -> SearchIndexStamp {
-        self.search_index.stamp(self.document_id)
+        self.search.stamp(self.document_id())
     }
 
     pub fn install_search_index(
@@ -132,24 +111,26 @@ impl EditorState {
         stamp: SearchIndexStamp,
         index: Option<SearchSheetIndex>,
     ) {
-        self.search_index
-            .install_sheet_index(self.document_id, sheet_index, stamp, index);
-        self.search_index.truncate(self.file_data().sheets.len());
+        self.search.install_sheet_index(
+            self.document_id(),
+            sheet_index,
+            self.file_data().sheets.len(),
+            stamp,
+            index,
+        );
     }
 
     pub fn mark_search_index_stale(&mut self) -> SearchIndexStamp {
-        self.search_index.mark_stale(self.document_id)
+        self.search.mark_all_stale(self.document_id())
     }
 
     pub fn mark_search_sheets_stale(&mut self, sheet_indexes: impl IntoIterator<Item = usize>) {
-        for sheet_index in sheet_indexes {
-            self.search_index.mark_sheet_stale(sheet_index);
-        }
+        self.search.mark_sheets_stale(sheet_indexes);
     }
 
     pub fn mark_search_sheet_fresh(&mut self, sheet_index: usize, stamp: SearchIndexStamp) {
-        self.search_index
-            .mark_sheet_fresh(self.document_id, sheet_index, stamp);
+        self.search
+            .mark_sheet_fresh(self.document_id(), sheet_index, stamp);
     }
 
     pub fn search_writer_handle(
@@ -157,8 +138,8 @@ impl EditorState {
         sheet_index: usize,
         stamp: SearchIndexStamp,
     ) -> Option<SearchWriterHandle> {
-        self.search_index
-            .writer_handle(self.document_id, sheet_index, stamp)
+        self.search
+            .writer_handle(self.document_id(), sheet_index, stamp)
     }
 
     pub fn indexed_search_sheet(
@@ -167,19 +148,7 @@ impl EditorState {
         query: &str,
         limit: usize,
     ) -> Option<Vec<SearchCellSnapshot>> {
-        self.search_index
-            .search_sheet(sheet_index, query, limit)
-            .map(|matches| {
-                matches
-                    .into_iter()
-                    .map(|cell| SearchCellSnapshot {
-                        row: cell.row,
-                        col: cell.col,
-                        text: cell.text,
-                        search_text: cell.display,
-                    })
-                    .collect()
-            })
+        self.search.indexed_search_sheet(sheet_index, query, limit)
     }
 
     pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
@@ -225,12 +194,11 @@ impl EditorState {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.current_content_hash != self.saved_content_hash
+        self.dirty.is_dirty()
     }
 
     pub fn mark_saved(&mut self) {
-        self.refresh_content_hash();
-        self.saved_content_hash = self.current_content_hash;
+        self.dirty.mark_saved(self.document.content_hash());
     }
 
     #[cfg(test)]
@@ -254,7 +222,6 @@ impl EditorState {
         let before = self.document.capture_memento_side(&operation);
         if operation.impact().is_noop() {
             let result = self.document.execute_operation(&operation, &before)?;
-            self.update_flags();
             self.refresh_content_hash();
             return Ok(ExecutedOperation {
                 operation: Some(result.operation),
@@ -269,18 +236,12 @@ impl EditorState {
         let cell_changes = result.cell_changes;
 
         if before.estimated_bytes() > MAX_SINGLE_HISTORY_ENTRY_BYTES {
-            self.clear_history();
-            self.clear_redo_stack();
+            self.history.clear_all();
         } else {
             let after = self.document.capture_memento_side(&operation);
             let memento = SpreadsheetDocument::create_memento(before, after);
             let entry = HistoryEntry::new(memento, operation_result.clone());
-            if entry.estimated_bytes > MAX_SINGLE_HISTORY_ENTRY_BYTES {
-                self.clear_history();
-            } else {
-                self.push_history(entry);
-            }
-            self.clear_redo_stack();
+            self.history.record(entry);
         }
 
         self.bump_revision();
@@ -289,7 +250,6 @@ impl EditorState {
         } else {
             self.mark_search_sheets_stale(stale_sheets);
         }
-        self.update_flags();
         self.refresh_content_hash();
         Ok(ExecutedOperation {
             operation: Some(operation_result),
@@ -300,18 +260,14 @@ impl EditorState {
 
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
-        if let Some(entry) = self.history.pop() {
-            self.history_estimated_bytes = self
-                .history_estimated_bytes
-                .saturating_sub(entry.estimated_bytes);
+        if let Some(entry) = self.history.pop_undo() {
             let restore = self
                 .document
                 .restore_memento(&entry.memento, MementoSide::Before)?;
             let operation = entry.operation.clone();
-            self.push_redo(entry);
+            self.history.push_redo(entry);
             self.bump_revision();
             self.mark_search_index_stale();
-            self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
                 operation: Some(operation),
@@ -325,18 +281,14 @@ impl EditorState {
 
     /// 重做上一个被撤销的操作
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
-        if let Some(entry) = self.redo_stack.pop() {
-            self.redo_estimated_bytes = self
-                .redo_estimated_bytes
-                .saturating_sub(entry.estimated_bytes);
+        if let Some(entry) = self.history.pop_redo() {
             let restore = self
                 .document
                 .restore_memento(&entry.memento, MementoSide::After)?;
             let operation = entry.operation.clone();
-            self.push_history(entry);
+            self.history.push_undo(entry);
             self.bump_revision();
             self.mark_search_index_stale();
-            self.update_flags();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
                 operation: Some(operation),
@@ -348,59 +300,12 @@ impl EditorState {
         }
     }
 
-    fn update_flags(&mut self) {
-        self.can_undo = !self.history.is_empty();
-        self.can_redo = !self.redo_stack.is_empty();
-    }
-
     fn refresh_content_hash(&mut self) {
-        self.current_content_hash = self.document.content_hash();
+        self.dirty.refresh(self.document.content_hash());
     }
 
     fn bump_revision(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
-    }
-
-    fn push_history(&mut self, entry: HistoryEntry) {
-        self.history_estimated_bytes += entry.estimated_bytes;
-        self.history.push(entry);
-        while self.history.len() > MAX_HISTORY_ENTRIES
-            || self.history_estimated_bytes > MAX_HISTORY_BYTES
-        {
-            let evicted = self.history.remove(0);
-            self.history_estimated_bytes = self
-                .history_estimated_bytes
-                .saturating_sub(evicted.estimated_bytes);
-            if self.history.is_empty() {
-                break;
-            }
-        }
-    }
-
-    fn clear_redo_stack(&mut self) {
-        self.redo_stack.clear();
-        self.redo_estimated_bytes = 0;
-    }
-
-    fn clear_history(&mut self) {
-        self.history.clear();
-        self.history_estimated_bytes = 0;
-    }
-
-    fn push_redo(&mut self, entry: HistoryEntry) {
-        self.redo_estimated_bytes += entry.estimated_bytes;
-        self.redo_stack.push(entry);
-        while self.redo_stack.len() > MAX_HISTORY_ENTRIES
-            || self.redo_estimated_bytes > MAX_HISTORY_BYTES
-        {
-            let evicted = self.redo_stack.remove(0);
-            self.redo_estimated_bytes = self
-                .redo_estimated_bytes
-                .saturating_sub(evicted.estimated_bytes);
-            if self.redo_stack.is_empty() {
-                break;
-            }
-        }
+        self.session.bump_revision();
     }
 
     fn ensure_operation_supported(
@@ -493,14 +398,14 @@ mod tests {
             },
             None,
         );
-        let original_hash = state.current_content_hash;
+        let original_hash = state.current_content_hash();
 
         state.update_identity("/tmp/renamed.xlsx".to_string(), "renamed.xlsx".to_string());
         state.refresh_content_hash();
 
         assert_eq!(state.file_data().path, "/tmp/renamed.xlsx");
         assert_eq!(state.file_data().file_name, "renamed.xlsx");
-        assert_eq!(state.current_content_hash, original_hash);
+        assert_eq!(state.current_content_hash(), original_hash);
         assert!(!state.is_dirty());
     }
 
@@ -1525,7 +1430,7 @@ mod tests {
             })
             .expect("batch edit");
 
-        assert!(state.can_undo);
+        assert!(state.can_undo());
         assert_eq!(
             state.file_data().sheets[0].rows[0][0],
             CellValue::String("x".to_string())
@@ -1692,9 +1597,9 @@ mod tests {
                 .expect("edit");
         }
 
-        assert_eq!(state.history.len(), MAX_HISTORY_ENTRIES);
-        assert!(state.history_estimated_bytes <= MAX_HISTORY_BYTES);
-        assert!(state.can_undo);
+        assert_eq!(state.history.undo_len(), MAX_HISTORY_ENTRIES);
+        assert!(state.history.undo_estimated_bytes() <= MAX_HISTORY_BYTES);
+        assert!(state.can_undo());
     }
 
     #[test]
@@ -1724,8 +1629,8 @@ mod tests {
                 .expect("edit");
         }
 
-        assert!(state.history.len() < 40);
-        assert!(state.history_estimated_bytes <= MAX_HISTORY_BYTES);
-        assert!(state.can_undo);
+        assert!(state.history.undo_len() < 40);
+        assert!(state.history.undo_estimated_bytes() <= MAX_HISTORY_BYTES);
+        assert!(state.can_undo());
     }
 }

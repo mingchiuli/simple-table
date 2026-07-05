@@ -1,27 +1,16 @@
 use std::collections::{HashSet, VecDeque};
 
-use formualizer_workbook::{LiteralValue, Workbook, WorkbookMode};
-use serde_json::Value;
+use formualizer_workbook::{Workbook, WorkbookMode};
 
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
+use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::index::{
     FormulaDependencyIndex, build_dependency_index, count_unregistered_formula_cells,
 };
+use crate::formula::registry::{apply_cell_changes, register_workbook_cells, set_workbook_cell};
+use crate::formula::value_codec::{literal_to_cell, to_formula_index};
 use crate::types::{CellValue, FileData, FormulaDiagnostics, SheetCellChange};
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub struct FormulaCellRef {
-    pub sheet_index: usize,
-    pub row: usize,
-    pub col: usize,
-}
-
-#[derive(Default)]
-struct FormulaRegistrationResult {
-    registered_formulas: HashSet<FormulaCellRef>,
-    invalid_formulas: Vec<SheetCellChange>,
-}
 
 pub struct FormulaRuntime {
     workbook: Workbook,
@@ -321,144 +310,10 @@ impl FormulaRuntime {
     }
 }
 
-fn register_workbook_cells(
-    workbook: &mut Workbook,
-    ast_service: &mut FormulaAstService,
-    file_data: &mut FileData,
-) -> Result<FormulaRegistrationResult, AppError> {
-    let mut result = FormulaRegistrationResult::default();
-
-    for (sheet_index, sheet) in file_data.sheets.iter_mut().enumerate() {
-        for (row_idx, row) in sheet.rows.iter_mut().enumerate() {
-            for (col_idx, cell) in row.iter_mut().enumerate() {
-                let cell_result = set_workbook_cell(
-                    workbook,
-                    ast_service,
-                    &sheet.name,
-                    sheet_index,
-                    row_idx,
-                    col_idx,
-                    cell,
-                )?;
-                result
-                    .registered_formulas
-                    .extend(cell_result.registered_formulas);
-                result.invalid_formulas.extend(cell_result.invalid_formulas);
-            }
-        }
-    }
-
-    Ok(result)
-}
-
-fn set_workbook_cell(
-    workbook: &mut Workbook,
-    ast_service: &mut FormulaAstService,
-    sheet_name: &str,
-    sheet_index: usize,
-    row_idx: usize,
-    col_idx: usize,
-    cell: &CellValue,
-) -> Result<FormulaRegistrationResult, AppError> {
-    let mut result = FormulaRegistrationResult::default();
-    let row = to_formula_index(row_idx);
-    let col = to_formula_index(col_idx);
-    match cell {
-        CellValue::Formula { formula, .. } => {
-            match ast_service.validate(formula).and_then(|_| {
-                workbook
-                    .set_formula(sheet_name, row, col, formula)
-                    .map_err(|error| error.to_string())
-            }) {
-                Ok(()) => {
-                    result.registered_formulas.insert(FormulaCellRef {
-                        sheet_index,
-                        row: row_idx,
-                        col: col_idx,
-                    });
-                }
-                Err(error) => {
-                    workbook
-                        .set_value(sheet_name, row, col, LiteralValue::Empty)
-                        .map_err(|error| AppError::Internal(error.to_string()))?;
-                    let value = cell.with_formula_result(CellValue::Null, Some(error));
-                    result.invalid_formulas.push(SheetCellChange::new(
-                        sheet_index,
-                        row_idx,
-                        col_idx,
-                        value,
-                    ));
-                }
-            }
-        }
-        _ => workbook
-            .set_value(sheet_name, row, col, cell_to_literal(cell))
-            .map_err(|error| AppError::Internal(error.to_string()))?,
-    }
-
-    Ok(result)
-}
-
-fn apply_cell_changes(file_data: &mut FileData, changes: &[SheetCellChange]) {
-    for change in changes {
-        let Some(cell) = file_data
-            .sheets
-            .get_mut(change.sheet_index)
-            .and_then(|sheet| sheet.rows.get_mut(change.row))
-            .and_then(|row| row.get_mut(change.col))
-        else {
-            continue;
-        };
-        *cell = change.value.clone();
-    }
-}
-
-fn to_formula_index(index: usize) -> u32 {
-    index.saturating_add(1) as u32
-}
-
-fn cell_to_literal(cell: &CellValue) -> LiteralValue {
-    match cell {
-        CellValue::Null => LiteralValue::Empty,
-        CellValue::String(value) => LiteralValue::Text(value.clone()),
-        CellValue::Number(value) => {
-            if let Some(int) = value.as_i64() {
-                LiteralValue::Int(int)
-            } else if let Some(float) = value.as_f64() {
-                LiteralValue::Number(float)
-            } else {
-                LiteralValue::Text(value.to_string())
-            }
-        }
-        CellValue::Boolean(value) => LiteralValue::Boolean(*value),
-        CellValue::Formula { cached_value, .. } => cell_to_literal(cached_value),
-    }
-}
-
-fn literal_to_cell(value: LiteralValue) -> (CellValue, Option<String>) {
-    match value {
-        LiteralValue::Empty | LiteralValue::Pending => (CellValue::Null, None),
-        LiteralValue::Int(value) => (CellValue::Number(Value::from(value)), None),
-        LiteralValue::Number(value) => (CellValue::Number(Value::from(value)), None),
-        LiteralValue::Text(value) => (CellValue::String(value), None),
-        LiteralValue::Boolean(value) => (CellValue::Boolean(value), None),
-        LiteralValue::Error(error) => (CellValue::Null, Some(error.kind.to_string())),
-        LiteralValue::Array(values) => values
-            .first()
-            .and_then(|row| row.first())
-            .cloned()
-            .map(literal_to_cell)
-            .unwrap_or((CellValue::Null, None)),
-        LiteralValue::Date(value) => (CellValue::String(value.to_string()), None),
-        LiteralValue::DateTime(value) => (CellValue::String(value.to_string()), None),
-        LiteralValue::Time(value) => (CellValue::String(value.to_string()), None),
-        LiteralValue::Duration(value) => (CellValue::String(value.to_string()), None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::types::SheetData;
+    use serde_json::Value;
 
     use super::*;
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::error::AppError;
-use crate::io::projection_mapper::ProjectionMapper;
+use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
     MergeRange, SheetData, SheetRichProjection,
@@ -47,7 +47,7 @@ fn read_xlsx_from_bytes(
         file_data: FileData {
             path,
             file_name,
-            sheets: ProjectionMapper::sheets_from_workbook(&workbook),
+            sheets: WorkbookProjectionCodec::read_sheets(&workbook),
         },
         workbook: Some(workbook),
     })

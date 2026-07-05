@@ -3,7 +3,7 @@ import { HomeFilled } from '@element-plus/icons-vue';
 import { useDocumentStatus } from '@/composables/useDocumentStatus';
 import { useEditorCommands } from '@/composables/useEditorCommands';
 import { useFileActions } from '@/composables/useFileActions';
-import { usePendingCellSave } from '@/composables/usePendingCellSave';
+import { useCellEditController } from '@/composables/useCellEditController';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
 import { useSearchSessionStore } from '@/stores/searchSession';
@@ -108,7 +108,7 @@ const {
   handleCellEditCancel,
   handleCellEditorSubmit,
   handleDeselectCell,
-} = usePendingCellSave({
+} = useCellEditController({
   fileData,
   currentSheet,
   currentSheetIndex,

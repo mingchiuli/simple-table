@@ -1,4 +1,5 @@
-use crate::formula::engine::{FormulaCellRef, FormulaRuntime};
+use crate::formula::cell_ref::FormulaCellRef;
+use crate::formula::engine::FormulaRuntime;
 use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
 use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus, SheetCellChange};

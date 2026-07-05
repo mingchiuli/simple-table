@@ -81,6 +81,16 @@ struct IndexScheduler {
 #[derive(Default)]
 struct IndexSchedulerState {
     pending: HashMap<(u64, usize), SheetPending>,
+    stats: SearchSchedulerStats,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SearchSchedulerStats {
+    pub queued_jobs: u64,
+    pub drained_batches: u64,
+    pub rebuild_jobs: u64,
+    pub incremental_jobs: u64,
+    pub incremental_fallback_rebuilds: u64,
 }
 
 static INDEX_SCHEDULER: OnceLock<Arc<IndexScheduler>> = OnceLock::new();
@@ -103,6 +113,7 @@ fn index_scheduler() -> &'static Arc<IndexScheduler> {
 fn enqueue_index_job(job: IndexJob) {
     let scheduler = index_scheduler();
     if let Ok(mut state) = scheduler.state.lock() {
+        state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
         merge_job(&mut state.pending, job);
         scheduler.wake.notify_one();
     }
@@ -169,11 +180,17 @@ fn index_worker(scheduler: Arc<IndexScheduler>) {
 
         for ((_, sheet_index), pending) in pending {
             if let Some(stamp) = pending.rebuild {
+                record_scheduler_event(|stats| {
+                    stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
+                });
                 run_rebuild(pending.document_id, sheet_index, stamp, &pending.registry);
                 continue;
             }
 
             if !pending.incremental.is_empty() {
+                record_scheduler_event(|stats| {
+                    stats.incremental_jobs = stats.incremental_jobs.saturating_add(1);
+                });
                 let latest_stamp = pending
                     .incremental
                     .values()
@@ -187,6 +204,11 @@ fn index_worker(scheduler: Arc<IndexScheduler>) {
                     &pending.registry,
                     &updates,
                 ) {
+                    record_scheduler_event(|stats| {
+                        stats.incremental_fallback_rebuilds =
+                            stats.incremental_fallback_rebuilds.saturating_add(1);
+                        stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
+                    });
                     run_rebuild(
                         pending.document_id,
                         sheet_index,
@@ -228,7 +250,26 @@ fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), 
         }
     }
 
-    std::mem::take(&mut state.pending)
+    let pending = std::mem::take(&mut state.pending);
+    state.stats.drained_batches = state.stats.drained_batches.saturating_add(1);
+    pending
+}
+
+fn record_scheduler_event(update: impl FnOnce(&mut SearchSchedulerStats)) {
+    let scheduler = index_scheduler();
+    if let Ok(mut state) = scheduler.state.lock() {
+        update(&mut state.stats);
+    }
+}
+
+#[allow(dead_code)]
+pub fn search_scheduler_stats() -> SearchSchedulerStats {
+    let scheduler = index_scheduler();
+    scheduler
+        .state
+        .lock()
+        .map(|state| state.stats.clone())
+        .unwrap_or_default()
 }
 
 fn run_rebuild(

@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::formula::engine::FormulaCellRef;
+use crate::formula::cell_ref::FormulaCellRef;
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
 use crate::io::document_transaction::DocumentTransaction;

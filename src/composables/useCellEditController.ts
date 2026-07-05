@@ -12,7 +12,7 @@ import { getCellKey } from '@/utils/cellKey';
 
 type CellPosition = { row: number; col: number };
 
-type UsePendingCellSaveOptions = {
+type UseCellEditControllerOptions = {
   fileData: ComputedRef<FileData | null>;
   currentSheet: ComputedRef<SheetData | null>;
   currentSheetIndex: Ref<number>;
@@ -24,7 +24,7 @@ type UsePendingCellSaveOptions = {
   clearPendingContentChange: () => void;
 };
 
-export function usePendingCellSave({
+export function useCellEditController({
   fileData,
   currentSheet,
   currentSheetIndex,
@@ -34,7 +34,7 @@ export function usePendingCellSave({
   applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
-}: UsePendingCellSaveOptions) {
+}: UseCellEditControllerOptions) {
   const documentSessionStore = useDocumentSessionStore();
 
   const transactions = useCellEditTransactions({

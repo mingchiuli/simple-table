@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use formualizer_parse::parser::ReferenceType;
 
 use crate::formula::ast::FormulaAstService;
-use crate::formula::engine::FormulaCellRef;
+use crate::formula::cell_ref::FormulaCellRef;
 use crate::types::{CellValue, FileData, FormulaDiagnostics};
 
 const MAX_INDEXED_RANGE_ROWS: usize = 512;
