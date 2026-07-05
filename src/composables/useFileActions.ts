@@ -137,7 +137,7 @@ export function useFileActions({
       if (!savePath) return;
 
       if (!nativeSaveExtensionFromName(savePath)) {
-        ElMessage.error('Native save is only supported as .xlsx. Use export for CSV.');
+        ElMessage.error('Native save is only supported as .xlsx or .csv.');
         return;
       }
 

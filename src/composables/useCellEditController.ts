@@ -36,6 +36,7 @@ export function useCellEditController({
   clearPendingContentChange,
 }: UseCellEditControllerOptions) {
   const documentSessionStore = useDocumentSessionStore();
+  let syncingEditorValue = false;
 
   const transactions = useCellEditTransactions({
     fileData,
@@ -55,13 +56,11 @@ export function useCellEditController({
     selectedCell,
     (newCell) => {
       if (newCell && currentSheet.value) {
-        cellEditorValue.value = transactions.editorStringForCell(
-          currentSheetIndex.value,
-          newCell.row,
-          newCell.col
+        syncFormulaBarValue(
+          transactions.editorStringForCell(currentSheetIndex.value, newCell.row, newCell.col)
         );
       } else {
-        cellEditorValue.value = '';
+        syncFormulaBarValue('');
       }
     },
     { immediate: true }
@@ -75,11 +74,12 @@ export function useCellEditController({
   });
 
   watch(cellEditorValue, (newValue) => {
+    if (syncingEditorValue) return;
     if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
 
     const { row, col } = selectedCell.value;
     transactions.updateDraftCell(currentSheetIndex.value, row, col, newValue);
-  });
+  }, { flush: 'sync' });
 
   async function commitBatch(changes: CellSaveRequest[]) {
     const currentFileData = fileData.value;
@@ -122,11 +122,19 @@ export function useCellEditController({
 
   function refreshSelectedEditorValue() {
     if (!selectedCell.value) return;
-    cellEditorValue.value = transactions.editorStringForCell(
-      currentSheetIndex.value,
-      selectedCell.value.row,
-      selectedCell.value.col
+    syncFormulaBarValue(
+      transactions.editorStringForCell(
+        currentSheetIndex.value,
+        selectedCell.value.row,
+        selectedCell.value.col
+      )
     );
+  }
+
+  function syncFormulaBarValue(value: string) {
+    syncingEditorValue = true;
+    cellEditorValue.value = value;
+    syncingEditorValue = false;
   }
 
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
@@ -139,7 +147,7 @@ export function useCellEditController({
   function handleCellEditing(row: number, col: number, value: string) {
     if (!canEditCells.value) return;
     if (selectedCell.value?.row === row && selectedCell.value?.col === col) {
-      cellEditorValue.value = value;
+      syncFormulaBarValue(value);
     }
 
     if (!currentSheet.value) return;
@@ -165,13 +173,14 @@ export function useCellEditController({
 
   function handleDeselectCell() {
     selectedCell.value = null;
-    cellEditorValue.value = '';
+    syncFormulaBarValue('');
   }
 
   return {
     cellToEditorString,
     draftCellValues: transactions.draftCellValues,
     flushPendingCellChanges: transactions.flushPendingCellChanges,
+    refreshSelectedEditorValue,
     handleCellChange,
     handleCellEditing,
     handleCellEditCancel,

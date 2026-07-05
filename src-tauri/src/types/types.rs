@@ -468,6 +468,13 @@ impl SheetData {
         })
     }
 
+    pub fn cell_style_at(&self, row: usize, col: usize) -> Option<CellStyleProjection> {
+        self.rich
+            .cell_styles
+            .get(&excel_cell_key(row, col))
+            .cloned()
+    }
+
     pub fn cell_display_text(&self, row: usize, col: usize) -> String {
         self.rows
             .get(row)
@@ -742,7 +749,14 @@ pub enum DrawingKind {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct DocumentCapabilities {
-    #[ts(type = "\"xlsx\" | null")]
+    #[ts(type = "\"xlsx\" | \"csv\"")]
+    pub source_format: String,
+    pub can_save_original: bool,
+    #[ts(type = "\"xlsx\" | \"csv\" | null")]
+    pub native_save_format: Option<String>,
+    #[ts(type = "Array<\"xlsx\" | \"csv\">")]
+    pub export_formats: Vec<String>,
+    #[ts(type = "\"xlsx\" | \"csv\" | null")]
     pub native_save_extension: Option<String>,
     #[ts(type = "\"xlsx\" | \"csv\"")]
     pub export_extension: String,
@@ -820,6 +834,18 @@ pub struct SheetCellChange {
     pub col: usize,
     pub value: CellValue,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub display: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub format: Option<CellFormatProjection>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub style: Option<CellStyleProjection>,
+    #[serde(default)]
     #[ts(skip)]
     pub display_format: Option<CellFormatProjection>,
 }
@@ -831,11 +857,22 @@ impl SheetCellChange {
             row,
             col,
             value,
+            display: None,
+            format: None,
+            style: None,
             display_format: None,
         }
     }
 
-    pub fn with_display_format(mut self, format: Option<CellFormatProjection>) -> Self {
+    pub fn with_display_projection(
+        mut self,
+        display: String,
+        format: Option<CellFormatProjection>,
+        style: Option<CellStyleProjection>,
+    ) -> Self {
+        self.display = Some(display);
+        self.format = format.clone();
+        self.style = style;
         self.display_format = format;
         self
     }
@@ -846,7 +883,18 @@ impl Serialize for SheetCellChange {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("SheetCellChange", 4)?;
+        let mut len = 4;
+        if self.display.is_some() {
+            len += 1;
+        }
+        if self.format.is_some() {
+            len += 1;
+        }
+        if self.style.is_some() {
+            len += 1;
+        }
+
+        let mut state = serializer.serialize_struct("SheetCellChange", len)?;
         state.serialize_field("sheetIndex", &self.sheet_index)?;
         state.serialize_field("row", &self.row)?;
         state.serialize_field("col", &self.col)?;
@@ -857,6 +905,15 @@ impl Serialize for SheetCellChange {
                 format: self.display_format.clone(),
             },
         )?;
+        if let Some(display) = &self.display {
+            state.serialize_field("display", display)?;
+        }
+        if let Some(format) = &self.format {
+            state.serialize_field("format", format)?;
+        }
+        if let Some(style) = &self.style {
+            state.serialize_field("style", style)?;
+        }
         state.end()
     }
 }
@@ -1078,6 +1135,15 @@ pub struct RowsInsertedPatch {
     #[serde(default)]
     #[ts(skip)]
     pub display_formats: Vec<Vec<Option<CellFormatProjection>>>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub displays: Vec<Vec<String>>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub formats: Vec<Vec<Option<CellFormatProjection>>>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<Vec<Option<CellStyleProjection>>>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1103,6 +1169,15 @@ pub struct ColumnsInsertedPatch {
     #[serde(default)]
     #[ts(skip)]
     pub display_formats: Vec<Option<CellFormatProjection>>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub displays: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub formats: Vec<Option<CellFormatProjection>>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<Option<CellStyleProjection>>,
 }
 
 impl Serialize for RowsInsertedPatch {
@@ -1110,7 +1185,17 @@ impl Serialize for RowsInsertedPatch {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("RowsInsertedPatch", 3)?;
+        let mut len = 3;
+        if !self.displays.is_empty() {
+            len += 1;
+        }
+        if !self.formats.is_empty() {
+            len += 1;
+        }
+        if !self.styles.is_empty() {
+            len += 1;
+        }
+        let mut state = serializer.serialize_struct("RowsInsertedPatch", len)?;
         state.serialize_field("sheetIndex", &self.sheet_index)?;
         state.serialize_field("rowIndex", &self.row_index)?;
         state.serialize_field(
@@ -1120,6 +1205,15 @@ impl Serialize for RowsInsertedPatch {
                 formats: &self.display_formats,
             },
         )?;
+        if !self.displays.is_empty() {
+            state.serialize_field("displays", &self.displays)?;
+        }
+        if !self.formats.is_empty() {
+            state.serialize_field("formats", &self.formats)?;
+        }
+        if !self.styles.is_empty() {
+            state.serialize_field("styles", &self.styles)?;
+        }
         state.end()
     }
 }
@@ -1129,7 +1223,17 @@ impl Serialize for ColumnsInsertedPatch {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("ColumnsInsertedPatch", 3)?;
+        let mut len = 3;
+        if !self.displays.is_empty() {
+            len += 1;
+        }
+        if !self.formats.is_empty() {
+            len += 1;
+        }
+        if !self.styles.is_empty() {
+            len += 1;
+        }
+        let mut state = serializer.serialize_struct("ColumnsInsertedPatch", len)?;
         state.serialize_field("sheetIndex", &self.sheet_index)?;
         state.serialize_field("colIndex", &self.col_index)?;
         state.serialize_field(
@@ -1139,6 +1243,15 @@ impl Serialize for ColumnsInsertedPatch {
                 formats: &self.display_formats,
             },
         )?;
+        if !self.displays.is_empty() {
+            state.serialize_field("displays", &self.displays)?;
+        }
+        if !self.formats.is_empty() {
+            state.serialize_field("formats", &self.formats)?;
+        }
+        if !self.styles.is_empty() {
+            state.serialize_field("styles", &self.styles)?;
+        }
         state.end()
     }
 }

@@ -87,13 +87,7 @@ async function applyMutationResponse(response: EditorMutationResponse) {
   if (result.resyncRequired) {
     await refreshProjectionFromBackend();
   }
-  if (!documentSessionStore.data || !selectedCell.value) return;
-
-  cellEditorValue.value = getEditorValue(
-    currentSheetIndex.value,
-    selectedCell.value.row,
-    selectedCell.value.col
-  );
+  refreshSelectedEditorValue();
 }
 
 async function refreshProjectionFromBackend() {
@@ -103,6 +97,7 @@ async function refreshProjectionFromBackend() {
 
 const {
   flushPendingCellChanges,
+  refreshSelectedEditorValue,
   handleCellChange,
   handleCellEditing,
   handleCellEditCancel,

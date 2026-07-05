@@ -1,5 +1,7 @@
 import type {
   CellValue,
+  CellFormatProjection,
+  CellStyleProjection,
   EditorPatch,
   FileData,
   SheetCellChange,
@@ -14,6 +16,8 @@ import type {
   ColumnsDeletedPatch,
 } from "@/types";
 import { blankCell } from "@/utils/cellValue";
+import { defaultRichProjection } from "@/types";
+import { toCellPosition } from "@/utils/excel";
 
 export type PatchApplyResult = {
   data: FileData | null;
@@ -113,8 +117,20 @@ function applyRowsInserted(data: FileData | null, patch: RowsInsertedPatch): Fil
   const sheet = data?.sheets[patch.sheetIndex];
   if (!data || !sheet || patch.rows.length === 0) return data;
   const rows = [...sheet.rows];
-  rows.splice(Math.min(patch.rowIndex, rows.length), 0, ...patch.rows.map((row) => [...row]));
-  return replaceSheet(data, patch.sheetIndex, { ...sheet, rows });
+  rows.splice(
+    Math.min(patch.rowIndex, rows.length),
+    0,
+    ...patch.rows.map((row, rowOffset) =>
+      row.map((cell, colIndex) => applyPatchDisplay(cell, patch.displays?.[rowOffset]?.[colIndex]))
+    )
+  );
+  const patchedSheet = applyInsertedRowsMetadata(
+    { ...sheet, rows },
+    patch.rowIndex,
+    patch.formats ?? [],
+    patch.styles ?? []
+  );
+  return replaceSheet(data, patch.sheetIndex, patchedSheet);
 }
 
 function applyRowsDeleted(data: FileData | null, patch: RowsDeletedPatch): FileData | null {
@@ -140,11 +156,17 @@ function applyColumnsInserted(data: FileData | null, patch: ColumnsInsertedPatch
     row.splice(
       Math.min(patch.colIndex, row.length),
       0,
-      patch.values[rowIndex] ?? blankCell()
+      applyPatchDisplay(patch.values[rowIndex] ?? blankCell(), patch.displays?.[rowIndex])
     );
     rows[rowIndex] = row;
   }
-  return replaceSheet(data, patch.sheetIndex, { ...sheet, rows });
+  const patchedSheet = applyInsertedColumnsMetadata(
+    { ...sheet, rows },
+    patch.colIndex,
+    patch.formats ?? [],
+    patch.styles ?? []
+  );
+  return replaceSheet(data, patch.sheetIndex, patchedSheet);
 }
 
 function applyColumnsDeleted(data: FileData | null, patch: ColumnsDeletedPatch): FileData | null {
@@ -212,11 +234,92 @@ function applyCellChanges(data: FileData | null, changes: SheetCellChange[]): Fi
     nextData.sheets[sheetIndex] = { ...sheet, rows };
     for (const change of sheetChanges) {
       ensureCellExists(rows, change.row, change.col);
-      rows[change.row][change.col] = change.value;
+      rows[change.row][change.col] = applyPatchDisplay(change.value, change.display);
     }
+    nextData.sheets[sheetIndex] = applyCellChangesMetadata(
+      nextData.sheets[sheetIndex],
+      sheetChanges
+    );
   }
 
   return nextData;
+}
+
+function applyPatchDisplay(cell: CellValue, display: string | undefined): CellValue {
+  if (display === undefined || cell.display === display) {
+    return cell;
+  }
+  return { ...cell, display };
+}
+
+function applyCellChangesMetadata(
+  sheet: FileData["sheets"][number],
+  changes: SheetCellChange[]
+): FileData["sheets"][number] {
+  let nextSheet = sheet;
+  for (const change of changes) {
+    nextSheet = patchCellMetadata(nextSheet, change.row, change.col, change.format, change.style);
+  }
+  return nextSheet;
+}
+
+function applyInsertedRowsMetadata(
+  sheet: FileData["sheets"][number],
+  rowIndex: number,
+  formats: (CellFormatProjection | null | undefined)[][],
+  styles: (CellStyleProjection | null | undefined)[][]
+): FileData["sheets"][number] {
+  let nextSheet = sheet;
+  for (const [rowOffset, rowFormats] of formats.entries()) {
+    for (const [colIndex, format] of rowFormats.entries()) {
+      nextSheet = patchCellMetadata(
+        nextSheet,
+        rowIndex + rowOffset,
+        colIndex,
+        format,
+        styles[rowOffset]?.[colIndex]
+      );
+    }
+  }
+  return nextSheet;
+}
+
+function applyInsertedColumnsMetadata(
+  sheet: FileData["sheets"][number],
+  colIndex: number,
+  formats: (CellFormatProjection | null | undefined)[],
+  styles: (CellStyleProjection | null | undefined)[]
+): FileData["sheets"][number] {
+  let nextSheet = sheet;
+  for (const [rowIndex, format] of formats.entries()) {
+    nextSheet = patchCellMetadata(nextSheet, rowIndex, colIndex, format, styles[rowIndex]);
+  }
+  return nextSheet;
+}
+
+function patchCellMetadata(
+  sheet: FileData["sheets"][number],
+  row: number,
+  col: number,
+  format: CellFormatProjection | null | undefined,
+  style: CellStyleProjection | null | undefined
+): FileData["sheets"][number] {
+  if (!format && !style) return sheet;
+
+  const rich = {
+    ...defaultRichProjection(),
+    ...(sheet.rich ?? {}),
+    cellFormats: { ...(sheet.rich?.cellFormats ?? {}) },
+    cellStyles: { ...(sheet.rich?.cellStyles ?? {}) },
+  };
+  const key = toCellPosition(row, col);
+  if (format) {
+    rich.cellFormats[key] = format;
+  }
+  if (style) {
+    rich.cellStyles[key] = style;
+  }
+  return { ...sheet, rich };
 }
 
 function applyLayoutPatch(

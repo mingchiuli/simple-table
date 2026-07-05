@@ -86,11 +86,19 @@ pub fn update_current_file_identity(path: String, file_name: String) -> Result<(
 
 pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> DocumentCapabilities {
     let source_name = current_path.unwrap_or(file_name);
+    let source_format = document_format(source_name)
+        .or_else(|| document_format(file_name))
+        .unwrap_or_else(|| "xlsx".to_string());
     let native_extension = native_save_extension(source_name);
     let native_save_allowed = native_extension.is_some();
-    let export_extension = export_extension(file_name).unwrap_or_else(|| "xlsx".to_string());
+    let export_extension = export_extension(file_name).unwrap_or_else(|| source_format.clone());
+    let export_formats = export_formats_for(&source_format);
 
     DocumentCapabilities {
+        source_format,
+        can_save_original: native_save_allowed,
+        native_save_format: native_extension.clone(),
+        export_formats,
         requires_save_as_for_native_save: native_extension.is_none(),
         native_save_extension: native_extension,
         export_extension,
@@ -165,12 +173,20 @@ fn init_editor_state(
 
 fn native_save_extension(file_name: &str) -> Option<String> {
     let extension = extension_of(file_name).unwrap_or_else(|| "xlsx".to_string());
-    (extension == "xlsx").then_some(extension)
+    matches!(extension.as_str(), "xlsx" | "csv").then_some(extension)
 }
 
 fn export_extension(file_name: &str) -> Option<String> {
     let extension = extension_of(file_name).unwrap_or_else(|| "xlsx".to_string());
     matches!(extension.as_str(), "xlsx" | "csv").then_some(extension)
+}
+
+fn document_format(file_name: &str) -> Option<String> {
+    export_extension(file_name)
+}
+
+fn export_formats_for(_source_format: &str) -> Vec<String> {
+    vec!["xlsx".to_string(), "csv".to_string()]
 }
 
 fn extension_of(file_name: &str) -> Option<String> {
@@ -190,6 +206,10 @@ mod tests {
         assert_eq!(
             document_capabilities("book.xlsx", None),
             DocumentCapabilities {
+                source_format: "xlsx".to_string(),
+                can_save_original: true,
+                native_save_format: Some("xlsx".to_string()),
+                export_formats: vec!["xlsx".to_string(), "csv".to_string()],
                 native_save_extension: Some("xlsx".to_string()),
                 export_extension: "xlsx".to_string(),
                 requires_save_as_for_native_save: false,
@@ -199,13 +219,14 @@ mod tests {
         assert_eq!(
             document_capabilities("data.csv", Some("/tmp/data.csv")),
             DocumentCapabilities {
-                native_save_extension: None,
+                source_format: "csv".to_string(),
+                can_save_original: true,
+                native_save_format: Some("csv".to_string()),
+                export_formats: vec!["xlsx".to_string(), "csv".to_string()],
+                native_save_extension: Some("csv".to_string()),
                 export_extension: "csv".to_string(),
-                requires_save_as_for_native_save: true,
-                workbook: WorkbookCapabilities {
-                    can_native_save: false,
-                    ..Default::default()
-                },
+                requires_save_as_for_native_save: false,
+                workbook: WorkbookCapabilities::default(),
             }
         );
     }

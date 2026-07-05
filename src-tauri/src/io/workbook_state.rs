@@ -16,6 +16,18 @@ pub struct StructurePatchDiagnostics {
     pub skipped_formula_reference_rewrites: usize,
 }
 
+#[derive(Clone, Copy)]
+enum FormulaRewriteScope {
+    CrossSheetOnly,
+}
+
+#[derive(Clone, Copy)]
+struct FormulaRewritePlan<'a> {
+    target_sheet_name: &'a str,
+    shift: StructureShift,
+    scope: FormulaRewriteScope,
+}
+
 pub fn patch_after_operation(
     workbook: &mut Workbook,
     file_data: &mut FileData,
@@ -98,14 +110,18 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.insert_new_row(*row_index as u32 + 1, 1);
             }
-            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::InsertRows {
-                    row_index: *row_index,
-                    count: 1,
-                },
-            );
+            diagnostics.skipped_formula_reference_rewrites +=
+                rewrite_formulas_after_native_structure_shift(
+                    workbook,
+                    FormulaRewritePlan {
+                        target_sheet_name: &sheet_name,
+                        shift: StructureShift::InsertRows {
+                            row_index: *row_index,
+                            count: 1,
+                        },
+                        scope: FormulaRewriteScope::CrossSheetOnly,
+                    },
+                );
         }
         AppliedOperation::DeleteRow {
             sheet_index,
@@ -115,14 +131,18 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.remove_row(*row_index as u32 + 1, 1);
             }
-            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::DeleteRows {
-                    row_index: *row_index,
-                    count: 1,
-                },
-            );
+            diagnostics.skipped_formula_reference_rewrites +=
+                rewrite_formulas_after_native_structure_shift(
+                    workbook,
+                    FormulaRewritePlan {
+                        target_sheet_name: &sheet_name,
+                        shift: StructureShift::DeleteRows {
+                            row_index: *row_index,
+                            count: 1,
+                        },
+                        scope: FormulaRewriteScope::CrossSheetOnly,
+                    },
+                );
         }
         AppliedOperation::AddColumn {
             sheet_index,
@@ -133,14 +153,18 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.insert_new_column_by_index(*col_index as u32 + 1, 1);
             }
-            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::InsertColumns {
-                    col_index: *col_index,
-                    count: 1,
-                },
-            );
+            diagnostics.skipped_formula_reference_rewrites +=
+                rewrite_formulas_after_native_structure_shift(
+                    workbook,
+                    FormulaRewritePlan {
+                        target_sheet_name: &sheet_name,
+                        shift: StructureShift::InsertColumns {
+                            col_index: *col_index,
+                            count: 1,
+                        },
+                        scope: FormulaRewriteScope::CrossSheetOnly,
+                    },
+                );
         }
         AppliedOperation::DeleteColumn {
             sheet_index,
@@ -150,14 +174,18 @@ pub fn apply_structure_operation(
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 worksheet.remove_column_by_index(*col_index as u32 + 1, 1);
             }
-            diagnostics.skipped_formula_reference_rewrites += adjust_other_sheet_formulas(
-                workbook,
-                &sheet_name,
-                StructureShift::DeleteColumns {
-                    col_index: *col_index,
-                    count: 1,
-                },
-            );
+            diagnostics.skipped_formula_reference_rewrites +=
+                rewrite_formulas_after_native_structure_shift(
+                    workbook,
+                    FormulaRewritePlan {
+                        target_sheet_name: &sheet_name,
+                        shift: StructureShift::DeleteColumns {
+                            col_index: *col_index,
+                            count: 1,
+                        },
+                        scope: FormulaRewriteScope::CrossSheetOnly,
+                    },
+                );
         }
         AppliedOperation::AddSheet {
             sheet_index,
@@ -346,27 +374,36 @@ fn merged_reasons<const N: usize>(groups: [&Vec<String>; N]) -> Vec<String> {
     reasons
 }
 
-fn adjust_other_sheet_formulas(
+fn rewrite_formulas_after_native_structure_shift(
     workbook: &mut Workbook,
-    target_sheet_name: &str,
-    shift: StructureShift,
+    plan: FormulaRewritePlan<'_>,
 ) -> usize {
     let mut skipped = 0;
     let mut ast_service = FormulaAstService::new();
     for worksheet in workbook.sheet_collection_mut() {
         let current_sheet_name = worksheet.name().to_string();
-        if current_sheet_name == target_sheet_name {
+        if !should_rewrite_formula_sheet(&current_sheet_name, plan.target_sheet_name, plan.scope) {
             continue;
         }
         skipped += adjust_worksheet_formulas(
             &mut ast_service,
             worksheet,
-            target_sheet_name,
+            plan.target_sheet_name,
             &current_sheet_name,
-            shift,
+            plan.shift,
         );
     }
     skipped
+}
+
+fn should_rewrite_formula_sheet(
+    current_sheet_name: &str,
+    target_sheet_name: &str,
+    scope: FormulaRewriteScope,
+) -> bool {
+    match scope {
+        FormulaRewriteScope::CrossSheetOnly => current_sheet_name != target_sheet_name,
+    }
 }
 
 pub fn patch_formula_changes(

@@ -38,7 +38,7 @@ export const desktopFileOps = {
   pickSaveLocation: async (defaultName: string) => {
     const selected = await save({
       defaultPath: defaultName,
-      filters: [{ name: "Excel workbook", extensions: ["xlsx"] }],
+      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "csv"] }],
     });
     return selected;
   },

@@ -1,12 +1,12 @@
 import * as api from "@/api";
 import type { DocumentCapabilities } from "@/types";
 
-export type NativeSaveExtension = "xlsx";
+export type NativeSaveExtension = "xlsx" | "csv";
 export type ExportExtension = NativeSaveExtension | "csv";
 
 export function nativeSaveExtensionFromName(fileName: string): NativeSaveExtension | null {
   const extension = extensionOf(fileName) || 'xlsx';
-  return extension === 'xlsx' ? extension : null;
+  return extension === 'xlsx' || extension === 'csv' ? extension : null;
 }
 
 export function exportExtensionFromName(fileName: string): ExportExtension | null {

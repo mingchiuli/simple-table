@@ -45,9 +45,9 @@ export type DrawingKind = "image" | "chart";
 
 export type WorkbookCapabilities = { canEditCells: boolean, canResizeRowsColumns: boolean, canInsertDeleteRows: boolean, canInsertDeleteColumns: boolean, canInsertDeleteSheets: boolean, canNativeSave: boolean, blockedStructureReasons?: Array<string>, blockedEditReasons?: Array<string>, blockedResizeReasons?: Array<string>, blockedRowStructureReasons?: Array<string>, blockedColumnStructureReasons?: Array<string>, blockedSheetStructureReasons?: Array<string>, detectedFeatures?: Array<string>, };
 
-export type DocumentCapabilities = { nativeSaveExtension: "xlsx" | null, exportExtension: "xlsx" | "csv", requiresSaveAsForNativeSave: boolean, workbook: WorkbookCapabilities, };
+export type DocumentCapabilities = { sourceFormat: "xlsx" | "csv", canSaveOriginal: boolean, nativeSaveFormat: "xlsx" | "csv" | null, exportFormats: Array<"xlsx" | "csv">, nativeSaveExtension: "xlsx" | "csv" | null, exportExtension: "xlsx" | "csv", requiresSaveAsForNativeSave: boolean, workbook: WorkbookCapabilities, };
 
-export type SheetCellChange = { sheetIndex: number, row: number, col: number, value: CellValue, };
+export type SheetCellChange = { sheetIndex: number, row: number, col: number, value: CellValue, display?: string, format?: CellFormatProjection, style?: CellStyleProjection, };
 
 export type SetCellRequest = { sheetIndex: number, row: number, col: number, text: string, };
 
@@ -83,11 +83,11 @@ export type SheetUpdatedPatch = { sheetIndex: number, sheet: SheetData, };
 
 export type SheetMetadataPatch = { sheetIndex: number, merges: Array<MergeRange>, columnWidths: { [key in number]: number }, rowHeights: { [key in number]: number }, rich: ReadOnlyRichProjection, };
 
-export type RowsInsertedPatch = { sheetIndex: number, rowIndex: number, rows: Array<Array<CellValue>>, };
+export type RowsInsertedPatch = { sheetIndex: number, rowIndex: number, rows: Array<Array<CellValue>>, displays?: Array<Array<string>>, formats?: Array<Array<CellFormatProjection | null>>, styles?: Array<Array<CellStyleProjection | null>>, };
 
 export type RowsDeletedPatch = { sheetIndex: number, rowIndex: number, count: number, };
 
-export type ColumnsInsertedPatch = { sheetIndex: number, colIndex: number, values: Array<CellValue>, };
+export type ColumnsInsertedPatch = { sheetIndex: number, colIndex: number, values: Array<CellValue>, displays?: Array<string>, formats?: Array<CellFormatProjection | null>, styles?: Array<CellStyleProjection | null>, };
 
 export type ColumnsDeletedPatch = { sheetIndex: number, colIndex: number, count: number, };
 

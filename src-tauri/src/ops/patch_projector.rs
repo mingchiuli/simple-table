@@ -135,6 +135,9 @@ pub fn structural_patches(
                             .map(|row| vec![row])
                             .unwrap_or_default(),
                         display_formats: Vec::new(),
+                        displays: Vec::new(),
+                        formats: Vec::new(),
+                        styles: Vec::new(),
                     },
                 }];
                 patches.push(sheet_metadata_patch(*sheet_index, sheet));
@@ -181,6 +184,9 @@ pub fn structural_patches(
                                 })
                                 .collect(),
                             display_formats: Vec::new(),
+                            displays: Vec::new(),
+                            formats: Vec::new(),
+                            styles: Vec::new(),
                         },
                     },
                     sheet_metadata_patch(*sheet_index, sheet),
@@ -253,26 +259,42 @@ fn project_patch_display_formats(
                 changes: changes
                     .into_iter()
                     .map(|change| {
-                        let format = file_data
-                            .sheets
-                            .get(change.sheet_index)
-                            .and_then(|sheet| sheet.cell_format_at(change.row, change.col));
-                        change.with_display_format(format)
+                        let sheet = file_data.sheets.get(change.sheet_index);
+                        let display = sheet
+                            .map(|sheet| sheet.cell_display_text(change.row, change.col))
+                            .unwrap_or_else(|| change.value.to_display_string());
+                        let format =
+                            sheet.and_then(|sheet| sheet.cell_format_at(change.row, change.col));
+                        let style =
+                            sheet.and_then(|sheet| sheet.cell_style_at(change.row, change.col));
+                        change.with_display_projection(display, format, style)
                     })
                     .collect(),
             },
             EditorPatch::RowsInserted { mut patch } => {
-                patch.display_formats = patch
+                let sheet = file_data.sheets.get(patch.sheet_index);
+                patch.display_formats =
+                    patch_rows_metadata(&patch.rows, sheet, patch.row_index, |sheet, row, col| {
+                        sheet.cell_format_at(row, col)
+                    });
+                patch.formats = patch.display_formats.clone();
+                patch.styles =
+                    patch_rows_metadata(&patch.rows, sheet, patch.row_index, |sheet, row, col| {
+                        sheet.cell_style_at(row, col)
+                    });
+                patch.displays = patch
                     .rows
                     .iter()
                     .enumerate()
                     .map(|(row_offset, row)| {
                         row.iter()
                             .enumerate()
-                            .map(|(col, _)| {
-                                file_data.sheets.get(patch.sheet_index).and_then(|sheet| {
-                                    sheet.cell_format_at(patch.row_index + row_offset, col)
-                                })
+                            .map(|(col, cell)| {
+                                sheet
+                                    .map(|sheet| {
+                                        sheet.cell_display_text(patch.row_index + row_offset, col)
+                                    })
+                                    .unwrap_or_else(|| cell.to_display_string())
                             })
                             .collect()
                     })
@@ -280,20 +302,54 @@ fn project_patch_display_formats(
                 EditorPatch::RowsInserted { patch }
             }
             EditorPatch::ColumnsInserted { mut patch } => {
+                let sheet = file_data.sheets.get(patch.sheet_index);
                 patch.display_formats = patch
                     .values
                     .iter()
                     .enumerate()
                     .map(|(row, _)| {
-                        file_data
-                            .sheets
-                            .get(patch.sheet_index)
-                            .and_then(|sheet| sheet.cell_format_at(row, patch.col_index))
+                        sheet.and_then(|sheet| sheet.cell_format_at(row, patch.col_index))
+                    })
+                    .collect();
+                patch.formats = patch.display_formats.clone();
+                patch.styles = patch
+                    .values
+                    .iter()
+                    .enumerate()
+                    .map(|(row, _)| {
+                        sheet.and_then(|sheet| sheet.cell_style_at(row, patch.col_index))
+                    })
+                    .collect();
+                patch.displays = patch
+                    .values
+                    .iter()
+                    .enumerate()
+                    .map(|(row, cell)| {
+                        sheet
+                            .map(|sheet| sheet.cell_display_text(row, patch.col_index))
+                            .unwrap_or_else(|| cell.to_display_string())
                     })
                     .collect();
                 EditorPatch::ColumnsInserted { patch }
             }
             other => other,
+        })
+        .collect()
+}
+
+fn patch_rows_metadata<T>(
+    rows: &[Vec<CellValue>],
+    sheet: Option<&SheetData>,
+    row_index: usize,
+    read: impl Fn(&SheetData, usize, usize) -> Option<T>,
+) -> Vec<Vec<Option<T>>> {
+    rows.iter()
+        .enumerate()
+        .map(|(row_offset, row)| {
+            row.iter()
+                .enumerate()
+                .map(|(col, _)| sheet.and_then(|sheet| read(sheet, row_index + row_offset, col)))
+                .collect()
         })
         .collect()
 }

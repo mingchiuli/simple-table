@@ -1,11 +1,13 @@
 use std::{collections::BTreeSet, path::Path};
 
 use crate::error::AppError;
+use crate::formula::ast::FormulaAstService;
 use crate::io::codec::writer;
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
 use crate::types::{AppliedOperationResult, FileData, SheetCellChange, WorkbookCapabilities};
+use formualizer_parse::parser::ReferenceType;
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {
@@ -109,10 +111,7 @@ impl SpreadsheetDocumentBody {
     pub fn capabilities(&self) -> WorkbookCapabilities {
         match self {
             Self::Excel(body) => workbook_state::workbook_capabilities(&body.workbook),
-            Self::Csv => WorkbookCapabilities {
-                can_native_save: false,
-                ..Default::default()
-            },
+            Self::Csv => WorkbookCapabilities::default(),
             Self::GeneratedWorkbook => WorkbookCapabilities::default(),
         }
     }
@@ -284,7 +283,7 @@ fn capture_excel_structure_memento(
             }
         }
     }
-    sheet_indexes.extend(formula_sheet_indexes(workbook));
+    sheet_indexes.extend(affected_formula_sheet_indexes(workbook, operation));
 
     let sheets: Vec<WorksheetSnapshot> = sheet_indexes
         .into_iter()
@@ -383,19 +382,95 @@ fn restore_excel_sheet_tail<'a>(
     Ok(())
 }
 
-fn formula_sheet_indexes(workbook: &Workbook) -> Vec<usize> {
+fn affected_formula_sheet_indexes(workbook: &Workbook, operation: &AppliedOperation) -> Vec<usize> {
+    let Some(target_sheet_index) = formula_reference_target_sheet(operation) else {
+        return Vec::new();
+    };
+    let Ok(target_sheet) = workbook.sheet(target_sheet_index) else {
+        return Vec::new();
+    };
+    let target_sheet_name = target_sheet.name().to_string();
+    let mut ast_service = FormulaAstService::new();
+
     workbook
         .sheet_collection()
         .iter()
         .enumerate()
         .filter_map(|(sheet_index, worksheet)| {
+            if sheet_index == target_sheet_index {
+                return None;
+            }
             worksheet
                 .cells()
                 .iter()
-                .any(|cell| cell.is_formula())
+                .any(|cell| {
+                    cell.is_formula()
+                        && formula_references_sheet(
+                            &mut ast_service,
+                            cell.formula(),
+                            &target_sheet_name,
+                            worksheet.name(),
+                        )
+                })
                 .then_some(sheet_index)
         })
         .collect()
+}
+
+fn formula_reference_target_sheet(operation: &AppliedOperation) -> Option<usize> {
+    match operation {
+        AppliedOperation::AddRow { sheet_index, .. }
+        | AppliedOperation::DeleteRow { sheet_index, .. }
+        | AppliedOperation::AddColumn { sheet_index, .. }
+        | AppliedOperation::DeleteColumn { sheet_index, .. }
+        | AppliedOperation::DeleteSheet { sheet_index } => Some(*sheet_index),
+        AppliedOperation::AddSheet { .. }
+        | AppliedOperation::SetCell { .. }
+        | AppliedOperation::SetCells { .. }
+        | AppliedOperation::SetColumnWidth { .. }
+        | AppliedOperation::SetRowHeight { .. } => None,
+    }
+}
+
+fn formula_references_sheet(
+    ast_service: &mut FormulaAstService,
+    formula: &str,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+) -> bool {
+    let Ok(parsed) = ast_service.parse(formula) else {
+        return false;
+    };
+    parsed
+        .references()
+        .iter()
+        .any(|reference| reference_targets_sheet(reference, target_sheet_name, current_sheet_name))
+}
+
+fn reference_targets_sheet(
+    reference: &ReferenceType,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+) -> bool {
+    match reference {
+        ReferenceType::Cell { sheet, .. } | ReferenceType::Range { sheet, .. } => sheet
+            .as_deref()
+            .map(|name| name == target_sheet_name)
+            .unwrap_or(current_sheet_name == target_sheet_name),
+        ReferenceType::Cell3D {
+            sheet_first,
+            sheet_last,
+            ..
+        }
+        | ReferenceType::Range3D {
+            sheet_first,
+            sheet_last,
+            ..
+        } => sheet_first == target_sheet_name || sheet_last == target_sheet_name,
+        ReferenceType::External(_) | ReferenceType::Table(_) | ReferenceType::NamedRange(_) => {
+            false
+        }
+    }
 }
 
 fn affected_sheet_index(operation: &AppliedOperation) -> Option<usize> {
