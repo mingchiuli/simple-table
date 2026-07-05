@@ -120,7 +120,7 @@ impl FormulaRuntime {
         )?;
         let mut changes = registration_result.invalid_formulas;
         if registration_result.registered_formulas.contains(&cell_ref) {
-            self.registered_formulas.insert(cell_ref.clone());
+            self.registered_formulas.insert(cell_ref);
         } else {
             self.registered_formulas.remove(&cell_ref);
         }

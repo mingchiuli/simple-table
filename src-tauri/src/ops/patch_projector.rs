@@ -49,16 +49,16 @@ pub fn resync_required_mutation_response(
 
 pub fn cell_delta_mutation_response(
     editor_state: &EditorState,
-    operation: AppliedOperationResult,
+    operation: &AppliedOperationResult,
     mut cell_changes: Vec<SheetCellChange>,
 ) -> EditorMutationResponse {
-    if let AppliedOperationResult::SetCell { sheet_index, cell } = &operation {
+    if let AppliedOperationResult::SetCell { sheet_index, cell } = operation {
         push_cell_change_if_missing(
             &mut cell_changes,
             SheetCellChange::new(*sheet_index, cell.row, cell.col, cell.value.clone()),
         );
     }
-    if let AppliedOperationResult::SetCells { changes } = &operation {
+    if let AppliedOperationResult::SetCells { changes } = operation {
         for change in changes {
             push_cell_change_if_missing(&mut cell_changes, change.clone());
         }
@@ -85,7 +85,7 @@ pub fn layout_mutation_response(
 
 pub fn structural_delta_mutation_response(
     editor_state: &EditorState,
-    operation: AppliedOperationResult,
+    operation: &AppliedOperationResult,
     cell_changes: Vec<SheetCellChange>,
 ) -> EditorMutationResponse {
     let mut patches = structural_patches(editor_state.file_data(), operation);
@@ -115,18 +115,18 @@ pub fn restore_mutation_response(
 
 pub fn structural_patches(
     file_data: &FileData,
-    operation: AppliedOperationResult,
+    operation: &AppliedOperationResult,
 ) -> Vec<EditorPatch> {
     match operation {
         AppliedOperationResult::AddRow {
             sheet_index, row, ..
         } => file_data
             .sheets
-            .get(sheet_index)
+            .get(*sheet_index)
             .map(|sheet| {
                 let mut patches = vec![EditorPatch::RowsInserted {
                     patch: RowsInsertedPatch {
-                        sheet_index,
+                        sheet_index: *sheet_index,
                         row_index: row.index,
                         rows: sheet
                             .rows
@@ -137,7 +137,7 @@ pub fn structural_patches(
                         display_formats: Vec::new(),
                     },
                 }];
-                patches.push(sheet_metadata_patch(sheet_index, sheet));
+                patches.push(sheet_metadata_patch(*sheet_index, sheet));
                 patches
             })
             .unwrap_or_default(),
@@ -146,17 +146,17 @@ pub fn structural_patches(
             row_index,
         } => file_data
             .sheets
-            .get(sheet_index)
+            .get(*sheet_index)
             .map(|sheet| {
                 vec![
                     EditorPatch::RowsDeleted {
                         patch: RowsDeletedPatch {
-                            sheet_index,
-                            row_index,
+                            sheet_index: *sheet_index,
+                            row_index: *row_index,
                             count: 1,
                         },
                     },
-                    sheet_metadata_patch(sheet_index, sheet),
+                    sheet_metadata_patch(*sheet_index, sheet),
                 ]
             })
             .unwrap_or_default(),
@@ -166,12 +166,12 @@ pub fn structural_patches(
             ..
         } => file_data
             .sheets
-            .get(sheet_index)
+            .get(*sheet_index)
             .map(|sheet| {
                 vec![
                     EditorPatch::ColumnsInserted {
                         patch: ColumnsInsertedPatch {
-                            sheet_index,
+                            sheet_index: *sheet_index,
                             col_index: column.index,
                             values: sheet
                                 .rows
@@ -183,7 +183,7 @@ pub fn structural_patches(
                             display_formats: Vec::new(),
                         },
                     },
-                    sheet_metadata_patch(sheet_index, sheet),
+                    sheet_metadata_patch(*sheet_index, sheet),
                 ]
             })
             .unwrap_or_default(),
@@ -192,17 +192,17 @@ pub fn structural_patches(
             column_index,
         } => file_data
             .sheets
-            .get(sheet_index)
+            .get(*sheet_index)
             .map(|sheet| {
                 vec![
                     EditorPatch::ColumnsDeleted {
                         patch: ColumnsDeletedPatch {
-                            sheet_index,
-                            col_index: column_index,
+                            sheet_index: *sheet_index,
+                            col_index: *column_index,
                             count: 1,
                         },
                     },
-                    sheet_metadata_patch(sheet_index, sheet),
+                    sheet_metadata_patch(*sheet_index, sheet),
                 ]
             })
             .unwrap_or_default(),
@@ -212,13 +212,15 @@ pub fn structural_patches(
             ..
         } => vec![EditorPatch::SheetInserted {
             patch: SheetInsertedPatch {
-                sheet_index,
-                sheet: sheet_data,
+                sheet_index: *sheet_index,
+                sheet: sheet_data.clone(),
             },
         }],
         AppliedOperationResult::DeleteSheet { sheet_index, .. } => {
             vec![EditorPatch::SheetDeleted {
-                patch: SheetDeletedPatch { sheet_index },
+                patch: SheetDeletedPatch {
+                    sheet_index: *sheet_index,
+                },
             }]
         }
         AppliedOperationResult::SetCell { .. }

@@ -34,14 +34,14 @@ pub fn open_from_bytes(
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
     // 初始化编辑器状态
-    let document = init_editor_state(result.file_data, result.workbook);
+    let document = init_editor_state(result.file_data, result.workbook)?;
 
     Ok(document)
 }
 
 /// 初始化编辑器状态（用于新建文件）
 pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
-    Ok(init_editor_state(file_data, None))
+    init_editor_state(file_data, None)
 }
 
 pub fn generate_current_file_bytes_for_target(
@@ -49,7 +49,9 @@ pub fn generate_current_file_bytes_for_target(
 ) -> Result<(String, Vec<u8>), AppError> {
     let registry = active_document_store();
     let document = {
-        let registry_guard = registry.read().expect("Document registry lock poisoned");
+        let registry_guard = registry
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
         registry_guard
             .active()
             .map(|editor_state| editor_state.document_snapshot())
@@ -61,7 +63,9 @@ pub fn generate_current_file_bytes_for_target(
 
 pub fn current_file_data() -> Result<FileData, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry.read().expect("Document registry lock poisoned");
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
 
     registry_guard
         .active()
@@ -71,31 +75,26 @@ pub fn current_file_data() -> Result<FileData, AppError> {
 
 pub fn update_current_file_identity(path: String, file_name: String) -> Result<(), AppError> {
     let registry = active_document_store();
-    let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+    let mut registry_guard = registry
+        .write()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
 
     let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
     editor_state.update_identity(path, file_name);
     Ok(())
 }
 
-pub fn document_capabilities(
-    file_name: String,
-    current_path: Option<String>,
-) -> DocumentCapabilities {
-    let source_name = current_path.as_deref().unwrap_or(&file_name);
+pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> DocumentCapabilities {
+    let source_name = current_path.unwrap_or(file_name);
     let native_extension = native_save_extension(source_name);
     let native_save_allowed = native_extension.is_some();
-    let export_extension = export_extension(&file_name).unwrap_or_else(|| "xlsx".to_string());
+    let export_extension = export_extension(file_name).unwrap_or_else(|| "xlsx".to_string());
 
     DocumentCapabilities {
         requires_save_as_for_native_save: native_extension.is_none(),
         native_save_extension: native_extension,
         export_extension,
-        workbook: active_workbook_capabilities(
-            &file_name,
-            current_path.as_deref(),
-            native_save_allowed,
-        ),
+        workbook: active_workbook_capabilities(file_name, current_path, native_save_allowed),
     }
 }
 
@@ -105,7 +104,13 @@ fn active_workbook_capabilities(
     native_save_allowed: bool,
 ) -> WorkbookCapabilities {
     let registry = active_document_store();
-    let registry_guard = registry.read().expect("Document registry lock poisoned");
+    let Ok(registry_guard) = registry.read() else {
+        eprintln!("document registry lock poisoned while reading workbook capabilities");
+        return WorkbookCapabilities {
+            can_native_save: native_save_allowed,
+            ..Default::default()
+        };
+    };
     registry_guard
         .active()
         .filter(|editor_state| {
@@ -126,13 +131,18 @@ fn active_workbook_capabilities(
         })
 }
 
-fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> OpenDocumentResponse {
+fn init_editor_state(
+    file_data: FileData,
+    workbook: Option<Workbook>,
+) -> Result<OpenDocumentResponse, AppError> {
     let registry = active_document_store();
     let initialized_file_data;
     let editor_session;
     let document_id;
     {
-        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = EditorState::with_workbook(file_data, workbook);
         initialized_file_data = editor_state.file_data().clone();
         editor_session = EditorSessionInfo {
@@ -146,11 +156,11 @@ fn init_editor_state(file_data: FileData, workbook: Option<Workbook>) -> OpenDoc
         registry_guard.replace_active(editor_state);
     }
     // 异步构建索引（后台线程）
-    spawn_rebuild_all_sheets_index(registry, document_id);
-    OpenDocumentResponse {
+    spawn_rebuild_all_sheets_index(&registry, document_id);
+    Ok(OpenDocumentResponse {
         file_data: initialized_file_data,
         editor_session,
-    }
+    })
 }
 
 fn native_save_extension(file_name: &str) -> Option<String> {
@@ -178,7 +188,7 @@ mod tests {
     #[test]
     fn document_capabilities_are_computed_by_backend() {
         assert_eq!(
-            document_capabilities("book.xlsx".to_string(), None),
+            document_capabilities("book.xlsx", None),
             DocumentCapabilities {
                 native_save_extension: Some("xlsx".to_string()),
                 export_extension: "xlsx".to_string(),
@@ -187,7 +197,7 @@ mod tests {
             }
         );
         assert_eq!(
-            document_capabilities("data.csv".to_string(), Some("/tmp/data.csv".to_string())),
+            document_capabilities("data.csv", Some("/tmp/data.csv")),
             DocumentCapabilities {
                 native_save_extension: None,
                 export_extension: "csv".to_string(),

@@ -186,7 +186,7 @@ impl SearchIndexStore {
         let row_field = entry.index.schema.get_field("row").ok()?;
         let col_field = entry.index.schema.get_field("col").ok()?;
         Some(SearchWriterHandle {
-            writer: entry.index.writer.clone(),
+            writer: std::sync::Arc::clone(&entry.index.writer),
             text_field: entry.index.text_field,
             display_field: entry.index.display_field,
             row_field,

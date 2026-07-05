@@ -13,25 +13,17 @@ fn col_to_letter(col: usize) -> String {
     let mut result = String::new();
     let mut n = col;
     while n >= 26 {
-        // Safety: math guarantees result is ASCII uppercase letter (65-90)
-        result.insert(
-            0,
-            char::from_u32((n % 26) as u32 + 65).expect("Invalid ASCII letter"),
-        );
+        result.insert(0, (b'A' + (n % 26) as u8) as char);
         n = n / 26 - 1;
     }
-    // Safety: math guarantees result is ASCII uppercase letter (65-90)
-    result.insert(
-        0,
-        char::from_u32(n as u32 + 65).expect("Invalid ASCII letter"),
-    );
+    result.insert(0, (b'A' + n as u8) as char);
     result
 }
 
 /// 搜索单元格
 pub fn do_search(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
-    query: String,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    query: &str,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
@@ -40,7 +32,9 @@ pub fn do_search(
     }
 
     let sheet_indexes = {
-        let registry = registry.read().expect("Document registry lock poisoned");
+        let registry = registry
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = match registry.active() {
             Some(s) => s,
             None => return Err(AppError::NoFileLoaded),
@@ -67,11 +61,13 @@ pub fn do_search(
         }
         let remaining = SEARCH_RESULT_LIMIT - results.len();
         let input = {
-            let registry = registry.read().expect("Document registry lock poisoned");
+            let registry = registry
+                .read()
+                .map_err(|_| AppError::poisoned_lock("document registry"))?;
             let Some(editor_state) = registry.active() else {
                 return Err(AppError::NoFileLoaded);
             };
-            search_input_for_sheet(editor_state, sheet_index, &query, remaining)
+            search_input_for_sheet(editor_state, sheet_index, query, remaining)
         };
         let Some(input) = input else {
             continue;
@@ -95,7 +91,7 @@ pub fn do_search(
             }
             SearchInput::Scan(snapshot) => {
                 used_scan_fallback = true;
-                for cell in scan_sheet_snapshot(&snapshot, &query, remaining) {
+                for cell in scan_sheet_snapshot(&snapshot, query, remaining) {
                     results.push(SearchResult {
                         sheet_index: snapshot.sheet_index,
                         sheet_name: snapshot.sheet_name.clone(),

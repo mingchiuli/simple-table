@@ -70,7 +70,7 @@ impl ActiveDocumentStore {
 static ACTIVE_DOCUMENT_STORE: OnceLock<Arc<RwLock<ActiveDocumentStore>>> = OnceLock::new();
 
 pub fn active_document_store() -> Arc<RwLock<ActiveDocumentStore>> {
-    ACTIVE_DOCUMENT_STORE
-        .get_or_init(|| Arc::new(RwLock::new(ActiveDocumentStore::new())))
-        .clone()
+    Arc::clone(
+        ACTIVE_DOCUMENT_STORE.get_or_init(|| Arc::new(RwLock::new(ActiveDocumentStore::new()))),
+    )
 }

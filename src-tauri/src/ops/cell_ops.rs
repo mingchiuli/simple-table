@@ -11,14 +11,14 @@ use crate::state::state::ActiveDocumentStore;
 use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
 
 pub fn do_set_cell(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row: usize,
     col: usize,
     text: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = execute_cell_delta(
-        registry.clone(),
+        registry,
         EditorCommand::SetCell {
             sheet_index,
             row,
@@ -35,10 +35,10 @@ pub fn do_set_cell(
 }
 
 pub fn do_set_cells(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     changes: Vec<SetCellRequest>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = execute_cell_delta(registry.clone(), EditorCommand::SetCells { changes });
+    let response = execute_cell_delta(registry, EditorCommand::SetCells { changes });
 
     if let Ok(response) = &response {
         schedule_index_for_response(response, registry);
@@ -48,7 +48,7 @@ pub fn do_set_cells(
 }
 
 pub fn do_add_row(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -63,7 +63,7 @@ pub fn do_add_row(
 }
 
 pub fn do_delete_row(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -78,7 +78,7 @@ pub fn do_delete_row(
 }
 
 pub fn do_add_column(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_structural_delta(
@@ -89,7 +89,7 @@ pub fn do_add_column(
 }
 
 pub fn do_delete_column(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -104,7 +104,7 @@ pub fn do_delete_column(
 }
 
 pub fn do_set_column_width(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
@@ -121,7 +121,7 @@ pub fn do_set_column_width(
 }
 
 pub fn do_set_row_height(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
@@ -138,29 +138,31 @@ pub fn do_set_row_height(
 }
 
 pub fn do_add_sheet(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_structural_snapshot(registry, EditorCommand::AddSheet { name: None })
 }
 
 pub fn do_delete_sheet(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     execute_structural_snapshot(registry, EditorCommand::DeleteSheet { sheet_index })
 }
 
 fn execute_cell_delta(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
-    let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+    let mut registry_guard = registry
+        .write()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
     let result = editor_state.execute(command)?;
     if let Some(operation) = result.operation {
         Ok(cell_delta_mutation_response(
             editor_state,
-            operation,
+            &operation,
             result.cell_changes,
         ))
     } else {
@@ -172,16 +174,18 @@ fn execute_cell_delta(
 }
 
 fn execute_structural_snapshot(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
-        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
         let result = editor_state.execute(command)?;
         match result.operation {
             Some(operation) => {
-                structural_delta_mutation_response(editor_state, operation, result.cell_changes)
+                structural_delta_mutation_response(editor_state, &operation, result.cell_changes)
             }
             None => resync_required_mutation_response(
                 editor_state,
@@ -196,17 +200,19 @@ fn execute_structural_snapshot(
 }
 
 fn execute_structural_delta(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
     _sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
-        let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
         let result = editor_state.execute(command)?;
         match result.operation {
             Some(operation) => {
-                structural_delta_mutation_response(editor_state, operation, result.cell_changes)
+                structural_delta_mutation_response(editor_state, &operation, result.cell_changes)
             }
             None => resync_required_mutation_response(
                 editor_state,
@@ -221,11 +227,13 @@ fn execute_structural_delta(
 }
 
 fn execute_layout(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     command: EditorCommand,
     patch: LayoutPatch,
 ) -> Result<EditorMutationResponse, AppError> {
-    let mut registry_guard = registry.write().expect("Document registry lock poisoned");
+    let mut registry_guard = registry
+        .write()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
     let _result = editor_state.execute(command)?;
     Ok(layout_mutation_response(editor_state, patch))
@@ -306,7 +314,8 @@ mod tests {
 
     #[test]
     fn row_and_column_structure_edits_return_delta_patches() {
-        let add_row_response = do_add_row(make_registry(), 0, 1).expect("add row");
+        let registry = make_registry();
+        let add_row_response = do_add_row(&registry, 0, 1).expect("add row");
         assert!(matches!(
             add_row_response.patches.first(),
             Some(EditorPatch::RowsInserted { patch }) if patch.sheet_index == 0 && patch.row_index == 1 && patch.rows.len() == 1
@@ -316,7 +325,8 @@ mod tests {
             Some(EditorPatch::SheetMetadata { patch }) if patch.sheet_index == 0
         ));
 
-        let add_column_response = do_add_column(make_registry(), 0).expect("add column");
+        let registry = make_registry();
+        let add_column_response = do_add_column(&registry, 0).expect("add column");
         assert!(matches!(
             add_column_response.patches.first(),
             Some(EditorPatch::ColumnsInserted { patch }) if patch.sheet_index == 0 && patch.col_index == 1 && patch.values.len() == 1
@@ -330,9 +340,9 @@ mod tests {
     #[test]
     fn undo_returns_delta_patches_without_resync() {
         let registry = make_registry();
-        do_set_cell(registry.clone(), 0, 0, 0, "changed".to_string()).expect("set cell");
+        do_set_cell(&registry, 0, 0, 0, "changed".to_string()).expect("set cell");
 
-        let response = crate::ops::editor_ops::do_undo(registry).expect("undo");
+        let response = crate::ops::editor_ops::do_undo(&registry).expect("undo");
 
         assert!(
             !response
@@ -350,8 +360,9 @@ mod tests {
 
     #[test]
     fn cell_delta_serializes_formatted_display_projection() {
-        let response = do_set_cell(make_formatted_registry(), 0, 0, 0, "0.5".to_string())
-            .expect("set formatted cell");
+        let registry = make_formatted_registry();
+        let response =
+            do_set_cell(&registry, 0, 0, 0, "0.5".to_string()).expect("set formatted cell");
         let json = serde_json::to_value(response).expect("serialize response");
 
         assert_eq!(

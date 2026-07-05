@@ -35,7 +35,7 @@ impl DocumentMemento {
 pub(crate) enum DocumentMementoSide {
     Cells(CellMemento),
     Layout(LayoutMemento),
-    Structure(StructureMemento),
+    Structure(Box<StructureMemento>),
 }
 
 impl DocumentMementoSide {
@@ -212,6 +212,7 @@ impl ProjectionSheetSnapshot {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum MementoSide {
     Before,
     After,
@@ -388,10 +389,10 @@ impl SpreadsheetDocument {
             | AppliedOperation::DeleteRow { .. }
             | AppliedOperation::AddColumn { .. }
             | AppliedOperation::DeleteColumn { .. } => {
-                DocumentMementoSide::Structure(self.structure_memento(operation))
+                DocumentMementoSide::Structure(Box::new(self.structure_memento(operation)))
             }
             AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => {
-                DocumentMementoSide::Structure(self.structure_memento(operation))
+                DocumentMementoSide::Structure(Box::new(self.structure_memento(operation)))
             }
         }
     }

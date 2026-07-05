@@ -49,18 +49,18 @@ pub fn do_add_recent_file_with_thumbnail(
     RecentStore::add(app, recent_file)
 }
 
-pub fn do_remove_recent_file(app: &AppHandle, id: String) -> Result<(), AppError> {
-    RecentStore::remove(app, &id)
+pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> {
+    RecentStore::remove(app, id)
 }
 
-pub fn do_check_file_exists(path: String) -> bool {
-    RecentStore::exists(&path)
+pub fn do_check_file_exists(path: &str) -> bool {
+    RecentStore::exists(path)
 }
 
 pub fn do_update_recent_file_path(
     app: &AppHandle,
-    id: String,
-    new_path: String,
+    id: &str,
+    new_path: &str,
 ) -> Result<(), AppError> {
-    RecentStore::update_path(app, &id, &new_path)
+    RecentStore::update_path(app, id, new_path)
 }

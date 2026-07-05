@@ -59,3 +59,9 @@ impl Serialize for AppError {
         serializer.serialize_str(&self.to_string())
     }
 }
+
+impl AppError {
+    pub fn poisoned_lock(name: &'static str) -> Self {
+        Self::Internal(format!("{name} lock poisoned"))
+    }
+}

@@ -385,7 +385,7 @@ pub struct SearchResult {
 }
 
 /// 搜索范围
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub enum SearchScope {

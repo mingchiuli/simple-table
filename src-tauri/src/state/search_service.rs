@@ -101,10 +101,10 @@ fn index_scheduler() -> &'static Arc<IndexScheduler> {
             state: Mutex::new(IndexSchedulerState::default()),
             wake: Condvar::new(),
         });
-        let worker_scheduler = scheduler.clone();
+        let worker_scheduler = Arc::clone(&scheduler);
         thread::Builder::new()
             .name("simple-table-indexer".into())
-            .spawn(move || index_worker(worker_scheduler))
+            .spawn(move || index_worker(&worker_scheduler))
             .expect("failed to spawn index worker thread");
         scheduler
     })
@@ -122,14 +122,14 @@ fn enqueue_index_job(job: IndexJob) {
 fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
     let document_id = job.document_id();
     let sheet_index = job.sheet_index();
-    let registry = job.registry().clone();
+    let registry = Arc::clone(job.registry());
     let entry = pending
         .entry((document_id, sheet_index))
         .or_insert_with(|| SheetPending {
             document_id,
             rebuild: None,
             incremental: HashMap::new(),
-            registry: registry.clone(),
+            registry: Arc::clone(&registry),
         });
     match job {
         IndexJob::Rebuild { stamp, .. } => {
@@ -174,9 +174,9 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
     }
 }
 
-fn index_worker(scheduler: Arc<IndexScheduler>) {
+fn index_worker(scheduler: &Arc<IndexScheduler>) {
     loop {
-        let pending = drain_pending_jobs(&scheduler);
+        let pending = drain_pending_jobs(scheduler);
 
         for ((_, sheet_index), pending) in pending {
             if let Some(stamp) = pending.rebuild {
@@ -225,12 +225,12 @@ fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), 
     let mut state = scheduler
         .state
         .lock()
-        .expect("search index scheduler lock poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     while state.pending.is_empty() {
         state = scheduler
             .wake
             .wait(state)
-            .expect("search index scheduler lock poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 
     let deadline = Instant::now() + INDEX_DEBOUNCE;
@@ -240,10 +240,11 @@ fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), 
             break;
         }
         let wait = deadline - now;
-        let (next_state, timeout) = scheduler
-            .wake
-            .wait_timeout(state, wait)
-            .expect("search index scheduler lock poisoned");
+        let wait_result = scheduler.wake.wait_timeout(state, wait);
+        let (next_state, timeout) = match wait_result {
+            Ok(result) => result,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         state = next_state;
         if timeout.timed_out() {
             break;
@@ -359,7 +360,7 @@ fn run_incremental(
 }
 
 pub fn spawn_rebuild_all_sheets_index(
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
 ) {
     let (count, stamp) = match registry.read() {
@@ -375,7 +376,7 @@ pub fn spawn_rebuild_all_sheets_index(
             document_id,
             sheet_index,
             stamp,
-            registry: registry.clone(),
+            registry: Arc::clone(registry),
         });
     }
 }
@@ -385,7 +386,7 @@ pub fn spawn_update_cell_index(
     sheet_index: usize,
     row: usize,
     col: usize,
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
     let (stamp, search_text, display_text) = match registry.read() {
         Ok(guard) => {
@@ -411,13 +412,13 @@ pub fn spawn_update_cell_index(
         col,
         search_text,
         display_text,
-        registry,
+        registry: Arc::clone(registry),
     });
 }
 
 pub fn schedule_index_for_response(
     response: &EditorMutationResponse,
-    registry: Arc<RwLock<ActiveDocumentStore>>,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
     let document_id = response.document_id;
     let mut needs_rebuild = false;
@@ -430,7 +431,7 @@ pub fn schedule_index_for_response(
                         change.sheet_index,
                         change.row,
                         change.col,
-                        registry.clone(),
+                        registry,
                     );
                 }
             }
@@ -506,16 +507,11 @@ mod tests {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         query: &str,
     ) -> Vec<(usize, usize)> {
-        let mut rows: Vec<_> = do_search(
-            registry.clone(),
-            query.to_string(),
-            SearchScope::CurrentSheet,
-            Some(0),
-        )
-        .unwrap()
-        .into_iter()
-        .map(|result| (result.row, result.col))
-        .collect();
+        let mut rows: Vec<_> = do_search(registry, query, SearchScope::CurrentSheet, Some(0))
+            .unwrap()
+            .into_iter()
+            .map(|result| (result.row, result.col))
+            .collect();
         rows.sort();
         rows
     }
@@ -544,7 +540,7 @@ mod tests {
                 col: 0,
                 search_text: "intermediate".to_string(),
                 display_text: "intermediate".to_string(),
-                registry: registry.clone(),
+                registry: Arc::clone(&registry),
             },
         );
         merge_job(
@@ -557,7 +553,7 @@ mod tests {
                 col: 0,
                 search_text: "latest".to_string(),
                 display_text: "latest".to_string(),
-                registry: registry.clone(),
+                registry,
             },
         );
 
@@ -588,7 +584,7 @@ mod tests {
                 col: 0,
                 search_text: "latest".to_string(),
                 display_text: "latest".to_string(),
-                registry: registry.clone(),
+                registry: Arc::clone(&registry),
             },
         );
         merge_job(
@@ -597,7 +593,7 @@ mod tests {
                 document_id,
                 sheet_index: 0,
                 stamp,
-                registry: registry.clone(),
+                registry,
             },
         );
 
