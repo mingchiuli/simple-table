@@ -5,9 +5,8 @@ use crate::formula::ast::FormulaAstService;
 use crate::formula::reference_rewrite::{
     StructureShift, adjust_formula_references, invalidate_deleted_sheet_references,
 };
-use crate::io::codec::writer::{
-    px_to_excel_column_width, px_to_points, sync_sheet_from_sheet_data, write_cell,
-};
+use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
+use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::ops::AppliedOperation;
 use crate::types::{FileData, SheetCellChange, SheetData, WorkbookCapabilities};
 use umya_spreadsheet::{Workbook, Worksheet};

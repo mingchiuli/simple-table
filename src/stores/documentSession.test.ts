@@ -1,14 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentSessionStore } from "@/stores/documentSession";
-import { defaultWorkbookCapabilities, type CellValue, type EditorMutationResponse, type FileData, type SheetData } from "@/types";
+import {
+  defaultRichProjection,
+  defaultWorkbookCapabilities,
+  readyFormulaStatus,
+  type CellValue,
+  type EditorMutationResponse,
+  type FileData,
+  type SheetData,
+} from "@/types";
 
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
 }
 
 function sheet(name: string, rows: CellValue[][]): SheetData {
-  return { name, rows, merges: [] };
+  return { name, rows, merges: [], rich: defaultRichProjection() };
 }
 
 function response(partial: Partial<EditorMutationResponse>): EditorMutationResponse {
@@ -16,7 +24,7 @@ function response(partial: Partial<EditorMutationResponse>): EditorMutationRespo
     protocolVersion: 1,
     documentId: 1,
     revision: 1,
-    formulaStatus: { state: "ready" },
+    formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
     editorState: { canUndo: false, canRedo: false, isDirty: false },
     patches: [],
@@ -103,7 +111,7 @@ describe("documentSession store", () => {
       editorSession: {
         documentId: 42,
         revision: 7,
-        formulaStatus: { state: "ready" },
+        formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: { canUndo: true, canRedo: false, isDirty: true },
       },

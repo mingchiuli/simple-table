@@ -3,8 +3,9 @@ import type {
   CellStyleProjection,
   CellValue,
   MergeRange,
-  SheetRichProjection,
+  ReadOnlyRichProjection,
 } from "@/types";
+import { defaultRichProjection } from "@/types";
 import { calculateSheetExtent, type SheetExtent } from "@/table-geometry/sheetExtent";
 
 export type SheetViewportModel = {
@@ -13,7 +14,7 @@ export type SheetViewportModel = {
   merges: MergeRange[];
   columnWidths: Record<number, number>;
   rowHeights: Record<number, number>;
-  rich: SheetRichProjection;
+  rich: ReadOnlyRichProjection;
   extent: SheetExtent;
   cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
   formatAt: (rowIndex: number, colIndex: number) => CellFormatProjection | undefined;
@@ -26,7 +27,7 @@ export type SheetViewportSource = {
   merges?: MergeRange[];
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
-  rich?: SheetRichProjection;
+  rich?: ReadOnlyRichProjection;
 };
 
 export function createSheetViewportModel(source: SheetViewportSource): SheetViewportModel {
@@ -35,7 +36,7 @@ export function createSheetViewportModel(source: SheetViewportSource): SheetView
   const merges = source.merges ?? [];
   const columnWidths = { ...(source.columnWidths ?? {}) };
   const rowHeights = { ...(source.rowHeights ?? {}) };
-  const rich = source.rich ?? {};
+  const rich = source.rich ?? defaultRichProjection();
   const extent = calculateSheetExtent(rows, merges, columnWidths, rowHeights);
 
   return {

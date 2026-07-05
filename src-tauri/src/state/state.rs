@@ -2,20 +2,25 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::state::editor_state::EditorState;
 use crate::types::{FormulaStatus, WorkbookCapabilities};
+use ts_rs::TS;
 
 /// 获取编辑器状态信息
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct EditorStateInfo {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_dirty: bool,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct EditorSessionInfo {
+    #[ts(type = "number")]
     pub document_id: u64,
+    #[ts(type = "number")]
     pub revision: u64,
     pub formula_status: FormulaStatus,
     pub capabilities: WorkbookCapabilities,

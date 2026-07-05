@@ -458,7 +458,7 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellFormatProjection, SheetRichProjection};
+    use crate::types::{CellFormatProjection, ReadOnlyRichProjection};
     use serde_json::Value;
     use std::collections::HashMap;
 
@@ -544,7 +544,7 @@ mod tests {
         let sheet = SheetData {
             name: "Test".to_string(),
             rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-            rich: SheetRichProjection {
+            rich: ReadOnlyRichProjection {
                 cell_formats: HashMap::from([(
                     "A1".to_string(),
                     CellFormatProjection {

@@ -2,11 +2,11 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
 use crate::ops::EditorCommand;
-use crate::ops::editor_ops::{
+use crate::ops::index_ops::schedule_index_for_response;
+use crate::ops::patch_projector::{
     cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
     structural_delta_mutation_response,
 };
-use crate::ops::index_ops::schedule_index_for_response;
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
 
@@ -253,7 +253,7 @@ mod tests {
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;
     use crate::types::{
-        CellFormatProjection, CellValue, EditorPatch, FileData, SheetData, SheetRichProjection,
+        CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection, SheetData,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -284,7 +284,7 @@ mod tests {
                 sheets: vec![SheetData {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-                    rich: SheetRichProjection {
+                    rich: ReadOnlyRichProjection {
                         cell_formats: HashMap::from([(
                             "A1".to_string(),
                             CellFormatProjection {

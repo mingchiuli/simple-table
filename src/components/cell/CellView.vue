@@ -35,7 +35,7 @@ const cellViewStyle = computed(() => ({
   alignItems: verticalAlign(props.cellStyle?.verticalAlign),
 }));
 
-function normalizeColor(value: string | undefined): string | undefined {
+function normalizeColor(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
   const hex = value.replace(/^#/, "");
   if (/^[0-9a-fA-F]{8}$/.test(hex)) {
@@ -47,7 +47,7 @@ function normalizeColor(value: string | undefined): string | undefined {
   return undefined;
 }
 
-function horizontalAlign(value: string | undefined): string | undefined {
+function horizontalAlign(value: string | null | undefined): string | undefined {
   const normalized = value?.toLowerCase();
   if (normalized?.includes("left")) return "flex-start";
   if (normalized?.includes("right")) return "flex-end";
@@ -55,7 +55,7 @@ function horizontalAlign(value: string | undefined): string | undefined {
   return undefined;
 }
 
-function verticalAlign(value: string | undefined): string | undefined {
+function verticalAlign(value: string | null | undefined): string | undefined {
   const normalized = value?.toLowerCase();
   if (normalized?.includes("top")) return "flex-start";
   if (normalized?.includes("bottom")) return "flex-end";
@@ -69,7 +69,7 @@ function verticalAlign(value: string | undefined): string | undefined {
     class="cell-view"
     :class="[`kind-${valueKind}`, { selected }]"
     :style="cellViewStyle"
-    :title="format?.numberFormat"
+    :title="format?.numberFormat ?? undefined"
   >
     <span v-if="displayValue" class="cell-content">{{ displayValue }}</span>
   </div>

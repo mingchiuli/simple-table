@@ -2,6 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::error::AppError;
+use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::types::{CellValue, FileData};
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
 
@@ -303,14 +304,6 @@ fn normalized_sheet_name(name: &str, sheet_index: usize) -> String {
     } else {
         name.to_string()
     }
-}
-
-pub fn px_to_excel_column_width(px: u32) -> f64 {
-    px.saturating_sub(5) as f64 / 7.0
-}
-
-pub fn px_to_points(px: u32) -> f64 {
-    px as f64 * 72.0 / 96.0
 }
 
 fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {

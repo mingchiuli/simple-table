@@ -9,7 +9,7 @@ use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_f
 use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, MergeRange,
-    ResyncRequiredPatch, SheetCellChange, SheetData, SheetRichProjection, SheetShapePatch,
+    ReadOnlyRichProjection, ResyncRequiredPatch, SheetCellChange, SheetData, SheetShapePatch,
     WorkbookCapabilities,
 };
 use std::collections::{HashMap, HashSet};
@@ -130,7 +130,7 @@ pub(crate) struct RowStructureMemento {
     row: Option<Vec<CellValue>>,
     merges: Vec<MergeRange>,
     row_heights: Option<HashMap<usize, u32>>,
-    rich: SheetRichProjection,
+    rich: ReadOnlyRichProjection,
 }
 
 impl RowStructureMemento {
@@ -161,7 +161,7 @@ pub(crate) struct ColumnStructureMemento {
     values: Vec<Option<CellValue>>,
     merges: Vec<MergeRange>,
     column_widths: Option<HashMap<usize, u32>>,
-    rich: SheetRichProjection,
+    rich: ReadOnlyRichProjection,
 }
 
 impl ColumnStructureMemento {
@@ -1047,8 +1047,8 @@ fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
         + sheet.rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
 }
 
-fn estimate_sheet_rich_projection_bytes(rich: &SheetRichProjection) -> usize {
-    std::mem::size_of::<SheetRichProjection>()
+fn estimate_sheet_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize {
+    std::mem::size_of::<ReadOnlyRichProjection>()
         + rich
             .cell_styles
             .iter()

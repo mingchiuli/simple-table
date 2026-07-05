@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyDocumentPatches } from "@/stores/documentPatches";
-import type { CellValue, FileData, SheetData } from "@/types";
+import { defaultRichProjection, type CellValue, type FileData, type SheetData } from "@/types";
 
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
@@ -11,6 +11,7 @@ function sheet(name: string, rows: CellValue[][]): SheetData {
     name,
     rows,
     merges: [],
+    rich: defaultRichProjection(),
   };
 }
 
@@ -28,6 +29,7 @@ describe("applyDocumentPatches", () => {
       columnWidths: { 1: 180 },
       rowHeights: { 0: 96 },
       rich: {
+        ...defaultRichProjection(),
         cellStyles: { A1: { bold: true } },
         drawings: [{ kind: "image", fromRow: 0, fromCol: 0, toRow: 1, toCol: 1 }],
       },
@@ -91,7 +93,7 @@ describe("applyDocumentPatches", () => {
             merges: [{ startRow: 0, startCol: 0, endRow: 0, endCol: 1 }],
             columnWidths: { 0: 120 },
             rowHeights: {},
-            rich: { cellStyles: { A1: { bold: true } } },
+            rich: { ...defaultRichProjection(), cellStyles: { A1: { bold: true } } },
           },
         },
       },

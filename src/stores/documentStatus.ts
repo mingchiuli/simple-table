@@ -1,4 +1,4 @@
-import { defaultWorkbookCapabilities } from "@/types";
+import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
 import type { EditorSessionInfo, EditorStateInfo, FormulaStatus, WorkbookCapabilities } from "@/types";
 
 export const useDocumentStatusStore = defineStore("documentStatus", {
@@ -7,7 +7,7 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
     canRedo: false,
     isContentDirty: false,
     hasPendingContentChange: false,
-    formulaStatus: { state: "ready" } as FormulaStatus,
+    formulaStatus: readyFormulaStatus() as FormulaStatus,
     capabilities: defaultWorkbookCapabilities() as WorkbookCapabilities,
   }),
   getters: {
@@ -34,7 +34,7 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
       this.canRedo = false;
       this.isContentDirty = false;
       this.hasPendingContentChange = false;
-      this.formulaStatus = { state: "ready" };
+      this.formulaStatus = readyFormulaStatus();
       this.capabilities = defaultWorkbookCapabilities();
     },
     markPendingContentChange() {

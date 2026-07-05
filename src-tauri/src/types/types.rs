@@ -4,6 +4,7 @@ use serde::ser::{SerializeMap, SerializeStruct};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use ts_rs::{Config, TS, TypeVisitor};
 
 // JavaScript 安全整数范围: -(2^53 - 1) 到 (2^53 - 1)
 const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
@@ -45,7 +46,7 @@ impl Serialize for CellValue {
             error,
         } = self
         {
-            let formula_projection = FormulaCellProjection {
+            let formula_projection = FormulaCellSerializeProjection {
                 formula,
                 cached_value,
                 error: error.as_deref(),
@@ -56,8 +57,9 @@ impl Serialize for CellValue {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct CellFormatProjection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number_format: Option<String>,
@@ -67,11 +69,91 @@ pub struct CellFormatProjection {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FormulaCellProjection<'a> {
+struct FormulaCellSerializeProjection<'a> {
     formula: &'a str,
     cached_value: &'a CellValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
+}
+
+pub struct ScalarCellValue;
+
+#[allow(dead_code)]
+#[derive(TS)]
+#[ts(rename_all = "camelCase")]
+pub struct CellFormulaProjection {
+    pub formula: String,
+    pub cached_value: CellValue,
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(TS)]
+#[ts(rename_all = "camelCase")]
+pub enum CellKind {
+    Blank,
+    Text,
+    Number,
+    Boolean,
+    Formula,
+    Error,
+}
+
+#[allow(dead_code)]
+#[derive(TS)]
+#[ts(rename_all = "camelCase")]
+pub struct CellData {
+    #[ts(rename = "type", type = "\"cell\"")]
+    pub cell_type: String,
+    pub kind: CellKind,
+    pub raw: ScalarCellValue,
+    pub display: String,
+    #[ts(optional)]
+    pub formula: Option<CellFormulaProjection>,
+    #[ts(optional)]
+    pub format: Option<CellFormatProjection>,
+}
+
+impl TS for ScalarCellValue {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+
+    fn name(_: &Config) -> String {
+        "ScalarCellValue".to_string()
+    }
+
+    fn decl(_: &Config) -> String {
+        "type ScalarCellValue = string | number | boolean | null;".to_string()
+    }
+
+    fn inline(_: &Config) -> String {
+        "ScalarCellValue".to_string()
+    }
+}
+
+impl TS for CellValue {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+
+    fn name(_: &Config) -> String {
+        "CellValue".to_string()
+    }
+
+    fn decl(_: &Config) -> String {
+        "type CellValue = CellData;".to_string()
+    }
+
+    fn inline(_: &Config) -> String {
+        "CellData".to_string()
+    }
+
+    fn visit_dependencies(visitor: &mut impl TypeVisitor)
+    where
+        Self: 'static,
+    {
+        visitor.visit::<CellData>();
+    }
 }
 
 impl CellValue {
@@ -290,8 +372,9 @@ impl<'de> Deserialize<'de> for CellValue {
 }
 
 /// 搜索结果
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SearchResult {
     pub sheet_index: usize,
     pub sheet_name: String,
@@ -302,16 +385,18 @@ pub struct SearchResult {
 }
 
 /// 搜索范围
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub enum SearchScope {
     CurrentSheet,
     AllSheets,
 }
 
 /// 合并范围
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct MergeRange {
     pub start_row: u32,
     pub start_col: u16,
@@ -319,8 +404,9 @@ pub struct MergeRange {
     pub end_col: u16,
 }
 
-#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Deserialize, TS, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetData {
     pub name: String,
     pub rows: Vec<Vec<CellValue>>,
@@ -328,14 +414,16 @@ pub struct SheetData {
     pub merges: Vec<MergeRange>,
     /// 列宽配置（用于持久化）
     #[serde(default)]
+    #[ts(optional)]
     pub column_widths: Option<HashMap<usize, u32>>,
     /// 行高配置（持久化到 Excel，属于文档状态）
     #[serde(default)]
+    #[ts(optional)]
     pub row_heights: Option<HashMap<usize, u32>>,
-    /// Optional rich Excel projection. This is display metadata only; the
+    /// Read-only rich Excel projection. This is display metadata only; the
     /// original workbook remains the persistence source for styles and drawings.
     #[serde(default)]
-    pub rich: SheetRichProjection,
+    pub rich: ReadOnlyRichProjection,
 }
 
 impl Serialize for SheetData {
@@ -483,7 +571,7 @@ impl Serialize for CellValueProjection<'_> {
             error,
         } = self.cell
         {
-            let formula_projection = FormulaCellProjection {
+            let formula_projection = FormulaCellSerializeProjection {
                 formula,
                 cached_value,
                 error: error.as_deref(),
@@ -578,24 +666,27 @@ fn excel_cell_key(row_index: usize, col_index: usize) -> String {
     format!("{letters}{}", row_index + 1)
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct FileData {
     pub path: String,
     pub file_name: String,
     pub sheets: Vec<SheetData>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct OpenDocumentResponse {
     pub file_data: FileData,
     pub editor_session: EditorSessionInfo,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SheetRichProjection {
+#[ts(rename = "ReadOnlyRichProjection", rename_all = "camelCase")]
+pub struct ReadOnlyRichProjection {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cell_formats: HashMap<String, CellFormatProjection>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -606,8 +697,9 @@ pub struct SheetRichProjection {
     pub has_more_drawings: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct CellStyleProjection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_color: Option<String>,
@@ -625,8 +717,9 @@ pub struct CellStyleProjection {
     pub number_format: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct DrawingProjection {
     pub kind: DrawingKind,
     pub from_row: u32,
@@ -637,25 +730,30 @@ pub struct DrawingProjection {
     pub to_col: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub enum DrawingKind {
     Image,
     Chart,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct DocumentCapabilities {
+    #[ts(type = "\"xlsx\" | null")]
     pub native_save_extension: Option<String>,
+    #[ts(type = "\"xlsx\" | \"csv\"")]
     pub export_extension: String,
     pub requires_save_as_for_native_save: bool,
     #[serde(default)]
     pub workbook: WorkbookCapabilities,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct WorkbookCapabilities {
     pub can_edit_cells: bool,
     pub can_resize_rows_columns: bool,
@@ -703,8 +801,9 @@ impl Default for WorkbookCapabilities {
 }
 
 /// 单元格变化
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct CellChange {
     pub row: usize,
     pub col: usize,
@@ -712,14 +811,16 @@ pub struct CellChange {
 }
 
 /// 带 sheet 的单元格变化，用于高频编辑的增量响应。
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetCellChange {
     pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
     pub value: CellValue,
     #[serde(default)]
+    #[ts(skip)]
     pub display_format: Option<CellFormatProjection>,
 }
 
@@ -761,8 +862,9 @@ impl Serialize for SheetCellChange {
 }
 
 /// 前端批量提交的单元格编辑请求。
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SetCellRequest {
     pub sheet_index: usize,
     pub row: usize,
@@ -771,29 +873,33 @@ pub struct SetCellRequest {
 }
 
 /// 行变化
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct RowChange {
     pub index: usize,
     pub values: Vec<CellValue>,
 }
 
 /// 列变化
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(rename_all = "camelCase")]
 pub struct ColumnChange {
     pub index: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct ColumnWidthChange {
     #[serde(rename = "colIndex")]
     pub col_index: usize,
     pub width: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct RowHeightChange {
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
@@ -831,8 +937,9 @@ pub struct GitHubAsset {
 // ==================== Applied Operation Result ====================
 
 /// Internal result produced after an editor operation has been applied.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
+#[ts(tag = "type", content = "data")]
 pub enum AppliedOperationResult {
     /// 单元格修改
     #[serde(rename = "SetCell")]
@@ -909,8 +1016,9 @@ pub enum AppliedOperationResult {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct LayoutPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -920,42 +1028,47 @@ pub struct LayoutPatch {
     pub row_heights: HashMap<usize, Option<u32>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetInsertedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
     pub sheet: SheetData,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetDeletedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetUpdatedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
     pub sheet: SheetData,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetMetadataPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
     pub merges: Vec<MergeRange>,
     pub column_widths: HashMap<usize, u32>,
     pub row_heights: HashMap<usize, u32>,
-    pub rich: SheetRichProjection,
+    pub rich: ReadOnlyRichProjection,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct RowsInsertedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -963,11 +1076,13 @@ pub struct RowsInsertedPatch {
     pub row_index: usize,
     pub rows: Vec<Vec<CellValue>>,
     #[serde(default)]
+    #[ts(skip)]
     pub display_formats: Vec<Vec<Option<CellFormatProjection>>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct RowsDeletedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -976,8 +1091,9 @@ pub struct RowsDeletedPatch {
     pub count: usize,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct ColumnsInsertedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -985,6 +1101,7 @@ pub struct ColumnsInsertedPatch {
     pub col_index: usize,
     pub values: Vec<CellValue>,
     #[serde(default)]
+    #[ts(skip)]
     pub display_formats: Vec<Option<CellFormatProjection>>,
 }
 
@@ -1026,8 +1143,9 @@ impl Serialize for ColumnsInsertedPatch {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct ColumnsDeletedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -1036,22 +1154,25 @@ pub struct ColumnsDeletedPatch {
     pub count: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetShapePatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
     pub row_lengths: Vec<usize>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct ResyncRequiredPatch {
     pub reason: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
+#[ts(tag = "type", content = "data")]
 pub enum EditorPatch {
     #[serde(rename = "Cells")]
     Cells { changes: Vec<SheetCellChange> },
@@ -1079,11 +1200,15 @@ pub enum EditorPatch {
     ResyncRequired { patch: ResyncRequiredPatch },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
+    #[ts(type = "1")]
     pub protocol_version: u16,
+    #[ts(type = "number")]
     pub document_id: u64,
+    #[ts(type = "number")]
     pub revision: u64,
     pub formula_status: FormulaStatus,
     #[serde(default)]
@@ -1093,8 +1218,9 @@ pub struct EditorMutationResponse {
     pub patches: Vec<EditorPatch>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct FormulaDiagnostics {
     pub invalid_formula_count: usize,
     pub volatile_formula_count: usize,
@@ -1103,8 +1229,9 @@ pub struct FormulaDiagnostics {
     pub skipped_reference_rewrite_count: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "camelCase")]
+#[ts(tag = "state", rename_all = "camelCase")]
 pub enum FormulaStatus {
     Ready {
         #[serde(default)]
@@ -1153,7 +1280,7 @@ mod tests {
         let sheet = SheetData {
             name: "Sheet1".to_string(),
             rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-            rich: SheetRichProjection {
+            rich: ReadOnlyRichProjection {
                 cell_formats: HashMap::from([(
                     "A1".to_string(),
                     CellFormatProjection {

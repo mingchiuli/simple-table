@@ -2,8 +2,8 @@ use std::path::Path;
 
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-use crate::ops::editor_ops::editor_state_info;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
+use crate::ops::patch_projector::editor_state_info;
 use crate::state::{active_document_store, editor_state::EditorState, state::EditorSessionInfo};
 use crate::types::{DocumentCapabilities, FileData, OpenDocumentResponse, WorkbookCapabilities};
 use umya_spreadsheet::Workbook;

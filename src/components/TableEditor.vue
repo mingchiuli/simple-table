@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CellValue, MergeRange } from '@/types';
-import type { SheetRichProjection } from '@/types';
+import type { ReadOnlyRichProjection } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { GridViewportShell } from '@/components/table-grid';
 import { useGridGeometry } from '@/table-geometry/useGridGeometry';
@@ -32,7 +32,7 @@ const props = defineProps<{
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
   layoutResetKey?: number;
-  rich?: SheetRichProjection;
+  rich?: ReadOnlyRichProjection;
 }>();
 
 const emit = defineEmits<{

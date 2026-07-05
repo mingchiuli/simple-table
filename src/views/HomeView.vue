@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Document } from "@element-plus/icons-vue";
-import type { FileData } from "@/types";
+import { defaultRichProjection, type FileData } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
@@ -60,6 +60,7 @@ async function handleNewFile() {
           [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
         ],
         merges: [],
+        rich: defaultRichProjection(),
       },
     ],
   };

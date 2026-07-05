@@ -2,18 +2,17 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::error::AppError;
+use crate::io::layout_units::{
+    DEFAULT_ROW_HEIGHT_PX, excel_column_width_to_px, is_default_column_width, points_to_px,
+};
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
-    MergeRange, SheetData, SheetRichProjection,
+    MergeRange, ReadOnlyRichProjection, SheetData,
 };
 use csv::ReaderBuilder;
 use serde_json::Value;
 use umya_spreadsheet::{Cell, Workbook, Worksheet, reader};
-
-const DEFAULT_COLUMN_WIDTH_PX: u32 = 120;
-const DEFAULT_ROW_HEIGHT_PX: u32 = 72;
-const EXCEL_DEFAULT_COLUMN_WIDTH: f64 = 8.38;
 
 pub struct ReadFileResult {
     pub file_data: FileData,
@@ -180,8 +179,8 @@ fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
     (!heights.is_empty()).then_some(heights)
 }
 
-fn read_rich_projection(worksheet: &Worksheet) -> SheetRichProjection {
-    SheetRichProjection {
+fn read_rich_projection(worksheet: &Worksheet) -> ReadOnlyRichProjection {
+    ReadOnlyRichProjection {
         cell_formats: read_cell_formats(worksheet),
         cell_styles: read_cell_styles(worksheet),
         drawings: read_drawings(worksheet),
@@ -300,24 +299,6 @@ fn parse_coordinate_1_based(coordinate: &str) -> Option<(u32, u32)> {
     (col > 0 && row > 0).then_some((col, row))
 }
 
-fn excel_column_width_to_px(width: f64) -> u32 {
-    if width <= 0.0 {
-        return DEFAULT_COLUMN_WIDTH_PX;
-    }
-    ((width * 7.0) + 5.0).round().max(1.0) as u32
-}
-
-fn is_default_column_width(width: f64, px: u32) -> bool {
-    px == DEFAULT_COLUMN_WIDTH_PX || (width - EXCEL_DEFAULT_COLUMN_WIDTH).abs() < 0.001
-}
-
-fn points_to_px(points: f64) -> u32 {
-    if points <= 0.0 {
-        return DEFAULT_ROW_HEIGHT_PX;
-    }
-    (points * 96.0 / 72.0).round().max(1.0) as u32
-}
-
 /// 判断字符串是否带有前导零（如 "007"、"-0123"），需要按字符串处理避免精度丢失
 fn has_leading_zero(s: &str) -> bool {
     let bytes = s.as_bytes();
@@ -398,24 +379,6 @@ mod tests {
         );
 
         assert!(matches!(result, Err(AppError::UnsupportedFormat)));
-    }
-
-    #[test]
-    fn column_width_conversion_is_stable_for_ui_default() {
-        assert_eq!(excel_column_width_to_px(16.428571428571427), 120);
-    }
-
-    #[test]
-    fn default_umya_column_width_is_not_persisted_as_custom_layout() {
-        assert!(is_default_column_width(
-            8.38,
-            excel_column_width_to_px(8.38)
-        ));
-    }
-
-    #[test]
-    fn row_height_conversion_uses_pixels() {
-        assert_eq!(points_to_px(54.0), 72);
     }
 
     #[test]

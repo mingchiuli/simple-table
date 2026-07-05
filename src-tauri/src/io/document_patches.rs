@@ -1,7 +1,8 @@
 use crate::io::document_model::FileStructureMemento;
+use crate::ops::patch_projector::sheet_metadata_patch;
 use crate::types::{
     CellValue, ColumnsDeletedPatch, ColumnsInsertedPatch, EditorPatch, FileData, RowsDeletedPatch,
-    RowsInsertedPatch, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetMetadataPatch,
+    RowsInsertedPatch, SheetDeletedPatch, SheetInsertedPatch,
 };
 
 pub(crate) enum CurrentStructureShape {
@@ -215,16 +216,4 @@ fn column_structure_patch_from(
             patches
         })
         .unwrap_or_default()
-}
-
-fn sheet_metadata_patch(sheet_index: usize, sheet: &SheetData) -> EditorPatch {
-    EditorPatch::SheetMetadata {
-        patch: SheetMetadataPatch {
-            sheet_index,
-            merges: sheet.merges.clone(),
-            column_widths: sheet.column_widths.clone().unwrap_or_default(),
-            row_heights: sheet.row_heights.clone().unwrap_or_default(),
-            rich: sheet.rich.clone(),
-        },
-    }
 }
