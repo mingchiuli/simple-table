@@ -74,12 +74,6 @@ pub fn get_editor_state() -> Result<Option<EditorSessionInfo>, AppError> {
 }
 
 #[tauri::command]
-pub fn mark_file_saved() -> Result<(), AppError> {
-    let registry = active_document_store();
-    editor_ops::do_mark_file_saved(&registry)
-}
-
-#[tauri::command]
 pub fn undo() -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
     editor_ops::do_undo(&registry)

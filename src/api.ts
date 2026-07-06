@@ -35,10 +35,6 @@ export async function getEditorState(): Promise<EditorSessionInfo | null> {
   return invoke<EditorSessionInfo | null>("get_editor_state");
 }
 
-export async function markFileSaved(): Promise<void> {
-  return invoke<void>("mark_file_saved");
-}
-
 export async function undo(): Promise<EditorMutationResponse> {
   return invoke<EditorMutationResponse>("undo");
 }

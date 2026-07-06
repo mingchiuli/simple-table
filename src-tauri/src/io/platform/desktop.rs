@@ -12,8 +12,17 @@ pub fn read_file(path: &str) -> Result<OpenDocumentResponse, AppError> {
 
 pub fn save_file(path: &str) -> Result<SavedDocumentResponse, AppError> {
     let prepared = document::prepare_current_file_save(path)?;
-    write_file_atomically(Path::new(path), &prepared.bytes)?;
-    document::complete_current_file_save(path.to_string(), prepared)
+    let target = Path::new(path);
+    let temp_path = temporary_path_for(target);
+    write_temp_file(&temp_path, &prepared.bytes)?;
+
+    let result = document::commit_current_file_save(path.to_string(), prepared, || {
+        replace_with_temp_file(&temp_path, target)
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
 }
 
 pub fn export_file(path: &str) -> Result<(), AppError> {
@@ -22,15 +31,22 @@ pub fn export_file(path: &str) -> Result<(), AppError> {
 }
 
 fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    let temp_path = temporary_path_for(path);
+    write_temp_file(&temp_path, bytes)?;
+    replace_with_temp_file(&temp_path, path)
+}
+
+fn temporary_path_for(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("simple-table.xlsx");
-    let temp_path = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()))
+}
 
-    write_temp_file(&temp_path, bytes)?;
-    match fs::rename(&temp_path, path) {
+fn replace_with_temp_file(temp_path: &Path, path: &Path) -> Result<(), AppError> {
+    match fs::rename(temp_path, path) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
             let _ = fs::remove_file(&temp_path);

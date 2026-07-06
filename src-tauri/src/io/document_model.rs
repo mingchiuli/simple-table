@@ -926,14 +926,8 @@ impl SpreadsheetDocument {
         self.cached_capabilities = self.body.capabilities();
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {
         self.body.validate_projection_consistency(&self.projection)
-    }
-
-    #[cfg(not(any(test, debug_assertions)))]
-    pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {
-        Ok(())
     }
 
     pub(crate) fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {

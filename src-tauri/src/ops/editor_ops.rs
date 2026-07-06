@@ -28,20 +28,6 @@ pub fn do_get_editor_state(
     get_editor_session_info(registry)
 }
 
-/// 标记当前编辑器内容已经成功保存
-pub fn do_mark_file_saved(registry: &Arc<RwLock<ActiveDocumentStore>>) -> Result<(), AppError> {
-    let mut registry = registry
-        .write()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    match registry.active_mut() {
-        Some(editor_state) => {
-            editor_state.mark_saved();
-            Ok(())
-        }
-        None => Err(AppError::NoFileLoaded),
-    }
-}
-
 /// 撤销操作
 pub fn do_undo(
     registry: &Arc<RwLock<ActiveDocumentStore>>,

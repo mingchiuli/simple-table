@@ -10,6 +10,7 @@ use crate::io::document_body::BodySheetShape;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::ops::AppliedOperation;
 use crate::types::{FileData, SheetCellChange, SheetData, WorkbookCapabilities};
+use formualizer_parse::parser::ReferenceType;
 use umya_spreadsheet::{Workbook, Worksheet};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -242,6 +243,12 @@ pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
         push_block_reason(&mut blocked_column_structure_reasons, "threaded comments");
         push_block_reason(&mut blocked_sheet_structure_reasons, "threaded comments");
     }
+    for limitation in formula_reference_limitations(workbook) {
+        push_detected_feature(&mut detected_features, &limitation);
+        push_block_reason(&mut blocked_row_structure_reasons, &limitation);
+        push_block_reason(&mut blocked_column_structure_reasons, &limitation);
+        push_block_reason(&mut blocked_sheet_structure_reasons, &limitation);
+    }
     for worksheet in workbook.sheet_collection() {
         if !worksheet.defined_names().is_empty() {
             push_detected_feature(&mut detected_features, "sheet defined names");
@@ -373,6 +380,47 @@ fn merged_reasons<const N: usize>(groups: [&Vec<String>; N]) -> Vec<String> {
     }
     normalize_reasons(&mut reasons);
     reasons
+}
+
+fn formula_reference_limitations(workbook: &Workbook) -> Vec<String> {
+    let mut limitations = Vec::new();
+    let mut ast_service = FormulaAstService::new();
+
+    for worksheet in workbook.sheet_collection() {
+        for cell in worksheet.cells() {
+            if !cell.is_formula() {
+                continue;
+            }
+            let parsed = match ast_service.parse(cell.formula()) {
+                Ok(parsed) => parsed,
+                Err(_) => {
+                    push_block_reason(&mut limitations, "unparseable formulas");
+                    continue;
+                }
+            };
+
+            for reference in parsed.references() {
+                match reference {
+                    ReferenceType::Cell { .. } | ReferenceType::Range { .. } => {}
+                    ReferenceType::Cell3D { .. } | ReferenceType::Range3D { .. } => {
+                        push_block_reason(&mut limitations, "3D formula references");
+                    }
+                    ReferenceType::External(_) => {
+                        push_block_reason(&mut limitations, "external formula references");
+                    }
+                    ReferenceType::Table(_) => {
+                        push_block_reason(&mut limitations, "table formula references");
+                    }
+                    ReferenceType::NamedRange(_) => {
+                        push_block_reason(&mut limitations, "named formula references");
+                    }
+                }
+            }
+        }
+    }
+
+    normalize_reasons(&mut limitations);
+    limitations
 }
 
 fn rewrite_formulas_after_native_structure_shift(
@@ -659,4 +707,31 @@ fn sheet_name(workbook: &Workbook, sheet_index: usize) -> Result<String, AppErro
         .sheet(sheet_index)
         .map(|sheet| sheet.name().to_string())
         .map_err(|e| AppError::WriteError(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unparseable_formulas_block_structure_editing() {
+        let mut workbook = umya_spreadsheet::new_file();
+        workbook
+            .sheet_mut(0)
+            .expect("sheet")
+            .cell_mut("A1")
+            .set_formula("SUM(");
+
+        let capabilities = workbook_capabilities(&workbook);
+
+        assert!(!capabilities.can_insert_delete_rows);
+        assert!(!capabilities.can_insert_delete_columns);
+        assert!(!capabilities.can_insert_delete_sheets);
+        assert!(
+            capabilities
+                .blocked_structure_reasons
+                .iter()
+                .any(|reason| reason == "unparseable formulas")
+        );
+    }
 }

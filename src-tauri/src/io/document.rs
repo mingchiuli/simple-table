@@ -84,11 +84,14 @@ pub fn prepare_current_file_save(
     })
 }
 
-pub fn complete_current_file_save(
+pub fn commit_current_file_save<F>(
     path: String,
     prepared: PreparedDocumentSave,
-) -> Result<SavedDocumentResponse, AppError> {
-    ensure_prepared_save_is_current(prepared.document_id, prepared.revision)?;
+    commit_write: F,
+) -> Result<SavedDocumentResponse, AppError>
+where
+    F: FnOnce() -> Result<(), AppError>,
+{
     let document_id_token = prepared.document_id;
     let revision_token = prepared.revision;
     let output_name = prepared.output_name;
@@ -112,6 +115,7 @@ pub fn complete_current_file_save(
             .or_else(|| extension_of(&result.file_data.path));
         let clear_history = current_extension != saved_extension;
 
+        commit_write()?;
         editor_state.rebind_saved_document(result.file_data, result.workbook, clear_history);
         editor_state.mark_saved();
         editor_state.mark_search_index_stale();
@@ -123,15 +127,6 @@ pub fn complete_current_file_save(
     }
     spawn_rebuild_all_sheets_index(&registry, document_id);
     Ok(response)
-}
-
-fn ensure_prepared_save_is_current(document_id: u64, revision: u64) -> Result<(), AppError> {
-    let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
-    ensure_editor_matches_prepared_save(editor_state, document_id, revision)
 }
 
 fn ensure_editor_matches_prepared_save(

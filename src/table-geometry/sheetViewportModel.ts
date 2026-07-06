@@ -38,7 +38,7 @@ export function createSheetViewportModel(source: SheetViewportSource): SheetView
   const columnWidths = { ...(source.columnWidths ?? {}) };
   const rowHeights = { ...(source.rowHeights ?? {}) };
   const rich = source.rich ?? defaultRichProjection();
-  const extent = calculateSheetExtent(rows, merges, columnWidths, rowHeights);
+  const extent = calculateSheetExtent(rows, merges, columnWidths, rowHeights, rich);
 
   return {
     rows,

@@ -284,6 +284,7 @@ function sheetExtent(sheet: SheetData) {
     sheet.rows,
     sheet.merges,
     sheet.columnWidths,
-    sheet.rowHeights
+    sheet.rowHeights,
+    sheet.rich
   );
 }

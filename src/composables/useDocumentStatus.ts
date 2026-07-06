@@ -45,12 +45,6 @@ export function useDocumentStatus() {
     documentStatusStore.reset();
   }
 
-  async function markSaved() {
-    await api.markFileSaved();
-    documentStatusStore.clearPendingContentChange();
-    await refreshEditorState();
-  }
-
   return {
     canUndo,
     canRedo,
@@ -65,6 +59,5 @@ export function useDocumentStatus() {
     markPendingContentChange,
     clearPendingContentChange,
     resetDocumentStatus,
-    markSaved,
   };
 }

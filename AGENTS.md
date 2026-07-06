@@ -82,7 +82,7 @@ Column and row resizing are persisted document edits and should participate in `
 - Open/new file initializes Rust `EditorState`.
 - Content operations go through Rust operations where possible.
 - Cell editing uses a frontend debounce layer; pending edits must be flushed before save, undo/redo, search, sheet changes that depend on committed data, or navigation.
-- After `saveFile(...)` succeeds, call `markFileSaved()` through document status to update Rust saved hash.
+- `saveFile(...)` commits the prepared bytes through the backend save protocol, which updates the Rust saved hash after the on-disk write succeeds.
 - Do not manually set unsaved UI state in random components. Refresh editor state via the document status composable.
 
 ## Code Guidelines

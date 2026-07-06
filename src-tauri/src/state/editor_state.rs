@@ -671,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn structure_formula_rewrite_skips_are_reported_in_diagnostics() {
+    fn unparseable_formulas_block_structure_edits() {
         let mut source = umya_spreadsheet::new_file();
         source.new_sheet("Other").expect("other sheet");
         {
@@ -696,32 +696,20 @@ mod tests {
         .expect("read source");
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
-        state
+        let error = state
             .execute(EditorCommand::AddRow {
                 sheet_index: 0,
                 row_index: 0,
             })
-            .expect("add row");
+            .expect_err("structure edits must be blocked");
 
-        match state.formula_status() {
-            FormulaStatus::Ready { diagnostics } => {
-                assert_eq!(diagnostics.skipped_reference_rewrite_count, 1);
-            }
-            status => panic!("expected ready status, got {status:?}"),
-        }
-        let (_, saved_bytes) = state
-            .generate_file_bytes_for_target("skipped-rewrite.xlsx")
-            .expect("save workbook");
-        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
-        assert_eq!(
-            saved
-                .sheet(1)
-                .expect("sheet")
-                .cell("A1")
-                .expect("A1")
-                .formula(),
-            "SUM("
-        );
+        assert!(matches!(
+            error,
+            AppError::UnsupportedWorkbookStructure(reason) if reason.contains("unparseable formulas")
+        ));
+        assert!(!state.capabilities().can_insert_delete_rows);
+        assert!(!state.capabilities().can_insert_delete_columns);
+        assert!(!state.capabilities().can_insert_delete_sheets);
     }
 
     #[test]

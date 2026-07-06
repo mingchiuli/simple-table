@@ -59,7 +59,8 @@ const columns = computed(() => {
     tableData.value,
     currentSheet.value?.merges ?? [],
     currentSheet.value?.columnWidths,
-    currentSheet.value?.rowHeights
+    currentSheet.value?.rowHeights,
+    currentSheet.value?.rich
   );
   return Array.from({ length: extent.columnCount }, (_, i) => colToLetter(i));
 });
