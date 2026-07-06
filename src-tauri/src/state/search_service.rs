@@ -5,19 +5,21 @@ use std::time::{Duration, Instant};
 
 use tantivy::{Term, doc};
 
+use crate::display::DisplayProjection;
 use crate::state::search_index::{
     SearchCellText, SearchIndexStamp, build_sheet_index, collect_sheet_search_text,
 };
 use crate::state::state::ActiveDocumentStore;
 #[cfg(test)]
 use crate::types::CellValue;
-use crate::types::{EditorMutationResponse, EditorPatch};
+use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
 
 enum IndexJob {
     Rebuild {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
+        search_text: Vec<SearchCellText>,
         registry: Arc<RwLock<ActiveDocumentStore>>,
     },
     UpdateCell {
@@ -38,6 +40,11 @@ struct CellIndexUpdate {
     col: usize,
     search_text: String,
     display_text: String,
+}
+
+struct RebuildIndexUpdate {
+    stamp: SearchIndexStamp,
+    search_text: Vec<SearchCellText>,
 }
 
 impl IndexJob {
@@ -66,7 +73,7 @@ impl IndexJob {
 
 struct SheetPending {
     document_id: u64,
-    rebuild: Option<SearchIndexStamp>,
+    rebuild: Option<RebuildIndexUpdate>,
     incremental: HashMap<(usize, usize), CellIndexUpdate>,
     registry: Arc<RwLock<ActiveDocumentStore>>,
 }
@@ -120,56 +127,74 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
     ) {
-        let (count, stamp) = match registry.read() {
+        let jobs: Vec<(usize, SearchIndexStamp, Vec<SearchCellText>)> = match registry.read() {
             Ok(guard) => guard
                 .get(document_id)
-                .map(|editor| (editor.file_data().sheets.len(), editor.search_index_stamp()))
-                .unwrap_or((0, SearchIndexStamp::default())),
-            Err(_) => (0, SearchIndexStamp::default()),
+                .map(|editor| {
+                    let stamp = editor.search_index_stamp();
+                    editor
+                        .file_data()
+                        .sheets
+                        .iter()
+                        .enumerate()
+                        .map(|(sheet_index, sheet)| {
+                            (sheet_index, stamp, collect_sheet_search_text(sheet))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
         };
 
-        for sheet_index in 0..count {
+        for (sheet_index, stamp, search_text) in jobs {
             self.enqueue(IndexJob::Rebuild {
                 document_id,
                 sheet_index,
                 stamp,
+                search_text,
                 registry: Arc::clone(registry),
             });
         }
     }
 
-    pub fn update_cell_index(
+    fn enqueue_cell_update(
         &self,
         document_id: u64,
         sheet_index: usize,
-        row: usize,
-        col: usize,
+        stamp: SearchIndexStamp,
+        change: &SheetCellChange,
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
-        let (stamp, search_text, display_text) = match registry.read() {
-            Ok(guard) => {
-                let Some(editor) = guard.get(document_id) else {
-                    return;
-                };
-                let Some(snapshot) = editor.search_cell_snapshot(sheet_index, row, col) else {
-                    return;
-                };
-                (
-                    editor.search_index_stamp(),
-                    snapshot.search_text,
-                    snapshot.text,
-                )
-            }
-            Err(_) => return,
-        };
         self.enqueue(IndexJob::UpdateCell {
             document_id,
             sheet_index,
             stamp,
-            row,
-            col,
+            row: change.row,
+            col: change.col,
+            search_text: DisplayProjection::search_text(
+                &change.value,
+                change.display_format.as_ref(),
+            ),
+            display_text: change.display.clone().unwrap_or_else(|| {
+                DisplayProjection::display_text(&change.value, change.display_format.as_ref())
+            }),
+            registry: Arc::clone(registry),
+        });
+    }
+
+    fn enqueue_rebuild(
+        &self,
+        document_id: u64,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+        search_text: Vec<SearchCellText>,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+    ) {
+        self.enqueue(IndexJob::Rebuild {
+            document_id,
+            sheet_index,
+            stamp,
             search_text,
-            display_text,
             registry: Arc::clone(registry),
         });
     }
@@ -180,22 +205,33 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
         let document_id = response.document_id;
+        let Some(stamp) = current_search_stamp(registry, document_id) else {
+            return;
+        };
         let mut needs_rebuild = false;
         for patch in &response.patches {
             match patch {
                 EditorPatch::Cells { changes } => {
                     for change in changes {
-                        self.update_cell_index(
+                        self.enqueue_cell_update(
                             document_id,
                             change.sheet_index,
-                            change.row,
-                            change.col,
+                            stamp,
+                            change,
                             registry,
                         );
                     }
                 }
-                EditorPatch::SheetUpdated { .. }
-                | EditorPatch::SheetShape { .. }
+                EditorPatch::SheetUpdated { patch } => {
+                    self.enqueue_rebuild(
+                        document_id,
+                        patch.sheet_index,
+                        stamp,
+                        collect_sheet_search_text(&patch.sheet),
+                        registry,
+                    );
+                }
+                EditorPatch::SheetShape { .. }
                 | EditorPatch::ResyncRequired { .. }
                 | EditorPatch::SheetInserted { .. }
                 | EditorPatch::SheetDeleted { .. } => needs_rebuild = true,
@@ -215,6 +251,17 @@ impl SearchService {
             self.scheduler.wake.notify_one();
         }
     }
+}
+
+fn current_search_stamp(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) -> Option<SearchIndexStamp> {
+    registry.read().ok().and_then(|guard| {
+        guard
+            .get(document_id)
+            .map(|editor| editor.search_index_stamp())
+    })
 }
 
 fn index_scheduler() -> &'static Arc<IndexScheduler> {
@@ -245,12 +292,20 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
             registry: Arc::clone(&registry),
         });
     match job {
-        IndexJob::Rebuild { stamp, .. } => {
+        IndexJob::Rebuild {
+            stamp, search_text, ..
+        } => {
             let latest_incremental = entry.incremental.values().map(|update| update.stamp).max();
-            let latest_seen = entry.rebuild.into_iter().chain(latest_incremental).max();
+            let latest_seen = entry
+                .rebuild
+                .as_ref()
+                .map(|rebuild| rebuild.stamp)
+                .into_iter()
+                .chain(latest_incremental)
+                .max();
             if latest_seen.is_none_or(|latest| stamp >= latest) {
                 entry.registry = registry;
-                entry.rebuild = Some(stamp);
+                entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
                 entry.incremental.clear();
             }
         }
@@ -292,11 +347,17 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
         let pending = drain_pending_jobs(scheduler);
 
         for ((_, sheet_index), pending) in pending {
-            if let Some(stamp) = pending.rebuild {
+            if let Some(rebuild) = pending.rebuild {
                 record_scheduler_event(scheduler, |stats| {
                     stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
                 });
-                run_rebuild(pending.document_id, sheet_index, stamp, &pending.registry);
+                run_rebuild(
+                    pending.document_id,
+                    sheet_index,
+                    rebuild.stamp,
+                    rebuild.search_text,
+                    &pending.registry,
+                );
                 continue;
             }
 
@@ -322,12 +383,20 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
                             stats.incremental_fallback_rebuilds.saturating_add(1);
                         stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
                     });
-                    run_rebuild(
+                    if let Some(search_text) = snapshot_sheet_search_text(
                         pending.document_id,
                         sheet_index,
                         latest_stamp,
                         &pending.registry,
-                    );
+                    ) {
+                        run_rebuild(
+                            pending.document_id,
+                            sheet_index,
+                            latest_stamp,
+                            search_text,
+                            &pending.registry,
+                        );
+                    }
                 }
             }
         }
@@ -387,9 +456,25 @@ fn run_rebuild(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
+    search_text: Vec<SearchCellText>,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
-    let search_text_snapshot: Option<Vec<SearchCellText>> = match registry.read() {
+    let built_index = build_sheet_index(&search_text);
+
+    if let Ok(mut guard) = registry.write()
+        && let Some(editor_state) = guard.get_mut(document_id)
+    {
+        editor_state.install_search_index(sheet_index, stamp, built_index);
+    }
+}
+
+fn snapshot_sheet_search_text(
+    document_id: u64,
+    sheet_index: usize,
+    stamp: SearchIndexStamp,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+) -> Option<Vec<SearchCellText>> {
+    match registry.read() {
         Ok(guard) => guard.get(document_id).and_then(|editor| {
             if editor.search_index_stamp() != stamp {
                 return None;
@@ -401,16 +486,6 @@ fn run_rebuild(
                 .map(collect_sheet_search_text)
         }),
         Err(_) => None,
-    };
-    let Some(search_text) = search_text_snapshot else {
-        return;
-    };
-    let built_index = build_sheet_index(&search_text);
-
-    if let Ok(mut guard) = registry.write()
-        && let Some(editor_state) = guard.get_mut(document_id)
-    {
-        editor_state.install_search_index(sheet_index, stamp, built_index);
     }
 }
 
@@ -553,6 +628,29 @@ mod tests {
         guard.get(document_id).unwrap().search_index_stamp()
     }
 
+    fn search_text_snapshot(
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        document_id: u64,
+    ) -> Vec<SearchCellText> {
+        snapshot_sheet_search_text(
+            document_id,
+            0,
+            current_stamp(registry, document_id),
+            registry,
+        )
+        .expect("search text snapshot")
+    }
+
+    fn rebuild_current_sheet(registry: &Arc<RwLock<ActiveDocumentStore>>, document_id: u64) {
+        run_rebuild(
+            document_id,
+            0,
+            current_stamp(registry, document_id),
+            search_text_snapshot(registry, document_id),
+            registry,
+        );
+    }
+
     #[test]
     fn pending_index_jobs_coalesce_same_cell_update() {
         let (registry, document_id) = make_registry(vec![vec![s("old")]]);
@@ -622,12 +720,21 @@ mod tests {
                 document_id,
                 sheet_index: 0,
                 stamp,
+                search_text: vec![SearchCellText {
+                    row: 0,
+                    col: 0,
+                    text: "latest".to_string(),
+                    display: "latest".to_string(),
+                }],
                 registry,
             },
         );
 
         let sheet = pending.get(&(document_id, 0)).expect("pending sheet");
-        assert_eq!(sheet.rebuild, Some(stamp));
+        assert_eq!(
+            sheet.rebuild.as_ref().map(|rebuild| rebuild.stamp),
+            Some(stamp)
+        );
         assert!(sheet.incremental.is_empty());
     }
 
@@ -637,12 +744,7 @@ mod tests {
             vec![s("apple"), s("banana")],
             vec![s("cherry"), s("durian")],
         ]);
-        run_rebuild(
-            document_id,
-            0,
-            current_stamp(&registry, document_id),
-            &registry,
-        );
+        rebuild_current_sheet(&registry, document_id);
 
         assert_eq!(rows_of(&registry, document_id, "apple"), vec![(0, 0)]);
         assert_eq!(rows_of(&registry, document_id, "durian"), vec![(1, 1)]);
@@ -651,12 +753,7 @@ mod tests {
     #[test]
     fn incremental_update_replaces_old_value() {
         let (registry, document_id) = make_registry(vec![vec![s("apple"), s("banana")]]);
-        run_rebuild(
-            document_id,
-            0,
-            current_stamp(&registry, document_id),
-            &registry,
-        );
+        rebuild_current_sheet(&registry, document_id);
         {
             let mut guard = registry.write().unwrap();
             let editor = guard.get_mut(document_id).unwrap();
@@ -692,12 +789,7 @@ mod tests {
     #[test]
     fn edited_sheet_uses_scan_fallback_until_incremental_index_commits() {
         let (registry, document_id) = make_registry(vec![vec![s("old")]]);
-        run_rebuild(
-            document_id,
-            0,
-            current_stamp(&registry, document_id),
-            &registry,
-        );
+        rebuild_current_sheet(&registry, document_id);
         assert_eq!(rows_of(&registry, document_id, "old"), vec![(0, 0)]);
 
         let stamp = {
@@ -738,12 +830,7 @@ mod tests {
     #[test]
     fn stale_index_search_falls_back_to_current_rows() {
         let (registry, document_id) = make_registry(vec![vec![s("apple")]]);
-        run_rebuild(
-            document_id,
-            0,
-            current_stamp(&registry, document_id),
-            &registry,
-        );
+        rebuild_current_sheet(&registry, document_id);
         assert_eq!(rows_of(&registry, document_id, "apple"), vec![(0, 0)]);
 
         {
@@ -763,12 +850,7 @@ mod tests {
         assert!(rows_of_current_search(&registry, "apple").is_empty());
         assert_eq!(rows_of_current_search(&registry, "orange"), vec![(0, 0)]);
 
-        run_rebuild(
-            document_id,
-            0,
-            current_stamp(&registry, document_id),
-            &registry,
-        );
+        rebuild_current_sheet(&registry, document_id);
         assert!(rows_of(&registry, document_id, "apple").is_empty());
         assert_eq!(rows_of(&registry, document_id, "orange"), vec![(0, 0)]);
     }
@@ -777,6 +859,7 @@ mod tests {
     fn stale_rebuild_job_does_not_write_into_replaced_active_document() {
         let (registry, old_document_id) = make_registry(vec![vec![s("old")]]);
         let old_stamp = current_stamp(&registry, old_document_id);
+        let old_search_text = search_text_snapshot(&registry, old_document_id);
 
         let new_editor = EditorState::with_workbook(
             FileData {
@@ -795,7 +878,7 @@ mod tests {
             guard.replace_active(new_editor);
         }
 
-        run_rebuild(old_document_id, 0, old_stamp, &registry);
+        run_rebuild(old_document_id, 0, old_stamp, old_search_text, &registry);
 
         assert_eq!(rows_of_current_search(&registry, "new"), vec![(0, 0)]);
         assert!(registry.read().unwrap().get(old_document_id).is_none());

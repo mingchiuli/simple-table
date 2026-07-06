@@ -127,14 +127,32 @@ fn sheets_are_consistent(expected: &SheetData, actual: &SheetData) -> bool {
 }
 
 fn rows_are_consistent(expected: &[Vec<CellValue>], actual: &[Vec<CellValue>]) -> bool {
-    expected.len() == actual.len()
-        && expected.iter().zip(actual).all(|(expected, actual)| {
-            expected.len() == actual.len()
-                && expected
-                    .iter()
-                    .zip(actual)
-                    .all(|(expected, actual)| cells_are_consistent(expected, actual))
+    let expected_rows = effective_row_count(expected);
+    let actual_rows = effective_row_count(actual);
+    expected_rows == actual_rows
+        && (0..expected_rows).all(|row_index| {
+            let expected = &expected[row_index];
+            let actual = &actual[row_index];
+            let expected_len = effective_row_len(expected);
+            let actual_len = effective_row_len(actual);
+            expected_len == actual_len
+                && (0..expected_len)
+                    .all(|col_index| cells_are_consistent(&expected[col_index], &actual[col_index]))
         })
+}
+
+fn effective_row_count(rows: &[Vec<CellValue>]) -> usize {
+    rows.iter()
+        .rposition(|row| effective_row_len(row) > 0)
+        .map(|index| index + 1)
+        .unwrap_or(0)
+}
+
+fn effective_row_len(row: &[CellValue]) -> usize {
+    row.iter()
+        .rposition(|cell| !matches!(cell, CellValue::Null))
+        .map(|index| index + 1)
+        .unwrap_or(0)
 }
 
 fn cells_are_consistent(expected: &CellValue, actual: &CellValue) -> bool {
@@ -197,27 +215,30 @@ fn formula_results_are_consistent(
 }
 
 fn row_difference(expected: &[Vec<CellValue>], actual: &[Vec<CellValue>]) -> String {
-    if expected.len() != actual.len() {
+    let expected_rows = effective_row_count(expected);
+    let actual_rows = effective_row_count(actual);
+    if expected_rows != actual_rows {
         return format!(
             "row count differs: projection={}, workbook={}",
-            expected.len(),
-            actual.len()
+            expected_rows, actual_rows
         );
     }
-    for (row_index, (expected_row, actual_row)) in expected.iter().zip(actual).enumerate() {
-        if expected_row.len() != actual_row.len() {
+    for row_index in 0..expected_rows {
+        let expected_row = &expected[row_index];
+        let actual_row = &actual[row_index];
+        let expected_len = effective_row_len(expected_row);
+        let actual_len = effective_row_len(actual_row);
+        if expected_len != actual_len {
             return format!(
                 "row {row_index} width differs: projection={}, workbook={}",
-                expected_row.len(),
-                actual_row.len()
+                expected_len, actual_len
             );
         }
-        for (col_index, (expected_cell, actual_cell)) in
-            expected_row.iter().zip(actual_row).enumerate()
-        {
-            if !cells_are_consistent(expected_cell, actual_cell) {
+        for col_index in 0..expected_len {
+            if !cells_are_consistent(&expected_row[col_index], &actual_row[col_index]) {
                 return format!(
-                    "cell ({row_index},{col_index}) differs: projection={expected_cell:?}, workbook={actual_cell:?}"
+                    "cell ({row_index},{col_index}) differs: projection={:?}, workbook={:?}",
+                    expected_row[col_index], actual_row[col_index]
                 );
             }
         }

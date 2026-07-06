@@ -234,7 +234,7 @@ impl EditorState {
         } else {
             let after = self.document.capture_memento_side(&operation);
             let memento = SpreadsheetDocument::create_memento(before, after);
-            let entry = HistoryEntry::new(memento, operation_result.clone());
+            let entry = HistoryEntry::new(memento);
             self.history.record(entry);
         }
 
@@ -258,13 +258,12 @@ impl EditorState {
             let restore = self
                 .document
                 .restore_memento(&entry.memento, MementoSide::Before)?;
-            let operation = entry.operation.clone();
             self.history.push_redo(entry);
             self.bump_revision();
             self.mark_search_index_stale();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
-                operation: Some(operation),
+                operation: None,
                 cell_changes: Vec::new(),
                 restore: Some(restore),
             }))
@@ -279,13 +278,12 @@ impl EditorState {
             let restore = self
                 .document
                 .restore_memento(&entry.memento, MementoSide::After)?;
-            let operation = entry.operation.clone();
             self.history.push_undo(entry);
             self.bump_revision();
             self.mark_search_index_stale();
             self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
-                operation: Some(operation),
+                operation: None,
                 cell_changes: Vec::new(),
                 restore: Some(restore),
             }))
@@ -1264,6 +1262,61 @@ mod tests {
     }
 
     #[test]
+    fn undo_sparse_cell_edit_preserves_style_only_far_cells() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_string("value");
+            sheet
+                .cell_mut("Z1000")
+                .style_mut()
+                .font_mut()
+                .set_bold(true);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "style-only-far-cell.xlsx".to_string(),
+        )
+        .expect("read source");
+        assert_eq!(parsed.file_data.sheets[0].rows.len(), 1);
+        assert_eq!(parsed.file_data.sheets[0].rows[0].len(), 1);
+        assert!(
+            parsed.file_data.sheets[0]
+                .rich
+                .cell_styles
+                .contains_key("Z1000")
+        );
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 3,
+                col: 4,
+                text: "E4".to_string(),
+            })
+            .expect("set sparse cell");
+        state.undo().expect("undo").expect("undo result");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("style-only-far-cell.xlsx")
+            .expect("save workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let far_cell = saved
+            .sheet(0)
+            .expect("sheet")
+            .cell("Z1000")
+            .expect("style-only far cell");
+        assert!(far_cell.style().font().is_some_and(|font| font.bold()));
+        assert!(saved.sheet(0).expect("sheet").cell("E4").is_none());
+    }
+
+    #[test]
     fn undo_redo_restores_workbook_snapshot_styles() {
         let mut source = umya_spreadsheet::new_file();
         {
@@ -1381,6 +1434,50 @@ mod tests {
         let sheet = saved.sheet(0).expect("sheet");
         assert_eq!(sheet.cell("A1").expect("A1").value(), "csv");
         assert_eq!(sheet.cell("B1").expect("B1").value(), "xlsx");
+    }
+
+    #[test]
+    fn csv_capabilities_disable_unpersisted_features() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: "input.csv".to_string(),
+                file_name: "input.csv".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("csv".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        let capabilities = state.capabilities();
+        assert!(capabilities.can_edit_cells);
+        assert!(capabilities.can_insert_delete_rows);
+        assert!(capabilities.can_insert_delete_columns);
+        assert!(!capabilities.can_resize_rows_columns);
+        assert!(!capabilities.can_insert_delete_sheets);
+
+        assert!(
+            state
+                .execute(EditorCommand::SetRowHeight {
+                    sheet_index: 0,
+                    row_index: 0,
+                    height: Some(96),
+                })
+                .is_err()
+        );
+        assert!(
+            state
+                .execute(EditorCommand::AddSheet { name: None })
+                .is_err()
+        );
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 1,
+            })
+            .expect("CSV row insertion is persisted as values");
     }
 
     #[test]

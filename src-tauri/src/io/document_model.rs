@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
+use crate::io::document_body::BodySheetShape;
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
 use crate::io::document_transaction::DocumentTransaction;
@@ -70,11 +71,14 @@ impl CellMemento {
 struct SheetShapeMemento {
     sheet_index: usize,
     row_lengths: Vec<usize>,
+    protected_cells: Vec<(usize, usize)>,
 }
 
 impl SheetShapeMemento {
     fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() + self.row_lengths.len() * std::mem::size_of::<usize>()
+        std::mem::size_of::<Self>()
+            + self.row_lengths.len() * std::mem::size_of::<usize>()
+            + self.protected_cells.len() * std::mem::size_of::<(usize, usize)>()
     }
 }
 
@@ -537,6 +541,12 @@ impl SpreadsheetDocument {
                     .get(sheet_index)
                     .map(|sheet| sheet.rows.iter().map(Vec::len).collect())
                     .unwrap_or_default(),
+                protected_cells: self
+                    .projection
+                    .sheets
+                    .get(sheet_index)
+                    .map(protected_rich_cell_positions)
+                    .unwrap_or_default(),
             })
             .collect();
 
@@ -894,9 +904,13 @@ impl SpreadsheetDocument {
     }
 
     fn patch_workbook_cell_shapes(&mut self, shapes: &[SheetShapeMemento]) -> Result<(), AppError> {
-        let sheet_shapes: Vec<(usize, Vec<usize>)> = shapes
+        let sheet_shapes: Vec<BodySheetShape> = shapes
             .iter()
-            .map(|shape| (shape.sheet_index, shape.row_lengths.clone()))
+            .map(|shape| BodySheetShape {
+                sheet_index: shape.sheet_index,
+                row_lengths: shape.row_lengths.clone(),
+                protected_cells: shape.protected_cells.clone(),
+            })
             .collect();
         self.body
             .patch_cell_shapes(&sheet_shapes)
@@ -1103,6 +1117,36 @@ fn parse_projection_cell_key(key: &str) -> Option<(usize, usize)> {
     (col > 0 && row > 0).then_some((row - 1, col - 1))
 }
 
+fn protected_rich_cell_positions(sheet: &crate::types::SheetData) -> Vec<(usize, usize)> {
+    let mut positions = Vec::new();
+    let mut seen = HashSet::new();
+    for key in sheet
+        .rich
+        .cell_formats
+        .keys()
+        .chain(sheet.rich.cell_styles.keys())
+        .chain(sheet.rich.hyperlinks.keys())
+    {
+        if let Some((row, col)) = parse_projection_cell_key(key)
+            && seen.insert((row, col))
+        {
+            positions.push((row, col));
+        }
+    }
+    for drawing in &sheet.rich.drawings {
+        push_unique_position_2d(
+            &mut positions,
+            &mut seen,
+            drawing.from_row as usize,
+            drawing.from_col as usize,
+        );
+        if let (Some(row), Some(col)) = (drawing.to_row, drawing.to_col) {
+            push_unique_position_2d(&mut positions, &mut seen, row as usize, col as usize);
+        }
+    }
+    positions
+}
+
 fn drawing_row_scope_affected(drawing: &DrawingProjection, row_index: usize) -> bool {
     drawing.from_row as usize >= row_index
         || drawing
@@ -1126,6 +1170,17 @@ fn push_unique_position(
 ) {
     if seen.insert((sheet_index, row, col)) {
         positions.push((sheet_index, row, col));
+    }
+}
+
+fn push_unique_position_2d(
+    positions: &mut Vec<(usize, usize)>,
+    seen: &mut HashSet<(usize, usize)>,
+    row: usize,
+    col: usize,
+) {
+    if seen.insert((row, col)) {
+        positions.push((row, col));
     }
 }
 

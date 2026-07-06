@@ -40,6 +40,12 @@ pub struct BodyStructureOperationResult {
     pub diagnostics: StructurePatchDiagnostics,
 }
 
+pub struct BodySheetShape {
+    pub sheet_index: usize,
+    pub row_lengths: Vec<usize>,
+    pub protected_cells: Vec<(usize, usize)>,
+}
+
 impl BodyStructureMemento {
     pub fn estimated_bytes(&self) -> usize {
         match self {
@@ -101,7 +107,7 @@ impl SpreadsheetDocumentBody {
     pub fn capabilities(&self) -> WorkbookCapabilities {
         match self {
             Self::Excel(body) => workbook_state::workbook_capabilities(&body.workbook),
-            Self::Csv => WorkbookCapabilities::default(),
+            Self::Csv => csv_workbook_capabilities(),
             Self::GeneratedWorkbook => WorkbookCapabilities::default(),
         }
     }
@@ -210,10 +216,7 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn patch_cell_shapes(
-        &mut self,
-        sheet_shapes: &[(usize, Vec<usize>)],
-    ) -> Result<(), AppError> {
+    pub fn patch_cell_shapes(&mut self, sheet_shapes: &[BodySheetShape]) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
                 workbook_state::patch_cell_shapes(&mut body.workbook, sheet_shapes)
@@ -508,4 +511,16 @@ fn is_csv_document(file_data: &FileData) -> bool {
         .or_else(|| Path::new(&file_data.path).extension())
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
+}
+
+fn csv_workbook_capabilities() -> WorkbookCapabilities {
+    WorkbookCapabilities {
+        can_resize_rows_columns: false,
+        can_insert_delete_sheets: false,
+        blocked_resize_reasons: vec!["CSV files do not persist row or column dimensions".into()],
+        blocked_sheet_structure_reasons: vec!["CSV files only persist one sheet".into()],
+        blocked_structure_reasons: vec!["CSV files only persist one sheet".into()],
+        detected_features: vec!["csv single-sheet value format".into()],
+        ..WorkbookCapabilities::default()
+    }
 }

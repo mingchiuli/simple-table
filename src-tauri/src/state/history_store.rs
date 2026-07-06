@@ -1,5 +1,4 @@
 use crate::io::document_model::DocumentMemento;
-use crate::types::AppliedOperationResult;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;
 pub(crate) const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
@@ -7,16 +6,14 @@ pub(crate) const MAX_SINGLE_HISTORY_ENTRY_BYTES: usize = MAX_HISTORY_BYTES / 2;
 
 pub(crate) struct HistoryEntry {
     pub(crate) memento: DocumentMemento,
-    pub(crate) operation: AppliedOperationResult,
     pub(crate) estimated_bytes: usize,
 }
 
 impl HistoryEntry {
-    pub(crate) fn new(memento: DocumentMemento, operation: AppliedOperationResult) -> Self {
+    pub(crate) fn new(memento: DocumentMemento) -> Self {
         let estimated_bytes = memento.estimated_bytes().max(1);
         Self {
             memento,
-            operation,
             estimated_bytes,
         }
     }

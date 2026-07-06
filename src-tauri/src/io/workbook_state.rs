@@ -6,6 +6,7 @@ use crate::formula::reference_rewrite::{
     StructureShift, adjust_formula_references, invalidate_deleted_sheet_references,
 };
 use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
+use crate::io::document_body::BodySheetShape;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::ops::AppliedOperation;
 use crate::types::{FileData, SheetCellChange, SheetData, WorkbookCapabilities};
@@ -433,23 +434,30 @@ pub fn patch_layout_dimensions(
 
 pub fn patch_cell_shapes(
     workbook: &mut Workbook,
-    sheet_shapes: &[(usize, Vec<usize>)],
+    sheet_shapes: &[BodySheetShape],
 ) -> Result<(), AppError> {
-    for (sheet_index, row_lengths) in sheet_shapes {
-        let Some(worksheet) = sheet_mut(workbook, *sheet_index)? else {
+    for shape in sheet_shapes {
+        let Some(worksheet) = sheet_mut(workbook, shape.sheet_index)? else {
             continue;
         };
-        let target_rows = row_lengths.len() as u32;
+        let target_rows = shape.row_lengths.len() as u32;
         let existing_cells: Vec<(u32, u32)> = worksheet
             .cells()
             .iter()
             .map(|cell| (cell.coordinate().col_num(), cell.coordinate().row_num()))
             .collect();
 
+        let protected_cells: std::collections::HashSet<(usize, usize)> =
+            shape.protected_cells.iter().copied().collect();
         for (col, row) in existing_cells {
+            let row_index = row.saturating_sub(1) as usize;
+            let col_index = col.saturating_sub(1) as usize;
+            if protected_cells.contains(&(row_index, col_index)) {
+                continue;
+            }
             let target_width = row
                 .checked_sub(1)
-                .and_then(|row_index| row_lengths.get(row_index as usize).copied())
+                .and_then(|row_index| shape.row_lengths.get(row_index as usize).copied())
                 .unwrap_or(0) as u32;
             if row > target_rows || col > target_width {
                 worksheet.remove_cell((col, row));
