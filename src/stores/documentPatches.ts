@@ -9,20 +9,10 @@ import type {
   SheetInsertedPatch,
   SheetUpdatedPatch,
   SheetShapePatch,
-  RowsInsertedPatch,
-  RowsDeletedPatch,
-  ColumnsInsertedPatch,
-  ColumnsDeletedPatch,
 } from "@/types";
 import { blankCell } from "@/utils/cellValue";
 import { defaultRichProjection } from "@/types";
-import {
-  cellKey,
-  deleteRichColumns,
-  deleteRichRows,
-  shiftRichColumns,
-  shiftRichRows,
-} from "@/utils/cellAddress";
+import { cellKey } from "@/utils/cellAddress";
 
 export type PatchApplyResult = {
   data: FileData | null;
@@ -57,18 +47,6 @@ export function applyDocumentPatches(
       case "SheetUpdated":
         nextData = applySheetUpdated(nextData, patch.data.patch);
         break;
-      case "RowsInserted":
-        nextData = applyRowsInserted(nextData, patch.data.patch);
-        break;
-      case "RowsDeleted":
-        nextData = applyRowsDeleted(nextData, patch.data.patch);
-        break;
-      case "ColumnsInserted":
-        nextData = applyColumnsInserted(nextData, patch.data.patch);
-        break;
-      case "ColumnsDeleted":
-        nextData = applyColumnsDeleted(nextData, patch.data.patch);
-        break;
       case "SheetShape":
         nextData = applySheetShape(nextData, patch.data.patch);
         break;
@@ -101,75 +79,6 @@ function applySheetDeleted(data: FileData | null, patch: SheetDeletedPatch): Fil
 function applySheetUpdated(data: FileData | null, patch: SheetUpdatedPatch): FileData | null {
   if (!data) return data;
   return replaceSheet(data, patch.sheetIndex, patch.sheet);
-}
-
-function applyRowsInserted(data: FileData | null, patch: RowsInsertedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet || patch.rows.length === 0) return data;
-  const rows = [...sheet.rows];
-  rows.splice(
-    Math.min(patch.rowIndex, rows.length),
-    0,
-    ...patch.rows.map((row, rowOffset) =>
-      row.map((cell, colIndex) => applyPatchDisplay(cell, patch.displays?.[rowOffset]?.[colIndex]))
-    )
-  );
-  const patchedSheet = applyInsertedRowsMetadata(
-    insertSheetRows({ ...sheet, rows }, patch.rowIndex, patch.rows.length),
-    patch.rowIndex,
-    patch.formats ?? [],
-    patch.styles ?? []
-  );
-  return replaceSheet(data, patch.sheetIndex, patchedSheet);
-}
-
-function applyRowsDeleted(data: FileData | null, patch: RowsDeletedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet || patch.count === 0) return data;
-  const rows = [...sheet.rows];
-  if (patch.rowIndex < rows.length) {
-    rows.splice(patch.rowIndex, patch.count);
-  }
-  return replaceSheet(data, patch.sheetIndex, deleteSheetRows({ ...sheet, rows }, patch.rowIndex, patch.count));
-}
-
-function applyColumnsInserted(data: FileData | null, patch: ColumnsInsertedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
-  const rows = [...sheet.rows];
-  const targetRows = Math.max(rows.length, patch.values.length);
-  for (let rowIndex = 0; rowIndex < targetRows; rowIndex += 1) {
-    const row = [...(rows[rowIndex] ?? [])];
-    while (row.length < patch.colIndex) {
-      row.push(blankCell());
-    }
-    row.splice(
-      Math.min(patch.colIndex, row.length),
-      0,
-      applyPatchDisplay(patch.values[rowIndex] ?? blankCell(), patch.displays?.[rowIndex])
-    );
-    rows[rowIndex] = row;
-  }
-  const patchedSheet = applyInsertedColumnsMetadata(
-    insertSheetColumns({ ...sheet, rows }, patch.colIndex, 1),
-    patch.colIndex,
-    patch.formats ?? [],
-    patch.styles ?? []
-  );
-  return replaceSheet(data, patch.sheetIndex, patchedSheet);
-}
-
-function applyColumnsDeleted(data: FileData | null, patch: ColumnsDeletedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet || patch.count === 0) return data;
-  const rows = sheet.rows.map((row) => {
-    const nextRow = [...row];
-    if (patch.colIndex < nextRow.length) {
-      nextRow.splice(patch.colIndex, patch.count);
-    }
-    return nextRow;
-  });
-  return replaceSheet(data, patch.sheetIndex, deleteSheetColumns({ ...sheet, rows }, patch.colIndex, patch.count));
 }
 
 function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileData | null {
@@ -253,40 +162,6 @@ function applyCellChangesMetadata(
   return nextSheet;
 }
 
-function applyInsertedRowsMetadata(
-  sheet: FileData["sheets"][number],
-  rowIndex: number,
-  formats: (CellFormatProjection | null | undefined)[][],
-  styles: (CellStyleProjection | null | undefined)[][]
-): FileData["sheets"][number] {
-  let nextSheet = sheet;
-  for (const [rowOffset, rowFormats] of formats.entries()) {
-    for (const [colIndex, format] of rowFormats.entries()) {
-      nextSheet = patchCellMetadata(
-        nextSheet,
-        rowIndex + rowOffset,
-        colIndex,
-        format,
-        styles[rowOffset]?.[colIndex]
-      );
-    }
-  }
-  return nextSheet;
-}
-
-function applyInsertedColumnsMetadata(
-  sheet: FileData["sheets"][number],
-  colIndex: number,
-  formats: (CellFormatProjection | null | undefined)[],
-  styles: (CellStyleProjection | null | undefined)[]
-): FileData["sheets"][number] {
-  let nextSheet = sheet;
-  for (const [rowIndex, format] of formats.entries()) {
-    nextSheet = patchCellMetadata(nextSheet, rowIndex, colIndex, format, styles[rowIndex]);
-  }
-  return nextSheet;
-}
-
 function patchCellMetadata(
   sheet: FileData["sheets"][number],
   row: number,
@@ -310,157 +185,6 @@ function patchCellMetadata(
     rich.cellStyles[key] = style;
   }
   return { ...sheet, rich };
-}
-
-function insertSheetRows(
-  sheet: FileData["sheets"][number],
-  rowIndex: number,
-  count: number
-): FileData["sheets"][number] {
-  return {
-    ...sheet,
-    merges: sheet.merges.map((merge) => insertRowsIntoMerge(merge, rowIndex, count)),
-    rowHeights: shiftNumberRecordOnInsert(sheet.rowHeights, rowIndex, count),
-    rich: shiftRichRows(sheet.rich, rowIndex, count),
-  };
-}
-
-function deleteSheetRows(
-  sheet: FileData["sheets"][number],
-  rowIndex: number,
-  count: number
-): FileData["sheets"][number] {
-  return {
-    ...sheet,
-    merges: sheet.merges.flatMap((merge) => {
-      const shifted = deleteRowsFromMerge(merge, rowIndex, count);
-      return shifted ? [shifted] : [];
-    }),
-    rowHeights: shiftNumberRecordOnDelete(sheet.rowHeights, rowIndex, count),
-    rich: deleteRichRows(sheet.rich, rowIndex, count),
-  };
-}
-
-function insertSheetColumns(
-  sheet: FileData["sheets"][number],
-  colIndex: number,
-  count: number
-): FileData["sheets"][number] {
-  return {
-    ...sheet,
-    merges: sheet.merges.map((merge) => insertColumnsIntoMerge(merge, colIndex, count)),
-    columnWidths: shiftNumberRecordOnInsert(sheet.columnWidths, colIndex, count),
-    rich: shiftRichColumns(sheet.rich, colIndex, count),
-  };
-}
-
-function deleteSheetColumns(
-  sheet: FileData["sheets"][number],
-  colIndex: number,
-  count: number
-): FileData["sheets"][number] {
-  return {
-    ...sheet,
-    merges: sheet.merges.flatMap((merge) => {
-      const shifted = deleteColumnsFromMerge(merge, colIndex, count);
-      return shifted ? [shifted] : [];
-    }),
-    columnWidths: shiftNumberRecordOnDelete(sheet.columnWidths, colIndex, count),
-    rich: deleteRichColumns(sheet.rich, colIndex, count),
-  };
-}
-
-function insertRowsIntoMerge(
-  merge: FileData["sheets"][number]["merges"][number],
-  rowIndex: number,
-  count: number
-) {
-  if (merge.startRow >= rowIndex) {
-    return { ...merge, startRow: merge.startRow + count, endRow: merge.endRow + count };
-  }
-  if (merge.endRow >= rowIndex) {
-    return { ...merge, endRow: merge.endRow + count };
-  }
-  return merge;
-}
-
-function insertColumnsIntoMerge(
-  merge: FileData["sheets"][number]["merges"][number],
-  colIndex: number,
-  count: number
-) {
-  if (merge.startCol >= colIndex) {
-    return { ...merge, startCol: merge.startCol + count, endCol: merge.endCol + count };
-  }
-  if (merge.endCol >= colIndex) {
-    return { ...merge, endCol: merge.endCol + count };
-  }
-  return merge;
-}
-
-function deleteRowsFromMerge(
-  merge: FileData["sheets"][number]["merges"][number],
-  rowIndex: number,
-  count: number
-) {
-  const rows = deleteIndexRange(merge.startRow, merge.endRow, rowIndex, count);
-  if (!rows) return null;
-  return { ...merge, startRow: rows.start, endRow: rows.end };
-}
-
-function deleteColumnsFromMerge(
-  merge: FileData["sheets"][number]["merges"][number],
-  colIndex: number,
-  count: number
-) {
-  const columns = deleteIndexRange(merge.startCol, merge.endCol, colIndex, count);
-  if (!columns) return null;
-  return { ...merge, startCol: columns.start, endCol: columns.end };
-}
-
-function deleteIndexRange(
-  start: number,
-  end: number,
-  deletedStart: number,
-  count: number
-): { start: number; end: number } | null {
-  const deletedEnd = deletedStart + count - 1;
-  if (end < deletedStart) return { start, end };
-  if (start > deletedEnd) return { start: start - count, end: end - count };
-  if (start < deletedStart && end > deletedEnd) return { start, end: end - count };
-  if (start < deletedStart) return { start, end: deletedStart - 1 };
-  if (end > deletedEnd) return { start: deletedStart, end: end - count };
-  return null;
-}
-
-function shiftNumberRecordOnInsert(
-  current: Record<number, number> | undefined,
-  index: number,
-  count: number
-): Record<number, number> | undefined {
-  const next: Record<number, number> = {};
-  for (const [rawKey, value] of Object.entries(current ?? {})) {
-    const key = Number(rawKey);
-    next[key >= index ? key + count : key] = value;
-  }
-  return Object.keys(next).length ? next : undefined;
-}
-
-function shiftNumberRecordOnDelete(
-  current: Record<number, number> | undefined,
-  index: number,
-  count: number
-): Record<number, number> | undefined {
-  const next: Record<number, number> = {};
-  for (const [rawKey, value] of Object.entries(current ?? {})) {
-    const key = Number(rawKey);
-    if (key < index) {
-      next[key] = value;
-    } else if (key >= index + count) {
-      next[key - count] = value;
-    }
-  }
-  return Object.keys(next).length ? next : undefined;
 }
 
 function applyLayoutPatch(

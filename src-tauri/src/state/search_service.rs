@@ -195,10 +195,6 @@ impl SearchService {
                     }
                 }
                 EditorPatch::SheetUpdated { .. }
-                | EditorPatch::RowsInserted { .. }
-                | EditorPatch::RowsDeleted { .. }
-                | EditorPatch::ColumnsInserted { .. }
-                | EditorPatch::ColumnsDeleted { .. }
                 | EditorPatch::SheetShape { .. }
                 | EditorPatch::ResyncRequired { .. }
                 | EditorPatch::SheetInserted { .. }

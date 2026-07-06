@@ -1,8 +1,6 @@
 use crate::display::DisplayProjection;
 use crate::state::state::{EditorSessionInfo, EditorStateInfo};
-use crate::types::projection::{
-    CellValueProjection, PatchColumnProjection, PatchRowsProjection, SheetRowsProjection,
-};
+use crate::types::projection::{CellValueProjection, SheetRowsProjection};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -851,150 +849,6 @@ pub struct SheetUpdatedPatch {
     pub sheet: SheetData,
 }
 
-#[derive(Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RowsInsertedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-    pub rows: Vec<Vec<CellValue>>,
-    #[serde(default)]
-    #[ts(skip)]
-    pub display_formats: Vec<Vec<Option<CellFormatProjection>>>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub displays: Vec<Vec<String>>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub formats: Vec<Vec<Option<CellFormatProjection>>>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub styles: Vec<Vec<Option<CellStyleProjection>>>,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RowsDeletedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-    pub count: usize,
-}
-
-#[derive(Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct ColumnsInsertedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "colIndex")]
-    pub col_index: usize,
-    pub values: Vec<CellValue>,
-    #[serde(default)]
-    #[ts(skip)]
-    pub display_formats: Vec<Option<CellFormatProjection>>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub displays: Vec<String>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub formats: Vec<Option<CellFormatProjection>>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub styles: Vec<Option<CellStyleProjection>>,
-}
-
-impl Serialize for RowsInsertedPatch {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut len = 3;
-        if !self.displays.is_empty() {
-            len += 1;
-        }
-        if !self.formats.is_empty() {
-            len += 1;
-        }
-        if !self.styles.is_empty() {
-            len += 1;
-        }
-        let mut state = serializer.serialize_struct("RowsInsertedPatch", len)?;
-        state.serialize_field("sheetIndex", &self.sheet_index)?;
-        state.serialize_field("rowIndex", &self.row_index)?;
-        state.serialize_field(
-            "rows",
-            &PatchRowsProjection {
-                rows: &self.rows,
-                formats: &self.display_formats,
-            },
-        )?;
-        if !self.displays.is_empty() {
-            state.serialize_field("displays", &self.displays)?;
-        }
-        if !self.formats.is_empty() {
-            state.serialize_field("formats", &self.formats)?;
-        }
-        if !self.styles.is_empty() {
-            state.serialize_field("styles", &self.styles)?;
-        }
-        state.end()
-    }
-}
-
-impl Serialize for ColumnsInsertedPatch {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut len = 3;
-        if !self.displays.is_empty() {
-            len += 1;
-        }
-        if !self.formats.is_empty() {
-            len += 1;
-        }
-        if !self.styles.is_empty() {
-            len += 1;
-        }
-        let mut state = serializer.serialize_struct("ColumnsInsertedPatch", len)?;
-        state.serialize_field("sheetIndex", &self.sheet_index)?;
-        state.serialize_field("colIndex", &self.col_index)?;
-        state.serialize_field(
-            "values",
-            &PatchColumnProjection {
-                values: &self.values,
-                formats: &self.display_formats,
-            },
-        )?;
-        if !self.displays.is_empty() {
-            state.serialize_field("displays", &self.displays)?;
-        }
-        if !self.formats.is_empty() {
-            state.serialize_field("formats", &self.formats)?;
-        }
-        if !self.styles.is_empty() {
-            state.serialize_field("styles", &self.styles)?;
-        }
-        state.end()
-    }
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct ColumnsDeletedPatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    #[serde(rename = "colIndex")]
-    pub col_index: usize,
-    pub count: usize,
-}
-
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -1025,14 +879,6 @@ pub enum EditorPatch {
     SheetDeleted { patch: SheetDeletedPatch },
     #[serde(rename = "SheetUpdated")]
     SheetUpdated { patch: SheetUpdatedPatch },
-    #[serde(rename = "RowsInserted")]
-    RowsInserted { patch: RowsInsertedPatch },
-    #[serde(rename = "RowsDeleted")]
-    RowsDeleted { patch: RowsDeletedPatch },
-    #[serde(rename = "ColumnsInserted")]
-    ColumnsInserted { patch: ColumnsInsertedPatch },
-    #[serde(rename = "ColumnsDeleted")]
-    ColumnsDeleted { patch: ColumnsDeletedPatch },
     #[serde(rename = "SheetShape")]
     SheetShape { patch: SheetShapePatch },
     #[serde(rename = "ResyncRequired")]

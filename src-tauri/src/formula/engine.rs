@@ -453,10 +453,11 @@ mod tests {
     }
 
     #[test]
-    fn large_bounded_ranges_use_range_dependencies() {
-        let mut row = vec![CellValue::Null; 2];
+    fn large_bounded_ranges_use_coarse_recalculation() {
+        let mut row = vec![CellValue::Null; 3];
         row[0] = CellValue::Number(Value::from(1));
         row[1] = CellValue::formula("=SUM(A1:A10001)", CellValue::Null);
+        row[2] = CellValue::Number(Value::from(0));
         let mut file_data = FileData {
             path: String::new(),
             file_name: "range.xlsx".to_string(),
@@ -476,6 +477,17 @@ mod tests {
             .expect("incremental range recalc");
 
         assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "5.0");
+
+        file_data.sheets[0].rows[0][2] = CellValue::Number(Value::from(10));
+        let changes = runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 2)
+            .expect("coarse range recalc");
+
+        assert!(
+            changes
+                .iter()
+                .any(|change| change.sheet_index == 0 && change.row == 0 && change.col == 1)
+        );
     }
 
     #[test]

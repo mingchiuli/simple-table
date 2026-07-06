@@ -7,6 +7,8 @@ use crate::formula::cell_ref::FormulaCellRef;
 use crate::types::{CellValue, FileData, FormulaDiagnostics};
 
 const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
+const LARGE_RANGE_COLUMN_THRESHOLD: usize = 128;
+const LARGE_RANGE_CELL_THRESHOLD: usize = 65_536;
 const RANGE_BUCKET_SIZE: usize = 128;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -29,6 +31,22 @@ impl FormulaRangeRef {
         self.end_row
             .saturating_sub(self.start_row)
             .saturating_add(1)
+    }
+
+    fn column_span(&self) -> usize {
+        self.end_col
+            .saturating_sub(self.start_col)
+            .saturating_add(1)
+    }
+
+    fn cell_span(&self) -> usize {
+        self.row_span().saturating_mul(self.column_span())
+    }
+
+    fn is_large(&self) -> bool {
+        self.row_span() > LARGE_RANGE_ROW_THRESHOLD
+            || self.column_span() > LARGE_RANGE_COLUMN_THRESHOLD
+            || self.cell_span() > LARGE_RANGE_CELL_THRESHOLD
     }
 }
 
@@ -147,8 +165,10 @@ pub(crate) fn build_dependency_index(
                         .insert(formula_ref);
                 }
                 for dependency in dependencies.ranges {
-                    if dependency.row_span() > LARGE_RANGE_ROW_THRESHOLD {
+                    if dependency.is_large() {
                         index.diagnostics.large_range_dependency_count += 1;
+                        index.always_recalculate.insert(formula_ref);
+                        continue;
                     }
                     index.range_dependents.insert(dependency, formula_ref);
                 }

@@ -131,6 +131,38 @@ const {
   resetDocumentStatus,
 });
 
+let routeLoadQueue = Promise.resolve();
+let lastLoadedRouteFilePath: string | null = null;
+
+function routeFilePath(): string | null {
+  const value = route.query.file;
+  if (Array.isArray(value)) {
+    return value[0] || null;
+  }
+  return value || null;
+}
+
+function enqueueRouteFileLoad(filePath: string | null) {
+  routeLoadQueue = routeLoadQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (filePath !== routeFilePath()) return;
+      if (!filePath) {
+        lastLoadedRouteFilePath = null;
+        await refreshEditorState();
+        return;
+      }
+      if (filePath === lastLoadedRouteFilePath && documentSessionStore.currentFilePath === filePath) {
+        return;
+      }
+      lastLoadedRouteFilePath = filePath;
+      await loadFileFromPath(filePath);
+    })
+    .catch((error) => {
+      console.error("Failed to handle route file load:", error);
+    });
+}
+
 function getEditorValue(sheetIndex: number, row: number, col: number): string {
   const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));
   if (draftValue !== undefined) return draftValue;
@@ -168,13 +200,10 @@ const {
 });
 
 // ========== Lifecycle ==========
-onMounted(async () => {
-  const filePath = route.query.file as string;
-  if (filePath) {
-    await loadFileFromPath(filePath);
-  } else {
-    await refreshEditorState();
-  }
+watch(() => route.query.file, () => {
+  enqueueRouteFileLoad(routeFilePath());
+}, {
+  immediate: true,
 });
 
 </script>

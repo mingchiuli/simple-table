@@ -6,11 +6,10 @@ use crate::recent::types::{RecentFile, StorageType};
 use crate::state::state::{EditorSessionInfo, EditorStateInfo};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
-    CellValue, ColumnsDeletedPatch, ColumnsInsertedPatch, DocumentCapabilities, DrawingKind,
-    DrawingProjection, EditorMutationResponse, EditorPatch, FileData, FormulaDiagnostics,
-    FormulaStatus, FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange,
-    OpenDocumentResponse, ReadOnlyRichProjection, ResyncRequiredPatch, RowsDeletedPatch,
-    RowsInsertedPatch, ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetData,
+    CellValue, DocumentCapabilities, DrawingKind, DrawingProjection, EditorMutationResponse,
+    EditorPatch, FileData, FormulaDiagnostics, FormulaStatus, FreezePaneProjection,
+    HyperlinkProjection, LayoutPatch, MergeRange, OpenDocumentResponse, ReadOnlyRichProjection,
+    ResyncRequiredPatch, ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetData,
     SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch, SheetUpdatedPatch,
     WorkbookCapabilities,
 };
@@ -51,10 +50,6 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetInsertedPatch>(&mut output, &cfg);
     push_decl::<SheetDeletedPatch>(&mut output, &cfg);
     push_decl::<SheetUpdatedPatch>(&mut output, &cfg);
-    push_decl::<RowsInsertedPatch>(&mut output, &cfg);
-    push_decl::<RowsDeletedPatch>(&mut output, &cfg);
-    push_decl::<ColumnsInsertedPatch>(&mut output, &cfg);
-    push_decl::<ColumnsDeletedPatch>(&mut output, &cfg);
     push_decl::<SheetShapePatch>(&mut output, &cfg);
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);
