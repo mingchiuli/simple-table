@@ -5,7 +5,10 @@ use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{active_document_store, editor_state::EditorState, state::EditorSessionInfo};
-use crate::types::{DocumentCapabilities, FileData, OpenDocumentResponse, WorkbookCapabilities};
+use crate::types::{
+    DocumentCapabilities, FileData, OpenDocumentResponse, SavedDocumentResponse,
+    WorkbookCapabilities,
+};
 use umya_spreadsheet::Workbook;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
@@ -55,6 +58,94 @@ pub fn generate_current_file_bytes_for_target(
         .active()
         .ok_or(AppError::NoFileLoaded)?
         .generate_file_bytes_for_target(target_path_or_name)
+}
+
+pub struct PreparedDocumentSave {
+    pub document_id: u64,
+    pub revision: u64,
+    pub output_name: String,
+    pub bytes: Vec<u8>,
+}
+
+pub fn prepare_current_file_save(
+    target_path_or_name: &str,
+) -> Result<PreparedDocumentSave, AppError> {
+    let registry = active_document_store();
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
+    let (output_name, bytes) = editor_state.generate_file_bytes_for_target(target_path_or_name)?;
+    Ok(PreparedDocumentSave {
+        document_id: editor_state.document_id(),
+        revision: editor_state.revision(),
+        output_name,
+        bytes,
+    })
+}
+
+pub fn complete_current_file_save(
+    path: String,
+    prepared: PreparedDocumentSave,
+) -> Result<SavedDocumentResponse, AppError> {
+    ensure_prepared_save_is_current(prepared.document_id, prepared.revision)?;
+    let document_id_token = prepared.document_id;
+    let revision_token = prepared.revision;
+    let output_name = prepared.output_name;
+    let bytes = prepared.bytes;
+    let extension = extension_of(&output_name)
+        .or_else(|| extension_of(&path))
+        .unwrap_or_else(|| "xlsx".to_string());
+    let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
+    let registry = active_document_store();
+    let document_id;
+    let response;
+    {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+        ensure_editor_matches_prepared_save(editor_state, document_id_token, revision_token)?;
+        let current_extension = extension_of(&editor_state.file_data().file_name)
+            .or_else(|| extension_of(&editor_state.file_data().path));
+        let saved_extension = extension_of(&result.file_data.file_name)
+            .or_else(|| extension_of(&result.file_data.path));
+        let clear_history = current_extension != saved_extension;
+
+        editor_state.rebind_saved_document(result.file_data, result.workbook, clear_history);
+        editor_state.mark_saved();
+        editor_state.mark_search_index_stale();
+        document_id = editor_state.document_id();
+        response = SavedDocumentResponse {
+            file_data: editor_state.file_data().clone(),
+            editor_session: editor_session_info(editor_state),
+        };
+    }
+    spawn_rebuild_all_sheets_index(&registry, document_id);
+    Ok(response)
+}
+
+fn ensure_prepared_save_is_current(document_id: u64, revision: u64) -> Result<(), AppError> {
+    let registry = active_document_store();
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
+    ensure_editor_matches_prepared_save(editor_state, document_id, revision)
+}
+
+fn ensure_editor_matches_prepared_save(
+    editor_state: &EditorState,
+    document_id: u64,
+    revision: u64,
+) -> Result<(), AppError> {
+    if editor_state.document_id() == document_id && editor_state.revision() == revision {
+        Ok(())
+    } else {
+        Err(AppError::DocumentStateInvalid(
+            "document changed while save was in progress; please save again".to_string(),
+        ))
+    }
 }
 
 pub fn current_file_data() -> Result<FileData, AppError> {
@@ -149,13 +240,7 @@ fn init_editor_state(
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = EditorState::with_workbook(file_data, workbook);
         initialized_file_data = editor_state.file_data().clone();
-        editor_session = EditorSessionInfo {
-            document_id: editor_state.document_id(),
-            revision: editor_state.revision(),
-            formula_status: editor_state.formula_status(),
-            capabilities: editor_state.capabilities(),
-            editor_state: editor_state_info(&editor_state),
-        };
+        editor_session = editor_session_info(&editor_state);
         document_id = editor_state.document_id();
         registry_guard.replace_active(editor_state);
     }
@@ -165,6 +250,16 @@ fn init_editor_state(
         file_data: initialized_file_data,
         editor_session,
     })
+}
+
+fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
+    EditorSessionInfo {
+        document_id: editor_state.document_id(),
+        revision: editor_state.revision(),
+        formula_status: editor_state.formula_status(),
+        capabilities: editor_state.capabilities(),
+        editor_state: editor_state_info(editor_state),
+    }
 }
 
 fn native_save_extension(file_name: &str) -> Option<String> {

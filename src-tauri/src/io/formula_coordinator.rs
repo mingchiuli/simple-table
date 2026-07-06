@@ -88,7 +88,7 @@ impl FormulaCoordinator {
                     }
                     Err(error) => {
                         eprintln!("Formula recalculation failed: {error}");
-                        let changes = formula_error_change(
+                        let mut changes = formula_error_change(
                             projection,
                             *sheet_index,
                             *row,
@@ -96,7 +96,7 @@ impl FormulaCoordinator {
                             new_value,
                             error.to_string(),
                         );
-                        self.rebuild(projection);
+                        append_unique_changes(&mut changes, self.rebuild(projection));
                         changes
                     }
                 }
@@ -132,7 +132,7 @@ impl FormulaCoordinator {
                                 error.clone(),
                             ));
                         }
-                        self.rebuild(projection);
+                        append_unique_changes(&mut formula_errors, self.rebuild(projection));
                         formula_errors
                     }
                 }
@@ -248,4 +248,18 @@ fn formula_error_change(
 
     *cell = cell.with_formula_result(CellValue::Null, Some(error));
     vec![SheetCellChange::new(sheet_index, row, col, cell.clone())]
+}
+
+fn append_unique_changes(target: &mut Vec<SheetCellChange>, changes: Vec<SheetCellChange>) {
+    for change in changes {
+        if let Some(existing) = target.iter_mut().find(|existing| {
+            existing.sheet_index == change.sheet_index
+                && existing.row == change.row
+                && existing.col == change.col
+        }) {
+            *existing = change;
+        } else {
+            target.push(change);
+        }
+    }
 }

@@ -68,6 +68,20 @@ impl EditorState {
         self.document.update_identity(path, file_name);
     }
 
+    pub fn rebind_saved_document(
+        &mut self,
+        file_data: FileData,
+        workbook: Option<Workbook>,
+        clear_history: bool,
+    ) {
+        self.document = SpreadsheetDocument::new(file_data, workbook);
+        if clear_history {
+            self.history.clear_all();
+        }
+        self.bump_revision();
+        self.refresh_content_hash();
+    }
+
     pub fn document_id(&self) -> u64 {
         self.session.document_id()
     }
@@ -101,8 +115,8 @@ impl EditorState {
         self.document.transaction_failure()
     }
 
-    pub fn search_index_stamp(&self) -> SearchIndexStamp {
-        self.search.stamp(self.document_id())
+    pub fn search_sheet_index_stamp(&self, sheet_index: usize) -> SearchIndexStamp {
+        self.search.sheet_stamp(self.document_id(), sheet_index)
     }
 
     pub fn install_search_index(
@@ -1434,6 +1448,42 @@ mod tests {
         let sheet = saved.sheet(0).expect("sheet");
         assert_eq!(sheet.cell("A1").expect("A1").value(), "csv");
         assert_eq!(sheet.cell("B1").expect("B1").value(), "xlsx");
+    }
+
+    #[test]
+    fn csv_saved_as_xlsx_rebinds_workbook_capabilities() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: "input.csv".to_string(),
+                file_name: "input.csv".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("csv".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        assert!(!state.capabilities().can_resize_rows_columns);
+        assert!(!state.capabilities().can_insert_delete_sheets);
+
+        let (saved_name, saved_bytes) = state
+            .generate_file_bytes_for_target("converted.xlsx")
+            .expect("save projection as xlsx");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            saved_bytes,
+            "converted.xlsx".to_string(),
+            saved_name,
+        )
+        .expect("read saved xlsx");
+
+        state.rebind_saved_document(parsed.file_data, parsed.workbook, true);
+        state.mark_saved();
+
+        assert!(state.capabilities().can_resize_rows_columns);
+        assert!(state.capabilities().can_insert_delete_sheets);
+        assert!(!state.is_dirty());
     }
 
     #[test]

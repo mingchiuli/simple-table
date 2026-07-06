@@ -79,7 +79,6 @@ const {
   markPendingContentChange,
   clearPendingContentChange,
   resetDocumentStatus,
-  markSaved,
 } = useDocumentStatus();
 
 async function applyMutationResponse(response: EditorMutationResponse) {
@@ -127,7 +126,6 @@ const {
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  markSaved,
   resetDocumentStatus,
 });
 

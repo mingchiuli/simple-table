@@ -13,7 +13,6 @@ type UseFileActionsOptions = {
   isLoading: Ref<boolean>;
   isFileLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
-  markSaved: () => Promise<void>;
   resetDocumentStatus: () => void;
 };
 
@@ -23,19 +22,11 @@ export function useFileActions({
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  markSaved,
   resetDocumentStatus,
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
-
-  async function syncSavedDocumentIdentity(path: string) {
-    const fileName = await getFileName(path);
-    await api.updateDocumentIdentity(path, fileName);
-    documentSessionStore.updateIdentity(path, fileName);
-    return fileName;
-  }
 
   async function updateRecentFileEntry(
     path: string,
@@ -123,9 +114,9 @@ export function useFileActions({
 
       if (existingPath && capabilities.nativeSaveExtension && !capabilities.requiresSaveAsForNativeSave) {
         isLoading.value = true;
-        await saveFile(existingPath);
-        const fileName = await syncSavedDocumentIdentity(existingPath);
-        await markSaved();
+        const saved = await saveFile(existingPath);
+        documentSessionStore.applySavedDocumentResponse(saved, existingPath);
+        const fileName = saved.fileData.fileName || await getFileName(existingPath);
         await updateRecentFileEntry(existingPath, fileName, storageType);
         await recentFilesStore.load();
         ElMessage.success('File saved successfully');
@@ -143,9 +134,9 @@ export function useFileActions({
       }
 
       isLoading.value = true;
-      await saveFile(savePath);
-      const fileName = await syncSavedDocumentIdentity(savePath);
-      await markSaved();
+      const saved = await saveFile(savePath);
+      documentSessionStore.applySavedDocumentResponse(saved, savePath);
+      const fileName = saved.fileData.fileName || await getFileName(savePath);
 
       await updateRecentFileEntry(savePath, fileName, storageType);
       await recentFilesStore.load();
@@ -179,9 +170,9 @@ export function useFileActions({
       }
     }
 
-    await saveFile(path);
-    const fileName = await syncSavedDocumentIdentity(path);
-    await markSaved();
+    const saved = await saveFile(path);
+    documentSessionStore.applySavedDocumentResponse(saved, path);
+    const fileName = saved.fileData.fileName || await getFileName(path);
     await updateRecentFileEntry(path, fileName, storageType);
     await recentFilesStore.load();
     return path;

@@ -8,8 +8,8 @@ use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
-    DocumentCapabilities, EditorMutationResponse, FileData, OpenDocumentResponse, SearchResult,
-    SearchScope, SetCellRequest,
+    DocumentCapabilities, EditorMutationResponse, FileData, OpenDocumentResponse,
+    SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
 };
 use tauri::AppHandle;
 
@@ -25,8 +25,15 @@ pub fn read_file_desktop(path: String) -> Result<OpenDocumentResponse, AppError>
 /// Desktop: 生成文件字节并写入路径
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn save_file_desktop(path: String) -> Result<(), AppError> {
+pub fn save_file_desktop(path: String) -> Result<SavedDocumentResponse, AppError> {
     desktop::save_file(&path)
+}
+
+/// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn export_file_desktop(path: String) -> Result<(), AppError> {
+    desktop::export_file(&path)
 }
 
 #[tauri::command]

@@ -2,7 +2,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
-import type { OpenDocumentResponse } from "@/types";
+import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 
 export const desktopFileOps = {
   /** Desktop: 打开文件选择器 + 直接调用 Rust 解析 */
@@ -32,7 +32,7 @@ export const desktopFileOps = {
 
   /** Desktop: 生成文件字节并写入路径 */
   saveFile: async (path: string) => {
-    await invoke<void>("save_file_desktop", { path });
+    return invoke<SavedDocumentResponse>("save_file_desktop", { path });
   },
 
   pickSaveLocation: async (defaultName: string) => {
@@ -50,7 +50,7 @@ export const desktopFileOps = {
     });
     if (!selected) return null;
 
-    await invoke<void>("save_file_desktop", { path: selected });
+    await invoke<void>("export_file_desktop", { path: selected });
     return selected;
   },
 };

@@ -5,7 +5,7 @@ use crate::io::platform::mobile::{PickFileResult, PickedFileInfo};
 #[cfg(target_os = "ios")]
 use crate::io::platform::{ios, mobile};
 #[cfg(target_os = "ios")]
-use crate::types::OpenDocumentResponse;
+use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 #[cfg(target_os = "ios")]
 use tauri::AppHandle;
 
@@ -36,7 +36,10 @@ pub async fn create_private_file_ios(
 /// iOS: generate file bytes and write them to the sandbox path.
 #[cfg(target_os = "ios")]
 #[tauri::command(rename_all = "camelCase")]
-pub async fn save_file_ios(app: AppHandle, path: String) -> Result<(), AppError> {
+pub async fn save_file_ios(
+    app: AppHandle,
+    path: String,
+) -> Result<SavedDocumentResponse, AppError> {
     mobile::save_file(&app, &path)
 }
 

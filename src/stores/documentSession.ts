@@ -3,6 +3,7 @@ import type {
   EditorSessionInfo,
   FileData,
   OpenDocumentResponse,
+  SavedDocumentResponse,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
@@ -52,6 +53,16 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       const statusStore = useDocumentStatusStore();
       statusStore.reset();
       statusStore.applyEditorSession(response.editorSession);
+    },
+    applySavedDocumentResponse(response: SavedDocumentResponse, path: string | null = null) {
+      this.data = response.fileData;
+      this.currentFilePath = path !== null ? path : response.fileData.path || null;
+      this.documentId = response.editorSession.documentId;
+      this.revision = response.editorSession.revision;
+      this.clampSelectionToCurrentSheet();
+      usePendingCellSavesStore().reset();
+      useDocumentStatusStore().clearPendingContentChange();
+      useDocumentStatusStore().applyEditorSession(response.editorSession);
     },
     updateIdentity(path: string | null, fileName: string) {
       if (this.data) {

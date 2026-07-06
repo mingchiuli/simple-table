@@ -5,7 +5,7 @@ use crate::io::platform::mobile::PickFileResult;
 #[cfg(target_os = "android")]
 use crate::io::platform::{android, mobile};
 #[cfg(target_os = "android")]
-use crate::types::OpenDocumentResponse;
+use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 #[cfg(target_os = "android")]
 use tauri::AppHandle;
 
@@ -29,7 +29,10 @@ pub async fn read_file_android(
 /// Android: generate file bytes and write them to the sandbox path.
 #[cfg(target_os = "android")]
 #[tauri::command(rename_all = "camelCase")]
-pub async fn save_file_android(app: AppHandle, path: String) -> Result<(), AppError> {
+pub async fn save_file_android(
+    app: AppHandle,
+    path: String,
+) -> Result<SavedDocumentResponse, AppError> {
     mobile::save_file(&app, &path)
 }
 

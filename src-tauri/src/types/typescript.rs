@@ -9,9 +9,9 @@ use crate::types::{
     CellValue, DocumentCapabilities, DrawingKind, DrawingProjection, EditorMutationResponse,
     EditorPatch, FileData, FormulaDiagnostics, FormulaStatus, FreezePaneProjection,
     HyperlinkProjection, LayoutPatch, MergeRange, OpenDocumentResponse, ReadOnlyRichProjection,
-    ResyncRequiredPatch, ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetData,
-    SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch, SheetUpdatedPatch,
-    WorkbookCapabilities,
+    ResyncRequiredPatch, SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope,
+    SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
+    SheetUpdatedPatch, WorkbookCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -56,6 +56,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);
+    push_decl::<SavedDocumentResponse>(&mut output, &cfg);
 
     output
 }

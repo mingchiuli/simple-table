@@ -30,7 +30,7 @@ use commands::{
     update_recent_file_path,
 };
 #[cfg(desktop)]
-use commands::{read_file_desktop, save_file_desktop};
+use commands::{export_file_desktop, read_file_desktop, save_file_desktop};
 
 use tauri::Emitter;
 
@@ -70,6 +70,8 @@ pub fn run() {
             read_file_desktop,
             #[cfg(desktop)]
             save_file_desktop,
+            #[cfg(desktop)]
+            export_file_desktop,
             generate_current_thumbnail_bytes,
             get_current_file_data,
             update_document_identity,

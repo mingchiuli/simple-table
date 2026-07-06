@@ -131,13 +131,13 @@ impl SearchService {
             Ok(guard) => guard
                 .get(document_id)
                 .map(|editor| {
-                    let stamp = editor.search_index_stamp();
                     editor
                         .file_data()
                         .sheets
                         .iter()
                         .enumerate()
                         .map(|(sheet_index, sheet)| {
+                            let stamp = editor.search_sheet_index_stamp(sheet_index);
                             (sheet_index, stamp, collect_sheet_search_text(sheet))
                         })
                         .collect()
@@ -205,14 +205,16 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
         let document_id = response.document_id;
-        let Some(stamp) = current_search_stamp(registry, document_id) else {
-            return;
-        };
         let mut needs_rebuild = false;
         for patch in &response.patches {
             match patch {
                 EditorPatch::Cells { changes } => {
                     for change in changes {
+                        let Some(stamp) =
+                            current_search_stamp(registry, document_id, change.sheet_index)
+                        else {
+                            continue;
+                        };
                         self.enqueue_cell_update(
                             document_id,
                             change.sheet_index,
@@ -223,6 +225,11 @@ impl SearchService {
                     }
                 }
                 EditorPatch::SheetUpdated { patch } => {
+                    let Some(stamp) =
+                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    else {
+                        continue;
+                    };
                     self.enqueue_rebuild(
                         document_id,
                         patch.sheet_index,
@@ -256,11 +263,12 @@ impl SearchService {
 fn current_search_stamp(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
+    sheet_index: usize,
 ) -> Option<SearchIndexStamp> {
     registry.read().ok().and_then(|guard| {
         guard
             .get(document_id)
-            .map(|editor| editor.search_index_stamp())
+            .map(|editor| editor.search_sheet_index_stamp(sheet_index))
     })
 }
 
@@ -295,18 +303,21 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
         IndexJob::Rebuild {
             stamp, search_text, ..
         } => {
-            let latest_incremental = entry.incremental.values().map(|update| update.stamp).max();
             let latest_seen = entry
                 .rebuild
                 .as_ref()
                 .map(|rebuild| rebuild.stamp)
                 .into_iter()
-                .chain(latest_incremental)
+                .chain(entry.incremental.values().map(|update| update.stamp).max())
                 .max();
             if latest_seen.is_none_or(|latest| stamp >= latest) {
                 entry.registry = registry;
                 entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
-                entry.incremental.clear();
+                entry.incremental.retain(|_, update| update.stamp > stamp);
+            } else if entry.rebuild.is_none() {
+                entry.registry = registry;
+                entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
+                entry.incremental.retain(|_, update| update.stamp > stamp);
             }
         }
         IndexJob::UpdateCell {
@@ -317,27 +328,31 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
             display_text,
             ..
         } => {
-            if entry.rebuild.is_none() {
-                let latest_incremental =
-                    entry.incremental.values().map(|update| update.stamp).max();
-                if latest_incremental.is_some_and(|latest| stamp < latest) {
-                    return;
-                }
-                if latest_incremental.is_some_and(|latest| stamp > latest) {
-                    entry.incremental.clear();
-                }
-                entry.registry = registry;
-                entry.incremental.insert(
-                    (row, col),
-                    CellIndexUpdate {
-                        stamp,
-                        row,
-                        col,
-                        search_text,
-                        display_text,
-                    },
-                );
+            if entry
+                .rebuild
+                .as_ref()
+                .is_some_and(|rebuild| stamp <= rebuild.stamp)
+            {
+                return;
             }
+            if entry
+                .incremental
+                .get(&(row, col))
+                .is_some_and(|existing| stamp < existing.stamp)
+            {
+                return;
+            }
+            entry.registry = registry;
+            entry.incremental.insert(
+                (row, col),
+                CellIndexUpdate {
+                    stamp,
+                    row,
+                    col,
+                    search_text,
+                    display_text,
+                },
+            );
         }
     }
 }
@@ -351,13 +366,35 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
                 record_scheduler_event(scheduler, |stats| {
                     stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
                 });
-                run_rebuild(
+                let latest_stamp = pending
+                    .incremental
+                    .values()
+                    .map(|update| update.stamp)
+                    .chain(std::iter::once(rebuild.stamp))
+                    .max()
+                    .expect("rebuild stamp is present");
+                if latest_stamp == rebuild.stamp {
+                    run_rebuild(
+                        pending.document_id,
+                        sheet_index,
+                        rebuild.stamp,
+                        rebuild.search_text,
+                        &pending.registry,
+                    );
+                } else if let Some(search_text) = snapshot_sheet_search_text(
                     pending.document_id,
                     sheet_index,
-                    rebuild.stamp,
-                    rebuild.search_text,
+                    latest_stamp,
                     &pending.registry,
-                );
+                ) {
+                    run_rebuild(
+                        pending.document_id,
+                        sheet_index,
+                        latest_stamp,
+                        search_text,
+                        &pending.registry,
+                    );
+                }
                 continue;
             }
 
@@ -476,7 +513,7 @@ fn snapshot_sheet_search_text(
 ) -> Option<Vec<SearchCellText>> {
     match registry.read() {
         Ok(guard) => guard.get(document_id).and_then(|editor| {
-            if editor.search_index_stamp() != stamp {
+            if editor.search_sheet_index_stamp(sheet_index) != stamp {
                 return None;
             }
             editor
@@ -495,15 +532,19 @@ fn run_incremental(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     ops: &[CellIndexUpdate],
 ) -> bool {
-    let Some((stamp, handle)) = registry.read().ok().and_then(|guard| {
+    let Some(latest_stamp) = ops.iter().map(|op| op.stamp).max() else {
+        return true;
+    };
+    if ops.iter().any(|op| {
+        op.stamp.document_id != latest_stamp.document_id
+            || op.stamp.generation != latest_stamp.generation
+            || op.stamp > latest_stamp
+    }) {
+        return false;
+    }
+    let Some(handle) = registry.read().ok().and_then(|guard| {
         let editor = guard.get(document_id)?;
-        let stamp = ops.first()?.stamp;
-        if ops.iter().any(|op| op.stamp != stamp) {
-            return None;
-        }
-        editor
-            .search_writer_handle(sheet_index, stamp)
-            .map(|handle| (stamp, handle))
+        editor.search_writer_handle(sheet_index, latest_stamp)
     }) else {
         return false;
     };
@@ -538,7 +579,7 @@ fn run_incremental(
     if let Ok(mut guard) = registry.write()
         && let Some(editor_state) = guard.get_mut(document_id)
     {
-        editor_state.mark_search_sheet_fresh(sheet_index, stamp);
+        editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp);
     }
 
     true
@@ -625,7 +666,7 @@ mod tests {
         document_id: u64,
     ) -> SearchIndexStamp {
         let guard = registry.read().unwrap();
-        guard.get(document_id).unwrap().search_index_stamp()
+        guard.get(document_id).unwrap().search_sheet_index_stamp(0)
     }
 
     fn search_text_snapshot(
@@ -787,6 +828,67 @@ mod tests {
     }
 
     #[test]
+    fn incremental_updates_can_span_sheet_revisions() {
+        let (registry, document_id) = make_registry(vec![vec![s("apple"), s("banana")]]);
+        rebuild_current_sheet(&registry, document_id);
+
+        let first_stamp = {
+            let mut guard = registry.write().unwrap();
+            let editor = guard.get_mut(document_id).unwrap();
+            editor
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "orange".to_string(),
+                })
+                .unwrap();
+            editor.search_sheet_index_stamp(0)
+        };
+        let second_stamp = {
+            let mut guard = registry.write().unwrap();
+            let editor = guard.get_mut(document_id).unwrap();
+            editor
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 1,
+                    text: "pear".to_string(),
+                })
+                .unwrap();
+            editor.search_sheet_index_stamp(0)
+        };
+
+        let ok = run_incremental(
+            document_id,
+            0,
+            &registry,
+            &[
+                CellIndexUpdate {
+                    stamp: first_stamp,
+                    row: 0,
+                    col: 0,
+                    search_text: "orange".to_string(),
+                    display_text: "orange".to_string(),
+                },
+                CellIndexUpdate {
+                    stamp: second_stamp,
+                    row: 0,
+                    col: 1,
+                    search_text: "pear".to_string(),
+                    display_text: "pear".to_string(),
+                },
+            ],
+        );
+
+        assert!(ok);
+        assert!(rows_of(&registry, document_id, "apple").is_empty());
+        assert!(rows_of(&registry, document_id, "banana").is_empty());
+        assert_eq!(rows_of(&registry, document_id, "orange"), vec![(0, 0)]);
+        assert_eq!(rows_of(&registry, document_id, "pear"), vec![(0, 1)]);
+    }
+
+    #[test]
     fn edited_sheet_uses_scan_fallback_until_incremental_index_commits() {
         let (registry, document_id) = make_registry(vec![vec![s("old")]]);
         rebuild_current_sheet(&registry, document_id);
@@ -803,7 +905,7 @@ mod tests {
                     text: "new".to_string(),
                 })
                 .unwrap();
-            editor.search_index_stamp()
+            editor.search_sheet_index_stamp(0)
         };
 
         assert!(rows_of_current_search(&registry, "old").is_empty());

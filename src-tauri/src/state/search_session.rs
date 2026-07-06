@@ -9,8 +9,8 @@ pub struct SearchSession {
 }
 
 impl SearchSession {
-    pub fn stamp(&self, document_id: u64) -> SearchIndexStamp {
-        self.index.stamp(document_id)
+    pub fn sheet_stamp(&self, document_id: u64, sheet_index: usize) -> SearchIndexStamp {
+        self.index.sheet_stamp(document_id, sheet_index)
     }
 
     pub fn install_sheet_index(

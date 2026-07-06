@@ -402,6 +402,14 @@ pub struct OpenDocumentResponse {
     pub editor_session: EditorSessionInfo,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SavedDocumentResponse {
+    pub file_data: FileData,
+    pub editor_session: EditorSessionInfo,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename = "ReadOnlyRichProjection", rename_all = "camelCase")]

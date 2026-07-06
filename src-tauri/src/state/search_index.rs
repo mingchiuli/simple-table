@@ -71,6 +71,7 @@ static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
 pub struct SearchIndexStore {
     generation: u64,
     revision: u64,
+    sheet_revisions: Vec<u64>,
     sheets: Vec<SearchSheetSlot>,
 }
 
@@ -79,6 +80,7 @@ impl Default for SearchIndexStore {
         Self {
             generation: NEXT_SEARCH_INDEX_GENERATION.fetch_add(1, Ordering::Relaxed),
             revision: 0,
+            sheet_revisions: Vec::new(),
             sheets: Vec::new(),
         }
     }
@@ -93,9 +95,20 @@ impl SearchIndexStore {
         }
     }
 
+    pub fn sheet_stamp(&self, document_id: u64, sheet_index: usize) -> SearchIndexStamp {
+        SearchIndexStamp {
+            document_id,
+            generation: self.generation,
+            revision: self.sheet_revision(sheet_index),
+        }
+    }
+
     pub fn mark_stale(&mut self, document_id: u64) -> SearchIndexStamp {
         self.revision = self.revision.wrapping_add(1);
-        for slot in &mut self.sheets {
+        self.sheet_revisions
+            .resize(self.sheets.len(), self.revision.saturating_sub(1));
+        for (sheet_index, slot) in self.sheets.iter_mut().enumerate() {
+            self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index].wrapping_add(1);
             if let SearchSheetSlot::Fresh(_) = slot {
                 let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
                 *slot = match previous {
@@ -109,6 +122,7 @@ impl SearchIndexStore {
 
     pub fn mark_sheet_stale(&mut self, sheet_index: usize) {
         self.ensure_sheet_slot(sheet_index);
+        self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index].wrapping_add(1);
         let previous = std::mem::replace(&mut self.sheets[sheet_index], SearchSheetSlot::Missing);
         self.sheets[sheet_index] = match previous {
             SearchSheetSlot::Fresh(entry) | SearchSheetSlot::Stale(Some(entry)) => {
@@ -124,7 +138,7 @@ impl SearchIndexStore {
         sheet_index: usize,
         stamp: SearchIndexStamp,
     ) {
-        if stamp != self.stamp(document_id) {
+        if stamp != self.sheet_stamp(document_id, sheet_index) {
             return;
         }
         if let Some(slot) = self.sheets.get_mut(sheet_index)
@@ -132,7 +146,12 @@ impl SearchIndexStore {
         {
             let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
             *slot = match previous {
-                SearchSheetSlot::Stale(Some(entry)) if entry.revision == stamp.revision => {
+                SearchSheetSlot::Stale(Some(mut entry)) if entry.revision <= stamp.revision => {
+                    entry.revision = stamp.revision;
+                    SearchSheetSlot::Fresh(entry)
+                }
+                SearchSheetSlot::Fresh(mut entry) if entry.revision <= stamp.revision => {
+                    entry.revision = stamp.revision;
                     SearchSheetSlot::Fresh(entry)
                 }
                 SearchSheetSlot::Stale(entry) => SearchSheetSlot::Stale(entry),
@@ -148,7 +167,7 @@ impl SearchIndexStore {
         stamp: SearchIndexStamp,
         index: Option<SearchSheetIndex>,
     ) {
-        if stamp != self.stamp(document_id) {
+        if stamp != self.sheet_stamp(document_id, sheet_index) {
             return;
         }
         self.ensure_sheet_slot(sheet_index);
@@ -164,6 +183,7 @@ impl SearchIndexStore {
 
     pub fn truncate(&mut self, sheet_count: usize) {
         self.sheets.truncate(sheet_count);
+        self.sheet_revisions.truncate(sheet_count);
     }
 
     pub fn writer_handle(
@@ -172,7 +192,7 @@ impl SearchIndexStore {
         sheet_index: usize,
         stamp: SearchIndexStamp,
     ) -> Option<SearchWriterHandle> {
-        if stamp != self.stamp(document_id) {
+        if stamp != self.sheet_stamp(document_id, sheet_index) {
             return None;
         }
         let entry = match self.sheets.get(sheet_index)? {
@@ -180,7 +200,7 @@ impl SearchIndexStore {
             SearchSheetSlot::Stale(Some(entry)) => entry,
             SearchSheetSlot::Stale(None) | SearchSheetSlot::Missing => return None,
         };
-        if entry.revision != stamp.revision {
+        if entry.revision > stamp.revision {
             return None;
         }
         let row_field = entry.index.schema.get_field("row").ok()?;
@@ -210,7 +230,7 @@ impl SearchIndexStore {
             SearchSheetSlot::Fresh(entry) => entry,
             SearchSheetSlot::Stale(_) | SearchSheetSlot::Missing => return None,
         };
-        if entry.revision != self.revision {
+        if entry.revision != self.sheet_revision(sheet_index) {
             return None;
         };
 
@@ -222,6 +242,16 @@ impl SearchIndexStore {
             self.sheets
                 .resize_with(sheet_index + 1, || SearchSheetSlot::Missing);
         }
+        if self.sheet_revisions.len() <= sheet_index {
+            self.sheet_revisions.resize(sheet_index + 1, self.revision);
+        }
+    }
+
+    fn sheet_revision(&self, sheet_index: usize) -> u64 {
+        self.sheet_revisions
+            .get(sheet_index)
+            .copied()
+            .unwrap_or(self.revision)
     }
 }
 
@@ -478,7 +508,7 @@ mod tests {
         let index = index_rows(&rows);
         let mut store = SearchIndexStore::default();
         let document_id = 42;
-        let original_stamp = store.stamp(document_id);
+        let original_stamp = store.sheet_stamp(document_id, 0);
 
         store.install_sheet_index(document_id, 0, original_stamp, Some(index));
         assert_eq!(
@@ -517,7 +547,7 @@ mod tests {
         let index = index_rows(&rows);
         let mut store = SearchIndexStore::default();
         let document_id = 7;
-        let stamp = store.stamp(document_id);
+        let stamp = store.sheet_stamp(document_id, 0);
 
         store.install_sheet_index(document_id, 0, stamp, Some(index));
         assert!(store.search_sheet(0, "old", 10).is_some());
@@ -526,6 +556,11 @@ mod tests {
         assert_eq!(store.search_sheet(0, "old", 10), None);
 
         store.mark_sheet_fresh(document_id, 0, stamp);
+        assert_eq!(store.search_sheet(0, "old", 10), None);
+
+        let fresh_stamp = store.sheet_stamp(document_id, 0);
+        let replacement = index_rows(&rows);
+        store.install_sheet_index(document_id, 0, fresh_stamp, Some(replacement));
         assert!(store.search_sheet(0, "old", 10).is_some());
     }
 

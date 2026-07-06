@@ -24,9 +24,16 @@ impl<'a> DocumentTransaction<'a> {
     }
 
     pub(crate) fn commit(&mut self) -> Result<DocumentOperationResult, AppError> {
-        let result = self
+        let result = match self
             .document
-            .apply_operation_to_body_and_projection(self.operation)?;
+            .apply_operation_to_body_and_projection(self.operation)
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.rollback_after_failure(&error)?;
+                return Err(error);
+            }
+        };
 
         if let Err(error) =
             self.document

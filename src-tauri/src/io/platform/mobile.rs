@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::io::document;
-use crate::types::OpenDocumentResponse;
+use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -93,9 +93,10 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, Ap
     document::open_from_bytes(path.to_string(), bytes, Some(file_name))
 }
 
-pub fn save_file(app: &AppHandle, path: &str) -> Result<(), AppError> {
-    let (_, bytes) = document::generate_current_file_bytes_for_target(path)?;
-    write_path_with_official_fs(app, PathBuf::from(path), &bytes)
+pub fn save_file(app: &AppHandle, path: &str) -> Result<SavedDocumentResponse, AppError> {
+    let prepared = document::prepare_current_file_save(path)?;
+    write_path_with_official_fs(app, PathBuf::from(path), &prepared.bytes)?;
+    document::complete_current_file_save(path.to_string(), prepared)
 }
 
 pub fn create_file(app: &AppHandle, file_name: &str) -> Result<PickedFileInfo, AppError> {
