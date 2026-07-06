@@ -42,12 +42,6 @@ pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> 
 }
 
 #[tauri::command]
-pub fn generate_current_thumbnail_bytes() -> Result<Vec<u8>, AppError> {
-    let (_, bytes) = document::generate_current_file_bytes_for_target("thumbnail.xlsx")?;
-    Ok(bytes)
-}
-
-#[tauri::command]
 pub fn get_current_file_data() -> Result<FileData, AppError> {
     document::current_file_data()
 }

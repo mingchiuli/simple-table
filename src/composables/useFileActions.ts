@@ -37,8 +37,7 @@ export function useFileActions({
     if (!fileData.value) return;
 
     const fileSize = await api.getFileSize(path);
-    const bytes = await api.generateCurrentThumbnailBytes();
-    await api.addRecentFileWithThumbnail(path, fileName, fileSize, bytes, storageType, originalPath);
+    await api.addRecentFileWithThumbnail(path, fileName, fileSize, storageType, originalPath);
   }
 
   async function loadFileFromPath(filePath: string) {
@@ -78,13 +77,11 @@ export function useFileActions({
       currentSheetIndex.value = 0;
 
       const storageType = await getStorageType();
-      const bytes = await api.generateCurrentThumbnailBytes();
       const fileSize = await api.getFileSize(result.path);
       await api.addRecentFileWithThumbnail(
         result.path,
         result.fileName,
         fileSize,
-        bytes,
         storageType,
         result.originalPath
       );

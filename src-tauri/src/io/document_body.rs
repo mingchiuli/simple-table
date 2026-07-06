@@ -231,7 +231,6 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub fn validate_projection_consistency(&self, projection: &FileData) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => WorkbookProjectionCodec::validate(&body.workbook, projection),

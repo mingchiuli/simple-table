@@ -1,5 +1,6 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
+use crate::error::AppError;
 use crate::state::editor_state::EditorState;
 use crate::types::{FormulaStatus, WorkbookCapabilities};
 use ts_rs::TS;
@@ -45,6 +46,19 @@ impl ActiveDocumentStore {
         let document_id = editor_state.document_id();
         self.active = Some(editor_state);
         document_id
+    }
+
+    pub fn try_replace_active(&mut self, editor_state: EditorState) -> Result<u64, AppError> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(EditorState::has_save_commit_in_progress)
+        {
+            return Err(AppError::DocumentStateInvalid(
+                "cannot replace the active document while save is in progress".to_string(),
+            ));
+        }
+        Ok(self.replace_active(editor_state))
     }
 
     pub fn active(&self) -> Option<&EditorState> {

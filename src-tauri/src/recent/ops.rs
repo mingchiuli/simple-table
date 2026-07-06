@@ -1,11 +1,12 @@
 use tauri::AppHandle;
 
 use crate::error::AppError;
+use crate::io::document;
 use crate::recent::types::StorageType;
 use serde::Deserialize;
 
 use super::store::RecentStore;
-use super::thumbnail::generate_thumbnail_from_bytes;
+use super::thumbnail::generate_thumbnail_from_file_data;
 use super::types::RecentFile;
 
 #[derive(Debug, Deserialize)]
@@ -14,7 +15,6 @@ pub struct AddRecentFileRequest {
     pub path: String,
     pub file_name: String,
     pub file_size: i64,
-    pub bytes: Vec<u8>,
     pub storage_type: Option<String>,
     pub original_path: Option<String>,
 }
@@ -29,7 +29,9 @@ pub fn do_add_recent_file_with_thumbnail(
 ) -> Result<RecentFile, AppError> {
     let mut recent_file = RecentFile::new(request.path, request.file_name, request.file_size);
 
-    if let Some(thumbnail) = generate_thumbnail_from_bytes(&request.bytes, "xlsx") {
+    if let Ok(file_data) = document::current_file_data()
+        && let Some(thumbnail) = generate_thumbnail_from_file_data(&file_data)
+    {
         recent_file.thumbnail = Some(thumbnail);
     }
 

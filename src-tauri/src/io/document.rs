@@ -75,6 +75,11 @@ pub fn prepare_current_file_save(
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
+    if editor_state.has_save_commit_in_progress() {
+        return Err(AppError::DocumentStateInvalid(
+            "save is already in progress".to_string(),
+        ));
+    }
     let (output_name, bytes) = editor_state.generate_file_bytes_for_target(target_path_or_name)?;
     Ok(PreparedDocumentSave {
         document_id: editor_state.document_id(),
@@ -101,8 +106,8 @@ where
         .unwrap_or_else(|| "xlsx".to_string());
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
     let registry = active_document_store();
-    let document_id;
-    let response;
+    let clear_history;
+    let lease;
     {
         let mut registry_guard = registry
             .write()
@@ -113,12 +118,27 @@ where
             .or_else(|| extension_of(&editor_state.file_data().path));
         let saved_extension = extension_of(&result.file_data.file_name)
             .or_else(|| extension_of(&result.file_data.path));
-        let clear_history = current_extension != saved_extension;
+        clear_history = current_extension != saved_extension;
+        lease = editor_state.begin_save_commit(document_id_token, revision_token)?;
+    }
 
-        commit_write()?;
-        editor_state.rebind_saved_document(result.file_data, result.workbook, clear_history);
-        editor_state.mark_saved();
-        editor_state.mark_search_index_stale();
+    if let Err(error) = commit_write() {
+        abort_save_commit(&registry, document_id_token, lease);
+        return Err(error);
+    }
+
+    let document_id;
+    let response;
+    {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.get_mut(document_id_token).ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "active document changed while save was in progress".to_string(),
+            )
+        })?;
+        editor_state.finish_save_commit(lease, result.file_data, result.workbook, clear_history)?;
         document_id = editor_state.document_id();
         response = SavedDocumentResponse {
             file_data: editor_state.file_data().clone(),
@@ -143,6 +163,18 @@ fn ensure_editor_matches_prepared_save(
     }
 }
 
+fn abort_save_commit(
+    registry: &std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
+    document_id: u64,
+    lease: crate::state::editor_state::SaveCommitLease,
+) {
+    if let Ok(mut registry_guard) = registry.write()
+        && let Some(editor_state) = registry_guard.get_mut(document_id)
+    {
+        editor_state.abort_save_commit(lease);
+    }
+}
+
 pub fn current_file_data() -> Result<FileData, AppError> {
     let registry = active_document_store();
     let registry_guard = registry
@@ -162,6 +194,11 @@ pub fn update_current_file_identity(path: String, file_name: String) -> Result<(
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
 
     let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+    if editor_state.has_save_commit_in_progress() {
+        return Err(AppError::DocumentStateInvalid(
+            "cannot update file identity while save is in progress".to_string(),
+        ));
+    }
     editor_state.update_identity(path, file_name);
     Ok(())
 }
@@ -237,7 +274,7 @@ fn init_editor_state(
         initialized_file_data = editor_state.file_data().clone();
         editor_session = editor_session_info(&editor_state);
         document_id = editor_state.document_id();
-        registry_guard.replace_active(editor_state);
+        registry_guard.try_replace_active(editor_state)?;
     }
     // 异步构建索引（后台线程）
     spawn_rebuild_all_sheets_index(&registry, document_id);

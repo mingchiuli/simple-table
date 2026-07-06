@@ -1,9 +1,9 @@
 use std::io::Cursor;
 
 use base64::Engine;
-use csv::ReaderBuilder;
 use image::{ImageBuffer, Rgba};
-use umya_spreadsheet::{Cell, reader};
+
+use crate::types::{CellValue, FileData};
 
 const THUMBNAIL_WIDTH: u32 = 200;
 const CELL_WIDTH: u32 = 40;
@@ -20,23 +20,8 @@ enum ThumbnailCell {
     Error,
 }
 
-fn get_format_from_extension(ext: &str) -> Option<&'static str> {
-    match ext.to_lowercase().as_str() {
-        "xlsx" => Some("xlsx"),
-        "csv" => Some("csv"),
-        _ => None,
-    }
-}
-
-pub fn generate_thumbnail_from_bytes(bytes: &[u8], extension: &str) -> Option<String> {
-    let format = get_format_from_extension(extension)?;
-
-    let rows = match format {
-        "xlsx" => read_xlsx_from_bytes(bytes)?,
-        "csv" => read_csv_from_bytes(bytes)?,
-        _ => return None,
-    };
-
+pub fn generate_thumbnail_from_file_data(file_data: &FileData) -> Option<String> {
+    let rows = thumbnail_rows_from_file_data(file_data)?;
     if rows.is_empty() {
         return None;
     }
@@ -77,74 +62,49 @@ pub fn generate_thumbnail_from_bytes(bytes: &[u8], extension: &str) -> Option<St
     Some(format!("data:image/png;base64,{}", base64_str))
 }
 
-fn read_xlsx_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<ThumbnailCell>>> {
-    let workbook = reader::xlsx::read_reader(Cursor::new(bytes.to_vec()), true).ok()?;
-    let worksheet = workbook.sheet(0).ok()?;
-    let (highest_col, highest_row) = worksheet.highest_column_and_row();
-    let row_count = (highest_row as usize).min(MAX_ROWS);
-    let col_count = (highest_col as usize).min(MAX_COLS);
+fn thumbnail_rows_from_file_data(file_data: &FileData) -> Option<Vec<Vec<ThumbnailCell>>> {
+    let sheet = file_data.sheets.first()?;
+    let row_count = sheet.rows.len().min(MAX_ROWS);
+    let col_count = sheet
+        .rows
+        .iter()
+        .take(row_count)
+        .map(|row| row.len().min(MAX_COLS))
+        .max()
+        .unwrap_or(0);
     if row_count == 0 || col_count == 0 {
         return None;
     }
 
     let mut rows = vec![vec![ThumbnailCell::Empty; col_count]; row_count];
-    for cell in worksheet.cells() {
-        let row_idx = cell.coordinate().row_num().saturating_sub(1) as usize;
-        let col_idx = cell.coordinate().col_num().saturating_sub(1) as usize;
-        if row_idx < row_count && col_idx < col_count {
-            rows[row_idx][col_idx] = thumbnail_cell_from_umya(cell);
+    for (row_idx, row) in sheet.rows.iter().take(row_count).enumerate() {
+        for (col_idx, cell) in row.iter().take(col_count).enumerate() {
+            rows[row_idx][col_idx] = thumbnail_cell_from_value(cell);
         }
     }
 
     Some(rows)
 }
 
-fn thumbnail_cell_from_umya(cell: &Cell) -> ThumbnailCell {
-    match cell.data_type() {
-        "b" => ThumbnailCell::Bool,
-        "e" => ThumbnailCell::Error,
-        "n" => ThumbnailCell::Number,
-        _ => {
-            let value = cell.value().into_owned();
-            if value.is_empty() {
-                ThumbnailCell::Empty
+fn thumbnail_cell_from_value(cell: &CellValue) -> ThumbnailCell {
+    match cell {
+        CellValue::Null => ThumbnailCell::Empty,
+        CellValue::String(value) if value.is_empty() => ThumbnailCell::Empty,
+        CellValue::String(value) => ThumbnailCell::String(value.clone()),
+        CellValue::Number(_) => ThumbnailCell::Number,
+        CellValue::Boolean(_) => ThumbnailCell::Bool,
+        CellValue::Formula {
+            cached_value,
+            error,
+            ..
+        } => {
+            if error.is_some() {
+                ThumbnailCell::Error
             } else {
-                ThumbnailCell::String(value)
+                thumbnail_cell_from_value(cached_value)
             }
         }
     }
-}
-
-fn read_csv_from_bytes(bytes: &[u8]) -> Option<Vec<Vec<ThumbnailCell>>> {
-    let cursor = Cursor::new(bytes.to_vec());
-    let mut reader = ReaderBuilder::new().has_headers(false).from_reader(cursor);
-
-    let mut rows = Vec::new();
-    for result in reader.records() {
-        let record = result.ok()?;
-        let row: Vec<ThumbnailCell> = record
-            .iter()
-            .take(MAX_COLS)
-            .map(|field| {
-                if field.is_empty() {
-                    ThumbnailCell::Empty
-                } else if field.parse::<i64>().is_ok() || field.parse::<f64>().is_ok() {
-                    ThumbnailCell::Number
-                } else if field.eq_ignore_ascii_case("true") || field.eq_ignore_ascii_case("false")
-                {
-                    ThumbnailCell::Bool
-                } else {
-                    ThumbnailCell::String(field.to_string())
-                }
-            })
-            .collect();
-        rows.push(row);
-        if rows.len() >= MAX_ROWS {
-            break;
-        }
-    }
-
-    Some(rows)
 }
 
 fn fill_rect(
@@ -175,5 +135,39 @@ fn get_cell_color(cell: &ThumbnailCell) -> Rgba<u8> {
         }
         ThumbnailCell::Bool => Rgba([255, 250, 230, 255]),
         ThumbnailCell::Error => Rgba([255, 230, 230, 255]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ReadOnlyRichProjection, SheetData};
+
+    #[test]
+    fn generates_thumbnail_from_file_projection_without_workbook_bytes() {
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "projection.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![
+                    CellValue::String("text".to_string()),
+                    CellValue::Number(serde_json::Value::from(42)),
+                    CellValue::Boolean(true),
+                    CellValue::Formula {
+                        formula: "=A1".to_string(),
+                        cached_value: Box::new(CellValue::String("cached".to_string())),
+                        error: None,
+                    },
+                ]],
+                merges: Vec::new(),
+                rich: ReadOnlyRichProjection::default(),
+                ..Default::default()
+            }],
+        };
+
+        let thumbnail = generate_thumbnail_from_file_data(&file_data).expect("thumbnail");
+
+        assert!(thumbnail.starts_with("data:image/png;base64,"));
     }
 }

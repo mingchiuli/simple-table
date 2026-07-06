@@ -14,7 +14,10 @@ use crate::types::{
     AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
 };
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
+
+static NEXT_SAVE_COMMIT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
@@ -38,6 +41,13 @@ pub struct SearchSheetSnapshot {
     pub cells: Vec<SearchCellSnapshot>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveCommitLease {
+    document_id: u64,
+    revision: u64,
+    token: u64,
+}
+
 /// 编辑器状态管理器
 pub struct EditorState {
     session: EditorSession,
@@ -45,6 +55,7 @@ pub struct EditorState {
     history: HistoryStore,
     dirty: DirtyTracker,
     search: SearchSession,
+    save_commit: Option<SaveCommitLease>,
 }
 
 impl EditorState {
@@ -57,6 +68,7 @@ impl EditorState {
             history: HistoryStore::default(),
             dirty: DirtyTracker::new(content_hash),
             search: SearchSession::default(),
+            save_commit: None,
         }
     }
 
@@ -65,6 +77,9 @@ impl EditorState {
     }
 
     pub fn update_identity(&mut self, path: String, file_name: String) {
+        if self.has_save_commit_in_progress() {
+            return;
+        }
         self.document.update_identity(path, file_name);
     }
 
@@ -80,6 +95,63 @@ impl EditorState {
         }
         self.bump_revision();
         self.refresh_content_hash();
+    }
+
+    pub fn has_save_commit_in_progress(&self) -> bool {
+        self.save_commit.is_some()
+    }
+
+    pub fn begin_save_commit(
+        &mut self,
+        document_id: u64,
+        revision: u64,
+    ) -> Result<SaveCommitLease, AppError> {
+        self.ensure_not_saving()?;
+        if self.document_id() != document_id || self.revision() != revision {
+            return Err(AppError::DocumentStateInvalid(
+                "document changed while save was in progress; please save again".to_string(),
+            ));
+        }
+
+        let lease = SaveCommitLease {
+            document_id,
+            revision,
+            token: NEXT_SAVE_COMMIT_ID.fetch_add(1, Ordering::Relaxed),
+        };
+        self.save_commit = Some(lease);
+        Ok(lease)
+    }
+
+    pub fn abort_save_commit(&mut self, lease: SaveCommitLease) {
+        if self.save_commit == Some(lease) {
+            self.save_commit = None;
+        }
+    }
+
+    pub fn finish_save_commit(
+        &mut self,
+        lease: SaveCommitLease,
+        file_data: FileData,
+        workbook: Option<Workbook>,
+        clear_history: bool,
+    ) -> Result<(), AppError> {
+        if self.save_commit != Some(lease) {
+            return Err(AppError::DocumentStateInvalid(
+                "save commit lease is no longer active".to_string(),
+            ));
+        }
+        if self.document_id() != lease.document_id || self.revision() != lease.revision {
+            self.save_commit = None;
+            return Err(AppError::DocumentStateInvalid(
+                "document changed while save was in progress; please save again".to_string(),
+            ));
+        }
+
+        self.save_commit = None;
+        self.rebind_saved_document(file_data, workbook, clear_history);
+        self.mark_saved();
+        self.mark_search_index_stale();
+        Ok(())
     }
 
     pub fn document_id(&self) -> u64 {
@@ -225,6 +297,7 @@ impl EditorState {
 
     /// 执行命令并记录到历史，返回增量结果。
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
+        self.ensure_not_saving()?;
         let operation = command.resolve(self.file_data())?;
         self.ensure_operation_supported(&operation)?;
         let should_mark_search_stale = operation.impact().requires_search_rebuild();
@@ -268,6 +341,7 @@ impl EditorState {
 
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
+        self.ensure_not_saving()?;
         if let Some(entry) = self.history.pop_undo() {
             let restore = self
                 .document
@@ -288,6 +362,7 @@ impl EditorState {
 
     /// 重做上一个被撤销的操作
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
+        self.ensure_not_saving()?;
         if let Some(entry) = self.history.pop_redo() {
             let restore = self
                 .document
@@ -348,6 +423,15 @@ impl EditorState {
         if operation.impact().is_cell_edit() && !capabilities.can_edit_cells {
             return Err(AppError::UnsupportedWorkbookStructure(
                 capabilities.blocked_edit_reasons.join(", "),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_not_saving(&self) -> Result<(), AppError> {
+        if self.save_commit.is_some() {
+            return Err(AppError::DocumentStateInvalid(
+                "save is already in progress".to_string(),
             ));
         }
         Ok(())
@@ -413,6 +497,46 @@ mod tests {
         assert_eq!(state.file_data().file_name, "renamed.xlsx");
         assert_eq!(state.current_content_hash(), original_hash);
         assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn save_commit_lease_blocks_mutations_until_released() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: "/tmp/source.xlsx".to_string(),
+                file_name: "source.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("old".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let lease = state
+            .begin_save_commit(state.document_id(), state.revision())
+            .expect("begin save commit");
+
+        let error = state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect_err("mutation should be blocked while save is in progress");
+
+        assert!(error.to_string().contains("save is already in progress"));
+
+        state.abort_save_commit(lease);
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect("mutation after save lease release");
     }
 
     #[test]

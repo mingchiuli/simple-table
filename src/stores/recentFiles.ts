@@ -30,15 +30,11 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         documentSessionStore.openDocumentResponse(opened, path);
 
         const storageType = await getStorageType();
-
-        const bytes = await api.generateCurrentThumbnailBytes();
-
         const fileSize = await api.getFileSize(path);
         await api.addRecentFileWithThumbnail(
           path,
           fileName,
           fileSize,
-          bytes,
           storageType,
           existingFile?.originalPath
         );
@@ -73,14 +69,11 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         documentSessionStore.openDocumentResponse(result, result.path);
 
         const storageType = await getStorageType();
-
-        const bytes = await api.generateCurrentThumbnailBytes();
         const fileSize = await api.getFileSize(result.path);
         await api.addRecentFileWithThumbnail(
           result.path,
           result.fileName,
           fileSize,
-          bytes,
           storageType,
           result.originalPath
         );

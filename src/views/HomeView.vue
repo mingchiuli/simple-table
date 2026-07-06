@@ -27,13 +27,11 @@ async function handleOpenFile() {
     documentSessionStore.openDocumentResponse(result, result.path);
 
     const storageType = await getStorageType();
-    const bytes = await api.generateCurrentThumbnailBytes();
     const fileSize = await api.getFileSize(result.path);
     await api.addRecentFileWithThumbnail(
       result.path,
       result.fileName,
       fileSize,
-      bytes,
       storageType,
       result.originalPath
     );

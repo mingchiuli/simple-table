@@ -120,7 +120,6 @@ export async function addRecentFileWithThumbnail(
   path: string,
   fileName: string,
   fileSize: number,
-  bytes: number[],
   storageType?: 'mobileSandboxPath' | 'desktopPath',
   originalPath?: string
 ): Promise<RecentFile> {
@@ -129,7 +128,6 @@ export async function addRecentFileWithThumbnail(
       path,
       fileName,
       fileSize,
-      bytes,
       storageType,
       originalPath,
     },
@@ -150,13 +148,4 @@ export async function getFileSize(path: string): Promise<number> {
 
 export async function updateRecentFilePath(id: string, newPath: string): Promise<void> {
   return invoke<void>("update_recent_file_path", { id, newPath });
-}
-
-export async function generateCurrentThumbnailBytes(): Promise<number[]> {
-  try {
-    return await invoke<number[]>("generate_current_thumbnail_bytes");
-  } catch (error) {
-    console.warn("Failed to generate current thumbnail bytes:", error);
-    return [];
-  }
 }
