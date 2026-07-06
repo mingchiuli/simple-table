@@ -6,7 +6,8 @@ use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::types::{CellValue, FileData, FormulaDiagnostics};
 
-const MAX_INDEXED_RANGE_ROWS: usize = 512;
+const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
+const RANGE_BUCKET_SIZE: usize = 128;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct FormulaRangeRef {
@@ -48,27 +49,23 @@ pub(crate) struct FormulaRangeDependencyIndex {
 #[derive(Default)]
 struct SheetRangeDependencyIndex {
     dependencies: Vec<(FormulaRangeRef, FormulaCellRef)>,
-    rows: HashMap<usize, Vec<usize>>,
-    large_dependencies: Vec<(FormulaRangeRef, FormulaCellRef)>,
+    buckets: HashMap<(usize, usize), Vec<usize>>,
 }
 
 impl FormulaRangeDependencyIndex {
     fn insert(&mut self, range: FormulaRangeRef, dependent: FormulaCellRef) {
         let sheet = self.sheets.entry(range.sheet_index).or_default();
-        if range
-            .end_row
-            .saturating_sub(range.start_row)
-            .saturating_add(1)
-            > MAX_INDEXED_RANGE_ROWS
-        {
-            sheet.large_dependencies.push((range, dependent));
-            return;
-        }
 
         let dependency_index = sheet.dependencies.len();
         sheet.dependencies.push((range, dependent));
-        for row in range.start_row..=range.end_row {
-            sheet.rows.entry(row).or_default().push(dependency_index);
+        for row_bucket in bucket_span(range.start_row, range.end_row) {
+            for col_bucket in bucket_span(range.start_col, range.end_col) {
+                sheet
+                    .buckets
+                    .entry((row_bucket, col_bucket))
+                    .or_default()
+                    .push(dependency_index);
+            }
         }
     }
 
@@ -78,7 +75,8 @@ impl FormulaRangeDependencyIndex {
         };
         let mut dependents = Vec::new();
         let mut seen = HashSet::new();
-        if let Some(dependency_indexes) = sheet.rows.get(&source.row) {
+        let bucket = (bucket_index(source.row), bucket_index(source.col));
+        if let Some(dependency_indexes) = sheet.buckets.get(&bucket) {
             for dependency_index in dependency_indexes {
                 let Some((range, dependent)) = sheet.dependencies.get(*dependency_index) else {
                     continue;
@@ -86,11 +84,6 @@ impl FormulaRangeDependencyIndex {
                 if range.contains(source) && seen.insert(*dependent) {
                     dependents.push(*dependent);
                 }
-            }
-        }
-        for (range, dependent) in &sheet.large_dependencies {
-            if range.contains(source) && seen.insert(*dependent) {
-                dependents.push(*dependent);
             }
         }
         dependents
@@ -154,7 +147,7 @@ pub(crate) fn build_dependency_index(
                         .insert(formula_ref);
                 }
                 for dependency in dependencies.ranges {
-                    if dependency.row_span() > MAX_INDEXED_RANGE_ROWS {
+                    if dependency.row_span() > LARGE_RANGE_ROW_THRESHOLD {
                         index.diagnostics.large_range_dependency_count += 1;
                     }
                     index.range_dependents.insert(dependency, formula_ref);
@@ -164,6 +157,14 @@ pub(crate) fn build_dependency_index(
     }
 
     index
+}
+
+fn bucket_index(index: usize) -> usize {
+    index / RANGE_BUCKET_SIZE
+}
+
+fn bucket_span(start: usize, end: usize) -> std::ops::RangeInclusive<usize> {
+    bucket_index(start)..=bucket_index(end)
 }
 
 pub(crate) fn count_unregistered_formula_cells(

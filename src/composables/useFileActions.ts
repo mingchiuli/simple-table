@@ -4,7 +4,7 @@ import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, re
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
-import { documentCapabilities, exportExtensionFromName, nativeSaveExtensionFromName } from '@/utils/documentCapabilities';
+import { documentCapabilities } from '@/utils/documentCapabilities';
 import { waitForEditorMutations } from '@/composables/useEditorMutationQueue';
 
 type UseFileActionsOptions = {
@@ -136,7 +136,8 @@ export function useFileActions({
       const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
       if (!savePath) return;
 
-      if (!nativeSaveExtensionFromName(savePath)) {
+      const targetCapabilities = await documentCapabilities(savePath, savePath);
+      if (!targetCapabilities.nativeSaveExtension) {
         ElMessage.error('Native save is only supported as .xlsx or .csv.');
         return;
       }
@@ -163,13 +164,19 @@ export function useFileActions({
 
     let path = documentSessionStore.currentFilePath;
     const storageType = await getStorageType();
+    const pathCapabilities = path ? await documentCapabilities(path, path) : null;
 
-    if (!path || !exportExtensionFromName(path)) {
+    if (!path || !pathCapabilities?.nativeSaveExtension) {
       if (storageType === 'desktopPath') {
         throw new Error('Export is only supported for mobile sandbox files');
       }
       path = await pickSaveLocation(`${defaultName}.${extension}`);
       if (!path) return null;
+
+      const targetCapabilities = await documentCapabilities(path, path);
+      if (!targetCapabilities.nativeSaveExtension) {
+        throw new Error('Native save is only supported as .xlsx or .csv.');
+      }
     }
 
     await saveFile(path);

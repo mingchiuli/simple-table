@@ -36,7 +36,6 @@ export function useCellEditController({
   clearPendingContentChange,
 }: UseCellEditControllerOptions) {
   const documentSessionStore = useDocumentSessionStore();
-  let syncingEditorValue = false;
 
   const transactions = useCellEditTransactions({
     fileData,
@@ -72,14 +71,6 @@ export function useCellEditController({
       refreshSelectedEditorValue();
     }
   });
-
-  watch(cellEditorValue, (newValue) => {
-    if (syncingEditorValue) return;
-    if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
-
-    const { row, col } = selectedCell.value;
-    transactions.updateDraftCell(currentSheetIndex.value, row, col, newValue);
-  }, { flush: 'sync' });
 
   async function commitBatch(changes: CellSaveRequest[]) {
     const currentFileData = fileData.value;
@@ -132,9 +123,7 @@ export function useCellEditController({
   }
 
   function syncFormulaBarValue(value: string) {
-    syncingEditorValue = true;
     cellEditorValue.value = value;
-    syncingEditorValue = false;
   }
 
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {

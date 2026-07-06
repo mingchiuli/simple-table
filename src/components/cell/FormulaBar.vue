@@ -47,7 +47,6 @@ function handleKeydown(event: KeyboardEvent) {
       spellcheck="false"
       placeholder="Value or formula"
       @keydown="handleKeydown"
-      @blur="!props.disabled && emit('submit')"
     />
     <button
       class="formula-action"

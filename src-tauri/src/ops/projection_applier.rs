@@ -57,6 +57,9 @@ impl ProjectionMutation<'_> {
                 row_height,
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    while sheet.rows.len() < *row_index {
+                        sheet.rows.push(Vec::new());
+                    }
                     sheet.rows.insert(*row_index, row_data.clone());
                     shift_layout_map_on_insert(sheet.row_heights.as_mut(), *row_index);
                     shift_row_merges_on_insert(&mut sheet.merges, *row_index);
@@ -98,6 +101,9 @@ impl ProjectionMutation<'_> {
                 column_width,
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    if sheet.rows.len() < col_data.len() {
+                        sheet.rows.resize_with(col_data.len(), Vec::new);
+                    }
                     for (row_index, row) in sheet.rows.iter_mut().enumerate() {
                         let value = col_data.get(row_index).cloned().unwrap_or(CellValue::Null);
                         let pos = (*col_index).min(row.len());

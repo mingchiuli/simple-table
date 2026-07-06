@@ -34,7 +34,9 @@ export function shiftRichRows(
   return shiftRichProjection(rich, (address) => ({
     row: address.row >= rowIndex ? address.row + count : address.row,
     col: address.col,
-  }), (drawing) => shiftDrawingRows(drawing, rowIndex, count));
+  }), (drawing) => shiftDrawingRows(drawing, rowIndex, count), (row) => (
+    row >= rowIndex ? row + count : row
+  ), keepIndex);
 }
 
 export function shiftRichColumns(
@@ -45,7 +47,9 @@ export function shiftRichColumns(
   return shiftRichProjection(rich, (address) => ({
     row: address.row,
     col: address.col >= colIndex ? address.col + count : address.col,
-  }), (drawing) => shiftDrawingColumns(drawing, colIndex, count));
+  }), (drawing) => shiftDrawingColumns(drawing, colIndex, count), keepIndex, (col) => (
+    col >= colIndex ? col + count : col
+  ));
 }
 
 export function deleteRichRows(
@@ -56,7 +60,9 @@ export function deleteRichRows(
   return shiftRichProjection(rich, (address) => {
     const row = deleteIndex(address.row, rowIndex, count);
     return row === null ? null : { row, col: address.col };
-  }, (drawing) => deleteDrawingRows(drawing, rowIndex, count));
+  }, (drawing) => deleteDrawingRows(drawing, rowIndex, count), (row) => (
+    deleteIndex(row, rowIndex, count)
+  ), keepIndex);
 }
 
 export function deleteRichColumns(
@@ -67,24 +73,36 @@ export function deleteRichColumns(
   return shiftRichProjection(rich, (address) => {
     const col = deleteIndex(address.col, colIndex, count);
     return col === null ? null : { row: address.row, col };
-  }, (drawing) => deleteDrawingColumns(drawing, colIndex, count));
+  }, (drawing) => deleteDrawingColumns(drawing, colIndex, count), keepIndex, (col) => (
+    deleteIndex(col, colIndex, count)
+  ));
 }
 
 function shiftRichProjection(
   rich: ReadOnlyRichProjection | undefined,
   mapAddress: (address: CellAddress) => CellAddress | null,
-  mapDrawing: (drawing: DrawingProjection) => DrawingProjection | null
+  mapDrawing: (drawing: DrawingProjection) => DrawingProjection | null,
+  mapRow: (row: number) => number | null,
+  mapColumn: (column: number) => number | null
 ): ReadOnlyRichProjection {
   const source = { ...defaultRichProjection(), ...(rich ?? {}) };
   return {
     ...source,
     cellFormats: shiftCellMap(source.cellFormats, mapAddress),
     cellStyles: shiftCellMap(source.cellStyles, mapAddress),
+    hiddenRows: shiftIndexList(source.hiddenRows, mapRow),
+    hiddenColumns: shiftIndexList(source.hiddenColumns, mapColumn),
+    freezePane: shiftFreezePane(source.freezePane, mapAddress),
+    hyperlinks: shiftCellMap(source.hyperlinks, mapAddress),
     drawings: (source.drawings ?? []).flatMap((drawing) => {
       const shifted = mapDrawing(drawing);
       return shifted ? [shifted] : [];
     }),
   };
+}
+
+function keepIndex(index: number): number {
+  return index;
 }
 
 function shiftCellMap<T>(
@@ -102,6 +120,35 @@ function shiftCellMap<T>(
     }
   }
   return shifted;
+}
+
+function shiftIndexList(
+  values: number[] | undefined,
+  mapIndex: (index: number) => number | null
+): number[] {
+  const shifted = new Set<number>();
+  for (const value of values ?? []) {
+    const next = mapIndex(value);
+    if (next !== null) {
+      shifted.add(next);
+    }
+  }
+  return Array.from(shifted).sort((left, right) => left - right);
+}
+
+function shiftFreezePane(
+  freezePane: ReadOnlyRichProjection["freezePane"] | undefined,
+  mapAddress: (address: CellAddress) => CellAddress | null
+): ReadOnlyRichProjection["freezePane"] | undefined {
+  if (!freezePane) return undefined;
+  const address = parseCellKey(freezePane.topLeftCell);
+  if (!address) return freezePane;
+  const nextAddress = mapAddress(address);
+  if (!nextAddress) return undefined;
+  return {
+    ...freezePane,
+    topLeftCell: cellKey(nextAddress.row, nextAddress.col),
+  };
 }
 
 function shiftDrawingRows(

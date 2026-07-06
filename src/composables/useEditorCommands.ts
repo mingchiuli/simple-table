@@ -5,6 +5,7 @@ import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
 import { enqueueEditorMutation, waitForEditorMutations } from "@/composables/useEditorMutationQueue";
+import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 
 type UseEditorCommandsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -55,7 +56,7 @@ export function useEditorCommands({
 
   async function handleAddRow() {
     if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
-    const rowIndex = currentSheet.value.rows.length;
+    const rowIndex = sheetExtent(currentSheet.value).rowCount;
     await runEditorCommand(
       () => api.addRow(currentSheetIndex.value, rowIndex),
       "Failed to add row"
@@ -72,7 +73,7 @@ export function useEditorCommands({
 
   async function handleAddColumn() {
     if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
-    const colIndex = selectedCell.value?.col ?? sheetColumnExtent(currentSheet.value);
+    const colIndex = selectedCell.value?.col ?? sheetExtent(currentSheet.value).columnCount;
     await runEditorCommand(
       () => api.addColumn(currentSheetIndex.value, colIndex),
       "Failed to add column"
@@ -278,11 +279,11 @@ export function useEditorCommands({
   };
 }
 
-function sheetColumnExtent(sheet: SheetData): number {
-  const valueExtent = sheet.rows.reduce((max, row) => Math.max(max, row.length), 0);
-  const mergeExtent = sheet.merges.reduce((max, merge) => Math.max(max, merge.endCol + 1), 0);
-  const layoutExtent = sheet.columnWidths
-    ? Object.keys(sheet.columnWidths).reduce((max, key) => Math.max(max, Number(key) + 1), 0)
-    : 0;
-  return Math.max(valueExtent, mergeExtent, layoutExtent);
+function sheetExtent(sheet: SheetData) {
+  return calculateSheetExtent(
+    sheet.rows,
+    sheet.merges,
+    sheet.columnWidths,
+    sheet.rowHeights
+  );
 }

@@ -1,10 +1,13 @@
 use crate::display::DisplayProjection;
 use crate::state::state::{EditorSessionInfo, EditorStateInfo};
-use serde::ser::{SerializeMap, SerializeStruct};
+use crate::types::projection::{
+    CellValueProjection, PatchColumnProjection, PatchRowsProjection, SheetRowsProjection,
+};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use ts_rs::{Config, TS, TypeVisitor};
+use ts_rs::TS;
 
 // JavaScript 安全整数范围: -(2^53 - 1) 到 (2^53 - 1)
 const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
@@ -23,40 +26,6 @@ pub enum CellValue {
     },
 }
 
-impl Serialize for CellValue {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeMap;
-
-        let mut len = 4;
-        if matches!(self, CellValue::Formula { .. }) {
-            len += 1;
-        }
-
-        let mut map = serializer.serialize_map(Some(len))?;
-        map.serialize_entry("type", "cell")?;
-        map.serialize_entry("kind", self.kind())?;
-        map.serialize_entry("raw", &self.raw_json_value())?;
-        map.serialize_entry("display", &self.to_display_string())?;
-        if let CellValue::Formula {
-            formula,
-            cached_value,
-            error,
-        } = self
-        {
-            let formula_projection = FormulaCellSerializeProjection {
-                formula,
-                cached_value,
-                error: error.as_deref(),
-            };
-            map.serialize_entry("formula", &formula_projection)?;
-        }
-        map.end()
-    }
-}
-
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -65,95 +34,6 @@ pub struct CellFormatProjection {
     pub number_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_id: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FormulaCellSerializeProjection<'a> {
-    formula: &'a str,
-    cached_value: &'a CellValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a str>,
-}
-
-pub struct ScalarCellValue;
-
-#[allow(dead_code)]
-#[derive(TS)]
-#[ts(rename_all = "camelCase")]
-pub struct CellFormulaProjection {
-    pub formula: String,
-    pub cached_value: CellValue,
-    #[ts(optional)]
-    pub error: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(TS)]
-#[ts(rename_all = "camelCase")]
-pub enum CellKind {
-    Blank,
-    Text,
-    Number,
-    Boolean,
-    Formula,
-    Error,
-}
-
-#[allow(dead_code)]
-#[derive(TS)]
-#[ts(rename_all = "camelCase")]
-pub struct CellData {
-    #[ts(rename = "type", type = "\"cell\"")]
-    pub cell_type: String,
-    pub kind: CellKind,
-    pub raw: ScalarCellValue,
-    pub display: String,
-    #[ts(optional)]
-    pub formula: Option<CellFormulaProjection>,
-    #[ts(optional)]
-    pub format: Option<CellFormatProjection>,
-}
-
-impl TS for ScalarCellValue {
-    type WithoutGenerics = Self;
-    type OptionInnerType = Self;
-
-    fn name(_: &Config) -> String {
-        "ScalarCellValue".to_string()
-    }
-
-    fn decl(_: &Config) -> String {
-        "type ScalarCellValue = string | number | boolean | null;".to_string()
-    }
-
-    fn inline(_: &Config) -> String {
-        "ScalarCellValue".to_string()
-    }
-}
-
-impl TS for CellValue {
-    type WithoutGenerics = Self;
-    type OptionInnerType = Self;
-
-    fn name(_: &Config) -> String {
-        "CellValue".to_string()
-    }
-
-    fn decl(_: &Config) -> String {
-        "type CellValue = CellData;".to_string()
-    }
-
-    fn inline(_: &Config) -> String {
-        "CellData".to_string()
-    }
-
-    fn visit_dependencies(visitor: &mut impl TypeVisitor)
-    where
-        Self: 'static,
-    {
-        visitor.visit::<CellData>();
-    }
 }
 
 impl CellValue {
@@ -191,7 +71,7 @@ impl CellValue {
         }
     }
 
-    fn raw_json_value(&self) -> Value {
+    pub(crate) fn raw_json_value(&self) -> Value {
         match self {
             CellValue::Null => Value::Null,
             CellValue::String(value) => Value::String(value.clone()),
@@ -496,172 +376,6 @@ impl SheetData {
     }
 }
 
-struct SheetRowsProjection<'a> {
-    sheet: &'a SheetData,
-}
-
-impl Serialize for SheetRowsProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-
-        let mut rows = serializer.serialize_seq(Some(self.sheet.rows.len()))?;
-        for (row_index, row) in self.sheet.rows.iter().enumerate() {
-            rows.serialize_element(&SheetRowProjection {
-                sheet: self.sheet,
-                row_index,
-                row,
-            })?;
-        }
-        rows.end()
-    }
-}
-
-struct SheetRowProjection<'a> {
-    sheet: &'a SheetData,
-    row_index: usize,
-    row: &'a [CellValue],
-}
-
-impl Serialize for SheetRowProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-
-        let mut row = serializer.serialize_seq(Some(self.row.len()))?;
-        for (col_index, cell) in self.row.iter().enumerate() {
-            row.serialize_element(&CellValueProjection {
-                cell,
-                format: self.sheet.cell_format_at(self.row_index, col_index),
-            })?;
-        }
-        row.end()
-    }
-}
-
-struct CellValueProjection<'a> {
-    cell: &'a CellValue,
-    format: Option<CellFormatProjection>,
-}
-
-impl Serialize for CellValueProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut len = 4;
-        if matches!(self.cell, CellValue::Formula { .. }) {
-            len += 1;
-        }
-        if self.format.is_some() {
-            len += 1;
-        }
-
-        let mut map = serializer.serialize_map(Some(len))?;
-        map.serialize_entry("type", "cell")?;
-        map.serialize_entry("kind", self.cell.kind())?;
-        map.serialize_entry("raw", &self.cell.raw_json_value())?;
-        map.serialize_entry(
-            "display",
-            &DisplayProjection::display_text(self.cell, self.format.as_ref()),
-        )?;
-        if let Some(format) = &self.format {
-            map.serialize_entry("format", format)?;
-        }
-        if let CellValue::Formula {
-            formula,
-            cached_value,
-            error,
-        } = self.cell
-        {
-            let formula_projection = FormulaCellSerializeProjection {
-                formula,
-                cached_value,
-                error: error.as_deref(),
-            };
-            map.serialize_entry("formula", &formula_projection)?;
-        }
-        map.end()
-    }
-}
-
-struct PatchRowsProjection<'a> {
-    rows: &'a [Vec<CellValue>],
-    formats: &'a [Vec<Option<CellFormatProjection>>],
-}
-
-impl Serialize for PatchRowsProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-
-        let mut rows = serializer.serialize_seq(Some(self.rows.len()))?;
-        for (row_index, row) in self.rows.iter().enumerate() {
-            rows.serialize_element(&PatchRowProjection {
-                row,
-                formats: self.formats.get(row_index).map(Vec::as_slice),
-            })?;
-        }
-        rows.end()
-    }
-}
-
-struct PatchRowProjection<'a> {
-    row: &'a [CellValue],
-    formats: Option<&'a [Option<CellFormatProjection>]>,
-}
-
-impl Serialize for PatchRowProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-
-        let mut row = serializer.serialize_seq(Some(self.row.len()))?;
-        for (col_index, cell) in self.row.iter().enumerate() {
-            row.serialize_element(&CellValueProjection {
-                cell,
-                format: self
-                    .formats
-                    .and_then(|formats| formats.get(col_index))
-                    .cloned()
-                    .flatten(),
-            })?;
-        }
-        row.end()
-    }
-}
-
-struct PatchColumnProjection<'a> {
-    values: &'a [CellValue],
-    formats: &'a [Option<CellFormatProjection>],
-}
-
-impl Serialize for PatchColumnProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeSeq;
-
-        let mut values = serializer.serialize_seq(Some(self.values.len()))?;
-        for (row_index, cell) in self.values.iter().enumerate() {
-            values.serialize_element(&CellValueProjection {
-                cell,
-                format: self.formats.get(row_index).cloned().flatten(),
-            })?;
-        }
-        values.end()
-    }
-}
-
 fn excel_cell_key(row_index: usize, col_index: usize) -> String {
     let mut col = col_index + 1;
     let mut letters = String::new();
@@ -690,7 +404,7 @@ pub struct OpenDocumentResponse {
     pub editor_session: EditorSessionInfo,
 }
 
-#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename = "ReadOnlyRichProjection", rename_all = "camelCase")]
 pub struct ReadOnlyRichProjection {
@@ -699,9 +413,38 @@ pub struct ReadOnlyRichProjection {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cell_styles: HashMap<String, CellStyleProjection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_rows: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_columns: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freeze_pane: Option<FreezePaneProjection>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub hyperlinks: HashMap<String, HyperlinkProjection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drawings: Vec<DrawingProjection>,
     #[serde(default)]
     pub has_more_drawings: bool,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FreezePaneProjection {
+    pub top_left_cell: String,
+    pub horizontal_split: f64,
+    pub vertical_split: f64,
+    pub active_pane: String,
+    pub state: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HyperlinkProjection {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    pub location: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
@@ -900,10 +643,7 @@ impl Serialize for SheetCellChange {
         state.serialize_field("col", &self.col)?;
         state.serialize_field(
             "value",
-            &CellValueProjection {
-                cell: &self.value,
-                format: self.display_format.clone(),
-            },
+            &CellValueProjection::new(&self.value, self.display_format.clone()),
         )?;
         if let Some(display) = &self.display {
             state.serialize_field("display", display)?;

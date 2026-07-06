@@ -46,6 +46,10 @@ export function defaultRichProjection(): ReadOnlyRichProjection {
   return {
     cellFormats: {},
     cellStyles: {},
+    hiddenRows: [],
+    hiddenColumns: [],
+    freezePane: undefined,
+    hyperlinks: {},
     drawings: [],
     hasMoreDrawings: false,
   };

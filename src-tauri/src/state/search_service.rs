@@ -95,6 +95,132 @@ pub struct SearchSchedulerStats {
 
 static INDEX_SCHEDULER: OnceLock<Arc<IndexScheduler>> = OnceLock::new();
 
+#[derive(Clone)]
+pub struct SearchService {
+    scheduler: Arc<IndexScheduler>,
+}
+
+impl SearchService {
+    pub fn global() -> Self {
+        Self {
+            scheduler: Arc::clone(index_scheduler()),
+        }
+    }
+
+    pub fn stats(&self) -> SearchSchedulerStats {
+        self.scheduler
+            .state
+            .lock()
+            .map(|state| state.stats.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn rebuild_all_sheets_index(
+        &self,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        document_id: u64,
+    ) {
+        let (count, stamp) = match registry.read() {
+            Ok(guard) => guard
+                .get(document_id)
+                .map(|editor| (editor.file_data().sheets.len(), editor.search_index_stamp()))
+                .unwrap_or((0, SearchIndexStamp::default())),
+            Err(_) => (0, SearchIndexStamp::default()),
+        };
+
+        for sheet_index in 0..count {
+            self.enqueue(IndexJob::Rebuild {
+                document_id,
+                sheet_index,
+                stamp,
+                registry: Arc::clone(registry),
+            });
+        }
+    }
+
+    pub fn update_cell_index(
+        &self,
+        document_id: u64,
+        sheet_index: usize,
+        row: usize,
+        col: usize,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+    ) {
+        let (stamp, search_text, display_text) = match registry.read() {
+            Ok(guard) => {
+                let Some(editor) = guard.get(document_id) else {
+                    return;
+                };
+                let Some(snapshot) = editor.search_cell_snapshot(sheet_index, row, col) else {
+                    return;
+                };
+                (
+                    editor.search_index_stamp(),
+                    snapshot.search_text,
+                    snapshot.text,
+                )
+            }
+            Err(_) => return,
+        };
+        self.enqueue(IndexJob::UpdateCell {
+            document_id,
+            sheet_index,
+            stamp,
+            row,
+            col,
+            search_text,
+            display_text,
+            registry: Arc::clone(registry),
+        });
+    }
+
+    pub fn schedule_for_response(
+        &self,
+        response: &EditorMutationResponse,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+    ) {
+        let document_id = response.document_id;
+        let mut needs_rebuild = false;
+        for patch in &response.patches {
+            match patch {
+                EditorPatch::Cells { changes } => {
+                    for change in changes {
+                        self.update_cell_index(
+                            document_id,
+                            change.sheet_index,
+                            change.row,
+                            change.col,
+                            registry,
+                        );
+                    }
+                }
+                EditorPatch::SheetUpdated { .. }
+                | EditorPatch::RowsInserted { .. }
+                | EditorPatch::RowsDeleted { .. }
+                | EditorPatch::ColumnsInserted { .. }
+                | EditorPatch::ColumnsDeleted { .. }
+                | EditorPatch::SheetShape { .. }
+                | EditorPatch::ResyncRequired { .. }
+                | EditorPatch::SheetInserted { .. }
+                | EditorPatch::SheetDeleted { .. } => needs_rebuild = true,
+                EditorPatch::Layout { .. } => {}
+            }
+        }
+
+        if needs_rebuild {
+            self.rebuild_all_sheets_index(registry, document_id);
+        }
+    }
+
+    fn enqueue(&self, job: IndexJob) {
+        if let Ok(mut state) = self.scheduler.state.lock() {
+            state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
+            merge_job(&mut state.pending, job);
+            self.scheduler.wake.notify_one();
+        }
+    }
+}
+
 fn index_scheduler() -> &'static Arc<IndexScheduler> {
     INDEX_SCHEDULER.get_or_init(|| {
         let scheduler = Arc::new(IndexScheduler {
@@ -108,15 +234,6 @@ fn index_scheduler() -> &'static Arc<IndexScheduler> {
             .expect("failed to spawn index worker thread");
         scheduler
     })
-}
-
-fn enqueue_index_job(job: IndexJob) {
-    let scheduler = index_scheduler();
-    if let Ok(mut state) = scheduler.state.lock() {
-        state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
-        merge_job(&mut state.pending, job);
-        scheduler.wake.notify_one();
-    }
 }
 
 fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
@@ -180,7 +297,7 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
 
         for ((_, sheet_index), pending) in pending {
             if let Some(stamp) = pending.rebuild {
-                record_scheduler_event(|stats| {
+                record_scheduler_event(scheduler, |stats| {
                     stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
                 });
                 run_rebuild(pending.document_id, sheet_index, stamp, &pending.registry);
@@ -188,7 +305,7 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
             }
 
             if !pending.incremental.is_empty() {
-                record_scheduler_event(|stats| {
+                record_scheduler_event(scheduler, |stats| {
                     stats.incremental_jobs = stats.incremental_jobs.saturating_add(1);
                 });
                 let latest_stamp = pending
@@ -204,7 +321,7 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
                     &pending.registry,
                     &updates,
                 ) {
-                    record_scheduler_event(|stats| {
+                    record_scheduler_event(scheduler, |stats| {
                         stats.incremental_fallback_rebuilds =
                             stats.incremental_fallback_rebuilds.saturating_add(1);
                         stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
@@ -256,8 +373,10 @@ fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), 
     pending
 }
 
-fn record_scheduler_event(update: impl FnOnce(&mut SearchSchedulerStats)) {
-    let scheduler = index_scheduler();
+fn record_scheduler_event(
+    scheduler: &Arc<IndexScheduler>,
+    update: impl FnOnce(&mut SearchSchedulerStats),
+) {
     if let Ok(mut state) = scheduler.state.lock() {
         update(&mut state.stats);
     }
@@ -265,12 +384,7 @@ fn record_scheduler_event(update: impl FnOnce(&mut SearchSchedulerStats)) {
 
 #[allow(dead_code)]
 pub fn search_scheduler_stats() -> SearchSchedulerStats {
-    let scheduler = index_scheduler();
-    scheduler
-        .state
-        .lock()
-        .map(|state| state.stats.clone())
-        .unwrap_or_default()
+    SearchService::global().stats()
 }
 
 fn run_rebuild(
@@ -363,94 +477,14 @@ pub fn spawn_rebuild_all_sheets_index(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
 ) {
-    let (count, stamp) = match registry.read() {
-        Ok(guard) => guard
-            .get(document_id)
-            .map(|editor| (editor.file_data().sheets.len(), editor.search_index_stamp()))
-            .unwrap_or((0, SearchIndexStamp::default())),
-        Err(_) => (0, SearchIndexStamp::default()),
-    };
-
-    for sheet_index in 0..count {
-        enqueue_index_job(IndexJob::Rebuild {
-            document_id,
-            sheet_index,
-            stamp,
-            registry: Arc::clone(registry),
-        });
-    }
-}
-
-pub fn spawn_update_cell_index(
-    document_id: u64,
-    sheet_index: usize,
-    row: usize,
-    col: usize,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
-) {
-    let (stamp, search_text, display_text) = match registry.read() {
-        Ok(guard) => {
-            let Some(editor) = guard.get(document_id) else {
-                return;
-            };
-            let Some(snapshot) = editor.search_cell_snapshot(sheet_index, row, col) else {
-                return;
-            };
-            (
-                editor.search_index_stamp(),
-                snapshot.search_text,
-                snapshot.text,
-            )
-        }
-        Err(_) => return,
-    };
-    enqueue_index_job(IndexJob::UpdateCell {
-        document_id,
-        sheet_index,
-        stamp,
-        row,
-        col,
-        search_text,
-        display_text,
-        registry: Arc::clone(registry),
-    });
+    SearchService::global().rebuild_all_sheets_index(registry, document_id);
 }
 
 pub fn schedule_index_for_response(
     response: &EditorMutationResponse,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
-    let document_id = response.document_id;
-    let mut needs_rebuild = false;
-    for patch in &response.patches {
-        match patch {
-            EditorPatch::Cells { changes } => {
-                for change in changes {
-                    spawn_update_cell_index(
-                        document_id,
-                        change.sheet_index,
-                        change.row,
-                        change.col,
-                        registry,
-                    );
-                }
-            }
-            EditorPatch::SheetUpdated { .. }
-            | EditorPatch::RowsInserted { .. }
-            | EditorPatch::RowsDeleted { .. }
-            | EditorPatch::ColumnsInserted { .. }
-            | EditorPatch::ColumnsDeleted { .. }
-            | EditorPatch::SheetShape { .. }
-            | EditorPatch::ResyncRequired { .. }
-            | EditorPatch::SheetInserted { .. }
-            | EditorPatch::SheetDeleted { .. } => needs_rebuild = true,
-            EditorPatch::Layout { .. } => {}
-        }
-    }
-
-    if needs_rebuild {
-        spawn_rebuild_all_sheets_index(registry, document_id);
-    }
+    SearchService::global().schedule_for_response(response, registry);
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use crate::io::layout_units::{
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
-    MergeRange, ReadOnlyRichProjection, SheetData,
+    FreezePaneProjection, HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
 };
 use csv::ReaderBuilder;
 use serde_json::Value;
@@ -202,9 +202,70 @@ fn read_rich_projection(worksheet: &Worksheet) -> ReadOnlyRichProjection {
     ReadOnlyRichProjection {
         cell_formats: read_cell_formats(worksheet),
         cell_styles: read_cell_styles(worksheet),
+        hidden_rows: read_hidden_rows(worksheet),
+        hidden_columns: read_hidden_columns(worksheet),
+        freeze_pane: read_freeze_pane(worksheet),
+        hyperlinks: read_hyperlinks(worksheet),
         drawings: read_drawings(worksheet),
         has_more_drawings: false,
     }
+}
+
+fn read_hidden_rows(worksheet: &Worksheet) -> Vec<usize> {
+    worksheet
+        .row_dimensions()
+        .into_iter()
+        .filter_map(|row| {
+            row.hidden()
+                .then_some(row.row_num().saturating_sub(1) as usize)
+        })
+        .collect()
+}
+
+fn read_hidden_columns(worksheet: &Worksheet) -> Vec<usize> {
+    worksheet
+        .column_dimensions()
+        .iter()
+        .filter_map(|column| {
+            column
+                .hidden()
+                .then_some(column.col_num().saturating_sub(1) as usize)
+        })
+        .collect()
+}
+
+fn read_freeze_pane(worksheet: &Worksheet) -> Option<FreezePaneProjection> {
+    worksheet
+        .sheets_views()
+        .sheet_view_list()
+        .iter()
+        .find_map(|sheet_view| sheet_view.pane())
+        .map(|pane| FreezePaneProjection {
+            top_left_cell: pane.top_left_cell().to_string(),
+            horizontal_split: pane.horizontal_split(),
+            vertical_split: pane.vertical_split(),
+            active_pane: format!("{:?}", pane.active_pane()),
+            state: format!("{:?}", pane.state()),
+        })
+}
+
+fn read_hyperlinks(worksheet: &Worksheet) -> HashMap<String, HyperlinkProjection> {
+    worksheet
+        .cells()
+        .into_iter()
+        .filter_map(|cell| {
+            let hyperlink = cell.hyperlink()?;
+            Some((
+                cell.coordinate().to_string(),
+                HyperlinkProjection {
+                    url: hyperlink.url().to_string(),
+                    tooltip: (!hyperlink.tooltip().is_empty())
+                        .then(|| hyperlink.tooltip().to_string()),
+                    location: hyperlink.location(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn read_cell_formats(worksheet: &Worksheet) -> HashMap<String, CellFormatProjection> {
@@ -424,6 +485,54 @@ mod tests {
         assert_eq!(
             data.rich.cell_styles.get("A1").and_then(|style| style.bold),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn rich_projection_includes_hidden_layout_freeze_pane_and_hyperlinks() {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.sheet_mut(0).expect("sheet");
+        sheet.row_dimension_mut(2).set_hidden(true);
+        sheet.column_dimension_mut("B").set_hidden(true);
+        sheet
+            .cell_mut("C3")
+            .hyperlink_mut()
+            .set_url("https://example.com")
+            .set_tooltip("Example");
+
+        let mut pane = umya_spreadsheet::Pane::default();
+        pane.set_horizontal_split(2.0)
+            .set_vertical_split(3.0)
+            .set_active_pane(umya_spreadsheet::PaneValues::BottomRight)
+            .set_state(umya_spreadsheet::PaneStateValues::Frozen);
+        pane.top_left_cell_mut().set_coordinate("C4");
+        sheet
+            .sheet_views_mut()
+            .sheet_view_list_mut()
+            .first_mut()
+            .expect("sheet view")
+            .set_pane(pane);
+
+        let data = read_worksheet(sheet);
+
+        assert_eq!(data.rich.hidden_rows, vec![1]);
+        assert_eq!(data.rich.hidden_columns, vec![1]);
+        assert_eq!(
+            data.rich.hyperlinks.get("C3").map(|hyperlink| (
+                hyperlink.url.as_str(),
+                hyperlink.tooltip.as_deref(),
+                hyperlink.location
+            )),
+            Some(("https://example.com", Some("Example"), false))
+        );
+        assert_eq!(
+            data.rich.freeze_pane.as_ref().map(|pane| (
+                pane.top_left_cell.as_str(),
+                pane.horizontal_split,
+                pane.vertical_split,
+                pane.state.as_str()
+            )),
+            Some(("C4", 2.0, 3.0, "Frozen"))
         );
     }
 

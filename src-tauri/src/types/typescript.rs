@@ -8,10 +8,11 @@ use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, ColumnsDeletedPatch, ColumnsInsertedPatch, DocumentCapabilities, DrawingKind,
     DrawingProjection, EditorMutationResponse, EditorPatch, FileData, FormulaDiagnostics,
-    FormulaStatus, LayoutPatch, MergeRange, OpenDocumentResponse, ReadOnlyRichProjection,
-    ResyncRequiredPatch, RowsDeletedPatch, RowsInsertedPatch, ScalarCellValue, SearchResult,
-    SearchScope, SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
-    SheetUpdatedPatch, WorkbookCapabilities,
+    FormulaStatus, FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange,
+    OpenDocumentResponse, ReadOnlyRichProjection, ResyncRequiredPatch, RowsDeletedPatch,
+    RowsInsertedPatch, ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetData,
+    SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch, SheetUpdatedPatch,
+    WorkbookCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -29,8 +30,10 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<MergeRange>(&mut output, &cfg);
     push_decl::<SheetData>(&mut output, &cfg);
     push_decl::<FileData>(&mut output, &cfg);
-    push_decl::<ReadOnlyRichProjection>(&mut output, &cfg);
     push_decl::<CellStyleProjection>(&mut output, &cfg);
+    push_decl::<FreezePaneProjection>(&mut output, &cfg);
+    push_decl::<HyperlinkProjection>(&mut output, &cfg);
+    push_decl::<ReadOnlyRichProjection>(&mut output, &cfg);
     push_decl::<DrawingProjection>(&mut output, &cfg);
     push_decl::<DrawingKind>(&mut output, &cfg);
     push_decl::<WorkbookCapabilities>(&mut output, &cfg);

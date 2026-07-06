@@ -56,14 +56,14 @@ impl EditorCommand {
                 row_index,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                if row_index > sheet.rows.len() {
+                let extent = SheetMutationExtent::from_sheet(sheet);
+                if row_index > extent.rows {
                     return Err(AppError::RowNotFound(row_index));
                 }
-                let col_count = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
                 Ok(AppliedOperation::AddRow {
                     sheet_index,
                     row_index,
-                    row_data: vec![CellValue::Null; col_count],
+                    row_data: vec![CellValue::Null; extent.columns],
                     row_height: None,
                 })
             }
@@ -72,7 +72,8 @@ impl EditorCommand {
                 row_index,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                if row_index >= sheet_row_extent(sheet) {
+                let extent = SheetMutationExtent::from_sheet(sheet);
+                if row_index >= extent.rows {
                     return Err(AppError::RowNotFound(row_index));
                 }
                 Ok(AppliedOperation::DeleteRow {
@@ -85,7 +86,8 @@ impl EditorCommand {
                 col_index,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                if col_index > sheet_column_extent(sheet) {
+                let extent = SheetMutationExtent::from_sheet(sheet);
+                if col_index > extent.columns {
                     return Err(AppError::InvalidCellPosition {
                         row: 0,
                         col: col_index,
@@ -94,7 +96,7 @@ impl EditorCommand {
                 Ok(AppliedOperation::AddColumn {
                     sheet_index,
                     col_index,
-                    col_data: vec![CellValue::Null; sheet.rows.len()],
+                    col_data: vec![CellValue::Null; extent.rows],
                     column_width: None,
                 })
             }
@@ -103,8 +105,8 @@ impl EditorCommand {
                 col_index,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                let total_cols = sheet_column_extent(sheet);
-                if col_index >= total_cols {
+                let extent = SheetMutationExtent::from_sheet(sheet);
+                if col_index >= extent.columns {
                     return Err(AppError::InvalidCellPosition {
                         row: 0,
                         col: col_index,
@@ -121,7 +123,8 @@ impl EditorCommand {
                 width,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                if col_index >= resizable_column_extent(sheet) {
+                let extent = SheetMutationExtent::from_sheet(sheet);
+                if col_index >= extent.resizable_columns() {
                     return Err(AppError::InvalidCellPosition {
                         row: 0,
                         col: col_index,
@@ -144,7 +147,8 @@ impl EditorCommand {
                 height,
             } => {
                 let sheet = require_sheet(file_data, sheet_index)?;
-                if row_index >= resizable_row_extent(sheet) {
+                let extent = SheetMutationExtent::from_sheet(sheet);
+                if row_index >= extent.resizable_rows() {
                     return Err(AppError::RowNotFound(row_index));
                 }
                 let old_height = sheet
@@ -186,44 +190,51 @@ fn require_sheet(file_data: &FileData, sheet_index: usize) -> Result<&SheetData,
         .ok_or(AppError::InvalidSheetIndex(sheet_index))
 }
 
-fn sheet_row_extent(sheet: &SheetData) -> usize {
-    let row_count = sheet.rows.len();
-    let merge_extent = sheet
-        .merges
-        .iter()
-        .map(|merge| merge.end_row as usize + 1)
-        .max()
-        .unwrap_or(0);
-    let layout_extent = sheet
-        .row_heights
-        .as_ref()
-        .and_then(|heights| heights.keys().max().map(|index| index + 1))
-        .unwrap_or(0);
-    row_count.max(merge_extent).max(layout_extent)
+struct SheetMutationExtent {
+    rows: usize,
+    columns: usize,
 }
 
-fn sheet_column_extent(sheet: &SheetData) -> usize {
-    let row_extent = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
-    let merge_extent = sheet
-        .merges
-        .iter()
-        .map(|merge| merge.end_col as usize + 1)
-        .max()
-        .unwrap_or(0);
-    let layout_extent = sheet
-        .column_widths
-        .as_ref()
-        .and_then(|widths| widths.keys().max().map(|index| index + 1))
-        .unwrap_or(0);
-    row_extent.max(merge_extent).max(layout_extent)
-}
+impl SheetMutationExtent {
+    fn from_sheet(sheet: &SheetData) -> Self {
+        let value_rows = sheet.rows.len();
+        let value_columns = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+        let merge_rows = sheet
+            .merges
+            .iter()
+            .map(|merge| merge.end_row as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let merge_columns = sheet
+            .merges
+            .iter()
+            .map(|merge| merge.end_col as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let layout_rows = sheet
+            .row_heights
+            .as_ref()
+            .and_then(|heights| heights.keys().max().map(|index| index + 1))
+            .unwrap_or(0);
+        let layout_columns = sheet
+            .column_widths
+            .as_ref()
+            .and_then(|widths| widths.keys().max().map(|index| index + 1))
+            .unwrap_or(0);
 
-fn resizable_row_extent(sheet: &SheetData) -> usize {
-    sheet_row_extent(sheet).max(1)
-}
+        Self {
+            rows: value_rows.max(merge_rows).max(layout_rows),
+            columns: value_columns.max(merge_columns).max(layout_columns),
+        }
+    }
 
-fn resizable_column_extent(sheet: &SheetData) -> usize {
-    sheet_column_extent(sheet).max(1)
+    fn resizable_rows(&self) -> usize {
+        self.rows.max(1)
+    }
+
+    fn resizable_columns(&self) -> usize {
+        self.columns.max(1)
+    }
 }
 
 fn empty_sheet(name: String) -> SheetData {

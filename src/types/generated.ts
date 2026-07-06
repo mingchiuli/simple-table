@@ -35,9 +35,13 @@ rich: ReadOnlyRichProjection, };
 
 export type FileData = { path: string, fileName: string, sheets: Array<SheetData>, };
 
-export type ReadOnlyRichProjection = { cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, drawings?: Array<DrawingProjection>, hasMoreDrawings: boolean, };
-
 export type CellStyleProjection = { fontColor?: string | null, backgroundColor?: string | null, bold?: boolean | null, italic?: boolean | null, horizontalAlign?: string | null, verticalAlign?: string | null, numberFormat?: string | null, };
+
+export type FreezePaneProjection = { topLeftCell: string, horizontalSplit: number, verticalSplit: number, activePane: string, state: string, };
+
+export type HyperlinkProjection = { url: string, tooltip?: string | null, location: boolean, };
+
+export type ReadOnlyRichProjection = { cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, hiddenRows?: Array<number>, hiddenColumns?: Array<number>, freezePane?: FreezePaneProjection | null, hyperlinks?: { [key in string]: HyperlinkProjection }, drawings?: Array<DrawingProjection>, hasMoreDrawings: boolean, };
 
 export type DrawingProjection = { kind: DrawingKind, fromRow: number, fromCol: number, toRow?: number | null, toCol?: number | null, };
 

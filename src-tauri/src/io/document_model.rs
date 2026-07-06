@@ -196,6 +196,8 @@ impl RichProjectionMemento {
             projection: filter_rich_projection(
                 source,
                 |row, _| row >= row_index,
+                |row| row >= row_index,
+                |_| false,
                 |drawing| drawing_row_scope_affected(drawing, row_index),
             ),
         }
@@ -207,6 +209,8 @@ impl RichProjectionMemento {
             projection: filter_rich_projection(
                 source,
                 |_, col| col >= col_index,
+                |_| false,
+                |col| col >= col_index,
                 |drawing| drawing_column_scope_affected(drawing, col_index),
             ),
         }
@@ -224,6 +228,10 @@ impl RichProjectionMemento {
                 target
                     .drawings
                     .retain(|drawing| !drawing_row_scope_affected(drawing, start));
+                target.hidden_rows.retain(|row| *row < start);
+                target
+                    .hyperlinks
+                    .retain(|key, _| !cell_key_matches(key, |row, _| row >= start));
             }
             RichProjectionScope::Columns { start } => {
                 target
@@ -235,6 +243,10 @@ impl RichProjectionMemento {
                 target
                     .drawings
                     .retain(|drawing| !drawing_column_scope_affected(drawing, start));
+                target.hidden_columns.retain(|col| *col < start);
+                target
+                    .hyperlinks
+                    .retain(|key, _| !cell_key_matches(key, |_, col| col >= start));
             }
         }
 
@@ -244,6 +256,18 @@ impl RichProjectionMemento {
         target
             .cell_styles
             .extend(self.projection.cell_styles.clone());
+        target
+            .hidden_rows
+            .extend(self.projection.hidden_rows.iter().copied());
+        target.hidden_rows.sort_unstable();
+        target.hidden_rows.dedup();
+        target
+            .hidden_columns
+            .extend(self.projection.hidden_columns.iter().copied());
+        target.hidden_columns.sort_unstable();
+        target.hidden_columns.dedup();
+        target.freeze_pane = self.projection.freeze_pane.clone();
+        target.hyperlinks.extend(self.projection.hyperlinks.clone());
         target.drawings.extend(self.projection.drawings.clone());
         target.has_more_drawings = self.projection.has_more_drawings;
     }
@@ -1014,11 +1038,27 @@ fn restore_projection_sheet_tail(file_data: &mut FileData, memento: &SheetTailMe
 fn filter_rich_projection(
     source: &ReadOnlyRichProjection,
     cell_matches: impl Fn(usize, usize) -> bool,
+    row_matches: impl Fn(usize) -> bool,
+    column_matches: impl Fn(usize) -> bool,
     drawing_matches: impl Fn(&DrawingProjection) -> bool,
 ) -> ReadOnlyRichProjection {
     ReadOnlyRichProjection {
         cell_formats: filter_cell_projection_map(&source.cell_formats, &cell_matches),
         cell_styles: filter_cell_projection_map(&source.cell_styles, &cell_matches),
+        hidden_rows: source
+            .hidden_rows
+            .iter()
+            .copied()
+            .filter(|row| row_matches(*row))
+            .collect(),
+        hidden_columns: source
+            .hidden_columns
+            .iter()
+            .copied()
+            .filter(|column| column_matches(*column))
+            .collect(),
+        freeze_pane: source.freeze_pane.clone(),
+        hyperlinks: filter_cell_projection_map(&source.hyperlinks, &cell_matches),
         drawings: source
             .drawings
             .iter()
@@ -1164,6 +1204,18 @@ fn estimate_sheet_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize 
             .iter()
             .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
             .sum::<usize>()
+        + rich.hidden_rows.len() * std::mem::size_of::<usize>()
+        + rich.hidden_columns.len() * std::mem::size_of::<usize>()
+        + rich
+            .freeze_pane
+            .as_ref()
+            .map(estimate_freeze_pane_projection_bytes)
+            .unwrap_or_default()
+        + rich
+            .hyperlinks
+            .iter()
+            .map(|(cell, hyperlink)| cell.len() + estimate_hyperlink_projection_bytes(hyperlink))
+            .sum::<usize>()
         + rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
 }
 
@@ -1208,6 +1260,25 @@ fn estimate_cell_style_projection_bytes(style: &crate::types::CellStyleProjectio
             .map(String::len)
             .unwrap_or_default()
         + std::mem::size_of::<crate::types::CellStyleProjection>()
+}
+
+fn estimate_freeze_pane_projection_bytes(
+    freeze_pane: &crate::types::FreezePaneProjection,
+) -> usize {
+    std::mem::size_of::<crate::types::FreezePaneProjection>()
+        + freeze_pane.top_left_cell.len()
+        + freeze_pane.active_pane.len()
+        + freeze_pane.state.len()
+}
+
+fn estimate_hyperlink_projection_bytes(hyperlink: &crate::types::HyperlinkProjection) -> usize {
+    std::mem::size_of::<crate::types::HyperlinkProjection>()
+        + hyperlink.url.len()
+        + hyperlink
+            .tooltip
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
 }
 
 fn estimate_cell_value_bytes(cell: &CellValue) -> usize {
