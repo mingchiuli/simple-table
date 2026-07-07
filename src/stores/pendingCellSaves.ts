@@ -24,6 +24,17 @@ export type QueueDraftResult = {
   shouldClearPendingIfIdle: boolean;
 };
 
+export type PendingCellSaveCallbacks = {
+  commitBatch: (changes: CellSaveRequest[]) => Promise<void>;
+  clearPendingContentChange: () => void;
+  onBatchCommitted?: () => void;
+  onCommitFailed?: (error: unknown) => Promise<void> | void;
+};
+
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSavePromise: Promise<boolean> | null = null;
+let schedulerGeneration = 0;
+
 export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   state: () => ({
     draftCellValues: new Map<string, string>(),
@@ -37,6 +48,9 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     hasActiveSaves: (state) => state.activeCellSaves.size > 0,
   },
   actions: {
+    hasPendingWork() {
+      return !this.isIdle() || pendingSavePromise !== null || debounceTimer !== null;
+    },
     stateFor(key: string): CellSaveState {
       return {
         key,
@@ -146,7 +160,123 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     isIdle() {
       return this.queuedCellSaves.size === 0 && this.activeCellSaves.size === 0;
     },
+    schedulePendingSave(callbacks: PendingCellSaveCallbacks, debounceMs: number) {
+      clearSchedulerTimer();
+      this.setPhase("debouncing");
+      const generation = schedulerGeneration;
+      debounceTimer = setTimeout(() => {
+        if (generation !== schedulerGeneration) return;
+        debounceTimer = null;
+        this.startPendingSave(callbacks);
+      }, debounceMs);
+    },
+    startPendingSave(callbacks: PendingCellSaveCallbacks) {
+      if (pendingSavePromise) {
+        return;
+      }
+
+      this.setPhase("saving");
+      const generation = schedulerGeneration;
+      pendingSavePromise = this.saveQueuedBatch(callbacks, generation).finally(() => {
+        if (generation !== schedulerGeneration) return;
+        pendingSavePromise = null;
+        if (this.hasQueuedSaves && !debounceTimer) {
+          this.startPendingSave(callbacks);
+          return;
+        }
+        if (this.isIdle()) {
+          this.setPhase("idle");
+          callbacks.clearPendingContentChange();
+        }
+      });
+    },
+    async saveQueuedBatch(
+      callbacks: PendingCellSaveCallbacks,
+      generation: number
+    ): Promise<boolean> {
+      if (!this.hasQueuedSaves) {
+        callbacks.clearPendingContentChange();
+        return true;
+      }
+
+      const changes = this.takeQueuedBatch();
+
+      try {
+        await callbacks.commitBatch(changes);
+        if (generation !== schedulerGeneration) return false;
+        this.completeBatch(changes);
+        callbacks.onBatchCommitted?.();
+      } catch (error) {
+        if (generation !== schedulerGeneration) return false;
+        await callbacks.onCommitFailed?.(error);
+        this.failBatch(changes);
+        this.setPhase("failed", String(error));
+        if (this.isIdle()) {
+          callbacks.clearPendingContentChange();
+        }
+        return false;
+      }
+
+      if (this.isIdle()) {
+        this.setPhase("idle");
+        callbacks.clearPendingContentChange();
+      }
+      return true;
+    },
+    clearDebounceIfNoQueuedSaves() {
+      if (this.hasQueuedSaves || !debounceTimer) {
+        return;
+      }
+      clearSchedulerTimer();
+      if (!this.hasActiveSaves) {
+        this.setPhase("idle");
+      }
+    },
+    clearPendingContentChangeIfIdle(clearPendingContentChange: () => void) {
+      if (!this.hasPendingWork()) {
+        this.setPhase("idle");
+        clearPendingContentChange();
+      }
+    },
+    async flushPendingCellChanges(callbacks: PendingCellSaveCallbacks): Promise<boolean> {
+      if (debounceTimer) {
+        clearSchedulerTimer();
+        if (this.hasQueuedSaves) {
+          this.setPhase("saving");
+        }
+      }
+
+      while (true) {
+        if (pendingSavePromise) {
+          const saved = await pendingSavePromise;
+          if (!saved) return false;
+        } else if (this.hasQueuedSaves) {
+          this.startPendingSave(callbacks);
+          if (!pendingSavePromise) return false;
+          const saved = await pendingSavePromise;
+          if (!saved) return false;
+        }
+
+        if (debounceTimer) {
+          clearSchedulerTimer();
+        }
+        if (this.hasQueuedSaves) {
+          continue;
+        }
+        if (!pendingSavePromise) {
+          return true;
+        }
+      }
+    },
+    releaseSchedulerIfIdle() {
+      if (this.hasPendingWork()) {
+        return;
+      }
+      clearSchedulerTimer();
+      this.setPhase("idle");
+    },
     reset() {
+      resetScheduler();
       this.draftCellValues.clear();
       this.queuedCellSaves.clear();
       this.activeCellSaves.clear();
@@ -158,4 +288,17 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
 
 function cellKey(request: Pick<CellSaveRequest, "sheetIndex" | "row" | "col">): string {
   return `${request.sheetIndex},${request.row},${request.col}`;
+}
+
+function clearSchedulerTimer() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+}
+
+function resetScheduler() {
+  schedulerGeneration += 1;
+  clearSchedulerTimer();
+  pendingSavePromise = null;
 }

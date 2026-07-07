@@ -4,6 +4,7 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
+import type { EditorCommandContext } from "@/api";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
 import { enqueueEditorMutation, waitForEditorMutations } from "@/composables/useEditorMutationQueue";
 import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
@@ -39,14 +40,15 @@ export function useEditorCommands({
   const searchSessionStore = useSearchSessionStore();
 
   async function runEditorCommand(
-    action: () => Promise<EditorMutationResponse>,
+    action: (context: EditorCommandContext) => Promise<EditorMutationResponse>,
     message: string
   ) {
+    if (documentSessionStore.isInteractionLocked) return;
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
-        await applyMutationResponse(await action());
+        await applyMutationResponse(await action(editorCommandContext()));
       });
     } catch (error) {
       await refreshAfterMutationError();
@@ -56,36 +58,50 @@ export function useEditorCommands({
     }
   }
 
+  function editorCommandContext(): EditorCommandContext {
+    if (documentSessionStore.documentId === null) {
+      throw new Error("No active editor document");
+    }
+    return {
+      documentId: documentSessionStore.documentId,
+      baseRevision: documentSessionStore.revision,
+    };
+  }
+
   async function handleAddRow() {
     if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
+    const sheetIndex = currentSheetIndex.value;
     const rowIndex = sheetExtent(currentSheet.value).rowCount;
     await runEditorCommand(
-      () => api.addRow(currentSheetIndex.value, rowIndex),
+      (context) => api.addRow(context, sheetIndex, rowIndex),
       "Failed to add row"
     );
   }
 
   async function handleDeleteRow(index: number) {
     if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
+    const sheetIndex = currentSheetIndex.value;
     await runEditorCommand(
-      () => api.deleteRow(currentSheetIndex.value, index),
+      (context) => api.deleteRow(context, sheetIndex, index),
       "Failed to delete row"
     );
   }
 
   async function handleAddColumn() {
     if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
+    const sheetIndex = currentSheetIndex.value;
     const colIndex = selectedCell.value?.col ?? sheetExtent(currentSheet.value).columnCount;
     await runEditorCommand(
-      () => api.addColumn(currentSheetIndex.value, colIndex),
+      (context) => api.addColumn(context, sheetIndex, colIndex),
       "Failed to add column"
     );
   }
 
   async function handleDeleteColumn(index: number) {
     if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
+    const sheetIndex = currentSheetIndex.value;
     await runEditorCommand(
-      () => api.deleteColumn(currentSheetIndex.value, index),
+      (context) => api.deleteColumn(context, sheetIndex, index),
       "Failed to delete column"
     );
   }
@@ -93,8 +109,8 @@ export function useEditorCommands({
   async function handleAddSheet() {
     if (!fileData.value || !ensureStructureEditingAllowed("sheets")) return;
     const newSheetIndex = fileData.value.sheets.length;
-    await runEditorCommand(async () => {
-      const response = await api.addSheet();
+    await runEditorCommand(async (context) => {
+      const response = await api.addSheet(context);
       editorSelectionStore.clearSelection();
       currentSheetIndex.value = newSheetIndex;
       return response;
@@ -110,8 +126,8 @@ export function useEditorCommands({
 
     const deletedIndex = currentSheetIndex.value;
     const nextSheetIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
-    await runEditorCommand(async () => {
-      const response = await api.deleteSheet(deletedIndex);
+    await runEditorCommand(async (context) => {
+      const response = await api.deleteSheet(context, deletedIndex);
       currentSheetIndex.value = nextSheetIndex;
       return response;
     }, "Failed to delete sheet");
@@ -127,16 +143,16 @@ export function useEditorCommands({
 
   async function handleUndo() {
     if (!documentStatusStore.canUndo) return;
-    await runEditorCommand(() => api.undo(), "Failed to undo");
+    await runEditorCommand((context) => api.undo(context), "Failed to undo");
   }
 
   async function handleRedo() {
     if (!documentStatusStore.canRedo) return;
-    await runEditorCommand(() => api.redo(), "Failed to redo");
+    await runEditorCommand((context) => api.redo(context), "Failed to redo");
   }
 
   async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
-    if (!fileData.value) return;
+    if (!fileData.value || documentSessionStore.isInteractionLocked) return;
 
     searchSessionStore.searchQuery = query;
     try {
@@ -173,13 +189,15 @@ export function useEditorCommands({
   }
 
   async function handleColumnResize(colIndex: number, width: number) {
-    if (!fileData.value || !ensureResizeAllowed()) return;
+    if (!fileData.value || documentSessionStore.isInteractionLocked || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
-        await applyMutationResponse(await api.setColumnWidth(sheetIndex, colIndex, width));
+        await applyMutationResponse(
+          await api.setColumnWidth(editorCommandContext(), sheetIndex, colIndex, width)
+        );
       });
     } catch (error) {
       await refreshAfterMutationError({ refreshProjection: true });
@@ -190,13 +208,15 @@ export function useEditorCommands({
   }
 
   async function handleRowResize(rowIndex: number, height: number) {
-    if (!fileData.value || !ensureResizeAllowed()) return;
+    if (!fileData.value || documentSessionStore.isInteractionLocked || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
-        await applyMutationResponse(await api.setRowHeight(sheetIndex, rowIndex, height));
+        await applyMutationResponse(
+          await api.setRowHeight(editorCommandContext(), sheetIndex, rowIndex, height)
+        );
       });
     } catch (error) {
       await refreshAfterMutationError({ refreshProjection: true });

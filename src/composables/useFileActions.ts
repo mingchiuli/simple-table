@@ -42,6 +42,7 @@ export function useFileActions({
 
   async function loadFileFromPath(filePath: string) {
     try {
+      documentSessionStore.beginLifecycle('loading');
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -60,11 +61,13 @@ export function useFileActions({
     } finally {
       isLoading.value = false;
       isFileLoading.value = false;
+      documentSessionStore.endLifecycle('loading');
     }
   }
 
   async function handleOpenFile() {
     try {
+      documentSessionStore.beginLifecycle('loading');
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -90,6 +93,7 @@ export function useFileActions({
     } finally {
       isLoading.value = false;
       isFileLoading.value = false;
+      documentSessionStore.endLifecycle('loading');
     }
   }
 
@@ -97,6 +101,7 @@ export function useFileActions({
     if (!fileData.value) return;
 
     try {
+      documentSessionStore.beginLifecycle('saving');
       if (!(await flushPendingCellChanges())) return;
       await waitForEditorMutations(documentSessionStore.mutationScope);
 
@@ -148,6 +153,7 @@ export function useFileActions({
       ElMessage.error(`Failed to save file: ${error}`);
     } finally {
       isLoading.value = false;
+      documentSessionStore.endLifecycle('saving');
     }
   }
 
@@ -187,6 +193,7 @@ export function useFileActions({
     if (!fileData.value) return;
 
     try {
+      documentSessionStore.beginLifecycle('saving');
       isLoading.value = true;
       const isNewFile = fileData.value.fileName.startsWith('untitled');
       const defaultName = isNewFile
@@ -223,6 +230,7 @@ export function useFileActions({
       ElMessage.error(`Failed to export file: ${error}`);
     } finally {
       isLoading.value = false;
+      documentSessionStore.endLifecycle('saving');
     }
   }
 

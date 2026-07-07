@@ -55,9 +55,9 @@ pub struct SpreadsheetDocument {
 
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
-        let formulas = FormulaCoordinator::new(&mut projection);
+        let mut formulas = FormulaCoordinator::new(&mut projection);
         let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
-        let cached_capabilities = body.capabilities();
+        let cached_capabilities = body.capabilities(formulas.ast_service_mut());
 
         Self {
             projection,
@@ -70,6 +70,10 @@ impl SpreadsheetDocument {
 
     pub fn projection(&self) -> &FileData {
         &self.projection
+    }
+
+    pub(crate) fn sheet_count(&self) -> usize {
+        self.projection.sheets.len()
     }
 
     pub fn update_identity(&mut self, path: String, file_name: String) {
@@ -164,7 +168,7 @@ impl SpreadsheetDocument {
         DocumentMemento::new(before, after)
     }
 
-    pub fn capture_memento_side(&self, operation: &AppliedOperation) -> DocumentMementoSide {
+    pub fn capture_memento_side(&mut self, operation: &AppliedOperation) -> DocumentMementoSide {
         match operation {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -349,8 +353,10 @@ impl SpreadsheetDocument {
         LayoutMemento::new(sheet_index, column_widths, row_heights)
     }
 
-    fn structure_memento(&self, operation: &AppliedOperation) -> StructureMemento {
-        let body = self.body.capture_structure_memento(operation);
+    fn structure_memento(&mut self, operation: &AppliedOperation) -> StructureMemento {
+        let body = self
+            .body
+            .capture_structure_memento(operation, self.formulas.ast_service_mut());
         let projection = self.projection_structure_memento(operation);
 
         StructureMemento::new(projection, body)
@@ -615,10 +621,12 @@ impl SpreadsheetDocument {
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
-        if let Some(result) = self
-            .body
-            .apply_structure_operation(&mut self.projection, operation)?
-        {
+        if let Some(result) = self.body.apply_structure_operation(
+            &mut self.projection,
+            operation,
+            &self.cached_capabilities,
+            self.formulas.ast_service_mut(),
+        )? {
             self.formulas
                 .set_pending_structure_diagnostics(result.diagnostics);
             self.refresh_capabilities();
@@ -675,7 +683,7 @@ impl SpreadsheetDocument {
     }
 
     fn refresh_capabilities(&mut self) {
-        self.cached_capabilities = self.body.capabilities();
+        self.cached_capabilities = self.body.capabilities(self.formulas.ast_service_mut());
     }
 
     pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {

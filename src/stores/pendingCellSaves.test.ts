@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import type { CellValue } from "@/types";
@@ -10,6 +10,10 @@ function text(value: string): CellValue {
 describe("pendingCellSaves store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("queues a revert when the user changes back while a save is active", () => {
@@ -48,5 +52,72 @@ describe("pendingCellSaves store", () => {
     expect(result.shouldClearPendingIfIdle).toBe(true);
     expect(store.queuedCellSaves.has("0,0,0")).toBe(false);
     expect(store.draftCellValues.has("0,0,0")).toBe(false);
+  });
+
+  it("owns the debounce scheduler at store scope", async () => {
+    vi.useFakeTimers();
+    const store = usePendingCellSavesStore();
+    const committed: string[] = [];
+    let cleared = 0;
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    store.schedulePendingSave(
+      {
+        commitBatch: async (changes) => {
+          committed.push(changes[0].value);
+        },
+        clearPendingContentChange: () => {
+          cleared += 1;
+        },
+      },
+      100
+    );
+
+    expect(store.phase).toBe("debouncing");
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual(["draft"]);
+    expect(store.phase).toBe("idle");
+    expect(store.isIdle()).toBe(true);
+    expect(cleared).toBeGreaterThan(0);
+  });
+
+  it("flushes through the store scheduler and waits for active saves", async () => {
+    const store = usePendingCellSavesStore();
+    let releaseSave!: () => void;
+    const activeSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let started = false;
+
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const flush = store.flushPendingCellChanges({
+      commitBatch: async () => {
+        started = true;
+        await activeSave;
+      },
+      clearPendingContentChange: () => undefined,
+    });
+
+    await Promise.resolve();
+    expect(started).toBe(true);
+    expect(store.hasActiveSaves).toBe(true);
+
+    releaseSave();
+    await expect(flush).resolves.toBe(true);
+    expect(store.isIdle()).toBe(true);
   });
 });

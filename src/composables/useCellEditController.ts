@@ -6,6 +6,7 @@ import { enqueueEditorMutation } from '@/composables/useEditorMutationQueue';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { CellSaveRequest } from '@/stores/pendingCellSaves';
 import type { ComputedRef, Ref } from 'vue';
+import type { EditorCommandContext } from '@/api';
 import type { EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
@@ -88,9 +89,19 @@ export function useCellEditController({
     });
 
     await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
-      const response = await api.setCells(payload);
+      const response = await api.setCells(editorCommandContext(), payload);
       await applyMutationResponse(response);
     });
+  }
+
+  function editorCommandContext(): EditorCommandContext {
+    if (documentSessionStore.documentId === null) {
+      throw new Error('No active editor document');
+    }
+    return {
+      documentId: documentSessionStore.documentId,
+      baseRevision: documentSessionStore.revision,
+    };
   }
 
   async function handleCommitFailed(error: unknown) {

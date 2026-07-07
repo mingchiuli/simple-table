@@ -80,9 +80,15 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn capture_structure_memento(&self, operation: &AppliedOperation) -> BodyStructureMemento {
+    pub fn capture_structure_memento(
+        &self,
+        operation: &AppliedOperation,
+        ast_service: &mut FormulaAstService,
+    ) -> BodyStructureMemento {
         match self {
-            Self::Excel(body) => capture_excel_structure_memento(excel_workbook(body), operation),
+            Self::Excel(body) => {
+                capture_excel_structure_memento(excel_workbook(body), operation, ast_service)
+            }
             Self::Csv | Self::GeneratedWorkbook => BodyStructureMemento::ProjectionOnly,
         }
     }
@@ -116,9 +122,11 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn capabilities(&self) -> WorkbookCapabilities {
+    pub fn capabilities(&self, ast_service: &mut FormulaAstService) -> WorkbookCapabilities {
         match self {
-            Self::Excel(body) => workbook_state::workbook_capabilities(excel_workbook(body)),
+            Self::Excel(body) => {
+                workbook_state::workbook_capabilities(excel_workbook(body), ast_service)
+            }
             Self::Csv => csv_workbook_capabilities(),
             Self::GeneratedWorkbook => WorkbookCapabilities::default(),
         }
@@ -193,6 +201,8 @@ impl SpreadsheetDocumentBody {
         &mut self,
         projection: &mut FileData,
         operation: &AppliedOperation,
+        capabilities: &WorkbookCapabilities,
+        ast_service: &mut FormulaAstService,
     ) -> Result<Option<BodyStructureOperationResult>, AppError> {
         if !operation.impact().is_structure_change() {
             return Ok(None);
@@ -200,8 +210,12 @@ impl SpreadsheetDocumentBody {
 
         match self {
             Self::Excel(body) => {
-                let diagnostics =
-                    workbook_state::apply_structure_operation(excel_workbook_mut(body), operation)?;
+                let diagnostics = workbook_state::apply_structure_operation(
+                    excel_workbook_mut(body),
+                    operation,
+                    capabilities,
+                    ast_service,
+                )?;
                 WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
                 WorkbookProjectionCodec::sync_merge_ranges(excel_workbook_mut(body), projection)?;
                 WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
@@ -368,6 +382,7 @@ pub enum BodyRestoreAction {
 fn capture_excel_structure_memento(
     workbook: &Workbook,
     operation: &AppliedOperation,
+    ast_service: &mut FormulaAstService,
 ) -> BodyStructureMemento {
     let sheet_count = workbook.sheet_count();
     let replace_tail_from = match operation {
@@ -386,7 +401,11 @@ fn capture_excel_structure_memento(
             }
         }
     }
-    sheet_indexes.extend(affected_formula_sheet_indexes(workbook, operation));
+    sheet_indexes.extend(affected_formula_sheet_indexes(
+        workbook,
+        operation,
+        ast_service,
+    ));
 
     let sheets: Vec<WorksheetSnapshot> = sheet_indexes
         .into_iter()
@@ -485,7 +504,11 @@ fn restore_excel_sheet_tail<'a>(
     Ok(())
 }
 
-fn affected_formula_sheet_indexes(workbook: &Workbook, operation: &AppliedOperation) -> Vec<usize> {
+fn affected_formula_sheet_indexes(
+    workbook: &Workbook,
+    operation: &AppliedOperation,
+    ast_service: &mut FormulaAstService,
+) -> Vec<usize> {
     let Some(target_sheet_index) = formula_reference_target_sheet(operation) else {
         return Vec::new();
     };
@@ -493,8 +516,6 @@ fn affected_formula_sheet_indexes(workbook: &Workbook, operation: &AppliedOperat
         return Vec::new();
     };
     let target_sheet_name = target_sheet.name().to_string();
-    let mut ast_service = FormulaAstService::new();
-
     workbook
         .sheet_collection()
         .iter()
@@ -509,7 +530,7 @@ fn affected_formula_sheet_indexes(workbook: &Workbook, operation: &AppliedOperat
                 .any(|cell| {
                     cell.is_formula()
                         && formula_references_sheet(
-                            &mut ast_service,
+                            ast_service,
                             cell.formula(),
                             &target_sheet_name,
                             worksheet.name(),

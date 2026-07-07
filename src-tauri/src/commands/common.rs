@@ -72,102 +72,173 @@ pub fn get_editor_state() -> Result<Option<EditorSessionInfo>, AppError> {
     editor_ops::do_get_editor_state(&registry)
 }
 
-#[tauri::command]
-pub fn undo() -> Result<EditorMutationResponse, AppError> {
+#[tauri::command(rename_all = "camelCase")]
+pub fn undo(document_id: u64, base_revision: u64) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    editor_ops::do_undo(&registry)
+    editor_ops::do_undo(&registry, document_id, base_revision)
 }
 
-#[tauri::command]
-pub fn redo() -> Result<EditorMutationResponse, AppError> {
+#[tauri::command(rename_all = "camelCase")]
+pub fn redo(document_id: u64, base_revision: u64) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    editor_ops::do_redo(&registry)
+    editor_ops::do_redo(&registry, document_id, base_revision)
 }
 
 // ==================== Cell Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_cell(
+    document_id: u64,
+    base_revision: u64,
     sheet_index: usize,
     row: usize,
     col: usize,
     text: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_cell(&registry, sheet_index, row, col, text)
+    cell_ops::do_set_cell(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        row,
+        col,
+        text,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn set_cells(changes: Vec<SetCellRequest>) -> Result<EditorMutationResponse, AppError> {
+pub fn set_cells(
+    document_id: u64,
+    base_revision: u64,
+    changes: Vec<SetCellRequest>,
+) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_cells(&registry, changes)
+    cell_ops::do_set_cells(&registry, document_id, base_revision, changes)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_row(sheet_index: usize, row_index: usize) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
-    cell_ops::do_add_row(&registry, sheet_index, row_index)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn delete_row(
+pub fn add_row(
+    document_id: u64,
+    base_revision: u64,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_row(&registry, sheet_index, row_index)
+    cell_ops::do_add_row(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        row_index,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn delete_row(
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+    row_index: usize,
+) -> Result<EditorMutationResponse, AppError> {
+    let registry = active_document_store();
+    cell_ops::do_delete_row(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        row_index,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_column(
+    document_id: u64,
+    base_revision: u64,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_column(&registry, sheet_index, col_index)
+    cell_ops::do_add_column(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        col_index,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_column(
+    document_id: u64,
+    base_revision: u64,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_column(&registry, sheet_index, col_index)
+    cell_ops::do_delete_column(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        col_index,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_column_width(
+    document_id: u64,
+    base_revision: u64,
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_column_width(&registry, sheet_index, col_index, width)
+    cell_ops::do_set_column_width(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        col_index,
+        width,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_row_height(
+    document_id: u64,
+    base_revision: u64,
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_row_height(&registry, sheet_index, row_index, height)
+    cell_ops::do_set_row_height(
+        &registry,
+        document_id,
+        base_revision,
+        sheet_index,
+        row_index,
+        height,
+    )
 }
 
 // ==================== Sheet Operations ====================
 
-#[tauri::command]
-pub fn add_sheet() -> Result<EditorMutationResponse, AppError> {
+#[tauri::command(rename_all = "camelCase")]
+pub fn add_sheet(document_id: u64, base_revision: u64) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_sheet(&registry)
+    cell_ops::do_add_sheet(&registry, document_id, base_revision)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn delete_sheet(sheet_index: usize) -> Result<EditorMutationResponse, AppError> {
+pub fn delete_sheet(
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_sheet(&registry, sheet_index)
+    cell_ops::do_delete_sheet(&registry, document_id, base_revision, sheet_index)
 }
 
 // ==================== Search Operations ====================

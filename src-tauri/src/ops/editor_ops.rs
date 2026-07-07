@@ -31,20 +31,18 @@ pub fn do_get_editor_state(
 /// 撤销操作
 pub fn do_undo(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+    base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        match registry_guard.active_mut() {
-            Some(editor_state) => {
-                if let Some(result) = editor_state.undo()? {
-                    restore_mutation_response(editor_state, result)
-                } else {
-                    return Err(AppError::NothingToUndo);
-                }
-            }
-            None => return Err(AppError::NoFileLoaded),
+        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        if let Some(result) = editor_state.undo()? {
+            restore_mutation_response(editor_state, result)
+        } else {
+            return Err(AppError::NothingToUndo);
         }
     };
 
@@ -56,20 +54,18 @@ pub fn do_undo(
 /// 重做操作
 pub fn do_redo(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+    base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        match registry_guard.active_mut() {
-            Some(editor_state) => {
-                if let Some(result) = editor_state.redo()? {
-                    restore_mutation_response(editor_state, result)
-                } else {
-                    return Err(AppError::NothingToRedo);
-                }
-            }
-            None => return Err(AppError::NoFileLoaded),
+        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        if let Some(result) = editor_state.redo()? {
+            restore_mutation_response(editor_state, result)
+        } else {
+            return Err(AppError::NothingToRedo);
         }
     };
 

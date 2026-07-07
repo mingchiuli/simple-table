@@ -71,6 +71,11 @@ const sheetNames = computed(() => {
   if (!fileData.value) return [];
   return fileData.value.sheets.map((s) => s.name);
 });
+const canInteractWithDocument = computed(() => !documentSessionStore.isInteractionLocked);
+const canEditCells = computed(() => capabilities.value.canEditCells && canInteractWithDocument.value);
+const canResizeRowsColumns = computed(
+  () => capabilities.value.canResizeRowsColumns && canInteractWithDocument.value
+);
 
 const {
   canUndo,
@@ -112,7 +117,7 @@ const {
   currentSheetIndex,
   selectedCell,
   cellEditorValue,
-  canEditCells: computed(() => capabilities.value.canEditCells),
+  canEditCells,
   applyMutationResponse,
   markPendingContentChange,
   clearPendingContentChange,
@@ -248,7 +253,7 @@ watch(() => route.query.file, () => {
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
             :cell-position="selectedCell"
-            :disabled="!capabilities.canEditCells"
+            :disabled="!canEditCells"
             @submit="handleCellEditorSubmit"
             @close="handleDeselectCell"
           />
@@ -262,8 +267,8 @@ watch(() => route.query.file, () => {
               :merges="currentSheet?.merges"
               :selected-cell="selectedCell"
               :auto-scroll="autoScroll"
-              :can-edit-cells="capabilities.canEditCells"
-              :can-resize-rows-columns="capabilities.canResizeRowsColumns"
+              :can-edit-cells="canEditCells"
+              :can-resize-rows-columns="canResizeRowsColumns"
               :column-widths="currentSheet?.columnWidths"
               :row-heights="currentSheet?.rowHeights"
               :layout-reset-key="layoutResetKey"

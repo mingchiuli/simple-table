@@ -82,19 +82,36 @@ impl<'a> DocumentTransaction<'a> {
     }
 
     fn validate_after_commit(&self, cell_changes: &[SheetCellChange]) -> Result<(), AppError> {
+        #[cfg(any(debug_assertions, test))]
         if self.operation.impact().is_structure_change() {
             self.document.validate_persisted_projection_consistency()?;
             return self.document.validate_projection_consistency();
         }
 
+        #[cfg(all(not(debug_assertions), not(test)))]
+        if self.operation.impact().is_structure_change() {
+            return self
+                .document
+                .validate_projection_sheets(touched_sheet_indexes(
+                    self.operation,
+                    cell_changes,
+                    self.document.sheet_count(),
+                ));
+        }
+
         self.document
-            .validate_projection_sheets(touched_sheet_indexes(self.operation, cell_changes))
+            .validate_projection_sheets(touched_sheet_indexes(
+                self.operation,
+                cell_changes,
+                self.document.sheet_count(),
+            ))
     }
 }
 
 fn touched_sheet_indexes(
     operation: &AppliedOperation,
     cell_changes: &[SheetCellChange],
+    sheet_count: usize,
 ) -> Vec<usize> {
     let mut sheets = BTreeSet::new();
     match operation {
@@ -112,13 +129,38 @@ fn touched_sheet_indexes(
         | AppliedOperation::DeleteRow { sheet_index, .. }
         | AppliedOperation::AddColumn { sheet_index, .. }
         | AppliedOperation::DeleteColumn { sheet_index, .. }
-        | AppliedOperation::AddSheet { sheet_index, .. }
-        | AppliedOperation::DeleteSheet { sheet_index } => {
+        | AppliedOperation::AddSheet { sheet_index, .. } => {
             sheets.insert(*sheet_index);
+        }
+        AppliedOperation::DeleteSheet { sheet_index } => {
+            for shifted_sheet_index in (*sheet_index).min(sheet_count)..sheet_count {
+                sheets.insert(shifted_sheet_index);
+            }
         }
     }
     for change in cell_changes {
         sheets.insert(change.sheet_index);
     }
     sheets.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_sheet_validation_targets_shifted_remaining_sheets() {
+        let indexes =
+            touched_sheet_indexes(&AppliedOperation::DeleteSheet { sheet_index: 1 }, &[], 3);
+
+        assert_eq!(indexes, vec![1, 2]);
+    }
+
+    #[test]
+    fn delete_last_sheet_validation_does_not_target_removed_index() {
+        let indexes =
+            touched_sheet_indexes(&AppliedOperation::DeleteSheet { sheet_index: 1 }, &[], 1);
+
+        assert!(indexes.is_empty());
+    }
 }

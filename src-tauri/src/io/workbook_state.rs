@@ -92,8 +92,10 @@ pub fn patch_after_operation(
 pub fn apply_structure_operation(
     workbook: &mut Workbook,
     operation: &AppliedOperation,
+    capabilities: &WorkbookCapabilities,
+    ast_service: &mut FormulaAstService,
 ) -> Result<StructurePatchDiagnostics, AppError> {
-    let unsupported = unsupported_structure_features(workbook, operation);
+    let unsupported = unsupported_structure_features(capabilities, operation);
     if !unsupported.is_empty() {
         return Err(AppError::UnsupportedWorkbookStructure(
             unsupported.join(", "),
@@ -115,6 +117,7 @@ pub fn apply_structure_operation(
             diagnostics.skipped_formula_reference_rewrites +=
                 rewrite_formulas_after_native_structure_shift(
                     workbook,
+                    ast_service,
                     FormulaRewritePlan {
                         target_sheet_name: &sheet_name,
                         shift: StructureShift::InsertRows {
@@ -136,6 +139,7 @@ pub fn apply_structure_operation(
             diagnostics.skipped_formula_reference_rewrites +=
                 rewrite_formulas_after_native_structure_shift(
                     workbook,
+                    ast_service,
                     FormulaRewritePlan {
                         target_sheet_name: &sheet_name,
                         shift: StructureShift::DeleteRows {
@@ -158,6 +162,7 @@ pub fn apply_structure_operation(
             diagnostics.skipped_formula_reference_rewrites +=
                 rewrite_formulas_after_native_structure_shift(
                     workbook,
+                    ast_service,
                     FormulaRewritePlan {
                         target_sheet_name: &sheet_name,
                         shift: StructureShift::InsertColumns {
@@ -179,6 +184,7 @@ pub fn apply_structure_operation(
             diagnostics.skipped_formula_reference_rewrites +=
                 rewrite_formulas_after_native_structure_shift(
                     workbook,
+                    ast_service,
                     FormulaRewritePlan {
                         target_sheet_name: &sheet_name,
                         shift: StructureShift::DeleteColumns {
@@ -197,7 +203,7 @@ pub fn apply_structure_operation(
         }
         AppliedOperation::DeleteSheet { sheet_index } => {
             diagnostics.skipped_formula_reference_rewrites +=
-                invalidate_sheet_references_before_delete(workbook, *sheet_index)?;
+                invalidate_sheet_references_before_delete(workbook, ast_service, *sheet_index)?;
             remove_sheet(workbook, *sheet_index)?;
         }
         AppliedOperation::SetCell { .. }
@@ -209,7 +215,10 @@ pub fn apply_structure_operation(
     Ok(diagnostics)
 }
 
-pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
+pub fn workbook_capabilities(
+    workbook: &Workbook,
+    ast_service: &mut FormulaAstService,
+) -> WorkbookCapabilities {
     let mut detected_features = Vec::new();
     let mut blocked_edit_reasons = Vec::new();
     let mut blocked_resize_reasons = Vec::new();
@@ -243,7 +252,7 @@ pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
         push_block_reason(&mut blocked_column_structure_reasons, "threaded comments");
         push_block_reason(&mut blocked_sheet_structure_reasons, "threaded comments");
     }
-    for limitation in formula_reference_limitations(workbook) {
+    for limitation in formula_reference_limitations(workbook, ast_service) {
         push_detected_feature(&mut detected_features, &limitation);
         push_block_reason(&mut blocked_row_structure_reasons, &limitation);
         push_block_reason(&mut blocked_column_structure_reasons, &limitation);
@@ -347,18 +356,17 @@ pub fn workbook_capabilities(workbook: &Workbook) -> WorkbookCapabilities {
 }
 
 pub fn unsupported_structure_features(
-    workbook: &Workbook,
+    capabilities: &WorkbookCapabilities,
     operation: &AppliedOperation,
 ) -> Vec<String> {
-    let capabilities = workbook_capabilities(workbook);
     if operation.impact().is_row_structure_change() {
-        return capabilities.blocked_row_structure_reasons;
+        return capabilities.blocked_row_structure_reasons.clone();
     }
     if operation.impact().is_column_structure_change() {
-        return capabilities.blocked_column_structure_reasons;
+        return capabilities.blocked_column_structure_reasons.clone();
     }
     if operation.impact().is_sheet_structure_change() {
-        return capabilities.blocked_sheet_structure_reasons;
+        return capabilities.blocked_sheet_structure_reasons.clone();
     }
     Vec::new()
 }
@@ -385,9 +393,11 @@ fn merged_reasons<const N: usize>(groups: [&Vec<String>; N]) -> Vec<String> {
     reasons
 }
 
-fn formula_reference_limitations(workbook: &Workbook) -> Vec<String> {
+fn formula_reference_limitations(
+    workbook: &Workbook,
+    ast_service: &mut FormulaAstService,
+) -> Vec<String> {
     let mut limitations = Vec::new();
-    let mut ast_service = FormulaAstService::new();
 
     for worksheet in workbook.sheet_collection() {
         for cell in worksheet.cells() {
@@ -428,17 +438,17 @@ fn formula_reference_limitations(workbook: &Workbook) -> Vec<String> {
 
 fn rewrite_formulas_after_native_structure_shift(
     workbook: &mut Workbook,
+    ast_service: &mut FormulaAstService,
     plan: FormulaRewritePlan<'_>,
 ) -> usize {
     let mut skipped = 0;
-    let mut ast_service = FormulaAstService::new();
     for worksheet in workbook.sheet_collection_mut() {
         let current_sheet_name = worksheet.name().to_string();
         if !should_rewrite_formula_sheet(&current_sheet_name, plan.target_sheet_name, plan.scope) {
             continue;
         }
         skipped += adjust_worksheet_formulas(
-            &mut ast_service,
+            ast_service,
             worksheet,
             plan.target_sheet_name,
             &current_sheet_name,
@@ -567,11 +577,11 @@ fn adjust_worksheet_formulas(
 
 fn invalidate_sheet_references_before_delete(
     workbook: &mut Workbook,
+    ast_service: &mut FormulaAstService,
     sheet_index: usize,
 ) -> Result<usize, AppError> {
     let deleted_sheet_name = sheet_name(workbook, sheet_index)?;
     let mut skipped = 0;
-    let mut ast_service = FormulaAstService::new();
     for (current_index, worksheet) in workbook.sheet_collection_mut().iter_mut().enumerate() {
         if current_index == sheet_index {
             continue;
@@ -582,7 +592,7 @@ fn invalidate_sheet_references_before_delete(
                 continue;
             }
             let rewrite = invalidate_deleted_sheet_references(
-                &mut ast_service,
+                ast_service,
                 cell.formula(),
                 &deleted_sheet_name,
                 &current_sheet_name,
@@ -718,6 +728,7 @@ mod tests {
 
     #[test]
     fn unparseable_formulas_block_structure_editing() {
+        let mut ast_service = FormulaAstService::new();
         let mut workbook = umya_spreadsheet::new_file();
         workbook
             .sheet_mut(0)
@@ -725,7 +736,7 @@ mod tests {
             .cell_mut("A1")
             .set_formula("SUM(");
 
-        let capabilities = workbook_capabilities(&workbook);
+        let capabilities = workbook_capabilities(&workbook, &mut ast_service);
 
         assert!(!capabilities.can_insert_delete_rows);
         assert!(!capabilities.can_insert_delete_columns);

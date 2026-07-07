@@ -508,6 +508,10 @@ fn run_rebuild(
     search_text: Arc<[SearchCellText]>,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
+    if !search_stamp_is_current(document_id, sheet_index, stamp, registry) {
+        return;
+    }
+
     let built_index = build_sheet_index(&search_text);
 
     if let Ok(mut guard) = registry.write()
@@ -515,6 +519,23 @@ fn run_rebuild(
     {
         editor_state.install_search_index(sheet_index, stamp, built_index);
     }
+}
+
+fn search_stamp_is_current(
+    document_id: u64,
+    sheet_index: usize,
+    stamp: SearchIndexStamp,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+) -> bool {
+    registry
+        .read()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .get(document_id)
+                .map(|editor| editor.search_sheet_index_stamp(sheet_index) == stamp)
+        })
+        .unwrap_or(false)
 }
 
 fn snapshot_sheet_search_text(

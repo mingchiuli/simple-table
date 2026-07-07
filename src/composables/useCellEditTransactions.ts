@@ -3,6 +3,7 @@ import type { ComputedRef } from 'vue';
 import {
   usePendingCellSavesStore,
   type CellSaveRequest,
+  type PendingCellSaveCallbacks,
   type QueueDraftResult,
 } from '@/stores/pendingCellSaves';
 import type { CellValue, FileData } from '@/types';
@@ -29,9 +30,13 @@ export function useCellEditTransactions({
   debounceMs = 500,
 }: UseCellEditTransactionsOptions) {
   const pendingCellSavesStore = usePendingCellSavesStore();
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingSavePromise: Promise<boolean> | null = null;
   const draftCellValues = pendingCellSavesStore.draftCellValues;
+  const schedulerCallbacks: PendingCellSaveCallbacks = {
+    commitBatch,
+    clearPendingContentChange,
+    onBatchCommitted,
+    onCommitFailed,
+  };
 
   function cellKey(sheetIndex: number, row: number, col: number) {
     return getCellKey(sheetIndex, row, col);
@@ -42,7 +47,7 @@ export function useCellEditTransactions({
   }
 
   function hasPendingWork() {
-    return !pendingCellSavesStore.isIdle() || pendingSavePromise !== null;
+    return pendingCellSavesStore.hasPendingWork();
   }
 
   function committedCellValue(sheetIndex: number, row: number, col: number): CellValue {
@@ -110,123 +115,23 @@ export function useCellEditTransactions({
   }
 
   function schedulePendingSave() {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-    pendingCellSavesStore.setPhase('debouncing');
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      startPendingSave();
-    }, debounceMs);
-  }
-
-  function startPendingSave() {
-    if (pendingSavePromise) {
-      return;
-    }
-
-    pendingCellSavesStore.setPhase('saving');
-    pendingSavePromise = saveQueuedBatch().finally(() => {
-      pendingSavePromise = null;
-      if (pendingCellSavesStore.hasQueuedSaves && !debounceTimer) {
-        startPendingSave();
-        return;
-      }
-      if (pendingCellSavesStore.isIdle()) {
-        pendingCellSavesStore.setPhase('idle');
-        clearPendingContentChange();
-      }
-    });
-  }
-
-  async function saveQueuedBatch(): Promise<boolean> {
-    if (!pendingCellSavesStore.hasQueuedSaves) {
-      clearPendingContentChange();
-      return true;
-    }
-
-    const changes = pendingCellSavesStore.takeQueuedBatch();
-
-    try {
-      await commitBatch(changes);
-      pendingCellSavesStore.completeBatch(changes);
-      onBatchCommitted?.();
-    } catch (error) {
-      await onCommitFailed?.(error);
-      pendingCellSavesStore.failBatch(changes);
-      pendingCellSavesStore.setPhase('failed', String(error));
-      if (pendingCellSavesStore.isIdle()) {
-        clearPendingContentChange();
-      }
-      return false;
-    }
-
-    if (pendingCellSavesStore.isIdle()) {
-      pendingCellSavesStore.setPhase('idle');
-      clearPendingContentChange();
-    }
-    return true;
+    pendingCellSavesStore.schedulePendingSave(schedulerCallbacks, debounceMs);
   }
 
   function clearDebounceIfNoQueuedSaves() {
-    if (pendingCellSavesStore.hasQueuedSaves || !debounceTimer) {
-      return;
-    }
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-    if (!pendingCellSavesStore.hasActiveSaves) {
-      pendingCellSavesStore.setPhase('idle');
-    }
+    pendingCellSavesStore.clearDebounceIfNoQueuedSaves();
   }
 
   function clearPendingContentChangeIfIdle() {
-    if (!hasPendingWork()) {
-      pendingCellSavesStore.setPhase('idle');
-      clearPendingContentChange();
-    }
+    pendingCellSavesStore.clearPendingContentChangeIfIdle(clearPendingContentChange);
   }
 
   async function flushPendingCellChanges(): Promise<boolean> {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-      if (pendingCellSavesStore.hasQueuedSaves) {
-        pendingCellSavesStore.setPhase('saving');
-      }
-    }
-
-    while (true) {
-      if (pendingSavePromise) {
-        const saved = await pendingSavePromise;
-        if (!saved) return false;
-      } else if (pendingCellSavesStore.hasQueuedSaves) {
-        startPendingSave();
-        if (!pendingSavePromise) return false;
-        const saved = await pendingSavePromise;
-        if (!saved) return false;
-      }
-
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-      if (pendingCellSavesStore.hasQueuedSaves) {
-        continue;
-      }
-      if (!pendingSavePromise) {
-        return true;
-      }
-    }
+    return pendingCellSavesStore.flushPendingCellChanges(schedulerCallbacks);
   }
 
   onUnmounted(() => {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-    }
-    if (!pendingSavePromise && pendingCellSavesStore.isIdle()) {
-      pendingCellSavesStore.setPhase('idle');
-    }
+    pendingCellSavesStore.releaseSchedulerIfIdle();
   });
 
   return {

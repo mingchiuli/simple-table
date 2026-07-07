@@ -17,6 +17,8 @@ export type MutationApplyResult = {
   resyncRequired: boolean;
 };
 
+export type DocumentSessionLifecycle = "idle" | "loading" | "saving";
+
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
     data: null as FileData | null,
@@ -24,8 +26,20 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     documentId: null as number | null,
     revision: 0,
     mutationScope: 0,
+    lifecycle: "idle" as DocumentSessionLifecycle,
   }),
+  getters: {
+    isInteractionLocked: (state) => state.lifecycle !== "idle",
+  },
   actions: {
+    beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">) {
+      this.lifecycle = lifecycle;
+    },
+    endLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">) {
+      if (this.lifecycle === lifecycle) {
+        this.lifecycle = "idle";
+      }
+    },
     openDocument(data: FileData, path: string | null = null) {
       resetEditorMutationQueue(this.mutationScope);
       this.mutationScope += 1;
@@ -74,6 +88,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = null;
       this.documentId = null;
       this.revision = 0;
+      this.lifecycle = "idle";
       this.resetSessionUi();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {

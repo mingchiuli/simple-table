@@ -1,3 +1,4 @@
+use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
 use crate::io::workbook_state::StructurePatchDiagnostics;
@@ -6,17 +7,20 @@ use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus, Sheet
 
 pub(crate) struct FormulaCoordinator {
     runtime: FormulaRuntime,
+    ast_service: FormulaAstService,
     status: FormulaStatus,
     pending_structure_diagnostics: StructurePatchDiagnostics,
 }
 
 impl FormulaCoordinator {
     pub(crate) fn new(projection: &mut FileData) -> Self {
-        match FormulaRuntime::new(projection) {
+        let mut ast_service = FormulaAstService::new();
+        match FormulaRuntime::new(projection, &mut ast_service) {
             Ok(runtime) => {
                 let status = FormulaStatus::ready(runtime.diagnostics());
                 Self {
                     runtime,
+                    ast_service,
                     status,
                     pending_structure_diagnostics: StructurePatchDiagnostics::default(),
                 }
@@ -25,6 +29,7 @@ impl FormulaCoordinator {
                 eprintln!("Formula runtime initialization failed: {error}");
                 Self {
                     runtime: FormulaRuntime::empty(),
+                    ast_service,
                     status: FormulaStatus::degraded(
                         error.to_string(),
                         FormulaDiagnostics::default(),
@@ -37,6 +42,10 @@ impl FormulaCoordinator {
 
     pub(crate) fn status(&self) -> FormulaStatus {
         self.status.clone()
+    }
+
+    pub(crate) fn ast_service_mut(&mut self) -> &mut FormulaAstService {
+        &mut self.ast_service
     }
 
     pub(crate) fn set_pending_structure_diagnostics(
@@ -77,9 +86,13 @@ impl FormulaCoordinator {
                 new_value,
                 ..
             } => {
-                let result =
-                    self.runtime
-                        .sync_cell_and_recalculate(projection, *sheet_index, *row, *col);
+                let result = self.runtime.sync_cell_and_recalculate(
+                    projection,
+                    &mut self.ast_service,
+                    *sheet_index,
+                    *row,
+                    *col,
+                );
 
                 match result {
                     Ok(changes) => {
@@ -110,10 +123,11 @@ impl FormulaCoordinator {
                         col: change.col,
                     })
                     .collect();
-                match self
-                    .runtime
-                    .sync_cells_and_recalculate(projection, changed_cell_refs)
-                {
+                match self.runtime.sync_cells_and_recalculate(
+                    projection,
+                    &mut self.ast_service,
+                    changed_cell_refs,
+                ) {
                     Ok(changes) => {
                         self.status = FormulaStatus::ready(self.runtime.diagnostics());
                         changes
@@ -142,7 +156,7 @@ impl FormulaCoordinator {
             }
             _ => match self
                 .runtime
-                .rebuild_and_recalculate_with_diagnostics(projection)
+                .rebuild_and_recalculate_with_diagnostics(projection, &mut self.ast_service)
             {
                 Ok(result) => {
                     let mut diagnostics = result.diagnostics;
@@ -159,7 +173,10 @@ impl FormulaCoordinator {
     }
 
     pub(crate) fn rebuild(&mut self, projection: &mut FileData) -> Vec<SheetCellChange> {
-        match self.runtime.rebuild_preserving_cached_results(projection) {
+        match self
+            .runtime
+            .rebuild_preserving_cached_results(projection, &mut self.ast_service)
+        {
             Ok(result) => {
                 let mut diagnostics = result.diagnostics;
                 self.merge_structure_diagnostics(&mut diagnostics);
