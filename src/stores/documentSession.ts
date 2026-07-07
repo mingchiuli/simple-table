@@ -9,9 +9,8 @@ import { applyDocumentPatches } from "@/stores/documentPatches";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { resetEditorMutationQueue } from "@/composables/useEditorMutationQueue";
-
-type CellPosition = { row: number; col: number };
 
 export type MutationApplyResult = {
   data: FileData | null;
@@ -25,12 +24,6 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     documentId: null as number | null,
     revision: 0,
     mutationScope: 0,
-
-    currentSheetIndex: 0,
-    selectedCell: null as CellPosition | null,
-    cellEditorValue: "",
-    autoScroll: false,
-    sheetSelectedCells: new Map<number, CellPosition>(),
   }),
   actions: {
     openDocument(data: FileData, path: string | null = null) {
@@ -40,7 +33,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
       this.documentId = null;
       this.revision = 0;
-      this.resetUiForCurrentDocument();
+      this.resetSessionUi();
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
       resetEditorMutationQueue(this.mutationScope);
@@ -49,7 +42,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
-      this.resetUiForCurrentDocument();
+      this.resetSessionUi();
       const statusStore = useDocumentStatusStore();
       statusStore.reset();
       statusStore.applyEditorSession(response.editorSession);
@@ -81,7 +74,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = null;
       this.documentId = null;
       this.revision = 0;
-      this.resetUiForCurrentDocument();
+      this.resetSessionUi();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
       if (response.protocolVersion !== 1) {
@@ -145,54 +138,20 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = Math.max(this.revision, info.revision);
       useDocumentStatusStore().applyEditorSession(info);
     },
-    resetUiForCurrentDocument() {
-      this.currentSheetIndex = 0;
-      this.selectedCell = null;
-      this.cellEditorValue = "";
-      this.autoScroll = false;
-      this.sheetSelectedCells = new Map();
+    resetSessionUi() {
+      useEditorSelectionStore().reset();
       useSearchSessionStore().reset();
       usePendingCellSavesStore().reset();
     },
-    selectCell(row: number, col: number, autoScroll = false) {
-      this.autoScroll = autoScroll;
-      this.selectedCell = { row, col };
-    },
-    clearSelection() {
-      this.selectedCell = null;
-      this.cellEditorValue = "";
-    },
-    rememberCurrentSheetSelection() {
-      if (this.selectedCell) {
-        this.sheetSelectedCells.set(this.currentSheetIndex, this.selectedCell);
-      }
-    },
-    restoreSheetSelection(sheetIndex: number, editorValueFor: (cell: CellPosition) => string) {
-      this.currentSheetIndex = sheetIndex;
-      const savedCell = this.sheetSelectedCells.get(sheetIndex);
-      if (!savedCell) {
-        this.clearSelection();
-        return;
-      }
-      this.selectedCell = savedCell;
-      this.cellEditorValue = editorValueFor(savedCell);
-      this.autoScroll = true;
-    },
     clampSelectionToCurrentSheet() {
+      const selectionStore = useEditorSelectionStore();
       if (!this.data) {
-        this.clearSelection();
+        selectionStore.clearSelection();
         return;
       }
-      if (this.currentSheetIndex >= this.data.sheets.length) {
-        this.currentSheetIndex = Math.max(0, this.data.sheets.length - 1);
-      }
-      if (!this.selectedCell) return;
-
-      const sheet = this.data.sheets[this.currentSheetIndex];
-      const row = sheet?.rows[this.selectedCell.row];
-      if (!row || this.selectedCell.col >= row.length) {
-        this.clearSelection();
-      }
+      selectionStore.clampToSheetData(this.data.sheets.length, (sheetIndex, row) =>
+        this.data?.sheets[sheetIndex]?.rows[row]?.length ?? null
+      );
     },
   },
 });

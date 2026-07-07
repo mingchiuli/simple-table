@@ -9,96 +9,16 @@ use crate::display::DisplayProjection;
 use crate::state::search_index::{
     SearchCellText, SearchIndexStamp, build_sheet_index, collect_sheet_search_text,
 };
+use crate::state::search_scheduler::{
+    CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, RebuildIndexUpdate,
+    SearchSchedulerStats, SheetPending,
+};
 use crate::state::state::ActiveDocumentStore;
 #[cfg(test)]
 use crate::types::CellValue;
 use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
 
-enum IndexJob {
-    Rebuild {
-        document_id: u64,
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        search_text: Vec<SearchCellText>,
-        registry: Arc<RwLock<ActiveDocumentStore>>,
-    },
-    UpdateCell {
-        document_id: u64,
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        row: usize,
-        col: usize,
-        search_text: String,
-        display_text: String,
-        registry: Arc<RwLock<ActiveDocumentStore>>,
-    },
-}
-
-struct CellIndexUpdate {
-    stamp: SearchIndexStamp,
-    row: usize,
-    col: usize,
-    search_text: String,
-    display_text: String,
-}
-
-struct RebuildIndexUpdate {
-    stamp: SearchIndexStamp,
-    search_text: Vec<SearchCellText>,
-}
-
-impl IndexJob {
-    fn document_id(&self) -> u64 {
-        match self {
-            IndexJob::Rebuild { document_id, .. } | IndexJob::UpdateCell { document_id, .. } => {
-                *document_id
-            }
-        }
-    }
-
-    fn sheet_index(&self) -> usize {
-        match self {
-            IndexJob::Rebuild { sheet_index, .. } | IndexJob::UpdateCell { sheet_index, .. } => {
-                *sheet_index
-            }
-        }
-    }
-
-    fn registry(&self) -> &Arc<RwLock<ActiveDocumentStore>> {
-        match self {
-            IndexJob::Rebuild { registry, .. } | IndexJob::UpdateCell { registry, .. } => registry,
-        }
-    }
-}
-
-struct SheetPending {
-    document_id: u64,
-    rebuild: Option<RebuildIndexUpdate>,
-    incremental: HashMap<(usize, usize), CellIndexUpdate>,
-    registry: Arc<RwLock<ActiveDocumentStore>>,
-}
-
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
-
-struct IndexScheduler {
-    state: Mutex<IndexSchedulerState>,
-    wake: Condvar,
-}
-
-#[derive(Default)]
-struct IndexSchedulerState {
-    pending: HashMap<(u64, usize), SheetPending>,
-    stats: SearchSchedulerStats,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SearchSchedulerStats {
-    pub queued_jobs: u64,
-    pub drained_batches: u64,
-    pub rebuild_jobs: u64,
-    pub incremental_jobs: u64,
-    pub incremental_fallback_rebuilds: u64,
-}
 
 static INDEX_SCHEDULER: OnceLock<Arc<IndexScheduler>> = OnceLock::new();
 
@@ -127,7 +47,7 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
     ) {
-        let jobs: Vec<(usize, SearchIndexStamp, Vec<SearchCellText>)> = match registry.read() {
+        let jobs: Vec<(usize, SearchIndexStamp, Arc<[SearchCellText]>)> = match registry.read() {
             Ok(guard) => guard
                 .get(document_id)
                 .map(|editor| {
@@ -138,7 +58,7 @@ impl SearchService {
                         .enumerate()
                         .filter_map(|(sheet_index, sheet)| {
                             let stamp = editor.search_sheet_index_stamp(sheet_index);
-                            let search_text = collect_sheet_search_text(sheet);
+                            let search_text = Arc::from(collect_sheet_search_text(sheet));
                             Some((sheet_index, stamp, search_text))
                         })
                         .collect()
@@ -188,7 +108,7 @@ impl SearchService {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        search_text: Vec<SearchCellText>,
+        search_text: Arc<[SearchCellText]>,
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
         self.enqueue(IndexJob::Rebuild {
@@ -333,12 +253,12 @@ fn current_search_snapshot(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
     sheet_index: usize,
-) -> Option<(SearchIndexStamp, Vec<SearchCellText>)> {
+) -> Option<(SearchIndexStamp, Arc<[SearchCellText]>)> {
     registry.read().ok().and_then(|guard| {
         let editor = guard.get(document_id)?;
         let stamp = editor.search_sheet_index_stamp(sheet_index);
         let sheet = editor.file_data().sheets.get(sheet_index)?;
-        Some((stamp, collect_sheet_search_text(sheet)))
+        Some((stamp, Arc::from(collect_sheet_search_text(sheet))))
     })
 }
 
@@ -585,7 +505,7 @@ fn run_rebuild(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
-    search_text: Vec<SearchCellText>,
+    search_text: Arc<[SearchCellText]>,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) {
     let built_index = build_sheet_index(&search_text);
@@ -602,7 +522,7 @@ fn snapshot_sheet_search_text(
     sheet_index: usize,
     stamp: SearchIndexStamp,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
-) -> Option<Vec<SearchCellText>> {
+) -> Option<Arc<[SearchCellText]>> {
     match registry.read() {
         Ok(guard) => guard.get(document_id).and_then(|editor| {
             if editor.search_sheet_index_stamp(sheet_index) != stamp {
@@ -612,7 +532,7 @@ fn snapshot_sheet_search_text(
                 .file_data()
                 .sheets
                 .get(sheet_index)
-                .map(collect_sheet_search_text)
+                .map(|sheet| Arc::from(collect_sheet_search_text(sheet)))
         }),
         Err(_) => None,
     }
@@ -764,7 +684,7 @@ mod tests {
     fn search_text_snapshot(
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
-    ) -> Vec<SearchCellText> {
+    ) -> Arc<[SearchCellText]> {
         snapshot_sheet_search_text(
             document_id,
             0,
@@ -853,7 +773,7 @@ mod tests {
                 document_id,
                 sheet_index: 0,
                 stamp,
-                search_text: Vec::new(),
+                search_text: Vec::new().into(),
                 registry,
             },
         );

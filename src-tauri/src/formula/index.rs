@@ -10,6 +10,8 @@ const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
 const LARGE_RANGE_COLUMN_THRESHOLD: usize = 128;
 const LARGE_RANGE_CELL_THRESHOLD: usize = 65_536;
 const RANGE_BUCKET_SIZE: usize = 128;
+const LARGE_RANGE_ROW_BUCKET_SIZE: usize = 4096;
+const LARGE_RANGE_COLUMN_BUCKET_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct FormulaRangeRef {
@@ -75,7 +77,20 @@ pub(crate) struct FormulaRangeDependencyIndex {
 
 #[derive(Default)]
 pub(crate) struct FormulaLargeRangeDependencyIndex {
+    sheets: HashMap<usize, SheetLargeRangeDependencyIndex>,
+}
+
+#[derive(Clone, Copy)]
+enum LargeRangeBucketAxis {
+    Row,
+    Column,
+}
+
+#[derive(Default)]
+struct SheetLargeRangeDependencyIndex {
     dependencies: Vec<(FormulaRangeRef, FormulaCellRef)>,
+    row_buckets: HashMap<usize, Vec<usize>>,
+    column_buckets: HashMap<usize, Vec<usize>>,
 }
 
 #[derive(Default)]
@@ -135,23 +150,95 @@ impl FormulaRangeDependencyIndex {
 
 impl FormulaLargeRangeDependencyIndex {
     fn insert(&mut self, range: FormulaRangeRef, dependent: FormulaCellRef) {
-        self.dependencies.push((range, dependent));
+        let sheet = self.sheets.entry(range.sheet_index).or_default();
+        let dependency_index = sheet.dependencies.len();
+        sheet.dependencies.push((range, dependent));
+        match large_range_bucket_axis(range) {
+            LargeRangeBucketAxis::Row => {
+                for row_bucket in large_row_bucket_span(range.start_row, range.end_row) {
+                    sheet
+                        .row_buckets
+                        .entry(row_bucket)
+                        .or_default()
+                        .push(dependency_index);
+                }
+            }
+            LargeRangeBucketAxis::Column => {
+                for column_bucket in large_column_bucket_span(range.start_col, range.end_col) {
+                    sheet
+                        .column_buckets
+                        .entry(column_bucket)
+                        .or_default()
+                        .push(dependency_index);
+                }
+            }
+        }
     }
 
     pub(crate) fn dependents_for(&self, source: FormulaCellRef) -> Vec<FormulaCellRef> {
+        let Some(sheet) = self.sheets.get(&source.sheet_index) else {
+            return Vec::new();
+        };
         let mut dependents = Vec::new();
         let mut seen = HashSet::new();
-        for (range, dependent) in &self.dependencies {
-            if range.contains(source) && seen.insert(*dependent) {
-                dependents.push(*dependent);
-            }
-        }
+        let mut seen_dependencies = HashSet::new();
+        collect_large_range_dependents(
+            sheet,
+            sheet.row_buckets.get(&large_row_bucket_index(source.row)),
+            source,
+            &mut seen_dependencies,
+            &mut seen,
+            &mut dependents,
+        );
+        collect_large_range_dependents(
+            sheet,
+            sheet
+                .column_buckets
+                .get(&large_column_bucket_index(source.col)),
+            source,
+            &mut seen_dependencies,
+            &mut seen,
+            &mut dependents,
+        );
         dependents
     }
 
     fn remove_dependent(&mut self, dependent: FormulaCellRef) {
-        self.dependencies
-            .retain(|(_, existing)| *existing != dependent);
+        for sheet in self.sheets.values_mut() {
+            sheet
+                .dependencies
+                .retain(|(_, existing)| *existing != dependent);
+            sheet.rebuild_buckets();
+        }
+        self.sheets
+            .retain(|_, sheet| !sheet.dependencies.is_empty());
+    }
+}
+
+impl SheetLargeRangeDependencyIndex {
+    fn rebuild_buckets(&mut self) {
+        self.row_buckets.clear();
+        self.column_buckets.clear();
+        for (dependency_index, (range, _)) in self.dependencies.iter().enumerate() {
+            match large_range_bucket_axis(*range) {
+                LargeRangeBucketAxis::Row => {
+                    for row_bucket in large_row_bucket_span(range.start_row, range.end_row) {
+                        self.row_buckets
+                            .entry(row_bucket)
+                            .or_default()
+                            .push(dependency_index);
+                    }
+                }
+                LargeRangeBucketAxis::Column => {
+                    for column_bucket in large_column_bucket_span(range.start_col, range.end_col) {
+                        self.column_buckets
+                            .entry(column_bucket)
+                            .or_default()
+                            .push(dependency_index);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -342,6 +429,60 @@ fn bucket_index(index: usize) -> usize {
 
 fn bucket_span(start: usize, end: usize) -> std::ops::RangeInclusive<usize> {
     bucket_index(start)..=bucket_index(end)
+}
+
+fn large_row_bucket_index(index: usize) -> usize {
+    index / LARGE_RANGE_ROW_BUCKET_SIZE
+}
+
+fn large_column_bucket_index(index: usize) -> usize {
+    index / LARGE_RANGE_COLUMN_BUCKET_SIZE
+}
+
+fn large_row_bucket_span(start: usize, end: usize) -> std::ops::RangeInclusive<usize> {
+    large_row_bucket_index(start)..=large_row_bucket_index(end)
+}
+
+fn large_column_bucket_span(start: usize, end: usize) -> std::ops::RangeInclusive<usize> {
+    large_column_bucket_index(start)..=large_column_bucket_index(end)
+}
+
+fn large_range_bucket_axis(range: FormulaRangeRef) -> LargeRangeBucketAxis {
+    let row_bucket_count = large_row_bucket_index(range.end_row)
+        .saturating_sub(large_row_bucket_index(range.start_row))
+        + 1;
+    let column_bucket_count = large_column_bucket_index(range.end_col)
+        .saturating_sub(large_column_bucket_index(range.start_col))
+        + 1;
+    if row_bucket_count <= column_bucket_count {
+        LargeRangeBucketAxis::Row
+    } else {
+        LargeRangeBucketAxis::Column
+    }
+}
+
+fn collect_large_range_dependents(
+    sheet: &SheetLargeRangeDependencyIndex,
+    dependency_indexes: Option<&Vec<usize>>,
+    source: FormulaCellRef,
+    seen_dependencies: &mut HashSet<usize>,
+    seen_dependents: &mut HashSet<FormulaCellRef>,
+    dependents: &mut Vec<FormulaCellRef>,
+) {
+    let Some(dependency_indexes) = dependency_indexes else {
+        return;
+    };
+    for dependency_index in dependency_indexes {
+        if !seen_dependencies.insert(*dependency_index) {
+            continue;
+        }
+        let Some((range, dependent)) = sheet.dependencies.get(*dependency_index) else {
+            continue;
+        };
+        if range.contains(source) && seen_dependents.insert(*dependent) {
+            dependents.push(*dependent);
+        }
+    }
 }
 
 pub(crate) fn count_unregistered_formula_cells(

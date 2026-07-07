@@ -1,4 +1,4 @@
-use crate::io::document_model::DocumentMemento;
+use crate::io::document_memento::DocumentMemento;
 use crate::state::state::HistoryStatus;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;

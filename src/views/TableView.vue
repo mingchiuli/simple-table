@@ -5,6 +5,7 @@ import { useEditorCommands } from '@/composables/useEditorCommands';
 import { useFileActions } from '@/composables/useFileActions';
 import { useCellEditController } from '@/composables/useCellEditController';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { useEditorSelectionStore } from '@/stores/editorSelection';
 import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
 import { useSearchSessionStore } from '@/stores/searchSession';
 import { Toolbar, StatusBar } from '@/components/layout';
@@ -19,6 +20,7 @@ import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
 import type { EditorMutationResponse } from '@/types';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
+const editorSelectionStore = useEditorSelectionStore();
 const pendingCellSavesStore = usePendingCellSavesStore();
 const searchSessionStore = useSearchSessionStore();
 
@@ -31,7 +33,7 @@ const {
   selectedCell,
   cellEditorValue,
   autoScroll,
-} = storeToRefs(documentSessionStore);
+} = storeToRefs(editorSelectionStore);
 const {
   searchResults,
   searchQuery,

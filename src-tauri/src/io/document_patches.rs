@@ -1,4 +1,4 @@
-use crate::io::document_model::FileStructureMemento;
+use crate::io::document_memento::FileStructureMemento;
 use crate::ops::patch_projector::sheet_updated_patch;
 use crate::types::{EditorPatch, FileData, SheetDeletedPatch, SheetInsertedPatch};
 

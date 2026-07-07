@@ -1,7 +1,6 @@
 use crate::error::AppError;
-use crate::io::document_model::{
-    DocumentMementoSide, DocumentOperationResult, SpreadsheetDocument,
-};
+use crate::io::document_memento::DocumentMementoSide;
+use crate::io::document_model::{DocumentOperationResult, SpreadsheetDocument};
 use crate::ops::AppliedOperation;
 use crate::types::SheetCellChange;
 use std::collections::BTreeSet;

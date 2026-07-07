@@ -2,6 +2,7 @@ import type { ComputedRef, Ref } from "vue";
 import * as api from "@/api";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
 import { enqueueEditorMutation, waitForEditorMutations } from "@/composables/useEditorMutationQueue";
@@ -34,6 +35,7 @@ export function useEditorCommands({
 }: UseEditorCommandsOptions) {
   const documentSessionStore = useDocumentSessionStore();
   const documentStatusStore = useDocumentStatusStore();
+  const editorSelectionStore = useEditorSelectionStore();
   const searchSessionStore = useSearchSessionStore();
 
   async function runEditorCommand(
@@ -93,7 +95,7 @@ export function useEditorCommands({
     const newSheetIndex = fileData.value.sheets.length;
     await runEditorCommand(async () => {
       const response = await api.addSheet();
-      documentSessionStore.clearSelection();
+      editorSelectionStore.clearSelection();
       currentSheetIndex.value = newSheetIndex;
       return response;
     }, "Failed to add sheet");
@@ -116,9 +118,9 @@ export function useEditorCommands({
   }
 
   function handleSheetChange(index: number) {
-    documentSessionStore.rememberCurrentSheetSelection();
+    editorSelectionStore.rememberCurrentSheetSelection();
     cellEditorValue.value = "";
-    documentSessionStore.restoreSheetSelection(index, (cell) =>
+    editorSelectionStore.restoreSheetSelection(index, (cell) =>
       editorValueForCell(index, cell.row, cell.col)
     );
   }
@@ -158,7 +160,7 @@ export function useEditorCommands({
     if (result.sheetIndex !== currentSheetIndex.value) {
       currentSheetIndex.value = result.sheetIndex;
     }
-    documentSessionStore.selectCell(result.row, result.col, true);
+    editorSelectionStore.selectCell(result.row, result.col, true);
     cellEditorValue.value = editorValueForCell(result.sheetIndex, result.row, result.col);
   }
 
@@ -167,7 +169,7 @@ export function useEditorCommands({
   }
 
   function handleSelectCell(row: number, col: number) {
-    documentSessionStore.selectCell(row, col, false);
+    editorSelectionStore.selectCell(row, col, false);
   }
 
   async function handleColumnResize(colIndex: number, width: number) {

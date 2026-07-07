@@ -128,6 +128,10 @@ impl SpreadsheetDocumentBody {
         matches!(self, Self::Excel(_))
     }
 
+    pub fn can_generate_without_projection(&self, target_path_or_name: &str) -> bool {
+        target_extension(target_path_or_name).as_deref() == Some("xlsx") && self.is_excel_backed()
+    }
+
     pub fn save_snapshot(&self) -> SpreadsheetDocumentBodySnapshot {
         let body = match self {
             Self::Excel(body) => Self::Excel(ExcelDocumentBody {
@@ -162,6 +166,26 @@ impl SpreadsheetDocumentBody {
             },
             "csv" => writer::generate_file_bytes_for_target(projection, target_path_or_name),
             _ => Err(AppError::UnsupportedFormat),
+        }
+    }
+
+    pub fn generate_file_bytes_without_projection_for_target(
+        &self,
+        target_path_or_name: &str,
+    ) -> Result<(String, Vec<u8>), AppError> {
+        match target_extension(target_path_or_name).as_deref() {
+            Some("xlsx") => match self {
+                Self::Excel(body) => writer::generate_excel_bytes_from_workbook_for_target(
+                    excel_workbook(body),
+                    target_path_or_name,
+                ),
+                Self::Csv | Self::GeneratedWorkbook => Err(AppError::Internal(
+                    "projection is required to generate this document body".to_string(),
+                )),
+            },
+            _ => Err(AppError::Internal(
+                "projection-free save snapshots only support native xlsx workbooks".to_string(),
+            )),
         }
     }
 
@@ -297,9 +321,25 @@ impl SpreadsheetDocumentBody {
     }
 }
 
+fn target_extension(target_path_or_name: &str) -> Option<String> {
+    Path::new(target_path_or_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
+        .or_else(|| Some("xlsx".to_string()))
+}
+
 impl SpreadsheetDocumentBodySnapshot {
     pub fn is_excel_backed(&self) -> bool {
         self.body.is_excel_backed()
+    }
+
+    pub fn generate_file_bytes_without_projection_for_target(
+        &self,
+        target_path_or_name: &str,
+    ) -> Result<(String, Vec<u8>), AppError> {
+        self.body
+            .generate_file_bytes_without_projection_for_target(target_path_or_name)
     }
 
     pub fn generate_file_bytes_for_target(

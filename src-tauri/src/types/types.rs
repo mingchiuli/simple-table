@@ -1,5 +1,6 @@
 use crate::display::DisplayProjection;
 use crate::state::state::{EditorSessionInfo, EditorStateInfo};
+use crate::types::FormulaStatus;
 use crate::types::projection::{CellValueProjection, SheetRowsProjection};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
@@ -247,28 +248,6 @@ impl<'de> Deserialize<'de> for CellValue {
             }
         }
     }
-}
-
-/// 搜索结果
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct SearchResult {
-    pub sheet_index: usize,
-    pub sheet_name: String,
-    pub row: usize,
-    pub col: usize,
-    pub value: String,
-    pub cell_position: String,
-}
-
-/// 搜索范围
-#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub enum SearchScope {
-    CurrentSheet,
-    AllSheets,
 }
 
 /// 合并范围
@@ -739,34 +718,6 @@ pub struct RowHeightChange {
     pub height: Option<u32>,
 }
 
-// ==================== GitHub Update Types ====================
-
-/// 更新信息，返回给前端
-#[cfg(any(target_os = "android", target_os = "ios"))]
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateInfo {
-    pub version: String,
-    pub tag_name: String,
-    pub release_url: String,
-    pub apk_url: Option<String>,
-}
-
-/// GitHub Release API 响应结构
-#[cfg(any(target_os = "android", target_os = "ios"))]
-#[derive(Debug, Deserialize)]
-pub struct GitHubRelease {
-    pub tag_name: String,
-    pub assets: Vec<GitHubAsset>,
-}
-
-/// GitHub Release Asset 结构
-#[cfg(any(target_os = "android", target_os = "ios"))]
-#[derive(Debug, Deserialize)]
-pub struct GitHubAsset {
-    pub name: String,
-    pub browser_download_url: String,
-}
-
 // ==================== Applied Operation Result ====================
 
 /// Internal result produced after an editor operation has been applied.
@@ -1020,45 +971,6 @@ pub struct EditorMutationResponse {
     pub editor_state: EditorStateInfo,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct FormulaDiagnostics {
-    pub invalid_formula_count: usize,
-    pub volatile_formula_count: usize,
-    pub unsupported_dependency_count: usize,
-    pub large_range_dependency_count: usize,
-    pub skipped_reference_rewrite_count: usize,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "camelCase")]
-#[ts(tag = "state", rename_all = "camelCase")]
-pub enum FormulaStatus {
-    Ready {
-        #[serde(default)]
-        diagnostics: FormulaDiagnostics,
-    },
-    Degraded {
-        message: String,
-        #[serde(default)]
-        diagnostics: FormulaDiagnostics,
-    },
-}
-
-impl FormulaStatus {
-    pub fn ready(diagnostics: FormulaDiagnostics) -> Self {
-        Self::Ready { diagnostics }
-    }
-
-    pub fn degraded(message: String, diagnostics: FormulaDiagnostics) -> Self {
-        Self::Degraded {
-            message,
-            diagnostics,
-        }
-    }
 }
 
 #[cfg(test)]

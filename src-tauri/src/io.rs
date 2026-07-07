@@ -6,8 +6,10 @@ pub mod codec {
 pub mod atomic_file;
 pub mod document;
 pub mod document_body;
+pub mod document_memento;
 pub mod document_model;
 pub mod document_patches;
+pub mod document_save;
 pub mod document_transaction;
 pub mod formula_coordinator;
 pub mod layout_units;

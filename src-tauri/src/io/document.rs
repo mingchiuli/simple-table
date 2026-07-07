@@ -62,7 +62,7 @@ pub fn generate_current_file_bytes_for_target(
         registry_guard
             .active()
             .ok_or(AppError::NoFileLoaded)?
-            .save_snapshot()
+            .save_snapshot_for_target(target_path_or_name)?
     };
     snapshot.generate_file_bytes_for_target(target_path_or_name)
 }
@@ -97,7 +97,13 @@ pub fn prepare_current_file_save(
         document_id = editor_state.document_id();
         revision = editor_state.revision();
         lease = editor_state.begin_save_commit(document_id, revision)?;
-        snapshot = editor_state.save_snapshot();
+        snapshot = match editor_state.save_snapshot_for_target(target_path_or_name) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                editor_state.abort_save_commit(lease);
+                return Err(error);
+            }
+        };
     }
 
     let (output_name, bytes) = match snapshot.generate_file_bytes_for_target(target_path_or_name) {
