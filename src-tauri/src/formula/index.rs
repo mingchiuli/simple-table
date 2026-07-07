@@ -57,6 +57,14 @@ pub(crate) struct FormulaDependencyIndex {
     pub(crate) range_dependents: FormulaRangeDependencyIndex,
     pub(crate) always_recalculate: HashSet<FormulaCellRef>,
     pub(crate) diagnostics: FormulaDiagnostics,
+    formula_diagnostics: HashMap<FormulaCellRef, FormulaDependencyDiagnostics>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FormulaDependencyDiagnostics {
+    volatile_formula_count: usize,
+    unsupported_dependency_count: usize,
+    large_range_dependency_count: usize,
 }
 
 #[derive(Default)]
@@ -106,6 +114,155 @@ impl FormulaRangeDependencyIndex {
         }
         dependents
     }
+
+    fn remove_dependent(&mut self, dependent: FormulaCellRef) {
+        for sheet in self.sheets.values_mut() {
+            sheet
+                .dependencies
+                .retain(|(_, existing)| *existing != dependent);
+            sheet.rebuild_buckets();
+        }
+        self.sheets
+            .retain(|_, sheet| !sheet.dependencies.is_empty());
+    }
+}
+
+impl SheetRangeDependencyIndex {
+    fn rebuild_buckets(&mut self) {
+        self.buckets.clear();
+        for (dependency_index, (range, _)) in self.dependencies.iter().enumerate() {
+            for row_bucket in bucket_span(range.start_row, range.end_row) {
+                for col_bucket in bucket_span(range.start_col, range.end_col) {
+                    self.buckets
+                        .entry((row_bucket, col_bucket))
+                        .or_default()
+                        .push(dependency_index);
+                }
+            }
+        }
+    }
+}
+
+impl FormulaDependencyIndex {
+    pub(crate) fn update_formula_dependencies(
+        &mut self,
+        file_data: &FileData,
+        formula_refs: impl IntoIterator<Item = FormulaCellRef>,
+        registered_formulas: &HashSet<FormulaCellRef>,
+        ast_service: &mut FormulaAstService,
+    ) {
+        let sheet_indexes = sheet_indexes(file_data);
+        for formula_ref in formula_refs {
+            self.remove_formula(formula_ref);
+            self.insert_registered_formula(
+                file_data,
+                formula_ref,
+                registered_formulas,
+                &sheet_indexes,
+                ast_service,
+            );
+        }
+    }
+
+    fn insert_registered_formula(
+        &mut self,
+        file_data: &FileData,
+        formula_ref: FormulaCellRef,
+        registered_formulas: &HashSet<FormulaCellRef>,
+        sheet_indexes: &HashMap<&str, usize>,
+        ast_service: &mut FormulaAstService,
+    ) {
+        if !registered_formulas.contains(&formula_ref) {
+            return;
+        }
+        let Some(CellValue::Formula { formula, .. }) = file_data
+            .sheets
+            .get(formula_ref.sheet_index)
+            .and_then(|sheet| sheet.rows.get(formula_ref.row))
+            .and_then(|row| row.get(formula_ref.col))
+        else {
+            return;
+        };
+
+        self.formulas.insert(formula_ref);
+        let mut diagnostics = FormulaDependencyDiagnostics::default();
+        let dependencies = match collect_formula_dependencies(
+            formula,
+            formula_ref.sheet_index,
+            sheet_indexes,
+            ast_service,
+        ) {
+            DependencyCollection::Precise(dependencies) => dependencies,
+            DependencyCollection::Volatile => {
+                diagnostics.volatile_formula_count = 1;
+                self.always_recalculate.insert(formula_ref);
+                self.add_formula_diagnostics(formula_ref, diagnostics);
+                return;
+            }
+            DependencyCollection::Unsupported => {
+                diagnostics.unsupported_dependency_count = 1;
+                self.always_recalculate.insert(formula_ref);
+                self.add_formula_diagnostics(formula_ref, diagnostics);
+                return;
+            }
+        };
+
+        for dependency in dependencies.cells {
+            self.dependents_by_source
+                .entry(dependency)
+                .or_default()
+                .insert(formula_ref);
+        }
+        for dependency in dependencies.ranges {
+            if dependency.is_large() {
+                diagnostics.large_range_dependency_count += 1;
+                self.always_recalculate.insert(formula_ref);
+                continue;
+            }
+            self.range_dependents.insert(dependency, formula_ref);
+        }
+        self.add_formula_diagnostics(formula_ref, diagnostics);
+    }
+
+    fn remove_formula(&mut self, formula_ref: FormulaCellRef) {
+        self.formulas.remove(&formula_ref);
+        self.always_recalculate.remove(&formula_ref);
+        for dependents in self.dependents_by_source.values_mut() {
+            dependents.remove(&formula_ref);
+        }
+        self.dependents_by_source
+            .retain(|_, dependents| !dependents.is_empty());
+        self.range_dependents.remove_dependent(formula_ref);
+        if let Some(diagnostics) = self.formula_diagnostics.remove(&formula_ref) {
+            self.subtract_diagnostics(diagnostics);
+        }
+    }
+
+    fn add_formula_diagnostics(
+        &mut self,
+        formula_ref: FormulaCellRef,
+        diagnostics: FormulaDependencyDiagnostics,
+    ) {
+        self.diagnostics.volatile_formula_count += diagnostics.volatile_formula_count;
+        self.diagnostics.unsupported_dependency_count += diagnostics.unsupported_dependency_count;
+        self.diagnostics.large_range_dependency_count += diagnostics.large_range_dependency_count;
+        self.formula_diagnostics.insert(formula_ref, diagnostics);
+    }
+
+    fn subtract_diagnostics(&mut self, diagnostics: FormulaDependencyDiagnostics) {
+        self.diagnostics.volatile_formula_count = self
+            .diagnostics
+            .volatile_formula_count
+            .saturating_sub(diagnostics.volatile_formula_count);
+        self.diagnostics.unsupported_dependency_count = self
+            .diagnostics
+            .unsupported_dependency_count
+            .saturating_sub(diagnostics.unsupported_dependency_count);
+        self.diagnostics.large_range_dependency_count = self
+            .diagnostics
+            .large_range_dependency_count
+            .saturating_sub(diagnostics.large_range_dependency_count);
+    }
 }
 
 pub(crate) fn build_dependency_index(
@@ -114,69 +271,40 @@ pub(crate) fn build_dependency_index(
     ast_service: &mut FormulaAstService,
 ) -> FormulaDependencyIndex {
     let mut index = FormulaDependencyIndex::default();
-    let sheet_indexes: HashMap<&str, usize> = file_data
-        .sheets
-        .iter()
-        .enumerate()
-        .map(|(sheet_index, sheet)| (sheet.name.as_str(), sheet_index))
-        .collect();
+    let sheet_indexes = sheet_indexes(file_data);
 
     for (sheet_index, sheet) in file_data.sheets.iter().enumerate() {
         for (row_idx, row) in sheet.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
-                let CellValue::Formula { formula, .. } = cell else {
+                if !matches!(cell, CellValue::Formula { .. }) {
                     continue;
-                };
+                }
                 let formula_ref = FormulaCellRef {
                     sheet_index,
                     row: row_idx,
                     col: col_idx,
                 };
-                if !registered_formulas.contains(&formula_ref) {
-                    continue;
-                }
-
-                index.formulas.insert(formula_ref);
-
-                let dependencies = match collect_formula_dependencies(
-                    formula,
-                    sheet_index,
+                index.insert_registered_formula(
+                    file_data,
+                    formula_ref,
+                    registered_formulas,
                     &sheet_indexes,
                     ast_service,
-                ) {
-                    DependencyCollection::Precise(dependencies) => dependencies,
-                    DependencyCollection::Volatile => {
-                        index.diagnostics.volatile_formula_count += 1;
-                        index.always_recalculate.insert(formula_ref);
-                        continue;
-                    }
-                    DependencyCollection::Unsupported => {
-                        index.diagnostics.unsupported_dependency_count += 1;
-                        index.always_recalculate.insert(formula_ref);
-                        continue;
-                    }
-                };
-
-                for dependency in dependencies.cells {
-                    index
-                        .dependents_by_source
-                        .entry(dependency)
-                        .or_default()
-                        .insert(formula_ref);
-                }
-                for dependency in dependencies.ranges {
-                    if dependency.is_large() {
-                        index.diagnostics.large_range_dependency_count += 1;
-                        index.always_recalculate.insert(formula_ref);
-                        continue;
-                    }
-                    index.range_dependents.insert(dependency, formula_ref);
-                }
+                );
             }
         }
     }
 
     index
+}
+
+fn sheet_indexes(file_data: &FileData) -> HashMap<&str, usize> {
+    file_data
+        .sheets
+        .iter()
+        .enumerate()
+        .map(|(sheet_index, sheet)| (sheet.name.as_str(), sheet_index))
+        .collect()
 }
 
 fn bucket_index(index: usize) -> usize {

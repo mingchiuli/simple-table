@@ -20,6 +20,10 @@ pub struct ExcelDocumentBody {
     workbook: Box<Workbook>,
 }
 
+pub struct SpreadsheetDocumentBodySnapshot {
+    body: SpreadsheetDocumentBody,
+}
+
 pub enum BodyStructureMemento {
     ExcelWorksheetSnapshots {
         sheet_count: usize,
@@ -114,6 +118,17 @@ impl SpreadsheetDocumentBody {
 
     pub fn is_excel_backed(&self) -> bool {
         matches!(self, Self::Excel(_))
+    }
+
+    pub fn save_snapshot(&self) -> SpreadsheetDocumentBodySnapshot {
+        let body = match self {
+            Self::Excel(body) => Self::Excel(ExcelDocumentBody {
+                workbook: Box::new((*body.workbook).clone()),
+            }),
+            Self::Csv => Self::Csv,
+            Self::GeneratedWorkbook => Self::GeneratedWorkbook,
+        };
+        SpreadsheetDocumentBodySnapshot { body }
     }
 
     pub fn generate_file_bytes_for_target(
@@ -250,6 +265,42 @@ impl SpreadsheetDocumentBody {
             Self::Excel(body) => WorkbookProjectionCodec::validate(&body.workbook, projection),
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
+    }
+
+    pub fn validate_projection_sheets(
+        &self,
+        projection: &FileData,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) -> Result<(), AppError> {
+        match self {
+            Self::Excel(body) => {
+                WorkbookProjectionCodec::validate_sheets(&body.workbook, projection, sheet_indexes)
+            }
+            Self::Csv | Self::GeneratedWorkbook => Ok(()),
+        }
+    }
+}
+
+impl SpreadsheetDocumentBodySnapshot {
+    pub fn is_excel_backed(&self) -> bool {
+        self.body.is_excel_backed()
+    }
+
+    pub fn generate_file_bytes_for_target(
+        &self,
+        projection: &FileData,
+        target_path_or_name: &str,
+    ) -> Result<(String, Vec<u8>), AppError> {
+        self.body
+            .generate_file_bytes_for_target(projection, target_path_or_name)
+    }
+
+    pub fn validate_persisted_projection_consistency(
+        &self,
+        projection: &FileData,
+    ) -> Result<(), AppError> {
+        self.body
+            .validate_persisted_projection_consistency(projection)
     }
 }
 

@@ -152,8 +152,12 @@ impl FormulaRuntime {
         apply_cell_changes(file_data, &changes);
 
         if was_formula || is_formula {
-            self.dependency_index =
-                build_dependency_index(file_data, &self.registered_formulas, &mut self.ast_service);
+            self.dependency_index.update_formula_dependencies(
+                file_data,
+                [cell_ref],
+                &self.registered_formulas,
+                &mut self.ast_service,
+            );
         }
         self.refresh_formula_diagnostics(file_data);
 
@@ -172,7 +176,7 @@ impl FormulaRuntime {
     ) -> Result<Vec<SheetCellChange>, AppError> {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
         let mut changes = Vec::new();
-        let mut dependency_graph_needs_rebuild = false;
+        let mut dependency_updates = Vec::new();
 
         for cell_ref in &changed_cells {
             let sheet = file_data
@@ -205,14 +209,20 @@ impl FormulaRuntime {
             } else {
                 self.registered_formulas.remove(cell_ref);
             }
-            dependency_graph_needs_rebuild |= was_formula || is_formula;
+            if was_formula || is_formula {
+                dependency_updates.push(*cell_ref);
+            }
         }
 
         apply_cell_changes(file_data, &changes);
 
-        if dependency_graph_needs_rebuild {
-            self.dependency_index =
-                build_dependency_index(file_data, &self.registered_formulas, &mut self.ast_service);
+        if !dependency_updates.is_empty() {
+            self.dependency_index.update_formula_dependencies(
+                file_data,
+                dependency_updates,
+                &self.registered_formulas,
+                &mut self.ast_service,
+            );
         }
         self.refresh_formula_diagnostics(file_data);
 
@@ -626,6 +636,50 @@ mod tests {
             .expect("incremental recalc");
 
         assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "20.0");
+    }
+
+    #[test]
+    fn formula_dependency_update_replaces_old_edges_and_diagnostics() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "formula.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![
+                    CellValue::Number(Value::from(1)),
+                    CellValue::formula("=SUM(A1:A10001)", CellValue::Null),
+                    CellValue::Number(Value::from(10)),
+                ]],
+                ..Default::default()
+            }],
+        };
+
+        let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
+        assert_eq!(runtime.diagnostics().large_range_dependency_count, 1);
+
+        file_data.sheets[0].rows[0][1] = CellValue::formula("=C1+1", CellValue::Null);
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 1)
+            .expect("formula dependency update");
+
+        assert_eq!(runtime.diagnostics().large_range_dependency_count, 0);
+        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "11.0");
+
+        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(99));
+        let changes = runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 0)
+            .expect("old dependency should not recalc");
+        assert!(
+            !changes
+                .iter()
+                .any(|change| change.sheet_index == 0 && change.row == 0 && change.col == 1)
+        );
+
+        file_data.sheets[0].rows[0][2] = CellValue::Number(Value::from(20));
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 2)
+            .expect("new dependency should recalc");
+        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "21.0");
     }
 
     #[test]

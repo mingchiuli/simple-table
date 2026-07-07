@@ -73,6 +73,43 @@ impl ProjectionMapper {
 
         Ok(())
     }
+
+    pub(crate) fn validate_workbook_sheets_match_projection(
+        workbook: &Workbook,
+        projection: &FileData,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) -> Result<(), AppError> {
+        if workbook.sheet_count() != projection.sheets.len() {
+            return Err(AppError::Internal(format!(
+                "workbook/projection sheet count mismatch: workbook={}, projection={}",
+                workbook.sheet_count(),
+                projection.sheets.len()
+            )));
+        }
+
+        for sheet_index in sheet_indexes {
+            let Some(worksheet) = workbook.sheet_collection().get(sheet_index) else {
+                return Err(AppError::Internal(format!(
+                    "workbook is missing sheet {sheet_index}"
+                )));
+            };
+            let Some(expected) = projection.sheets.get(sheet_index) else {
+                return Err(AppError::Internal(format!(
+                    "projection is missing sheet {sheet_index}"
+                )));
+            };
+            let actual = read_worksheet(worksheet);
+            if !sheets_are_consistent(expected, &actual) {
+                return Err(AppError::Internal(format!(
+                    "workbook/projection mismatch on sheet {sheet_index} ({}): {}",
+                    expected.name,
+                    sheet_difference(expected, &actual)
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn sheet_mut(

@@ -97,7 +97,13 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, Ap
 pub fn save_file(_app: &AppHandle, path: &str) -> Result<SavedDocumentResponse, AppError> {
     let prepared = document::prepare_current_file_save(path)?;
     let target = PathBuf::from(path);
-    let temp_path = write_temp_file_for_target(&target, &prepared.bytes)?;
+    let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
+        Ok(temp_path) => temp_path,
+        Err(error) => {
+            document::abort_prepared_file_save(&prepared);
+            return Err(error);
+        }
+    };
 
     let result = document::commit_current_file_save(path.to_string(), prepared, || {
         replace_temp_file(&temp_path, &target)

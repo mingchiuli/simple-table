@@ -4,7 +4,11 @@ use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::ops::patch_projector::editor_state_info;
-use crate::state::{active_document_store, editor_state::EditorState, state::EditorSessionInfo};
+use crate::state::{
+    active_document_store,
+    editor_state::{EditorState, SaveCommitLease},
+    state::EditorSessionInfo,
+};
 use crate::types::{
     DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, SavedDocumentResponse,
     WorkbookCapabilities,
@@ -51,18 +55,22 @@ pub fn generate_current_file_bytes_for_target(
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    registry_guard
-        .active()
-        .ok_or(AppError::NoFileLoaded)?
-        .generate_file_bytes_for_target(target_path_or_name)
+    let snapshot = {
+        let registry_guard = registry
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        registry_guard
+            .active()
+            .ok_or(AppError::NoFileLoaded)?
+            .save_snapshot()
+    };
+    snapshot.generate_file_bytes_for_target(target_path_or_name)
 }
 
 pub struct PreparedDocumentSave {
     pub document_id: u64,
     pub revision: u64,
+    pub lease: SaveCommitLease,
     pub output_name: String,
     pub bytes: Vec<u8>,
     pub finish_without_reparse: bool,
@@ -72,26 +80,50 @@ pub fn prepare_current_file_save(
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentSave, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
-    if editor_state.has_save_commit_in_progress() {
-        return Err(AppError::DocumentStateInvalid(
-            "save is already in progress".to_string(),
-        ));
+    let document_id;
+    let revision;
+    let lease;
+    let snapshot;
+    {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+        if editor_state.has_save_commit_in_progress() {
+            return Err(AppError::DocumentStateInvalid(
+                "save is already in progress".to_string(),
+            ));
+        }
+        document_id = editor_state.document_id();
+        revision = editor_state.revision();
+        lease = editor_state.begin_save_commit(document_id, revision)?;
+        snapshot = editor_state.save_snapshot();
     }
-    let (output_name, bytes) = editor_state.generate_file_bytes_for_target(target_path_or_name)?;
+
+    let (output_name, bytes) = match snapshot.generate_file_bytes_for_target(target_path_or_name) {
+        Ok(result) => result,
+        Err(error) => {
+            abort_save_commit(&registry, document_id, lease);
+            return Err(error);
+        }
+    };
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
         .unwrap_or_else(|| "xlsx".to_string());
     Ok(PreparedDocumentSave {
-        document_id: editor_state.document_id(),
-        revision: editor_state.revision(),
+        document_id,
+        revision,
+        lease,
         output_name,
         bytes,
-        finish_without_reparse: editor_state.can_finish_save_without_reparse(&target_extension),
+        finish_without_reparse: target_extension.eq_ignore_ascii_case("xlsx")
+            && snapshot.is_excel_backed(),
     })
+}
+
+pub fn abort_prepared_file_save(prepared: &PreparedDocumentSave) {
+    let registry = active_document_store();
+    abort_save_commit(&registry, prepared.document_id, prepared.lease);
 }
 
 pub fn commit_current_file_save<F>(
@@ -104,6 +136,7 @@ where
 {
     let document_id_token = prepared.document_id;
     let revision_token = prepared.revision;
+    let lease = prepared.lease;
     let output_name = prepared.output_name;
     let finish_without_reparse = prepared.finish_without_reparse;
     let bytes = prepared.bytes;
@@ -115,28 +148,44 @@ where
             path,
             document_id_token,
             revision_token,
+            lease,
             output_name,
             extension,
             commit_write,
         );
     }
-    let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
+    let result =
+        match read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name) {
+            Ok(result) => result,
+            Err(error) => {
+                let registry = active_document_store();
+                abort_save_commit(&registry, document_id_token, lease);
+                return Err(error);
+            }
+        };
     let registry = active_document_store();
-    let clear_history;
-    let lease;
-    {
-        let mut registry_guard = registry
-            .write()
+    let clear_history = match (|| -> Result<bool, AppError> {
+        let registry_guard = registry
+            .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+        let editor_state = registry_guard.get(document_id_token).ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "active document changed while save was in progress".to_string(),
+            )
+        })?;
         ensure_editor_matches_prepared_save(editor_state, document_id_token, revision_token)?;
         let current_extension = extension_of(&editor_state.file_data().file_name)
             .or_else(|| extension_of(&editor_state.file_data().path));
         let saved_extension = extension_of(&result.file_data.file_name)
             .or_else(|| extension_of(&result.file_data.path));
-        clear_history = current_extension != saved_extension;
-        lease = editor_state.begin_save_commit(document_id_token, revision_token)?;
-    }
+        Ok(current_extension != saved_extension)
+    })() {
+        Ok(clear_history) => clear_history,
+        Err(error) => {
+            abort_save_commit(&registry, document_id_token, lease);
+            return Err(error);
+        }
+    };
 
     if let Err(error) = commit_write() {
         abort_save_commit(&registry, document_id_token, lease);
@@ -169,6 +218,7 @@ fn commit_current_file_save_without_reparse<F>(
     path: String,
     document_id_token: u64,
     revision_token: u64,
+    lease: SaveCommitLease,
     output_name: String,
     saved_extension: String,
     commit_write: F,
@@ -177,19 +227,26 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     let registry = active_document_store();
-    let clear_history;
-    let lease;
-    {
-        let mut registry_guard = registry
-            .write()
+    let clear_history = match (|| -> Result<bool, AppError> {
+        let registry_guard = registry
+            .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+        let editor_state = registry_guard.get(document_id_token).ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "active document changed while save was in progress".to_string(),
+            )
+        })?;
         ensure_editor_matches_prepared_save(editor_state, document_id_token, revision_token)?;
         let current_extension = extension_of(&editor_state.file_data().file_name)
             .or_else(|| extension_of(&editor_state.file_data().path));
-        clear_history = current_extension.as_deref() != Some(saved_extension.as_str());
-        lease = editor_state.begin_save_commit(document_id_token, revision_token)?;
-    }
+        Ok(current_extension.as_deref() != Some(saved_extension.as_str()))
+    })() {
+        Ok(clear_history) => clear_history,
+        Err(error) => {
+            abort_save_commit(&registry, document_id_token, lease);
+            return Err(error);
+        }
+    };
 
     if let Err(error) = commit_write() {
         abort_save_commit(&registry, document_id_token, lease);

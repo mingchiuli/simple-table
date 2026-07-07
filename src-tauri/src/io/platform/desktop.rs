@@ -15,7 +15,13 @@ pub fn read_file(path: &str) -> Result<OpenDocumentResponse, AppError> {
 pub fn save_file(path: &str) -> Result<SavedDocumentResponse, AppError> {
     let prepared = document::prepare_current_file_save(path)?;
     let target = Path::new(path);
-    let temp_path = write_temp_file_for_target(target, &prepared.bytes)?;
+    let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
+        Ok(temp_path) => temp_path,
+        Err(error) => {
+            document::abort_prepared_file_save(&prepared);
+            return Err(error);
+        }
+    };
 
     let result = document::commit_current_file_save(path.to_string(), prepared, || {
         replace_temp_file(&temp_path, target)

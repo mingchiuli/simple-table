@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::io::document_model::{DocumentRestoreResult, MementoSide, SpreadsheetDocument};
+use crate::io::document_model::{
+    DocumentRestoreResult, MementoSide, SpreadsheetDocument, SpreadsheetDocumentSaveSnapshot,
+};
 use crate::ops::EditorCommand;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
@@ -154,8 +156,13 @@ impl EditorState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn can_finish_save_without_reparse(&self, target_extension: &str) -> bool {
         target_extension.eq_ignore_ascii_case("xlsx") && self.document.is_excel_backed()
+    }
+
+    pub fn save_snapshot(&self) -> SpreadsheetDocumentSaveSnapshot {
+        self.document.save_snapshot()
     }
 
     pub fn finish_save_commit_without_reparse(
@@ -321,6 +328,7 @@ impl EditorState {
         self.dirty.mark_saved(self.document.content_hash());
     }
 
+    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,

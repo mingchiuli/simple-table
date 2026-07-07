@@ -33,4 +33,16 @@ impl WorkbookProjectionCodec {
     pub(crate) fn validate(workbook: &Workbook, projection: &FileData) -> Result<(), AppError> {
         ProjectionMapper::validate_workbook_matches_projection(workbook, projection)
     }
+
+    pub(crate) fn validate_sheets(
+        workbook: &Workbook,
+        projection: &FileData,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) -> Result<(), AppError> {
+        ProjectionMapper::validate_workbook_sheets_match_projection(
+            workbook,
+            projection,
+            sheet_indexes,
+        )
+    }
 }

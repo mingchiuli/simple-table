@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::io::document_body::BodySheetShape;
+use crate::io::document_body::SpreadsheetDocumentBodySnapshot;
 use crate::io::document_body::{BodyRestoreAction, BodyStructureMemento, SpreadsheetDocumentBody};
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
 use crate::io::document_transaction::DocumentTransaction;
@@ -346,6 +347,12 @@ pub struct SpreadsheetDocument {
     transaction_failure: Option<String>,
 }
 
+pub struct SpreadsheetDocumentSaveSnapshot {
+    projection: FileData,
+    body: SpreadsheetDocumentBodySnapshot,
+    transaction_failure: Option<String>,
+}
+
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
         let formulas = FormulaCoordinator::new(&mut projection);
@@ -401,10 +408,20 @@ impl SpreadsheetDocument {
         capabilities
     }
 
+    #[cfg(test)]
     pub fn is_excel_backed(&self) -> bool {
         self.body.is_excel_backed()
     }
 
+    pub fn save_snapshot(&self) -> SpreadsheetDocumentSaveSnapshot {
+        SpreadsheetDocumentSaveSnapshot {
+            projection: self.projection.clone(),
+            body: self.body.save_snapshot(),
+            transaction_failure: self.transaction_failure.clone(),
+        }
+    }
+
+    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,
@@ -720,7 +737,7 @@ impl SpreadsheetDocument {
         if !formula_changes.is_empty() {
             self.patch_workbook_formula_changes(&formula_changes)?;
         }
-        self.validate_projection_consistency()?;
+        self.validate_projection_sheets(cell_memento_sheet_indexes(memento))?;
         let mut patches = Vec::new();
         let mut cell_changes = memento.cells.clone();
         for change in formula_changes {
@@ -796,7 +813,7 @@ impl SpreadsheetDocument {
         }
 
         self.patch_workbook_layout(memento)?;
-        self.validate_projection_consistency()?;
+        self.validate_projection_sheets([memento.sheet_index])?;
         Ok(DocumentRestoreResult {
             patches: vec![EditorPatch::Layout {
                 patch: LayoutPatch {
@@ -939,6 +956,14 @@ impl SpreadsheetDocument {
         self.body.validate_projection_consistency(&self.projection)
     }
 
+    pub(crate) fn validate_projection_sheets(
+        &self,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) -> Result<(), AppError> {
+        self.body
+            .validate_projection_sheets(&self.projection, sheet_indexes)
+    }
+
     pub(crate) fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
         self.body
             .validate_persisted_projection_consistency(&self.projection)
@@ -952,6 +977,25 @@ impl SpreadsheetDocument {
         self.refresh_capabilities();
         self.transaction_failure = Some(reason.clone());
         self.formulas.mark_degraded(reason);
+    }
+}
+
+impl SpreadsheetDocumentSaveSnapshot {
+    pub fn is_excel_backed(&self) -> bool {
+        self.body.is_excel_backed()
+    }
+
+    pub fn generate_file_bytes_for_target(
+        &self,
+        target_path_or_name: &str,
+    ) -> Result<(String, Vec<u8>), AppError> {
+        if let Some(reason) = &self.transaction_failure {
+            return Err(AppError::DocumentStateInvalid(reason.clone()));
+        }
+        self.body
+            .validate_persisted_projection_consistency(&self.projection)?;
+        self.body
+            .generate_file_bytes_for_target(&self.projection, target_path_or_name)
     }
 }
 
@@ -1195,6 +1239,17 @@ fn push_sheet_cell_change_if_missing(changes: &mut Vec<SheetCellChange>, change:
     }) {
         changes.push(change);
     }
+}
+
+fn cell_memento_sheet_indexes(memento: &CellMemento) -> Vec<usize> {
+    let mut sheets = HashSet::new();
+    for change in &memento.cells {
+        sheets.insert(change.sheet_index);
+    }
+    for shape in &memento.sheet_shapes {
+        sheets.insert(shape.sheet_index);
+    }
+    sheets.into_iter().collect()
 }
 
 fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<EditorPatch> {

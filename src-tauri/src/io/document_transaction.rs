@@ -3,6 +3,8 @@ use crate::io::document_model::{
     DocumentMementoSide, DocumentOperationResult, SpreadsheetDocument,
 };
 use crate::ops::AppliedOperation;
+use crate::types::SheetCellChange;
+use std::collections::BTreeSet;
 
 pub(crate) struct DocumentTransaction<'a> {
     document: &'a mut SpreadsheetDocument,
@@ -52,14 +54,7 @@ impl<'a> DocumentTransaction<'a> {
             return Err(error);
         }
 
-        if self.operation.impact().is_structure_change()
-            && let Err(error) = self.document.validate_persisted_projection_consistency()
-        {
-            self.rollback_after_failure(&error)?;
-            return Err(error);
-        }
-
-        if let Err(error) = self.document.validate_projection_consistency() {
+        if let Err(error) = self.validate_after_commit(&cell_changes) {
             self.rollback_after_failure(&error)?;
             return Err(error);
         }
@@ -86,4 +81,45 @@ impl<'a> DocumentTransaction<'a> {
             }
         }
     }
+
+    fn validate_after_commit(&self, cell_changes: &[SheetCellChange]) -> Result<(), AppError> {
+        if self.operation.impact().is_structure_change() {
+            self.document.validate_persisted_projection_consistency()?;
+            return self.document.validate_projection_consistency();
+        }
+
+        self.document
+            .validate_projection_sheets(touched_sheet_indexes(self.operation, cell_changes))
+    }
+}
+
+fn touched_sheet_indexes(
+    operation: &AppliedOperation,
+    cell_changes: &[SheetCellChange],
+) -> Vec<usize> {
+    let mut sheets = BTreeSet::new();
+    match operation {
+        AppliedOperation::SetCell { sheet_index, .. }
+        | AppliedOperation::SetColumnWidth { sheet_index, .. }
+        | AppliedOperation::SetRowHeight { sheet_index, .. } => {
+            sheets.insert(*sheet_index);
+        }
+        AppliedOperation::SetCells { changes } => {
+            for change in changes {
+                sheets.insert(change.sheet_index);
+            }
+        }
+        AppliedOperation::AddRow { sheet_index, .. }
+        | AppliedOperation::DeleteRow { sheet_index, .. }
+        | AppliedOperation::AddColumn { sheet_index, .. }
+        | AppliedOperation::DeleteColumn { sheet_index, .. }
+        | AppliedOperation::AddSheet { sheet_index, .. }
+        | AppliedOperation::DeleteSheet { sheet_index } => {
+            sheets.insert(*sheet_index);
+        }
+    }
+    for change in cell_changes {
+        sheets.insert(change.sheet_index);
+    }
+    sheets.into_iter().collect()
 }
