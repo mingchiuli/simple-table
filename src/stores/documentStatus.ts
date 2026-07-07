@@ -1,5 +1,11 @@
-import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
-import type { EditorSessionInfo, EditorStateInfo, FormulaStatus, WorkbookCapabilities } from "@/types";
+import { defaultHistoryStatus, defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
+import type {
+  EditorSessionInfo,
+  EditorStateInfo,
+  FormulaStatus,
+  HistoryStatus,
+  WorkbookCapabilities,
+} from "@/types";
 
 export const useDocumentStatusStore = defineStore("documentStatus", {
   state: () => ({
@@ -9,6 +15,7 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
     hasPendingContentChange: false,
     formulaStatus: readyFormulaStatus() as FormulaStatus,
     capabilities: defaultWorkbookCapabilities() as WorkbookCapabilities,
+    history: defaultHistoryStatus() as HistoryStatus,
   }),
   getters: {
     hasUnsavedChanges: (state) => state.isContentDirty || state.hasPendingContentChange,
@@ -18,6 +25,7 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
       this.canUndo = state?.canUndo ?? false;
       this.canRedo = state?.canRedo ?? false;
       this.isContentDirty = state?.isDirty ?? false;
+      this.history = state?.history ?? defaultHistoryStatus();
     },
     applyEditorSession(info: EditorSessionInfo | null | undefined) {
       if (!info) {
@@ -36,6 +44,7 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
       this.hasPendingContentChange = false;
       this.formulaStatus = readyFormulaStatus();
       this.capabilities = defaultWorkbookCapabilities();
+      this.history = defaultHistoryStatus();
     },
     markPendingContentChange() {
       this.hasPendingContentChange = true;

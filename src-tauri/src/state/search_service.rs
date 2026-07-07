@@ -19,6 +19,7 @@ enum IndexJob {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
+        search_text: Vec<SearchCellText>,
         registry: Arc<RwLock<ActiveDocumentStore>>,
     },
     UpdateCell {
@@ -43,6 +44,7 @@ struct CellIndexUpdate {
 
 struct RebuildIndexUpdate {
     stamp: SearchIndexStamp,
+    search_text: Vec<SearchCellText>,
 }
 
 impl IndexJob {
@@ -125,7 +127,7 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
     ) {
-        let jobs: Vec<(usize, SearchIndexStamp)> = match registry.read() {
+        let jobs: Vec<(usize, SearchIndexStamp, Vec<SearchCellText>)> = match registry.read() {
             Ok(guard) => guard
                 .get(document_id)
                 .map(|editor| {
@@ -134,9 +136,10 @@ impl SearchService {
                         .sheets
                         .iter()
                         .enumerate()
-                        .map(|(sheet_index, _sheet)| {
+                        .filter_map(|(sheet_index, sheet)| {
                             let stamp = editor.search_sheet_index_stamp(sheet_index);
-                            (sheet_index, stamp)
+                            let search_text = collect_sheet_search_text(sheet);
+                            Some((sheet_index, stamp, search_text))
                         })
                         .collect()
                 })
@@ -144,11 +147,12 @@ impl SearchService {
             Err(_) => Vec::new(),
         };
 
-        for (sheet_index, stamp) in jobs {
+        for (sheet_index, stamp, search_text) in jobs {
             self.enqueue(IndexJob::Rebuild {
                 document_id,
                 sheet_index,
                 stamp,
+                search_text,
                 registry: Arc::clone(registry),
             });
         }
@@ -184,12 +188,14 @@ impl SearchService {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
+        search_text: Vec<SearchCellText>,
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
         self.enqueue(IndexJob::Rebuild {
             document_id,
             sheet_index,
             stamp,
+            search_text,
             registry: Arc::clone(registry),
         });
     }
@@ -220,44 +226,74 @@ impl SearchService {
                     }
                 }
                 EditorPatch::SheetUpdated { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    let Some((stamp, search_text)) =
+                        current_search_snapshot(registry, document_id, patch.sheet_index)
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                    self.enqueue_rebuild(
+                        document_id,
+                        patch.sheet_index,
+                        stamp,
+                        search_text,
+                        registry,
+                    );
                 }
                 EditorPatch::RowInserted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    let Some((stamp, search_text)) =
+                        current_search_snapshot(registry, document_id, patch.sheet_index)
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                    self.enqueue_rebuild(
+                        document_id,
+                        patch.sheet_index,
+                        stamp,
+                        search_text,
+                        registry,
+                    );
                 }
                 EditorPatch::RowDeleted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    let Some((stamp, search_text)) =
+                        current_search_snapshot(registry, document_id, patch.sheet_index)
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                    self.enqueue_rebuild(
+                        document_id,
+                        patch.sheet_index,
+                        stamp,
+                        search_text,
+                        registry,
+                    );
                 }
                 EditorPatch::ColumnInserted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    let Some((stamp, search_text)) =
+                        current_search_snapshot(registry, document_id, patch.sheet_index)
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                    self.enqueue_rebuild(
+                        document_id,
+                        patch.sheet_index,
+                        stamp,
+                        search_text,
+                        registry,
+                    );
                 }
                 EditorPatch::ColumnDeleted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    let Some((stamp, search_text)) =
+                        current_search_snapshot(registry, document_id, patch.sheet_index)
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                    self.enqueue_rebuild(
+                        document_id,
+                        patch.sheet_index,
+                        stamp,
+                        search_text,
+                        registry,
+                    );
                 }
                 EditorPatch::SheetShape { .. }
                 | EditorPatch::ResyncRequired { .. }
@@ -293,17 +329,36 @@ fn current_search_stamp(
     })
 }
 
+fn current_search_snapshot(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+    sheet_index: usize,
+) -> Option<(SearchIndexStamp, Vec<SearchCellText>)> {
+    registry.read().ok().and_then(|guard| {
+        let editor = guard.get(document_id)?;
+        let stamp = editor.search_sheet_index_stamp(sheet_index);
+        let sheet = editor.file_data().sheets.get(sheet_index)?;
+        Some((stamp, collect_sheet_search_text(sheet)))
+    })
+}
+
 fn index_scheduler() -> &'static Arc<IndexScheduler> {
     INDEX_SCHEDULER.get_or_init(|| {
         let scheduler = Arc::new(IndexScheduler {
             state: Mutex::new(IndexSchedulerState::default()),
             wake: Condvar::new(),
         });
-        let worker_scheduler = Arc::clone(&scheduler);
-        thread::Builder::new()
-            .name("simple-table-indexer".into())
-            .spawn(move || index_worker(&worker_scheduler))
-            .expect("failed to spawn index worker thread");
+        let worker_count = thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(2)
+            .clamp(2, 4);
+        for worker_index in 0..worker_count {
+            let worker_scheduler = Arc::clone(&scheduler);
+            thread::Builder::new()
+                .name(format!("simple-table-indexer-{worker_index}"))
+                .spawn(move || index_worker(&worker_scheduler))
+                .expect("failed to spawn index worker thread");
+        }
         scheduler
     })
 }
@@ -321,7 +376,9 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
             registry: Arc::clone(&registry),
         });
     match job {
-        IndexJob::Rebuild { stamp, .. } => {
+        IndexJob::Rebuild {
+            stamp, search_text, ..
+        } => {
             let latest_seen = entry
                 .rebuild
                 .as_ref()
@@ -331,11 +388,11 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
                 .max();
             if latest_seen.is_none_or(|latest| stamp >= latest) {
                 entry.registry = registry;
-                entry.rebuild = Some(RebuildIndexUpdate { stamp });
+                entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
                 entry.incremental.retain(|_, update| update.stamp > stamp);
             } else if entry.rebuild.is_none() {
                 entry.registry = registry;
-                entry.rebuild = Some(RebuildIndexUpdate { stamp });
+                entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
                 entry.incremental.retain(|_, update| update.stamp > stamp);
             }
         }
@@ -378,95 +435,93 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
 
 fn index_worker(scheduler: &Arc<IndexScheduler>) {
     loop {
-        let pending = drain_pending_jobs(scheduler);
+        let ((_, sheet_index), pending) = drain_pending_job(scheduler);
+        process_pending_sheet(scheduler, sheet_index, pending);
+    }
+}
 
-        for ((_, sheet_index), pending) in pending {
-            if let Some(rebuild) = pending.rebuild {
-                record_scheduler_event(scheduler, |stats| {
-                    stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
-                });
-                let latest_stamp = pending
-                    .incremental
-                    .values()
-                    .map(|update| update.stamp)
-                    .chain(std::iter::once(rebuild.stamp))
-                    .max()
-                    .expect("rebuild stamp is present");
-                if latest_stamp == rebuild.stamp {
-                    if let Some(search_text) = snapshot_sheet_search_text(
-                        pending.document_id,
-                        sheet_index,
-                        rebuild.stamp,
-                        &pending.registry,
-                    ) {
-                        run_rebuild(
-                            pending.document_id,
-                            sheet_index,
-                            rebuild.stamp,
-                            search_text,
-                            &pending.registry,
-                        );
-                    }
-                } else if let Some(search_text) = snapshot_sheet_search_text(
+fn process_pending_sheet(
+    scheduler: &Arc<IndexScheduler>,
+    sheet_index: usize,
+    pending: SheetPending,
+) {
+    if let Some(rebuild) = pending.rebuild {
+        record_scheduler_event(scheduler, |stats| {
+            stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
+        });
+        let latest_stamp = pending
+            .incremental
+            .values()
+            .map(|update| update.stamp)
+            .chain(std::iter::once(rebuild.stamp))
+            .max()
+            .expect("rebuild stamp is present");
+        if latest_stamp == rebuild.stamp {
+            run_rebuild(
+                pending.document_id,
+                sheet_index,
+                rebuild.stamp,
+                rebuild.search_text,
+                &pending.registry,
+            );
+        } else if let Some(search_text) = snapshot_sheet_search_text(
+            pending.document_id,
+            sheet_index,
+            latest_stamp,
+            &pending.registry,
+        ) {
+            run_rebuild(
+                pending.document_id,
+                sheet_index,
+                latest_stamp,
+                search_text,
+                &pending.registry,
+            );
+        }
+        return;
+    }
+
+    if !pending.incremental.is_empty() {
+        record_scheduler_event(scheduler, |stats| {
+            stats.incremental_jobs = stats.incremental_jobs.saturating_add(1);
+        });
+        let latest_stamp = pending
+            .incremental
+            .values()
+            .map(|update| update.stamp)
+            .max()
+            .expect("incremental ops are non-empty");
+        let updates: Vec<CellIndexUpdate> = pending.incremental.into_values().collect();
+        if !run_incremental(
+            pending.document_id,
+            sheet_index,
+            &pending.registry,
+            &updates,
+        ) {
+            record_scheduler_event(scheduler, |stats| {
+                stats.incremental_fallback_rebuilds =
+                    stats.incremental_fallback_rebuilds.saturating_add(1);
+                stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
+            });
+            if let Some(search_text) = snapshot_sheet_search_text(
+                pending.document_id,
+                sheet_index,
+                latest_stamp,
+                &pending.registry,
+            ) {
+                run_rebuild(
                     pending.document_id,
                     sheet_index,
                     latest_stamp,
+                    search_text,
                     &pending.registry,
-                ) {
-                    run_rebuild(
-                        pending.document_id,
-                        sheet_index,
-                        latest_stamp,
-                        search_text,
-                        &pending.registry,
-                    );
-                }
-                continue;
-            }
-
-            if !pending.incremental.is_empty() {
-                record_scheduler_event(scheduler, |stats| {
-                    stats.incremental_jobs = stats.incremental_jobs.saturating_add(1);
-                });
-                let latest_stamp = pending
-                    .incremental
-                    .values()
-                    .map(|update| update.stamp)
-                    .max()
-                    .expect("incremental ops are non-empty");
-                let updates: Vec<CellIndexUpdate> = pending.incremental.into_values().collect();
-                if !run_incremental(
-                    pending.document_id,
-                    sheet_index,
-                    &pending.registry,
-                    &updates,
-                ) {
-                    record_scheduler_event(scheduler, |stats| {
-                        stats.incremental_fallback_rebuilds =
-                            stats.incremental_fallback_rebuilds.saturating_add(1);
-                        stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
-                    });
-                    if let Some(search_text) = snapshot_sheet_search_text(
-                        pending.document_id,
-                        sheet_index,
-                        latest_stamp,
-                        &pending.registry,
-                    ) {
-                        run_rebuild(
-                            pending.document_id,
-                            sheet_index,
-                            latest_stamp,
-                            search_text,
-                            &pending.registry,
-                        );
-                    }
-                }
+                );
             }
         }
     }
 }
 
-fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), SheetPending> {
+fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> ((u64, usize), SheetPending) {
     let mut state = scheduler
         .state
         .lock()
@@ -496,9 +551,20 @@ fn drain_pending_jobs(scheduler: &Arc<IndexScheduler>) -> HashMap<(u64, usize), 
         }
     }
 
-    let pending = std::mem::take(&mut state.pending);
+    let key = *state
+        .pending
+        .keys()
+        .next()
+        .expect("pending job exists after wait");
+    let pending = state
+        .pending
+        .remove(&key)
+        .expect("pending job exists for selected key");
+    if !state.pending.is_empty() {
+        scheduler.wake.notify_one();
+    }
     state.stats.drained_batches = state.stats.drained_batches.saturating_add(1);
-    pending
+    (key, pending)
 }
 
 fn record_scheduler_event(
@@ -787,6 +853,7 @@ mod tests {
                 document_id,
                 sheet_index: 0,
                 stamp,
+                search_text: Vec::new(),
                 registry,
             },
         );

@@ -53,6 +53,7 @@ impl DocumentMementoSide {
 pub(crate) struct CellMemento {
     cells: Vec<SheetCellChange>,
     sheet_shapes: Vec<SheetShapeMemento>,
+    formula_capabilities_may_change: bool,
 }
 
 impl CellMemento {
@@ -456,13 +457,19 @@ impl SpreadsheetDocument {
                 row,
                 col,
                 ..
-            } => DocumentMementoSide::Cells(self.cell_memento([FormulaCellRef {
-                sheet_index: *sheet_index,
-                row: *row,
-                col: *col,
-            }])),
+            } => DocumentMementoSide::Cells(self.cell_memento(
+                [FormulaCellRef {
+                    sheet_index: *sheet_index,
+                    row: *row,
+                    col: *col,
+                }],
+                operation_may_change_formula_capabilities(operation),
+            )),
             AppliedOperation::SetCells { changes } => {
-                DocumentMementoSide::Cells(self.cell_batch_memento(changes))
+                DocumentMementoSide::Cells(self.cell_batch_memento(
+                    changes,
+                    operation_may_change_formula_capabilities(operation),
+                ))
             }
             AppliedOperation::SetColumnWidth {
                 sheet_index,
@@ -516,7 +523,11 @@ impl SpreadsheetDocument {
         }
     }
 
-    fn cell_memento(&self, changed_cells: impl IntoIterator<Item = FormulaCellRef>) -> CellMemento {
+    fn cell_memento(
+        &self,
+        changed_cells: impl IntoIterator<Item = FormulaCellRef>,
+        formula_capabilities_may_change: bool,
+    ) -> CellMemento {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
         let formula_cells = self
             .formulas
@@ -526,23 +537,29 @@ impl SpreadsheetDocument {
                 .into_iter()
                 .chain(formula_cells)
                 .map(|cell| (cell.sheet_index, cell.row, cell.col)),
+            formula_capabilities_may_change,
         )
     }
 
     fn cell_batch_memento(
         &self,
         changes: &[crate::ops::core_ops::ResolvedCellEdit],
+        formula_capabilities_may_change: bool,
     ) -> CellMemento {
-        self.cell_memento(changes.iter().map(|change| FormulaCellRef {
-            sheet_index: change.sheet_index,
-            row: change.row,
-            col: change.col,
-        }))
+        self.cell_memento(
+            changes.iter().map(|change| FormulaCellRef {
+                sheet_index: change.sheet_index,
+                row: change.row,
+                col: change.col,
+            }),
+            formula_capabilities_may_change,
+        )
     }
 
     fn cell_positions_memento(
         &self,
         positions_to_capture: impl IntoIterator<Item = (usize, usize, usize)>,
+        formula_capabilities_may_change: bool,
     ) -> CellMemento {
         let mut positions = Vec::new();
         let mut seen = HashSet::new();
@@ -586,6 +603,7 @@ impl SpreadsheetDocument {
         CellMemento {
             cells,
             sheet_shapes,
+            formula_capabilities_may_change,
         }
     }
 
@@ -730,7 +748,9 @@ impl SpreadsheetDocument {
         }
 
         self.patch_workbook_formula_changes(&memento.cells)?;
-        self.refresh_capabilities();
+        if memento.formula_capabilities_may_change {
+            self.refresh_capabilities();
+        }
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
         let formula_changes = self.formulas.rebuild(&mut self.projection);
@@ -879,7 +899,7 @@ impl SpreadsheetDocument {
         self.body
             .patch_after_operation(&mut self.projection, operation, cell_changes)
             .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))?;
-        if operation.impact().is_cell_edit() {
+        if operation_may_change_formula_capabilities(operation) {
             self.refresh_capabilities();
         }
         Ok(())
@@ -1006,6 +1026,35 @@ fn push_unique_reason(reasons: &mut Vec<String>, reason: impl Into<String>) {
     }
 }
 
+fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bool {
+    match operation {
+        AppliedOperation::SetCell {
+            old_value,
+            new_value,
+            ..
+        } => formula_capability_signature(old_value) != formula_capability_signature(new_value),
+        AppliedOperation::SetCells { changes } => changes.iter().any(|change| {
+            formula_capability_signature(&change.old_value)
+                != formula_capability_signature(&change.new_value)
+        }),
+        AppliedOperation::AddRow { .. }
+        | AppliedOperation::DeleteRow { .. }
+        | AppliedOperation::AddColumn { .. }
+        | AppliedOperation::DeleteColumn { .. }
+        | AppliedOperation::SetColumnWidth { .. }
+        | AppliedOperation::SetRowHeight { .. }
+        | AppliedOperation::AddSheet { .. }
+        | AppliedOperation::DeleteSheet { .. } => false,
+    }
+}
+
+fn formula_capability_signature(value: &CellValue) -> Option<&str> {
+    match value {
+        CellValue::Formula { formula, .. } => Some(formula.as_str()),
+        _ => None,
+    }
+}
+
 fn restore_projection_structure(file_data: &mut FileData, memento: &FileStructureMemento) {
     match memento {
         FileStructureMemento::Empty { sheet_count } => {
@@ -1103,9 +1152,23 @@ fn filter_rich_projection(
     column_matches: impl Fn(usize) -> bool,
     drawing_matches: impl Fn(&DrawingProjection) -> bool,
 ) -> ReadOnlyRichProjection {
+    let cell_formats = filter_cell_projection_map(&source.cell_formats, &cell_matches);
+    let cell_styles = filter_cell_projection_map(&source.cell_styles, &cell_matches);
+    let freeze_pane = source.freeze_pane.clone();
+    let hyperlinks = filter_cell_projection_map(&source.hyperlinks, &cell_matches);
+    let drawings: Vec<DrawingProjection> = source
+        .drawings
+        .iter()
+        .filter(|drawing| drawing_matches(drawing))
+        .cloned()
+        .collect();
+
     ReadOnlyRichProjection {
-        cell_formats: filter_cell_projection_map(&source.cell_formats, &cell_matches),
-        cell_styles: filter_cell_projection_map(&source.cell_styles, &cell_matches),
+        has_style_metadata: !cell_formats.is_empty() || !cell_styles.is_empty(),
+        has_hyperlinks: !hyperlinks.is_empty(),
+        has_freeze_pane: freeze_pane.is_some(),
+        cell_formats,
+        cell_styles,
         hidden_rows: source
             .hidden_rows
             .iter()
@@ -1118,14 +1181,9 @@ fn filter_rich_projection(
             .copied()
             .filter(|column| column_matches(*column))
             .collect(),
-        freeze_pane: source.freeze_pane.clone(),
-        hyperlinks: filter_cell_projection_map(&source.hyperlinks, &cell_matches),
-        drawings: source
-            .drawings
-            .iter()
-            .filter(|drawing| drawing_matches(drawing))
-            .cloned()
-            .collect(),
+        freeze_pane,
+        hyperlinks,
+        drawings,
         has_more_drawings: source.has_more_drawings,
     }
 }

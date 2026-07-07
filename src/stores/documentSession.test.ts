@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import {
+  defaultHistoryStatus,
   defaultRichProjection,
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
   type EditorMutationResponse,
+  type EditorStateInfo,
   type FileData,
   type SheetData,
 } from "@/types";
@@ -19,6 +21,16 @@ function sheet(name: string, rows: CellValue[][]): SheetData {
   return { name, rows, merges: [], rich: defaultRichProjection() };
 }
 
+function editorState(partial: Partial<EditorStateInfo> = {}): EditorStateInfo {
+  return {
+    canUndo: false,
+    canRedo: false,
+    isDirty: false,
+    history: defaultHistoryStatus(),
+    ...partial,
+  };
+}
+
 function response(partial: Partial<EditorMutationResponse>): EditorMutationResponse {
   return {
     protocolVersion: 1,
@@ -26,7 +38,7 @@ function response(partial: Partial<EditorMutationResponse>): EditorMutationRespo
     revision: 1,
     formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
-    editorState: { canUndo: false, canRedo: false, isDirty: false },
+    editorState: editorState(),
     patches: [],
     ...partial,
   };
@@ -87,7 +99,7 @@ describe("documentSession store", () => {
     const result = store.applyMutationResponse(response({
       revision: 1,
       patches: [],
-      editorState: { canUndo: false, canRedo: false, isDirty: true },
+      editorState: editorState({ isDirty: true }),
     }));
 
     expect(result.resyncRequired).toBe(false);
@@ -132,7 +144,7 @@ describe("documentSession store", () => {
         revision: 7,
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
-        editorState: { canUndo: true, canRedo: false, isDirty: true },
+        editorState: editorState({ canUndo: true, isDirty: true }),
       },
     }, data.path);
 

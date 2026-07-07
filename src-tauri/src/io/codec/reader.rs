@@ -199,15 +199,27 @@ fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
 }
 
 fn read_rich_projection(worksheet: &Worksheet) -> ReadOnlyRichProjection {
+    let cell_formats = read_cell_formats(worksheet);
+    let cell_styles = read_cell_styles(worksheet);
+    let freeze_pane = read_freeze_pane(worksheet);
+    let hyperlinks = read_hyperlinks(worksheet);
+    let drawings = read_drawings(worksheet);
+    let has_style_metadata = !cell_formats.is_empty() || !cell_styles.is_empty();
+    let has_hyperlinks = !hyperlinks.is_empty();
+    let has_freeze_pane = freeze_pane.is_some();
+
     ReadOnlyRichProjection {
-        cell_formats: read_cell_formats(worksheet),
-        cell_styles: read_cell_styles(worksheet),
+        cell_formats,
+        cell_styles,
         hidden_rows: read_hidden_rows(worksheet),
         hidden_columns: read_hidden_columns(worksheet),
-        freeze_pane: read_freeze_pane(worksheet),
-        hyperlinks: read_hyperlinks(worksheet),
-        drawings: read_drawings(worksheet),
+        freeze_pane,
+        hyperlinks,
+        drawings,
         has_more_drawings: false,
+        has_style_metadata,
+        has_hyperlinks,
+        has_freeze_pane,
     }
 }
 

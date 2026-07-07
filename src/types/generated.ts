@@ -41,13 +41,13 @@ export type FreezePaneProjection = { topLeftCell: string, horizontalSplit: numbe
 
 export type HyperlinkProjection = { url: string, tooltip?: string | null, location: boolean, };
 
-export type ReadOnlyRichProjection = { cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, hiddenRows?: Array<number>, hiddenColumns?: Array<number>, freezePane?: FreezePaneProjection | null, hyperlinks?: { [key in string]: HyperlinkProjection }, drawings?: Array<DrawingProjection>, hasMoreDrawings: boolean, };
+export type ReadOnlyRichProjection = { cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, hiddenRows?: Array<number>, hiddenColumns?: Array<number>, freezePane?: FreezePaneProjection | null, hyperlinks?: { [key in string]: HyperlinkProjection }, drawings?: Array<DrawingProjection>, hasMoreDrawings: boolean, hasStyleMetadata: boolean, hasHyperlinks: boolean, hasFreezePane: boolean, };
 
 export type DrawingProjection = { kind: DrawingKind, fromRow: number, fromCol: number, toRow?: number | null, toCol?: number | null, };
 
 export type DrawingKind = "image" | "chart";
 
-export type WorkbookCapabilities = { canEditCells: boolean, canResizeRowsColumns: boolean, canInsertDeleteRows: boolean, canInsertDeleteColumns: boolean, canInsertDeleteSheets: boolean, canNativeSave: boolean, blockedStructureReasons?: Array<string>, blockedEditReasons?: Array<string>, blockedResizeReasons?: Array<string>, blockedRowStructureReasons?: Array<string>, blockedColumnStructureReasons?: Array<string>, blockedSheetStructureReasons?: Array<string>, detectedFeatures?: Array<string>, };
+export type WorkbookCapabilities = { canEditCells: boolean, canResizeRowsColumns: boolean, canInsertDeleteRows: boolean, canInsertDeleteColumns: boolean, canInsertDeleteSheets: boolean, canNativeSave: boolean, canEditStyles: boolean, canEditDrawings: boolean, canEditHyperlinks: boolean, blockedStructureReasons?: Array<string>, blockedEditReasons?: Array<string>, blockedResizeReasons?: Array<string>, blockedRowStructureReasons?: Array<string>, blockedColumnStructureReasons?: Array<string>, blockedSheetStructureReasons?: Array<string>, detectedFeatures?: Array<string>, };
 
 export type DocumentCapabilities = { sourceFormat: "xlsx" | "csv", canSaveOriginal: boolean, nativeSaveFormat: "xlsx" | "csv" | null, exportFormats: Array<"xlsx" | "csv">, nativeSaveExtension: "xlsx" | "csv" | null, exportExtension: "xlsx" | "csv", requiresSaveAsForNativeSave: boolean, workbook: WorkbookCapabilities, };
 
@@ -73,7 +73,9 @@ storageType: StorageType,
  */
 originalPath?: string, };
 
-export type EditorStateInfo = { canUndo: boolean, canRedo: boolean, isDirty: boolean, };
+export type HistoryStatus = { isTruncated: boolean, reason?: string, undoEntries: number, redoEntries: number, undoEstimatedBytes: number, redoEstimatedBytes: number, maxHistoryBytes: number, maxSingleEntryBytes: number, };
+
+export type EditorStateInfo = { canUndo: boolean, canRedo: boolean, isDirty: boolean, history: HistoryStatus, };
 
 export type FormulaDiagnostics = { invalidFormulaCount: number, volatileFormulaCount: number, unsupportedDependencyCount: number, largeRangeDependencyCount: number, skippedReferenceRewriteCount: number, };
 

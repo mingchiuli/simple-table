@@ -430,6 +430,12 @@ pub struct ReadOnlyRichProjection {
     pub drawings: Vec<DrawingProjection>,
     #[serde(default)]
     pub has_more_drawings: bool,
+    #[serde(default)]
+    pub has_style_metadata: bool,
+    #[serde(default)]
+    pub has_hyperlinks: bool,
+    #[serde(default)]
+    pub has_freeze_pane: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -542,6 +548,12 @@ pub struct WorkbookCapabilities {
     #[serde(default)]
     pub can_insert_delete_sheets: bool,
     pub can_native_save: bool,
+    #[serde(default)]
+    pub can_edit_styles: bool,
+    #[serde(default)]
+    pub can_edit_drawings: bool,
+    #[serde(default)]
+    pub can_edit_hyperlinks: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_structure_reasons: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -567,6 +579,9 @@ impl Default for WorkbookCapabilities {
             can_insert_delete_columns: true,
             can_insert_delete_sheets: true,
             can_native_save: true,
+            can_edit_styles: false,
+            can_edit_drawings: false,
+            can_edit_hyperlinks: false,
             blocked_structure_reasons: Vec::new(),
             blocked_edit_reasons: Vec::new(),
             blocked_resize_reasons: Vec::new(),

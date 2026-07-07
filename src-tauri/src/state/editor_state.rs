@@ -12,6 +12,7 @@ use crate::state::history_store::{HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_index::{SearchIndexStamp, SearchSheetIndex, SearchWriterHandle};
 use crate::state::search_session::SearchSession;
+use crate::state::state::HistoryStatus;
 use crate::types::{
     AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
 };
@@ -209,6 +210,10 @@ impl EditorState {
 
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
+    }
+
+    pub fn history_status(&self) -> HistoryStatus {
+        self.history.status()
     }
 
     #[cfg(test)]

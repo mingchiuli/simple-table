@@ -3,6 +3,7 @@ export * from './generated';
 import type {
   FormulaDiagnostics,
   FormulaStatus,
+  HistoryStatus,
   ReadOnlyRichProjection,
   WorkbookCapabilities,
 } from './generated';
@@ -15,6 +16,9 @@ export function defaultWorkbookCapabilities(): WorkbookCapabilities {
     canInsertDeleteColumns: true,
     canInsertDeleteSheets: true,
     canNativeSave: true,
+    canEditStyles: false,
+    canEditDrawings: false,
+    canEditHyperlinks: false,
     blockedStructureReasons: [],
     blockedEditReasons: [],
     blockedResizeReasons: [],
@@ -22,6 +26,18 @@ export function defaultWorkbookCapabilities(): WorkbookCapabilities {
     blockedColumnStructureReasons: [],
     blockedSheetStructureReasons: [],
     detectedFeatures: [],
+  };
+}
+
+export function defaultHistoryStatus(): HistoryStatus {
+  return {
+    isTruncated: false,
+    undoEntries: 0,
+    redoEntries: 0,
+    undoEstimatedBytes: 0,
+    redoEstimatedBytes: 0,
+    maxHistoryBytes: 0,
+    maxSingleEntryBytes: 0,
   };
 }
 
@@ -52,5 +68,8 @@ export function defaultRichProjection(): ReadOnlyRichProjection {
     hyperlinks: {},
     drawings: [],
     hasMoreDrawings: false,
+    hasStyleMetadata: false,
+    hasHyperlinks: false,
+    hasFreezePane: false,
   };
 }

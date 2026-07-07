@@ -13,6 +13,24 @@ pub struct EditorStateInfo {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_dirty: bool,
+    #[serde(default)]
+    pub history: HistoryStatus,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HistoryStatus {
+    pub is_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    pub undo_entries: usize,
+    pub redo_entries: usize,
+    pub undo_estimated_bytes: usize,
+    pub redo_estimated_bytes: usize,
+    pub max_history_bytes: usize,
+    pub max_single_entry_bytes: usize,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug)]

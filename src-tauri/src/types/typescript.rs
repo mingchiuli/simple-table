@@ -3,7 +3,7 @@
 use ts_rs::{Config, TS};
 
 use crate::recent::types::{RecentFile, StorageType};
-use crate::state::state::{EditorSessionInfo, EditorStateInfo};
+use crate::state::state::{EditorSessionInfo, EditorStateInfo, HistoryStatus};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DrawingKind,
@@ -45,6 +45,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SearchScope>(&mut output, &cfg);
     push_decl::<StorageType>(&mut output, &cfg);
     push_decl::<RecentFile>(&mut output, &cfg);
+    push_decl::<HistoryStatus>(&mut output, &cfg);
     push_decl::<EditorStateInfo>(&mut output, &cfg);
     push_decl::<FormulaDiagnostics>(&mut output, &cfg);
     push_decl::<FormulaStatus>(&mut output, &cfg);

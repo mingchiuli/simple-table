@@ -55,6 +55,7 @@ pub(crate) struct FormulaDependencyIndex {
     pub(crate) formulas: HashSet<FormulaCellRef>,
     pub(crate) dependents_by_source: HashMap<FormulaCellRef, HashSet<FormulaCellRef>>,
     pub(crate) range_dependents: FormulaRangeDependencyIndex,
+    pub(crate) large_range_dependents: FormulaLargeRangeDependencyIndex,
     pub(crate) always_recalculate: HashSet<FormulaCellRef>,
     pub(crate) diagnostics: FormulaDiagnostics,
     formula_diagnostics: HashMap<FormulaCellRef, FormulaDependencyDiagnostics>,
@@ -70,6 +71,11 @@ struct FormulaDependencyDiagnostics {
 #[derive(Default)]
 pub(crate) struct FormulaRangeDependencyIndex {
     sheets: HashMap<usize, SheetRangeDependencyIndex>,
+}
+
+#[derive(Default)]
+pub(crate) struct FormulaLargeRangeDependencyIndex {
+    dependencies: Vec<(FormulaRangeRef, FormulaCellRef)>,
 }
 
 #[derive(Default)]
@@ -124,6 +130,28 @@ impl FormulaRangeDependencyIndex {
         }
         self.sheets
             .retain(|_, sheet| !sheet.dependencies.is_empty());
+    }
+}
+
+impl FormulaLargeRangeDependencyIndex {
+    fn insert(&mut self, range: FormulaRangeRef, dependent: FormulaCellRef) {
+        self.dependencies.push((range, dependent));
+    }
+
+    pub(crate) fn dependents_for(&self, source: FormulaCellRef) -> Vec<FormulaCellRef> {
+        let mut dependents = Vec::new();
+        let mut seen = HashSet::new();
+        for (range, dependent) in &self.dependencies {
+            if range.contains(source) && seen.insert(*dependent) {
+                dependents.push(*dependent);
+            }
+        }
+        dependents
+    }
+
+    fn remove_dependent(&mut self, dependent: FormulaCellRef) {
+        self.dependencies
+            .retain(|(_, existing)| *existing != dependent);
     }
 }
 
@@ -216,7 +244,7 @@ impl FormulaDependencyIndex {
         for dependency in dependencies.ranges {
             if dependency.is_large() {
                 diagnostics.large_range_dependency_count += 1;
-                self.always_recalculate.insert(formula_ref);
+                self.large_range_dependents.insert(dependency, formula_ref);
                 continue;
             }
             self.range_dependents.insert(dependency, formula_ref);
@@ -233,6 +261,7 @@ impl FormulaDependencyIndex {
         self.dependents_by_source
             .retain(|_, dependents| !dependents.is_empty());
         self.range_dependents.remove_dependent(formula_ref);
+        self.large_range_dependents.remove_dependent(formula_ref);
         if let Some(diagnostics) = self.formula_diagnostics.remove(&formula_ref) {
             self.subtract_diagnostics(diagnostics);
         }

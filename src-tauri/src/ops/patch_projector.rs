@@ -14,6 +14,7 @@ pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
         can_undo: editor_state.can_undo(),
         can_redo: editor_state.can_redo(),
         is_dirty: editor_state.is_dirty(),
+        history: editor_state.history_status(),
     }
 }
 

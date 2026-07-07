@@ -1,4 +1,5 @@
 use crate::io::document_model::DocumentMemento;
+use crate::state::state::HistoryStatus;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;
 pub(crate) const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
@@ -25,6 +26,7 @@ pub(crate) struct HistoryStore {
     redo_stack: Vec<HistoryEntry>,
     undo_estimated_bytes: usize,
     redo_estimated_bytes: usize,
+    truncated_reason: Option<String>,
 }
 
 impl HistoryStore {
@@ -39,6 +41,10 @@ impl HistoryStore {
     pub(crate) fn record(&mut self, entry: HistoryEntry) {
         if entry.estimated_bytes > MAX_SINGLE_HISTORY_ENTRY_BYTES {
             self.clear_undo();
+            self.truncated_reason = Some(format!(
+                "The last operation was too large to keep in undo history ({} bytes, limit {} bytes).",
+                entry.estimated_bytes, MAX_SINGLE_HISTORY_ENTRY_BYTES
+            ));
         } else {
             self.push_undo(entry);
         }
@@ -48,6 +54,7 @@ impl HistoryStore {
     pub(crate) fn clear_all(&mut self) {
         self.clear_undo();
         self.clear_redo();
+        self.truncated_reason = None;
     }
 
     pub(crate) fn clear_undo(&mut self) {
@@ -79,13 +86,32 @@ impl HistoryStore {
     pub(crate) fn push_redo(&mut self, entry: HistoryEntry) {
         self.redo_estimated_bytes += entry.estimated_bytes;
         self.redo_stack.push(entry);
-        evict_oldest_until_bounded(&mut self.redo_stack, &mut self.redo_estimated_bytes);
+        if evict_oldest_until_bounded(&mut self.redo_stack, &mut self.redo_estimated_bytes) > 0 {
+            self.truncated_reason =
+                Some("Old redo entries were discarded to keep history under memory budget.".into());
+        }
     }
 
     pub(crate) fn push_undo(&mut self, entry: HistoryEntry) {
         self.undo_estimated_bytes += entry.estimated_bytes;
         self.undo_stack.push(entry);
-        evict_oldest_until_bounded(&mut self.undo_stack, &mut self.undo_estimated_bytes);
+        if evict_oldest_until_bounded(&mut self.undo_stack, &mut self.undo_estimated_bytes) > 0 {
+            self.truncated_reason =
+                Some("Old undo entries were discarded to keep history under memory budget.".into());
+        }
+    }
+
+    pub(crate) fn status(&self) -> HistoryStatus {
+        HistoryStatus {
+            is_truncated: self.truncated_reason.is_some(),
+            reason: self.truncated_reason.clone(),
+            undo_entries: self.undo_stack.len(),
+            redo_entries: self.redo_stack.len(),
+            undo_estimated_bytes: self.undo_estimated_bytes,
+            redo_estimated_bytes: self.redo_estimated_bytes,
+            max_history_bytes: MAX_HISTORY_BYTES,
+            max_single_entry_bytes: MAX_SINGLE_HISTORY_ENTRY_BYTES,
+        }
     }
 
     #[cfg(test)]
@@ -99,12 +125,15 @@ impl HistoryStore {
     }
 }
 
-fn evict_oldest_until_bounded(stack: &mut Vec<HistoryEntry>, estimated_bytes: &mut usize) {
+fn evict_oldest_until_bounded(stack: &mut Vec<HistoryEntry>, estimated_bytes: &mut usize) -> usize {
+    let mut evicted_count = 0;
     while stack.len() > MAX_HISTORY_ENTRIES || *estimated_bytes > MAX_HISTORY_BYTES {
         let evicted = stack.remove(0);
         *estimated_bytes = estimated_bytes.saturating_sub(evicted.estimated_bytes);
+        evicted_count += 1;
         if stack.is_empty() {
             break;
         }
     }
+    evicted_count
 }

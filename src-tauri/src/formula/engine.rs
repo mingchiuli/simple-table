@@ -284,6 +284,16 @@ impl FormulaRuntime {
                     queue.push_back(dependent);
                 }
             }
+
+            for dependent in self
+                .dependency_index
+                .large_range_dependents
+                .dependents_for(source)
+            {
+                if impacted.insert(dependent) {
+                    queue.push_back(dependent);
+                }
+            }
         }
 
         impacted
@@ -491,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn large_bounded_ranges_use_coarse_recalculation() {
+    fn large_bounded_ranges_recalculate_only_when_the_source_is_inside_the_range() {
         let mut row = vec![CellValue::Null; 3];
         row[0] = CellValue::Number(Value::from(1));
         row[1] = CellValue::formula("=SUM(A1:A10001)", CellValue::Null);
@@ -519,10 +529,10 @@ mod tests {
         file_data.sheets[0].rows[0][2] = CellValue::Number(Value::from(10));
         let changes = runtime
             .sync_cell_and_recalculate(&mut file_data, 0, 0, 2)
-            .expect("coarse range recalc");
+            .expect("unrelated edit");
 
         assert!(
-            changes
+            !changes
                 .iter()
                 .any(|change| change.sheet_index == 0 && change.row == 0 && change.col == 1)
         );

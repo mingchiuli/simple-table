@@ -76,6 +76,7 @@ const {
   hasUnsavedChanges,
   formulaStatus,
   capabilities,
+  history,
   refreshEditorState,
   markPendingContentChange,
   clearPendingContentChange,
@@ -292,6 +293,7 @@ watch(() => route.query.file, () => {
       :file-name="fileData.fileName"
       :has-changes="hasUnsavedChanges"
       :formula-status="formulaStatus"
+      :history-status="history"
     />
 
     <el-button class="back-btn" circle @click="handleBack">

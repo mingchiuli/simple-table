@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { FormulaStatus } from "@/types";
+import type { FormulaStatus, HistoryStatus } from "@/types";
 
 const props = defineProps<{
   fileName: string;
   hasChanges: boolean;
   formulaStatus: FormulaStatus;
+  historyStatus: HistoryStatus;
 }>();
 
 function formulaWarningText(status: FormulaStatus): string | null {
@@ -34,6 +35,13 @@ function formulaWarningText(status: FormulaStatus): string | null {
 }
 
 const formulaWarning = computed(() => formulaWarningText(props.formulaStatus));
+
+const historyWarning = computed(() => {
+  const status = props.historyStatus;
+  if (!status.isTruncated) return null;
+  const reason = status.reason ? `${status.reason}. ` : '';
+  return `${reason}Undo entries: ${status.undoEntries}, redo entries: ${status.redoEntries}`;
+});
 </script>
 
 <template>
@@ -46,6 +54,13 @@ const formulaWarning = computed(() => formulaWarningText(props.formulaStatus));
         :title="formulaWarning"
       >
         {{ formulaStatus.state === 'degraded' ? 'Formula degraded' : 'Formula warnings' }}
+      </span>
+      <span
+        v-if="historyWarning"
+        class="history-warning"
+        :title="historyWarning"
+      >
+        Undo history limited
       </span>
       <span v-if="hasChanges" class="unsaved">Unsaved changes</span>
     </span>
@@ -76,6 +91,10 @@ const formulaWarning = computed(() => formulaWarningText(props.formulaStatus));
 
 .formula-warning {
   color: var(--el-color-danger);
+}
+
+.history-warning {
+  color: var(--el-color-warning);
 }
 
 @media (max-width: 640px), (pointer: coarse) {
