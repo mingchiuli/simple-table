@@ -401,6 +401,10 @@ impl SpreadsheetDocument {
         capabilities
     }
 
+    pub fn is_excel_backed(&self) -> bool {
+        self.body.is_excel_backed()
+    }
+
     pub fn generate_file_bytes_for_target(
         &self,
         target_path_or_name: &str,

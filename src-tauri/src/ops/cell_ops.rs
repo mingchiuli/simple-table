@@ -318,13 +318,13 @@ mod tests {
     }
 
     #[test]
-    fn row_and_column_structure_edits_return_sheet_snapshots() {
+    fn row_and_column_structure_edits_return_delta_patches() {
         let registry = make_registry();
         let add_row_response = do_add_row(&registry, 0, 1).expect("add row");
         assert!(matches!(
             add_row_response.patches.first(),
-            Some(EditorPatch::SheetUpdated { patch })
-                if patch.sheet_index == 0 && patch.sheet.rows.len() == 2
+            Some(EditorPatch::RowInserted { patch })
+                if patch.sheet_index == 0 && patch.row_index == 1 && patch.rows.len() == 1
         ));
         assert_eq!(add_row_response.patches.len(), 1);
 
@@ -332,8 +332,8 @@ mod tests {
         let add_column_response = do_add_column(&registry, 0, 1).expect("add column");
         assert!(matches!(
             add_column_response.patches.first(),
-            Some(EditorPatch::SheetUpdated { patch })
-                if patch.sheet_index == 0 && patch.sheet.rows.first().is_some_and(|row| row.len() == 2)
+            Some(EditorPatch::ColumnInserted { patch })
+                if patch.sheet_index == 0 && patch.col_index == 1 && patch.values.len() == 1
         ));
         assert_eq!(add_column_response.patches.len(), 1);
     }

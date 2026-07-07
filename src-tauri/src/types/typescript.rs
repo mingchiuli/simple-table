@@ -6,12 +6,13 @@ use crate::recent::types::{RecentFile, StorageType};
 use crate::state::state::{EditorSessionInfo, EditorStateInfo};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
-    CellValue, DocumentCapabilities, DrawingKind, DrawingProjection, EditorMutationResponse,
-    EditorPatch, FileData, FormulaDiagnostics, FormulaStatus, FreezePaneProjection,
-    HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse,
-    ReadOnlyRichProjection, ResyncRequiredPatch, SavedDocumentResponse, ScalarCellValue,
-    SearchResult, SearchScope, SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch,
-    SheetShapePatch, SheetUpdatedPatch, WorkbookCapabilities,
+    CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DrawingKind,
+    DrawingProjection, EditorMutationResponse, EditorPatch, FileData, FormulaDiagnostics,
+    FormulaStatus, FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange,
+    NativeSavePlan, OpenDocumentResponse, ReadOnlyRichProjection, ResyncRequiredPatch,
+    RowDeletedPatch, RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchResult,
+    SearchScope, SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
+    SheetStructureMetadataPatch, SheetUpdatedPatch, WorkbookCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -51,6 +52,11 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetInsertedPatch>(&mut output, &cfg);
     push_decl::<SheetDeletedPatch>(&mut output, &cfg);
     push_decl::<SheetUpdatedPatch>(&mut output, &cfg);
+    push_decl::<SheetStructureMetadataPatch>(&mut output, &cfg);
+    push_decl::<RowInsertedPatch>(&mut output, &cfg);
+    push_decl::<RowDeletedPatch>(&mut output, &cfg);
+    push_decl::<ColumnInsertedPatch>(&mut output, &cfg);
+    push_decl::<ColumnDeletedPatch>(&mut output, &cfg);
     push_decl::<SheetShapePatch>(&mut output, &cfg);
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);

@@ -19,7 +19,6 @@ enum IndexJob {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        search_text: Vec<SearchCellText>,
         registry: Arc<RwLock<ActiveDocumentStore>>,
     },
     UpdateCell {
@@ -44,7 +43,6 @@ struct CellIndexUpdate {
 
 struct RebuildIndexUpdate {
     stamp: SearchIndexStamp,
-    search_text: Vec<SearchCellText>,
 }
 
 impl IndexJob {
@@ -127,7 +125,7 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
     ) {
-        let jobs: Vec<(usize, SearchIndexStamp, Vec<SearchCellText>)> = match registry.read() {
+        let jobs: Vec<(usize, SearchIndexStamp)> = match registry.read() {
             Ok(guard) => guard
                 .get(document_id)
                 .map(|editor| {
@@ -136,9 +134,9 @@ impl SearchService {
                         .sheets
                         .iter()
                         .enumerate()
-                        .map(|(sheet_index, sheet)| {
+                        .map(|(sheet_index, _sheet)| {
                             let stamp = editor.search_sheet_index_stamp(sheet_index);
-                            (sheet_index, stamp, collect_sheet_search_text(sheet))
+                            (sheet_index, stamp)
                         })
                         .collect()
                 })
@@ -146,12 +144,11 @@ impl SearchService {
             Err(_) => Vec::new(),
         };
 
-        for (sheet_index, stamp, search_text) in jobs {
+        for (sheet_index, stamp) in jobs {
             self.enqueue(IndexJob::Rebuild {
                 document_id,
                 sheet_index,
                 stamp,
-                search_text,
                 registry: Arc::clone(registry),
             });
         }
@@ -187,14 +184,12 @@ impl SearchService {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        search_text: Vec<SearchCellText>,
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
         self.enqueue(IndexJob::Rebuild {
             document_id,
             sheet_index,
             stamp,
-            search_text,
             registry: Arc::clone(registry),
         });
     }
@@ -230,13 +225,39 @@ impl SearchService {
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(
-                        document_id,
-                        patch.sheet_index,
-                        stamp,
-                        collect_sheet_search_text(&patch.sheet),
-                        registry,
-                    );
+                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                }
+                EditorPatch::RowInserted { patch } => {
+                    let Some(stamp) =
+                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    else {
+                        continue;
+                    };
+                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                }
+                EditorPatch::RowDeleted { patch } => {
+                    let Some(stamp) =
+                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    else {
+                        continue;
+                    };
+                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                }
+                EditorPatch::ColumnInserted { patch } => {
+                    let Some(stamp) =
+                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    else {
+                        continue;
+                    };
+                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                }
+                EditorPatch::ColumnDeleted { patch } => {
+                    let Some(stamp) =
+                        current_search_stamp(registry, document_id, patch.sheet_index)
+                    else {
+                        continue;
+                    };
+                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
                 }
                 EditorPatch::SheetShape { .. }
                 | EditorPatch::ResyncRequired { .. }
@@ -300,9 +321,7 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
             registry: Arc::clone(&registry),
         });
     match job {
-        IndexJob::Rebuild {
-            stamp, search_text, ..
-        } => {
+        IndexJob::Rebuild { stamp, .. } => {
             let latest_seen = entry
                 .rebuild
                 .as_ref()
@@ -312,11 +331,11 @@ fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
                 .max();
             if latest_seen.is_none_or(|latest| stamp >= latest) {
                 entry.registry = registry;
-                entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
+                entry.rebuild = Some(RebuildIndexUpdate { stamp });
                 entry.incremental.retain(|_, update| update.stamp > stamp);
             } else if entry.rebuild.is_none() {
                 entry.registry = registry;
-                entry.rebuild = Some(RebuildIndexUpdate { stamp, search_text });
+                entry.rebuild = Some(RebuildIndexUpdate { stamp });
                 entry.incremental.retain(|_, update| update.stamp > stamp);
             }
         }
@@ -374,13 +393,20 @@ fn index_worker(scheduler: &Arc<IndexScheduler>) {
                     .max()
                     .expect("rebuild stamp is present");
                 if latest_stamp == rebuild.stamp {
-                    run_rebuild(
+                    if let Some(search_text) = snapshot_sheet_search_text(
                         pending.document_id,
                         sheet_index,
                         rebuild.stamp,
-                        rebuild.search_text,
                         &pending.registry,
-                    );
+                    ) {
+                        run_rebuild(
+                            pending.document_id,
+                            sheet_index,
+                            rebuild.stamp,
+                            search_text,
+                            &pending.registry,
+                        );
+                    }
                 } else if let Some(search_text) = snapshot_sheet_search_text(
                     pending.document_id,
                     sheet_index,
@@ -761,12 +787,6 @@ mod tests {
                 document_id,
                 sheet_index: 0,
                 stamp,
-                search_text: vec![SearchCellText {
-                    row: 0,
-                    col: 0,
-                    text: "latest".to_string(),
-                    display: "latest".to_string(),
-                }],
                 registry,
             },
         );

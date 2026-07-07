@@ -1,8 +1,10 @@
 use crate::state::editor_state::{EditorState, ExecutedOperation};
 use crate::state::state::EditorStateInfo;
 use crate::types::{
-    AppliedOperationResult, EditorMutationResponse, EditorPatch, FileData, LayoutPatch,
-    ResyncRequiredPatch, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetUpdatedPatch,
+    AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
+    EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
+    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetStructureMetadataPatch,
+    SheetUpdatedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -120,12 +122,72 @@ pub fn structural_patches(
     operation: &AppliedOperationResult,
 ) -> Vec<EditorPatch> {
     match operation {
-        AppliedOperationResult::AddRow { sheet_index, .. }
-        | AppliedOperationResult::DeleteRow { sheet_index, .. }
-        | AppliedOperationResult::AddColumn { sheet_index, .. }
-        | AppliedOperationResult::DeleteColumn { sheet_index, .. } => {
-            sheet_updated_patch(file_data, *sheet_index)
-        }
+        AppliedOperationResult::AddRow { sheet_index, row } => file_data
+            .sheets
+            .get(*sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::RowInserted {
+                    patch: RowInsertedPatch {
+                        sheet_index: *sheet_index,
+                        row_index: row.index,
+                        rows: vec![row.values.clone()],
+                        metadata: SheetStructureMetadataPatch::from_sheet(sheet),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::DeleteRow {
+            sheet_index,
+            row_index,
+        } => file_data
+            .sheets
+            .get(*sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::RowDeleted {
+                    patch: RowDeletedPatch {
+                        sheet_index: *sheet_index,
+                        row_index: *row_index,
+                        count: 1,
+                        metadata: SheetStructureMetadataPatch::from_sheet(sheet),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::AddColumn {
+            sheet_index,
+            column,
+            col_data,
+        } => file_data
+            .sheets
+            .get(*sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::ColumnInserted {
+                    patch: ColumnInsertedPatch {
+                        sheet_index: *sheet_index,
+                        col_index: column.index,
+                        values: col_data.clone(),
+                        metadata: SheetStructureMetadataPatch::from_sheet(sheet),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
+        AppliedOperationResult::DeleteColumn {
+            sheet_index,
+            column_index,
+        } => file_data
+            .sheets
+            .get(*sheet_index)
+            .map(|sheet| {
+                vec![EditorPatch::ColumnDeleted {
+                    patch: ColumnDeletedPatch {
+                        sheet_index: *sheet_index,
+                        col_index: *column_index,
+                        count: 1,
+                        metadata: SheetStructureMetadataPatch::from_sheet(sheet),
+                    },
+                }]
+            })
+            .unwrap_or_default(),
         AppliedOperationResult::AddSheet {
             sheet_index,
             sheet_data,

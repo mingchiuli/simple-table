@@ -65,6 +65,7 @@ pub struct PreparedDocumentSave {
     pub revision: u64,
     pub output_name: String,
     pub bytes: Vec<u8>,
+    pub finish_without_reparse: bool,
 }
 
 pub fn prepare_current_file_save(
@@ -81,11 +82,15 @@ pub fn prepare_current_file_save(
         ));
     }
     let (output_name, bytes) = editor_state.generate_file_bytes_for_target(target_path_or_name)?;
+    let target_extension = extension_of(&output_name)
+        .or_else(|| extension_of(target_path_or_name))
+        .unwrap_or_else(|| "xlsx".to_string());
     Ok(PreparedDocumentSave {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
         output_name,
         bytes,
+        finish_without_reparse: editor_state.can_finish_save_without_reparse(&target_extension),
     })
 }
 
@@ -100,10 +105,21 @@ where
     let document_id_token = prepared.document_id;
     let revision_token = prepared.revision;
     let output_name = prepared.output_name;
+    let finish_without_reparse = prepared.finish_without_reparse;
     let bytes = prepared.bytes;
     let extension = extension_of(&output_name)
         .or_else(|| extension_of(&path))
         .unwrap_or_else(|| "xlsx".to_string());
+    if finish_without_reparse {
+        return commit_current_file_save_without_reparse(
+            path,
+            document_id_token,
+            revision_token,
+            output_name,
+            extension,
+            commit_write,
+        );
+    }
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
     let registry = active_document_store();
     let clear_history;
@@ -146,6 +162,56 @@ where
         };
     }
     spawn_rebuild_all_sheets_index(&registry, document_id);
+    Ok(response)
+}
+
+fn commit_current_file_save_without_reparse<F>(
+    path: String,
+    document_id_token: u64,
+    revision_token: u64,
+    output_name: String,
+    saved_extension: String,
+    commit_write: F,
+) -> Result<SavedDocumentResponse, AppError>
+where
+    F: FnOnce() -> Result<(), AppError>,
+{
+    let registry = active_document_store();
+    let clear_history;
+    let lease;
+    {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+        ensure_editor_matches_prepared_save(editor_state, document_id_token, revision_token)?;
+        let current_extension = extension_of(&editor_state.file_data().file_name)
+            .or_else(|| extension_of(&editor_state.file_data().path));
+        clear_history = current_extension.as_deref() != Some(saved_extension.as_str());
+        lease = editor_state.begin_save_commit(document_id_token, revision_token)?;
+    }
+
+    if let Err(error) = commit_write() {
+        abort_save_commit(&registry, document_id_token, lease);
+        return Err(error);
+    }
+
+    let response;
+    {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.get_mut(document_id_token).ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "active document changed while save was in progress".to_string(),
+            )
+        })?;
+        editor_state.finish_save_commit_without_reparse(lease, path, output_name, clear_history)?;
+        response = SavedDocumentResponse {
+            file_data: editor_state.file_data().clone(),
+            editor_session: editor_session_info(editor_state),
+        };
+    }
     Ok(response)
 }
 

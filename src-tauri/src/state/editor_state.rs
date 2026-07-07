@@ -154,6 +154,40 @@ impl EditorState {
         Ok(())
     }
 
+    pub fn can_finish_save_without_reparse(&self, target_extension: &str) -> bool {
+        target_extension.eq_ignore_ascii_case("xlsx") && self.document.is_excel_backed()
+    }
+
+    pub fn finish_save_commit_without_reparse(
+        &mut self,
+        lease: SaveCommitLease,
+        path: String,
+        file_name: String,
+        clear_history: bool,
+    ) -> Result<(), AppError> {
+        if self.save_commit != Some(lease) {
+            return Err(AppError::DocumentStateInvalid(
+                "save commit lease is no longer active".to_string(),
+            ));
+        }
+        if self.document_id() != lease.document_id || self.revision() != lease.revision {
+            self.save_commit = None;
+            return Err(AppError::DocumentStateInvalid(
+                "document changed while save was in progress; please save again".to_string(),
+            ));
+        }
+
+        self.save_commit = None;
+        self.document.update_identity(path, file_name);
+        if clear_history {
+            self.history.clear_all();
+        }
+        self.bump_revision();
+        self.refresh_content_hash();
+        self.mark_saved();
+        Ok(())
+    }
+
     pub fn document_id(&self) -> u64 {
         self.session.document_id()
     }
@@ -537,6 +571,58 @@ mod tests {
                 text: "new".to_string(),
             })
             .expect("mutation after save lease release");
+    }
+
+    #[test]
+    fn excel_backed_save_can_finish_without_reparse() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("sheet")
+            .cell_mut("A1")
+            .set_value_string("old");
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            "/tmp/source.xlsx".to_string(),
+            "source.xlsx".to_string(),
+        )
+        .expect("read source");
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+
+        assert!(state.can_finish_save_without_reparse("xlsx"));
+        assert!(!state.can_finish_save_without_reparse("csv"));
+
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect("edit");
+        assert!(state.is_dirty());
+        let revision_before_save = state.revision();
+        let lease = state
+            .begin_save_commit(state.document_id(), state.revision())
+            .expect("begin save commit");
+
+        state
+            .finish_save_commit_without_reparse(
+                lease,
+                "/tmp/saved.xlsx".to_string(),
+                "saved.xlsx".to_string(),
+                false,
+            )
+            .expect("finish save");
+
+        assert_eq!(state.file_data().path, "/tmp/saved.xlsx");
+        assert_eq!(state.file_data().file_name, "saved.xlsx");
+        assert_eq!(state.revision(), revision_before_save + 1);
+        assert!(!state.is_dirty());
+        assert!(state.can_undo());
     }
 
     #[test]

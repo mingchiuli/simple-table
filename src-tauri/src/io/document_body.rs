@@ -112,6 +112,10 @@ impl SpreadsheetDocumentBody {
         }
     }
 
+    pub fn is_excel_backed(&self) -> bool {
+        matches!(self, Self::Excel(_))
+    }
+
     pub fn generate_file_bytes_for_target(
         &self,
         projection: &FileData,

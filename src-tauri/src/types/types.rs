@@ -875,6 +875,79 @@ pub struct SheetUpdatedPatch {
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
+pub struct SheetStructureMetadataPatch {
+    pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub column_widths: Option<HashMap<usize, u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub row_heights: Option<HashMap<usize, u32>>,
+    pub rich: ReadOnlyRichProjection,
+}
+
+impl SheetStructureMetadataPatch {
+    pub fn from_sheet(sheet: &SheetData) -> Self {
+        Self {
+            merges: sheet.merges.clone(),
+            column_widths: sheet.column_widths.clone(),
+            row_heights: sheet.row_heights.clone(),
+            rich: sheet.rich.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RowInsertedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "rowIndex")]
+    pub row_index: usize,
+    pub rows: Vec<Vec<CellValue>>,
+    pub metadata: SheetStructureMetadataPatch,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RowDeletedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "rowIndex")]
+    pub row_index: usize,
+    pub count: usize,
+    pub metadata: SheetStructureMetadataPatch,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ColumnInsertedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "colIndex")]
+    pub col_index: usize,
+    pub values: Vec<CellValue>,
+    pub metadata: SheetStructureMetadataPatch,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ColumnDeletedPatch {
+    #[serde(rename = "sheetIndex")]
+    pub sheet_index: usize,
+    #[serde(rename = "colIndex")]
+    pub col_index: usize,
+    pub count: usize,
+    pub metadata: SheetStructureMetadataPatch,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetShapePatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
@@ -902,6 +975,14 @@ pub enum EditorPatch {
     SheetDeleted { patch: SheetDeletedPatch },
     #[serde(rename = "SheetUpdated")]
     SheetUpdated { patch: SheetUpdatedPatch },
+    #[serde(rename = "RowInserted")]
+    RowInserted { patch: RowInsertedPatch },
+    #[serde(rename = "RowDeleted")]
+    RowDeleted { patch: RowDeletedPatch },
+    #[serde(rename = "ColumnInserted")]
+    ColumnInserted { patch: ColumnInsertedPatch },
+    #[serde(rename = "ColumnDeleted")]
+    ColumnDeleted { patch: ColumnDeletedPatch },
     #[serde(rename = "SheetShape")]
     SheetShape { patch: SheetShapePatch },
     #[serde(rename = "ResyncRequired")]

@@ -87,11 +87,21 @@ export type SheetDeletedPatch = { sheetIndex: number, };
 
 export type SheetUpdatedPatch = { sheetIndex: number, sheet: SheetData, };
 
+export type SheetStructureMetadataPatch = { merges: Array<MergeRange>, columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, rich: ReadOnlyRichProjection, };
+
+export type RowInsertedPatch = { sheetIndex: number, rowIndex: number, rows: Array<Array<CellValue>>, metadata: SheetStructureMetadataPatch, };
+
+export type RowDeletedPatch = { sheetIndex: number, rowIndex: number, count: number, metadata: SheetStructureMetadataPatch, };
+
+export type ColumnInsertedPatch = { sheetIndex: number, colIndex: number, values: Array<CellValue>, metadata: SheetStructureMetadataPatch, };
+
+export type ColumnDeletedPatch = { sheetIndex: number, colIndex: number, count: number, metadata: SheetStructureMetadataPatch, };
+
 export type SheetShapePatch = { sheetIndex: number, rowLengths: Array<number>, };
 
 export type ResyncRequiredPatch = { reason: string, };
 
-export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetUpdated", "data": { patch: SheetUpdatedPatch, } } | { "type": "SheetShape", "data": { patch: SheetShapePatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
+export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetUpdated", "data": { patch: SheetUpdatedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "SheetShape", "data": { patch: SheetShapePatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
 
 export type EditorMutationResponse = { protocolVersion: 1, documentId: number, revision: number, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, };
 
