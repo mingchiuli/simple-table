@@ -24,6 +24,12 @@ pub struct FormulaRebuildResult {
     pub diagnostics: FormulaDiagnostics,
 }
 
+#[derive(Clone, Copy)]
+enum FormulaRebuildPolicy {
+    PreserveCachedResults,
+    RecalculateRegisteredFormulas,
+}
+
 impl FormulaRuntime {
     pub fn new(file_data: &mut FileData) -> Result<Self, AppError> {
         let mut runtime = Self::empty();
@@ -41,12 +47,30 @@ impl FormulaRuntime {
     }
 
     pub fn rebuild(&mut self, file_data: &mut FileData) -> Result<Vec<SheetCellChange>, AppError> {
-        Ok(self.rebuild_with_diagnostics(file_data)?.changes)
+        Ok(self.rebuild_preserving_cached_results(file_data)?.changes)
     }
 
-    pub fn rebuild_with_diagnostics(
+    pub fn rebuild_preserving_cached_results(
         &mut self,
         file_data: &mut FileData,
+    ) -> Result<FormulaRebuildResult, AppError> {
+        self.rebuild_with_policy(file_data, FormulaRebuildPolicy::PreserveCachedResults)
+    }
+
+    pub fn rebuild_and_recalculate_with_diagnostics(
+        &mut self,
+        file_data: &mut FileData,
+    ) -> Result<FormulaRebuildResult, AppError> {
+        self.rebuild_with_policy(
+            file_data,
+            FormulaRebuildPolicy::RecalculateRegisteredFormulas,
+        )
+    }
+
+    fn rebuild_with_policy(
+        &mut self,
+        file_data: &mut FileData,
+        policy: FormulaRebuildPolicy,
     ) -> Result<FormulaRebuildResult, AppError> {
         let mut workbook = Workbook::new_with_mode(WorkbookMode::Ephemeral);
         for sheet in &file_data.sheets {
@@ -55,9 +79,9 @@ impl FormulaRuntime {
                 .map_err(|error| AppError::Internal(error.to_string()))?;
         }
 
-        let mut registration_result =
+        let registration_result =
             register_workbook_cells(&mut workbook, &mut self.ast_service, file_data)?;
-        let mut changes = std::mem::take(&mut registration_result.invalid_formulas);
+        let mut changes = Vec::new();
 
         let sheet_names: Vec<String> = file_data
             .sheets
@@ -68,13 +92,14 @@ impl FormulaRuntime {
             .prepare_graph_for_sheets(sheet_names.iter().map(String::as_str))
             .map_err(|error| AppError::Internal(error.to_string()))?;
 
-        apply_cell_changes(file_data, &changes);
         self.workbook = workbook;
-        self.registered_formulas = std::mem::take(&mut registration_result.registered_formulas);
+        self.registered_formulas = registration_result.registered_formulas;
         self.dependency_index =
             build_dependency_index(file_data, &self.registered_formulas, &mut self.ast_service);
         self.refresh_formula_diagnostics(file_data);
-        changes.extend(self.recalculate_all_formula_cells(file_data)?);
+        if matches!(policy, FormulaRebuildPolicy::RecalculateRegisteredFormulas) {
+            changes.extend(self.recalculate_all_formula_cells(file_data)?);
+        }
         Ok(FormulaRebuildResult {
             changes,
             diagnostics: self.dependency_index.diagnostics.clone(),
@@ -318,7 +343,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recalculates_basic_formulas() {
+    fn rebuild_preserves_cached_formula_results_until_an_edit_impacts_them() {
         let mut file_data = FileData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
@@ -330,18 +355,26 @@ mod tests {
                         CellValue::Number(Value::from(3)),
                     ],
                     vec![
-                        CellValue::formula("=A1+B1", CellValue::Null),
-                        CellValue::formula("=SUM(A1:B1)", CellValue::Null),
+                        CellValue::formula("=A1+B1", CellValue::String("cached".to_string())),
+                        CellValue::formula("=SUM(A1:B1)", CellValue::String("cached".to_string())),
                     ],
                 ],
                 ..Default::default()
             }],
         };
 
-        FormulaRuntime::new(&mut file_data).expect("formula recalc");
+        let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
 
-        assert_eq!(file_data.sheets[0].rows[1][0].to_display_string(), "5.0");
-        assert_eq!(file_data.sheets[0].rows[1][1].to_display_string(), "5.0");
+        assert_eq!(file_data.sheets[0].rows[1][0].to_display_string(), "cached");
+        assert_eq!(file_data.sheets[0].rows[1][1].to_display_string(), "cached");
+
+        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(4));
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, 0, 0, 0)
+            .expect("incremental recalc");
+
+        assert_eq!(file_data.sheets[0].rows[1][0].to_display_string(), "7.0");
+        assert_eq!(file_data.sheets[0].rows[1][1].to_display_string(), "7.0");
     }
 
     #[test]
@@ -362,11 +395,8 @@ mod tests {
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
 
-        assert!(matches!(
-            &file_data.sheets[0].rows[0][1],
-            CellValue::Formula { error: Some(_), .. }
-        ));
-        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "2.0");
+        assert_eq!(runtime.diagnostics().invalid_formula_count, 1);
+        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "");
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
         runtime
@@ -393,8 +423,6 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "2.0");
-        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "3.0");
 
         file_data.sheets[0].rows[0][1] = CellValue::formula("=SUM(", CellValue::Null);
         let changes = runtime
@@ -535,7 +563,6 @@ mod tests {
                 && change.col == 1
                 && matches!(&change.value, CellValue::Formula { error: Some(_), .. })
         }));
-        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "3.0");
         assert_eq!(file_data.sheets[0].rows[0][3].to_display_string(), "4.0");
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
@@ -567,7 +594,6 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "3.0");
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
         runtime
@@ -593,7 +619,6 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "11.0");
 
         file_data.sheets[0].rows[0][1] = CellValue::formula("=A1*2", CellValue::Null);
         runtime
@@ -644,7 +669,6 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "6.0");
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
         runtime
@@ -671,7 +695,6 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "3.0");
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(5));
         runtime
@@ -702,7 +725,6 @@ mod tests {
         };
 
         let mut runtime = FormulaRuntime::new(&mut file_data).expect("formula runtime");
-        assert_eq!(file_data.sheets[1].rows[0][0].to_display_string(), "12.0");
 
         file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(7));
         runtime

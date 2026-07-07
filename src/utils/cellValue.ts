@@ -14,9 +14,8 @@ export function cellToEditorString(value: CellValue | undefined): string {
   return value.formula?.formula ?? scalarToString(value.raw);
 }
 
-export function cellToDisplayString(value: CellValue | undefined): string {
-  if (!value) return "";
-  return value.formula?.error ?? value.display ?? scalarToString(value.raw);
+export function cellDisplayText(value: CellValue | undefined): string {
+  return value?.display ?? "";
 }
 
 export function cellKind(value: CellValue | undefined): CellKind {

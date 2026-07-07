@@ -6,7 +6,7 @@ use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{active_document_store, editor_state::EditorState, state::EditorSessionInfo};
 use crate::types::{
-    DocumentCapabilities, FileData, OpenDocumentResponse, SavedDocumentResponse,
+    DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, SavedDocumentResponse,
     WorkbookCapabilities,
 };
 use umya_spreadsheet::Workbook;
@@ -225,6 +225,36 @@ pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> Doc
     }
 }
 
+pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
+    let source_format = document_format(target_path_or_name).unwrap_or_else(|| "xlsx".to_string());
+    let native_extension = native_save_extension(target_path_or_name);
+    let native_save_allowed = native_extension.is_some();
+    let export_extension =
+        export_extension(target_path_or_name).unwrap_or_else(|| source_format.clone());
+    let export_formats = export_formats_for(&source_format);
+    let workbook = active_workbook_capabilities_for_save(native_save_allowed);
+    let capabilities = DocumentCapabilities {
+        source_format,
+        can_save_original: native_save_allowed,
+        native_save_format: native_extension.clone(),
+        export_formats,
+        requires_save_as_for_native_save: native_extension.is_none(),
+        native_save_extension: native_extension.clone(),
+        export_extension,
+        workbook: workbook.clone(),
+    };
+    let blocked_reason = native_save_blocked_reason(&capabilities);
+
+    NativeSavePlan {
+        can_save: blocked_reason.is_none(),
+        requires_save_as: capabilities.requires_save_as_for_native_save,
+        native_save_extension: native_extension.clone(),
+        default_extension: native_extension.unwrap_or_else(|| "xlsx".to_string()),
+        blocked_reason,
+        capabilities,
+    }
+}
+
 fn active_workbook_capabilities(
     file_name: &str,
     current_path: Option<&str>,
@@ -256,6 +286,59 @@ fn active_workbook_capabilities(
             can_native_save: native_save_allowed,
             ..Default::default()
         })
+}
+
+fn active_workbook_capabilities_for_save(native_save_allowed: bool) -> WorkbookCapabilities {
+    let registry = active_document_store();
+    let Ok(registry_guard) = registry.read() else {
+        eprintln!("document registry lock poisoned while planning native save");
+        return WorkbookCapabilities {
+            can_native_save: native_save_allowed,
+            ..Default::default()
+        };
+    };
+
+    registry_guard
+        .active()
+        .map(|editor_state| {
+            let mut capabilities = editor_state.capabilities();
+            capabilities.can_native_save = native_save_allowed && capabilities.can_native_save;
+            capabilities
+        })
+        .unwrap_or_else(|| WorkbookCapabilities {
+            can_native_save: native_save_allowed,
+            ..Default::default()
+        })
+}
+
+fn native_save_blocked_reason(capabilities: &DocumentCapabilities) -> Option<String> {
+    if capabilities.native_save_extension.is_none() {
+        return Some("Native save is only supported as .xlsx or .csv.".to_string());
+    }
+    if !capabilities.workbook.can_native_save {
+        return Some(first_reason(
+            [
+                &capabilities.workbook.blocked_structure_reasons,
+                &capabilities.workbook.blocked_edit_reasons,
+                &capabilities.workbook.blocked_resize_reasons,
+                &capabilities.workbook.blocked_row_structure_reasons,
+                &capabilities.workbook.blocked_column_structure_reasons,
+                &capabilities.workbook.blocked_sheet_structure_reasons,
+                &capabilities.workbook.detected_features,
+            ],
+            "Workbook cannot be saved in its current state.",
+        ));
+    }
+    None
+}
+
+fn first_reason(reason_groups: [&Vec<String>; 7], fallback: &str) -> String {
+    reason_groups
+        .into_iter()
+        .flat_map(|reasons| reasons.iter())
+        .next()
+        .cloned()
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn init_editor_state(

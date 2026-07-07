@@ -709,6 +709,7 @@ impl SpreadsheetDocument {
         }
 
         self.patch_workbook_formula_changes(&memento.cells)?;
+        self.refresh_capabilities();
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
         let formula_changes = self.formulas.rebuild(&mut self.projection);
@@ -856,7 +857,11 @@ impl SpreadsheetDocument {
     ) -> Result<(), AppError> {
         self.body
             .patch_after_operation(&mut self.projection, operation, cell_changes)
-            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))
+            .map_err(|error| AppError::WorkbookPatchFailed(error.to_string()))?;
+        if operation.impact().is_cell_edit() {
+            self.refresh_capabilities();
+        }
+        Ok(())
     }
 
     pub(crate) fn apply_operation_to_body_and_projection(

@@ -7,6 +7,7 @@ import type {
   EditorMutationResponse,
   EditorSessionInfo,
   DocumentCapabilities,
+  NativeSavePlan,
   OpenDocumentResponse,
 } from "@/types";
 
@@ -27,6 +28,10 @@ export async function getDocumentCapabilities(
   currentPath: string | null
 ): Promise<DocumentCapabilities> {
   return invoke<DocumentCapabilities>("get_document_capabilities", { fileName, currentPath });
+}
+
+export async function getNativeSavePlan(targetPathOrName: string): Promise<NativeSavePlan> {
+  return invoke<NativeSavePlan>("get_native_save_plan", { targetPathOrName });
 }
 
 // ==================== Editor Operations ====================

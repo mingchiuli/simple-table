@@ -24,9 +24,9 @@ use commands::ios::{
 use commands::{
     add_column, add_recent_file_with_thumbnail, add_row, add_sheet, check_file_exists,
     delete_column, delete_row, delete_sheet, get_current_file_data, get_document_capabilities,
-    get_editor_state, get_file_size, get_recent_files, init_file, redo, remove_recent_file, search,
-    set_cell, set_cells, set_column_width, set_row_height, undo, update_document_identity,
-    update_recent_file_path,
+    get_editor_state, get_file_size, get_native_save_plan, get_recent_files, init_file, redo,
+    remove_recent_file, search, set_cell, set_cells, set_column_width, set_row_height, undo,
+    update_document_identity, update_recent_file_path,
 };
 #[cfg(desktop)]
 use commands::{export_file_desktop, read_file_desktop, save_file_desktop};
@@ -74,6 +74,7 @@ pub fn run() {
             get_current_file_data,
             update_document_identity,
             get_document_capabilities,
+            get_native_save_plan,
             init_file,
             undo,
             redo,

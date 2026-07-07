@@ -837,6 +837,58 @@ mod tests {
     }
 
     #[test]
+    fn formula_edits_refresh_workbook_capabilities_and_undo_restores_them() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("sheet")
+            .cell_mut("A1")
+            .set_value_number(1);
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "capabilities.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        assert!(state.capabilities().can_insert_delete_rows);
+
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 1,
+                text: "=SUM(".to_string(),
+            })
+            .expect("invalid formula edit is isolated to the cell");
+
+        let capabilities = state.capabilities();
+        assert!(!capabilities.can_insert_delete_rows);
+        assert!(
+            capabilities
+                .blocked_structure_reasons
+                .contains(&"unparseable formulas".to_string())
+        );
+
+        state
+            .undo()
+            .expect("undo formula edit")
+            .expect("undo result");
+        assert!(state.capabilities().can_insert_delete_rows);
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 1,
+            })
+            .expect("structure edit after formula undo");
+    }
+
+    #[test]
     fn structure_undo_redo_restores_cross_sheet_formula_rewrites() {
         let mut source = umya_spreadsheet::new_file();
         source.new_sheet("Other").expect("other sheet");

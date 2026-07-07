@@ -3,6 +3,7 @@ pub mod codec {
     pub mod writer;
 }
 
+pub mod atomic_file;
 pub mod document;
 pub mod document_body;
 pub mod document_model;

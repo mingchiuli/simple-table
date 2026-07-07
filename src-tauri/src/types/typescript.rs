@@ -8,10 +8,10 @@ use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, DocumentCapabilities, DrawingKind, DrawingProjection, EditorMutationResponse,
     EditorPatch, FileData, FormulaDiagnostics, FormulaStatus, FreezePaneProjection,
-    HyperlinkProjection, LayoutPatch, MergeRange, OpenDocumentResponse, ReadOnlyRichProjection,
-    ResyncRequiredPatch, SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope,
-    SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
-    SheetUpdatedPatch, WorkbookCapabilities,
+    HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse,
+    ReadOnlyRichProjection, ResyncRequiredPatch, SavedDocumentResponse, ScalarCellValue,
+    SearchResult, SearchScope, SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch,
+    SheetShapePatch, SheetUpdatedPatch, WorkbookCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -37,6 +37,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<DrawingKind>(&mut output, &cfg);
     push_decl::<WorkbookCapabilities>(&mut output, &cfg);
     push_decl::<DocumentCapabilities>(&mut output, &cfg);
+    push_decl::<NativeSavePlan>(&mut output, &cfg);
     push_decl::<crate::types::SheetCellChange>(&mut output, &cfg);
     push_decl::<SetCellRequest>(&mut output, &cfg);
     push_decl::<SearchResult>(&mut output, &cfg);

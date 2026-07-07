@@ -140,7 +140,10 @@ impl FormulaCoordinator {
             AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
                 Vec::new()
             }
-            _ => match self.runtime.rebuild_with_diagnostics(projection) {
+            _ => match self
+                .runtime
+                .rebuild_and_recalculate_with_diagnostics(projection)
+            {
                 Ok(result) => {
                     let mut diagnostics = result.diagnostics;
                     self.merge_structure_diagnostics(&mut diagnostics);
@@ -156,7 +159,7 @@ impl FormulaCoordinator {
     }
 
     pub(crate) fn rebuild(&mut self, projection: &mut FileData) -> Vec<SheetCellChange> {
-        match self.runtime.rebuild_with_diagnostics(projection) {
+        match self.runtime.rebuild_preserving_cached_results(projection) {
             Ok(result) => {
                 let mut diagnostics = result.diagnostics;
                 self.merge_structure_diagnostics(&mut diagnostics);

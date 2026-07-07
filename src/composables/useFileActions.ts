@@ -4,7 +4,7 @@ import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, re
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
-import { documentCapabilities } from '@/utils/documentCapabilities';
+import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { waitForEditorMutations } from '@/composables/useEditorMutationQueue';
 
 type UseFileActionsOptions = {
@@ -107,9 +107,10 @@ export function useFileActions({
 
       const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
-      const capabilities = await documentCapabilities(fileData.value.fileName, existingPath);
+      const existingTarget = existingPath ?? fileData.value.fileName;
+      const savePlan = await nativeSavePlan(existingTarget);
 
-      if (existingPath && capabilities.nativeSaveExtension && !capabilities.requiresSaveAsForNativeSave) {
+      if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
         isLoading.value = true;
         const saved = await saveFile(existingPath);
         documentSessionStore.applySavedDocumentResponse(saved, existingPath);
@@ -120,13 +121,18 @@ export function useFileActions({
         return;
       }
 
-      const fallbackExtension = capabilities.nativeSaveExtension || 'xlsx';
+      if (existingPath && !savePlan.requiresSaveAs && !savePlan.canSave) {
+        ElMessage.error(savePlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
+        return;
+      }
+
+      const fallbackExtension = savePlan.defaultExtension;
       const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
       if (!savePath) return;
 
-      const targetCapabilities = await documentCapabilities(savePath, savePath);
-      if (!targetCapabilities.nativeSaveExtension) {
-        ElMessage.error('Native save is only supported as .xlsx or .csv.');
+      const targetPlan = await nativeSavePlan(savePath);
+      if (!targetPlan.canSave) {
+        ElMessage.error(targetPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
         return;
       }
 
@@ -152,19 +158,21 @@ export function useFileActions({
 
     let path = documentSessionStore.currentFilePath;
     const storageType = await getStorageType();
-    const pathCapabilities = path ? await documentCapabilities(path, path) : null;
+    const pathPlan = path ? await nativeSavePlan(path) : null;
 
-    if (!path || !pathCapabilities?.nativeSaveExtension) {
+    if (!path || pathPlan?.requiresSaveAs) {
       if (storageType === 'desktopPath') {
         throw new Error('Export is only supported for mobile sandbox files');
       }
       path = await pickSaveLocation(`${defaultName}.${extension}`);
       if (!path) return null;
 
-      const targetCapabilities = await documentCapabilities(path, path);
-      if (!targetCapabilities.nativeSaveExtension) {
-        throw new Error('Native save is only supported as .xlsx or .csv.');
+      const targetPlan = await nativeSavePlan(path);
+      if (!targetPlan.canSave) {
+        throw new Error(targetPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
       }
+    } else if (pathPlan && !pathPlan.canSave) {
+      throw new Error(pathPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
     }
 
     const saved = await saveFile(path);

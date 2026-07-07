@@ -1,6 +1,6 @@
 import type { ComputedRef } from "vue";
 import type { CellValue } from "@/types";
-import { cellToDisplayString, cellToEditorString } from "@/utils/cellValue";
+import { cellDisplayText, cellToEditorString } from "@/utils/cellValue";
 import { useCellEditing } from "@/table-geometry/useCellEditing";
 
 type CellPosition = { row: number; col: number };
@@ -119,7 +119,7 @@ export function useTableInteractionController({
     const draftValue = getDraftValue(rowIndex, colIndex);
     if (draftValue !== undefined) return draftValue;
 
-    return cellToDisplayString(cellValue);
+    return cellDisplayText(cellValue);
   }
 
   function handleCommit(rowIndex: number, colIndex: number, value: string) {

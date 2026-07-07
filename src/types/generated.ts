@@ -51,6 +51,8 @@ export type WorkbookCapabilities = { canEditCells: boolean, canResizeRowsColumns
 
 export type DocumentCapabilities = { sourceFormat: "xlsx" | "csv", canSaveOriginal: boolean, nativeSaveFormat: "xlsx" | "csv" | null, exportFormats: Array<"xlsx" | "csv">, nativeSaveExtension: "xlsx" | "csv" | null, exportExtension: "xlsx" | "csv", requiresSaveAsForNativeSave: boolean, workbook: WorkbookCapabilities, };
 
+export type NativeSavePlan = { canSave: boolean, requiresSaveAs: boolean, nativeSaveExtension: "xlsx" | "csv" | null, defaultExtension: "xlsx" | "csv", blockedReason?: string | null, capabilities: DocumentCapabilities, };
+
 export type SheetCellChange = { sheetIndex: number, row: number, col: number, value: CellValue, display?: string, format?: CellFormatProjection, style?: CellStyleProjection, };
 
 export type SetCellRequest = { sheetIndex: number, row: number, col: number, text: string, };

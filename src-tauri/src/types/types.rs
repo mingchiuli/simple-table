@@ -514,6 +514,21 @@ pub struct DocumentCapabilities {
     pub workbook: WorkbookCapabilities,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct NativeSavePlan {
+    pub can_save: bool,
+    pub requires_save_as: bool,
+    #[ts(type = "\"xlsx\" | \"csv\" | null")]
+    pub native_save_extension: Option<String>,
+    #[ts(type = "\"xlsx\" | \"csv\"")]
+    pub default_extension: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    pub capabilities: DocumentCapabilities,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

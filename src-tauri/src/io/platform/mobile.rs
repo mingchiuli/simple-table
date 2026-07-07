@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 use crate::io::document;
 use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
@@ -96,14 +97,13 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, Ap
 pub fn save_file(_app: &AppHandle, path: &str) -> Result<SavedDocumentResponse, AppError> {
     let prepared = document::prepare_current_file_save(path)?;
     let target = PathBuf::from(path);
-    let temp_path = temporary_path_for(&target);
-    write_local_temp_file(&temp_path, &prepared.bytes)?;
+    let temp_path = write_temp_file_for_target(&target, &prepared.bytes)?;
 
     let result = document::commit_current_file_save(path.to_string(), prepared, || {
-        replace_local_file_with_temp(&temp_path, &target)
+        replace_temp_file(&temp_path, &target)
     });
     if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
+        cleanup_temp_file(&temp_path);
     }
     result
 }
@@ -152,31 +152,4 @@ pub fn export_file(
         .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;
 
     Ok(Some(dest.to_string()))
-}
-
-fn temporary_path_for(path: &Path) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("simple-table.xlsx");
-    parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()))
-}
-
-fn write_local_temp_file(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
-    let mut file = fs::File::create(path).map_err(|e| AppError::WriteError(e.to_string()))?;
-    file.write_all(bytes)
-        .map_err(|e| AppError::WriteError(e.to_string()))?;
-    file.sync_all()
-        .map_err(|e| AppError::WriteError(e.to_string()))
-}
-
-fn replace_local_file_with_temp(temp_path: &Path, target: &Path) -> Result<(), AppError> {
-    match fs::rename(temp_path, target) {
-        Ok(()) => Ok(()),
-        Err(rename_error) => {
-            let _ = fs::remove_file(temp_path);
-            Err(AppError::WriteError(rename_error.to_string()))
-        }
-    }
 }
