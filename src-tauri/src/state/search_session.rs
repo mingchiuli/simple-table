@@ -1,6 +1,5 @@
-use crate::state::editor_state::SearchCellSnapshot;
 use crate::state::search_index::{
-    SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
+    SearchCellText, SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
 
 #[derive(Default)]
@@ -59,19 +58,7 @@ impl SearchSession {
         sheet_index: usize,
         query: &str,
         limit: usize,
-    ) -> Option<Vec<SearchCellSnapshot>> {
-        self.index
-            .search_sheet(sheet_index, query, limit)
-            .map(|matches| {
-                matches
-                    .into_iter()
-                    .map(|cell| SearchCellSnapshot {
-                        row: cell.row,
-                        col: cell.col,
-                        text: cell.text,
-                        search_text: cell.display,
-                    })
-                    .collect()
-            })
+    ) -> Option<Vec<SearchCellText>> {
+        self.index.search_sheet(sheet_index, query, limit)
     }
 }

@@ -10,7 +10,9 @@ use crate::state::editor_session::EditorSession;
 use crate::state::history_store::{HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES};
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
-use crate::state::search_index::{SearchIndexStamp, SearchSheetIndex, SearchWriterHandle};
+use crate::state::search_index::{
+    SearchCellText, SearchIndexStamp, SearchSheetIndex, SearchWriterHandle,
+};
 use crate::state::search_session::SearchSession;
 use crate::state::state::HistoryStatus;
 use crate::types::{
@@ -27,21 +29,6 @@ pub struct ExecutedOperation {
     pub operation: Option<AppliedOperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
     pub restore: Option<DocumentRestoreResult>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SearchCellSnapshot {
-    pub row: usize,
-    pub col: usize,
-    pub text: String,
-    pub search_text: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct SearchSheetSnapshot {
-    pub sheet_index: usize,
-    pub sheet_name: String,
-    pub cells: Vec<SearchCellSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,7 +269,7 @@ impl EditorState {
         sheet_index: usize,
         query: &str,
         limit: usize,
-    ) -> Option<Vec<SearchCellSnapshot>> {
+    ) -> Option<Vec<SearchCellText>> {
         self.search.indexed_search_sheet(sheet_index, query, limit)
     }
 
@@ -291,41 +278,6 @@ impl EditorState {
             .sheets
             .get(sheet_index)
             .map(|sheet| sheet.name.clone())
-    }
-
-    pub fn search_sheet_snapshot(&self, sheet_index: usize) -> Option<SearchSheetSnapshot> {
-        let sheet = self.file_data().sheets.get(sheet_index)?;
-        Some(SearchSheetSnapshot {
-            sheet_index,
-            sheet_name: sheet.name.clone(),
-            cells: sheet
-                .rows
-                .iter()
-                .enumerate()
-                .flat_map(|(row_idx, row)| {
-                    row.iter().enumerate().filter_map(move |(col_idx, _cell)| {
-                        self.search_cell_snapshot(sheet_index, row_idx, col_idx)
-                            .filter(|cell| !cell.search_text.is_empty())
-                    })
-                })
-                .collect(),
-        })
-    }
-
-    pub fn search_cell_snapshot(
-        &self,
-        sheet_index: usize,
-        row: usize,
-        col: usize,
-    ) -> Option<SearchCellSnapshot> {
-        let sheet = self.file_data().sheets.get(sheet_index)?;
-        sheet.rows.get(row)?.get(col)?;
-        Some(SearchCellSnapshot {
-            row,
-            col,
-            text: sheet.cell_display_text(row, col),
-            search_text: sheet.cell_search_text(row, col),
-        })
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -350,6 +302,7 @@ impl EditorState {
         self.ensure_not_saving()?;
         let operation = command.resolve(self.file_data())?;
         self.ensure_operation_supported(&operation)?;
+        self.ensure_memento_budget(&operation)?;
         let should_mark_search_stale = operation.impact().requires_search_rebuild();
         let before = self.document.capture_memento_side(&operation);
         if operation.impact().is_noop() {
@@ -483,6 +436,19 @@ impl EditorState {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
             ));
+        }
+        Ok(())
+    }
+
+    fn ensure_memento_budget(
+        &mut self,
+        operation: &crate::ops::AppliedOperation,
+    ) -> Result<(), AppError> {
+        let estimated_bytes = self.document.estimate_memento_side_bytes(operation);
+        if estimated_bytes > MAX_SINGLE_HISTORY_ENTRY_BYTES {
+            return Err(AppError::DocumentStateInvalid(format!(
+                "operation is too large for safe undo/rollback history (estimated {estimated_bytes} bytes, limit {MAX_SINGLE_HISTORY_ENTRY_BYTES} bytes)"
+            )));
         }
         Ok(())
     }
@@ -2039,5 +2005,37 @@ mod tests {
         assert!(state.history.undo_len() < 40);
         assert!(state.history.undo_estimated_bytes() <= MAX_HISTORY_BYTES);
         assert!(state.can_undo());
+    }
+
+    #[test]
+    fn oversized_structure_memento_is_rejected_before_history_capture() {
+        let huge_text = "x".repeat(MAX_SINGLE_HISTORY_ENTRY_BYTES + 1024);
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "huge-structure.xlsx".to_string(),
+                sheets: vec![
+                    crate::types::SheetData {
+                        name: "Huge".to_string(),
+                        rows: vec![vec![CellValue::String(huge_text)]],
+                        ..Default::default()
+                    },
+                    crate::types::SheetData {
+                        name: "Other".to_string(),
+                        rows: vec![vec![CellValue::Null]],
+                        ..Default::default()
+                    },
+                ],
+            },
+            None,
+        );
+
+        let error = state
+            .execute(EditorCommand::DeleteSheet { sheet_index: 0 })
+            .expect_err("oversized structure operation should be rejected");
+
+        assert!(error.to_string().contains("too large for safe undo"));
+        assert!(!state.can_undo());
+        assert_eq!(state.file_data().sheets.len(), 2);
     }
 }

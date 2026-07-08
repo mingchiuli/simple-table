@@ -39,9 +39,10 @@ export function useEditorCommands({
   const editorSelectionStore = useEditorSelectionStore();
   const searchSessionStore = useSearchSessionStore();
 
-  async function runEditorCommand(
+  async function runEditorMutation(
     action: (context: EditorCommandContext) => Promise<EditorMutationResponse>,
-    message: string
+    message: string,
+    options: { refreshProjectionOnError?: boolean } = {}
   ) {
     if (documentSessionStore.isInteractionLocked) return;
     try {
@@ -51,7 +52,7 @@ export function useEditorCommands({
         await applyMutationResponse(await action(editorCommandContext()));
       });
     } catch (error) {
-      await refreshAfterMutationError();
+      await refreshAfterMutationError({ refreshProjection: options.refreshProjectionOnError });
       ElMessage.error(`${message}: ${error}`);
     } finally {
       isLoading.value = false;
@@ -72,7 +73,7 @@ export function useEditorCommands({
     if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
     const rowIndex = sheetExtent(currentSheet.value).rowCount;
-    await runEditorCommand(
+    await runEditorMutation(
       (context) => api.addRow(context, sheetIndex, rowIndex),
       "Failed to add row"
     );
@@ -81,7 +82,7 @@ export function useEditorCommands({
   async function handleDeleteRow(index: number) {
     if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
-    await runEditorCommand(
+    await runEditorMutation(
       (context) => api.deleteRow(context, sheetIndex, index),
       "Failed to delete row"
     );
@@ -91,7 +92,7 @@ export function useEditorCommands({
     if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
     const colIndex = selectedCell.value?.col ?? sheetExtent(currentSheet.value).columnCount;
-    await runEditorCommand(
+    await runEditorMutation(
       (context) => api.addColumn(context, sheetIndex, colIndex),
       "Failed to add column"
     );
@@ -100,7 +101,7 @@ export function useEditorCommands({
   async function handleDeleteColumn(index: number) {
     if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
-    await runEditorCommand(
+    await runEditorMutation(
       (context) => api.deleteColumn(context, sheetIndex, index),
       "Failed to delete column"
     );
@@ -109,7 +110,7 @@ export function useEditorCommands({
   async function handleAddSheet() {
     if (!fileData.value || !ensureStructureEditingAllowed("sheets")) return;
     const newSheetIndex = fileData.value.sheets.length;
-    await runEditorCommand(async (context) => {
+    await runEditorMutation(async (context) => {
       const response = await api.addSheet(context);
       editorSelectionStore.clearSelection();
       currentSheetIndex.value = newSheetIndex;
@@ -126,7 +127,7 @@ export function useEditorCommands({
 
     const deletedIndex = currentSheetIndex.value;
     const nextSheetIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
-    await runEditorCommand(async (context) => {
+    await runEditorMutation(async (context) => {
       const response = await api.deleteSheet(context, deletedIndex);
       currentSheetIndex.value = nextSheetIndex;
       return response;
@@ -143,12 +144,12 @@ export function useEditorCommands({
 
   async function handleUndo() {
     if (!documentStatusStore.canUndo) return;
-    await runEditorCommand((context) => api.undo(context), "Failed to undo");
+    await runEditorMutation((context) => api.undo(context), "Failed to undo");
   }
 
   async function handleRedo() {
     if (!documentStatusStore.canRedo) return;
-    await runEditorCommand((context) => api.redo(context), "Failed to redo");
+    await runEditorMutation((context) => api.redo(context), "Failed to redo");
   }
 
   async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
@@ -191,39 +192,21 @@ export function useEditorCommands({
   async function handleColumnResize(colIndex: number, width: number) {
     if (!fileData.value || documentSessionStore.isInteractionLocked || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
-    try {
-      isLoading.value = true;
-      if (!(await flushPendingCellChanges())) return;
-      await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
-        await applyMutationResponse(
-          await api.setColumnWidth(editorCommandContext(), sheetIndex, colIndex, width)
-        );
-      });
-    } catch (error) {
-      await refreshAfterMutationError({ refreshProjection: true });
-      ElMessage.error(`Failed to resize column: ${error}`);
-    } finally {
-      isLoading.value = false;
-    }
+    await runEditorMutation(
+      (context) => api.setColumnWidth(context, sheetIndex, colIndex, width),
+      "Failed to resize column",
+      { refreshProjectionOnError: true }
+    );
   }
 
   async function handleRowResize(rowIndex: number, height: number) {
     if (!fileData.value || documentSessionStore.isInteractionLocked || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
-    try {
-      isLoading.value = true;
-      if (!(await flushPendingCellChanges())) return;
-      await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
-        await applyMutationResponse(
-          await api.setRowHeight(editorCommandContext(), sheetIndex, rowIndex, height)
-        );
-      });
-    } catch (error) {
-      await refreshAfterMutationError({ refreshProjection: true });
-      ElMessage.error(`Failed to resize row: ${error}`);
-    } finally {
-      isLoading.value = false;
-    }
+    await runEditorMutation(
+      (context) => api.setRowHeight(context, sheetIndex, rowIndex, height),
+      "Failed to resize row",
+      { refreshProjectionOnError: true }
+    );
   }
 
   function ensureStructureEditingAllowed(kind: "rows" | "columns" | "sheets"): boolean {

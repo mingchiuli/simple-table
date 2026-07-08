@@ -28,6 +28,21 @@ export function useFileActions({
   const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
 
+  async function withDocumentLifecycle(
+    lifecycle: 'loading' | 'saving',
+    errorPrefix: string,
+    action: () => Promise<void>
+  ) {
+    try {
+      documentSessionStore.beginLifecycle(lifecycle);
+      await action();
+    } catch (error) {
+      ElMessage.error(`${errorPrefix}: ${error}`);
+    } finally {
+      documentSessionStore.endLifecycle(lifecycle);
+    }
+  }
+
   async function updateRecentFileEntry(
     path: string,
     fileName: string,
@@ -41,8 +56,7 @@ export function useFileActions({
   }
 
   async function loadFileFromPath(filePath: string) {
-    try {
-      documentSessionStore.beginLifecycle('loading');
+    await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -56,18 +70,13 @@ export function useFileActions({
       const storageType = await getStorageType();
       await updateRecentFileEntry(filePath, fileName, storageType);
       await recentFilesStore.load();
-    } catch (error) {
-      ElMessage.error(`Failed to open file: ${error}`);
-    } finally {
-      isLoading.value = false;
-      isFileLoading.value = false;
-      documentSessionStore.endLifecycle('loading');
-    }
+    });
+    isLoading.value = false;
+    isFileLoading.value = false;
   }
 
   async function handleOpenFile() {
-    try {
-      documentSessionStore.beginLifecycle('loading');
+    await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -88,31 +97,27 @@ export function useFileActions({
         storageType,
         result.originalPath
       );
-    } catch (error) {
-      ElMessage.error(`Failed to open file: ${error}`);
-    } finally {
-      isLoading.value = false;
-      isFileLoading.value = false;
-      documentSessionStore.endLifecycle('loading');
-    }
+    });
+    isLoading.value = false;
+    isFileLoading.value = false;
   }
 
   async function handleSaveFile() {
-    if (!fileData.value) return;
+    const data = fileData.value;
+    if (!data) return;
 
-    try {
-      documentSessionStore.beginLifecycle('saving');
+    await withDocumentLifecycle('saving', 'Failed to save file', async () => {
       if (!(await flushPendingCellChanges())) return;
       await waitForEditorMutations(documentSessionStore.mutationScope);
 
-      const isNewFile = fileData.value.fileName.startsWith('untitled');
+      const isNewFile = data.fileName.startsWith('untitled');
       const defaultName = isNewFile
         ? 'untitled'
-        : fileData.value.fileName.replace(/\.[^.]+$/, '');
+        : data.fileName.replace(/\.[^.]+$/, '');
 
       const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
-      const existingTarget = existingPath ?? fileData.value.fileName;
+      const existingTarget = existingPath ?? data.fileName;
       const savePlan = await nativeSavePlan(existingTarget);
 
       if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
@@ -149,12 +154,8 @@ export function useFileActions({
       await updateRecentFileEntry(savePath, fileName, storageType);
       await recentFilesStore.load();
       ElMessage.success('File saved successfully');
-    } catch (error) {
-      ElMessage.error(`Failed to save file: ${error}`);
-    } finally {
-      isLoading.value = false;
-      documentSessionStore.endLifecycle('saving');
-    }
+    });
+    isLoading.value = false;
   }
 
   async function ensureSandboxPathForExport(defaultName: string, extension: string): Promise<string | null> {
@@ -190,17 +191,17 @@ export function useFileActions({
   }
 
   async function handleExportFile() {
-    if (!fileData.value) return;
+    const data = fileData.value;
+    if (!data) return;
 
-    try {
-      documentSessionStore.beginLifecycle('saving');
+    await withDocumentLifecycle('saving', 'Failed to export file', async () => {
       isLoading.value = true;
-      const isNewFile = fileData.value.fileName.startsWith('untitled');
+      const isNewFile = data.fileName.startsWith('untitled');
       const defaultName = isNewFile
         ? 'untitled'
-        : fileData.value.fileName.replace(/\.[^.]+$/, '');
+        : data.fileName.replace(/\.[^.]+$/, '');
       const capabilities = await documentCapabilities(
-        fileData.value.fileName,
+        data.fileName,
         documentSessionStore.currentFilePath
       );
       const extension = isNewFile ? 'xlsx' : capabilities.exportExtension;
@@ -226,12 +227,8 @@ export function useFileActions({
       if (exportedPath) {
         ElMessage.success('File exported successfully');
       }
-    } catch (error) {
-      ElMessage.error(`Failed to export file: ${error}`);
-    } finally {
-      isLoading.value = false;
-      documentSessionStore.endLifecycle('saving');
-    }
+    });
+    isLoading.value = false;
   }
 
   async function handleBack() {

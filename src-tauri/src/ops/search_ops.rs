@@ -1,8 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::state::editor_state::{SearchCellSnapshot, SearchSheetSnapshot};
-use crate::state::search_index::SearchMatcher;
+use crate::state::search_index::{SearchCellText, SearchMatcher};
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{SearchResult, SearchScope};
 
@@ -52,6 +51,7 @@ pub fn do_search(
         }
     };
 
+    let matcher = SearchMatcher::new(query);
     let mut results = Vec::new();
     let mut used_scan_fallback = false;
 
@@ -67,7 +67,13 @@ pub fn do_search(
             let Some(editor_state) = registry.active() else {
                 return Err(AppError::NoFileLoaded);
             };
-            search_input_for_sheet(editor_state, sheet_index, query, remaining)
+            search_input_for_sheet(
+                editor_state,
+                sheet_index,
+                query,
+                matcher.as_ref(),
+                remaining,
+            )
         };
         let Some(input) = input else {
             continue;
@@ -89,12 +95,16 @@ pub fn do_search(
                     });
                 }
             }
-            SearchInput::Scan(snapshot) => {
+            SearchInput::Scan {
+                sheet_index,
+                sheet_name,
+                cells,
+            } => {
                 used_scan_fallback = true;
-                for cell in scan_sheet_snapshot(&snapshot, query, remaining) {
+                for cell in cells {
                     results.push(SearchResult {
-                        sheet_index: snapshot.sheet_index,
-                        sheet_name: snapshot.sheet_name.clone(),
+                        sheet_index,
+                        sheet_name: sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
                         value: cell.text,
@@ -116,15 +126,20 @@ enum SearchInput {
     Indexed {
         sheet_index: usize,
         sheet_name: String,
-        cells: Vec<SearchCellSnapshot>,
+        cells: Vec<SearchCellText>,
     },
-    Scan(SearchSheetSnapshot),
+    Scan {
+        sheet_index: usize,
+        sheet_name: String,
+        cells: Vec<SearchCellText>,
+    },
 }
 
 fn search_input_for_sheet(
     editor_state: &crate::state::editor_state::EditorState,
     sheet_index: usize,
     query: &str,
+    matcher: Option<&SearchMatcher>,
     limit: usize,
 ) -> Option<SearchInput> {
     if let Some(cells) = editor_state.indexed_search_sheet(sheet_index, query, limit) {
@@ -134,38 +149,33 @@ fn search_input_for_sheet(
             cells,
         });
     }
-    Some(SearchInput::Scan(
-        editor_state.search_sheet_snapshot(sheet_index)?,
-    ))
-}
-
-fn scan_sheet_snapshot(
-    snapshot: &SearchSheetSnapshot,
-    query: &str,
-    limit: usize,
-) -> Vec<SearchCellSnapshot> {
-    let Some(matcher) = SearchMatcher::new(query) else {
-        return Vec::new();
-    };
-    let mut results = Vec::new();
-    for SearchCellSnapshot {
-        row,
-        col,
-        text,
-        search_text,
-    } in &snapshot.cells
-    {
-        if matcher.matches(search_text) {
-            results.push(SearchCellSnapshot {
-                row: *row,
-                col: *col,
-                text: text.clone(),
-                search_text: search_text.clone(),
+    let matcher = matcher?;
+    let sheet = editor_state.file_data().sheets.get(sheet_index)?;
+    let mut cells = Vec::new();
+    for (row_idx, row) in sheet.rows.iter().enumerate() {
+        for (col_idx, _cell) in row.iter().enumerate() {
+            let search_text = sheet.cell_search_text(row_idx, col_idx);
+            if search_text.is_empty() || !matcher.matches(&search_text) {
+                continue;
+            }
+            cells.push(SearchCellText {
+                row: row_idx,
+                col: col_idx,
+                text: sheet.cell_display_text(row_idx, col_idx),
+                display: search_text,
             });
-            if results.len() >= limit {
-                break;
+            if cells.len() >= limit {
+                return Some(SearchInput::Scan {
+                    sheet_index,
+                    sheet_name: sheet.name.clone(),
+                    cells,
+                });
             }
         }
     }
-    results
+    Some(SearchInput::Scan {
+        sheet_index,
+        sheet_name: sheet.name.clone(),
+        cells,
+    })
 }

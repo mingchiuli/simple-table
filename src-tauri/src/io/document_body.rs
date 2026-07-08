@@ -93,6 +93,19 @@ impl SpreadsheetDocumentBody {
         }
     }
 
+    pub fn estimate_structure_memento_bytes(
+        &self,
+        operation: &AppliedOperation,
+        ast_service: &mut FormulaAstService,
+    ) -> usize {
+        match self {
+            Self::Excel(body) => {
+                estimate_excel_structure_memento_bytes(excel_workbook(body), operation, ast_service)
+            }
+            Self::Csv | Self::GeneratedWorkbook => std::mem::size_of::<BodyStructureMemento>(),
+        }
+    }
+
     pub fn restore_structure_memento(
         &mut self,
         memento: &BodyStructureMemento,
@@ -431,6 +444,49 @@ fn capture_excel_structure_memento(
         sheets,
         estimated_bytes,
     }
+}
+
+fn estimate_excel_structure_memento_bytes(
+    workbook: &Workbook,
+    operation: &AppliedOperation,
+    ast_service: &mut FormulaAstService,
+) -> usize {
+    affected_excel_structure_sheet_indexes(workbook, operation, ast_service)
+        .into_iter()
+        .filter_map(|sheet_index| workbook.sheet(sheet_index).ok())
+        .map(estimate_worksheet_bytes)
+        .sum::<usize>()
+        + std::mem::size_of::<BodyStructureMemento>()
+}
+
+fn affected_excel_structure_sheet_indexes(
+    workbook: &Workbook,
+    operation: &AppliedOperation,
+    ast_service: &mut FormulaAstService,
+) -> BTreeSet<usize> {
+    let sheet_count = workbook.sheet_count();
+    let replace_tail_from = match operation {
+        AppliedOperation::AddSheet { sheet_index, .. }
+        | AppliedOperation::DeleteSheet { sheet_index } => Some(*sheet_index),
+        _ => None,
+    };
+    let mut sheet_indexes = BTreeSet::new();
+    match replace_tail_from {
+        Some(start) => sheet_indexes.extend(start..sheet_count),
+        None => {
+            if let Some(sheet_index) =
+                affected_sheet_index(operation).filter(|sheet_index| *sheet_index < sheet_count)
+            {
+                sheet_indexes.insert(sheet_index);
+            }
+        }
+    }
+    sheet_indexes.extend(affected_formula_sheet_indexes(
+        workbook,
+        operation,
+        ast_service,
+    ));
+    sheet_indexes
 }
 
 fn restore_excel_structure_memento(

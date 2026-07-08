@@ -8,6 +8,7 @@ use crate::io::document_memento::{
     RichProjectionMemento, RowStructureMemento, SheetShapeMemento, SheetTailMemento,
     StructureMemento, protected_rich_cell_positions,
 };
+use crate::io::document_memento_budget;
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
 use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::io::document_transaction::DocumentTransaction;
@@ -217,6 +218,15 @@ impl SpreadsheetDocument {
                 DocumentMementoSide::Structure(Box::new(self.structure_memento(operation)))
             }
         }
+    }
+
+    pub(crate) fn estimate_memento_side_bytes(&mut self, operation: &AppliedOperation) -> usize {
+        document_memento_budget::estimate_memento_side_bytes(
+            &self.projection,
+            &self.body,
+            &mut self.formulas,
+            operation,
+        )
     }
 
     pub fn restore_memento(
