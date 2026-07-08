@@ -113,6 +113,14 @@ impl SpreadsheetDocument {
         capabilities
     }
 
+    pub(crate) fn unsupported_operation_features(
+        &mut self,
+        operation: &AppliedOperation,
+    ) -> Vec<String> {
+        self.body
+            .unsupported_operation_features(operation, self.formulas.ast_service_mut())
+    }
+
     #[cfg(test)]
     pub fn is_excel_backed(&self) -> bool {
         self.body.is_excel_backed()
@@ -634,7 +642,6 @@ impl SpreadsheetDocument {
         if let Some(result) = self.body.apply_structure_operation(
             &mut self.projection,
             operation,
-            &self.cached_capabilities,
             self.formulas.ast_service_mut(),
         )? {
             self.formulas

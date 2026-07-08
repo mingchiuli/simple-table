@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
-use crate::state::search_index::{SearchCellText, SearchIndexStamp};
+use crate::state::search_index::SearchIndexStamp;
 use crate::state::state::ActiveDocumentStore;
 
 pub(crate) enum IndexJob {
@@ -9,7 +9,6 @@ pub(crate) enum IndexJob {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        search_text: Arc<[SearchCellText]>,
         registry: Arc<RwLock<ActiveDocumentStore>>,
     },
     UpdateCell {
@@ -34,7 +33,6 @@ pub(crate) struct CellIndexUpdate {
 
 pub(crate) struct RebuildIndexUpdate {
     pub(crate) stamp: SearchIndexStamp,
-    pub(crate) search_text: Arc<[SearchCellText]>,
 }
 
 impl IndexJob {

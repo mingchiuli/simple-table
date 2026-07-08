@@ -8,11 +8,12 @@ use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DrawingKind,
     DrawingProjection, EditorMutationResponse, EditorPatch, FileData, FormulaDiagnostics,
-    FormulaStatus, FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange,
-    NativeSavePlan, OpenDocumentResponse, ReadOnlyRichProjection, ResyncRequiredPatch,
-    RowDeletedPatch, RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchResult,
-    SearchScope, SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
-    SheetStructureMetadataPatch, SheetUpdatedPatch, WorkbookCapabilities,
+    FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection, HyperlinkProjection,
+    LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse, ReadOnlyRichProjection,
+    ResyncRequiredPatch, RichProjectionPatch, RichProjectionPatchScope, RowDeletedPatch,
+    RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope,
+    SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
+    SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch, WorkbookCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -47,12 +48,17 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<RecentFile>(&mut output, &cfg);
     push_decl::<HistoryStatus>(&mut output, &cfg);
     push_decl::<EditorStateInfo>(&mut output, &cfg);
+    push_decl::<FormulaIssueKind>(&mut output, &cfg);
+    push_decl::<FormulaIssue>(&mut output, &cfg);
     push_decl::<FormulaDiagnostics>(&mut output, &cfg);
     push_decl::<FormulaStatus>(&mut output, &cfg);
     push_decl::<LayoutPatch>(&mut output, &cfg);
     push_decl::<SheetInsertedPatch>(&mut output, &cfg);
     push_decl::<SheetDeletedPatch>(&mut output, &cfg);
     push_decl::<SheetUpdatedPatch>(&mut output, &cfg);
+    push_decl::<SheetsReplacedPatch>(&mut output, &cfg);
+    push_decl::<RichProjectionPatchScope>(&mut output, &cfg);
+    push_decl::<RichProjectionPatch>(&mut output, &cfg);
     push_decl::<SheetStructureMetadataPatch>(&mut output, &cfg);
     push_decl::<RowInsertedPatch>(&mut output, &cfg);
     push_decl::<RowDeletedPatch>(&mut output, &cfg);

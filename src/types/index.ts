@@ -48,6 +48,7 @@ export function defaultFormulaDiagnostics(): FormulaDiagnostics {
     unsupportedDependencyCount: 0,
     largeRangeDependencyCount: 0,
     skippedReferenceRewriteCount: 0,
+    issues: [],
   };
 }
 

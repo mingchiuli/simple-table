@@ -92,10 +92,9 @@ pub fn patch_after_operation(
 pub fn apply_structure_operation(
     workbook: &mut Workbook,
     operation: &AppliedOperation,
-    capabilities: &WorkbookCapabilities,
     ast_service: &mut FormulaAstService,
 ) -> Result<StructurePatchDiagnostics, AppError> {
-    let unsupported = unsupported_structure_features(capabilities, operation);
+    let unsupported = unsupported_operation_features(workbook, operation, ast_service);
     if !unsupported.is_empty() {
         return Err(AppError::UnsupportedWorkbookStructure(
             unsupported.join(", "),
@@ -355,20 +354,130 @@ pub fn workbook_capabilities(
     }
 }
 
-pub fn unsupported_structure_features(
-    capabilities: &WorkbookCapabilities,
+pub fn unsupported_operation_features(
+    workbook: &Workbook,
     operation: &AppliedOperation,
+    ast_service: &mut FormulaAstService,
 ) -> Vec<String> {
-    if operation.impact().is_row_structure_change() {
-        return capabilities.blocked_row_structure_reasons.clone();
+    let mut reasons = Vec::new();
+
+    if workbook.workbook_protection().is_some() {
+        push_block_reason(&mut reasons, "workbook protection");
     }
-    if operation.impact().is_column_structure_change() {
-        return capabilities.blocked_column_structure_reasons.clone();
+
+    if operation.impact().is_structure_change() {
+        if !workbook.defined_names().is_empty() {
+            push_block_reason(&mut reasons, "workbook defined names");
+        }
+        if workbook.has_threaded_comments() {
+            push_block_reason(&mut reasons, "threaded comments");
+        }
+        for limitation in formula_reference_limitations(workbook, ast_service) {
+            push_block_reason(&mut reasons, &limitation);
+        }
     }
-    if operation.impact().is_sheet_structure_change() {
-        return capabilities.blocked_sheet_structure_reasons.clone();
+
+    for sheet_index in operation_blocker_sheet_indexes(workbook, operation) {
+        let Ok(worksheet) = workbook.sheet(sheet_index) else {
+            continue;
+        };
+        push_worksheet_operation_blockers(&mut reasons, worksheet, operation);
     }
-    Vec::new()
+
+    normalize_reasons(&mut reasons);
+    reasons
+}
+
+fn operation_blocker_sheet_indexes(
+    workbook: &Workbook,
+    operation: &AppliedOperation,
+) -> Vec<usize> {
+    match operation {
+        AppliedOperation::SetCell { sheet_index, .. }
+        | AppliedOperation::SetColumnWidth { sheet_index, .. }
+        | AppliedOperation::SetRowHeight { sheet_index, .. }
+        | AppliedOperation::AddRow { sheet_index, .. }
+        | AppliedOperation::DeleteRow { sheet_index, .. }
+        | AppliedOperation::AddColumn { sheet_index, .. }
+        | AppliedOperation::DeleteColumn { sheet_index, .. } => vec![*sheet_index],
+        AppliedOperation::SetCells { changes } => {
+            let mut indexes: Vec<usize> = changes.iter().map(|change| change.sheet_index).collect();
+            indexes.sort_unstable();
+            indexes.dedup();
+            indexes
+        }
+        AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => {
+            (0..workbook.sheet_count()).collect()
+        }
+    }
+}
+
+fn push_worksheet_operation_blockers(
+    reasons: &mut Vec<String>,
+    worksheet: &Worksheet,
+    operation: &AppliedOperation,
+) {
+    if worksheet.sheet_protection().is_some() {
+        if operation.impact().is_cell_edit()
+            || operation.impact().is_layout_change()
+            || operation.impact().is_row_structure_change()
+            || operation.impact().is_column_structure_change()
+        {
+            push_block_reason(reasons, "sheet protection");
+        }
+    }
+
+    if operation.impact().is_structure_change() && !worksheet.defined_names().is_empty() {
+        push_block_reason(reasons, "sheet defined names");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && worksheet.has_table()
+    {
+        push_block_reason(reasons, "tables");
+    }
+    if operation.impact().is_structure_change() && worksheet.has_pivot_table() {
+        push_block_reason(reasons, "pivot tables");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && !worksheet.chart_collection().is_empty()
+    {
+        push_block_reason(reasons, "charts");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && (!worksheet.image_collection().is_empty() || worksheet.has_drawing_object())
+    {
+        push_block_reason(reasons, "drawings/images");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && (worksheet.data_validations().is_some() || worksheet.data_validations_2010().is_some())
+    {
+        push_block_reason(reasons, "data validations");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && !worksheet.conditional_formatting_collection().is_empty()
+    {
+        push_block_reason(reasons, "conditional formatting");
+    }
+    if operation.impact().is_row_structure_change() && worksheet.auto_filter().is_some() {
+        push_block_reason(reasons, "auto filters");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && worksheet.has_comments()
+    {
+        push_block_reason(reasons, "comments");
+    }
+    if (operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change())
+        && worksheet.has_threaded_comments()
+    {
+        push_block_reason(reasons, "threaded comments");
+    }
 }
 
 fn push_detected_feature(detected_features: &mut Vec<String>, feature: &str) {

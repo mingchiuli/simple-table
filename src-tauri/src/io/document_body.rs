@@ -145,6 +145,22 @@ impl SpreadsheetDocumentBody {
         }
     }
 
+    pub fn unsupported_operation_features(
+        &self,
+        operation: &AppliedOperation,
+        ast_service: &mut FormulaAstService,
+    ) -> Vec<String> {
+        match self {
+            Self::Excel(body) => workbook_state::unsupported_operation_features(
+                excel_workbook(body),
+                operation,
+                ast_service,
+            ),
+            Self::Csv => csv_unsupported_operation_features(operation),
+            Self::GeneratedWorkbook => Vec::new(),
+        }
+    }
+
     pub fn is_excel_backed(&self) -> bool {
         matches!(self, Self::Excel(_))
     }
@@ -214,7 +230,6 @@ impl SpreadsheetDocumentBody {
         &mut self,
         projection: &mut FileData,
         operation: &AppliedOperation,
-        capabilities: &WorkbookCapabilities,
         ast_service: &mut FormulaAstService,
     ) -> Result<Option<BodyStructureOperationResult>, AppError> {
         if !operation.impact().is_structure_change() {
@@ -226,7 +241,6 @@ impl SpreadsheetDocumentBody {
                 let diagnostics = workbook_state::apply_structure_operation(
                     excel_workbook_mut(body),
                     operation,
-                    capabilities,
                     ast_service,
                 )?;
                 WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
@@ -710,4 +724,14 @@ fn csv_workbook_capabilities() -> WorkbookCapabilities {
         detected_features: vec!["csv single-sheet value format".into()],
         ..WorkbookCapabilities::default()
     }
+}
+
+fn csv_unsupported_operation_features(operation: &AppliedOperation) -> Vec<String> {
+    if operation.impact().is_layout_change() {
+        return vec!["CSV files do not persist row or column dimensions".into()];
+    }
+    if operation.impact().is_sheet_structure_change() {
+        return vec!["CSV files only persist one sheet".into()];
+    }
+    Vec::new()
 }

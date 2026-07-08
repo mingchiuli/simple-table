@@ -4,7 +4,7 @@ use formualizer_parse::parser::ReferenceType;
 
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
-use crate::types::{CellValue, FileData, FormulaDiagnostics};
+use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaIssue, FormulaIssueKind};
 
 const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
 const LARGE_RANGE_COLUMN_THRESHOLD: usize = 128;
@@ -63,11 +63,12 @@ pub(crate) struct FormulaDependencyIndex {
     formula_diagnostics: HashMap<FormulaCellRef, FormulaDependencyDiagnostics>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct FormulaDependencyDiagnostics {
     volatile_formula_count: usize,
     unsupported_dependency_count: usize,
     large_range_dependency_count: usize,
+    issues: Vec<FormulaIssue>,
 }
 
 #[derive(Default)]
@@ -310,12 +311,22 @@ impl FormulaDependencyIndex {
             DependencyCollection::Precise(dependencies) => dependencies,
             DependencyCollection::Volatile => {
                 diagnostics.volatile_formula_count = 1;
+                diagnostics.issues.push(formula_issue(
+                    formula_ref,
+                    FormulaIssueKind::VolatileFormula,
+                    "Formula uses volatile functions and is recalculated after every edit",
+                ));
                 self.always_recalculate.insert(formula_ref);
                 self.add_formula_diagnostics(formula_ref, diagnostics);
                 return;
             }
             DependencyCollection::Unsupported => {
                 diagnostics.unsupported_dependency_count = 1;
+                diagnostics.issues.push(formula_issue(
+                    formula_ref,
+                    FormulaIssueKind::UnsupportedDependency,
+                    "Formula contains references that cannot be tracked precisely",
+                ));
                 self.always_recalculate.insert(formula_ref);
                 self.add_formula_diagnostics(formula_ref, diagnostics);
                 return;
@@ -335,6 +346,16 @@ impl FormulaDependencyIndex {
                 continue;
             }
             self.range_dependents.insert(dependency, formula_ref);
+        }
+        if diagnostics.large_range_dependency_count > 0 {
+            diagnostics.issues.push(formula_issue(
+                formula_ref,
+                FormulaIssueKind::LargeRangeDependency,
+                format!(
+                    "Formula depends on {} large range(s); dependency tracking uses coarse buckets",
+                    diagnostics.large_range_dependency_count
+                ),
+            ));
         }
         self.add_formula_diagnostics(formula_ref, diagnostics);
     }
@@ -362,6 +383,9 @@ impl FormulaDependencyIndex {
         self.diagnostics.volatile_formula_count += diagnostics.volatile_formula_count;
         self.diagnostics.unsupported_dependency_count += diagnostics.unsupported_dependency_count;
         self.diagnostics.large_range_dependency_count += diagnostics.large_range_dependency_count;
+        self.diagnostics
+            .issues
+            .extend(diagnostics.issues.iter().cloned());
         self.formula_diagnostics.insert(formula_ref, diagnostics);
     }
 
@@ -378,6 +402,9 @@ impl FormulaDependencyIndex {
             .diagnostics
             .large_range_dependency_count
             .saturating_sub(diagnostics.large_range_dependency_count);
+        self.diagnostics
+            .issues
+            .retain(|issue| !diagnostics.issues.contains(issue));
     }
 }
 
@@ -485,36 +512,53 @@ fn collect_large_range_dependents(
     }
 }
 
-pub(crate) fn count_unregistered_formula_cells(
+pub(crate) fn unregistered_formula_issues(
     file_data: &FileData,
     registered_formulas: &HashSet<FormulaCellRef>,
-) -> usize {
+) -> Vec<FormulaIssue> {
     file_data
         .sheets
         .iter()
         .enumerate()
-        .map(|(sheet_index, sheet)| {
+        .flat_map(|(sheet_index, sheet)| {
             sheet
                 .rows
                 .iter()
                 .enumerate()
-                .map(|(row, row_data)| {
-                    row_data
-                        .iter()
-                        .enumerate()
-                        .filter(|(col, cell)| {
-                            matches!(cell, CellValue::Formula { .. })
-                                && !registered_formulas.contains(&FormulaCellRef {
-                                    sheet_index,
-                                    row,
-                                    col: *col,
-                                })
+                .flat_map(move |(row, row_data)| {
+                    row_data.iter().enumerate().filter_map(move |(col, cell)| {
+                        let formula_ref = FormulaCellRef {
+                            sheet_index,
+                            row,
+                            col,
+                        };
+                        (matches!(cell, CellValue::Formula { .. })
+                            && !registered_formulas.contains(&formula_ref))
+                        .then(|| {
+                            formula_issue(
+                                formula_ref,
+                                FormulaIssueKind::InvalidFormula,
+                                "Formula could not be parsed or registered",
+                            )
                         })
-                        .count()
+                    })
                 })
-                .sum::<usize>()
         })
-        .sum()
+        .collect()
+}
+
+fn formula_issue(
+    formula_ref: FormulaCellRef,
+    kind: FormulaIssueKind,
+    message: impl Into<String>,
+) -> FormulaIssue {
+    FormulaIssue::new(
+        formula_ref.sheet_index,
+        formula_ref.row,
+        formula_ref.col,
+        kind,
+        message,
+    )
 }
 
 #[derive(Default)]

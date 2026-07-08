@@ -6,7 +6,7 @@ use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::index::{
-    FormulaDependencyIndex, build_dependency_index, count_unregistered_formula_cells,
+    FormulaDependencyIndex, build_dependency_index, unregistered_formula_issues,
 };
 use crate::formula::registry::{apply_cell_changes, register_workbook_cells, set_workbook_cell};
 use crate::formula::value_codec::{literal_to_cell, to_formula_index};
@@ -272,8 +272,16 @@ impl FormulaRuntime {
     }
 
     fn refresh_formula_diagnostics(&mut self, file_data: &FileData) {
-        self.dependency_index.diagnostics.invalid_formula_count =
-            count_unregistered_formula_cells(file_data, &self.registered_formulas);
+        let invalid_issues = unregistered_formula_issues(file_data, &self.registered_formulas);
+        self.dependency_index.diagnostics.invalid_formula_count = invalid_issues.len();
+        self.dependency_index
+            .diagnostics
+            .issues
+            .retain(|issue| !matches!(issue.kind, crate::types::FormulaIssueKind::InvalidFormula));
+        self.dependency_index
+            .diagnostics
+            .issues
+            .extend(invalid_issues);
     }
 
     fn impacted_formula_cells(&self, changed_cell: &FormulaCellRef) -> HashSet<FormulaCellRef> {
@@ -520,6 +528,13 @@ mod tests {
         assert_eq!(diagnostics.volatile_formula_count, 1);
         assert_eq!(diagnostics.large_range_dependency_count, 1);
         assert_eq!(diagnostics.unsupported_dependency_count, 1);
+        assert_eq!(diagnostics.issues.len(), 4);
+        assert!(diagnostics.issues.iter().any(|issue| {
+            issue.sheet_index == 0
+                && issue.row == 0
+                && issue.col == 0
+                && matches!(issue.kind, crate::types::FormulaIssueKind::InvalidFormula)
+        }));
     }
 
     #[test]

@@ -841,6 +841,32 @@ pub struct SheetUpdatedPatch {
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
+pub struct SheetsReplacedPatch {
+    #[serde(rename = "startIndex")]
+    pub start_index: usize,
+    pub sheets: Vec<SheetData>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase")]
+pub enum RichProjectionPatchScope {
+    All,
+    Rows { start: usize },
+    Columns { start: usize },
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RichProjectionPatch {
+    pub scope: RichProjectionPatchScope,
+    pub projection: ReadOnlyRichProjection,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SheetStructureMetadataPatch {
     pub merges: Vec<MergeRange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -849,18 +875,7 @@ pub struct SheetStructureMetadataPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub row_heights: Option<HashMap<usize, u32>>,
-    pub rich: ReadOnlyRichProjection,
-}
-
-impl SheetStructureMetadataPatch {
-    pub fn from_sheet(sheet: &SheetData) -> Self {
-        Self {
-            merges: sheet.merges.clone(),
-            column_widths: sheet.column_widths.clone(),
-            row_heights: sheet.row_heights.clone(),
-            rich: sheet.rich.clone(),
-        }
-    }
+    pub rich: RichProjectionPatch,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -941,6 +956,8 @@ pub enum EditorPatch {
     SheetDeleted { patch: SheetDeletedPatch },
     #[serde(rename = "SheetUpdated")]
     SheetUpdated { patch: SheetUpdatedPatch },
+    #[serde(rename = "SheetsReplaced")]
+    SheetsReplaced { patch: SheetsReplacedPatch },
     #[serde(rename = "RowInserted")]
     RowInserted { patch: RowInsertedPatch },
     #[serde(rename = "RowDeleted")]

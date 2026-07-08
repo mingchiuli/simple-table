@@ -77,7 +77,11 @@ export type HistoryStatus = { isTruncated: boolean, reason?: string, undoEntries
 
 export type EditorStateInfo = { canUndo: boolean, canRedo: boolean, isDirty: boolean, history: HistoryStatus, };
 
-export type FormulaDiagnostics = { invalidFormulaCount: number, volatileFormulaCount: number, unsupportedDependencyCount: number, largeRangeDependencyCount: number, skippedReferenceRewriteCount: number, };
+export type FormulaIssueKind = "invalidFormula" | "volatileFormula" | "unsupportedDependency" | "largeRangeDependency";
+
+export type FormulaIssue = { sheetIndex: number, row: number, col: number, kind: FormulaIssueKind, message: string, };
+
+export type FormulaDiagnostics = { invalidFormulaCount: number, volatileFormulaCount: number, unsupportedDependencyCount: number, largeRangeDependencyCount: number, skippedReferenceRewriteCount: number, issues?: Array<FormulaIssue>, };
 
 export type FormulaStatus = { "state": "ready", diagnostics: FormulaDiagnostics, } | { "state": "degraded", message: string, diagnostics: FormulaDiagnostics, };
 
@@ -89,7 +93,13 @@ export type SheetDeletedPatch = { sheetIndex: number, };
 
 export type SheetUpdatedPatch = { sheetIndex: number, sheet: SheetData, };
 
-export type SheetStructureMetadataPatch = { merges: Array<MergeRange>, columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, rich: ReadOnlyRichProjection, };
+export type SheetsReplacedPatch = { startIndex: number, sheets: Array<SheetData>, };
+
+export type RichProjectionPatchScope = { "type": "all" } | { "type": "rows", start: number, } | { "type": "columns", start: number, };
+
+export type RichProjectionPatch = { scope: RichProjectionPatchScope, projection: ReadOnlyRichProjection, };
+
+export type SheetStructureMetadataPatch = { merges: Array<MergeRange>, columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, rich: RichProjectionPatch, };
 
 export type RowInsertedPatch = { sheetIndex: number, rowIndex: number, rows: Array<Array<CellValue>>, metadata: SheetStructureMetadataPatch, };
 
@@ -103,7 +113,7 @@ export type SheetShapePatch = { sheetIndex: number, rowLengths: Array<number>, }
 
 export type ResyncRequiredPatch = { reason: string, };
 
-export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetUpdated", "data": { patch: SheetUpdatedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "SheetShape", "data": { patch: SheetShapePatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
+export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetUpdated", "data": { patch: SheetUpdatedPatch, } } | { "type": "SheetsReplaced", "data": { patch: SheetsReplacedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "SheetShape", "data": { patch: SheetShapePatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
 
 export type EditorMutationResponse = { protocolVersion: 1, documentId: number, revision: number, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, };
 

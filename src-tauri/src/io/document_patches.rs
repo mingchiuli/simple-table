@@ -1,23 +1,19 @@
 use crate::io::document_memento::FileStructureMemento;
 use crate::ops::patch_projector::sheet_updated_patch;
-use crate::types::{EditorPatch, FileData, SheetDeletedPatch, SheetInsertedPatch};
+use crate::types::{EditorPatch, FileData, SheetsReplacedPatch};
 
 pub(crate) enum CurrentStructureShape {
     Empty,
-    Sheets {
-        sheet_index: usize,
-        sheet_count: usize,
-    },
+    Sheets { sheet_index: usize },
 }
 
 impl CurrentStructureShape {
-    pub(crate) fn capture(file_data: &FileData, target: &FileStructureMemento) -> Self {
+    pub(crate) fn capture(_file_data: &FileData, target: &FileStructureMemento) -> Self {
         match target {
             FileStructureMemento::Empty { .. } => Self::Empty,
             FileStructureMemento::Row(_) | FileStructureMemento::Column(_) => Self::Empty,
             FileStructureMemento::Sheets(memento) => Self::Sheets {
                 sheet_index: memento.truncate_from,
-                sheet_count: file_data.sheets.len(),
             },
         }
     }
@@ -33,36 +29,19 @@ pub(crate) fn restore_structure_patches(
         (_, FileStructureMemento::Column(target)) => {
             sheet_updated_patch(restored, target.sheet_index)
         }
-        (
-            CurrentStructureShape::Sheets {
-                sheet_index,
-                sheet_count,
-            },
-            FileStructureMemento::Sheets(target),
-        ) if *sheet_index == target.truncate_from => {
-            if target.sheet_count > *sheet_count {
-                return restored
-                    .sheets
-                    .get(target.truncate_from)
-                    .cloned()
-                    .map(|sheet| {
-                        vec![EditorPatch::SheetInserted {
-                            patch: SheetInsertedPatch {
-                                sheet_index: target.truncate_from,
-                                sheet,
-                            },
-                        }]
-                    })
-                    .unwrap_or_default();
-            }
-            if target.sheet_count < *sheet_count {
-                return vec![EditorPatch::SheetDeleted {
-                    patch: SheetDeletedPatch {
-                        sheet_index: target.truncate_from,
-                    },
-                }];
-            }
-            Vec::new()
+        (CurrentStructureShape::Sheets { sheet_index }, FileStructureMemento::Sheets(target))
+            if *sheet_index == target.truncate_from =>
+        {
+            vec![EditorPatch::SheetsReplaced {
+                patch: SheetsReplacedPatch {
+                    start_index: target.truncate_from,
+                    sheets: restored
+                        .sheets
+                        .get(target.truncate_from..)
+                        .unwrap_or_default()
+                        .to_vec(),
+                },
+            }]
         }
         _ => Vec::new(),
     }

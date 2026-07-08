@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::state::search_index::{SearchCellText, SearchMatcher};
 use crate::state::state::ActiveDocumentStore;
-use crate::types::{SearchResult, SearchScope};
+use crate::types::{SearchResult, SearchScope, SheetData};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
 
@@ -98,10 +98,10 @@ pub fn do_search(
             SearchInput::Scan {
                 sheet_index,
                 sheet_name,
-                cells,
+                sheet,
             } => {
                 used_scan_fallback = true;
-                for cell in cells {
+                for cell in scan_sheet(&sheet, matcher.as_ref(), remaining) {
                     results.push(SearchResult {
                         sheet_index,
                         sheet_name: sheet_name.clone(),
@@ -131,7 +131,7 @@ enum SearchInput {
     Scan {
         sheet_index: usize,
         sheet_name: String,
-        cells: Vec<SearchCellText>,
+        sheet: SheetData,
     },
 }
 
@@ -149,8 +149,23 @@ fn search_input_for_sheet(
             cells,
         });
     }
-    let matcher = matcher?;
     let sheet = editor_state.file_data().sheets.get(sheet_index)?;
+    matcher?;
+    Some(SearchInput::Scan {
+        sheet_index,
+        sheet_name: sheet.name.clone(),
+        sheet: sheet.clone(),
+    })
+}
+
+fn scan_sheet(
+    sheet: &SheetData,
+    matcher: Option<&SearchMatcher>,
+    limit: usize,
+) -> Vec<SearchCellText> {
+    let Some(matcher) = matcher else {
+        return Vec::new();
+    };
     let mut cells = Vec::new();
     for (row_idx, row) in sheet.rows.iter().enumerate() {
         for (col_idx, _cell) in row.iter().enumerate() {
@@ -165,17 +180,9 @@ fn search_input_for_sheet(
                 display: search_text,
             });
             if cells.len() >= limit {
-                return Some(SearchInput::Scan {
-                    sheet_index,
-                    sheet_name: sheet.name.clone(),
-                    cells,
-                });
+                return cells;
             }
         }
     }
-    Some(SearchInput::Scan {
-        sheet_index,
-        sheet_name: sheet.name.clone(),
-        cells,
-    })
+    cells
 }

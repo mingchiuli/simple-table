@@ -393,39 +393,16 @@ impl EditorState {
     }
 
     fn ensure_operation_supported(
-        &self,
+        &mut self,
         operation: &crate::ops::AppliedOperation,
     ) -> Result<(), AppError> {
         if let Some(reason) = self.transaction_failure() {
             return Err(AppError::DocumentStateInvalid(reason.to_string()));
         }
-        let capabilities = self.capabilities();
-        if operation.impact().is_row_structure_change() && !capabilities.can_insert_delete_rows {
+        let unsupported = self.document.unsupported_operation_features(operation);
+        if !unsupported.is_empty() {
             return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_row_structure_reasons.join(", "),
-            ));
-        }
-        if operation.impact().is_column_structure_change()
-            && !capabilities.can_insert_delete_columns
-        {
-            return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_column_structure_reasons.join(", "),
-            ));
-        }
-        if operation.impact().is_sheet_structure_change() && !capabilities.can_insert_delete_sheets
-        {
-            return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_sheet_structure_reasons.join(", "),
-            ));
-        }
-        if operation.impact().is_layout_change() && !capabilities.can_resize_rows_columns {
-            return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_resize_reasons.join(", "),
-            ));
-        }
-        if operation.impact().is_cell_edit() && !capabilities.can_edit_cells {
-            return Err(AppError::UnsupportedWorkbookStructure(
-                capabilities.blocked_edit_reasons.join(", "),
+                unsupported.join(", "),
             ));
         }
         Ok(())

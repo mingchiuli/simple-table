@@ -68,7 +68,13 @@ describe("applyDocumentPatches", () => {
     const data: FileData = {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
-      sheets: [sheet("Sheet1", [[text("A1")], [text("A2")]])],
+      sheets: [{
+        ...sheet("Sheet1", [[text("A1")], [text("A2")]]),
+        rich: {
+          ...defaultRichProjection(),
+          cellStyles: { A1: { italic: true }, A2: { bold: true } },
+        },
+      }],
     };
 
     const result = applyDocumentPatches(data, [
@@ -84,8 +90,11 @@ describe("applyDocumentPatches", () => {
               rowHeights: { 1: 88 },
               columnWidths: undefined,
               rich: {
-                ...defaultRichProjection(),
-                cellStyles: { A2: { bold: true } },
+                scope: { type: "rows", start: 1 },
+                projection: {
+                  ...defaultRichProjection(),
+                  cellStyles: { A2: { bold: true } },
+                },
               },
             },
           },
@@ -97,6 +106,7 @@ describe("applyDocumentPatches", () => {
     expect(result.data?.sheets[0].rows).toEqual([[text("A1")], [text("inserted")], [text("A2")]]);
     expect(result.data?.sheets[0].merges).toEqual([{ startRow: 1, startCol: 0, endRow: 1, endCol: 1 }]);
     expect(result.data?.sheets[0].rowHeights?.[1]).toBe(88);
+    expect(result.data?.sheets[0].rich.cellStyles?.A1).toEqual({ italic: true });
     expect(result.data?.sheets[0].rich.cellStyles?.A2).toEqual({ bold: true });
   });
 
@@ -104,7 +114,13 @@ describe("applyDocumentPatches", () => {
     const data: FileData = {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
-      sheets: [sheet("Sheet1", [[text("A1"), text("B1")], [text("A2"), text("B2")]])],
+      sheets: [{
+        ...sheet("Sheet1", [[text("A1"), text("B1")], [text("A2"), text("B2")]]),
+        rich: {
+          ...defaultRichProjection(),
+          cellStyles: { A1: { bold: true }, B1: { italic: true } },
+        },
+      }],
     };
 
     const result = applyDocumentPatches(data, [
@@ -120,8 +136,11 @@ describe("applyDocumentPatches", () => {
               columnWidths: { 0: 144 },
               rowHeights: undefined,
               rich: {
-                ...defaultRichProjection(),
-                cellStyles: { A1: { italic: true } },
+                scope: { type: "columns", start: 0 },
+                projection: {
+                  ...defaultRichProjection(),
+                  cellStyles: { A1: { italic: true } },
+                },
               },
             },
           },
@@ -133,6 +152,31 @@ describe("applyDocumentPatches", () => {
     expect(result.data?.sheets[0].rows).toEqual([[text("B1")], [text("B2")]]);
     expect(result.data?.sheets[0].columnWidths?.[0]).toBe(144);
     expect(result.data?.sheets[0].rich.cellStyles?.A1).toEqual({ italic: true });
+    expect(result.data?.sheets[0].rich.cellStyles?.B1).toBeUndefined();
   });
 
+  it("replaces the sheet tail from a backend restore patch", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [
+        sheet("Keep", [[text("A")]]),
+        sheet("Old 1", [[text("B")]]),
+        sheet("Old 2", [[text("C")]]),
+      ],
+    };
+    const result = applyDocumentPatches(data, [
+      {
+        type: "SheetsReplaced",
+        data: {
+          patch: {
+            startIndex: 1,
+            sheets: [sheet("New 1", [[text("D")]]), sheet("New 2", [[text("E")]])],
+          },
+        },
+      },
+    ]);
+
+    expect(result.data?.sheets.map((item) => item.name)).toEqual(["Keep", "New 1", "New 2"]);
+  });
 });

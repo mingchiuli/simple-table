@@ -31,7 +31,11 @@ function formulaWarningText(status: FormulaStatus): string | null {
   if (diagnostics.skippedReferenceRewriteCount) {
     warnings.push(`${diagnostics.skippedReferenceRewriteCount} unshifted ref`);
   }
-  return warnings.length ? `Formula warnings: ${warnings.join(', ')}` : null;
+  const issueDetails = (diagnostics.issues ?? [])
+    .slice(0, 5)
+    .map((issue) => `S${issue.sheetIndex + 1}!${issue.row + 1}:${issue.col + 1} ${issue.kind}`);
+  const detailText = issueDetails.length ? ` (${issueDetails.join('; ')})` : '';
+  return warnings.length ? `Formula warnings: ${warnings.join(', ')}${detailText}` : null;
 }
 
 const formulaWarning = computed(() => formulaWarningText(props.formulaStatus));
