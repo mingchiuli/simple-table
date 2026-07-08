@@ -18,13 +18,18 @@ export type MutationApplyResult = {
 
 export type DocumentSessionLifecycle = "idle" | "loading" | "saving";
 
+type MutationQueueRuntime = {
+  tail: Promise<void> | null;
+};
+
+const mutationQueueRuntimes = new WeakMap<object, MutationQueueRuntime>();
+
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
     data: null as FileData | null,
     currentFilePath: null as string | null,
     documentId: null as number | null,
     revision: 0,
-    mutationTail: null as Promise<void> | null,
     lifecycle: "idle" as DocumentSessionLifecycle,
   }),
   getters: {
@@ -40,25 +45,26 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       }
     },
     resetMutationQueue() {
-      this.mutationTail = null;
+      mutationRuntimeFor(this).tail = null;
     },
     enqueueMutation<T>(task: () => Promise<T>): Promise<T> {
-      const tail = this.mutationTail ?? Promise.resolve();
+      const runtime = mutationRuntimeFor(this);
+      const tail = runtime.tail ?? Promise.resolve();
       const run = tail.then(task, task);
       const cleanup = run.then(
         () => undefined,
         () => undefined
       );
-      this.mutationTail = cleanup;
+      runtime.tail = cleanup;
       cleanup.finally(() => {
-        if (this.mutationTail === cleanup) {
-          this.mutationTail = null;
+        if (runtime.tail === cleanup) {
+          runtime.tail = null;
         }
       });
       return run;
     },
     waitForMutations(): Promise<void> {
-      return this.mutationTail ?? Promise.resolve();
+      return mutationRuntimeFor(this).tail ?? Promise.resolve();
     },
     openDocument(data: FileData, path: string | null = null) {
       this.resetMutationQueue();
@@ -187,3 +193,12 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
   },
 });
+
+function mutationRuntimeFor(store: object): MutationQueueRuntime {
+  let runtime = mutationQueueRuntimes.get(store);
+  if (!runtime) {
+    runtime = { tail: null };
+    mutationQueueRuntimes.set(store, runtime);
+  }
+  return runtime;
+}

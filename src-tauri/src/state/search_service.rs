@@ -122,6 +122,18 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
     ) {
         let document_id = response.document_id;
+        if response.search_index_update.rebuild_all {
+            self.rebuild_all_sheets_index(registry, document_id);
+            return;
+        }
+
+        for sheet_index in &response.search_index_update.rebuild_sheets {
+            let Some(stamp) = current_search_stamp(registry, document_id, *sheet_index) else {
+                continue;
+            };
+            self.enqueue_rebuild(document_id, *sheet_index, stamp, registry);
+        }
+
         let mut needs_rebuild = false;
         for patch in &response.patches {
             match patch {

@@ -76,16 +76,21 @@ export function useTableInteractionController({
     emitCancel,
   });
 
-  watch(data, () => {
+  const selectedEditorValue = computed(() => {
+    const cell = selectedCell.value;
+    if (!cell) return undefined;
+    return getDraftValue(cell.row, cell.col) ?? getCellEditorValue(cell.row, cell.col);
+  });
+
+  watch(selectedEditorValue, (value) => {
     const cell = selectedCell.value;
     if (!cell) return;
 
     const key = getCellKey(cell.row, cell.col);
     if (editingValue.value[key] === undefined) return;
 
-    editingValue.value[key] = getDraftValue(cell.row, cell.col)
-      ?? getCellEditorValue(cell.row, cell.col);
-  }, { deep: true });
+    editingValue.value[key] = value ?? "";
+  });
 
   watch(selectedCell, (newCell) => {
     if (!newCell) {

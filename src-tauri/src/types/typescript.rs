@@ -11,10 +11,10 @@ use crate::types::{
     FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection, HyperlinkProjection,
     LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse, ReadOnlyRichProjection,
     ResyncRequiredPatch, RichProjectionPatch, RichProjectionPatchScope, RowDeletedPatch,
-    RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope,
-    SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch, SheetInsertedPatch,
-    SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch,
-    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchIndexUpdatePlan, SearchResult,
+    SearchScope, SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch,
+    SheetInsertedPatch, SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch,
+    SheetsReplacedPatch, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
     WorkbookStructureCapabilities,
 };
 
@@ -73,6 +73,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetShapePatch>(&mut output, &cfg);
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);
+    push_decl::<SearchIndexUpdatePlan>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);

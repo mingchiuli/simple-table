@@ -3,8 +3,9 @@ use crate::state::state::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
     EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RichProjectionPatch,
-    RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SheetCellChange,
-    SheetDeletedPatch, SheetInsertedPatch, SheetStructureMetadataPatch, SheetUpdatedPatch,
+    RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SearchIndexUpdatePlan,
+    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetStructureMetadataPatch,
+    SheetUpdatedPatch,
 };
 
 const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
@@ -22,6 +23,18 @@ pub fn mutation_response(
     editor_state: &EditorState,
     patches: Vec<EditorPatch>,
 ) -> EditorMutationResponse {
+    mutation_response_with_search_index_update(
+        editor_state,
+        patches,
+        SearchIndexUpdatePlan::default(),
+    )
+}
+
+pub fn mutation_response_with_search_index_update(
+    editor_state: &EditorState,
+    patches: Vec<EditorPatch>,
+    search_index_update: SearchIndexUpdatePlan,
+) -> EditorMutationResponse {
     let patches = project_patch_display_formats(editor_state.file_data(), patches);
     EditorMutationResponse {
         protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
@@ -31,6 +44,7 @@ pub fn mutation_response(
         capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
         patches,
+        search_index_update,
     }
 }
 
@@ -92,6 +106,7 @@ pub fn structural_delta_mutation_response(
     editor_state: &EditorState,
     operation: &AppliedOperationResult,
     cell_changes: Vec<SheetCellChange>,
+    search_index_update: SearchIndexUpdatePlan,
 ) -> EditorMutationResponse {
     let mut patches = structural_patches(editor_state.file_data(), operation);
 
@@ -101,7 +116,7 @@ pub fn structural_delta_mutation_response(
         });
     }
 
-    mutation_response(editor_state, patches)
+    mutation_response_with_search_index_update(editor_state, patches, search_index_update)
 }
 
 pub fn restore_mutation_response(
@@ -115,7 +130,11 @@ pub fn restore_mutation_response(
         );
     };
 
-    mutation_response(editor_state, restore.patches)
+    mutation_response_with_search_index_update(
+        editor_state,
+        restore.patches,
+        result.search_index_update,
+    )
 }
 
 pub fn structural_patches(

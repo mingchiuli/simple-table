@@ -1,3 +1,5 @@
+use formualizer_parse::parser::ReferenceType;
+
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
@@ -76,18 +78,21 @@ impl FormulaCoordinator {
     }
 
     pub(crate) fn structure_memento_sheet_indexes(
-        &self,
+        &mut self,
         projection: &FileData,
         operation: &AppliedOperation,
     ) -> Vec<usize> {
         if !operation.impact().is_structure_change() {
             return Vec::new();
         }
-        let mut sheet_indexes = std::collections::BTreeSet::new();
-        for cell in self.formula_cell_positions(projection) {
-            sheet_indexes.insert(cell.sheet_index);
+        if matches!(self.status, FormulaStatus::Degraded { .. }) {
+            return formula_sheet_indexes(self.formula_cell_positions(projection));
         }
-        sheet_indexes.into_iter().collect()
+
+        let Some(target) = FormulaStructureTarget::from_operation(projection, operation) else {
+            return Vec::new();
+        };
+        formula_sheets_referencing_target(projection, &target, &mut self.ast_service)
     }
 
     pub(crate) fn impacted_cells_for_memento(
@@ -276,6 +281,118 @@ impl FormulaCoordinator {
     }
 }
 
+struct FormulaStructureTarget<'a> {
+    sheet_index: usize,
+    sheet_name: &'a str,
+    include_implicit_current_sheet_refs: bool,
+}
+
+impl<'a> FormulaStructureTarget<'a> {
+    fn from_operation(projection: &'a FileData, operation: &AppliedOperation) -> Option<Self> {
+        match operation {
+            AppliedOperation::AddRow { sheet_index, .. }
+            | AppliedOperation::DeleteRow { sheet_index, .. }
+            | AppliedOperation::AddColumn { sheet_index, .. }
+            | AppliedOperation::DeleteColumn { sheet_index, .. } => {
+                let sheet = projection.sheets.get(*sheet_index)?;
+                Some(Self {
+                    sheet_index: *sheet_index,
+                    sheet_name: &sheet.name,
+                    include_implicit_current_sheet_refs: true,
+                })
+            }
+            AppliedOperation::DeleteSheet { sheet_index } => {
+                let sheet = projection.sheets.get(*sheet_index)?;
+                Some(Self {
+                    sheet_index: *sheet_index,
+                    sheet_name: &sheet.name,
+                    include_implicit_current_sheet_refs: false,
+                })
+            }
+            AppliedOperation::AddSheet { .. } => None,
+            AppliedOperation::SetCell { .. }
+            | AppliedOperation::SetCells { .. }
+            | AppliedOperation::SetColumnWidth { .. }
+            | AppliedOperation::SetRowHeight { .. } => None,
+        }
+    }
+}
+
+fn formula_sheets_referencing_target(
+    projection: &FileData,
+    target: &FormulaStructureTarget<'_>,
+    ast_service: &mut FormulaAstService,
+) -> Vec<usize> {
+    let mut sheet_indexes = std::collections::BTreeSet::new();
+    for (sheet_index, sheet) in projection.sheets.iter().enumerate() {
+        'formula_scan: for row in &sheet.rows {
+            for cell in row {
+                let CellValue::Formula { formula, .. } = cell else {
+                    continue;
+                };
+                if formula_references_target_sheet(ast_service, formula, sheet_index, target) {
+                    sheet_indexes.insert(sheet_index);
+                    break 'formula_scan;
+                }
+            }
+        }
+    }
+    sheet_indexes.into_iter().collect()
+}
+
+fn formula_references_target_sheet(
+    ast_service: &mut FormulaAstService,
+    formula: &str,
+    formula_sheet_index: usize,
+    target: &FormulaStructureTarget<'_>,
+) -> bool {
+    let Ok(parsed) = ast_service.parse(formula) else {
+        return true;
+    };
+
+    parsed
+        .references()
+        .into_iter()
+        .any(|reference| reference_targets_sheet(reference, formula_sheet_index, target))
+}
+
+fn reference_targets_sheet(
+    reference: ReferenceType,
+    formula_sheet_index: usize,
+    target: &FormulaStructureTarget<'_>,
+) -> bool {
+    match reference {
+        ReferenceType::Cell { sheet, .. } | ReferenceType::Range { sheet, .. } => sheet
+            .as_deref()
+            .map(|name| name == target.sheet_name)
+            .unwrap_or(
+                target.include_implicit_current_sheet_refs
+                    && formula_sheet_index == target.sheet_index,
+            ),
+        ReferenceType::Cell3D {
+            sheet_first,
+            sheet_last,
+            ..
+        }
+        | ReferenceType::Range3D {
+            sheet_first,
+            sheet_last,
+            ..
+        } => sheet_first == target.sheet_name || sheet_last == target.sheet_name,
+        ReferenceType::External(_) | ReferenceType::Table(_) | ReferenceType::NamedRange(_) => {
+            false
+        }
+    }
+}
+
+fn formula_sheet_indexes(cells: Vec<FormulaCellRef>) -> Vec<usize> {
+    let mut sheet_indexes = std::collections::BTreeSet::new();
+    for cell in cells {
+        sheet_indexes.insert(cell.sheet_index);
+    }
+    sheet_indexes.into_iter().collect()
+}
+
 fn formula_error_change(
     projection: &mut FileData,
     sheet_index: usize,
@@ -312,5 +429,64 @@ fn append_unique_changes(target: &mut Vec<SheetCellChange>, changes: Vec<SheetCe
         } else {
             target.push(change);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{CellValue, FileData, SheetData};
+
+    fn sheet(name: &str, rows: Vec<Vec<CellValue>>) -> SheetData {
+        SheetData {
+            name: name.to_string(),
+            rows,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn structure_memento_only_includes_formula_sheets_referencing_target() {
+        let mut projection = FileData {
+            path: String::new(),
+            file_name: "formulas.xlsx".to_string(),
+            sheets: vec![
+                sheet("Inputs", vec![vec![CellValue::String("1".to_string())]]),
+                sheet(
+                    "Calc",
+                    vec![vec![CellValue::formula("=A1+Inputs!A1", CellValue::Null)]],
+                ),
+                sheet(
+                    "Other",
+                    vec![vec![CellValue::formula("=Calc!A1+1", CellValue::Null)]],
+                ),
+            ],
+        };
+        let mut coordinator = FormulaCoordinator::new(&mut projection);
+
+        assert_eq!(
+            coordinator.structure_memento_sheet_indexes(
+                &projection,
+                &AppliedOperation::AddRow {
+                    sheet_index: 0,
+                    row_index: 0,
+                    row_data: Vec::new(),
+                    row_height: None,
+                },
+            ),
+            vec![1]
+        );
+        assert_eq!(
+            coordinator.structure_memento_sheet_indexes(
+                &projection,
+                &AppliedOperation::AddRow {
+                    sheet_index: 1,
+                    row_index: 0,
+                    row_data: Vec::new(),
+                    row_height: None,
+                },
+            ),
+            vec![1, 2]
+        );
     }
 }

@@ -234,9 +234,12 @@ fn execute_structural_command(
         let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         match result.operation {
-            Some(operation) => {
-                structural_delta_mutation_response(editor_state, &operation, result.cell_changes)
-            }
+            Some(operation) => structural_delta_mutation_response(
+                editor_state,
+                &operation,
+                result.cell_changes,
+                result.search_index_update,
+            ),
             None => resync_required_mutation_response(
                 editor_state,
                 "structure edit completed without an operation result",
@@ -387,6 +390,7 @@ mod tests {
                 if patch.sheet_index == 0 && patch.row_index == 1 && patch.rows.len() == 1
         ));
         assert_eq!(add_row_response.patches.len(), 1);
+        assert!(add_row_response.search_index_update.rebuild_all);
 
         let registry = make_registry();
         let (document_id, revision) = command_session(&registry);
@@ -398,6 +402,7 @@ mod tests {
                 if patch.sheet_index == 0 && patch.col_index == 1 && patch.values.len() == 1
         ));
         assert_eq!(add_column_response.patches.len(), 1);
+        assert!(add_column_response.search_index_update.rebuild_all);
     }
 
     #[test]

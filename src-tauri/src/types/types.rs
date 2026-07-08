@@ -1013,6 +1013,25 @@ pub enum EditorPatch {
     ResyncRequired { patch: ResyncRequiredPatch },
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SearchIndexUpdatePlan {
+    #[serde(default)]
+    pub rebuild_all: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rebuild_sheets: Vec<usize>,
+}
+
+impl SearchIndexUpdatePlan {
+    pub fn rebuild_all() -> Self {
+        Self {
+            rebuild_all: true,
+            rebuild_sheets: Vec::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -1029,6 +1048,8 @@ pub struct EditorMutationResponse {
     pub editor_state: EditorStateInfo,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,
+    #[serde(default)]
+    pub search_index_update: SearchIndexUpdatePlan,
 }
 
 #[cfg(test)]

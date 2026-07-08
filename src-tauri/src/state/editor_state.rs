@@ -16,7 +16,8 @@ use crate::state::search_index::{
 use crate::state::search_session::SearchSession;
 use crate::state::state::HistoryStatus;
 use crate::types::{
-    AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
+    AppliedOperationResult, FileData, FormulaStatus, SearchIndexUpdatePlan, SheetCellChange,
+    WorkbookCapabilities,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,6 +30,7 @@ pub struct ExecutedOperation {
     pub operation: Option<AppliedOperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
     pub restore: Option<DocumentRestoreResult>,
+    pub search_index_update: SearchIndexUpdatePlan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,6 +313,7 @@ impl EditorState {
                 operation: None,
                 cell_changes: Vec::new(),
                 restore: None,
+                search_index_update: SearchIndexUpdatePlan::default(),
             });
         }
 
@@ -331,6 +334,14 @@ impl EditorState {
         self.bump_revision();
         if should_mark_search_stale {
             self.mark_search_index_stale();
+            let search_index_update = SearchIndexUpdatePlan::rebuild_all();
+            self.refresh_content_hash();
+            return Ok(ExecutedOperation {
+                operation: Some(operation_result),
+                cell_changes,
+                restore: None,
+                search_index_update,
+            });
         } else {
             self.mark_search_sheets_stale(stale_sheets);
         }
@@ -339,6 +350,7 @@ impl EditorState {
             operation: Some(operation_result),
             cell_changes,
             restore: None,
+            search_index_update: SearchIndexUpdatePlan::default(),
         })
     }
 
@@ -357,6 +369,7 @@ impl EditorState {
                 operation: None,
                 cell_changes: Vec::new(),
                 restore: Some(restore),
+                search_index_update: SearchIndexUpdatePlan::rebuild_all(),
             }))
         } else {
             Ok(None)
@@ -378,6 +391,7 @@ impl EditorState {
                 operation: None,
                 cell_changes: Vec::new(),
                 restore: Some(restore),
+                search_index_update: SearchIndexUpdatePlan::rebuild_all(),
             }))
         } else {
             Ok(None)
