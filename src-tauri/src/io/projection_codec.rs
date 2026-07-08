@@ -1,5 +1,4 @@
 use crate::error::AppError;
-use crate::io::codec::writer;
 use crate::io::projection_mapper::ProjectionMapper;
 use crate::types::{FileData, SheetData};
 use umya_spreadsheet::Workbook;
@@ -13,14 +12,6 @@ impl WorkbookProjectionCodec {
 
     pub(crate) fn refresh_projection(workbook: &Workbook, projection: &mut FileData) {
         ProjectionMapper::refresh_file_data_from_workbook(workbook, projection);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn apply_projection(
-        workbook: &mut Workbook,
-        projection: &FileData,
-    ) -> Result<(), AppError> {
-        writer::sync_workbook_from_file_data(workbook, projection)
     }
 
     pub(crate) fn sync_merge_ranges(

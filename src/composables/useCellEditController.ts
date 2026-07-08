@@ -2,7 +2,6 @@ import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as api from '@/api';
 import { useCellEditTransactions } from '@/composables/useCellEditTransactions';
-import { enqueueEditorMutation } from '@/composables/useEditorMutationQueue';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { CellSaveRequest } from '@/stores/pendingCellSaves';
 import type { ComputedRef, Ref } from 'vue';
@@ -88,7 +87,7 @@ export function useCellEditController({
       };
     });
 
-    await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
+    await documentSessionStore.enqueueMutation(async () => {
       const response = await api.setCells(editorCommandContext(), payload);
       await applyMutationResponse(response);
     });

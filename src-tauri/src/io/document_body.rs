@@ -8,8 +8,8 @@ use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
 use crate::types::{
     AppliedOperationResult, FileData, SheetCapabilities, SheetCellChange, WorkbookCapabilities,
+    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
-use formualizer_parse::parser::ReferenceType;
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {
@@ -85,12 +85,14 @@ impl SpreadsheetDocumentBody {
     pub fn capture_structure_memento(
         &self,
         operation: &AppliedOperation,
-        ast_service: &mut FormulaAstService,
+        formula_sheet_indexes: Vec<usize>,
     ) -> BodyStructureMemento {
         match self {
-            Self::Excel(body) => {
-                capture_excel_structure_memento(excel_workbook(body), operation, ast_service)
-            }
+            Self::Excel(body) => capture_excel_structure_memento(
+                excel_workbook(body),
+                operation,
+                formula_sheet_indexes,
+            ),
             Self::Csv | Self::GeneratedWorkbook => BodyStructureMemento::ProjectionOnly,
         }
     }
@@ -98,12 +100,14 @@ impl SpreadsheetDocumentBody {
     pub fn estimate_structure_memento_bytes(
         &self,
         operation: &AppliedOperation,
-        ast_service: &mut FormulaAstService,
+        formula_sheet_indexes: Vec<usize>,
     ) -> usize {
         match self {
-            Self::Excel(body) => {
-                estimate_excel_structure_memento_bytes(excel_workbook(body), operation, ast_service)
-            }
+            Self::Excel(body) => estimate_excel_structure_memento_bytes(
+                excel_workbook(body),
+                operation,
+                formula_sheet_indexes,
+            ),
             Self::Csv | Self::GeneratedWorkbook => std::mem::size_of::<BodyStructureMemento>(),
         }
     }
@@ -137,11 +141,12 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn capabilities(&self, ast_service: &mut FormulaAstService) -> WorkbookCapabilities {
+    pub fn capabilities(&self, formula_structure_limitations: &[String]) -> WorkbookCapabilities {
         match self {
-            Self::Excel(body) => {
-                workbook_state::workbook_capabilities(excel_workbook(body), ast_service)
-            }
+            Self::Excel(body) => workbook_state::workbook_capabilities(
+                excel_workbook(body),
+                formula_structure_limitations,
+            ),
             Self::Csv => csv_workbook_capabilities(),
             Self::GeneratedWorkbook => WorkbookCapabilities::default(),
         }
@@ -150,13 +155,13 @@ impl SpreadsheetDocumentBody {
     pub fn unsupported_operation_features(
         &self,
         operation: &AppliedOperation,
-        ast_service: &mut FormulaAstService,
+        formula_structure_limitations: &[String],
     ) -> Vec<String> {
         match self {
             Self::Excel(body) => workbook_state::unsupported_operation_features(
                 excel_workbook(body),
                 operation,
-                ast_service,
+                formula_structure_limitations,
             ),
             Self::Csv => csv_unsupported_operation_features(operation),
             Self::GeneratedWorkbook => Vec::new(),
@@ -411,7 +416,7 @@ pub enum BodyRestoreAction {
 fn capture_excel_structure_memento(
     workbook: &Workbook,
     operation: &AppliedOperation,
-    ast_service: &mut FormulaAstService,
+    formula_sheet_indexes: Vec<usize>,
 ) -> BodyStructureMemento {
     let sheet_count = workbook.sheet_count();
     let replace_tail_from = match operation {
@@ -430,11 +435,7 @@ fn capture_excel_structure_memento(
             }
         }
     }
-    sheet_indexes.extend(affected_formula_sheet_indexes(
-        workbook,
-        operation,
-        ast_service,
-    ));
+    sheet_indexes.extend(formula_sheet_indexes);
 
     let sheets: Vec<WorksheetSnapshot> = sheet_indexes
         .into_iter()
@@ -465,9 +466,9 @@ fn capture_excel_structure_memento(
 fn estimate_excel_structure_memento_bytes(
     workbook: &Workbook,
     operation: &AppliedOperation,
-    ast_service: &mut FormulaAstService,
+    formula_sheet_indexes: Vec<usize>,
 ) -> usize {
-    affected_excel_structure_sheet_indexes(workbook, operation, ast_service)
+    affected_excel_structure_sheet_indexes(workbook, operation, formula_sheet_indexes)
         .into_iter()
         .filter_map(|sheet_index| workbook.sheet(sheet_index).ok())
         .map(estimate_worksheet_bytes)
@@ -478,7 +479,7 @@ fn estimate_excel_structure_memento_bytes(
 fn affected_excel_structure_sheet_indexes(
     workbook: &Workbook,
     operation: &AppliedOperation,
-    ast_service: &mut FormulaAstService,
+    formula_sheet_indexes: Vec<usize>,
 ) -> BTreeSet<usize> {
     let sheet_count = workbook.sheet_count();
     let replace_tail_from = match operation {
@@ -497,11 +498,7 @@ fn affected_excel_structure_sheet_indexes(
             }
         }
     }
-    sheet_indexes.extend(affected_formula_sheet_indexes(
-        workbook,
-        operation,
-        ast_service,
-    ));
+    sheet_indexes.extend(formula_sheet_indexes);
     sheet_indexes
 }
 
@@ -576,99 +573,6 @@ fn restore_excel_sheet_tail<'a>(
     Ok(())
 }
 
-fn affected_formula_sheet_indexes(
-    workbook: &Workbook,
-    operation: &AppliedOperation,
-    ast_service: &mut FormulaAstService,
-) -> Vec<usize> {
-    let Some(target_sheet_index) = formula_reference_target_sheet(operation) else {
-        return Vec::new();
-    };
-    let Ok(target_sheet) = workbook.sheet(target_sheet_index) else {
-        return Vec::new();
-    };
-    let target_sheet_name = target_sheet.name().to_string();
-    workbook
-        .sheet_collection()
-        .iter()
-        .enumerate()
-        .filter_map(|(sheet_index, worksheet)| {
-            if sheet_index == target_sheet_index {
-                return None;
-            }
-            worksheet
-                .cells()
-                .iter()
-                .any(|cell| {
-                    cell.is_formula()
-                        && formula_references_sheet(
-                            ast_service,
-                            cell.formula(),
-                            &target_sheet_name,
-                            worksheet.name(),
-                        )
-                })
-                .then_some(sheet_index)
-        })
-        .collect()
-}
-
-fn formula_reference_target_sheet(operation: &AppliedOperation) -> Option<usize> {
-    match operation {
-        AppliedOperation::AddRow { sheet_index, .. }
-        | AppliedOperation::DeleteRow { sheet_index, .. }
-        | AppliedOperation::AddColumn { sheet_index, .. }
-        | AppliedOperation::DeleteColumn { sheet_index, .. }
-        | AppliedOperation::DeleteSheet { sheet_index } => Some(*sheet_index),
-        AppliedOperation::AddSheet { .. }
-        | AppliedOperation::SetCell { .. }
-        | AppliedOperation::SetCells { .. }
-        | AppliedOperation::SetColumnWidth { .. }
-        | AppliedOperation::SetRowHeight { .. } => None,
-    }
-}
-
-fn formula_references_sheet(
-    ast_service: &mut FormulaAstService,
-    formula: &str,
-    target_sheet_name: &str,
-    current_sheet_name: &str,
-) -> bool {
-    let Ok(parsed) = ast_service.parse(formula) else {
-        return false;
-    };
-    parsed
-        .references()
-        .iter()
-        .any(|reference| reference_targets_sheet(reference, target_sheet_name, current_sheet_name))
-}
-
-fn reference_targets_sheet(
-    reference: &ReferenceType,
-    target_sheet_name: &str,
-    current_sheet_name: &str,
-) -> bool {
-    match reference {
-        ReferenceType::Cell { sheet, .. } | ReferenceType::Range { sheet, .. } => sheet
-            .as_deref()
-            .map(|name| name == target_sheet_name)
-            .unwrap_or(current_sheet_name == target_sheet_name),
-        ReferenceType::Cell3D {
-            sheet_first,
-            sheet_last,
-            ..
-        }
-        | ReferenceType::Range3D {
-            sheet_first,
-            sheet_last,
-            ..
-        } => sheet_first == target_sheet_name || sheet_last == target_sheet_name,
-        ReferenceType::External(_) | ReferenceType::Table(_) | ReferenceType::NamedRange(_) => {
-            false
-        }
-    }
-}
-
 fn affected_sheet_index(operation: &AppliedOperation) -> Option<usize> {
     match operation {
         AppliedOperation::AddRow { sheet_index, .. }
@@ -724,13 +628,16 @@ fn csv_workbook_capabilities() -> WorkbookCapabilities {
     };
 
     WorkbookCapabilities {
-        can_resize_rows_columns: false,
-        can_insert_delete_sheets: false,
-        blocked_resize_reasons: vec!["CSV files do not persist row or column dimensions".into()],
-        blocked_sheet_structure_reasons: vec!["CSV files only persist one sheet".into()],
-        blocked_structure_reasons: vec!["CSV files only persist one sheet".into()],
-        detected_features: vec!["csv single-sheet value format".into()],
-        sheet_capabilities: vec![sheet_capabilities],
+        save: WorkbookSaveCapabilities {
+            detected_features: vec!["csv single-sheet value format".into()],
+            ..WorkbookSaveCapabilities::default()
+        },
+        structure: WorkbookStructureCapabilities {
+            can_insert_delete_sheets: false,
+            blocked_sheet_structure_reasons: vec!["CSV files only persist one sheet".into()],
+            blocked_structure_reasons: vec!["CSV files only persist one sheet".into()],
+        },
+        sheets: vec![sheet_capabilities],
         ..WorkbookCapabilities::default()
     }
 }

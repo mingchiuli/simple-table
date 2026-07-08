@@ -56,9 +56,10 @@ pub struct SpreadsheetDocument {
 
 impl SpreadsheetDocument {
     pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
-        let mut formulas = FormulaCoordinator::new(&mut projection);
+        let formulas = FormulaCoordinator::new(&mut projection);
         let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
-        let cached_capabilities = body.capabilities(formulas.ast_service_mut());
+        let formula_structure_limitations = formulas.structure_formula_limitations();
+        let cached_capabilities = body.capabilities(&formula_structure_limitations);
 
         Self {
             projection,
@@ -93,23 +94,22 @@ impl SpreadsheetDocument {
     pub fn capabilities(&self) -> WorkbookCapabilities {
         let mut capabilities = self.cached_capabilities.clone();
         if let Some(reason) = &self.transaction_failure {
-            capabilities.can_edit_cells = false;
-            capabilities.can_resize_rows_columns = false;
-            capabilities.can_insert_delete_rows = false;
-            capabilities.can_insert_delete_columns = false;
-            capabilities.can_insert_delete_sheets = false;
-            capabilities.can_native_save = false;
-            push_unique_reason(&mut capabilities.blocked_edit_reasons, reason);
-            push_unique_reason(&mut capabilities.blocked_resize_reasons, reason);
-            push_unique_reason(&mut capabilities.blocked_row_structure_reasons, reason);
-            push_unique_reason(&mut capabilities.blocked_column_structure_reasons, reason);
-            push_unique_reason(&mut capabilities.blocked_sheet_structure_reasons, reason);
-            push_unique_reason(&mut capabilities.blocked_structure_reasons, reason);
+            capabilities.save.can_native_save = false;
+            push_unique_reason(&mut capabilities.save.blocked_save_reasons, reason);
+            capabilities.structure.can_insert_delete_sheets = false;
             push_unique_reason(
-                &mut capabilities.detected_features,
+                &mut capabilities.structure.blocked_sheet_structure_reasons,
+                reason,
+            );
+            push_unique_reason(
+                &mut capabilities.structure.blocked_structure_reasons,
+                reason,
+            );
+            push_unique_reason(
+                &mut capabilities.save.detected_features,
                 "failed editor transaction",
             );
-            for sheet_capabilities in &mut capabilities.sheet_capabilities {
+            for sheet_capabilities in &mut capabilities.sheets {
                 disable_sheet_capabilities(sheet_capabilities, reason);
             }
         }
@@ -120,8 +120,10 @@ impl SpreadsheetDocument {
         &mut self,
         operation: &AppliedOperation,
     ) -> Vec<String> {
-        self.body
-            .unsupported_operation_features(operation, self.formulas.ast_service_mut())
+        self.body.unsupported_operation_features(
+            operation,
+            &self.formulas.structure_formula_limitations(),
+        )
     }
 
     #[cfg(test)]
@@ -375,9 +377,12 @@ impl SpreadsheetDocument {
     }
 
     fn structure_memento(&mut self, operation: &AppliedOperation) -> StructureMemento {
+        let formula_sheet_indexes = self
+            .formulas
+            .structure_memento_sheet_indexes(&self.projection, operation);
         let body = self
             .body
-            .capture_structure_memento(operation, self.formulas.ast_service_mut());
+            .capture_structure_memento(operation, formula_sheet_indexes);
         let projection = self.projection_structure_memento(operation);
 
         StructureMemento::new(projection, body)
@@ -481,14 +486,14 @@ impl SpreadsheetDocument {
         }
 
         self.patch_workbook_formula_changes(&memento.cells)?;
-        if memento.formula_capabilities_may_change {
-            self.refresh_capabilities();
-        }
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
         let formula_changes = self.formulas.rebuild(&mut self.projection);
         if !formula_changes.is_empty() {
             self.patch_workbook_formula_changes(&formula_changes)?;
+        }
+        if memento.formula_capabilities_may_change {
+            self.refresh_capabilities();
         }
         self.validate_projection_sheets(cell_memento_sheet_indexes(memento))?;
         let mut patches = Vec::new();
@@ -619,8 +624,13 @@ impl SpreadsheetDocument {
         &mut self,
         operation: &AppliedOperation,
     ) -> Vec<SheetCellChange> {
-        self.formulas
-            .recalculate_after_operation(operation, &mut self.projection)
+        let changes = self
+            .formulas
+            .recalculate_after_operation(operation, &mut self.projection);
+        if operation_may_change_formula_capabilities(operation) {
+            self.refresh_capabilities();
+        }
+        changes
     }
 
     pub(crate) fn patch_workbook_after_operation(
@@ -703,7 +713,9 @@ impl SpreadsheetDocument {
     }
 
     fn refresh_capabilities(&mut self) {
-        self.cached_capabilities = self.body.capabilities(self.formulas.ast_service_mut());
+        self.cached_capabilities = self
+            .body
+            .capabilities(&self.formulas.structure_formula_limitations());
     }
 
     pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {

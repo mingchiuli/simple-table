@@ -31,9 +31,11 @@ export type PendingCellSaveCallbacks = {
   onCommitFailed?: (error: unknown) => Promise<void> | void;
 };
 
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingSavePromise: Promise<boolean> | null = null;
-let schedulerGeneration = 0;
+type PendingCellSaveSchedulerState = {
+  debounceTimer: ReturnType<typeof setTimeout> | null;
+  pendingSavePromise: Promise<boolean> | null;
+  generation: number;
+};
 
 export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   state: () => ({
@@ -42,6 +44,11 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     activeCellSaves: new Map<string, CellSaveRequest>(),
     phase: "idle" as PendingCellSavePhase,
     lastError: null as string | null,
+    scheduler: {
+      debounceTimer: null,
+      pendingSavePromise: null,
+      generation: 0,
+    } as PendingCellSaveSchedulerState,
   }),
   getters: {
     hasQueuedSaves: (state) => state.queuedCellSaves.size > 0,
@@ -49,7 +56,9 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   },
   actions: {
     hasPendingWork() {
-      return !this.isIdle() || pendingSavePromise !== null || debounceTimer !== null;
+      return !this.isIdle()
+        || this.scheduler.pendingSavePromise !== null
+        || this.scheduler.debounceTimer !== null;
     },
     stateFor(key: string): CellSaveState {
       return {
@@ -161,26 +170,26 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       return this.queuedCellSaves.size === 0 && this.activeCellSaves.size === 0;
     },
     schedulePendingSave(callbacks: PendingCellSaveCallbacks, debounceMs: number) {
-      clearSchedulerTimer();
+      clearSchedulerTimer(this.scheduler);
       this.setPhase("debouncing");
-      const generation = schedulerGeneration;
-      debounceTimer = setTimeout(() => {
-        if (generation !== schedulerGeneration) return;
-        debounceTimer = null;
+      const generation = this.scheduler.generation;
+      this.scheduler.debounceTimer = setTimeout(() => {
+        if (generation !== this.scheduler.generation) return;
+        this.scheduler.debounceTimer = null;
         this.startPendingSave(callbacks);
       }, debounceMs);
     },
     startPendingSave(callbacks: PendingCellSaveCallbacks) {
-      if (pendingSavePromise) {
+      if (this.scheduler.pendingSavePromise) {
         return;
       }
 
       this.setPhase("saving");
-      const generation = schedulerGeneration;
-      pendingSavePromise = this.saveQueuedBatch(callbacks, generation).finally(() => {
-        if (generation !== schedulerGeneration) return;
-        pendingSavePromise = null;
-        if (this.hasQueuedSaves && !debounceTimer) {
+      const generation = this.scheduler.generation;
+      this.scheduler.pendingSavePromise = this.saveQueuedBatch(callbacks, generation).finally(() => {
+        if (generation !== this.scheduler.generation) return;
+        this.scheduler.pendingSavePromise = null;
+        if (this.hasQueuedSaves && !this.scheduler.debounceTimer) {
           this.startPendingSave(callbacks);
           return;
         }
@@ -203,11 +212,11 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
 
       try {
         await callbacks.commitBatch(changes);
-        if (generation !== schedulerGeneration) return false;
+        if (generation !== this.scheduler.generation) return false;
         this.completeBatch(changes);
         callbacks.onBatchCommitted?.();
       } catch (error) {
-        if (generation !== schedulerGeneration) return false;
+        if (generation !== this.scheduler.generation) return false;
         await callbacks.onCommitFailed?.(error);
         this.failBatch(changes);
         this.setPhase("failed", String(error));
@@ -224,10 +233,10 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       return true;
     },
     clearDebounceIfNoQueuedSaves() {
-      if (this.hasQueuedSaves || !debounceTimer) {
+      if (this.hasQueuedSaves || !this.scheduler.debounceTimer) {
         return;
       }
-      clearSchedulerTimer();
+      clearSchedulerTimer(this.scheduler);
       if (!this.hasActiveSaves) {
         this.setPhase("idle");
       }
@@ -239,31 +248,31 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       }
     },
     async flushPendingCellChanges(callbacks: PendingCellSaveCallbacks): Promise<boolean> {
-      if (debounceTimer) {
-        clearSchedulerTimer();
+      if (this.scheduler.debounceTimer) {
+        clearSchedulerTimer(this.scheduler);
         if (this.hasQueuedSaves) {
           this.setPhase("saving");
         }
       }
 
       while (true) {
-        if (pendingSavePromise) {
-          const saved = await pendingSavePromise;
+        if (this.scheduler.pendingSavePromise) {
+          const saved = await this.scheduler.pendingSavePromise;
           if (!saved) return false;
         } else if (this.hasQueuedSaves) {
           this.startPendingSave(callbacks);
-          if (!pendingSavePromise) return false;
-          const saved = await pendingSavePromise;
+          if (!this.scheduler.pendingSavePromise) return false;
+          const saved = await this.scheduler.pendingSavePromise;
           if (!saved) return false;
         }
 
-        if (debounceTimer) {
-          clearSchedulerTimer();
+        if (this.scheduler.debounceTimer) {
+          clearSchedulerTimer(this.scheduler);
         }
         if (this.hasQueuedSaves) {
           continue;
         }
-        if (!pendingSavePromise) {
+        if (!this.scheduler.pendingSavePromise) {
           return true;
         }
       }
@@ -272,11 +281,11 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       if (this.hasPendingWork()) {
         return;
       }
-      clearSchedulerTimer();
+      clearSchedulerTimer(this.scheduler);
       this.setPhase("idle");
     },
     reset() {
-      resetScheduler();
+      resetScheduler(this.scheduler);
       this.draftCellValues.clear();
       this.queuedCellSaves.clear();
       this.activeCellSaves.clear();
@@ -290,15 +299,15 @@ function cellKey(request: Pick<CellSaveRequest, "sheetIndex" | "row" | "col">): 
   return `${request.sheetIndex},${request.row},${request.col}`;
 }
 
-function clearSchedulerTimer() {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
+function clearSchedulerTimer(scheduler: PendingCellSaveSchedulerState) {
+  if (scheduler.debounceTimer) {
+    clearTimeout(scheduler.debounceTimer);
+    scheduler.debounceTimer = null;
   }
 }
 
-function resetScheduler() {
-  schedulerGeneration += 1;
-  clearSchedulerTimer();
-  pendingSavePromise = null;
+function resetScheduler(scheduler: PendingCellSaveSchedulerState) {
+  scheduler.generation += 1;
+  clearSchedulerTimer(scheduler);
+  scheduler.pendingSavePromise = null;
 }

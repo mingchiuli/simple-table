@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FileData, WorkbookCapabilities } from '@/types';
+import type { FileData } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
 import {
@@ -28,7 +28,11 @@ const props = defineProps<{
   currentSheetIndex: number;
   canUndo: boolean;
   canRedo: boolean;
-  capabilities: WorkbookCapabilities;
+  capabilities: {
+    canInsertDeleteRows: boolean;
+    canInsertDeleteColumns: boolean;
+    canInsertDeleteSheets: boolean;
+  };
   isSearching: boolean;
 }>();
 

@@ -10,7 +10,6 @@ import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
-import { resetEditorMutationQueue } from "@/composables/useEditorMutationQueue";
 
 export type MutationApplyResult = {
   data: FileData | null;
@@ -25,7 +24,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     currentFilePath: null as string | null,
     documentId: null as number | null,
     revision: 0,
-    mutationScope: 0,
+    mutationTail: null as Promise<void> | null,
     lifecycle: "idle" as DocumentSessionLifecycle,
   }),
   getters: {
@@ -40,9 +39,29 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         this.lifecycle = "idle";
       }
     },
+    resetMutationQueue() {
+      this.mutationTail = null;
+    },
+    enqueueMutation<T>(task: () => Promise<T>): Promise<T> {
+      const tail = this.mutationTail ?? Promise.resolve();
+      const run = tail.then(task, task);
+      const cleanup = run.then(
+        () => undefined,
+        () => undefined
+      );
+      this.mutationTail = cleanup;
+      cleanup.finally(() => {
+        if (this.mutationTail === cleanup) {
+          this.mutationTail = null;
+        }
+      });
+      return run;
+    },
+    waitForMutations(): Promise<void> {
+      return this.mutationTail ?? Promise.resolve();
+    },
     openDocument(data: FileData, path: string | null = null) {
-      resetEditorMutationQueue(this.mutationScope);
-      this.mutationScope += 1;
+      this.resetMutationQueue();
       this.data = data;
       this.currentFilePath = path;
       this.documentId = null;
@@ -50,8 +69,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.resetSessionUi();
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
-      resetEditorMutationQueue(this.mutationScope);
-      this.mutationScope += 1;
+      this.resetMutationQueue();
       this.data = response.fileData;
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
@@ -82,8 +100,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
     },
     clearDocument() {
-      resetEditorMutationQueue(this.mutationScope);
-      this.mutationScope += 1;
+      this.resetMutationQueue();
       this.data = null;
       this.currentFilePath = null;
       this.documentId = null;

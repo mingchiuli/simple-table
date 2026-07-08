@@ -91,15 +91,9 @@ const currentSheetCapabilities = computed(() =>
   workbookSheetCapabilities(capabilities.value, currentSheetIndex.value)
 );
 const toolbarCapabilities = computed(() => ({
-  ...capabilities.value,
-  canEditCells: currentSheetCapabilities.value.canEditCells,
-  canResizeRowsColumns: currentSheetCapabilities.value.canResizeRowsColumns,
   canInsertDeleteRows: currentSheetCapabilities.value.canInsertDeleteRows,
   canInsertDeleteColumns: currentSheetCapabilities.value.canInsertDeleteColumns,
-  blockedEditReasons: currentSheetCapabilities.value.blockedEditReasons,
-  blockedResizeReasons: currentSheetCapabilities.value.blockedResizeReasons,
-  blockedRowStructureReasons: currentSheetCapabilities.value.blockedRowStructureReasons,
-  blockedColumnStructureReasons: currentSheetCapabilities.value.blockedColumnStructureReasons,
+  canInsertDeleteSheets: capabilities.value.structure.canInsertDeleteSheets,
 }));
 const canEditCells = computed(() => currentSheetCapabilities.value.canEditCells && canInteractWithDocument.value);
 const canResizeRowsColumns = computed(

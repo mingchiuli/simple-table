@@ -7,7 +7,6 @@ import { useSearchSessionStore } from "@/stores/searchSession";
 import type { EditorCommandContext } from "@/api";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
 import { workbookSheetCapabilities } from "@/types";
-import { enqueueEditorMutation, waitForEditorMutations } from "@/composables/useEditorMutationQueue";
 import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 
 type UseEditorCommandsOptions = {
@@ -49,7 +48,7 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await enqueueEditorMutation(documentSessionStore.mutationScope, async () => {
+      await documentSessionStore.enqueueMutation(async () => {
         await applyMutationResponse(await action(editorCommandContext()));
       });
     } catch (error) {
@@ -160,7 +159,7 @@ export function useEditorCommands({
     try {
       searchSessionStore.isSearching = true;
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations(documentSessionStore.mutationScope);
+      await documentSessionStore.waitForMutations();
 
       searchSessionStore.searchResults = await api.search(
         query,
@@ -217,7 +216,7 @@ export function useEditorCommands({
       ? sheetCapabilities.canInsertDeleteRows
       : kind === "columns"
         ? sheetCapabilities.canInsertDeleteColumns
-        : capabilities.canInsertDeleteSheets;
+        : capabilities.structure.canInsertDeleteSheets;
     if (allowed) return true;
     const reason = structureBlockReasons(kind).join(", ");
     ElMessage.warning(
@@ -236,12 +235,18 @@ export function useEditorCommands({
     const capabilities = documentStatusStore.capabilities;
     const sheetCapabilities = currentSheetCapabilities();
     if (kind === "rows") {
-      return sheetCapabilities.blockedRowStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+      return sheetCapabilities.blockedRowStructureReasons
+        ?? capabilities.structure.blockedStructureReasons
+        ?? [];
     }
     if (kind === "columns") {
-      return sheetCapabilities.blockedColumnStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+      return sheetCapabilities.blockedColumnStructureReasons
+        ?? capabilities.structure.blockedStructureReasons
+        ?? [];
     }
-    return capabilities.blockedSheetStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+    return capabilities.structure.blockedSheetStructureReasons
+      ?? capabilities.structure.blockedStructureReasons
+      ?? [];
   }
 
   function ensureResizeAllowed(): boolean {

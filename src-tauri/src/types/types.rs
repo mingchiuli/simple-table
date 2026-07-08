@@ -550,62 +550,67 @@ impl Default for SheetCapabilities {
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
-pub struct WorkbookCapabilities {
-    pub can_edit_cells: bool,
-    pub can_resize_rows_columns: bool,
-    #[serde(default)]
-    pub can_insert_delete_rows: bool,
-    #[serde(default)]
-    pub can_insert_delete_columns: bool,
+pub struct WorkbookSaveCapabilities {
+    pub can_native_save: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_save_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detected_features: Vec<String>,
+}
+
+impl Default for WorkbookSaveCapabilities {
+    fn default() -> Self {
+        Self {
+            can_native_save: true,
+            blocked_save_reasons: Vec::new(),
+            detected_features: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct WorkbookStructureCapabilities {
     #[serde(default)]
     pub can_insert_delete_sheets: bool,
-    pub can_native_save: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_structure_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_sheet_structure_reasons: Vec<String>,
+}
+
+impl Default for WorkbookStructureCapabilities {
+    fn default() -> Self {
+        Self {
+            can_insert_delete_sheets: true,
+            blocked_structure_reasons: Vec::new(),
+            blocked_sheet_structure_reasons: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct WorkbookRichCapabilities {
     #[serde(default)]
     pub can_edit_styles: bool,
     #[serde(default)]
     pub can_edit_drawings: bool,
     #[serde(default)]
     pub can_edit_hyperlinks: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_structure_reasons: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_edit_reasons: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_resize_reasons: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_row_structure_reasons: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_column_structure_reasons: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_sheet_structure_reasons: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub detected_features: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sheet_capabilities: Vec<SheetCapabilities>,
 }
 
-impl Default for WorkbookCapabilities {
-    fn default() -> Self {
-        Self {
-            can_edit_cells: true,
-            can_resize_rows_columns: true,
-            can_insert_delete_rows: true,
-            can_insert_delete_columns: true,
-            can_insert_delete_sheets: true,
-            can_native_save: true,
-            can_edit_styles: false,
-            can_edit_drawings: false,
-            can_edit_hyperlinks: false,
-            blocked_structure_reasons: Vec::new(),
-            blocked_edit_reasons: Vec::new(),
-            blocked_resize_reasons: Vec::new(),
-            blocked_row_structure_reasons: Vec::new(),
-            blocked_column_structure_reasons: Vec::new(),
-            blocked_sheet_structure_reasons: Vec::new(),
-            detected_features: Vec::new(),
-            sheet_capabilities: Vec::new(),
-        }
-    }
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct WorkbookCapabilities {
+    pub save: WorkbookSaveCapabilities,
+    pub structure: WorkbookStructureCapabilities,
+    pub rich: WorkbookRichCapabilities,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheets: Vec<SheetCapabilities>,
 }
 
 /// 单元格变化

@@ -24,23 +24,22 @@ export function defaultSheetCapabilities(): SheetCapabilities {
 
 export function defaultWorkbookCapabilities(): WorkbookCapabilities {
   return {
-    canEditCells: true,
-    canResizeRowsColumns: true,
-    canInsertDeleteRows: true,
-    canInsertDeleteColumns: true,
-    canInsertDeleteSheets: true,
-    canNativeSave: true,
-    canEditStyles: false,
-    canEditDrawings: false,
-    canEditHyperlinks: false,
-    blockedStructureReasons: [],
-    blockedEditReasons: [],
-    blockedResizeReasons: [],
-    blockedRowStructureReasons: [],
-    blockedColumnStructureReasons: [],
-    blockedSheetStructureReasons: [],
-    detectedFeatures: [],
-    sheetCapabilities: [],
+    save: {
+      canNativeSave: true,
+      blockedSaveReasons: [],
+      detectedFeatures: [],
+    },
+    structure: {
+      canInsertDeleteSheets: true,
+      blockedStructureReasons: [],
+      blockedSheetStructureReasons: [],
+    },
+    rich: {
+      canEditStyles: false,
+      canEditDrawings: false,
+      canEditHyperlinks: false,
+    },
+    sheets: [],
   };
 }
 
@@ -48,21 +47,11 @@ export function workbookSheetCapabilities(
   workbook: WorkbookCapabilities,
   sheetIndex: number
 ): SheetCapabilities {
-  const sheetCapabilities = workbook.sheetCapabilities?.[sheetIndex];
+  const sheetCapabilities = workbook.sheets?.[sheetIndex];
   if (sheetCapabilities) {
     return sheetCapabilities;
   }
-  return {
-    canEditCells: workbook.canEditCells,
-    canResizeRowsColumns: workbook.canResizeRowsColumns,
-    canInsertDeleteRows: workbook.canInsertDeleteRows,
-    canInsertDeleteColumns: workbook.canInsertDeleteColumns,
-    blockedEditReasons: workbook.blockedEditReasons ?? [],
-    blockedResizeReasons: workbook.blockedResizeReasons ?? [],
-    blockedRowStructureReasons: workbook.blockedRowStructureReasons ?? workbook.blockedStructureReasons ?? [],
-    blockedColumnStructureReasons:
-      workbook.blockedColumnStructureReasons ?? workbook.blockedStructureReasons ?? [],
-  };
+  return defaultSheetCapabilities();
 }
 
 export function defaultHistoryStatus(): HistoryStatus {

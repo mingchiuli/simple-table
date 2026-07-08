@@ -876,9 +876,10 @@ mod tests {
             error,
             AppError::UnsupportedWorkbookStructure(reason) if reason.contains("unparseable formulas")
         ));
-        assert!(!state.capabilities().can_insert_delete_rows);
-        assert!(!state.capabilities().can_insert_delete_columns);
-        assert!(!state.capabilities().can_insert_delete_sheets);
+        let capabilities = state.capabilities();
+        assert!(!capabilities.sheets[0].can_insert_delete_rows);
+        assert!(!capabilities.sheets[0].can_insert_delete_columns);
+        assert!(!capabilities.structure.can_insert_delete_sheets);
     }
 
     #[test]
@@ -901,7 +902,7 @@ mod tests {
         .expect("read source");
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
-        assert!(state.capabilities().can_insert_delete_rows);
+        assert!(state.capabilities().sheets[0].can_insert_delete_rows);
 
         state
             .execute(EditorCommand::SetCell {
@@ -913,9 +914,10 @@ mod tests {
             .expect("invalid formula edit is isolated to the cell");
 
         let capabilities = state.capabilities();
-        assert!(!capabilities.can_insert_delete_rows);
+        assert!(!capabilities.sheets[0].can_insert_delete_rows);
         assert!(
             capabilities
+                .structure
                 .blocked_structure_reasons
                 .contains(&"unparseable formulas".to_string())
         );
@@ -924,7 +926,7 @@ mod tests {
             .undo()
             .expect("undo formula edit")
             .expect("undo result");
-        assert!(state.capabilities().can_insert_delete_rows);
+        assert!(state.capabilities().sheets[0].can_insert_delete_rows);
         state
             .execute(EditorCommand::AddRow {
                 sheet_index: 0,
@@ -1137,13 +1139,13 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         let capabilities = state.capabilities();
-        assert!(!capabilities.can_edit_cells);
-        assert!(!capabilities.can_resize_rows_columns);
-        assert!(!capabilities.can_insert_delete_rows);
-        assert!(!capabilities.can_insert_delete_columns);
-        assert!(capabilities.can_insert_delete_sheets);
+        assert!(!capabilities.sheets[0].can_edit_cells);
+        assert!(!capabilities.sheets[0].can_resize_rows_columns);
+        assert!(!capabilities.sheets[0].can_insert_delete_rows);
+        assert!(!capabilities.sheets[0].can_insert_delete_columns);
+        assert!(capabilities.structure.can_insert_delete_sheets);
         assert!(
-            capabilities
+            capabilities.sheets[0]
                 .blocked_row_structure_reasons
                 .contains(&"sheet protection".to_string())
         );
@@ -1175,7 +1177,7 @@ mod tests {
     }
 
     #[test]
-    fn sheet_capabilities_allow_unprotected_sheets_to_remain_editable() {
+    fn sheets_allow_unprotected_sheets_to_remain_editable() {
         let mut source = umya_spreadsheet::new_file();
         source
             .sheet_mut(0)
@@ -1195,19 +1197,15 @@ mod tests {
 
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
         let capabilities = state.capabilities();
-        assert!(!capabilities.can_edit_cells);
-        assert!(!capabilities.can_resize_rows_columns);
-        assert!(!capabilities.can_insert_delete_rows);
-        assert!(!capabilities.can_insert_delete_columns);
-        assert_eq!(capabilities.sheet_capabilities.len(), 2);
-        assert!(!capabilities.sheet_capabilities[0].can_edit_cells);
-        assert!(!capabilities.sheet_capabilities[0].can_resize_rows_columns);
-        assert!(!capabilities.sheet_capabilities[0].can_insert_delete_rows);
-        assert!(!capabilities.sheet_capabilities[0].can_insert_delete_columns);
-        assert!(capabilities.sheet_capabilities[1].can_edit_cells);
-        assert!(capabilities.sheet_capabilities[1].can_resize_rows_columns);
-        assert!(capabilities.sheet_capabilities[1].can_insert_delete_rows);
-        assert!(capabilities.sheet_capabilities[1].can_insert_delete_columns);
+        assert_eq!(capabilities.sheets.len(), 2);
+        assert!(!capabilities.sheets[0].can_edit_cells);
+        assert!(!capabilities.sheets[0].can_resize_rows_columns);
+        assert!(!capabilities.sheets[0].can_insert_delete_rows);
+        assert!(!capabilities.sheets[0].can_insert_delete_columns);
+        assert!(capabilities.sheets[1].can_edit_cells);
+        assert!(capabilities.sheets[1].can_resize_rows_columns);
+        assert!(capabilities.sheets[1].can_insert_delete_rows);
+        assert!(capabilities.sheets[1].can_insert_delete_columns);
 
         state
             .execute(EditorCommand::SetCell {
@@ -1727,8 +1725,8 @@ mod tests {
             },
             None,
         );
-        assert!(!state.capabilities().can_resize_rows_columns);
-        assert!(!state.capabilities().can_insert_delete_sheets);
+        assert!(!state.capabilities().sheets[0].can_resize_rows_columns);
+        assert!(!state.capabilities().structure.can_insert_delete_sheets);
 
         let (saved_name, saved_bytes) = state
             .generate_file_bytes_for_target("converted.xlsx")
@@ -1744,8 +1742,8 @@ mod tests {
         state.rebind_saved_document(parsed.file_data, parsed.workbook, true);
         state.mark_saved();
 
-        assert!(state.capabilities().can_resize_rows_columns);
-        assert!(state.capabilities().can_insert_delete_sheets);
+        assert!(state.capabilities().sheets[0].can_resize_rows_columns);
+        assert!(state.capabilities().structure.can_insert_delete_sheets);
         assert!(!state.is_dirty());
     }
 
@@ -1765,11 +1763,11 @@ mod tests {
         );
 
         let capabilities = state.capabilities();
-        assert!(capabilities.can_edit_cells);
-        assert!(capabilities.can_insert_delete_rows);
-        assert!(capabilities.can_insert_delete_columns);
-        assert!(!capabilities.can_resize_rows_columns);
-        assert!(!capabilities.can_insert_delete_sheets);
+        assert!(capabilities.sheets[0].can_edit_cells);
+        assert!(capabilities.sheets[0].can_insert_delete_rows);
+        assert!(capabilities.sheets[0].can_insert_delete_columns);
+        assert!(!capabilities.sheets[0].can_resize_rows_columns);
+        assert!(!capabilities.structure.can_insert_delete_sheets);
 
         assert!(
             state

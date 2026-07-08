@@ -392,10 +392,9 @@ fn active_workbook_capabilities(
     let registry = active_document_store();
     let Ok(registry_guard) = registry.read() else {
         eprintln!("document registry lock poisoned while reading workbook capabilities");
-        return WorkbookCapabilities {
-            can_native_save: native_save_allowed,
-            ..Default::default()
-        };
+        let mut capabilities = WorkbookCapabilities::default();
+        capabilities.save.can_native_save = native_save_allowed;
+        return capabilities;
     };
     registry_guard
         .active()
@@ -408,12 +407,14 @@ fn active_workbook_capabilities(
         })
         .map(|editor_state| {
             let mut capabilities = editor_state.capabilities();
-            capabilities.can_native_save = native_save_allowed && capabilities.can_native_save;
+            capabilities.save.can_native_save =
+                native_save_allowed && capabilities.save.can_native_save;
             capabilities
         })
-        .unwrap_or_else(|| WorkbookCapabilities {
-            can_native_save: native_save_allowed,
-            ..Default::default()
+        .unwrap_or_else(|| {
+            let mut capabilities = WorkbookCapabilities::default();
+            capabilities.save.can_native_save = native_save_allowed;
+            capabilities
         })
 }
 
@@ -421,22 +422,23 @@ fn active_workbook_capabilities_for_save(native_save_allowed: bool) -> WorkbookC
     let registry = active_document_store();
     let Ok(registry_guard) = registry.read() else {
         eprintln!("document registry lock poisoned while planning native save");
-        return WorkbookCapabilities {
-            can_native_save: native_save_allowed,
-            ..Default::default()
-        };
+        let mut capabilities = WorkbookCapabilities::default();
+        capabilities.save.can_native_save = native_save_allowed;
+        return capabilities;
     };
 
     registry_guard
         .active()
         .map(|editor_state| {
             let mut capabilities = editor_state.capabilities();
-            capabilities.can_native_save = native_save_allowed && capabilities.can_native_save;
+            capabilities.save.can_native_save =
+                native_save_allowed && capabilities.save.can_native_save;
             capabilities
         })
-        .unwrap_or_else(|| WorkbookCapabilities {
-            can_native_save: native_save_allowed,
-            ..Default::default()
+        .unwrap_or_else(|| {
+            let mut capabilities = WorkbookCapabilities::default();
+            capabilities.save.can_native_save = native_save_allowed;
+            capabilities
         })
 }
 
@@ -444,16 +446,16 @@ fn native_save_blocked_reason(capabilities: &DocumentCapabilities) -> Option<Str
     if capabilities.native_save_extension.is_none() {
         return Some("Native save is only supported as .xlsx or .csv.".to_string());
     }
-    if !capabilities.workbook.can_native_save {
+    if !capabilities.workbook.save.can_native_save {
         return Some(first_reason(
             [
-                &capabilities.workbook.blocked_structure_reasons,
-                &capabilities.workbook.blocked_edit_reasons,
-                &capabilities.workbook.blocked_resize_reasons,
-                &capabilities.workbook.blocked_row_structure_reasons,
-                &capabilities.workbook.blocked_column_structure_reasons,
-                &capabilities.workbook.blocked_sheet_structure_reasons,
-                &capabilities.workbook.detected_features,
+                &capabilities.workbook.save.blocked_save_reasons,
+                &capabilities.workbook.structure.blocked_structure_reasons,
+                &capabilities
+                    .workbook
+                    .structure
+                    .blocked_sheet_structure_reasons,
+                &capabilities.workbook.save.detected_features,
             ],
             "Workbook cannot be saved in its current state.",
         ));
@@ -461,7 +463,7 @@ fn native_save_blocked_reason(capabilities: &DocumentCapabilities) -> Option<Str
     None
 }
 
-fn first_reason(reason_groups: [&Vec<String>; 7], fallback: &str) -> String {
+fn first_reason<const N: usize>(reason_groups: [&Vec<String>; N], fallback: &str) -> String {
     reason_groups
         .into_iter()
         .flat_map(|reasons| reasons.iter())

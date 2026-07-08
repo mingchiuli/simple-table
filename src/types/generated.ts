@@ -49,7 +49,13 @@ export type DrawingKind = "image" | "chart";
 
 export type SheetCapabilities = { canEditCells: boolean, canResizeRowsColumns: boolean, canInsertDeleteRows: boolean, canInsertDeleteColumns: boolean, blockedEditReasons?: Array<string>, blockedResizeReasons?: Array<string>, blockedRowStructureReasons?: Array<string>, blockedColumnStructureReasons?: Array<string>, };
 
-export type WorkbookCapabilities = { canEditCells: boolean, canResizeRowsColumns: boolean, canInsertDeleteRows: boolean, canInsertDeleteColumns: boolean, canInsertDeleteSheets: boolean, canNativeSave: boolean, canEditStyles: boolean, canEditDrawings: boolean, canEditHyperlinks: boolean, blockedStructureReasons?: Array<string>, blockedEditReasons?: Array<string>, blockedResizeReasons?: Array<string>, blockedRowStructureReasons?: Array<string>, blockedColumnStructureReasons?: Array<string>, blockedSheetStructureReasons?: Array<string>, detectedFeatures?: Array<string>, sheetCapabilities?: Array<SheetCapabilities>, };
+export type WorkbookSaveCapabilities = { canNativeSave: boolean, blockedSaveReasons?: Array<string>, detectedFeatures?: Array<string>, };
+
+export type WorkbookStructureCapabilities = { canInsertDeleteSheets: boolean, blockedStructureReasons?: Array<string>, blockedSheetStructureReasons?: Array<string>, };
+
+export type WorkbookRichCapabilities = { canEditStyles: boolean, canEditDrawings: boolean, canEditHyperlinks: boolean, };
+
+export type WorkbookCapabilities = { save: WorkbookSaveCapabilities, structure: WorkbookStructureCapabilities, rich: WorkbookRichCapabilities, sheets?: Array<SheetCapabilities>, };
 
 export type DocumentCapabilities = { sourceFormat: "xlsx" | "csv", canSaveOriginal: boolean, nativeSaveFormat: "xlsx" | "csv" | null, exportFormats: Array<"xlsx" | "csv">, nativeSaveExtension: "xlsx" | "csv" | null, exportExtension: "xlsx" | "csv", requiresSaveAsForNativeSave: boolean, workbook: WorkbookCapabilities, };
 

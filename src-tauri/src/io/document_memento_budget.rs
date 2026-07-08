@@ -51,8 +51,10 @@ pub(crate) fn estimate_memento_side_bytes(
         | AppliedOperation::DeleteColumn { .. }
         | AppliedOperation::AddSheet { .. }
         | AppliedOperation::DeleteSheet { .. } => {
+            let formula_sheet_indexes =
+                formulas.structure_memento_sheet_indexes(projection, operation);
             estimate_file_structure_memento_bytes(projection, operation)
-                + body.estimate_structure_memento_bytes(operation, formulas.ast_service_mut())
+                + body.estimate_structure_memento_bytes(operation, formula_sheet_indexes)
         }
     }
 }

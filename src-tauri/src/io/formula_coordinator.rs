@@ -59,6 +59,37 @@ impl FormulaCoordinator {
         self.status = FormulaStatus::degraded(reason, FormulaDiagnostics::default());
     }
 
+    pub(crate) fn structure_formula_limitations(&self) -> Vec<String> {
+        let diagnostics = match &self.status {
+            FormulaStatus::Ready { diagnostics } | FormulaStatus::Degraded { diagnostics, .. } => {
+                diagnostics
+            }
+        };
+        let mut limitations = Vec::new();
+        if diagnostics.invalid_formula_count > 0 {
+            limitations.push("unparseable formulas".to_string());
+        }
+        if diagnostics.unsupported_dependency_count > 0 {
+            limitations.push("unsupported formula references".to_string());
+        }
+        limitations
+    }
+
+    pub(crate) fn structure_memento_sheet_indexes(
+        &self,
+        projection: &FileData,
+        operation: &AppliedOperation,
+    ) -> Vec<usize> {
+        if !operation.impact().is_structure_change() {
+            return Vec::new();
+        }
+        let mut sheet_indexes = std::collections::BTreeSet::new();
+        for cell in self.formula_cell_positions(projection) {
+            sheet_indexes.insert(cell.sheet_index);
+        }
+        sheet_indexes.into_iter().collect()
+    }
+
     pub(crate) fn impacted_cells_for_memento(
         &self,
         changed_cells: impl IntoIterator<Item = FormulaCellRef>,

@@ -82,21 +82,9 @@ impl<'a> DocumentTransaction<'a> {
     }
 
     fn validate_after_commit(&self, cell_changes: &[SheetCellChange]) -> Result<(), AppError> {
-        #[cfg(any(debug_assertions, test))]
         if self.operation.impact().is_structure_change() {
             self.document.validate_persisted_projection_consistency()?;
             return self.document.validate_projection_consistency();
-        }
-
-        #[cfg(all(not(debug_assertions), not(test)))]
-        if self.operation.impact().is_structure_change() {
-            return self
-                .document
-                .validate_projection_sheets(touched_sheet_indexes(
-                    self.operation,
-                    cell_changes,
-                    self.document.sheet_count(),
-                ));
         }
 
         self.document

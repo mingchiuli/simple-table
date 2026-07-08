@@ -5,7 +5,6 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
-import { waitForEditorMutations } from '@/composables/useEditorMutationQueue';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -60,7 +59,7 @@ export function useFileActions({
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations(documentSessionStore.mutationScope);
+      await documentSessionStore.waitForMutations();
 
       const opened = await readFile(filePath);
       documentSessionStore.openDocumentResponse(opened, filePath);
@@ -80,7 +79,7 @@ export function useFileActions({
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations(documentSessionStore.mutationScope);
+      await documentSessionStore.waitForMutations();
 
       const result = await openFile();
       if (!result) return;
@@ -108,7 +107,7 @@ export function useFileActions({
 
     await withDocumentLifecycle('saving', 'Failed to save file', async () => {
       if (!(await flushPendingCellChanges())) return;
-      await waitForEditorMutations(documentSessionStore.mutationScope);
+      await documentSessionStore.waitForMutations();
 
       const isNewFile = data.fileName.startsWith('untitled');
       const defaultName = isNewFile
@@ -160,7 +159,7 @@ export function useFileActions({
 
   async function ensureSandboxPathForExport(defaultName: string, extension: string): Promise<string | null> {
     if (!(await flushPendingCellChanges())) return null;
-    await waitForEditorMutations(documentSessionStore.mutationScope);
+    await documentSessionStore.waitForMutations();
     if (!fileData.value) return null;
 
     let path = documentSessionStore.currentFilePath;
@@ -209,7 +208,7 @@ export function useFileActions({
 
       if (storageType === 'desktopPath') {
         if (!(await flushPendingCellChanges())) return;
-        await waitForEditorMutations(documentSessionStore.mutationScope);
+        await documentSessionStore.waitForMutations();
         const exportedPath = await exportFile(
           documentSessionStore.currentFilePath ?? '',
           `${defaultName}.${extension}`
@@ -233,7 +232,7 @@ export function useFileActions({
 
   async function handleBack() {
     if (!(await flushPendingCellChanges())) return;
-    await waitForEditorMutations(documentSessionStore.mutationScope);
+    await documentSessionStore.waitForMutations();
 
     documentSessionStore.clearDocument();
     resetDocumentStatus();

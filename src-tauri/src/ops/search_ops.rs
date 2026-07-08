@@ -1,9 +1,9 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::state::search_index::{SearchCellText, SearchMatcher};
+use crate::state::search_index::{SearchCellText, SearchMatcher, collect_sheet_search_text};
 use crate::state::state::ActiveDocumentStore;
-use crate::types::{SearchResult, SearchScope, SheetData};
+use crate::types::{SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
 
@@ -98,10 +98,10 @@ pub fn do_search(
             SearchInput::Scan {
                 sheet_index,
                 sheet_name,
-                sheet,
+                cells,
             } => {
                 used_scan_fallback = true;
-                for cell in scan_sheet(&sheet, matcher.as_ref(), remaining) {
+                for cell in scan_sheet(&cells, matcher.as_ref(), remaining) {
                     results.push(SearchResult {
                         sheet_index,
                         sheet_name: sheet_name.clone(),
@@ -131,7 +131,7 @@ enum SearchInput {
     Scan {
         sheet_index: usize,
         sheet_name: String,
-        sheet: SheetData,
+        cells: Vec<SearchCellText>,
     },
 }
 
@@ -154,12 +154,12 @@ fn search_input_for_sheet(
     Some(SearchInput::Scan {
         sheet_index,
         sheet_name: sheet.name.clone(),
-        sheet: sheet.clone(),
+        cells: collect_sheet_search_text(sheet),
     })
 }
 
 fn scan_sheet(
-    sheet: &SheetData,
+    sheet_cells: &[SearchCellText],
     matcher: Option<&SearchMatcher>,
     limit: usize,
 ) -> Vec<SearchCellText> {
@@ -167,21 +167,13 @@ fn scan_sheet(
         return Vec::new();
     };
     let mut cells = Vec::new();
-    for (row_idx, row) in sheet.rows.iter().enumerate() {
-        for (col_idx, _cell) in row.iter().enumerate() {
-            let search_text = sheet.cell_search_text(row_idx, col_idx);
-            if search_text.is_empty() || !matcher.matches(&search_text) {
-                continue;
-            }
-            cells.push(SearchCellText {
-                row: row_idx,
-                col: col_idx,
-                text: sheet.cell_display_text(row_idx, col_idx),
-                display: search_text,
-            });
-            if cells.len() >= limit {
-                return cells;
-            }
+    for cell in sheet_cells {
+        if !matcher.matches(&cell.display) {
+            continue;
+        }
+        cells.push(cell.clone());
+        if cells.len() >= limit {
+            return cells;
         }
     }
     cells
