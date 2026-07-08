@@ -12,8 +12,9 @@ use crate::types::{
     LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse, ReadOnlyRichProjection,
     ResyncRequiredPatch, RichProjectionPatch, RichProjectionPatchScope, RowDeletedPatch,
     RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope,
-    SetCellRequest, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
-    SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch, WorkbookCapabilities,
+    SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch, SheetInsertedPatch,
+    SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch,
+    WorkbookCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -37,6 +38,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<ReadOnlyRichProjection>(&mut output, &cfg);
     push_decl::<DrawingProjection>(&mut output, &cfg);
     push_decl::<DrawingKind>(&mut output, &cfg);
+    push_decl::<SheetCapabilities>(&mut output, &cfg);
     push_decl::<WorkbookCapabilities>(&mut output, &cfg);
     push_decl::<DocumentCapabilities>(&mut output, &cfg);
     push_decl::<NativeSavePlan>(&mut output, &cfg);

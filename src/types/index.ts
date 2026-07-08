@@ -5,8 +5,22 @@ import type {
   FormulaStatus,
   HistoryStatus,
   ReadOnlyRichProjection,
+  SheetCapabilities,
   WorkbookCapabilities,
 } from './generated';
+
+export function defaultSheetCapabilities(): SheetCapabilities {
+  return {
+    canEditCells: true,
+    canResizeRowsColumns: true,
+    canInsertDeleteRows: true,
+    canInsertDeleteColumns: true,
+    blockedEditReasons: [],
+    blockedResizeReasons: [],
+    blockedRowStructureReasons: [],
+    blockedColumnStructureReasons: [],
+  };
+}
 
 export function defaultWorkbookCapabilities(): WorkbookCapabilities {
   return {
@@ -26,6 +40,28 @@ export function defaultWorkbookCapabilities(): WorkbookCapabilities {
     blockedColumnStructureReasons: [],
     blockedSheetStructureReasons: [],
     detectedFeatures: [],
+    sheetCapabilities: [],
+  };
+}
+
+export function workbookSheetCapabilities(
+  workbook: WorkbookCapabilities,
+  sheetIndex: number
+): SheetCapabilities {
+  const sheetCapabilities = workbook.sheetCapabilities?.[sheetIndex];
+  if (sheetCapabilities) {
+    return sheetCapabilities;
+  }
+  return {
+    canEditCells: workbook.canEditCells,
+    canResizeRowsColumns: workbook.canResizeRowsColumns,
+    canInsertDeleteRows: workbook.canInsertDeleteRows,
+    canInsertDeleteColumns: workbook.canInsertDeleteColumns,
+    blockedEditReasons: workbook.blockedEditReasons ?? [],
+    blockedResizeReasons: workbook.blockedResizeReasons ?? [],
+    blockedRowStructureReasons: workbook.blockedRowStructureReasons ?? workbook.blockedStructureReasons ?? [],
+    blockedColumnStructureReasons:
+      workbook.blockedColumnStructureReasons ?? workbook.blockedStructureReasons ?? [],
   };
 }
 

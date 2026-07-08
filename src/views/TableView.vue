@@ -17,6 +17,7 @@ import { getCellKey } from '@/utils/cellKey';
 import { cellToEditorString } from '@/utils/cellValue';
 import { colToLetter } from '@/utils/excel';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
+import { workbookSheetCapabilities } from '@/types';
 import type { EditorMutationResponse } from '@/types';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
@@ -71,11 +72,6 @@ const sheetNames = computed(() => {
   if (!fileData.value) return [];
   return fileData.value.sheets.map((s) => s.name);
 });
-const canInteractWithDocument = computed(() => !documentSessionStore.isInteractionLocked);
-const canEditCells = computed(() => capabilities.value.canEditCells && canInteractWithDocument.value);
-const canResizeRowsColumns = computed(
-  () => capabilities.value.canResizeRowsColumns && canInteractWithDocument.value
-);
 
 const {
   canUndo,
@@ -89,6 +85,26 @@ const {
   clearPendingContentChange,
   resetDocumentStatus,
 } = useDocumentStatus();
+
+const canInteractWithDocument = computed(() => !documentSessionStore.isInteractionLocked);
+const currentSheetCapabilities = computed(() =>
+  workbookSheetCapabilities(capabilities.value, currentSheetIndex.value)
+);
+const toolbarCapabilities = computed(() => ({
+  ...capabilities.value,
+  canEditCells: currentSheetCapabilities.value.canEditCells,
+  canResizeRowsColumns: currentSheetCapabilities.value.canResizeRowsColumns,
+  canInsertDeleteRows: currentSheetCapabilities.value.canInsertDeleteRows,
+  canInsertDeleteColumns: currentSheetCapabilities.value.canInsertDeleteColumns,
+  blockedEditReasons: currentSheetCapabilities.value.blockedEditReasons,
+  blockedResizeReasons: currentSheetCapabilities.value.blockedResizeReasons,
+  blockedRowStructureReasons: currentSheetCapabilities.value.blockedRowStructureReasons,
+  blockedColumnStructureReasons: currentSheetCapabilities.value.blockedColumnStructureReasons,
+}));
+const canEditCells = computed(() => currentSheetCapabilities.value.canEditCells && canInteractWithDocument.value);
+const canResizeRowsColumns = computed(
+  () => currentSheetCapabilities.value.canResizeRowsColumns && canInteractWithDocument.value
+);
 
 async function applyMutationResponse(response: EditorMutationResponse) {
   const result = documentSessionStore.applyMutationResponse(response);
@@ -223,7 +239,7 @@ watch(() => route.query.file, () => {
       :current-sheet-index="currentSheetIndex"
       :can-undo="canUndo"
       :can-redo="canRedo"
-      :capabilities="capabilities"
+      :capabilities="toolbarCapabilities"
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"

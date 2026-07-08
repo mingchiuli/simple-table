@@ -6,6 +6,7 @@ import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import type { EditorCommandContext } from "@/api";
 import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
+import { workbookSheetCapabilities } from "@/types";
 import { enqueueEditorMutation, waitForEditorMutations } from "@/composables/useEditorMutationQueue";
 import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 
@@ -211,10 +212,11 @@ export function useEditorCommands({
 
   function ensureStructureEditingAllowed(kind: "rows" | "columns" | "sheets"): boolean {
     const capabilities = documentStatusStore.capabilities;
+    const sheetCapabilities = currentSheetCapabilities();
     const allowed = kind === "rows"
-      ? capabilities.canInsertDeleteRows
+      ? sheetCapabilities.canInsertDeleteRows
       : kind === "columns"
-        ? capabilities.canInsertDeleteColumns
+        ? sheetCapabilities.canInsertDeleteColumns
         : capabilities.canInsertDeleteSheets;
     if (allowed) return true;
     const reason = structureBlockReasons(kind).join(", ");
@@ -232,24 +234,30 @@ export function useEditorCommands({
 
   function structureBlockReasons(kind: "rows" | "columns" | "sheets"): string[] {
     const capabilities = documentStatusStore.capabilities;
+    const sheetCapabilities = currentSheetCapabilities();
     if (kind === "rows") {
-      return capabilities.blockedRowStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+      return sheetCapabilities.blockedRowStructureReasons ?? capabilities.blockedStructureReasons ?? [];
     }
     if (kind === "columns") {
-      return capabilities.blockedColumnStructureReasons ?? capabilities.blockedStructureReasons ?? [];
+      return sheetCapabilities.blockedColumnStructureReasons ?? capabilities.blockedStructureReasons ?? [];
     }
     return capabilities.blockedSheetStructureReasons ?? capabilities.blockedStructureReasons ?? [];
   }
 
   function ensureResizeAllowed(): boolean {
-    if (documentStatusStore.capabilities.canResizeRowsColumns) return true;
-    const reason = documentStatusStore.capabilities.blockedResizeReasons?.join(", ");
+    const sheetCapabilities = currentSheetCapabilities();
+    if (sheetCapabilities.canResizeRowsColumns) return true;
+    const reason = sheetCapabilities.blockedResizeReasons?.join(", ");
     ElMessage.warning(
       reason
         ? `Row and column resizing is disabled for this workbook: ${reason}`
         : "Row and column resizing is disabled for this workbook"
     );
     return false;
+  }
+
+  function currentSheetCapabilities() {
+    return workbookSheetCapabilities(documentStatusStore.capabilities, currentSheetIndex.value);
   }
 
   async function refreshAfterMutationError(

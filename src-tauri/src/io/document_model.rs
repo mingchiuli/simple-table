@@ -18,7 +18,7 @@ use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_f
 use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
-    SheetCellChange, SheetData, SheetShapePatch, WorkbookCapabilities,
+    SheetCapabilities, SheetCellChange, SheetData, SheetShapePatch, WorkbookCapabilities,
 };
 use std::collections::{HashMap, HashSet};
 use umya_spreadsheet::Workbook;
@@ -109,6 +109,9 @@ impl SpreadsheetDocument {
                 &mut capabilities.detected_features,
                 "failed editor transaction",
             );
+            for sheet_capabilities in &mut capabilities.sheet_capabilities {
+                disable_sheet_capabilities(sheet_capabilities, reason);
+            }
         }
         capabilities
     }
@@ -736,6 +739,17 @@ fn push_unique_reason(reasons: &mut Vec<String>, reason: impl Into<String>) {
     if !reasons.iter().any(|existing| existing == &reason) {
         reasons.push(reason);
     }
+}
+
+fn disable_sheet_capabilities(capabilities: &mut SheetCapabilities, reason: &str) {
+    capabilities.can_edit_cells = false;
+    capabilities.can_resize_rows_columns = false;
+    capabilities.can_insert_delete_rows = false;
+    capabilities.can_insert_delete_columns = false;
+    push_unique_reason(&mut capabilities.blocked_edit_reasons, reason);
+    push_unique_reason(&mut capabilities.blocked_resize_reasons, reason);
+    push_unique_reason(&mut capabilities.blocked_row_structure_reasons, reason);
+    push_unique_reason(&mut capabilities.blocked_column_structure_reasons, reason);
 }
 
 fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bool {

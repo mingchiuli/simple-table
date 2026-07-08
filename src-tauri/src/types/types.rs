@@ -517,6 +517,39 @@ pub struct NativeSavePlan {
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
+pub struct SheetCapabilities {
+    pub can_edit_cells: bool,
+    pub can_resize_rows_columns: bool,
+    pub can_insert_delete_rows: bool,
+    pub can_insert_delete_columns: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_edit_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_resize_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_row_structure_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_column_structure_reasons: Vec<String>,
+}
+
+impl Default for SheetCapabilities {
+    fn default() -> Self {
+        Self {
+            can_edit_cells: true,
+            can_resize_rows_columns: true,
+            can_insert_delete_rows: true,
+            can_insert_delete_columns: true,
+            blocked_edit_reasons: Vec::new(),
+            blocked_resize_reasons: Vec::new(),
+            blocked_row_structure_reasons: Vec::new(),
+            blocked_column_structure_reasons: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct WorkbookCapabilities {
     pub can_edit_cells: bool,
     pub can_resize_rows_columns: bool,
@@ -547,6 +580,8 @@ pub struct WorkbookCapabilities {
     pub blocked_sheet_structure_reasons: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detected_features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_capabilities: Vec<SheetCapabilities>,
 }
 
 impl Default for WorkbookCapabilities {
@@ -568,6 +603,7 @@ impl Default for WorkbookCapabilities {
             blocked_column_structure_reasons: Vec::new(),
             blocked_sheet_structure_reasons: Vec::new(),
             detected_features: Vec::new(),
+            sheet_capabilities: Vec::new(),
         }
     }
 }

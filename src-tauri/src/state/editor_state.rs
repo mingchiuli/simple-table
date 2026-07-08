@@ -1175,6 +1175,60 @@ mod tests {
     }
 
     #[test]
+    fn sheet_capabilities_allow_unprotected_sheets_to_remain_editable() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("protected sheet")
+            .set_sheet_protection(SheetProtection::default());
+        source.new_sheet("Editable").expect("editable sheet");
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "mixed-protection.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        let capabilities = state.capabilities();
+        assert!(!capabilities.can_edit_cells);
+        assert!(!capabilities.can_resize_rows_columns);
+        assert!(!capabilities.can_insert_delete_rows);
+        assert!(!capabilities.can_insert_delete_columns);
+        assert_eq!(capabilities.sheet_capabilities.len(), 2);
+        assert!(!capabilities.sheet_capabilities[0].can_edit_cells);
+        assert!(!capabilities.sheet_capabilities[0].can_resize_rows_columns);
+        assert!(!capabilities.sheet_capabilities[0].can_insert_delete_rows);
+        assert!(!capabilities.sheet_capabilities[0].can_insert_delete_columns);
+        assert!(capabilities.sheet_capabilities[1].can_edit_cells);
+        assert!(capabilities.sheet_capabilities[1].can_resize_rows_columns);
+        assert!(capabilities.sheet_capabilities[1].can_insert_delete_rows);
+        assert!(capabilities.sheet_capabilities[1].can_insert_delete_columns);
+
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 1,
+                row: 0,
+                col: 0,
+                text: "editable".to_string(),
+            })
+            .expect("unprotected sheet remains editable");
+        assert!(matches!(
+            state.execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "blocked".to_string(),
+            }),
+            Err(AppError::UnsupportedWorkbookStructure(_))
+        ));
+    }
+
+    #[test]
     fn row_height_and_column_width_participate_in_undo_redo() {
         let mut source = umya_spreadsheet::new_file();
         source

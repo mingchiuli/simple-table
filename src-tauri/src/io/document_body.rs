@@ -6,7 +6,9 @@ use crate::io::codec::writer;
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
-use crate::types::{AppliedOperationResult, FileData, SheetCellChange, WorkbookCapabilities};
+use crate::types::{
+    AppliedOperationResult, FileData, SheetCapabilities, SheetCellChange, WorkbookCapabilities,
+};
 use formualizer_parse::parser::ReferenceType;
 use umya_spreadsheet::{Workbook, Worksheet};
 
@@ -715,6 +717,12 @@ fn is_csv_document(file_data: &FileData) -> bool {
 }
 
 fn csv_workbook_capabilities() -> WorkbookCapabilities {
+    let sheet_capabilities = SheetCapabilities {
+        can_resize_rows_columns: false,
+        blocked_resize_reasons: vec!["CSV files do not persist row or column dimensions".into()],
+        ..SheetCapabilities::default()
+    };
+
     WorkbookCapabilities {
         can_resize_rows_columns: false,
         can_insert_delete_sheets: false,
@@ -722,6 +730,7 @@ fn csv_workbook_capabilities() -> WorkbookCapabilities {
         blocked_sheet_structure_reasons: vec!["CSV files only persist one sheet".into()],
         blocked_structure_reasons: vec!["CSV files only persist one sheet".into()],
         detected_features: vec!["csv single-sheet value format".into()],
+        sheet_capabilities: vec![sheet_capabilities],
         ..WorkbookCapabilities::default()
     }
 }
