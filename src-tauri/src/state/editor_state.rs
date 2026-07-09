@@ -1554,6 +1554,84 @@ mod tests {
     }
 
     #[test]
+    fn structure_redo_restores_sparse_projection_shape() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "sparse-structure.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("A1".to_string())], vec![]],
+                    column_widths: Some(std::collections::HashMap::from([(3, 120)])),
+                    row_heights: Some(std::collections::HashMap::from([(3, 72)])),
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(EditorCommand::AddColumn {
+                sheet_index: 0,
+                col_index: 3,
+            })
+            .expect("add sparse column");
+        assert_eq!(
+            state.file_data().sheets[0]
+                .rows
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            vec![4, 4, 4, 4]
+        );
+        state.undo().expect("undo column add").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0]
+                .rows
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+        state.redo().expect("redo column add").expect("redo result");
+        assert_eq!(
+            state.file_data().sheets[0]
+                .rows
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            vec![4, 4, 4, 4]
+        );
+
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "sparse-structure.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("A1".to_string())]],
+                    row_heights: Some(std::collections::HashMap::from([(3, 72)])),
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 3,
+            })
+            .expect("add sparse row");
+        assert_eq!(state.file_data().sheets[0].rows.len(), 4);
+        state.undo().expect("undo row add").expect("undo result");
+        assert_eq!(state.file_data().sheets[0].rows.len(), 1);
+        state.redo().expect("redo row add").expect("redo result");
+        assert_eq!(state.file_data().sheets[0].rows.len(), 4);
+        assert_eq!(state.file_data().sheets[0].rows[3].len(), 1);
+    }
+
+    #[test]
     fn undo_sparse_cell_edit_preserves_style_only_far_cells() {
         let mut source = umya_spreadsheet::new_file();
         {

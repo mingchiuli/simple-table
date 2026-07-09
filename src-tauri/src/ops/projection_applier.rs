@@ -109,8 +109,10 @@ impl ProjectionMutation<'_> {
                     }
                     for (row_index, row) in sheet.rows.iter_mut().enumerate() {
                         let value = col_data.get(row_index).cloned().unwrap_or(CellValue::Null);
-                        let pos = (*col_index).min(row.len());
-                        row.insert(pos, value);
+                        while row.len() < *col_index {
+                            row.push(CellValue::Null);
+                        }
+                        row.insert(*col_index, value);
                     }
                     shift_layout_map_on_insert(sheet.column_widths.as_mut(), *col_index);
                     shift_column_merges_on_insert(&mut sheet.merges, *col_index);
@@ -633,5 +635,48 @@ mod tests {
         assert_eq!(rich.hidden_rows, vec![1]);
         assert_eq!(rich.drawings[0].from_row, 0);
         assert_eq!(rich.drawings[0].to_row, Some(1));
+    }
+
+    #[test]
+    fn add_column_projection_preserves_sparse_column_position() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "sparse.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::String("A1".to_string())], vec![]],
+                ..Default::default()
+            }],
+        };
+
+        AppliedOperation::AddColumn {
+            sheet_index: 0,
+            col_index: 3,
+            col_data: vec![
+                CellValue::String("D1".to_string()),
+                CellValue::String("D2".to_string()),
+            ],
+            column_width: None,
+        }
+        .projection_mutation()
+        .execute(&mut file_data);
+
+        assert_eq!(
+            file_data.sheets[0].rows,
+            vec![
+                vec![
+                    CellValue::String("A1".to_string()),
+                    CellValue::Null,
+                    CellValue::Null,
+                    CellValue::String("D1".to_string()),
+                ],
+                vec![
+                    CellValue::Null,
+                    CellValue::Null,
+                    CellValue::Null,
+                    CellValue::String("D2".to_string()),
+                ],
+            ]
+        );
     }
 }

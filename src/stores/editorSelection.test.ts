@@ -94,4 +94,19 @@ describe("editorSelection store", () => {
     expect(store.sheetSelectedCells.get(0)).toEqual({ row: 0, col: 0 });
     expect(store.sheetSelectedCells.has(2)).toBe(false);
   });
+
+  it("clamps remembered selections to current sheet bounds", () => {
+    const store = useEditorSelectionStore();
+    store.sheetSelectedCells.set(0, { row: 0, col: 0 });
+    store.sheetSelectedCells.set(1, { row: 4, col: 4 });
+    store.sheetSelectedCells.set(3, { row: 0, col: 0 });
+
+    store.clampToSheetData(2, (sheetIndex, row, col) => (
+      sheetIndex === 0 && row === 0 && col === 0
+    ));
+
+    expect(store.sheetSelectedCells.get(0)).toEqual({ row: 0, col: 0 });
+    expect(store.sheetSelectedCells.has(1)).toBe(false);
+    expect(store.sheetSelectedCells.has(3)).toBe(false);
+  });
 });

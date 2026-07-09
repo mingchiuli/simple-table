@@ -275,7 +275,11 @@ async function awaitRouteLoadStep<T>(
   shouldContinue: ContinuationGuard
 ): Promise<T | undefined> {
   try {
-    return await promise;
+    const result = await promise;
+    if (!shouldContinue()) {
+      return undefined;
+    }
+    return result;
   } catch (error) {
     if (!shouldContinue()) {
       return undefined;

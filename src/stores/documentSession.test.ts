@@ -14,6 +14,7 @@ import {
   type EditorMutationResponse,
   type EditorStateInfo,
   type FileData,
+  type SearchResult,
   type SheetData,
 } from "@/types";
 
@@ -61,6 +62,17 @@ function queuePendingDraft(value = "draft") {
   return { statusStore, pendingStore };
 }
 
+function searchResult(value = "old"): SearchResult {
+  return {
+    sheetIndex: 0,
+    sheetName: "Sheet1",
+    row: 0,
+    col: 0,
+    value,
+    cellPosition: "A1",
+  };
+}
+
 describe("documentSession store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -102,6 +114,79 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(true);
     expect(store.revision).toBe(3);
+  });
+
+  it("clears stale search results when a content mutation is applied", () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    });
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    store.applyMutationResponse(response({
+      revision: 1,
+      patches: [{
+        type: "Cells",
+        data: {
+          changes: [{ sheetIndex: 0, row: 0, col: 0, value: text("new") }],
+        },
+      }],
+    }));
+
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
+    expect(searchStore.isSearching).toBe(false);
+  });
+
+  it("keeps search results for layout-only mutations", () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    });
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    store.applyMutationResponse(response({
+      revision: 1,
+      patches: [{
+        type: "Layout",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            columnWidths: { 0: 160 },
+          },
+        },
+      }],
+    }));
+
+    expect(searchStore.searchQuery).toBe("old");
+    expect(searchStore.searchResults).toEqual([searchResult()]);
+    expect(searchStore.isSearching).toBe(false);
+  });
+
+  it("clears search results when a mutation response skips revisions", () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    });
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    store.applyMutationResponse(response({ revision: 3 }));
+
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
+    expect(searchStore.isSearching).toBe(false);
   });
 
   it("loads a fresh projection when applying a response that requires resync", async () => {
@@ -373,6 +458,36 @@ describe("documentSession store", () => {
     }));
 
     expect(selectionStore.selectedCell).toBeNull();
+  });
+
+  it("keeps selections inside layout-defined sparse sheet extent", () => {
+    const store = useDocumentSessionStore();
+    const selectionStore = useEditorSelectionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [{
+        ...sheet("Sheet1", [[text("A1")]]),
+        columnWidths: { 3: 120 },
+        rowHeights: { 3: 72 },
+      }],
+    });
+    selectionStore.selectCell(3, 3);
+
+    store.applyMutationResponse(response({
+      revision: 1,
+      patches: [{
+        type: "Layout",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            rowHeights: { 3: 80 },
+          },
+        },
+      }],
+    }));
+
+    expect(selectionStore.selectedCell).toEqual({ row: 3, col: 3 });
   });
 
   it("ignores stale responses from an older revision", () => {

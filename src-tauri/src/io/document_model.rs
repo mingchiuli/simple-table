@@ -814,15 +814,23 @@ fn restore_projection_row(file_data: &mut FileData, memento: &RowStructureMement
         }
     } else if sheet.rows.len() < memento.row_count {
         let row = memento.row.clone().unwrap_or_default();
-        sheet
-            .rows
-            .insert(memento.row_index.min(sheet.rows.len()), row);
+        while sheet.rows.len() < memento.row_index && sheet.rows.len() < memento.row_count {
+            sheet.rows.push(Vec::new());
+        }
+        if sheet.rows.len() < memento.row_count {
+            sheet
+                .rows
+                .insert(memento.row_index.min(sheet.rows.len()), row);
+        }
     } else if let Some(row) = &memento.row
         && memento.row_index < sheet.rows.len()
     {
         sheet.rows[memento.row_index] = row.clone();
     }
 
+    if sheet.rows.len() < memento.row_count {
+        sheet.rows.resize_with(memento.row_count, Vec::new);
+    }
     sheet.rows.truncate(memento.row_count);
     sheet.merges = memento.merges.clone();
     sheet.row_heights = memento.row_heights.clone();
@@ -847,14 +855,22 @@ fn restore_projection_column(file_data: &mut FileData, memento: &ColumnStructure
                 row.remove(memento.col_index);
             }
         } else if row.len() < target_len {
-            row.insert(
-                memento.col_index.min(row.len()),
-                value.unwrap_or(CellValue::Null),
-            );
+            while row.len() < memento.col_index && row.len() < target_len {
+                row.push(CellValue::Null);
+            }
+            if row.len() < target_len {
+                row.insert(
+                    memento.col_index.min(row.len()),
+                    value.unwrap_or(CellValue::Null),
+                );
+            }
         } else if let Some(value) = value
             && memento.col_index < row.len()
         {
             row[memento.col_index] = value;
+        }
+        if row.len() < target_len {
+            row.resize(target_len, CellValue::Null);
         }
         row.truncate(target_len);
     }

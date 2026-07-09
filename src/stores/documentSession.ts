@@ -8,12 +8,14 @@ import type {
   SavedDocumentResponse,
   EditorCommandContext,
   WorkbookCapabilities,
+  EditorPatch,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
+import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 
 export type MutationApplyResult = {
   data: FileData | null;
@@ -242,10 +244,14 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (response.revision > this.revision + 1) {
         this.revision = response.revision;
         this.applyResponseStatus(response);
+        useSearchSessionStore().clearSearch();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision && response.patches?.length) {
         this.applyResponseStatus(response);
+        if (mutationInvalidatesSearch(response.patches)) {
+          useSearchSessionStore().clearSearch();
+        }
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision) {
@@ -256,6 +262,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       const result = applyDocumentPatches(this.data, response.patches);
       this.data = result.data;
       useEditorSelectionStore().applyEditorPatches(response.patches);
+      if (mutationInvalidatesSearch(response.patches)) {
+        useSearchSessionStore().clearSearch();
+      }
       this.applyResponseStatus(response);
       this.clampSelectionToCurrentSheet();
       return {
@@ -439,9 +448,18 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         selectionStore.clearSelection();
         return;
       }
-      selectionStore.clampToSheetData(this.data.sheets.length, (sheetIndex, row) =>
-        this.data?.sheets[sheetIndex]?.rows[row]?.length ?? null
-      );
+      selectionStore.clampToSheetData(this.data.sheets.length, (sheetIndex, row, col) => {
+        const sheet = this.data?.sheets[sheetIndex];
+        if (!sheet) return false;
+        const extent = calculateSheetExtent(
+          sheet.rows,
+          sheet.merges,
+          sheet.columnWidths,
+          sheet.rowHeights,
+          sheet.rich
+        );
+        return row >= 0 && col >= 0 && row < extent.rowCount && col < extent.columnCount;
+      });
     },
   },
 });
@@ -469,4 +487,8 @@ function cloneCellPosition(cell: CellPosition | null): CellPosition | null {
 
 function cloneSelectedCells(cells: Map<number, CellPosition>): Map<number, CellPosition> {
   return new Map(Array.from(cells, ([sheetIndex, cell]) => [sheetIndex, { ...cell }]));
+}
+
+function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): boolean {
+  return (patches ?? []).some((patch) => patch.type !== "Layout");
 }

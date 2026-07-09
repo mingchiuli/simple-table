@@ -273,7 +273,9 @@ function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileDat
   for (let rowIndex = 0; rowIndex < patch.rowLengths.length; rowIndex += 1) {
     const targetLength = patch.rowLengths[rowIndex] ?? 0;
     const row = [...(rows[rowIndex] ?? [])];
-    row.length = targetLength;
+    if (row.length > targetLength) {
+      row.length = targetLength;
+    }
     while (row.length < targetLength) {
       row.push(blankCell());
     }

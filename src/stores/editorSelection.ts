@@ -157,7 +157,10 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
         this.sheetSelectedCells.delete(sheetIndex);
       }
     },
-    clampToSheetData(sheetCount: number, rowLengthAt: (sheetIndex: number, row: number) => number | null) {
+    clampToSheetData(
+      sheetCount: number,
+      isCellInSheetBounds: (sheetIndex: number, row: number, col: number) => boolean
+    ) {
       if (sheetCount <= 0) {
         this.clearSelection();
         this.currentSheetIndex = 0;
@@ -166,10 +169,21 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
       if (this.currentSheetIndex >= sheetCount) {
         this.currentSheetIndex = sheetCount - 1;
       }
+      for (const [sheetIndex, cell] of this.sheetSelectedCells) {
+        if (
+          sheetIndex >= sheetCount
+          || !isCellInSheetBounds(sheetIndex, cell.row, cell.col)
+        ) {
+          this.sheetSelectedCells.delete(sheetIndex);
+        }
+      }
       if (!this.selectedCell) return;
 
-      const rowLength = rowLengthAt(this.currentSheetIndex, this.selectedCell.row);
-      if (rowLength === null || this.selectedCell.col >= rowLength) {
+      if (!isCellInSheetBounds(
+        this.currentSheetIndex,
+        this.selectedCell.row,
+        this.selectedCell.col
+      )) {
         this.clearSelection();
       }
     },

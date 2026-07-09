@@ -213,7 +213,7 @@ describe("useFileActions", () => {
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
   });
 
-  it("applies a path load after reading succeeds because the backend document has switched", async () => {
+  it("drops a path load that is cancelled while reading", async () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
@@ -234,9 +234,9 @@ describe("useFileActions", () => {
     shouldContinue = false;
     pendingRead.resolve(openedResponse("stale.xlsx", 2));
 
-    await expect(loadPromise).resolves.toBe(true);
-    expect(documentSessionStore.documentId).toBe(2);
-    expect(documentSessionStore.currentFilePath).toBe("/tmp/stale.xlsx");
+    await expect(loadPromise).resolves.toBe(false);
+    expect(documentSessionStore.documentId).toBeNull();
+    expect(documentSessionStore.currentFilePath).toBeNull();
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
@@ -275,9 +275,9 @@ describe("useFileActions", () => {
     expect(actions.isFileLoading.value).toBe(false);
 
     pendingRead.resolve(openedResponse("slow.xlsx", 2));
-    await expect(loadPromise).resolves.toBe(true);
-    expect(documentSessionStore.documentId).toBe(2);
-    expect(documentSessionStore.currentFilePath).toBe("/tmp/slow.xlsx");
+    await expect(loadPromise).resolves.toBe(false);
+    expect(documentSessionStore.documentId).toBeNull();
+    expect(documentSessionStore.currentFilePath).toBeNull();
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 

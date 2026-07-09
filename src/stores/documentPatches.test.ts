@@ -284,6 +284,31 @@ describe("applyDocumentPatches", () => {
     ]);
   });
 
+  it("fills blank cells when expanding a sheet shape", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    const result = applyDocumentPatches(data, [
+      {
+        type: "SheetShape",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            rowLengths: [3, 2],
+          },
+        },
+      },
+    ]);
+
+    expect(result.data?.sheets[0].rows).toEqual([
+      [text("A1"), blankCell(), blankCell()],
+      [blankCell(), blankCell()],
+    ]);
+  });
+
   it("replaces the sheet tail from a backend restore patch", () => {
     const data: FileData = {
       path: "/tmp/book.xlsx",
