@@ -279,6 +279,39 @@ describe("useFileActions", () => {
     expect(documentSessionStore.data).toBeNull();
   });
 
+  it("suppresses stale path load errors after cancellation", async () => {
+    const elementPlus = await import("element-plus");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const pendingRead = deferred<OpenDocumentResponse>();
+    const cancelHandlers: Array<() => void> = [];
+    let shouldContinue = true;
+    const guard = (() => shouldContinue) as (() => boolean) & {
+      onCancel: (handler: () => void) => () => void;
+    };
+    guard.onCancel = (handler) => {
+      cancelHandlers.push(handler);
+      return () => undefined;
+    };
+    vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
+
+    const actions = mountActions(vi.fn().mockResolvedValue(true));
+    const loadPromise = actions.loadFileFromPath("/tmp/stale-error.xlsx", guard);
+
+    await flushPromises();
+
+    shouldContinue = false;
+    for (const handler of cancelHandlers) {
+      handler();
+    }
+    pendingRead.reject(new Error("stale read failed"));
+
+    await expect(loadPromise).resolves.toBe(false);
+    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+    expect(documentSessionStore.data).toBeNull();
+    expect(documentSessionStore.lifecycle).toBe("idle");
+  });
+
   it("waits for an active document lifecycle before loading a route file path", async () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();

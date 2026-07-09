@@ -77,9 +77,14 @@ export function useFileActions({
         if (!(await prepareForDocumentReplacement())) return;
         if (!shouldContinue()) return;
 
-        const opened = await readFile(filePath);
+        const opened = await awaitRouteLoadStep(readFile(filePath), shouldContinue);
+        if (!opened) return;
         if (!shouldContinue()) return;
-        const fileName = opened.fileData.fileName || await getFileName(filePath);
+        const fileName = opened.fileData.fileName || (await awaitRouteLoadStep(
+          getFileName(filePath),
+          shouldContinue
+        ));
+        if (!fileName) return;
         if (!shouldContinue()) return;
 
         documentSessionStore.openDocumentResponse(opened, filePath);
@@ -248,4 +253,18 @@ export function useFileActions({
     closeCurrentDocument,
     handleBack,
   };
+}
+
+async function awaitRouteLoadStep<T>(
+  promise: Promise<T>,
+  shouldContinue: ContinuationGuard
+): Promise<T | undefined> {
+  try {
+    return await promise;
+  } catch (error) {
+    if (!shouldContinue()) {
+      return undefined;
+    }
+    throw error;
+  }
 }
