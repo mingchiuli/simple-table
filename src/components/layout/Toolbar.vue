@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FileData } from '@/types';
+import type { FileData, SearchScope } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
 import {
@@ -48,7 +48,7 @@ const emit = defineEmits<{
   (e: 'add-column'): void;
   (e: 'undo'): void;
   (e: 'redo'): void;
-  (e: 'search', query: string, scope: 'currentSheet' | 'allSheets'): void;
+  (e: 'search', query: string, scope: SearchScope): void;
   (e: 'clear-search'): void;
 }>();
 function handleCheckUpdate() {
@@ -103,7 +103,7 @@ function handleCheckUpdate() {
           class="search-box"
           :is-searching="props.isSearching"
           :disabled="props.isBusy"
-          @search="(query: string, scope: 'currentSheet' | 'allSheets') => emit('search', query, scope)"
+          @search="(query: string, scope: SearchScope) => emit('search', query, scope)"
           @clear-search="emit('clear-search')"
         />
       </div>

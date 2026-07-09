@@ -83,6 +83,8 @@ storageType: StorageType,
  */
 originalPath?: string, };
 
+export type AddRecentFileRequest = { path: string, fileName: string, fileSize: number, storageType?: StorageType, originalPath?: string, documentId?: number, baseRevision?: number, };
+
 export type HistoryStatus = { isTruncated: boolean, reason?: string, undoEntries: number, redoEntries: number, undoEstimatedBytes: number, redoEstimatedBytes: number, maxHistoryBytes: number, maxSingleEntryBytes: number, };
 
 export type EditorStateInfo = { canUndo: boolean, canRedo: boolean, isDirty: boolean, history: HistoryStatus, };
@@ -126,6 +128,8 @@ export type ResyncRequiredPatch = { reason: string, };
 export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetUpdated", "data": { patch: SheetUpdatedPatch, } } | { "type": "SheetsReplaced", "data": { patch: SheetsReplacedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "SheetShape", "data": { patch: SheetShapePatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
 
 export type SearchIndexUpdatePlan = { rebuildAll: boolean, rebuildSheets?: Array<number>, };
+
+export type EditorCommandContext = { documentId: number, baseRevision: number, };
 
 export type EditorMutationResponse = { protocolVersion: 1, documentId: number, revision: number, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, searchIndexUpdate: SearchIndexUpdatePlan, };
 

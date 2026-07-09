@@ -92,6 +92,8 @@ const {
   getDataColumnOffset,
   setColumnWidth: setPreviewColumnWidth,
   setRowHeight: setPreviewRowHeight,
+  clearColumnWidth: clearPreviewColumnWidth,
+  clearRowHeight: clearPreviewRowHeight,
   normalizeCellPosition,
 } = useGridGeometry({
   sheet: viewportModel,
@@ -160,6 +162,8 @@ const {
   getRowOffset,
   setColumnWidth: setPreviewColumnWidth,
   setRowHeight: setPreviewRowHeight,
+  clearColumnWidth: clearPreviewColumnWidth,
+  clearRowHeight: clearPreviewRowHeight,
   commitColumnWidth: (colIndex, width) => emit('column-resize', colIndex, width),
   commitRowHeight: (rowIndex, height) => emit('row-resize', rowIndex, height),
 });

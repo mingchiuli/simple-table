@@ -22,11 +22,6 @@ export function defaultSheetCapabilities(): SheetCapabilities {
   };
 }
 
-export type EditorCommandContext = {
-  documentId: number;
-  baseRevision: number;
-};
-
 export function defaultWorkbookCapabilities(): WorkbookCapabilities {
   return {
     save: {

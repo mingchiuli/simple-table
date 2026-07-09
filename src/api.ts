@@ -11,6 +11,9 @@ import type {
   OpenDocumentResponse,
   SpreadsheetFormatOptions,
   EditorCommandContext,
+  StorageType,
+  SearchScope,
+  AddRecentFileRequest,
 } from "@/types";
 
 export async function initFile(fileData: FileData): Promise<OpenDocumentResponse> {
@@ -164,7 +167,7 @@ export async function deleteSheet(
 export async function search(
   context: EditorCommandContext,
   query: string,
-  scope: "currentSheet" | "allSheets",
+  scope: SearchScope,
   currentSheetIndex: number | null
 ): Promise<SearchResult[]> {
   return invoke<SearchResult[]>("search", { ...context, query, scope, currentSheetIndex });
@@ -180,24 +183,26 @@ export async function addRecentFileWithThumbnail(
   path: string,
   fileName: string,
   fileSize: number,
-  storageType?: 'mobileSandboxPath' | 'desktopPath',
+  storageType?: StorageType,
   originalPath?: string,
   context?: EditorCommandContext | null
 ): Promise<RecentFile> {
+  const request: AddRecentFileRequest = {
+    path,
+    fileName,
+    fileSize,
+    storageType,
+    originalPath,
+    ...(context
+      ? {
+        documentId: context.documentId,
+        baseRevision: context.baseRevision,
+      }
+      : {}),
+  };
+
   return invoke<RecentFile>("add_recent_file_with_thumbnail", {
-    request: {
-      path,
-      fileName,
-      fileSize,
-      storageType,
-      originalPath,
-      ...(context
-        ? {
-          documentId: context.documentId,
-          baseRevision: context.baseRevision,
-        }
-        : {}),
-    },
+    request,
   });
 }
 

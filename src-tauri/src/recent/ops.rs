@@ -2,24 +2,10 @@ use tauri::AppHandle;
 
 use crate::error::AppError;
 use crate::io::document;
-use crate::recent::types::StorageType;
-use serde::Deserialize;
 
 use super::store::RecentStore;
 use super::thumbnail::generate_thumbnail_from_file_data;
-use super::types::RecentFile;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddRecentFileRequest {
-    pub path: String,
-    pub file_name: String,
-    pub file_size: i64,
-    pub storage_type: Option<String>,
-    pub original_path: Option<String>,
-    pub document_id: Option<u64>,
-    pub base_revision: Option<u64>,
-}
+use super::types::{AddRecentFileRequest, RecentFile};
 
 pub fn do_get_recent_files(app: &AppHandle) -> Vec<RecentFile> {
     RecentStore::get_all(app)
@@ -40,13 +26,8 @@ pub fn do_add_recent_file_with_thumbnail(
     } = request;
     let mut recent_file = RecentFile::new(path, file_name, file_size);
 
-    // Convert string to StorageType
-    if let Some(st) = storage_type {
-        recent_file.storage_type = match st.as_str() {
-            "mobileSandboxPath" => StorageType::MobileSandboxPath,
-            "desktopPath" => StorageType::DesktopPath,
-            _ => StorageType::default(),
-        };
+    if let Some(storage_type) = storage_type {
+        recent_file.storage_type = storage_type;
     }
 
     if let Some(op) = original_path {
@@ -88,4 +69,37 @@ pub fn do_update_recent_file_path(
     new_path: &str,
 ) -> Result<(), AppError> {
     RecentStore::update_path(app, id, new_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recent::types::StorageType;
+    use serde_json::json;
+
+    #[test]
+    fn add_recent_request_uses_generated_storage_type_contract() {
+        let request: AddRecentFileRequest = serde_json::from_value(json!({
+            "path": "/tmp/book.xlsx",
+            "fileName": "book.xlsx",
+            "fileSize": 42,
+            "storageType": "mobileSandboxPath"
+        }))
+        .expect("recent request");
+
+        assert_eq!(request.storage_type, Some(StorageType::MobileSandboxPath));
+    }
+
+    #[test]
+    fn add_recent_request_rejects_unknown_storage_type() {
+        let error = serde_json::from_value::<AddRecentFileRequest>(json!({
+            "path": "/tmp/book.xlsx",
+            "fileName": "book.xlsx",
+            "fileSize": 42,
+            "storageType": "unknown"
+        }))
+        .expect_err("unknown storage type should fail deserialization");
+
+        assert!(error.to_string().contains("unknown variant"));
+    }
 }

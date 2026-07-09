@@ -10,6 +10,7 @@ import type {
   EditorMutationResponse,
   FileData,
   SearchResult,
+  SearchScope,
   SheetData,
 } from "@/types";
 import { workbookSheetCapabilities } from "@/types";
@@ -148,7 +149,7 @@ export function useEditorCommands({
     await runEditorMutation((context) => api.redo(context), "Failed to redo");
   }
 
-  async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
+  async function handleSearch(query: string, scope: SearchScope) {
     if (!fileData.value || isEditorCommandBlocked()) return;
 
     const requestId = searchSessionStore.beginSearch(query);

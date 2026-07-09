@@ -1040,6 +1040,16 @@ impl SearchIndexUpdatePlan {
     }
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct EditorCommandContext {
+    #[ts(type = "number")]
+    pub document_id: u64,
+    #[ts(type = "number")]
+    pub base_revision: u64,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

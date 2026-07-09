@@ -2,20 +2,20 @@
 
 use ts_rs::{Config, TS};
 
-use crate::recent::types::{RecentFile, StorageType};
+use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::state::state::{EditorSessionInfo, EditorStateInfo, HistoryStatus};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DrawingKind,
-    DrawingProjection, EditorMutationResponse, EditorPatch, FileData, FormulaDiagnostics,
-    FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection, HyperlinkProjection,
-    LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse, ReadOnlyRichProjection,
-    ResyncRequiredPatch, RichProjectionPatch, RichProjectionPatchScope, RowDeletedPatch,
-    RowInsertedPatch, SavedDocumentResponse, ScalarCellValue, SearchIndexUpdatePlan, SearchResult,
-    SearchScope, SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch,
-    SheetInsertedPatch, SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch,
-    SheetsReplacedPatch, SpreadsheetFormatOptions, WorkbookCapabilities, WorkbookRichCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    DrawingProjection, EditorCommandContext, EditorMutationResponse, EditorPatch, FileData,
+    FormulaDiagnostics, FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection,
+    HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse,
+    ReadOnlyRichProjection, ResyncRequiredPatch, RichProjectionPatch, RichProjectionPatchScope,
+    RowDeletedPatch, RowInsertedPatch, SavedDocumentResponse, ScalarCellValue,
+    SearchIndexUpdatePlan, SearchResult, SearchScope, SetCellRequest, SheetCapabilities, SheetData,
+    SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch, SheetStructureMetadataPatch,
+    SheetUpdatedPatch, SheetsReplacedPatch, SpreadsheetFormatOptions, WorkbookCapabilities,
+    WorkbookRichCapabilities, WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -53,6 +53,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SearchScope>(&mut output, &cfg);
     push_decl::<StorageType>(&mut output, &cfg);
     push_decl::<RecentFile>(&mut output, &cfg);
+    push_decl::<AddRecentFileRequest>(&mut output, &cfg);
     push_decl::<HistoryStatus>(&mut output, &cfg);
     push_decl::<EditorStateInfo>(&mut output, &cfg);
     push_decl::<FormulaIssueKind>(&mut output, &cfg);
@@ -75,6 +76,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);
     push_decl::<SearchIndexUpdatePlan>(&mut output, &cfg);
+    push_decl::<EditorCommandContext>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);

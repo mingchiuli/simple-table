@@ -2,7 +2,12 @@
  * Platform-agnostic type definitions for dynamic platform loading
  */
 
-import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
+import type {
+  EditorCommandContext,
+  OpenDocumentResponse,
+  SavedDocumentResponse,
+  StorageType,
+} from "@/types";
 
 export type OpenFileSelection = {
   path: string;
@@ -27,8 +32,6 @@ export interface PlatformFileOps {
   /** 导出当前编辑状态到用户选择的位置 */
   exportFile?(defaultName: string, context: EditorCommandContext): Promise<string | null>;
 }
-
-export type StorageType = 'mobileSandboxPath' | 'desktopPath';
 
 export interface PlatformAPI {
   fileOps: PlatformFileOps;

@@ -1,16 +1,18 @@
 <script setup lang="ts">
+import type { SearchScope } from '@/types';
+
 const props = defineProps<{
   isSearching: boolean;
   disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
-  (e: 'search', query: string, scope: 'currentSheet' | 'allSheets'): void;
+  (e: 'search', query: string, scope: SearchScope): void;
   (e: 'clear-search'): void;
 }>();
 
 const searchQuery = ref('');
-const searchScope = ref<'currentSheet' | 'allSheets'>('currentSheet');
+const searchScope = ref<SearchScope>('currentSheet');
 
 function handleSearch() {
   if (props.disabled) return;

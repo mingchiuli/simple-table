@@ -53,8 +53,102 @@ describe("useGridResize", () => {
   it("keeps resize listeners idempotent and resize sessions exclusive", () => {
     const documentMock = createDocumentMock();
     vi.stubGlobal("document", documentMock);
-    const setColumnWidth = vi.fn();
-    const setRowHeight = vi.fn();
+    let columnWidth = 120;
+    let rowHeight = 72;
+    const setColumnWidth = vi.fn((_colIndex: number, width: number) => {
+      columnWidth = width;
+    });
+    const setRowHeight = vi.fn((_rowIndex: number, height: number) => {
+      rowHeight = height;
+    });
+    const commitColumnWidth = vi.fn();
+    const commitRowHeight = vi.fn();
+
+    const resize = useGridResize({
+      headerHeight: 50,
+      minColumnWidth: 56,
+      minRowHeight: 36,
+      scrollLeft: ref(0),
+      scrollTop: ref(0),
+      getColumnWidth: () => columnWidth,
+      getRowHeight: () => rowHeight,
+      getColumnOffset: () => 0,
+      getRowOffset: () => 0,
+      setColumnWidth,
+      setRowHeight,
+      commitColumnWidth,
+      commitRowHeight,
+    });
+
+    resize.startColumnResize(mouseEvent(100), 0, 120);
+    documentMock.dispatch("mousemove", { clientX: 180, clientY: 0 });
+    resize.startRowResize(mouseEvent(0, 200), 1, 122);
+
+    expect(documentMock.addEventListener).toHaveBeenCalledTimes(5);
+    expect(documentMock.listenerCount("mousemove")).toBe(1);
+    expect(documentMock.listenerCount("touchmove")).toBe(1);
+    expect(documentMock.listenerCount("touchcancel")).toBe(1);
+    expect(resize.resizingColumn.value).toBeNull();
+    expect(resize.resizingRow.value).toBe(1);
+    expect(setColumnWidth).toHaveBeenCalledWith(0, 200);
+    expect(commitColumnWidth).toHaveBeenCalledWith(0, 200);
+
+    documentMock.dispatch("mousemove", { clientX: 180, clientY: 250 });
+
+    expect(setRowHeight).toHaveBeenCalledWith(1, 122);
+
+    documentMock.dispatch("mouseup");
+
+    expect(commitColumnWidth).toHaveBeenCalledTimes(1);
+    expect(commitRowHeight).toHaveBeenCalledWith(1, 122);
+    expect(documentMock.removeEventListener).toHaveBeenCalledTimes(5);
+    expect(documentMock.listenerCount("mousemove")).toBe(0);
+    expect(documentMock.listenerCount("touchmove")).toBe(0);
+    expect(documentMock.listenerCount("touchcancel")).toBe(0);
+  });
+
+  it("cleans up an active touch resize when the gesture is cancelled", () => {
+    const documentMock = createDocumentMock();
+    vi.stubGlobal("document", documentMock);
+    let rowHeight = 72;
+    const setRowHeight = vi.fn((_rowIndex: number, height: number) => {
+      rowHeight = height;
+    });
+    const commitRowHeight = vi.fn();
+
+    const resize = useGridResize({
+      headerHeight: 50,
+      minColumnWidth: 56,
+      minRowHeight: 36,
+      scrollLeft: ref(0),
+      scrollTop: ref(0),
+      getColumnWidth: () => 120,
+      getRowHeight: () => rowHeight,
+      getColumnOffset: () => 0,
+      getRowOffset: () => 0,
+      setColumnWidth: vi.fn(),
+      setRowHeight,
+      commitColumnWidth: vi.fn(),
+      commitRowHeight,
+    });
+
+    resize.startRowResize(mouseEvent(0, 100), 2, 122);
+    documentMock.dispatch("touchmove", {
+      touches: [{ clientX: 0, clientY: 140 }],
+      preventDefault: vi.fn(),
+    });
+    documentMock.dispatch("touchcancel");
+
+    expect(setRowHeight).toHaveBeenCalledWith(2, 112);
+    expect(commitRowHeight).toHaveBeenCalledWith(2, 112);
+    expect(resize.resizingRow.value).toBeNull();
+    expect(documentMock.listenerCount("touchmove")).toBe(0);
+    expect(documentMock.listenerCount("touchcancel")).toBe(0);
+  });
+
+  it("does not commit a resize when the dimension did not change", () => {
+    const documentMock = createDocumentMock();
+    vi.stubGlobal("document", documentMock);
     const commitColumnWidth = vi.fn();
     const commitRowHeight = vi.fn();
 
@@ -68,32 +162,94 @@ describe("useGridResize", () => {
       getRowHeight: () => 72,
       getColumnOffset: () => 0,
       getRowOffset: () => 0,
-      setColumnWidth,
-      setRowHeight,
+      setColumnWidth: vi.fn(),
+      setRowHeight: vi.fn(),
       commitColumnWidth,
       commitRowHeight,
     });
 
     resize.startColumnResize(mouseEvent(100), 0, 120);
-    resize.startRowResize(mouseEvent(0, 200), 1, 122);
-
-    expect(documentMock.addEventListener).toHaveBeenCalledTimes(4);
-    expect(documentMock.listenerCount("mousemove")).toBe(1);
-    expect(documentMock.listenerCount("touchmove")).toBe(1);
-    expect(resize.resizingColumn.value).toBeNull();
-    expect(resize.resizingRow.value).toBe(1);
-
-    documentMock.dispatch("mousemove", { clientX: 180, clientY: 250 });
-
-    expect(setColumnWidth).not.toHaveBeenCalled();
-    expect(setRowHeight).toHaveBeenCalledWith(1, 122);
-
+    documentMock.dispatch("mouseup");
+    resize.startRowResize(mouseEvent(0, 100), 2, 122);
     documentMock.dispatch("mouseup");
 
     expect(commitColumnWidth).not.toHaveBeenCalled();
-    expect(commitRowHeight).toHaveBeenCalledWith(1, 72);
-    expect(documentMock.removeEventListener).toHaveBeenCalledTimes(4);
+    expect(commitRowHeight).not.toHaveBeenCalled();
+    expect(resize.resizingColumn.value).toBeNull();
+    expect(resize.resizingRow.value).toBeNull();
+  });
+
+  it("clears preview state after a committed resize", () => {
+    const documentMock = createDocumentMock();
+    vi.stubGlobal("document", documentMock);
+    let columnWidth = 120;
+    const clearColumnWidth = vi.fn();
+    const commitColumnWidth = vi.fn();
+
+    const resize = useGridResize({
+      headerHeight: 50,
+      minColumnWidth: 56,
+      minRowHeight: 36,
+      scrollLeft: ref(0),
+      scrollTop: ref(0),
+      getColumnWidth: () => columnWidth,
+      getRowHeight: () => 72,
+      getColumnOffset: () => 0,
+      getRowOffset: () => 0,
+      setColumnWidth: vi.fn((_colIndex: number, width: number) => {
+        columnWidth = width;
+      }),
+      setRowHeight: vi.fn(),
+      clearColumnWidth,
+      clearRowHeight: vi.fn(),
+      commitColumnWidth,
+      commitRowHeight: vi.fn(),
+    });
+
+    resize.startColumnResize(mouseEvent(100), 0, 120);
+    documentMock.dispatch("mousemove", { clientX: 150 });
+    documentMock.dispatch("mouseup");
+
+    expect(commitColumnWidth).toHaveBeenCalledWith(0, 170);
+    expect(clearColumnWidth).toHaveBeenCalledWith(0);
+  });
+
+  it("cancels the active resize without committing when resizing becomes disabled", () => {
+    const documentMock = createDocumentMock();
+    vi.stubGlobal("document", documentMock);
+    const canResize = ref(true);
+    let rowHeight = 72;
+    const clearRowHeight = vi.fn();
+    const commitRowHeight = vi.fn();
+
+    const resize = useGridResize({
+      canResize,
+      headerHeight: 50,
+      minColumnWidth: 56,
+      minRowHeight: 36,
+      scrollLeft: ref(0),
+      scrollTop: ref(0),
+      getColumnWidth: () => 120,
+      getRowHeight: () => rowHeight,
+      getColumnOffset: () => 0,
+      getRowOffset: () => 0,
+      setColumnWidth: vi.fn(),
+      setRowHeight: vi.fn((_rowIndex: number, height: number) => {
+        rowHeight = height;
+      }),
+      clearColumnWidth: vi.fn(),
+      clearRowHeight,
+      commitColumnWidth: vi.fn(),
+      commitRowHeight,
+    });
+
+    resize.startRowResize(mouseEvent(0, 100), 2, 122);
+    documentMock.dispatch("mousemove", { clientX: 0, clientY: 130 });
+    canResize.value = false;
+
+    expect(commitRowHeight).not.toHaveBeenCalled();
+    expect(clearRowHeight).toHaveBeenCalledWith(2);
+    expect(resize.resizingRow.value).toBeNull();
     expect(documentMock.listenerCount("mousemove")).toBe(0);
-    expect(documentMock.listenerCount("touchmove")).toBe(0);
   });
 });

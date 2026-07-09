@@ -273,6 +273,18 @@ export function useGridGeometry({
     };
   }
 
+  function clearColumnWidth(colIndex: number) {
+    const next = { ...previewColumnWidths.value };
+    delete next[colIndex];
+    previewColumnWidths.value = next;
+  }
+
+  function clearRowHeight(rowIndex: number) {
+    const next = { ...previewRowHeights.value };
+    delete next[rowIndex];
+    previewRowHeights.value = next;
+  }
+
   function cellFormat(rowIndex: number, colIndex: number): CellFormatProjection | undefined {
     return sheet.value.formatAt(rowIndex, colIndex);
   }
@@ -299,6 +311,8 @@ export function useGridGeometry({
     getDataColumnOffset,
     setColumnWidth,
     setRowHeight,
+    clearColumnWidth,
+    clearRowHeight,
     normalizeCellPosition,
   };
 }

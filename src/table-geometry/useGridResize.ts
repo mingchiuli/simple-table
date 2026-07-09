@@ -15,6 +15,8 @@ type UseGridResizeOptions = {
   getRowOffset: (rowIndex: number) => number;
   setColumnWidth: (colIndex: number, width: number) => void;
   setRowHeight: (rowIndex: number, height: number) => void;
+  clearColumnWidth?: (colIndex: number) => void;
+  clearRowHeight?: (rowIndex: number) => void;
   commitColumnWidth: (colIndex: number, width: number) => void;
   commitRowHeight: (rowIndex: number, height: number) => void;
 };
@@ -32,6 +34,8 @@ export function useGridResize({
   getRowOffset,
   setColumnWidth,
   setRowHeight,
+  clearColumnWidth,
+  clearRowHeight,
   commitColumnWidth,
   commitRowHeight,
 }: UseGridResizeOptions) {
@@ -48,7 +52,7 @@ export function useGridResize({
   function startColumnResize(event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number) {
     if (canResize?.value === false) return;
     event.preventDefault();
-    resizingRow.value = null;
+    finishActiveResize();
     resizingColumn.value = colIndex;
     startX.value = getClientX(event);
     startWidth.value = getColumnWidth(colIndex);
@@ -59,7 +63,7 @@ export function useGridResize({
   function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number, boundaryY?: number) {
     if (canResize?.value === false) return;
     event.preventDefault();
-    resizingColumn.value = null;
+    finishActiveResize();
     resizingRow.value = rowIndex;
     startY.value = getClientY(event);
     startHeight.value = getRowHeight(rowIndex);
@@ -90,14 +94,42 @@ export function useGridResize({
   }
 
   function stopResize() {
+    finishActiveResize();
+    removeDocumentListeners();
+  }
+
+  function finishActiveResize() {
     if (resizingColumn.value !== null) {
-      commitColumnWidth(resizingColumn.value, getColumnWidth(resizingColumn.value));
+      const colIndex = resizingColumn.value;
+      const width = getColumnWidth(colIndex);
+      if (width !== startWidth.value) {
+        commitColumnWidth(colIndex, width);
+      }
+      clearColumnWidth?.(colIndex);
     }
 
     if (resizingRow.value !== null) {
-      commitRowHeight(resizingRow.value, getRowHeight(resizingRow.value));
+      const rowIndex = resizingRow.value;
+      const height = getRowHeight(rowIndex);
+      if (height !== startHeight.value) {
+        commitRowHeight(rowIndex, height);
+      }
+      clearRowHeight?.(rowIndex);
     }
 
+    resizingColumn.value = null;
+    resizingRow.value = null;
+    resizeLineX.value = 0;
+    resizeLineY.value = 0;
+  }
+
+  function cancelActiveResize() {
+    if (resizingColumn.value !== null) {
+      clearColumnWidth?.(resizingColumn.value);
+    }
+    if (resizingRow.value !== null) {
+      clearRowHeight?.(resizingRow.value);
+    }
     resizingColumn.value = null;
     resizingRow.value = null;
     resizeLineX.value = 0;
@@ -114,6 +146,7 @@ export function useGridResize({
     document.addEventListener("mouseup", stopResize);
     document.addEventListener("touchmove", onResize, { passive: false });
     document.addEventListener("touchend", stopResize);
+    document.addEventListener("touchcancel", stopResize);
   }
 
   function removeDocumentListeners() {
@@ -125,9 +158,18 @@ export function useGridResize({
     document.removeEventListener("mouseup", stopResize);
     document.removeEventListener("touchmove", onResize);
     document.removeEventListener("touchend", stopResize);
+    document.removeEventListener("touchcancel", stopResize);
   }
 
-  onUnmounted(removeDocumentListeners);
+  if (canResize) {
+    watch(canResize, (allowed) => {
+      if (!allowed) {
+        cancelActiveResize();
+      }
+    }, { flush: "sync" });
+  }
+
+  onUnmounted(cancelActiveResize);
 
   return {
     resizingColumn,
