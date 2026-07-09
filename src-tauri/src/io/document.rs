@@ -70,7 +70,6 @@ pub fn generate_current_file_bytes_for_target(
 pub struct PreparedDocumentSave {
     pub document_id: u64,
     pub revision: u64,
-    pub lease: SaveCommitLease,
     pub output_name: String,
     pub bytes: Vec<u8>,
     pub finish_without_reparse: bool,
@@ -82,13 +81,12 @@ pub fn prepare_current_file_save(
     let registry = active_document_store();
     let document_id;
     let revision;
-    let lease;
     let snapshot;
     {
-        let mut registry_guard = registry
-            .write()
+        let registry_guard = registry
+            .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
+        let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
         if editor_state.has_save_commit_in_progress() {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
@@ -96,22 +94,12 @@ pub fn prepare_current_file_save(
         }
         document_id = editor_state.document_id();
         revision = editor_state.revision();
-        lease = editor_state.begin_save_commit(document_id, revision)?;
-        snapshot = match editor_state.save_snapshot_for_target(target_path_or_name) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                editor_state.abort_save_commit(lease);
-                return Err(error);
-            }
-        };
+        snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
     }
 
     let (output_name, bytes) = match snapshot.generate_file_bytes_for_target(target_path_or_name) {
         Ok(result) => result,
-        Err(error) => {
-            abort_save_commit(&registry, document_id, lease);
-            return Err(error);
-        }
+        Err(error) => return Err(error),
     };
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
@@ -119,7 +107,6 @@ pub fn prepare_current_file_save(
     Ok(PreparedDocumentSave {
         document_id,
         revision,
-        lease,
         output_name,
         bytes,
         finish_without_reparse: target_extension.eq_ignore_ascii_case("xlsx")
@@ -128,8 +115,7 @@ pub fn prepare_current_file_save(
 }
 
 pub fn abort_prepared_file_save(prepared: &PreparedDocumentSave) {
-    let registry = active_document_store();
-    abort_save_commit(&registry, prepared.document_id, prepared.lease);
+    let _ = prepared;
 }
 
 pub fn commit_current_file_save<F>(
@@ -142,7 +128,6 @@ where
 {
     let document_id_token = prepared.document_id;
     let revision_token = prepared.revision;
-    let lease = prepared.lease;
     let output_name = prepared.output_name;
     let finish_without_reparse = prepared.finish_without_reparse;
     let bytes = prepared.bytes;
@@ -154,7 +139,6 @@ where
             path,
             document_id_token,
             revision_token,
-            lease,
             output_name,
             extension,
             commit_write,
@@ -163,34 +147,23 @@ where
     let result =
         match read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name) {
             Ok(result) => result,
-            Err(error) => {
-                let registry = active_document_store();
-                abort_save_commit(&registry, document_id_token, lease);
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
     let registry = active_document_store();
-    let clear_history = match (|| -> Result<bool, AppError> {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.get(document_id_token).ok_or_else(|| {
-            AppError::DocumentStateInvalid(
-                "active document changed while save was in progress".to_string(),
-            )
-        })?;
-        ensure_editor_matches_prepared_save(editor_state, document_id_token, revision_token)?;
-        let current_extension = extension_of(&editor_state.file_data().file_name)
-            .or_else(|| extension_of(&editor_state.file_data().path));
-        let saved_extension = extension_of(&result.file_data.file_name)
-            .or_else(|| extension_of(&result.file_data.path));
-        Ok(current_extension != saved_extension)
-    })() {
-        Ok(clear_history) => clear_history,
-        Err(error) => {
-            abort_save_commit(&registry, document_id_token, lease);
-            return Err(error);
-        }
+    let (lease, clear_history) = match begin_prepared_save_commit(
+        &registry,
+        document_id_token,
+        revision_token,
+        |editor_state| {
+            let current_extension = extension_of(&editor_state.file_data().file_name)
+                .or_else(|| extension_of(&editor_state.file_data().path));
+            let saved_extension = extension_of(&result.file_data.file_name)
+                .or_else(|| extension_of(&result.file_data.path));
+            current_extension != saved_extension
+        },
+    ) {
+        Ok(result) => result,
+        Err(error) => return Err(error),
     };
 
     if let Err(error) = commit_write() {
@@ -220,11 +193,33 @@ where
     Ok(response)
 }
 
+fn begin_prepared_save_commit<F>(
+    registry: &std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
+    document_id: u64,
+    revision: u64,
+    clear_history: F,
+) -> Result<(SaveCommitLease, bool), AppError>
+where
+    F: FnOnce(&EditorState) -> bool,
+{
+    let mut registry_guard = registry
+        .write()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    let editor_state = registry_guard.get_mut(document_id).ok_or_else(|| {
+        AppError::DocumentStateInvalid(
+            "active document changed while save was in progress".to_string(),
+        )
+    })?;
+    ensure_editor_matches_prepared_save(editor_state, document_id, revision)?;
+    let clear_history = clear_history(editor_state);
+    let lease = editor_state.begin_save_commit(document_id, revision)?;
+    Ok((lease, clear_history))
+}
+
 fn commit_current_file_save_without_reparse<F>(
     path: String,
     document_id_token: u64,
     revision_token: u64,
-    lease: SaveCommitLease,
     output_name: String,
     saved_extension: String,
     commit_write: F,
@@ -233,25 +228,18 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     let registry = active_document_store();
-    let clear_history = match (|| -> Result<bool, AppError> {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.get(document_id_token).ok_or_else(|| {
-            AppError::DocumentStateInvalid(
-                "active document changed while save was in progress".to_string(),
-            )
-        })?;
-        ensure_editor_matches_prepared_save(editor_state, document_id_token, revision_token)?;
-        let current_extension = extension_of(&editor_state.file_data().file_name)
-            .or_else(|| extension_of(&editor_state.file_data().path));
-        Ok(current_extension.as_deref() != Some(saved_extension.as_str()))
-    })() {
-        Ok(clear_history) => clear_history,
-        Err(error) => {
-            abort_save_commit(&registry, document_id_token, lease);
-            return Err(error);
-        }
+    let (lease, clear_history) = match begin_prepared_save_commit(
+        &registry,
+        document_id_token,
+        revision_token,
+        |editor_state| {
+            let current_extension = extension_of(&editor_state.file_data().file_name)
+                .or_else(|| extension_of(&editor_state.file_data().path));
+            current_extension.as_deref() != Some(saved_extension.as_str())
+        },
+    ) {
+        Ok(result) => result,
+        Err(error) => return Err(error),
     };
 
     if let Err(error) = commit_write() {
@@ -287,7 +275,7 @@ fn ensure_editor_matches_prepared_save(
         Ok(())
     } else {
         Err(AppError::DocumentStateInvalid(
-            "document changed while save was in progress; please save again".to_string(),
+            "document changed while save was being prepared; please save again".to_string(),
         ))
     }
 }
@@ -322,6 +310,14 @@ pub fn close_current_document() -> Result<(), AppError> {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        if registry_guard
+            .active()
+            .is_some_and(EditorState::has_save_commit_in_progress)
+        {
+            return Err(AppError::DocumentStateInvalid(
+                "cannot close document while save is in progress".to_string(),
+            ));
+        }
         registry_guard.close_active()?
     };
     if let Some(document_id) = closed_document_id {

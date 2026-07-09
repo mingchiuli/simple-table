@@ -7,7 +7,7 @@ use tantivy::{Term, doc};
 
 use crate::display::DisplayProjection;
 use crate::state::search_index::{
-    SearchCellText, SearchIndexStamp, build_sheet_index, collect_sheet_search_text,
+    SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel, collect_sheet_search_text,
 };
 use crate::state::search_scheduler::{
     CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, RebuildIndexUpdate,
@@ -484,7 +484,9 @@ fn run_rebuild(
         return;
     }
 
-    let built_index = build_sheet_index(&search_text);
+    let built_index = build_sheet_index_with_cancel(&search_text, || {
+        search_stamp_is_current(document_id, sheet_index, stamp, registry)
+    });
 
     if let Ok(mut guard) = registry.write()
         && let Some(editor_state) = guard.get_mut(document_id)

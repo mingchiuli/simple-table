@@ -273,11 +273,6 @@ export function useGridGeometry({
     };
   }
 
-  function resetLayoutFromSource() {
-    syncColumnWidths();
-    syncRowHeights();
-  }
-
   function cellFormat(rowIndex: number, colIndex: number): CellFormatProjection | undefined {
     return sheet.value.formatAt(rowIndex, colIndex);
   }
@@ -304,7 +299,6 @@ export function useGridGeometry({
     getDataColumnOffset,
     setColumnWidth,
     setRowHeight,
-    resetLayoutFromSource,
     normalizeCellPosition,
   };
 }

@@ -110,6 +110,55 @@ describe("applyDocumentPatches", () => {
     expect(result.data?.sheets[0].rich.cellStyles?.A2).toEqual({ bold: true });
   });
 
+  it("shifts row heights locally when row structure metadata omits dimensions", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [{
+        ...sheet("Sheet1", [[text("A1")], [text("A2")], [text("A3")]]),
+        rowHeights: { 0: 44, 2: 88 },
+      }],
+    };
+
+    const inserted = applyDocumentPatches(data, [
+      {
+        type: "RowInserted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            rowIndex: 1,
+            rows: [[text("inserted")]],
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "rows", start: 1 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(inserted.data?.sheets[0].rowHeights).toEqual({ 0: 44, 3: 88 });
+
+    const deleted = applyDocumentPatches(inserted.data, [
+      {
+        type: "RowDeleted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            rowIndex: 1,
+            count: 1,
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "rows", start: 1 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(deleted.data?.sheets[0].rowHeights).toEqual({ 0: 44, 2: 88 });
+  });
+
   it("applies column structure patches without replacing the whole sheet", () => {
     const data: FileData = {
       path: "/tmp/book.xlsx",
@@ -153,6 +202,55 @@ describe("applyDocumentPatches", () => {
     expect(result.data?.sheets[0].columnWidths?.[0]).toBe(144);
     expect(result.data?.sheets[0].rich.cellStyles?.A1).toEqual({ italic: true });
     expect(result.data?.sheets[0].rich.cellStyles?.B1).toBeUndefined();
+  });
+
+  it("shifts column widths locally when column structure metadata omits dimensions", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [{
+        ...sheet("Sheet1", [[text("A1"), text("B1"), text("C1")]]),
+        columnWidths: { 0: 100, 2: 200 },
+      }],
+    };
+
+    const inserted = applyDocumentPatches(data, [
+      {
+        type: "ColumnInserted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            colIndex: 1,
+            values: [text("inserted")],
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "columns", start: 1 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(inserted.data?.sheets[0].columnWidths).toEqual({ 0: 100, 3: 200 });
+
+    const deleted = applyDocumentPatches(inserted.data, [
+      {
+        type: "ColumnDeleted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            colIndex: 1,
+            count: 1,
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "columns", start: 1 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(deleted.data?.sheets[0].columnWidths).toEqual({ 0: 100, 2: 200 });
   });
 
   it("replaces the sheet tail from a backend restore patch", () => {

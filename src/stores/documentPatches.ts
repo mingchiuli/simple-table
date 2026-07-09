@@ -118,7 +118,15 @@ function applyRowInserted(data: FileData | null, patch: RowInsertedPatch): FileD
     rows.push([]);
   }
   rows.splice(patch.rowIndex, 0, ...patch.rows.map((row) => [...row]));
-  return replaceSheet(data, patch.sheetIndex, applyStructureMetadata({ ...sheet, rows }, patch.metadata));
+  return replaceSheet(
+    data,
+    patch.sheetIndex,
+    applyStructureMetadata({ ...sheet, rows }, patch.metadata, {
+      type: "rowsInserted",
+      index: patch.rowIndex,
+      count: patch.rows.length,
+    })
+  );
 }
 
 function applyRowDeleted(data: FileData | null, patch: RowDeletedPatch): FileData | null {
@@ -128,7 +136,15 @@ function applyRowDeleted(data: FileData | null, patch: RowDeletedPatch): FileDat
   if (patch.rowIndex < rows.length) {
     rows.splice(patch.rowIndex, patch.count);
   }
-  return replaceSheet(data, patch.sheetIndex, applyStructureMetadata({ ...sheet, rows }, patch.metadata));
+  return replaceSheet(
+    data,
+    patch.sheetIndex,
+    applyStructureMetadata({ ...sheet, rows }, patch.metadata, {
+      type: "rowsDeleted",
+      index: patch.rowIndex,
+      count: patch.count,
+    })
+  );
 }
 
 function applyColumnInserted(data: FileData | null, patch: ColumnInsertedPatch): FileData | null {
@@ -141,7 +157,15 @@ function applyColumnInserted(data: FileData | null, patch: ColumnInsertedPatch):
     row.splice(insertAt, 0, patch.values[rowIndex] ?? blankCell());
     return row;
   });
-  return replaceSheet(data, patch.sheetIndex, applyStructureMetadata({ ...sheet, rows }, patch.metadata));
+  return replaceSheet(
+    data,
+    patch.sheetIndex,
+    applyStructureMetadata({ ...sheet, rows }, patch.metadata, {
+      type: "columnsInserted",
+      index: patch.colIndex,
+      count: 1,
+    })
+  );
 }
 
 function applyColumnDeleted(data: FileData | null, patch: ColumnDeletedPatch): FileData | null {
@@ -154,20 +178,89 @@ function applyColumnDeleted(data: FileData | null, patch: ColumnDeletedPatch): F
     }
     return nextRow;
   });
-  return replaceSheet(data, patch.sheetIndex, applyStructureMetadata({ ...sheet, rows }, patch.metadata));
+  return replaceSheet(
+    data,
+    patch.sheetIndex,
+    applyStructureMetadata({ ...sheet, rows }, patch.metadata, {
+      type: "columnsDeleted",
+      index: patch.colIndex,
+      count: patch.count,
+    })
+  );
 }
+
+type StructureTransform =
+  | { type: "rowsInserted"; index: number; count: number }
+  | { type: "rowsDeleted"; index: number; count: number }
+  | { type: "columnsInserted"; index: number; count: number }
+  | { type: "columnsDeleted"; index: number; count: number };
 
 function applyStructureMetadata(
   sheet: FileData["sheets"][number],
-  metadata: SheetStructureMetadataPatch
+  metadata: SheetStructureMetadataPatch,
+  transform: StructureTransform
 ): FileData["sheets"][number] {
   return {
     ...sheet,
     merges: metadata.merges,
-    columnWidths: metadata.columnWidths,
-    rowHeights: metadata.rowHeights,
+    columnWidths: metadata.columnWidths ?? transformColumnWidths(sheet.columnWidths, transform),
+    rowHeights: metadata.rowHeights ?? transformRowHeights(sheet.rowHeights, transform),
     rich: applyRichProjectionPatch(sheet.rich, metadata.rich),
   };
+}
+
+function transformColumnWidths(
+  widths: Record<number, number> | undefined,
+  transform: StructureTransform
+): Record<number, number> | undefined {
+  if (transform.type === "rowsInserted" || transform.type === "rowsDeleted") {
+    return widths;
+  }
+  return transform.type === "columnsInserted"
+    ? shiftNumberRecordOnInsert(widths, transform.index, transform.count)
+    : shiftNumberRecordOnDelete(widths, transform.index, transform.count);
+}
+
+function transformRowHeights(
+  heights: Record<number, number> | undefined,
+  transform: StructureTransform
+): Record<number, number> | undefined {
+  if (transform.type === "columnsInserted" || transform.type === "columnsDeleted") {
+    return heights;
+  }
+  return transform.type === "rowsInserted"
+    ? shiftNumberRecordOnInsert(heights, transform.index, transform.count)
+    : shiftNumberRecordOnDelete(heights, transform.index, transform.count);
+}
+
+function shiftNumberRecordOnInsert(
+  current: Record<number, number> | undefined,
+  index: number,
+  count: number
+): Record<number, number> | undefined {
+  if (!current || count <= 0) return current;
+  const next: Record<number, number> = {};
+  for (const [key, value] of Object.entries(current)) {
+    const numericKey = Number(key);
+    next[numericKey >= index ? numericKey + count : numericKey] = value;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
+function shiftNumberRecordOnDelete(
+  current: Record<number, number> | undefined,
+  index: number,
+  count: number
+): Record<number, number> | undefined {
+  if (!current || count <= 0) return current;
+  const deleteEnd = index + count;
+  const next: Record<number, number> = {};
+  for (const [key, value] of Object.entries(current)) {
+    const numericKey = Number(key);
+    if (numericKey >= index && numericKey < deleteEnd) continue;
+    next[numericKey >= deleteEnd ? numericKey - count : numericKey] = value;
+  }
+  return Object.keys(next).length ? next : undefined;
 }
 
 function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileData | null {

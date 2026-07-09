@@ -252,8 +252,8 @@ fn row_structure_metadata_patch(
 ) -> SheetStructureMetadataPatch {
     SheetStructureMetadataPatch {
         merges: sheet.merges.clone(),
-        column_widths: sheet.column_widths.clone(),
-        row_heights: sheet.row_heights.clone(),
+        column_widths: None,
+        row_heights: None,
         rich: RichProjectionPatch {
             scope: RichProjectionPatchScope::Rows { start },
             projection: filter_rich_projection(&sheet.rich, RichProjectionScope::Rows { start }),
@@ -267,8 +267,8 @@ fn column_structure_metadata_patch(
 ) -> SheetStructureMetadataPatch {
     SheetStructureMetadataPatch {
         merges: sheet.merges.clone(),
-        column_widths: sheet.column_widths.clone(),
-        row_heights: sheet.row_heights.clone(),
+        column_widths: None,
+        row_heights: None,
         rich: RichProjectionPatch {
             scope: RichProjectionPatchScope::Columns { start },
             projection: filter_rich_projection(&sheet.rich, RichProjectionScope::Columns { start }),

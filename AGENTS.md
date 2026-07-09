@@ -13,7 +13,7 @@ The app targets desktop and mobile Tauri builds. File operations are abstracted 
 Use the project-local Node/npm when available:
 
 ```bash
-/Library/NodeJs/graalnodejs-25.0.3-macos-aarch64/bin/npm run build
+/Library/NodeJs/graalnode24-25.1.3-macos-aarch64/bin/npm run build
 ```
 
 Standard commands:
@@ -120,7 +120,7 @@ Before finishing non-trivial code changes, run:
 
 ```bash
 cd src-tauri && cargo check
-/Library/NodeJs/graalnodejs-25.0.3-macos-aarch64/bin/npm run build
+/Library/NodeJs/graalnode24-25.1.3-macos-aarch64/bin/npm run build
 ```
 
 For backend state/hash changes, also run:

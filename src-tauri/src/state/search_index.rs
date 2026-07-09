@@ -312,7 +312,19 @@ pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
+    build_sheet_index_with_cancel(cells, || true)
+}
+
+pub fn build_sheet_index_with_cancel(
+    cells: &[SearchCellText],
+    should_continue: impl Fn() -> bool,
+) -> Option<SearchSheetIndex> {
+    if !should_continue() {
+        return None;
+    }
+
     let (index, schema, fields) = match create_tantivy_index() {
         Ok(index) => index,
         Err(error) => {
@@ -329,7 +341,10 @@ pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
         }
     };
 
-    for cell in cells {
+    for (cell_index, cell) in cells.iter().enumerate() {
+        if cell_index % 512 == 0 && !should_continue() {
+            return None;
+        }
         if let Err(error) = writer.add_document(doc!(
             fields.text => cell.search_text.clone(),
             fields.display => cell.display_text.clone(),
@@ -341,8 +356,16 @@ pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
         }
     }
 
+    if !should_continue() {
+        return None;
+    }
+
     if let Err(error) = writer.commit() {
         eprintln!("Failed to commit index: {error:?}");
+        return None;
+    }
+
+    if !should_continue() {
         return None;
     }
 
@@ -509,6 +532,18 @@ mod tests {
         };
         let cells = collect_sheet_search_text(&sheet);
         build_sheet_index(&cells).expect("index")
+    }
+
+    #[test]
+    fn index_build_can_be_canceled_before_work_starts() {
+        let cells = vec![SearchCellText {
+            row: 0,
+            col: 0,
+            search_text: "indexed text".to_string(),
+            display_text: "indexed text".to_string(),
+        }];
+
+        assert!(build_sheet_index_with_cancel(&cells, || false).is_none());
     }
 
     #[test]
