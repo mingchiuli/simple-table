@@ -3,13 +3,16 @@ import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
 import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
+import { SUPPORTED_SPREADSHEET_EXTENSIONS } from "@/utils/fileFormats";
+
+const SPREADSHEET_FILTER = [{ name: "Spreadsheet", extensions: SUPPORTED_SPREADSHEET_EXTENSIONS }];
 
 export const desktopFileOps = {
   /** Desktop: 打开文件选择器 + 直接调用 Rust 解析 */
   openFile: async (): Promise<OpenFileResult | null> => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "csv"] }],
+      filters: SPREADSHEET_FILTER,
     });
     if (!selected) return null;
 
@@ -38,7 +41,7 @@ export const desktopFileOps = {
   pickSaveLocation: async (defaultName: string) => {
     const selected = await save({
       defaultPath: defaultName,
-      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "csv"] }],
+      filters: SPREADSHEET_FILTER,
     });
     return selected;
   },
@@ -46,7 +49,7 @@ export const desktopFileOps = {
   exportFile: async (_sourcePath: string, defaultName: string) => {
     const selected = await save({
       defaultPath: defaultName,
-      filters: [{ name: "Spreadsheet", extensions: ["xlsx", "csv"] }],
+      filters: SPREADSHEET_FILTER,
     });
     if (!selected) return null;
 

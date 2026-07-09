@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 use crate::io::document;
+use crate::io::file_format::{SUPPORTED_SPREADSHEET_EXTENSIONS, SpreadsheetFileFormat};
 use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -26,11 +27,9 @@ pub struct PickFileResult {
 }
 
 pub(super) fn extension_from_name(file_name: &str) -> String {
-    Path::new(file_name)
+    SpreadsheetFileFormat::from_path_or_default(file_name)
+        .unwrap_or(SpreadsheetFileFormat::Xlsx)
         .extension()
-        .and_then(|ext| ext.to_str())
-        .filter(|ext| !ext.is_empty())
-        .unwrap_or("xlsx")
         .to_string()
 }
 
@@ -140,7 +139,7 @@ pub fn export_file(
     let dest = match app
         .dialog()
         .file()
-        .add_filter("Spreadsheet", &["xlsx", "csv", "*"])
+        .add_filter("Spreadsheet", SUPPORTED_SPREADSHEET_EXTENSIONS)
         .set_picker_mode(PickerMode::Document)
         .set_file_name(default_name)
         .blocking_save_file()
@@ -158,4 +157,17 @@ pub fn export_file(
         .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;
 
     Ok(Some(dest.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extension_from_name;
+
+    #[test]
+    fn extension_from_name_uses_supported_extension_or_xlsx_default() {
+        assert_eq!(extension_from_name("book.xlsx"), "xlsx");
+        assert_eq!(extension_from_name("data.CSV"), "csv");
+        assert_eq!(extension_from_name("untitled"), "xlsx");
+        assert_eq!(extension_from_name("unsupported.bin"), "xlsx");
+    }
 }

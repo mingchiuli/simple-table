@@ -2,6 +2,9 @@ use std::path::Path;
 
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
+use crate::io::file_format::{
+    SpreadsheetFileFormat, export_extensions, extension_of, supported_extension_from_name,
+};
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -528,13 +531,15 @@ fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
 }
 
 fn native_save_extension(file_name: &str) -> Option<String> {
-    let extension = extension_of(file_name).unwrap_or_else(|| "xlsx".to_string());
-    matches!(extension.as_str(), "xlsx" | "csv").then_some(extension)
+    if extension_of(file_name).is_none() {
+        Some(SpreadsheetFileFormat::Xlsx.extension().to_string())
+    } else {
+        supported_extension_from_name(file_name)
+    }
 }
 
 fn export_extension(file_name: &str) -> Option<String> {
-    let extension = extension_of(file_name).unwrap_or_else(|| "xlsx".to_string());
-    matches!(extension.as_str(), "xlsx" | "csv").then_some(extension)
+    native_save_extension(file_name)
 }
 
 fn document_format(file_name: &str) -> Option<String> {
@@ -542,15 +547,7 @@ fn document_format(file_name: &str) -> Option<String> {
 }
 
 fn export_formats_for(_source_format: &str) -> Vec<String> {
-    vec!["xlsx".to_string(), "csv".to_string()]
-}
-
-fn extension_of(file_name: &str) -> Option<String> {
-    Path::new(file_name)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .filter(|extension| !extension.is_empty())
-        .map(|extension| extension.to_ascii_lowercase())
+    export_extensions()
 }
 
 #[cfg(test)]

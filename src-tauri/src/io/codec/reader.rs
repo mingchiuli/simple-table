@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::error::AppError;
+use crate::io::file_format::SpreadsheetFileFormat;
 use crate::io::layout_units::{
     DEFAULT_ROW_HEIGHT_PX, excel_column_width_to_px, is_default_column_width, points_to_px,
 };
@@ -28,10 +29,10 @@ pub fn read_file_with_workbook_from_bytes(
 ) -> Result<ReadFileResult, AppError> {
     let cursor = Cursor::new(bytes);
 
-    match extension.to_lowercase().as_str() {
-        "xlsx" => read_xlsx_from_bytes(cursor, path, file_name),
-        "csv" => read_csv_from_bytes(cursor, path, file_name),
-        _ => Err(AppError::UnsupportedFormat),
+    match SpreadsheetFileFormat::from_extension(extension) {
+        Some(SpreadsheetFileFormat::Xlsx) => read_xlsx_from_bytes(cursor, path, file_name),
+        Some(SpreadsheetFileFormat::Csv) => read_csv_from_bytes(cursor, path, file_name),
+        None => Err(AppError::UnsupportedFormat),
     }
 }
 

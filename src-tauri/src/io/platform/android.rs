@@ -1,9 +1,9 @@
 use super::mobile::{
-    PickFileResult, PickedFileInfo, extension_from_name, mobile_dir, unique_import_path,
-    write_path_with_official_fs,
+    PickFileResult, PickedFileInfo, mobile_dir, unique_import_path, write_path_with_official_fs,
 };
 use crate::error::AppError;
 use crate::io::document;
+use crate::io::file_format::{SpreadsheetFileFormat, supported_extension_from_name};
 use std::path::Path;
 use std::str;
 use tauri::AppHandle;
@@ -25,17 +25,6 @@ fn display_name_from_path(path: &FilePath) -> String {
     }
 }
 
-fn supported_extension_from_name(file_name: &str) -> Option<String> {
-    let ext = Path::new(file_name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase())?;
-    match ext.as_str() {
-        "xlsx" | "csv" => Some(ext),
-        _ => None,
-    }
-}
-
 fn extension_for_import(file_name: &str, bytes: &[u8]) -> Result<String, AppError> {
     if let Some(ext) = supported_extension_from_name(file_name) {
         return Ok(ext);
@@ -43,11 +32,11 @@ fn extension_for_import(file_name: &str, bytes: &[u8]) -> Result<String, AppErro
 
     let has_extension = Path::new(file_name).extension().is_some();
     if !has_extension && bytes.starts_with(b"PK") {
-        return Ok("xlsx".to_string());
+        return Ok(SpreadsheetFileFormat::Xlsx.extension().to_string());
     }
 
     if !has_extension && str::from_utf8(bytes).is_ok() {
-        return Ok("csv".to_string());
+        return Ok(SpreadsheetFileFormat::Csv.extension().to_string());
     }
 
     Err(AppError::UnsupportedFormat)
@@ -118,7 +107,10 @@ pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<String,
         "{}-{}.{}",
         stem,
         uuid::Uuid::new_v4(),
-        extension_from_name(default_name)
+        SpreadsheetFileFormat::from_path_or_default(default_name)
+            .unwrap_or(SpreadsheetFileFormat::Xlsx)
+            .extension()
+            .to_string()
     ));
     Ok(path.to_string_lossy().to_string())
 }

@@ -5,6 +5,11 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
+import {
+  DEFAULT_SPREADSHEET_EXTENSION,
+  baseNameWithoutExtension,
+  isUntitledSpreadsheet,
+} from '@/utils/fileFormats';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -109,10 +114,8 @@ export function useFileActions({
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
 
-      const isNewFile = data.fileName.startsWith('untitled');
-      const defaultName = isNewFile
-        ? 'untitled'
-        : data.fileName.replace(/\.[^.]+$/, '');
+      const isNewFile = isUntitledSpreadsheet(data.fileName);
+      const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
 
       const existingPath = documentSessionStore.currentFilePath;
       const storageType = await getStorageType();
@@ -195,15 +198,13 @@ export function useFileActions({
 
     await withDocumentLifecycle('saving', 'Failed to export file', async () => {
       isLoading.value = true;
-      const isNewFile = data.fileName.startsWith('untitled');
-      const defaultName = isNewFile
-        ? 'untitled'
-        : data.fileName.replace(/\.[^.]+$/, '');
+      const isNewFile = isUntitledSpreadsheet(data.fileName);
+      const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
       const capabilities = await documentCapabilities(
         data.fileName,
         documentSessionStore.currentFilePath
       );
-      const extension = isNewFile ? 'xlsx' : capabilities.exportExtension;
+      const extension = isNewFile ? DEFAULT_SPREADSHEET_EXTENSION : capabilities.exportExtension;
       const storageType = await getStorageType();
 
       if (storageType === 'desktopPath') {

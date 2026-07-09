@@ -3,6 +3,7 @@ use super::mobile::{
 };
 use crate::error::AppError;
 use crate::io::document;
+use crate::io::file_format::SUPPORTED_SPREADSHEET_EXTENSIONS;
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -32,7 +33,7 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
     let source = match app
         .dialog()
         .file()
-        .add_filter("Spreadsheet", &["xlsx", "csv"])
+        .add_filter("Spreadsheet", SUPPORTED_SPREADSHEET_EXTENSIONS)
         .set_picker_mode(PickerMode::Document)
         .set_file_access_mode(FileAccessMode::Copy)
         .blocking_pick_file()

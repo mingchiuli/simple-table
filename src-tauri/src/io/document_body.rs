@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::io::codec::writer;
+use crate::io::file_format::{SpreadsheetFileFormat, extension_or_default};
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
@@ -173,7 +174,9 @@ impl SpreadsheetDocumentBody {
     }
 
     pub fn can_generate_without_projection(&self, target_path_or_name: &str) -> bool {
-        target_extension(target_path_or_name).as_deref() == Some("xlsx") && self.is_excel_backed()
+        SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
+            .is_some_and(SpreadsheetFileFormat::is_xlsx)
+            && self.is_excel_backed()
     }
 
     pub fn save_snapshot(&self) -> SpreadsheetDocumentBodySnapshot {
@@ -192,14 +195,8 @@ impl SpreadsheetDocumentBody {
         projection: &FileData,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
-        let extension = Path::new(target_path_or_name)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_lowercase())
-            .unwrap_or_else(|| "xlsx".to_string());
-
-        match extension.as_str() {
-            "xlsx" => match self {
+        match SpreadsheetFileFormat::from_extension(&extension_or_default(target_path_or_name)) {
+            Some(SpreadsheetFileFormat::Xlsx) => match self {
                 Self::Excel(body) => writer::generate_excel_bytes_from_workbook_for_target(
                     excel_workbook(body),
                     target_path_or_name,
@@ -208,8 +205,10 @@ impl SpreadsheetDocumentBody {
                     writer::generate_file_bytes_for_target(projection, target_path_or_name)
                 }
             },
-            "csv" => writer::generate_file_bytes_for_target(projection, target_path_or_name),
-            _ => Err(AppError::UnsupportedFormat),
+            Some(SpreadsheetFileFormat::Csv) => {
+                writer::generate_file_bytes_for_target(projection, target_path_or_name)
+            }
+            None => Err(AppError::UnsupportedFormat),
         }
     }
 
@@ -217,8 +216,8 @@ impl SpreadsheetDocumentBody {
         &self,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
-        match target_extension(target_path_or_name).as_deref() {
-            Some("xlsx") => match self {
+        match SpreadsheetFileFormat::from_path_or_default(target_path_or_name) {
+            Some(SpreadsheetFileFormat::Xlsx) => match self {
                 Self::Excel(body) => writer::generate_excel_bytes_from_workbook_for_target(
                     excel_workbook(body),
                     target_path_or_name,
@@ -227,7 +226,7 @@ impl SpreadsheetDocumentBody {
                     "projection is required to generate this document body".to_string(),
                 )),
             },
-            _ => Err(AppError::Internal(
+            Some(SpreadsheetFileFormat::Csv) | None => Err(AppError::Internal(
                 "projection-free save snapshots only support native xlsx workbooks".to_string(),
             )),
         }
@@ -367,14 +366,6 @@ impl SpreadsheetDocumentBody {
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
-}
-
-fn target_extension(target_path_or_name: &str) -> Option<String> {
-    Path::new(target_path_or_name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase())
-        .or_else(|| Some("xlsx".to_string()))
 }
 
 impl SpreadsheetDocumentBodySnapshot {

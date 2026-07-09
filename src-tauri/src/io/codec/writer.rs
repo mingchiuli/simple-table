@@ -2,6 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::error::AppError;
+use crate::io::file_format::{SpreadsheetFileFormat, extension_or_default};
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::types::{CellValue, FileData};
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
@@ -24,28 +25,24 @@ fn generate_file_bytes_for_name(
     file_data: &FileData,
     output_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    let extension = Path::new(output_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_else(|| "xlsx".to_string());
+    let extension = extension_or_default(output_name);
     let output_stem = Path::new(output_name)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.is_empty())
         .unwrap_or("untitled");
 
-    match extension.as_str() {
-        "xlsx" => {
+    match SpreadsheetFileFormat::from_extension(&extension) {
+        Some(SpreadsheetFileFormat::Xlsx) => {
             let workbook = workbook_from_file_data(file_data)?;
             let bytes = write_workbook_to_bytes(&workbook)?;
             Ok((format!("{output_stem}.{extension}"), bytes))
         }
-        "csv" => {
+        Some(SpreadsheetFileFormat::Csv) => {
             let bytes = write_csv_to_bytes(file_data)?;
             Ok((format!("{output_stem}.csv"), bytes))
         }
-        _ => Err(AppError::UnsupportedFormat),
+        None => Err(AppError::UnsupportedFormat),
     }
 }
 
@@ -58,18 +55,14 @@ pub fn generate_excel_bytes_from_workbook_for_target(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(target_path_or_name);
-    let extension = Path::new(target_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_else(|| "xlsx".to_string());
+    let extension = extension_or_default(target_name);
     let output_stem = Path::new(target_name)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.is_empty())
         .unwrap_or("untitled");
 
-    if extension != "xlsx" {
+    if SpreadsheetFileFormat::from_extension(&extension) != Some(SpreadsheetFileFormat::Xlsx) {
         return Err(AppError::UnsupportedFormat);
     }
 

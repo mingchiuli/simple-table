@@ -7,6 +7,7 @@ import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
 import { openFile, getStorageType } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
+import { DEFAULT_SPREADSHEET_EXTENSION } from "@/utils/fileFormats";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
@@ -46,7 +47,7 @@ async function handleOpenFile() {
 async function handleNewFile() {
   const newFileData: FileData = {
     path: "",
-    fileName: "untitled.xlsx",
+    fileName: `untitled.${DEFAULT_SPREADSHEET_EXTENSION}`,
     sheets: [
       {
         name: "Sheet1",
