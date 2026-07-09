@@ -2,9 +2,10 @@
 import { Close } from "@element-plus/icons-vue";
 import type { SearchResult } from "@/types";
 
-defineProps<{
+const props = defineProps<{
   results: SearchResult[];
   query: string;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -13,6 +14,7 @@ const emit = defineEmits<{
 }>();
 
 function handleResultClick(result: SearchResult) {
+  if (props.disabled) return;
   emit("result-click", result);
 }
 
@@ -64,22 +66,22 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 </script>
 
 <template>
-  <div v-if="results.length > 0" class="search-panel">
+  <div v-if="props.results.length > 0" class="search-panel">
     <div class="search-panel-header">
-      <span>Found {{ results.length }} result(s)</span>
+      <span>Found {{ props.results.length }} result(s)</span>
       <el-button text @click="handleClear">
         <el-icon><Close /></el-icon>
       </el-button>
     </div>
     <div class="search-panel-list">
       <div
-        v-for="(result, index) in results"
+        v-for="(result, index) in props.results"
         :key="index"
-        class="search-result-item"
+        :class="['search-result-item', { disabled: props.disabled }]"
         @click="handleResultClick(result)"
       >
         <span class="cell-position">{{ result.cellPosition }}</span>
-        <span class="cell-value" v-html="getHighlightedSnippet(result.value, query)"></span>
+        <span class="cell-value" v-html="getHighlightedSnippet(result.value, props.query)"></span>
         <span v-if="result.sheetName" class="sheet-name">{{ result.sheetName }}</span>
       </div>
     </div>
@@ -123,6 +125,15 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 
 .search-result-item:hover {
   background: var(--el-bg-color-page);
+}
+
+.search-result-item.disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.search-result-item.disabled:hover {
+  background: transparent;
 }
 
 .cell-position {

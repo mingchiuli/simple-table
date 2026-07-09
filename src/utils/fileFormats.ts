@@ -16,6 +16,23 @@ export function fileNameFromPathLike(name: string, fallback = "untitled"): strin
   return decodedSegment || fallback;
 }
 
+export function filePathFromDeepLinkTarget(target: string): string {
+  if (!target.match(/^file:/i)) {
+    return target;
+  }
+
+  const parsed = new URL(target);
+  let path = decodeFileNameSegment(parsed.pathname);
+
+  if (parsed.hostname && parsed.hostname !== "localhost") {
+    path = `//${parsed.hostname}${path}`;
+  } else if (/^\/[A-Za-z]:($|[\\/])/.test(path)) {
+    path = path.slice(1);
+  }
+
+  return path;
+}
+
 export function extensionFromName(name: string): string | null {
   const fileName = fileNameFromPathLike(name, "");
   const dotIndex = fileName.lastIndexOf(".");

@@ -68,9 +68,10 @@ impl RecentStore {
     }
 
     pub fn exists(path: &str) -> bool {
-        if path.starts_with("content://")
-            || path.starts_with("file://")
-            || path.starts_with("blob:")
+        let lower_path = path.to_ascii_lowercase();
+        if lower_path.starts_with("content://")
+            || lower_path.starts_with("file://")
+            || lower_path.starts_with("blob:")
         {
             return true;
         }
@@ -168,6 +169,14 @@ mod tests {
         );
         assert_eq!(updated.id, "stable-id");
         assert_eq!(updated.file_name, "renamed.xlsx");
+    }
+
+    #[test]
+    fn virtual_uri_exists_checks_are_case_insensitive() {
+        assert!(RecentStore::exists("content://provider/document"));
+        assert!(RecentStore::exists("CONTENT://provider/document"));
+        assert!(RecentStore::exists("FILE://server/share/book.xlsx"));
+        assert!(RecentStore::exists("BLOB:temporary-id"));
     }
 
     #[test]

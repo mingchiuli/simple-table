@@ -102,6 +102,7 @@ function handleCheckUpdate() {
         <SearchBox
           class="search-box"
           :is-searching="props.isSearching"
+          :disabled="props.isBusy"
           @search="(query: string, scope: 'currentSheet' | 'allSheets') => emit('search', query, scope)"
           @clear-search="emit('clear-search')"
         />
@@ -160,12 +161,13 @@ function handleCheckUpdate() {
         @update:visible="searchPopoverVisible = $event"
       >
         <template #reference>
-          <el-button size="small" title="Search">
+          <el-button size="small" title="Search" :disabled="props.isBusy">
             <el-icon><Search /></el-icon>
           </el-button>
         </template>
         <SearchBox
           :is-searching="props.isSearching"
+          :disabled="props.isBusy"
           @search="(query, scope) => { emit('search', query, scope); searchPopoverVisible = false; }"
           @clear-search="emit('clear-search')"
         />

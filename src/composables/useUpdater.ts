@@ -21,10 +21,13 @@ export function useUpdater() {
   const downloadProgress = ref({ downloaded: 0, total: 0, percentage: 0 })
   const errorMessage = ref<string | null>(null)
   const currentVersion = ref('')
+  let currentVersionPromise: Promise<string> | null = null
 
   // 初始化时获取应用版本
-  onMounted(async () => {
-    currentVersion.value = await getVersion()
+  onMounted(() => {
+    void ensureCurrentVersion().catch((e) => {
+      errorMessage.value = String(e)
+    })
   })
 
   const isChecking = computed(() => status.value === 'checking')
@@ -48,6 +51,7 @@ export function useUpdater() {
     errorMessage.value = null
 
     try {
+      const appVersion = await ensureCurrentVersion()
       if (isDesktop.value) {
         // 桌面端：使用 tauri-plugin-updater
         const update = await check()
@@ -60,7 +64,7 @@ export function useUpdater() {
       } else {
         // 移动端：调用 Rust command
         const info = await invoke<UpdateInfo | null>('check_update_mobile', {
-          currentVersion: currentVersion.value
+          currentVersion: appVersion
         })
         if (info) {
           mobileUpdateInfo.value = info
@@ -131,6 +135,21 @@ export function useUpdater() {
     mobileUpdateInfo.value = null
     downloadProgress.value = { downloaded: 0, total: 0, percentage: 0 }
     errorMessage.value = null
+  }
+
+  async function ensureCurrentVersion(): Promise<string> {
+    if (currentVersion.value) {
+      return currentVersion.value
+    }
+    currentVersionPromise ??= getVersion()
+      .then((version) => {
+        currentVersion.value = version
+        return version
+      })
+      .finally(() => {
+        currentVersionPromise = null
+      })
+    return currentVersionPromise
   }
 
   return {

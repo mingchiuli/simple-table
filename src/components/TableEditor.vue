@@ -148,7 +148,6 @@ const {
   startColumnResize,
   startRowResize,
 } = useGridResize({
-  isTouchDevice,
   canResize: computed(() => props.canResizeRowsColumns ?? true),
   headerHeight: HEADER_HEIGHT,
   minColumnWidth: MIN_COLUMN_WIDTH,

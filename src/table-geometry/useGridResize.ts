@@ -3,7 +3,6 @@ import type { ComputedRef, Ref } from "vue";
 type MaybeReadonlyRef<T> = Ref<T> | ComputedRef<T>;
 
 type UseGridResizeOptions = {
-  isTouchDevice: MaybeReadonlyRef<boolean>;
   canResize?: MaybeReadonlyRef<boolean>;
   headerHeight: number;
   minColumnWidth: number;
@@ -21,7 +20,6 @@ type UseGridResizeOptions = {
 };
 
 export function useGridResize({
-  isTouchDevice,
   canResize,
   headerHeight,
   minColumnWidth,
@@ -45,10 +43,12 @@ export function useGridResize({
   const startHeight = ref(0);
   const resizeLineX = ref(0);
   const resizeLineY = ref(0);
+  let listenersAttached = false;
 
   function startColumnResize(event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number) {
     if (canResize?.value === false) return;
     event.preventDefault();
+    resizingRow.value = null;
     resizingColumn.value = colIndex;
     startX.value = getClientX(event);
     startWidth.value = getColumnWidth(colIndex);
@@ -59,6 +59,7 @@ export function useGridResize({
   function startRowResize(event: MouseEvent | TouchEvent, rowIndex: number, boundaryY?: number) {
     if (canResize?.value === false) return;
     event.preventDefault();
+    resizingColumn.value = null;
     resizingRow.value = rowIndex;
     startY.value = getClientY(event);
     startHeight.value = getRowHeight(rowIndex);
@@ -105,23 +106,25 @@ export function useGridResize({
   }
 
   function addDocumentListeners() {
+    if (listenersAttached) {
+      return;
+    }
+    listenersAttached = true;
     document.addEventListener("mousemove", onResize);
     document.addEventListener("mouseup", stopResize);
-
-    if (isTouchDevice.value) {
-      document.addEventListener("touchmove", onResize, { passive: false });
-      document.addEventListener("touchend", stopResize);
-    }
+    document.addEventListener("touchmove", onResize, { passive: false });
+    document.addEventListener("touchend", stopResize);
   }
 
   function removeDocumentListeners() {
+    if (!listenersAttached) {
+      return;
+    }
+    listenersAttached = false;
     document.removeEventListener("mousemove", onResize);
     document.removeEventListener("mouseup", stopResize);
-
-    if (isTouchDevice.value) {
-      document.removeEventListener("touchmove", onResize);
-      document.removeEventListener("touchend", stopResize);
-    }
+    document.removeEventListener("touchmove", onResize);
+    document.removeEventListener("touchend", stopResize);
   }
 
   onUnmounted(removeDocumentListeners);

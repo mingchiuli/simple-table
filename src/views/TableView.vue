@@ -299,6 +299,7 @@ watch(() => route.query.file, () => {
         class="search-panel-host"
         :results="searchResults"
         :query="searchQuery"
+        :disabled="isToolbarBusy"
         @result-click="handleSearchResultClick"
         @clear="handleClearSearch"
       />
