@@ -5,9 +5,11 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
+use crate::io::transient_files::transient_file_registry;
 use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -42,6 +44,22 @@ pub(super) fn unique_import_path(app: &AppHandle, file_name: &str) -> Result<Pat
         uuid::Uuid::new_v4(),
         extension_from_name(file_name)
     )))
+}
+
+pub(super) fn register_transient_path(app: &AppHandle, path: &Path) -> Result<(), AppError> {
+    let target = validated_mobile_files_path(app, path)?;
+    register_transient_target(target)
+}
+
+pub(super) fn register_created_transient_path(
+    app: &AppHandle,
+    path: &Path,
+) -> Result<(), AppError> {
+    if let Err(error) = register_transient_path(app, path) {
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
 }
 
 pub(super) fn write_with_official_fs(
@@ -106,11 +124,66 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, Ap
         .read(FilePath::from(PathBuf::from(path)))
         .map_err(|e| AppError::ReadError(format!("Failed to read file: {}", e)))?;
 
-    document::open_from_bytes(path.to_string(), bytes, Some(file_name))
+    let opened = document::open_from_bytes(path.to_string(), bytes, Some(file_name))?;
+    adopt_transient_path_if_registered(app, Path::new(path));
+    Ok(opened)
+}
+
+pub fn discard_transient_file(app: &AppHandle, path: &str) -> Result<(), AppError> {
+    let target = take_registered_transient_path(app, Path::new(path))?;
+    match fs::remove_file(&target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            let message = format!("Failed to remove unused transient file: {}", error);
+            let _ = register_transient_target(target);
+            Err(AppError::WriteError(message))
+        }
+    }
+}
+
+fn validated_mobile_files_path(app: &AppHandle, path: &Path) -> Result<PathBuf, AppError> {
+    let target = path.to_path_buf();
+    let files_dir = mobile_dir(app)?.canonicalize().map_err(|e| {
+        AppError::DocumentStateInvalid(format!("Failed to resolve app file dir: {}", e))
+    })?;
+    let file_name = target.file_name().ok_or_else(|| {
+        AppError::DocumentStateInvalid("Transient file path has no file name".to_string())
+    })?;
+    let target_parent = target.parent().ok_or_else(|| {
+        AppError::DocumentStateInvalid("Transient file path has no parent directory".to_string())
+    })?;
+    let target_parent = target_parent.canonicalize().map_err(|e| {
+        AppError::DocumentStateInvalid(format!("Failed to resolve transient file dir: {}", e))
+    })?;
+
+    if target_parent != files_dir {
+        return Err(AppError::DocumentStateInvalid(
+            "Refusing to discard a file outside the mobile files directory".to_string(),
+        ));
+    }
+
+    Ok(files_dir.join(file_name))
+}
+
+fn register_transient_target(target: PathBuf) -> Result<(), AppError> {
+    transient_file_registry().register(target)
+}
+
+fn take_registered_transient_path(app: &AppHandle, path: &Path) -> Result<PathBuf, AppError> {
+    let target = validated_mobile_files_path(app, path)?;
+    transient_file_registry().take(&target)
+}
+
+fn adopt_transient_path_if_registered(app: &AppHandle, path: &Path) {
+    let Ok(target) = validated_mobile_files_path(app, path) else {
+        return;
+    };
+    let _ = transient_file_registry().adopt_if_registered(&target);
 }
 
 pub fn save_file(
-    _app: &AppHandle,
+    app: &AppHandle,
     path: &str,
     document_id: u64,
     base_revision: u64,
@@ -126,7 +199,9 @@ pub fn save_file(
     };
 
     let result = document::commit_current_file_save(path.to_string(), prepared, || {
-        replace_temp_file(&temp_path, &target)
+        replace_temp_file(&temp_path, &target)?;
+        adopt_transient_path_if_registered(app, &target);
+        Ok(())
     });
     if result.is_err() {
         cleanup_temp_file(&temp_path);
@@ -134,19 +209,16 @@ pub fn save_file(
     result
 }
 
-pub fn create_file(app: &AppHandle, file_name: &str) -> Result<PickedFileInfo, AppError> {
+pub fn reserve_save_location(app: &AppHandle, file_name: &str) -> Result<String, AppError> {
     let path = mobile_dir(app)?.join(format!(
         "{}.{}",
         uuid::Uuid::new_v4(),
         extension_from_name(file_name)
     ));
     write_path_with_official_fs(app, path.clone(), &[])?;
+    register_created_transient_path(app, &path)?;
 
-    Ok(PickedFileInfo {
-        path: path.to_string_lossy().to_string(),
-        original_path: String::new(),
-        file_name: file_name.to_string(),
-    })
+    Ok(path.to_string_lossy().to_string())
 }
 
 pub fn export_file(

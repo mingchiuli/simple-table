@@ -23,6 +23,10 @@ export const iosFileOps = {
     };
   },
 
+  discardOpenFileSelection: (selection: OpenFileSelection): Promise<void> => {
+    return invoke<void>("discard_open_file_selection_ios", { path: selection.path });
+  },
+
   /** iOS: 从 App 沙盒路径读取并解析（用于最近文件列表） */
   readFile: (path: string): Promise<OpenDocumentResponse> => {
     return invoke<OpenDocumentResponse>("read_file_ios", { path });
@@ -32,12 +36,11 @@ export const iosFileOps = {
   saveFile: (path: string, context: EditorCommandContext) =>
     invoke<SavedDocumentResponse>("save_file_ios", { path, ...context }),
 
-  createPrivateFile: (fileName: string) =>
-    invoke<{ path: string; originalPath: string; fileName: string }>("create_private_file_ios", { fileName }),
+  pickSaveLocation: (defaultName: string) =>
+    invoke<string | null>("pick_save_location_ios", { defaultName }),
 
-  pickSaveLocation: async (defaultName: string) => {
-    const info = await invoke<{ path: string; originalPath: string; fileName: string }>("create_private_file_ios", { fileName: defaultName });
-    return info.path;
+  discardSaveLocation: (path: string): Promise<void> => {
+    return invoke<void>("discard_save_location_ios", { path });
   },
 
   exportFile: (defaultName: string, context: EditorCommandContext) =>

@@ -16,6 +16,23 @@ pub async fn pick_open_file_android(app: AppHandle) -> Result<Option<PickedFileI
     android::pick_file_info(&app)
 }
 
+/// Android: remove a picked file that was imported but never opened as the active document.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn discard_open_file_selection_android(
+    app: AppHandle,
+    path: String,
+) -> Result<(), AppError> {
+    mobile::discard_transient_file(&app, &path)
+}
+
+/// Android: remove a save-as target that was reserved but never adopted.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn discard_save_location_android(app: AppHandle, path: String) -> Result<(), AppError> {
+    mobile::discard_transient_file(&app, &path)
+}
+
 /// Android: read and parse a sandboxed file path saved in recent files.
 #[cfg(target_os = "android")]
 #[tauri::command]

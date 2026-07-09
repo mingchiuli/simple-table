@@ -65,6 +65,7 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
     let file_name = normalized_import_file_name(&raw_file_name, &extension);
     let sandbox_path = unique_import_path(app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
+    mobile::register_created_transient_path(app, &sandbox_path)?;
 
     let path = sandbox_path.to_string_lossy().to_string();
 

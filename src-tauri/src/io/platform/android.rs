@@ -1,4 +1,6 @@
-use super::mobile::{PickedFileInfo, mobile_dir, unique_import_path, write_path_with_official_fs};
+use super::mobile::{
+    self, PickedFileInfo, mobile_dir, unique_import_path, write_path_with_official_fs,
+};
 use crate::error::AppError;
 use crate::io::file_format::{
     default_spreadsheet_file_name, file_name_from_path_like, file_stem_from_path_like,
@@ -60,6 +62,7 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
     let file_name = normalized_import_file_name(&raw_file_name, &extension);
     let sandbox_path = unique_import_path(app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
+    mobile::register_created_transient_path(app, &sandbox_path)?;
 
     let path = sandbox_path.to_string_lossy().to_string();
 
@@ -78,6 +81,7 @@ pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<String,
         uuid::Uuid::new_v4(),
         supported_extension_or_default(default_name)
     ));
+    mobile::register_transient_path(app, &path)?;
     Ok(path.to_string_lossy().to_string())
 }
 

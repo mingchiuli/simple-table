@@ -13,12 +13,18 @@ import {
   warnRecentFileTrackingFailure,
 } from "@/utils/recentFileTracking";
 import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
+import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
+import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
 const recentFilesStore = useRecentFilesStore();
 const { prepareForDocumentReplacement } = useDocumentReplacementGuard();
+const { openSelectedFileOrDiscard } = useOpenFileSelection({
+  prepareForDocumentReplacement,
+});
+const { runDocumentLifecycle } = useDocumentLifecycle();
 const isBusy = ref(false);
 
 onMounted(() => {
@@ -26,13 +32,12 @@ onMounted(() => {
 });
 
 async function runHomeFileAction(action: () => Promise<void>) {
-  if (isBusy.value || !documentSessionStore.beginLifecycle("loading")) return;
+  if (isBusy.value) return;
   isBusy.value = true;
   try {
-    await action();
+    await runDocumentLifecycle("loading", "Failed to handle file action", action);
   } finally {
     isBusy.value = false;
-    documentSessionStore.endLifecycle("loading");
   }
 }
 
@@ -61,9 +66,8 @@ async function handleOpenFile() {
         // 用户取消选择
         return;
       }
-      if (!(await prepareForDocumentReplacement())) return;
-
-      const opened = await readFile(selection.path);
+      const opened = await openSelectedFileOrDiscard(selection);
+      if (!opened) return;
       documentSessionStore.openDocumentResponse(opened, selection.path);
 
       await trackOpenedFile(selection.path, selection.fileName, selection.originalPath);
@@ -139,9 +143,8 @@ async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
   try {
     const selection = await pickOpenFile();
     if (!selection) return false;
-    if (!(await prepareForDocumentReplacement())) return false;
-
-    const opened = await readFile(selection.path);
+    const opened = await openSelectedFileOrDiscard(selection);
+    if (!opened) return false;
     documentSessionStore.openDocumentResponse(opened, selection.path);
     await trackOpenedFile(selection.path, selection.fileName, selection.originalPath);
 
@@ -159,6 +162,7 @@ async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
     return false;
   }
 }
+
 </script>
 
 <template>

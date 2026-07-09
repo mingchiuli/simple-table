@@ -45,6 +45,16 @@ export async function pickOpenFile(): Promise<OpenFileSelection | null> {
   return api.fileOps.pickOpenFile();
 }
 
+/** 丢弃已选择/导入但没有成功打开为当前文档的文件 */
+export async function discardOpenFileSelection(selection: OpenFileSelection): Promise<void> {
+  const api = await getPlatformAPI();
+  try {
+    await api.fileOps.discardOpenFileSelection?.(selection);
+  } catch (error) {
+    console.warn("Failed to discard unused open file selection", error);
+  }
+}
+
 /** 从已知路径读取并解析（用于最近文件列表） */
 export async function readFile(path: string): Promise<OpenDocumentResponse> {
   const api = await getPlatformAPI();
@@ -64,6 +74,16 @@ export async function pickSaveLocation(defaultName: string) {
     throw new Error('pickSaveLocation not supported on this platform');
   }
   return api.fileOps.pickSaveLocation(defaultName);
+}
+
+/** 丢弃已预留但没有成功保存接管的保存目标 */
+export async function discardSaveLocation(path: string): Promise<void> {
+  const api = await getPlatformAPI();
+  try {
+    await api.fileOps.discardSaveLocation?.(path);
+  } catch (error) {
+    console.warn("Failed to discard unused save location", error);
+  }
 }
 
 /** 导出当前编辑状态到用户选择的位置 */

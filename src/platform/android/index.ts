@@ -23,6 +23,10 @@ export const androidFileOps = {
     };
   },
 
+  discardOpenFileSelection: (selection: OpenFileSelection): Promise<void> => {
+    return invoke<void>("discard_open_file_selection_android", { path: selection.path });
+  },
+
   /** Android: 从 App 沙盒路径读取并解析（用于最近文件列表） */
   readFile: (path: string): Promise<OpenDocumentResponse> => {
     return invoke<OpenDocumentResponse>("read_file_android", { path });
@@ -37,6 +41,10 @@ export const androidFileOps = {
 
   pickSaveLocation: (defaultName: string) =>
     invoke<string | null>("pick_save_location_android", { defaultName }),
+
+  discardSaveLocation: (path: string): Promise<void> => {
+    return invoke<void>("discard_save_location_android", { path });
+  },
 };
 
 export const androidAPI: PlatformAPI = {

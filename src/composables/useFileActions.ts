@@ -1,8 +1,18 @@
 import type { ComputedRef, Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as api from '@/api';
-import { exportFile, getFileName, getStorageType, pickOpenFile, pickSaveLocation, readFile, saveFile } from '@/platform';
+import {
+  exportFile,
+  getFileName,
+  getStorageType,
+  pickOpenFile,
+  readFile,
+  saveFile,
+} from '@/platform';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
+import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
+import { useOpenFileSelection } from '@/composables/useOpenFileSelection';
+import { useSaveLocation } from '@/composables/useSaveLocation';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
@@ -35,24 +45,11 @@ export function useFileActions({
   const { prepareForDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
-
-  async function withDocumentLifecycle(
-    lifecycle: 'loading' | 'saving',
-    errorPrefix: string,
-    action: () => Promise<void>
-  ): Promise<boolean> {
-    if (!documentSessionStore.beginLifecycle(lifecycle)) {
-      return false;
-    }
-    try {
-      await action();
-    } catch (error) {
-      ElMessage.error(`${errorPrefix}: ${error}`);
-    } finally {
-      documentSessionStore.endLifecycle(lifecycle);
-    }
-    return true;
-  }
+  const { openSelectedFileOrDiscard } = useOpenFileSelection({
+    prepareForDocumentReplacement,
+  });
+  const { withReservedSaveLocation } = useSaveLocation();
+  const { runDocumentLifecycle } = useDocumentLifecycle();
 
   async function updateRecentFileEntry(
     path: string,
@@ -75,7 +72,7 @@ export function useFileActions({
 
   async function loadFileFromPath(filePath: string): Promise<boolean> {
     let loaded = false;
-    const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
+    const ran = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await prepareForDocumentReplacement())) return;
@@ -96,15 +93,14 @@ export function useFileActions({
   }
 
   async function handleOpenFile() {
-    const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
+    const ran = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
 
       const selection = await pickOpenFile();
       if (!selection) return;
-      if (!(await prepareForDocumentReplacement())) return;
-
-      const opened = await readFile(selection.path);
+      const opened = await openSelectedFileOrDiscard(selection);
+      if (!opened) return;
       documentSessionStore.openDocumentResponse(opened, selection.path);
       currentSheetIndex.value = 0;
 
@@ -117,7 +113,7 @@ export function useFileActions({
   }
 
   async function handleSaveFile() {
-    const ran = await withDocumentLifecycle('saving', 'Failed to save file', async () => {
+    const ran = await runDocumentLifecycle('saving', 'Failed to save file', async () => {
       const data = fileData.value;
       if (!data) return;
       if (!(await flushPendingCellChanges())) return;
@@ -135,6 +131,7 @@ export function useFileActions({
         isLoading.value = true;
         const saved = await saveFile(existingPath, context);
         if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, existingPath)) {
+          notifySavedButNotApplied();
           return;
         }
         const fileName = saved.fileData.fileName || await getFileName(existingPath);
@@ -149,24 +146,28 @@ export function useFileActions({
       }
 
       const fallbackExtension = savePlan.defaultExtension;
-      const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
-      if (!savePath) return;
+      await withReservedSaveLocation(`${defaultName}.${fallbackExtension}`, async ({
+        path: savePath,
+        markPersisted,
+      }) => {
+        const targetPlan = await nativeSavePlan(context, savePath);
+        if (!targetPlan.canSave) {
+          ElMessage.error(targetPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
+          return;
+        }
 
-      const targetPlan = await nativeSavePlan(context, savePath);
-      if (!targetPlan.canSave) {
-        ElMessage.error(targetPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
-        return;
-      }
+        isLoading.value = true;
+        const saved = await saveFile(savePath, context);
+        markPersisted();
+        if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, savePath)) {
+          notifySavedButNotApplied();
+          return;
+        }
+        const fileName = saved.fileData.fileName || await getFileName(savePath);
 
-      isLoading.value = true;
-      const saved = await saveFile(savePath, context);
-      if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, savePath)) {
-        return;
-      }
-      const fileName = saved.fileData.fileName || await getFileName(savePath);
-
-      await updateRecentFileEntry(savePath, fileName);
-      ElMessage.success('File saved successfully');
+        await updateRecentFileEntry(savePath, fileName);
+        ElMessage.success('File saved successfully');
+      });
     });
     if (ran) {
       isLoading.value = false;
@@ -174,7 +175,7 @@ export function useFileActions({
   }
 
   async function handleExportFile() {
-    const ran = await withDocumentLifecycle('saving', 'Failed to export file', async () => {
+    const ran = await runDocumentLifecycle('saving', 'Failed to export file', async () => {
       const data = fileData.value;
       if (!data) return;
       isLoading.value = true;
@@ -225,6 +226,12 @@ export function useFileActions({
   async function handleBack() {
     if (!(await closeCurrentDocument())) return;
     router.push({ name: 'home' });
+  }
+
+  function notifySavedButNotApplied() {
+    ElMessage.warning(
+      'File was saved, but the active document changed before the editor could refresh.'
+    );
   }
 
   return {

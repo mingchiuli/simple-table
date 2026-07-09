@@ -12,14 +12,15 @@ mod utils;
 
 #[cfg(target_os = "android")]
 use commands::android::{
-    export_file_android, pick_open_file_android, pick_save_location_android, read_file_android,
-    save_file_android,
+    discard_open_file_selection_android, discard_save_location_android, export_file_android,
+    pick_open_file_android, pick_save_location_android, read_file_android, save_file_android,
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use commands::check_update_mobile;
 #[cfg(target_os = "ios")]
 use commands::ios::{
-    create_private_file_ios, export_file_ios, pick_open_file_ios, read_file_ios, save_file_ios,
+    discard_open_file_selection_ios, discard_save_location_ios, export_file_ios,
+    pick_open_file_ios, pick_save_location_ios, read_file_ios, save_file_ios,
 };
 use commands::{
     add_column, add_recent_file_with_thumbnail, add_row, add_sheet, check_file_exists,
@@ -101,6 +102,10 @@ pub fn run() {
             #[cfg(target_os = "android")]
             pick_open_file_android,
             #[cfg(target_os = "android")]
+            discard_open_file_selection_android,
+            #[cfg(target_os = "android")]
+            discard_save_location_android,
+            #[cfg(target_os = "android")]
             read_file_android,
             #[cfg(target_os = "android")]
             save_file_android,
@@ -112,9 +117,13 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             pick_open_file_ios,
             #[cfg(target_os = "ios")]
+            discard_open_file_selection_ios,
+            #[cfg(target_os = "ios")]
+            discard_save_location_ios,
+            #[cfg(target_os = "ios")]
             read_file_ios,
             #[cfg(target_os = "ios")]
-            create_private_file_ios,
+            pick_save_location_ios,
             #[cfg(target_os = "ios")]
             save_file_ios,
             #[cfg(target_os = "ios")]

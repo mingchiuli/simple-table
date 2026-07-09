@@ -18,6 +18,8 @@ pub mod layout_units;
 pub mod projection_codec;
 pub mod projection_mapper;
 pub mod rich_projection;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub mod transient_files;
 pub mod workbook_state;
 
 pub mod platform {

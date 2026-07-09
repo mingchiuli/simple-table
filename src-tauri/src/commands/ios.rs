@@ -16,6 +16,20 @@ pub async fn pick_open_file_ios(app: AppHandle) -> Result<Option<PickedFileInfo>
     ios::pick_file_info(&app)
 }
 
+/// iOS: remove a picked file that was imported but never opened as the active document.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn discard_open_file_selection_ios(app: AppHandle, path: String) -> Result<(), AppError> {
+    mobile::discard_transient_file(&app, &path)
+}
+
+/// iOS: remove a save-as target that was reserved but never adopted.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn discard_save_location_ios(app: AppHandle, path: String) -> Result<(), AppError> {
+    mobile::discard_transient_file(&app, &path)
+}
+
 /// iOS: read and parse a sandboxed file path saved in recent files.
 #[cfg(target_os = "ios")]
 #[tauri::command]
@@ -23,14 +37,14 @@ pub async fn read_file_ios(app: AppHandle, path: String) -> Result<OpenDocumentR
     mobile::read_file(&app, &path)
 }
 
-/// iOS: create a new file in app sandbox.
+/// iOS: create a new sandbox save target that must be adopted by save_file_ios or discarded.
 #[cfg(target_os = "ios")]
 #[tauri::command(rename_all = "camelCase")]
-pub async fn create_private_file_ios(
+pub async fn pick_save_location_ios(
     app: AppHandle,
-    file_name: String,
-) -> Result<PickedFileInfo, AppError> {
-    mobile::create_file(&app, &file_name)
+    default_name: String,
+) -> Result<Option<String>, AppError> {
+    Ok(Some(mobile::reserve_save_location(&app, &default_name)?))
 }
 
 /// iOS: generate file bytes and write them to the sandbox path.
