@@ -4,7 +4,6 @@ import * as api from '@/api';
 import {
   exportFile,
   getFileName,
-  getStorageType,
   pickOpenFile,
   readFile,
   saveFile,
@@ -12,16 +11,12 @@ import {
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
 import { useOpenFileSelection } from '@/composables/useOpenFileSelection';
+import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
-import {
-  tryAddRecentFileWithResolvedStorage,
-  tryRefreshRecentFiles,
-} from '@/utils/recentFileTracking';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
@@ -32,6 +27,14 @@ type UseFileActionsOptions = {
   flushPendingCellChanges: () => Promise<boolean>;
 };
 
+type ContinuationGuard = (() => boolean) & {
+  onCancel?: (handler: () => void) => () => void;
+};
+
+function keepGoing() {
+  return true;
+}
+
 export function useFileActions({
   fileData,
   currentSheetIndex,
@@ -41,7 +44,6 @@ export function useFileActions({
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
-  const recentFilesStore = useRecentFilesStore();
   const { prepareForDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
@@ -50,42 +52,46 @@ export function useFileActions({
   });
   const { withReservedSaveLocation } = useSaveLocation();
   const { runDocumentLifecycle } = useDocumentLifecycle();
+  const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
 
-  async function updateRecentFileEntry(
-    path: string,
-    fileName: string,
-    originalPath?: string
-  ) {
-    if (!fileData.value) return;
-
-    await tryAddRecentFileWithResolvedStorage(
-      {
-        path,
-        fileName,
-        originalPath,
-        context: documentSessionStore.currentCommandContext(),
-      },
-      getStorageType
-    );
-    await tryRefreshRecentFiles(() => recentFilesStore.load());
-  }
-
-  async function loadFileFromPath(filePath: string): Promise<boolean> {
+  async function loadFileFromPath(
+    filePath: string,
+    shouldContinue: ContinuationGuard = keepGoing
+  ): Promise<boolean> {
     let loaded = false;
-    const lifecycleStatus = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
-      isLoading.value = true;
-      isFileLoading.value = true;
-      if (!(await prepareForDocumentReplacement())) return;
+    let releasedByCancel = false;
+    let removeCancelHandler: (() => void) | undefined;
+    const lifecycleStatus = await runDocumentLifecycle(
+      'loading',
+      'Failed to open file',
+      async () => {
+        isLoading.value = true;
+        isFileLoading.value = true;
+        removeCancelHandler = shouldContinue.onCancel?.(() => {
+          releasedByCancel = true;
+          isLoading.value = false;
+          isFileLoading.value = false;
+          documentSessionStore.endLifecycle('loading');
+        });
+        if (!shouldContinue()) return;
+        if (!(await prepareForDocumentReplacement())) return;
+        if (!shouldContinue()) return;
 
-      const opened = await readFile(filePath);
-      documentSessionStore.openDocumentResponse(opened, filePath);
-      currentSheetIndex.value = 0;
+        const opened = await readFile(filePath);
+        if (!shouldContinue()) return;
+        const fileName = opened.fileData.fileName || await getFileName(filePath);
+        if (!shouldContinue()) return;
 
-      const fileName = await getFileName(filePath);
-      await updateRecentFileEntry(filePath, fileName);
-      loaded = true;
-    });
-    if (lifecycleStatus !== 'skipped') {
+        documentSessionStore.openDocumentResponse(opened, filePath);
+        currentSheetIndex.value = 0;
+
+        queueRecentFileEntryUpdate(filePath, fileName);
+        loaded = true;
+      },
+      { waitForIdle: true, shouldContinue }
+    );
+    removeCancelHandler?.();
+    if (lifecycleStatus !== 'skipped' && !releasedByCancel) {
       isLoading.value = false;
       isFileLoading.value = false;
     }
@@ -104,7 +110,7 @@ export function useFileActions({
       documentSessionStore.openDocumentResponse(opened, selection.path);
       currentSheetIndex.value = 0;
 
-      await updateRecentFileEntry(selection.path, selection.fileName, selection.originalPath);
+      queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
     });
     if (lifecycleStatus !== 'skipped') {
       isLoading.value = false;
@@ -135,7 +141,7 @@ export function useFileActions({
           return;
         }
         const fileName = saved.fileData.fileName || await getFileName(existingPath);
-        await updateRecentFileEntry(existingPath, fileName);
+        queueRecentFileEntryUpdate(existingPath, fileName);
         ElMessage.success('File saved successfully');
         return;
       }
@@ -165,7 +171,7 @@ export function useFileActions({
         }
         const fileName = saved.fileData.fileName || await getFileName(savePath);
 
-        await updateRecentFileEntry(savePath, fileName);
+        queueRecentFileEntryUpdate(savePath, fileName);
         ElMessage.success('File saved successfully');
       });
     });

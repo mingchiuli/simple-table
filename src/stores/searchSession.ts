@@ -11,6 +11,7 @@ export const useSearchSessionStore = defineStore("searchSession", {
     beginSearch(query: string): number {
       this.requestId += 1;
       this.searchQuery = query;
+      this.searchResults = [];
       this.isSearching = true;
       return this.requestId;
     },

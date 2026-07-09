@@ -53,4 +53,45 @@ describe("useDocumentLifecycle", () => {
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith("Save failed: Error: disk full");
     expect(store.lifecycle).toBe("idle");
   });
+
+  it("waits for the active lifecycle when requested", async () => {
+    const store = useDocumentSessionStore();
+    const action = vi.fn().mockResolvedValue(undefined);
+    const { runDocumentLifecycle } = useDocumentLifecycle();
+
+    store.beginLifecycle("saving");
+    const runPromise = runDocumentLifecycle("loading", "Failed", action, {
+      waitForIdle: true,
+    });
+    await Promise.resolve();
+
+    expect(action).not.toHaveBeenCalled();
+
+    store.endLifecycle("saving");
+    await expect(runPromise).resolves.toBe("completed");
+
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(store.lifecycle).toBe("idle");
+  });
+
+  it("cancels a waiting lifecycle when its continuation guard expires", async () => {
+    const store = useDocumentSessionStore();
+    const action = vi.fn().mockResolvedValue(undefined);
+    const { runDocumentLifecycle } = useDocumentLifecycle();
+    let shouldContinue = true;
+
+    store.beginLifecycle("saving");
+    const runPromise = runDocumentLifecycle("loading", "Failed", action, {
+      waitForIdle: true,
+      shouldContinue: () => shouldContinue,
+    });
+    await Promise.resolve();
+
+    shouldContinue = false;
+    store.endLifecycle("saving");
+    await expect(runPromise).resolves.toBe("skipped");
+
+    expect(action).not.toHaveBeenCalled();
+    expect(store.lifecycle).toBe("idle");
+  });
 });

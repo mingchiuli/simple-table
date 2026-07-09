@@ -5,17 +5,14 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
-import { pickOpenFile, readFile, getStorageType } from "@/platform";
+import { pickOpenFile, readFile } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
-import {
-  tryAddRecentFileWithResolvedStorage,
-  tryRefreshRecentFiles,
-  warnRecentFileTrackingFailure,
-} from "@/utils/recentFileTracking";
+import { warnRecentFileTrackingFailure } from "@/utils/recentFileTracking";
 import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
 import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
+import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
@@ -25,94 +22,69 @@ const { openSelectedFileOrDiscard } = useOpenFileSelection({
   prepareForDocumentReplacement,
 });
 const { runDocumentLifecycle } = useDocumentLifecycle();
+const { queueRecentFileEntryUpdate, refreshRecentFiles } = useRecentFileUpdates();
 const isBusy = ref(false);
 
 onMounted(() => {
-  recentFilesStore.load();
+  void refreshRecentFiles();
 });
 
-async function runHomeFileAction(action: () => Promise<void>) {
+async function runHomeFileAction(errorPrefix: string, action: () => Promise<void>) {
   if (isBusy.value) return;
   isBusy.value = true;
   try {
-    await runDocumentLifecycle("loading", "Failed to handle file action", action);
+    await runDocumentLifecycle("loading", errorPrefix, action);
   } finally {
     isBusy.value = false;
   }
 }
 
-async function trackOpenedFile(
-  path: string,
-  fileName: string,
-  originalPath?: string
-) {
-  await tryAddRecentFileWithResolvedStorage(
-    {
-      path,
-      fileName,
-      originalPath,
-      context: documentSessionStore.currentCommandContext(),
-    },
-    getStorageType
-  );
-  await tryRefreshRecentFiles(() => recentFilesStore.load());
-}
-
 async function handleOpenFile() {
-  await runHomeFileAction(async () => {
-    try {
-      const selection = await pickOpenFile();
-      if (!selection) {
-        // 用户取消选择
-        return;
-      }
-      const opened = await openSelectedFileOrDiscard(selection);
-      if (!opened) return;
-      documentSessionStore.openDocumentResponse(opened, selection.path);
-
-      await trackOpenedFile(selection.path, selection.fileName, selection.originalPath);
-      await router.push({ name: "table" });
-    } catch (error) {
-      ElMessage.error(`Failed to open file: ${error}`);
+  await runHomeFileAction("Failed to open file", async () => {
+    const selection = await pickOpenFile();
+    if (!selection) {
+      return;
     }
+    const opened = await openSelectedFileOrDiscard(selection);
+    if (!opened) return;
+    documentSessionStore.openDocumentResponse(opened, selection.path);
+
+    queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
+    await router.push({ name: "table" });
   });
 }
 
 async function handleNewFile() {
-  await runHomeFileAction(async () => {
-    try {
-      if (!(await prepareForDocumentReplacement())) return;
-      const defaultExtension = await defaultSpreadsheetExtension();
-      const newFileData: FileData = {
-        path: "",
-        fileName: `untitled.${defaultExtension}`,
-        sheets: [
-          {
-            name: "Sheet1",
-            rows: [
-              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            ],
-            merges: [],
-            rich: defaultRichProjection(),
-          },
-        ],
-      };
+  await runHomeFileAction("Failed to create file", async () => {
+    if (!(await prepareForDocumentReplacement())) return;
+    const defaultExtension = await defaultSpreadsheetExtension();
+    const newFileData: FileData = {
+      path: "",
+      fileName: `untitled.${defaultExtension}`,
+      sheets: [
+        {
+          name: "Sheet1",
+          rows: [
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+          ],
+          merges: [],
+          rich: defaultRichProjection(),
+        },
+      ],
+    };
 
-      const opened = await api.initFile(newFileData);
-      documentSessionStore.openDocumentResponse(opened, null);
-      await router.push({ name: "table" });
-    } catch (error) {
-      ElMessage.error(`Failed to create file: ${error}`);
-    }
+    const opened = await api.initFile(newFileData);
+    documentSessionStore.openDocumentResponse(opened, null);
+    await router.push({ name: "table" });
   });
 }
 
 async function handleOpenRecent(file: RecentFile) {
-  await runHomeFileAction(async () => {
+  await runHomeFileAction("Failed to open file", async () => {
     if (await api.checkFileExists(file.path)) {
       if (!(await prepareForDocumentReplacement())) return;
       if (await openRecentPath(file)) {
@@ -128,39 +100,29 @@ async function handleOpenRecent(file: RecentFile) {
 }
 
 async function openRecentPath(file: RecentFile): Promise<boolean> {
-  try {
-    const opened = await readFile(file.path);
-    documentSessionStore.openDocumentResponse(opened, file.path);
-    await trackOpenedFile(file.path, file.fileName, file.originalPath);
-    return true;
-  } catch (error) {
-    ElMessage.error(`Failed to open file: ${error}`);
-    return false;
-  }
+  const opened = await readFile(file.path);
+  documentSessionStore.openDocumentResponse(opened, file.path);
+  queueRecentFileEntryUpdate(file.path, file.fileName, file.originalPath);
+  return true;
 }
 
 async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
-  try {
-    const selection = await pickOpenFile();
-    if (!selection) return false;
-    const opened = await openSelectedFileOrDiscard(selection);
-    if (!opened) return false;
-    documentSessionStore.openDocumentResponse(opened, selection.path);
-    await trackOpenedFile(selection.path, selection.fileName, selection.originalPath);
+  const selection = await pickOpenFile();
+  if (!selection) return false;
+  const opened = await openSelectedFileOrDiscard(selection);
+  if (!opened) return false;
+  documentSessionStore.openDocumentResponse(opened, selection.path);
+  queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
 
-    if (file.path !== selection.path) {
-      try {
-        await api.removeRecentFile(file.id);
-      } catch (error) {
-        warnRecentFileTrackingFailure(error);
-      }
+  if (file.path !== selection.path) {
+    try {
+      await api.removeRecentFile(file.id);
+    } catch (error) {
+      warnRecentFileTrackingFailure(error);
     }
-    await tryRefreshRecentFiles(() => recentFilesStore.load());
-    return true;
-  } catch (error) {
-    ElMessage.error(`Failed to open file: ${error}`);
-    return false;
   }
+  void refreshRecentFiles();
+  return true;
 }
 
 </script>

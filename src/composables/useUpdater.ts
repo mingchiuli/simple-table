@@ -22,10 +22,14 @@ export function useUpdater() {
   const errorMessage = ref<string | null>(null)
   const currentVersion = ref('')
   let currentVersionPromise: Promise<string> | null = null
+  let operationToken = 0
 
   // 初始化时获取应用版本
   onMounted(() => {
+    const token = operationToken
     void ensureCurrentVersion().catch((e) => {
+      if (!isCurrentOperation(token)) return
+
       errorMessage.value = String(e)
     })
   })
@@ -47,14 +51,19 @@ export function useUpdater() {
   const isIOS = computed(() => platform() === 'ios')
 
   async function checkForUpdate() {
+    const token = beginOperation()
     status.value = 'checking'
     errorMessage.value = null
 
     try {
       const appVersion = await ensureCurrentVersion()
+      if (!isCurrentOperation(token)) return
+
       if (isDesktop.value) {
         // 桌面端：使用 tauri-plugin-updater
         const update = await check()
+        if (!isCurrentOperation(token)) return
+
         if (update) {
           updateInfo.value = update
           status.value = 'available'
@@ -66,6 +75,8 @@ export function useUpdater() {
         const info = await invoke<UpdateInfo | null>('check_update_mobile', {
           currentVersion: appVersion
         })
+        if (!isCurrentOperation(token)) return
+
         if (info) {
           mobileUpdateInfo.value = info
           status.value = 'available'
@@ -74,19 +85,25 @@ export function useUpdater() {
         }
       }
     } catch (e) {
+      if (!isCurrentOperation(token)) return
+
       status.value = 'error'
       errorMessage.value = String(e)
     }
   }
 
   async function downloadAndInstall() {
-    if (!updateInfo.value) return
+    const update = updateInfo.value
+    if (!update) return
 
+    const token = beginOperation()
     status.value = 'downloading'
     downloadProgress.value = { downloaded: 0, total: 0, percentage: 0 }
 
     try {
-      await updateInfo.value.downloadAndInstall((event) => {
+      await update.downloadAndInstall((event) => {
+        if (!isCurrentOperation(token)) return
+
         switch (event.event) {
           case 'Started':
             downloadProgress.value.total = event.data.contentLength ?? 0
@@ -103,33 +120,41 @@ export function useUpdater() {
             break
         }
       })
+      if (!isCurrentOperation(token)) return
 
       // 自动重启
       await relaunch()
     } catch (e) {
+      if (!isCurrentOperation(token)) return
+
       status.value = 'error'
       errorMessage.value = String(e)
     }
   }
 
   async function handleMobileUpdate() {
-    if (!mobileUpdateInfo.value) return
+    const info = mobileUpdateInfo.value
+    if (!info) return
 
+    const token = beginOperation()
     try {
-      if (isAndroid.value && mobileUpdateInfo.value.apk_url) {
+      if (isAndroid.value && info.apk_url) {
         // Android: 打开 APK 下载链接
-        await openUrl(mobileUpdateInfo.value.apk_url)
+        await openUrl(info.apk_url)
       } else {
         // iOS 或 Android 没有 APK: 打开 Releases 页面
-        await openUrl(mobileUpdateInfo.value.release_url)
+        await openUrl(info.release_url)
       }
     } catch (e) {
+      if (!isCurrentOperation(token)) return
+
       status.value = 'error'
       errorMessage.value = String(e)
     }
   }
 
   function reset() {
+    operationToken += 1
     status.value = 'idle'
     updateInfo.value = null
     mobileUpdateInfo.value = null
@@ -150,6 +175,15 @@ export function useUpdater() {
         currentVersionPromise = null
       })
     return currentVersionPromise
+  }
+
+  function beginOperation() {
+    operationToken += 1
+    return operationToken
+  }
+
+  function isCurrentOperation(token: number) {
+    return token === operationToken
   }
 
   return {

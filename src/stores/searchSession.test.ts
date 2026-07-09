@@ -44,4 +44,16 @@ describe("searchSession store", () => {
     expect(store.searchQuery).toBe("");
     expect(store.isSearching).toBe(false);
   });
+
+  it("clears old results when a new search starts", () => {
+    const store = useSearchSessionStore();
+    const first = store.beginSearch("old");
+    store.applySearchResults(first, [result("old")]);
+
+    store.beginSearch("new");
+
+    expect(store.searchQuery).toBe("new");
+    expect(store.searchResults).toEqual([]);
+    expect(store.isSearching).toBe(true);
+  });
 });

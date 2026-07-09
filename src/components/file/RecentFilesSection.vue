@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Document, Delete } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
 import type { RecentFile } from "@/types";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 
@@ -21,7 +22,11 @@ function handleOpenRecent(file: RecentFile) {
 async function handleDeleteRecent(id: string, event: Event) {
   event.stopPropagation();
   if (props.disabled) return;
-  await recentFilesStore.remove(id);
+  try {
+    await recentFilesStore.remove(id);
+  } catch (error) {
+    ElMessage.error(`Failed to remove recent file: ${error}`);
+  }
 }
 
 function formatFileSize(bytes: number): string {

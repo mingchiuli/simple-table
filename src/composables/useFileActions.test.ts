@@ -153,6 +153,22 @@ function nativeSavePlan(partial: Partial<NativeSavePlan> = {}): NativeSavePlan {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushPromises() {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 function mountActions(flushPendingCellChanges: () => Promise<boolean>) {
   const documentSessionStore = useDocumentSessionStore();
   const currentSheetIndex = ref(0);
@@ -196,6 +212,114 @@ describe("useFileActions", () => {
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
     expect(platform.readFile).not.toHaveBeenCalled();
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
+  });
+
+  it("does not apply a path load after its continuation guard expires", async () => {
+    const api = await import("@/api");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const pendingRead = deferred<OpenDocumentResponse>();
+    let shouldContinue = true;
+    vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
+    vi.mocked(platform.getFileName).mockResolvedValue("stale.xlsx");
+
+    const actions = mountActions(vi.fn().mockResolvedValue(true));
+    const loadPromise = actions.loadFileFromPath(
+      "/tmp/stale.xlsx",
+      () => shouldContinue
+    );
+
+    await flushPromises();
+    expect(platform.readFile).toHaveBeenCalledWith("/tmp/stale.xlsx");
+
+    shouldContinue = false;
+    pendingRead.resolve(openedResponse("stale.xlsx", 2));
+
+    await expect(loadPromise).resolves.toBe(false);
+    expect(documentSessionStore.data).toBeNull();
+    expect(documentSessionStore.currentFilePath).toBeNull();
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+  });
+
+  it("releases the loading lifecycle when an in-flight path load is cancelled", async () => {
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const pendingRead = deferred<OpenDocumentResponse>();
+    const cancelHandlers: Array<() => void> = [];
+    let shouldContinue = true;
+    const guard = (() => shouldContinue) as (() => boolean) & {
+      onCancel: (handler: () => void) => () => void;
+    };
+    guard.onCancel = (handler) => {
+      cancelHandlers.push(handler);
+      return () => undefined;
+    };
+    vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
+
+    const actions = mountActions(vi.fn().mockResolvedValue(true));
+    const loadPromise = actions.loadFileFromPath("/tmp/slow.xlsx", guard);
+
+    await flushPromises();
+
+    expect(documentSessionStore.lifecycle).toBe("loading");
+    expect(actions.isLoading.value).toBe(true);
+    expect(actions.isFileLoading.value).toBe(true);
+
+    shouldContinue = false;
+    for (const handler of cancelHandlers) {
+      handler();
+    }
+
+    expect(documentSessionStore.lifecycle).toBe("idle");
+    expect(actions.isLoading.value).toBe(false);
+    expect(actions.isFileLoading.value).toBe(false);
+
+    pendingRead.resolve(openedResponse("slow.xlsx", 2));
+    await expect(loadPromise).resolves.toBe(false);
+    expect(documentSessionStore.data).toBeNull();
+  });
+
+  it("waits for an active document lifecycle before loading a route file path", async () => {
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.beginLifecycle("saving");
+    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("queued.xlsx", 2));
+
+    const actions = mountActions(flushPendingCellChanges);
+    const loadPromise = actions.loadFileFromPath("/tmp/queued.xlsx");
+
+    await flushPromises();
+
+    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(documentSessionStore.lifecycle).toBe("saving");
+
+    documentSessionStore.endLifecycle("saving");
+
+    await expect(loadPromise).resolves.toBe(true);
+    expect(platform.readFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/queued.xlsx");
+  });
+
+  it("does not block path loading on recent file metadata updates", async () => {
+    const api = await import("@/api");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const storageType = deferred<"desktopPath">();
+    vi.mocked(platform.getStorageType).mockReturnValue(storageType.promise);
+    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("fast.xlsx", 2));
+
+    const actions = mountActions(vi.fn().mockResolvedValue(true));
+
+    await expect(actions.loadFileFromPath("/tmp/fast.xlsx")).resolves.toBe(true);
+
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/fast.xlsx");
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+
+    storageType.resolve("desktopPath");
+    await flushPromises();
+
+    expect(api.addRecentFileWithThumbnail).toHaveBeenCalled();
   });
 
   it("asks before opening when pending work becomes dirty after flush", async () => {

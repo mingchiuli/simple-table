@@ -22,8 +22,9 @@ export type MutationApplyResult = {
 
 export type DocumentSessionLifecycle = "idle" | "loading" | "saving";
 
-type MutationQueueRuntime = {
+type DocumentSessionRuntime = {
   tail: Promise<void> | null;
+  lifecycleIdleWaiters: Array<() => void>;
 };
 
 type CellPosition = { row: number; col: number };
@@ -56,7 +57,7 @@ type DocumentSessionSnapshot = {
   selection: EditorSelectionSnapshot;
 };
 
-const mutationQueueRuntimes = new WeakMap<object, MutationQueueRuntime>();
+const documentSessionRuntimes = new WeakMap<object, DocumentSessionRuntime>();
 
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
@@ -80,13 +81,22 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     endLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">) {
       if (this.lifecycle === lifecycle) {
         this.lifecycle = "idle";
+        resolveLifecycleIdleWaiters(this);
       }
     },
+    waitForIdleLifecycle(): Promise<void> {
+      if (this.lifecycle === "idle") {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        sessionRuntimeFor(this).lifecycleIdleWaiters.push(resolve);
+      });
+    },
     resetMutationQueue() {
-      mutationRuntimeFor(this).tail = null;
+      sessionRuntimeFor(this).tail = null;
     },
     enqueueMutation<T>(task: () => Promise<T>): Promise<T> {
-      const runtime = mutationRuntimeFor(this);
+      const runtime = sessionRuntimeFor(this);
       const tail = runtime.tail ?? Promise.resolve();
       const run = tail.then(task, task);
       const cleanup = run.then(
@@ -114,7 +124,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       });
     },
     waitForMutations(): Promise<void> {
-      return mutationRuntimeFor(this).tail ?? Promise.resolve();
+      return sessionRuntimeFor(this).tail ?? Promise.resolve();
     },
     currentCommandContext(): EditorCommandContext | null {
       if (this.documentId === null) return null;
@@ -206,6 +216,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = null;
       this.revision = 0;
       this.lifecycle = "idle";
+      resolveLifecycleIdleWaiters(this);
       this.resetSessionUi();
       useDocumentStatusStore().reset();
     },
@@ -431,13 +442,21 @@ export const useDocumentSessionStore = defineStore("documentSession", {
   },
 });
 
-function mutationRuntimeFor(store: object): MutationQueueRuntime {
-  let runtime = mutationQueueRuntimes.get(store);
+function sessionRuntimeFor(store: object): DocumentSessionRuntime {
+  let runtime = documentSessionRuntimes.get(store);
   if (!runtime) {
-    runtime = { tail: null };
-    mutationQueueRuntimes.set(store, runtime);
+    runtime = { tail: null, lifecycleIdleWaiters: [] };
+    documentSessionRuntimes.set(store, runtime);
   }
   return runtime;
+}
+
+function resolveLifecycleIdleWaiters(store: object) {
+  const runtime = sessionRuntimeFor(store);
+  const waiters = runtime.lifecycleIdleWaiters.splice(0);
+  for (const resolve of waiters) {
+    resolve();
+  }
 }
 
 function cloneCellPosition(cell: CellPosition | null): CellPosition | null {

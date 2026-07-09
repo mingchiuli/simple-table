@@ -19,6 +19,7 @@ import { colToLetter } from '@/utils/excel';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
 import { workbookSheetCapabilities } from '@/types';
 import type { EditorMutationResponse } from '@/types';
+import { createRouteFileLoader } from '@/composables/useRouteFileLoader';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
@@ -139,9 +140,6 @@ const {
   flushPendingCellChanges,
 });
 
-let routeLoadQueue = Promise.resolve();
-let lastLoadedRouteFilePath: string | null = null;
-
 function routeFilePath(): string | null {
   const value = route.query.file;
   if (Array.isArray(value)) {
@@ -150,30 +148,15 @@ function routeFilePath(): string | null {
   return value || null;
 }
 
-function enqueueRouteFileLoad(filePath: string | null) {
-  routeLoadQueue = routeLoadQueue
-    .catch(() => undefined)
-    .then(async () => {
-      if (filePath !== routeFilePath()) return;
-      if (!filePath) {
-        lastLoadedRouteFilePath = null;
-        await refreshEditorState();
-        return;
-      }
-      if (filePath === lastLoadedRouteFilePath && documentSessionStore.currentFilePath === filePath) {
-        return;
-      }
-      if (await loadFileFromPath(filePath)) {
-        lastLoadedRouteFilePath = filePath;
-      }
-    })
-    .catch((error) => {
-      console.error("Failed to handle route file load:", error);
-    });
-}
+const routeFileLoader = createRouteFileLoader({
+  getRouteFilePath: routeFilePath,
+  getCurrentFilePath: () => documentSessionStore.currentFilePath,
+  loadFileFromPath,
+  refreshEditorState,
+});
 
 onBeforeRouteLeave(async () => {
-  await routeLoadQueue.catch(() => undefined);
+  routeFileLoader.cancel();
   if (!documentSessionStore.data && documentSessionStore.documentId === null) {
     return true;
   }
@@ -217,7 +200,7 @@ const {
 
 // ========== Lifecycle ==========
 watch(() => route.query.file, () => {
-  enqueueRouteFileLoad(routeFilePath());
+  routeFileLoader.enqueue(routeFilePath());
 }, {
   immediate: true,
 });
