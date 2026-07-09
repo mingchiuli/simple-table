@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::io::codec::writer;
-use crate::io::file_format::{SpreadsheetFileFormat, extension_or_default};
+use crate::io::file_format::SpreadsheetFileFormat;
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
@@ -195,7 +195,7 @@ impl SpreadsheetDocumentBody {
         projection: &FileData,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
-        match SpreadsheetFileFormat::from_extension(&extension_or_default(target_path_or_name)) {
+        match SpreadsheetFileFormat::from_path_or_default(target_path_or_name) {
             Some(SpreadsheetFileFormat::Xlsx) => match self {
                 Self::Excel(body) => writer::generate_excel_bytes_from_workbook_for_target(
                     excel_workbook(body),

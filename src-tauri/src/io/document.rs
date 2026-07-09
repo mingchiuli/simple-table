@@ -3,7 +3,8 @@ use std::path::Path;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{
-    SpreadsheetFileFormat, export_extensions, extension_of, supported_extension_from_name,
+    default_spreadsheet_extension, export_extensions, extension_of, is_xlsx_extension,
+    open_extension_from_path_name_or_bytes, supported_extension_from_name,
 };
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
@@ -25,11 +26,7 @@ pub fn open_from_bytes(
     file_name: Option<String>,
 ) -> Result<OpenDocumentResponse, AppError> {
     let path_obj = Path::new(&path);
-    let extension = path_obj
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_else(|| "xlsx".to_string());
+    let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
 
     // 如果调用方已经解析出文件名，优先使用；否则从路径解析
     let resolved_file_name = file_name.unwrap_or_else(|| {
@@ -106,14 +103,13 @@ pub fn prepare_current_file_save(
     };
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
-        .unwrap_or_else(|| "xlsx".to_string());
+        .unwrap_or_else(default_extension_string);
     Ok(PreparedDocumentSave {
         document_id,
         revision,
         output_name,
         bytes,
-        finish_without_reparse: target_extension.eq_ignore_ascii_case("xlsx")
-            && snapshot.is_excel_backed(),
+        finish_without_reparse: is_xlsx_extension(&target_extension) && snapshot.is_excel_backed(),
     })
 }
 
@@ -136,7 +132,7 @@ where
     let bytes = prepared.bytes;
     let extension = extension_of(&output_name)
         .or_else(|| extension_of(&path))
-        .unwrap_or_else(|| "xlsx".to_string());
+        .unwrap_or_else(default_extension_string);
     if finish_without_reparse {
         return commit_current_file_save_without_reparse(
             path,
@@ -349,7 +345,7 @@ pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> Doc
     let source_name = current_path.unwrap_or(file_name);
     let source_format = document_format(source_name)
         .or_else(|| document_format(file_name))
-        .unwrap_or_else(|| "xlsx".to_string());
+        .unwrap_or_else(default_extension_string);
     let native_extension = native_save_extension(source_name);
     let native_save_allowed = native_extension.is_some();
     let export_extension = export_extension(file_name).unwrap_or_else(|| source_format.clone());
@@ -368,7 +364,8 @@ pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> Doc
 }
 
 pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
-    let source_format = document_format(target_path_or_name).unwrap_or_else(|| "xlsx".to_string());
+    let source_format =
+        document_format(target_path_or_name).unwrap_or_else(default_extension_string);
     let native_extension = native_save_extension(target_path_or_name);
     let native_save_allowed = native_extension.is_some();
     let export_extension =
@@ -391,7 +388,7 @@ pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
         can_save: blocked_reason.is_none(),
         requires_save_as: capabilities.requires_save_as_for_native_save,
         native_save_extension: native_extension.clone(),
-        default_extension: native_extension.unwrap_or_else(|| "xlsx".to_string()),
+        default_extension: native_extension.unwrap_or_else(default_extension_string),
         blocked_reason,
         capabilities,
     }
@@ -532,7 +529,7 @@ fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
 
 fn native_save_extension(file_name: &str) -> Option<String> {
     if extension_of(file_name).is_none() {
-        Some(SpreadsheetFileFormat::Xlsx.extension().to_string())
+        Some(default_extension_string())
     } else {
         supported_extension_from_name(file_name)
     }
@@ -550,9 +547,14 @@ fn export_formats_for(_source_format: &str) -> Vec<String> {
     export_extensions()
 }
 
+fn default_extension_string() -> String {
+    default_spreadsheet_extension().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CellValue;
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
@@ -582,5 +584,21 @@ mod tests {
                 workbook: WorkbookCapabilities::default(),
             }
         );
+    }
+
+    #[test]
+    fn open_from_bytes_detects_extensionless_csv_content() {
+        let response = open_from_bytes(
+            "/tmp/imported".to_string(),
+            b"name,score\nalice,42".to_vec(),
+            Some("imported".to_string()),
+        )
+        .expect("open extensionless csv");
+
+        let rows = &response.file_data.sheets[0].rows;
+        assert_eq!(rows[0][0], CellValue::String("name".to_string()));
+        assert_eq!(rows[0][1], CellValue::String("score".to_string()));
+        assert_eq!(rows[1][0], CellValue::String("alice".to_string()));
+        assert_eq!(rows[1][1], CellValue::Number(42.into()));
     }
 }

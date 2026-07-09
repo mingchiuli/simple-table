@@ -3,7 +3,10 @@ use super::mobile::{
 };
 use crate::error::AppError;
 use crate::io::document;
-use crate::io::file_format::SUPPORTED_SPREADSHEET_EXTENSIONS;
+use crate::io::file_format::{
+    SUPPORTED_SPREADSHEET_EXTENSIONS, default_spreadsheet_file_name,
+    import_extension_from_name_or_bytes, normalized_import_file_name,
+};
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -13,7 +16,7 @@ fn display_name_from_path(path: &FilePath) -> String {
             .file_name()
             .and_then(|name| name.to_str())
             .map(|name| name.to_string())
-            .unwrap_or_else(|| "imported.xlsx".to_string()),
+            .unwrap_or_else(|| default_spreadsheet_file_name("imported")),
         FilePath::Url(url) => url
             .to_file_path()
             .ok()
@@ -22,7 +25,7 @@ fn display_name_from_path(path: &FilePath) -> String {
                     .and_then(|name| name.to_str())
                     .map(|name| name.to_string())
             })
-            .unwrap_or_else(|| "imported.xlsx".to_string()),
+            .unwrap_or_else(|| default_spreadsheet_file_name("imported")),
     }
 }
 
@@ -43,12 +46,15 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
     };
 
     let original_path = source.to_string();
-    let file_name = display_name_from_path(&source);
+    let raw_file_name = display_name_from_path(&source);
     let bytes = app
         .fs()
         .read(source)
         .map_err(|e| AppError::ReadError(format!("Failed to read selected file: {}", e)))?;
 
+    let extension = import_extension_from_name_or_bytes(&raw_file_name, &bytes)
+        .ok_or(AppError::UnsupportedFormat)?;
+    let file_name = normalized_import_file_name(&raw_file_name, &extension);
     let sandbox_path = unique_import_path(app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
 

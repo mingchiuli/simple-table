@@ -110,7 +110,10 @@ export function useCellEditController({
 
   async function refreshSessionAfterMutationError() {
     try {
-      documentSessionStore.applyEditorSession(await api.getEditorState());
+      await documentSessionStore.refreshAfterMutationFailure(
+        api.getEditorState,
+        api.getCurrentFileData
+      );
     } catch (error) {
       console.error('Failed to refresh editor state after cell save error:', error);
     }

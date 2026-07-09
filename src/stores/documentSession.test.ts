@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useDocumentStatusStore } from "@/stores/documentStatus";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -86,6 +87,89 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(true);
     expect(store.revision).toBe(3);
+  });
+
+  it("loads a fresh projection when applying a response that requires resync", async () => {
+    const store = useDocumentSessionStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const fresh: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("fresh")]])],
+    };
+    store.openDocument(current, current.path);
+
+    const result = await store.applyMutationResponseWithResync(
+      response({ revision: 3 }),
+      async () => fresh
+    );
+
+    expect(result.resyncRequired).toBe(true);
+    expect(store.revision).toBe(3);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+  });
+
+  it("rolls back session state when required resync projection loading fails", async () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocument(current, current.path);
+
+    await expect(
+      store.applyMutationResponseWithResync(
+        response({
+          revision: 3,
+          editorState: editorState({ isDirty: true }),
+        }),
+        async () => {
+          throw new Error("projection unavailable");
+        }
+      )
+    ).rejects.toThrow("projection unavailable");
+
+    expect(store.documentId).toBeNull();
+    expect(store.revision).toBe(0);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(statusStore.isContentDirty).toBe(false);
+  });
+
+  it("does not apply mutation failure session refresh when projection refresh fails", async () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocument(current, current.path);
+
+    await expect(
+      store.refreshAfterMutationFailure(
+        async () => ({
+          documentId: 1,
+          revision: 3,
+          formulaStatus: readyFormulaStatus(),
+          capabilities: defaultWorkbookCapabilities(),
+          editorState: editorState({ isDirty: true }),
+        }),
+        async () => {
+          throw new Error("projection unavailable");
+        }
+      )
+    ).rejects.toThrow("projection unavailable");
+
+    expect(store.documentId).toBeNull();
+    expect(store.revision).toBe(0);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(statusStore.isContentDirty).toBe(false);
   });
 
   it("accepts status-only responses at the current revision", () => {

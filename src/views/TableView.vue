@@ -100,15 +100,8 @@ const canResizeRowsColumns = computed(
 );
 
 async function applyMutationResponse(response: EditorMutationResponse) {
-  const result = documentSessionStore.applyMutationResponse(response);
-  if (result.resyncRequired) {
-    await refreshProjectionFromBackend();
-  }
+  await documentSessionStore.applyMutationResponseWithResync(response, api.getCurrentFileData);
   refreshSelectedEditorValue();
-}
-
-async function refreshProjectionFromBackend() {
-  documentSessionStore.replaceProjection(await api.getCurrentFileData());
 }
 
 const {
@@ -211,7 +204,6 @@ const {
   flushPendingCellChanges,
   editorValueForCell: getEditorValue,
   applyMutationResponse,
-  refreshProjectionFromBackend,
 });
 
 // ========== Lifecycle ==========

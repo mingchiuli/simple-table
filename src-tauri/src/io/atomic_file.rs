@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::io::file_format::default_spreadsheet_file_name;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -33,7 +34,8 @@ fn temporary_path_for(path: &Path) -> PathBuf {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("simple-table.xlsx");
+        .map(str::to_string)
+        .unwrap_or_else(|| default_spreadsheet_file_name("simple-table"));
     parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()))
 }
 

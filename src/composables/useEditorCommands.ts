@@ -19,7 +19,6 @@ type UseEditorCommandsOptions = {
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
   applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
-  refreshProjectionFromBackend: () => Promise<void>;
 };
 
 export function useEditorCommands({
@@ -32,7 +31,6 @@ export function useEditorCommands({
   flushPendingCellChanges,
   editorValueForCell,
   applyMutationResponse,
-  refreshProjectionFromBackend,
 }: UseEditorCommandsOptions) {
   const documentSessionStore = useDocumentSessionStore();
   const documentStatusStore = useDocumentStatusStore();
@@ -269,10 +267,10 @@ export function useEditorCommands({
     options: { refreshProjection?: boolean } = {}
   ) {
     try {
-      documentSessionStore.applyEditorSession(await api.getEditorState());
-      if (options.refreshProjection && fileData.value) {
-        await refreshProjectionFromBackend();
-      }
+      await documentSessionStore.refreshAfterMutationFailure(
+        api.getEditorState,
+        options.refreshProjection && fileData.value ? api.getCurrentFileData : undefined
+      );
     } catch (error) {
       console.error("Failed to refresh editor state after mutation error:", error);
     }

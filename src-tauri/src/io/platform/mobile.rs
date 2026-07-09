@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 use crate::io::document;
-use crate::io::file_format::{SUPPORTED_SPREADSHEET_EXTENSIONS, SpreadsheetFileFormat};
+use crate::io::file_format::{SUPPORTED_SPREADSHEET_EXTENSIONS, supported_extension_or_default};
 use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -27,10 +27,7 @@ pub struct PickFileResult {
 }
 
 pub(super) fn extension_from_name(file_name: &str) -> String {
-    SpreadsheetFileFormat::from_path_or_default(file_name)
-        .unwrap_or(SpreadsheetFileFormat::Xlsx)
-        .extension()
-        .to_string()
+    supported_extension_or_default(file_name)
 }
 
 pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {

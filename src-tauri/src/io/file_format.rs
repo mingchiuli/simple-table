@@ -45,14 +45,79 @@ pub fn extension_of(path_or_name: &str) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
+pub fn default_spreadsheet_extension() -> &'static str {
+    DEFAULT_SPREADSHEET_FORMAT.extension()
+}
+
+pub fn default_spreadsheet_file_name(stem: &str) -> String {
+    format!("{stem}.{}", default_spreadsheet_extension())
+}
+
 pub fn supported_extension_from_name(file_name: &str) -> Option<String> {
     extension_of(file_name)
         .and_then(|extension| SpreadsheetFileFormat::from_extension(&extension))
         .map(|format| format.extension().to_string())
 }
 
-pub fn extension_or_default(file_name: &str) -> String {
-    extension_of(file_name).unwrap_or_else(|| DEFAULT_SPREADSHEET_FORMAT.extension().to_string())
+pub fn is_xlsx_extension(extension: &str) -> bool {
+    SpreadsheetFileFormat::from_extension(extension).is_some_and(SpreadsheetFileFormat::is_xlsx)
+}
+
+pub fn open_extension_from_path_name_or_bytes(
+    path: &str,
+    file_name: Option<&str>,
+    bytes: &[u8],
+) -> String {
+    let path_extension = extension_of(path);
+    if let Some(extension) = supported_extension(path_extension.as_deref()) {
+        return extension;
+    }
+
+    let file_name_extension = file_name.and_then(extension_of);
+    if let Some(extension) = supported_extension(file_name_extension.as_deref()) {
+        return extension;
+    }
+
+    if path_extension.is_none()
+        && file_name_extension.is_none()
+        && let Some(format) = detect_extensionless_format_from_bytes(bytes)
+    {
+        return format.extension().to_string();
+    }
+
+    path_extension
+        .or(file_name_extension)
+        .unwrap_or_else(|| DEFAULT_SPREADSHEET_FORMAT.extension().to_string())
+}
+
+#[cfg(any(test, target_os = "android", target_os = "ios"))]
+pub fn supported_extension_or_default(file_name: &str) -> String {
+    SpreadsheetFileFormat::from_path_or_default(file_name)
+        .unwrap_or(DEFAULT_SPREADSHEET_FORMAT)
+        .extension()
+        .to_string()
+}
+
+#[cfg(any(test, target_os = "android", target_os = "ios"))]
+pub fn import_extension_from_name_or_bytes(file_name: &str, bytes: &[u8]) -> Option<String> {
+    if let Some(extension) = supported_extension_from_name(file_name) {
+        return Some(extension);
+    }
+
+    if extension_of(file_name).is_some() {
+        return None;
+    }
+
+    detect_extensionless_format_from_bytes(bytes).map(|format| format.extension().to_string())
+}
+
+#[cfg(any(test, target_os = "android", target_os = "ios"))]
+pub fn normalized_import_file_name(file_name: &str, extension: &str) -> String {
+    if supported_extension_from_name(file_name).is_some() {
+        file_name.to_string()
+    } else {
+        format!("imported.{extension}")
+    }
 }
 
 pub fn export_extensions() -> Vec<String> {
@@ -60,6 +125,24 @@ pub fn export_extensions() -> Vec<String> {
         .iter()
         .map(|extension| (*extension).to_string())
         .collect()
+}
+
+fn supported_extension(extension: Option<&str>) -> Option<String> {
+    extension
+        .and_then(SpreadsheetFileFormat::from_extension)
+        .map(|format| format.extension().to_string())
+}
+
+fn detect_extensionless_format_from_bytes(bytes: &[u8]) -> Option<SpreadsheetFileFormat> {
+    if bytes.starts_with(b"PK") {
+        return Some(SpreadsheetFileFormat::Xlsx);
+    }
+
+    if std::str::from_utf8(bytes).is_ok() {
+        return Some(SpreadsheetFileFormat::Csv);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -77,6 +160,11 @@ mod tests {
             Some(SpreadsheetFileFormat::Csv)
         );
         assert_eq!(SpreadsheetFileFormat::from_extension("xlsm"), None);
+        assert_eq!(default_spreadsheet_extension(), "xlsx");
+        assert_eq!(default_spreadsheet_file_name("book"), "book.xlsx");
+        assert!(is_xlsx_extension("XLSX"));
+        assert!(!is_xlsx_extension("csv"));
+        assert!(!is_xlsx_extension("xlsm"));
     }
 
     #[test]
@@ -90,5 +178,74 @@ mod tests {
             None
         );
         assert_eq!(supported_extension_from_name("book.bin"), None);
+    }
+
+    #[test]
+    fn resolves_open_extension_from_path_name_or_extensionless_bytes() {
+        assert_eq!(
+            open_extension_from_path_name_or_bytes("/tmp/data.csv", Some("book.xlsx"), b"PK"),
+            "csv"
+        );
+        assert_eq!(
+            open_extension_from_path_name_or_bytes("/tmp/imported.tmp", Some("book.xlsx"), b"PK"),
+            "xlsx"
+        );
+        assert_eq!(
+            open_extension_from_path_name_or_bytes("/tmp/imported", None, b"PK\x03\x04"),
+            "xlsx"
+        );
+        assert_eq!(
+            open_extension_from_path_name_or_bytes("/tmp/imported", None, b"a,b"),
+            "csv"
+        );
+        assert_eq!(
+            open_extension_from_path_name_or_bytes("/tmp/imported.bin", None, b"PK\x03\x04"),
+            "bin"
+        );
+    }
+
+    #[test]
+    fn resolves_supported_extension_or_default_without_leaking_unknown_extensions() {
+        assert_eq!(supported_extension_or_default("book.xlsx"), "xlsx");
+        assert_eq!(supported_extension_or_default("DATA.CSV"), "csv");
+        assert_eq!(supported_extension_or_default("untitled"), "xlsx");
+        assert_eq!(supported_extension_or_default("book.bin"), "xlsx");
+    }
+
+    #[test]
+    fn detects_import_extension_from_supported_name_or_extensionless_bytes() {
+        assert_eq!(
+            import_extension_from_name_or_bytes("book.xlsx", b"ignored"),
+            Some("xlsx".to_string())
+        );
+        assert_eq!(
+            import_extension_from_name_or_bytes("data.csv", b"ignored"),
+            Some("csv".to_string())
+        );
+        assert_eq!(
+            import_extension_from_name_or_bytes("unknown", b"PK\x03\x04"),
+            Some("xlsx".to_string())
+        );
+        assert_eq!(
+            import_extension_from_name_or_bytes("unknown", b"a,b"),
+            Some("csv".to_string())
+        );
+        assert_eq!(
+            import_extension_from_name_or_bytes("unsupported.bin", b"PK\x03\x04"),
+            None
+        );
+    }
+
+    #[test]
+    fn normalizes_import_name_only_when_source_name_has_no_supported_extension() {
+        assert_eq!(
+            normalized_import_file_name("report.csv", "csv"),
+            "report.csv"
+        );
+        assert_eq!(normalized_import_file_name("report", "csv"), "imported.csv");
+        assert_eq!(
+            normalized_import_file_name("report.bin", "xlsx"),
+            "imported.xlsx"
+        );
     }
 }

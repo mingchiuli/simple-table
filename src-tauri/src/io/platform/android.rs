@@ -3,9 +3,11 @@ use super::mobile::{
 };
 use crate::error::AppError;
 use crate::io::document;
-use crate::io::file_format::{SpreadsheetFileFormat, supported_extension_from_name};
+use crate::io::file_format::{
+    default_spreadsheet_file_name, import_extension_from_name_or_bytes,
+    normalized_import_file_name, supported_extension_or_default,
+};
 use std::path::Path;
-use std::str;
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -15,38 +17,13 @@ fn display_name_from_path(path: &FilePath) -> String {
             .file_name()
             .and_then(|name| name.to_str())
             .map(|name| name.to_string())
-            .unwrap_or_else(|| "imported.xlsx".to_string()),
+            .unwrap_or_else(|| default_spreadsheet_file_name("imported")),
         FilePath::Url(url) => url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
             .filter(|segment| !segment.is_empty())
             .map(|segment| segment.to_string())
-            .unwrap_or_else(|| "imported.xlsx".to_string()),
-    }
-}
-
-fn extension_for_import(file_name: &str, bytes: &[u8]) -> Result<String, AppError> {
-    if let Some(ext) = supported_extension_from_name(file_name) {
-        return Ok(ext);
-    }
-
-    let has_extension = Path::new(file_name).extension().is_some();
-    if !has_extension && bytes.starts_with(b"PK") {
-        return Ok(SpreadsheetFileFormat::Xlsx.extension().to_string());
-    }
-
-    if !has_extension && str::from_utf8(bytes).is_ok() {
-        return Ok(SpreadsheetFileFormat::Csv.extension().to_string());
-    }
-
-    Err(AppError::UnsupportedFormat)
-}
-
-fn normalize_display_name(file_name: String, extension: &str) -> String {
-    if supported_extension_from_name(&file_name).is_some() {
-        file_name
-    } else {
-        format!("imported.{}", extension)
+            .unwrap_or_else(|| default_spreadsheet_file_name("imported")),
     }
 }
 
@@ -79,8 +56,9 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
         .read(source)
         .map_err(|e| AppError::ReadError(format!("Failed to read selected file: {}", e)))?;
 
-    let extension = extension_for_import(&raw_file_name, &bytes)?;
-    let file_name = normalize_display_name(raw_file_name, &extension);
+    let extension = import_extension_from_name_or_bytes(&raw_file_name, &bytes)
+        .ok_or(AppError::UnsupportedFormat)?;
+    let file_name = normalized_import_file_name(&raw_file_name, &extension);
     let sandbox_path = unique_import_path(app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
 
@@ -107,10 +85,7 @@ pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<String,
         "{}-{}.{}",
         stem,
         uuid::Uuid::new_v4(),
-        SpreadsheetFileFormat::from_path_or_default(default_name)
-            .unwrap_or(SpreadsheetFileFormat::Xlsx)
-            .extension()
-            .to_string()
+        supported_extension_or_default(default_name)
     ));
     Ok(path.to_string_lossy().to_string())
 }
@@ -122,20 +97,20 @@ mod tests {
     #[test]
     fn import_extension_requires_supported_extension_for_zip_files() {
         assert_eq!(
-            extension_for_import("book.xlsx", b"PK\x03\x04").expect("xlsx"),
-            "xlsx"
+            import_extension_from_name_or_bytes("book.xlsx", b"PK\x03\x04"),
+            Some("xlsx".to_string())
         );
         assert_eq!(
-            extension_for_import("data.csv", b"a,b").expect("csv"),
-            "csv"
+            import_extension_from_name_or_bytes("data.csv", b"a,b"),
+            Some("csv".to_string())
         );
         assert_eq!(
-            extension_for_import("unknown", b"PK\x03\x04").expect("extensionless xlsx"),
-            "xlsx"
+            import_extension_from_name_or_bytes("unknown", b"PK\x03\x04"),
+            Some("xlsx".to_string())
         );
-        assert!(matches!(
-            extension_for_import("unsupported.bin", b"PK\x03\x04"),
-            Err(AppError::UnsupportedFormat)
-        ));
+        assert_eq!(
+            import_extension_from_name_or_bytes("unsupported.bin", b"PK\x03\x04"),
+            None
+        );
     }
 }
