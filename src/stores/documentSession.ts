@@ -255,33 +255,39 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (response.revision > this.revision + 1) {
         this.revision = response.revision;
         this.applyResponseStatus(response);
+        this.projectionStale = true;
         useSearchSessionStore().clearSearch();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision && response.patches?.length) {
         this.applyResponseStatus(response);
-        if (mutationInvalidatesSearch(response.patches)) {
-          useSearchSessionStore().clearSearch();
-        }
+        this.projectionStale = true;
+        useSearchSessionStore().clearSearch();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision) {
         this.applyResponseStatus(response);
         return { data: this.data, resyncRequired: false };
       }
-      this.revision = response.revision;
-      const result = applyDocumentPatches(this.data, response.patches);
-      this.data = result.data;
-      useEditorSelectionStore().applyEditorPatches(response.patches);
-      if (mutationInvalidatesSearch(response.patches)) {
-        useSearchSessionStore().clearSearch();
-      }
       this.applyResponseStatus(response);
-      this.clampSelectionToCurrentSheet();
-      return {
-        data: result.data,
-        resyncRequired: result.resyncRequired,
-      };
+      this.revision = response.revision;
+      try {
+        const result = applyDocumentPatches(this.data, response.patches);
+        this.data = result.data;
+        useEditorSelectionStore().applyEditorPatches(response.patches);
+        if (mutationInvalidatesSearch(response.patches)) {
+          useSearchSessionStore().clearSearch();
+        }
+        this.clampSelectionToCurrentSheet();
+        return {
+          data: result.data,
+          resyncRequired: result.resyncRequired,
+        };
+      } catch (error) {
+        this.projectionStale = true;
+        useSearchSessionStore().clearSearch();
+        throw error;
+      }
     },
     markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
       if (this.documentId !== null && response.documentId !== this.documentId) {
@@ -473,9 +479,14 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (this.documentId !== null && info.documentId !== this.documentId) {
         return;
       }
+      const revisionAdvancedWithoutProjection = info.revision > this.revision;
       this.documentId = info.documentId;
       this.revision = Math.max(this.revision, info.revision);
       useDocumentStatusStore().applyEditorSession(info);
+      if (revisionAdvancedWithoutProjection) {
+        this.projectionStale = true;
+        useSearchSessionStore().clearSearch();
+      }
     },
     resetSessionUi() {
       useEditorSelectionStore().reset();

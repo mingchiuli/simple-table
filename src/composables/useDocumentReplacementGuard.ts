@@ -22,8 +22,7 @@ export function useDocumentReplacementGuard({
 
   async function beginDocumentReplacement(): Promise<DocumentReplacementLease | null> {
     if (hasUnsavedDocumentChanges()) {
-      if (!(await confirmReplacementIfUnsaved())) return null;
-      return createReplacementLease();
+      return confirmDiscardWithAutosavePaused();
     }
     if (flushPendingCellChanges && !(await flushPendingCellChanges())) {
       return null;
@@ -31,6 +30,15 @@ export function useDocumentReplacementGuard({
     await documentSessionStore.waitForMutations();
     if (!(await confirmReplacementIfUnsaved())) return null;
     return createReplacementLease();
+  }
+
+  async function confirmDiscardWithAutosavePaused(): Promise<DocumentReplacementLease | null> {
+    const replacement = createReplacementLease();
+    if (await confirmReplacementIfUnsaved()) {
+      return replacement;
+    }
+    replacement.cancel();
+    return null;
   }
 
   async function confirmReplacementIfUnsaved(): Promise<boolean> {

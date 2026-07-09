@@ -75,6 +75,31 @@ describe("useDocumentReplacementGuard", () => {
     expect(committed).toEqual(["draft"]);
   });
 
+  it("pauses pending autosave while discard confirmation is still open", async () => {
+    const statusStore = useDocumentStatusStore();
+    const committed: string[] = [];
+    const pendingStore = queueDraftWithAutosave(committed);
+    statusStore.markPendingContentChange();
+    let resolveConfirm!: (confirmed: boolean) => void;
+    unsavedChanges.confirmDiscardUnsavedChanges.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveConfirm = resolve;
+      })
+    );
+
+    const replacementPromise = useDocumentReplacementGuard().beginDocumentReplacement();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual([]);
+    expect(pendingStore.queuedCellSaves.get("0,0,0")?.value).toBe("draft");
+
+    resolveConfirm(false);
+    await expect(replacementPromise).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual(["draft"]);
+  });
+
   it("drops pending work when a replacement is committed", async () => {
     const statusStore = useDocumentStatusStore();
     const committed: string[] = [];

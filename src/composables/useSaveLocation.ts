@@ -22,9 +22,15 @@ export function useSaveLocation() {
           shouldDiscard = false;
         },
       });
+    } catch (error) {
+      if (shouldDiscard) {
+        await discardReservedSaveLocation(path, error);
+        shouldDiscard = false;
+      }
+      throw error;
     } finally {
       if (shouldDiscard) {
-        await discardSaveLocation(path);
+        await discardReservedSaveLocation(path);
       }
     }
   }
@@ -32,4 +38,16 @@ export function useSaveLocation() {
   return {
     withReservedSaveLocation,
   };
+}
+
+async function discardReservedSaveLocation(path: string, originalError?: unknown) {
+  try {
+    await discardSaveLocation(path);
+  } catch (cleanupError) {
+    if (originalError !== undefined) {
+      console.error("Failed to discard reserved save location after action error:", cleanupError);
+      return;
+    }
+    throw cleanupError;
+  }
 }

@@ -11,6 +11,7 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
+  type EditorPatch,
   type EditorMutationResponse,
   type EditorStateInfo,
   type FileData,
@@ -114,6 +115,8 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(true);
     expect(store.revision).toBe(3);
+    expect(store.projectionStale).toBe(true);
+    expect(store.isEditorInteractionLocked).toBe(true);
   });
 
   it("clears stale search results when a content mutation is applied", () => {
@@ -187,6 +190,40 @@ describe("documentSession store", () => {
     expect(searchStore.searchQuery).toBe("");
     expect(searchStore.searchResults).toEqual([]);
     expect(searchStore.isSearching).toBe(false);
+    expect(store.projectionStale).toBe(true);
+  });
+
+  it("marks the projection stale when a current-revision response still requires patch resync", () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("current")]])],
+    });
+    store.applyMutationResponse(response({ revision: 1 }));
+    const requestId = searchStore.beginSearch("current");
+    searchStore.applySearchResults(requestId, [searchResult("current")]);
+
+    const result = store.applyMutationResponse(response({
+      revision: 1,
+      patches: [
+        {
+          type: "Cells",
+          data: {
+            changes: [{ sheetIndex: 0, row: 0, col: 0, value: text("duplicate") }],
+          },
+        },
+      ],
+    }));
+
+    expect(result.resyncRequired).toBe(true);
+    expect(store.revision).toBe(1);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.projectionStale).toBe(true);
+    expect(store.isEditorInteractionLocked).toBe(true);
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
   });
 
   it("loads a fresh projection when applying a response that requires resync", async () => {
@@ -299,6 +336,45 @@ describe("documentSession store", () => {
     expect(marked).toBe(true);
     expect(store.documentId).toBe(1);
     expect(store.revision).toBe(3);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(statusStore.isContentDirty).toBe(true);
+    expect(store.projectionStale).toBe(true);
+    expect(store.isInteractionLocked).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(true);
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
+  });
+
+  it("locks the projection stale if patch application fails after accepting a backend mutation", () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const searchStore = useSearchSessionStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocumentResponse({
+      fileData: current,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, current.path);
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    expect(() => store.applyMutationResponse(response({
+      revision: 1,
+      editorState: editorState({ isDirty: true }),
+      patches: [{ type: "UnknownPatch", data: {} } as unknown as EditorPatch],
+    }))).toThrow("Unhandled editor patch");
+
+    expect(store.documentId).toBe(1);
+    expect(store.revision).toBe(1);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
@@ -1122,6 +1198,43 @@ describe("documentSession store", () => {
     expect(store.data).toBeNull();
     expect(store.documentId).toBeNull();
     expect(store.revision).toBe(0);
+  });
+
+  it("marks projection stale when a session-only refresh advances the revision", () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 1,
+        revision: 1,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, data.path);
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    store.applyEditorSession({
+      documentId: 1,
+      revision: 2,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: editorState({ isDirty: true }),
+    });
+
+    expect(store.revision).toBe(2);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.projectionStale).toBe(true);
+    expect(store.isEditorInteractionLocked).toBe(true);
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
   });
 
   it("clearDocument resets status owned by the active document", () => {

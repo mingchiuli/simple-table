@@ -199,12 +199,12 @@ pub fn save_file(
     };
 
     let result = document::commit_current_file_save(path.to_string(), prepared, || {
-        replace_temp_file(&temp_path, &target)?;
-        adopt_transient_path_if_registered(app, &target);
-        Ok(())
+        replace_temp_file(&temp_path, &target)
     });
     if result.is_err() {
         cleanup_temp_file(&temp_path);
+    } else {
+        adopt_transient_path_if_registered(app, &target);
     }
     result
 }
