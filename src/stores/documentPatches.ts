@@ -153,8 +153,10 @@ function applyColumnInserted(data: FileData | null, patch: ColumnInsertedPatch):
   const rowCount = Math.max(sheet.rows.length, patch.values.length);
   const rows = Array.from({ length: rowCount }, (_, rowIndex) => {
     const row = [...(sheet.rows[rowIndex] ?? [])];
-    const insertAt = Math.min(patch.colIndex, row.length);
-    row.splice(insertAt, 0, patch.values[rowIndex] ?? blankCell());
+    while (row.length < patch.colIndex) {
+      row.push(blankCell());
+    }
+    row.splice(patch.colIndex, 0, patch.values[rowIndex] ?? blankCell());
     return row;
   });
   return replaceSheet(

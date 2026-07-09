@@ -4,6 +4,7 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
+import { useSearchSessionStore } from "@/stores/searchSession";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -46,6 +47,18 @@ function response(partial: Partial<EditorMutationResponse>): EditorMutationRespo
     searchIndexUpdate: { rebuildAll: false, rebuildSheets: [] },
     ...partial,
   };
+}
+
+function queuePendingDraft(value = "draft") {
+  const statusStore = useDocumentStatusStore();
+  const pendingStore = usePendingCellSavesStore();
+  statusStore.markPendingContentChange();
+  pendingStore.applyDraft(
+    "0,0,0",
+    { sheetIndex: 0, row: 0, col: 0, value, oldValue: text("old") },
+    text("old")
+  );
+  return { statusStore, pendingStore };
 }
 
 describe("documentSession store", () => {
@@ -584,24 +597,157 @@ describe("documentSession store", () => {
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
   });
 
+  it("saved document responses clear stale search UI state", () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, data.path);
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [{
+      sheetIndex: 0,
+      sheetName: "Sheet1",
+      row: 0,
+      col: 0,
+      value: "old",
+      cellPosition: "A1",
+    }]);
+
+    store.applySavedDocumentResponse({
+      fileData: {
+        path: "/tmp/book.csv",
+        fileName: "book.csv",
+        sheets: [sheet("Sheet1", [[text("saved")]])],
+      },
+      editorSession: {
+        documentId: 1,
+        revision: 1,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, "/tmp/book.csv");
+
+    expect(store.currentFilePath).toBe("/tmp/book.csv");
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
+    expect(searchStore.isSearching).toBe(false);
+  });
+
   it("discardPendingLocalWork clears queued drafts and pending dirty state", () => {
     const store = useDocumentSessionStore();
-    const statusStore = useDocumentStatusStore();
-    const pendingStore = usePendingCellSavesStore();
     store.openDocument({
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
     });
-    statusStore.markPendingContentChange();
-    pendingStore.applyDraft(
-      "0,0,0",
-      { sheetIndex: 0, row: 0, col: 0, value: "draft", oldValue: text("old") },
-      text("old")
-    );
+    const { statusStore, pendingStore } = queuePendingDraft();
 
     store.discardPendingLocalWork();
 
+    expect(statusStore.hasPendingContentChange).toBe(false);
+    expect(pendingStore.hasPendingWork()).toBe(false);
+    expect(pendingStore.draftCellValues.size).toBe(0);
+    expect(pendingStore.queuedCellSaves.size).toBe(0);
+  });
+
+  it("openDocumentResponse clears local work from the previous document", () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse({
+      fileData: {
+        path: "/tmp/old.xlsx",
+        fileName: "old.xlsx",
+        sheets: [sheet("Sheet1", [[text("old")]])],
+      },
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, "/tmp/old.xlsx");
+    const { statusStore, pendingStore } = queuePendingDraft();
+
+    store.openDocumentResponse({
+      fileData: {
+        path: "/tmp/next.xlsx",
+        fileName: "next.xlsx",
+        sheets: [sheet("Sheet1", [[text("next")]])],
+      },
+      editorSession: {
+        documentId: 2,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, "/tmp/next.xlsx");
+
+    expect(store.documentId).toBe(2);
+    expect(store.data?.fileName).toBe("next.xlsx");
+    expect(statusStore.hasPendingContentChange).toBe(false);
+    expect(pendingStore.hasPendingWork()).toBe(false);
+    expect(pendingStore.draftCellValues.size).toBe(0);
+    expect(pendingStore.queuedCellSaves.size).toBe(0);
+  });
+
+  it("openDocument clears local work from the previous backend document", () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse({
+      fileData: {
+        path: "/tmp/old.xlsx",
+        fileName: "old.xlsx",
+        sheets: [sheet("Sheet1", [[text("old")]])],
+      },
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, "/tmp/old.xlsx");
+    const { statusStore, pendingStore } = queuePendingDraft();
+
+    store.openDocument({
+      path: "",
+      fileName: "untitled.xlsx",
+      sheets: [sheet("Sheet1", [[text("blank")]])],
+    }, null);
+
+    expect(store.documentId).toBeNull();
+    expect(store.data?.fileName).toBe("untitled.xlsx");
+    expect(statusStore.hasPendingContentChange).toBe(false);
+    expect(pendingStore.hasPendingWork()).toBe(false);
+    expect(pendingStore.draftCellValues.size).toBe(0);
+    expect(pendingStore.queuedCellSaves.size).toBe(0);
+  });
+
+  it("clearDocument clears local drafts and queued saves", () => {
+    const store = useDocumentSessionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    });
+    const { statusStore, pendingStore } = queuePendingDraft();
+
+    store.clearDocument();
+
+    expect(store.data).toBeNull();
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(pendingStore.hasPendingWork()).toBe(false);
     expect(pendingStore.draftCellValues.size).toBe(0);

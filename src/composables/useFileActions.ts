@@ -153,8 +153,10 @@ export function useFileActions({
           notifySavedButNotApplied();
           return;
         }
-        const fileName = saved.fileData.fileName || await getFileName(existingPath);
-        queueRecentFileEntryUpdate(existingPath, fileName);
+        const fileName = await resolveRecentFileNameAfterSave(saved.fileData.fileName, existingPath);
+        if (fileName) {
+          queueRecentFileEntryUpdate(existingPath, fileName);
+        }
         ElMessage.success('File saved successfully');
         return;
       }
@@ -182,9 +184,10 @@ export function useFileActions({
           notifySavedButNotApplied();
           return;
         }
-        const fileName = saved.fileData.fileName || await getFileName(savePath);
-
-        queueRecentFileEntryUpdate(savePath, fileName);
+        const fileName = await resolveRecentFileNameAfterSave(saved.fileData.fileName, savePath);
+        if (fileName) {
+          queueRecentFileEntryUpdate(savePath, fileName);
+        }
         ElMessage.success('File saved successfully');
       });
     });
@@ -289,6 +292,19 @@ async function resolveRecentFileNameAfterOpen(
   if (openedFileName) return openedFileName;
   try {
     return await awaitRouteLoadStep(getFileName(filePath), shouldContinue) ?? null;
+  } catch (error) {
+    warnRecentFileTrackingFailure(error);
+    return null;
+  }
+}
+
+async function resolveRecentFileNameAfterSave(
+  savedFileName: string,
+  filePath: string
+): Promise<string | null> {
+  if (savedFileName) return savedFileName;
+  try {
+    return await getFileName(filePath);
   } catch (error) {
     warnRecentFileTrackingFailure(error);
     return null;

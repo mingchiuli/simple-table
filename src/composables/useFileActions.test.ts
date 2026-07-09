@@ -37,9 +37,7 @@ vi.mock("@/api", () => ({
   getFileSize: vi.fn().mockResolvedValue(42),
   getSpreadsheetFormatOptions: vi.fn().mockResolvedValue({
     defaultExtension: "xlsx",
-    openExtensions: ["xlsx", "csv"],
-    saveExtensions: ["xlsx", "csv"],
-    exportExtensions: ["xlsx", "csv"],
+    supportedExtensions: ["xlsx", "csv"],
   }),
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
     id: "recent",
@@ -556,6 +554,62 @@ describe("useFileActions", () => {
     });
     expect(platform.discardSaveLocation).not.toHaveBeenCalled();
     expect(documentSessionStore.currentFilePath).toBe(savePath);
+  });
+
+  it("keeps a save-as result when recent file name fallback fails", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const savePath = "/tmp/saved-without-name.xlsx";
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.openDocumentResponse(newUntitledResponse(1), null);
+    vi.mocked(api.getNativeSavePlan)
+      .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
+      .mockResolvedValueOnce(nativeSavePlan());
+    vi.mocked(platform.pickSaveLocation).mockResolvedValue(savePath);
+    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("", savePath, 1));
+    vi.mocked(platform.getFileName).mockRejectedValue(new Error("name unavailable"));
+
+    const actions = mountActions(flushPendingCellChanges);
+
+    await actions.handleSaveFile();
+
+    expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
+      documentId: 1,
+      baseRevision: 0,
+    });
+    expect(platform.discardSaveLocation).not.toHaveBeenCalled();
+    expect(documentSessionStore.currentFilePath).toBe(savePath);
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+    expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
+  });
+
+  it("keeps an existing-file save when recent file name fallback fails", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const existingPath = "/tmp/current.xlsx";
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), existingPath);
+    vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
+    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("", existingPath, 1));
+    vi.mocked(platform.getFileName).mockRejectedValue(new Error("name unavailable"));
+
+    const actions = mountActions(flushPendingCellChanges);
+
+    await actions.handleSaveFile();
+
+    expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
+      documentId: 1,
+      baseRevision: 0,
+    });
+    expect(documentSessionStore.currentFilePath).toBe(existingPath);
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+    expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
   });
 
   it("keeps a reserved save-as location when a successful save response is ignored as stale", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyDocumentPatches } from "@/stores/documentPatches";
 import { defaultRichProjection, type CellValue, type FileData, type SheetData } from "@/types";
+import { blankCell } from "@/utils/cellValue";
 
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
@@ -251,6 +252,36 @@ describe("applyDocumentPatches", () => {
     ]);
 
     expect(deleted.data?.sheets[0].columnWidths).toEqual({ 0: 100, 2: 200 });
+  });
+
+  it("preserves sparse column positions when inserting beyond a row length", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")], []])],
+    };
+
+    const result = applyDocumentPatches(data, [
+      {
+        type: "ColumnInserted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            colIndex: 3,
+            values: [text("D1"), text("D2")],
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "columns", start: 3 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(result.data?.sheets[0].rows).toEqual([
+      [text("A1"), blankCell(), blankCell(), text("D1")],
+      [blankCell(), blankCell(), blankCell(), text("D2")],
+    ]);
   });
 
   it("replaces the sheet tail from a backend restore patch", () => {

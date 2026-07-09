@@ -151,12 +151,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
     },
     discardPendingLocalWork() {
-      this.resetMutationQueue();
-      usePendingCellSavesStore().reset();
-      useDocumentStatusStore().clearPendingContentChange();
+      this.resetTransientDocumentWork();
     },
     openDocument(data: FileData, path: string | null = null) {
-      this.resetMutationQueue();
+      this.resetTransientDocumentWork();
       this.data = data;
       this.currentFilePath = path;
       this.documentId = null;
@@ -165,7 +163,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       useDocumentStatusStore().reset();
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
-      this.resetMutationQueue();
+      this.resetTransientDocumentWork();
       this.data = response.fileData;
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
@@ -176,13 +174,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       statusStore.applyEditorSession(response.editorSession);
     },
     applySavedDocumentResponse(response: SavedDocumentResponse, path: string | null = null) {
+      this.resetTransientDocumentWork();
       this.data = response.fileData;
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.clampSelectionToCurrentSheet();
-      usePendingCellSavesStore().reset();
-      useDocumentStatusStore().clearPendingContentChange();
+      useSearchSessionStore().reset();
       useDocumentStatusStore().applyEditorSession(response.editorSession);
     },
     applySavedDocumentResponseForContext(
@@ -210,7 +208,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
     },
     clearDocument() {
-      this.resetMutationQueue();
+      this.resetTransientDocumentWork();
       this.data = null;
       this.currentFilePath = null;
       this.documentId = null;
@@ -219,6 +217,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       resolveLifecycleIdleWaiters(this);
       this.resetSessionUi();
       useDocumentStatusStore().reset();
+    },
+    resetTransientDocumentWork() {
+      this.resetMutationQueue();
+      usePendingCellSavesStore().reset();
+      useDocumentStatusStore().clearPendingContentChange();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
       if (response.protocolVersion !== 1) {
