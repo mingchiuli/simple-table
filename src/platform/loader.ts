@@ -4,7 +4,7 @@
 import { getPlatform } from '@/utils/platform';
 import { basename } from '@tauri-apps/api/path';
 import type { PlatformAPI, OpenFileResult } from './types';
-import type { OpenDocumentResponse } from '@/types';
+import type { EditorCommandContext, OpenDocumentResponse } from '@/types';
 import { createAsyncCache } from '@/utils/asyncCache';
 import { decodeFileNameSegment, fileNameFromPathLike } from '@/utils/fileFormats';
 
@@ -52,9 +52,9 @@ export async function readFile(path: string): Promise<OpenDocumentResponse> {
 }
 
 /** 保存文件：生成字节 + 写入（一体化） */
-export async function saveFile(path: string) {
+export async function saveFile(path: string, context: EditorCommandContext) {
   const api = await getPlatformAPI();
-  return api.fileOps.saveFile(path);
+  return api.fileOps.saveFile(path, context);
 }
 
 /** 选择保存位置 */
@@ -67,12 +67,12 @@ export async function pickSaveLocation(defaultName: string) {
 }
 
 /** 导出当前编辑状态到用户选择的位置 */
-export async function exportFile(defaultName: string) {
+export async function exportFile(defaultName: string, context: EditorCommandContext) {
   const api = await getPlatformAPI();
   if (!api.fileOps.exportFile) {
     throw new Error('exportFile not supported on this platform');
   }
-  return api.fileOps.exportFile(defaultName);
+  return api.fileOps.exportFile(defaultName, context);
 }
 
 /** 获取存储类型 */

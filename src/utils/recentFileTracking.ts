@@ -1,11 +1,12 @@
 import * as api from "@/api";
-import type { StorageType } from "@/types";
+import type { EditorCommandContext, StorageType } from "@/types";
 
 export type RecentFileTrackingRequest = {
   path: string;
   fileName: string;
   storageType: StorageType;
   originalPath?: string;
+  context?: EditorCommandContext | null;
 };
 
 export type RecentFileTrackingInput = Omit<RecentFileTrackingRequest, "storageType">;
@@ -19,6 +20,7 @@ export async function tryAddRecentFileWithThumbnail({
   fileName,
   storageType,
   originalPath,
+  context,
 }: RecentFileTrackingRequest): Promise<boolean> {
   try {
     const fileSize = await api.getFileSize(path);
@@ -27,7 +29,8 @@ export async function tryAddRecentFileWithThumbnail({
       fileName,
       fileSize,
       storageType,
-      originalPath
+      originalPath,
+      context
     );
     return true;
   } catch (error) {

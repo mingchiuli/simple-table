@@ -6,6 +6,7 @@ import type {
   HistoryStatus,
   OpenDocumentResponse,
   SavedDocumentResponse,
+  EditorCommandContext,
   WorkbookCapabilities,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
@@ -103,6 +104,23 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     waitForMutations(): Promise<void> {
       return mutationRuntimeFor(this).tail ?? Promise.resolve();
     },
+    currentCommandContext(): EditorCommandContext | null {
+      if (this.documentId === null) return null;
+      return {
+        documentId: this.documentId,
+        baseRevision: this.revision,
+      };
+    },
+    requireCommandContext(): EditorCommandContext {
+      const context = this.currentCommandContext();
+      if (!context) {
+        throw new Error("No active editor document");
+      }
+      return context;
+    },
+    matchesCommandContext(context: EditorCommandContext): boolean {
+      return this.documentId === context.documentId && this.revision === context.baseRevision;
+    },
     openDocument(data: FileData, path: string | null = null) {
       this.resetMutationQueue();
       this.data = data;
@@ -194,17 +212,30 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
     async applyMutationResponseWithResync(
       response: EditorMutationResponse,
-      fetchProjection: () => Promise<FileData>
+      fetchProjection: (context: EditorCommandContext) => Promise<FileData>
     ): Promise<MutationApplyResult> {
       const snapshot = this.captureMutationSnapshot();
       const result = this.applyMutationResponse(response);
       if (!result.resyncRequired) {
         return result;
       }
+      const resyncContext = {
+        documentId: response.documentId,
+        baseRevision: response.revision,
+      };
       try {
-        this.replaceProjection(await fetchProjection());
+        const projection = await fetchProjection(resyncContext);
+        if (!this.matchesCommandContext(resyncContext)) {
+          return {
+            data: this.data,
+            resyncRequired: true,
+          };
+        }
+        this.replaceProjection(projection);
       } catch (error) {
-        this.restoreMutationSnapshot(snapshot);
+        if (this.matchesCommandContext(resyncContext)) {
+          this.restoreMutationSnapshot(snapshot);
+        }
         throw error;
       }
       return {
@@ -277,24 +308,64 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       selectionStore.sheetSelectedCells = cloneSelectedCells(snapshot.selection.sheetSelectedCells);
     },
     async refreshAfterMutationFailure(
-      fetchEditorSession: () => Promise<EditorSessionInfo | null | undefined>,
-      fetchProjection?: () => Promise<FileData>
+      fetchEditorSession: (
+        context: EditorCommandContext | null
+      ) => Promise<EditorSessionInfo | null | undefined>,
+      fetchProjection?: (context: EditorCommandContext) => Promise<FileData>
     ) {
-      if (!fetchProjection) {
-        this.applyEditorSession(await fetchEditorSession());
+      const context = this.currentCommandContext();
+      if (!fetchProjection || !context) {
+        this.applyEditorSessionForContext(context, await fetchEditorSession(context));
         return;
       }
 
-      const [projection, session] = await Promise.all([
-        fetchProjection(),
-        fetchEditorSession(),
-      ]);
-      this.replaceProjection(projection);
-      this.applyEditorSession(session);
+      const snapshot = this.captureMutationSnapshot();
+      try {
+        const [projection, session] = await Promise.all([
+          fetchProjection(context),
+          fetchEditorSession(context),
+        ]);
+        if (!this.matchesCommandContext(context)) {
+          return;
+        }
+        this.replaceProjection(projection);
+        this.applyEditorSessionForContext(context, session);
+      } catch (error) {
+        if (this.matchesCommandContext(context)) {
+          this.restoreMutationSnapshot(snapshot);
+        }
+        throw error;
+      }
+    },
+    applyEditorSessionForContext(
+      context: EditorCommandContext | null,
+      info: EditorSessionInfo | null | undefined
+    ) {
+      if (context) {
+        if (!this.matchesCommandContext(context)) {
+          return;
+        }
+        this.applyEditorSession(info);
+        return;
+      }
+
+      if (this.documentId !== null) {
+        return;
+      }
+      if (!info) {
+        this.clearDocument();
+        return;
+      }
+      if (this.data !== null) {
+        this.applyEditorSession(info);
+      }
     },
     applyEditorSession(info: EditorSessionInfo | null | undefined) {
       if (!info) {
         this.clearDocument();
+        return;
+      }
+      if (this.data === null) {
         return;
       }
       if (this.documentId !== null && info.documentId !== this.documentId) {

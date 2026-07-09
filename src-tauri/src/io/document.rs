@@ -45,6 +45,8 @@ pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> 
 }
 
 pub fn generate_current_file_bytes_for_target(
+    document_id: u64,
+    base_revision: u64,
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     let registry = active_document_store();
@@ -53,8 +55,7 @@ pub fn generate_current_file_bytes_for_target(
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         registry_guard
-            .active()
-            .ok_or(AppError::NoFileLoaded)?
+            .active_for_command(document_id, base_revision)?
             .save_snapshot_for_target(target_path_or_name)?
     };
     snapshot.generate_file_bytes_for_target(target_path_or_name)
@@ -69,24 +70,22 @@ pub struct PreparedDocumentSave {
 }
 
 pub fn prepare_current_file_save(
+    document_id_token: u64,
+    revision_token: u64,
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentSave, AppError> {
     let registry = active_document_store();
-    let document_id;
-    let revision;
     let snapshot;
     {
         let registry_guard = registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
+        let editor_state = registry_guard.active_for_command(document_id_token, revision_token)?;
         if editor_state.has_save_commit_in_progress() {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
             ));
         }
-        document_id = editor_state.document_id();
-        revision = editor_state.revision();
         snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
     }
 
@@ -98,8 +97,8 @@ pub fn prepare_current_file_save(
         .or_else(|| extension_of(target_path_or_name))
         .unwrap_or_else(default_extension_string);
     Ok(PreparedDocumentSave {
-        document_id,
-        revision,
+        document_id: document_id_token,
+        revision: revision_token,
         output_name,
         bytes,
         finish_without_reparse: is_xlsx_extension(&target_extension) && snapshot.is_excel_backed(),
@@ -284,33 +283,27 @@ fn abort_save_commit(
     }
 }
 
-pub fn current_file_data() -> Result<FileData, AppError> {
+pub fn current_file_data_for_command(
+    document_id: u64,
+    base_revision: u64,
+) -> Result<FileData, AppError> {
     let registry = active_document_store();
     let registry_guard = registry
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
 
     registry_guard
-        .active()
+        .active_for_command(document_id, base_revision)
         .map(|editor_state| editor_state.file_data().clone())
-        .ok_or(AppError::NoFileLoaded)
 }
 
-pub fn close_current_document() -> Result<(), AppError> {
+pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
     let registry = active_document_store();
     let closed_document_id = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        if registry_guard
-            .active()
-            .is_some_and(EditorState::has_save_commit_in_progress)
-        {
-            return Err(AppError::DocumentStateInvalid(
-                "cannot close document while save is in progress".to_string(),
-            ));
-        }
-        registry_guard.close_active()?
+        registry_guard.close_active_document(document_id)?
     };
     if let Some(document_id) = closed_document_id {
         cancel_index_jobs_for_document(document_id);
@@ -318,22 +311,7 @@ pub fn close_current_document() -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn update_current_file_identity(path: String, file_name: String) -> Result<(), AppError> {
-    let registry = active_document_store();
-    let mut registry_guard = registry
-        .write()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-
-    let editor_state = registry_guard.active_mut().ok_or(AppError::NoFileLoaded)?;
-    if editor_state.has_save_commit_in_progress() {
-        return Err(AppError::DocumentStateInvalid(
-            "cannot update file identity while save is in progress".to_string(),
-        ));
-    }
-    editor_state.update_identity(path, file_name);
-    Ok(())
-}
-
+#[cfg(test)]
 pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> DocumentCapabilities {
     let source_name = current_path.unwrap_or(file_name);
     let source_format = document_format(source_name)
@@ -356,7 +334,40 @@ pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> Doc
     }
 }
 
-pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
+pub fn document_capabilities_for_command(
+    document_id: u64,
+    base_revision: u64,
+    file_name: &str,
+    current_path: Option<&str>,
+) -> Result<DocumentCapabilities, AppError> {
+    let source_name = current_path.unwrap_or(file_name);
+    let source_format = document_format(source_name)
+        .or_else(|| document_format(file_name))
+        .unwrap_or_else(default_extension_string);
+    let native_extension = native_save_extension(source_name);
+    let native_save_allowed = native_extension.is_some();
+    let export_extension = export_extension(file_name).unwrap_or_else(|| source_format.clone());
+    let export_formats = export_formats_for(&source_format);
+    let workbook =
+        workbook_capabilities_for_command(document_id, base_revision, native_save_allowed)?;
+
+    Ok(DocumentCapabilities {
+        source_format,
+        can_save_original: native_save_allowed,
+        native_save_format: native_extension.clone(),
+        export_formats,
+        requires_save_as_for_native_save: native_extension.is_none(),
+        native_save_extension: native_extension,
+        export_extension,
+        workbook,
+    })
+}
+
+pub fn native_save_plan_for_command(
+    document_id: u64,
+    base_revision: u64,
+    target_path_or_name: &str,
+) -> Result<NativeSavePlan, AppError> {
     let source_format =
         document_format(target_path_or_name).unwrap_or_else(default_extension_string);
     let native_extension = native_save_extension(target_path_or_name);
@@ -364,7 +375,8 @@ pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
     let export_extension =
         export_extension(target_path_or_name).unwrap_or_else(|| source_format.clone());
     let export_formats = export_formats_for(&source_format);
-    let workbook = active_workbook_capabilities_for_save(native_save_allowed);
+    let workbook =
+        workbook_capabilities_for_command(document_id, base_revision, native_save_allowed)?;
     let capabilities = DocumentCapabilities {
         source_format,
         can_save_original: native_save_allowed,
@@ -373,24 +385,25 @@ pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
         requires_save_as_for_native_save: native_extension.is_none(),
         native_save_extension: native_extension.clone(),
         export_extension,
-        workbook: workbook.clone(),
+        workbook,
     };
     let blocked_reason = native_save_blocked_reason(&capabilities);
 
-    NativeSavePlan {
+    Ok(NativeSavePlan {
         can_save: blocked_reason.is_none(),
         requires_save_as: capabilities.requires_save_as_for_native_save,
         native_save_extension: native_extension.clone(),
         default_extension: native_extension.unwrap_or_else(default_extension_string),
         blocked_reason,
         capabilities,
-    }
+    })
 }
 
 pub fn format_options() -> SpreadsheetFormatOptions {
     spreadsheet_format_options()
 }
 
+#[cfg(test)]
 fn active_workbook_capabilities(
     file_name: &str,
     current_path: Option<&str>,
@@ -425,28 +438,20 @@ fn active_workbook_capabilities(
         })
 }
 
-fn active_workbook_capabilities_for_save(native_save_allowed: bool) -> WorkbookCapabilities {
+fn workbook_capabilities_for_command(
+    document_id: u64,
+    base_revision: u64,
+    native_save_allowed: bool,
+) -> Result<WorkbookCapabilities, AppError> {
     let registry = active_document_store();
-    let Ok(registry_guard) = registry.read() else {
-        eprintln!("document registry lock poisoned while planning native save");
-        let mut capabilities = WorkbookCapabilities::default();
-        capabilities.save.can_native_save = native_save_allowed;
-        return capabilities;
-    };
-
-    registry_guard
-        .active()
-        .map(|editor_state| {
-            let mut capabilities = editor_state.capabilities();
-            capabilities.save.can_native_save =
-                native_save_allowed && capabilities.save.can_native_save;
-            capabilities
-        })
-        .unwrap_or_else(|| {
-            let mut capabilities = WorkbookCapabilities::default();
-            capabilities.save.can_native_save = native_save_allowed;
-            capabilities
-        })
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    let mut capabilities = registry_guard
+        .active_for_command(document_id, base_revision)?
+        .capabilities();
+    capabilities.save.can_native_save = native_save_allowed && capabilities.save.can_native_save;
+    Ok(capabilities)
 }
 
 fn native_save_blocked_reason(capabilities: &DocumentCapabilities) -> Option<String> {

@@ -2,7 +2,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
-import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
+import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 import { decodeFileNameSegment } from "@/utils/fileFormats";
 import { spreadsheetDialogFilters } from "@/utils/spreadsheetFormats";
 
@@ -33,8 +33,8 @@ export const desktopFileOps = {
   },
 
   /** Desktop: 生成文件字节并写入路径 */
-  saveFile: async (path: string) => {
-    return invoke<SavedDocumentResponse>("save_file_desktop", { path });
+  saveFile: async (path: string, context: EditorCommandContext) => {
+    return invoke<SavedDocumentResponse>("save_file_desktop", { path, ...context });
   },
 
   pickSaveLocation: async (defaultName: string) => {
@@ -45,14 +45,14 @@ export const desktopFileOps = {
     return selected;
   },
 
-  exportFile: async (defaultName: string) => {
+  exportFile: async (defaultName: string, context: EditorCommandContext) => {
     const selected = await save({
       defaultPath: defaultName,
       filters: await spreadsheetDialogFilters(),
     });
     if (!selected) return null;
 
-    await invoke<void>("export_file_desktop", { path: selected });
+    await invoke<void>("export_file_desktop", { path: selected, ...context });
     return selected;
   },
 };

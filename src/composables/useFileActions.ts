@@ -11,6 +11,10 @@ import {
   tryRefreshRecentFiles,
 } from '@/utils/recentFileTracking';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
+import {
+  confirmDiscardUnsavedChanges,
+  hasUnsavedDocumentChanges,
+} from '@/utils/unsavedChanges';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -56,16 +60,33 @@ export function useFileActions({
   ) {
     if (!fileData.value) return;
 
-    await tryAddRecentFileWithResolvedStorage({ path, fileName, originalPath }, getStorageType);
+    await tryAddRecentFileWithResolvedStorage(
+      {
+        path,
+        fileName,
+        originalPath,
+        context: documentSessionStore.currentCommandContext(),
+      },
+      getStorageType
+    );
     await tryRefreshRecentFiles(() => recentFilesStore.load());
   }
 
-  async function loadFileFromPath(filePath: string) {
+  async function prepareForDocumentReplacement(): Promise<boolean> {
+    if (hasUnsavedDocumentChanges()) {
+      return confirmDiscardUnsavedChanges();
+    }
+    if (!(await flushPendingCellChanges())) return false;
+    await documentSessionStore.waitForMutations();
+    return true;
+  }
+
+  async function loadFileFromPath(filePath: string): Promise<boolean> {
+    let loaded = false;
     const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
-      if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.waitForMutations();
+      if (!(await prepareForDocumentReplacement())) return;
 
       const opened = await readFile(filePath);
       documentSessionStore.openDocumentResponse(opened, filePath);
@@ -73,19 +94,20 @@ export function useFileActions({
 
       const fileName = await getFileName(filePath);
       await updateRecentFileEntry(filePath, fileName);
+      loaded = true;
     });
     if (ran) {
       isLoading.value = false;
       isFileLoading.value = false;
     }
+    return loaded;
   }
 
   async function handleOpenFile() {
     const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
-      if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.waitForMutations();
+      if (!(await prepareForDocumentReplacement())) return;
 
       const result = await openFile();
       if (!result) return;
@@ -102,23 +124,23 @@ export function useFileActions({
   }
 
   async function handleSaveFile() {
-    const data = fileData.value;
-    if (!data) return;
-
     const ran = await withDocumentLifecycle('saving', 'Failed to save file', async () => {
+      const data = fileData.value;
+      if (!data) return;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
+      const context = documentSessionStore.requireCommandContext();
 
       const isNewFile = isUntitledSpreadsheet(data.fileName);
       const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
 
       const existingPath = documentSessionStore.currentFilePath;
       const existingTarget = existingPath ?? data.fileName;
-      const savePlan = await nativeSavePlan(existingTarget);
+      const savePlan = await nativeSavePlan(context, existingTarget);
 
       if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
         isLoading.value = true;
-        const saved = await saveFile(existingPath);
+        const saved = await saveFile(existingPath, context);
         documentSessionStore.applySavedDocumentResponse(saved, existingPath);
         const fileName = saved.fileData.fileName || await getFileName(existingPath);
         await updateRecentFileEntry(existingPath, fileName);
@@ -135,14 +157,14 @@ export function useFileActions({
       const savePath = await pickSaveLocation(`${defaultName}.${fallbackExtension}`);
       if (!savePath) return;
 
-      const targetPlan = await nativeSavePlan(savePath);
+      const targetPlan = await nativeSavePlan(context, savePath);
       if (!targetPlan.canSave) {
         ElMessage.error(targetPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
         return;
       }
 
       isLoading.value = true;
-      const saved = await saveFile(savePath);
+      const saved = await saveFile(savePath, context);
       documentSessionStore.applySavedDocumentResponse(saved, savePath);
       const fileName = saved.fileData.fileName || await getFileName(savePath);
 
@@ -155,24 +177,25 @@ export function useFileActions({
   }
 
   async function handleExportFile() {
-    const data = fileData.value;
-    if (!data) return;
-
     const ran = await withDocumentLifecycle('saving', 'Failed to export file', async () => {
+      const data = fileData.value;
+      if (!data) return;
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
+      const context = documentSessionStore.requireCommandContext();
 
       const isNewFile = isUntitledSpreadsheet(data.fileName);
       const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
       const capabilities = await documentCapabilities(
+        context,
         data.fileName,
         documentSessionStore.currentFilePath
       );
       const extension = isNewFile
         ? await defaultSpreadsheetExtension()
         : capabilities.exportExtension;
-      const exportedPath = await exportFile(`${defaultName}.${extension}`);
+      const exportedPath = await exportFile(`${defaultName}.${extension}`, context);
       if (exportedPath) {
         ElMessage.success('File exported successfully');
       }
@@ -184,11 +207,16 @@ export function useFileActions({
 
   async function closeCurrentDocument(): Promise<boolean> {
     if (documentSessionStore.isInteractionLocked) return false;
-    if (!(await flushPendingCellChanges())) return false;
-    await documentSessionStore.waitForMutations();
+    if (!(await prepareForDocumentReplacement())) return false;
+
+    const context = documentSessionStore.currentCommandContext();
+    if (!context) {
+      documentSessionStore.clearDocument();
+      return true;
+    }
 
     try {
-      await api.closeCurrentDocument();
+      await api.closeCurrentDocument(context.documentId);
     } catch (error) {
       ElMessage.error(`Failed to close file: ${error}`);
       return false;

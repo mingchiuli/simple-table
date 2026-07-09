@@ -26,11 +26,14 @@ export function useDocumentStatus() {
   }
 
   async function refreshEditorState() {
+    const context = documentSessionStore.currentCommandContext();
     try {
-      const session = await api.getEditorState();
-      applyEditorSession(session);
+      const session = await api.getEditorState(context);
+      documentSessionStore.applyEditorSessionForContext(context, session);
     } catch (error) {
-      console.error('Failed to get editor state:', error);
+      if (!context || documentSessionStore.matchesCommandContext(context)) {
+        console.error('Failed to get editor state:', error);
+      }
     }
   }
 

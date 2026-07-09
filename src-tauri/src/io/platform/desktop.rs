@@ -12,8 +12,12 @@ pub fn read_file(path: &str) -> Result<OpenDocumentResponse, AppError> {
     document::open_from_bytes(path.to_string(), bytes, None)
 }
 
-pub fn save_file(path: &str) -> Result<SavedDocumentResponse, AppError> {
-    let prepared = document::prepare_current_file_save(path)?;
+pub fn save_file(
+    path: &str,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<SavedDocumentResponse, AppError> {
+    let prepared = document::prepare_current_file_save(document_id, base_revision, path)?;
     let target = Path::new(path);
     let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
@@ -32,7 +36,8 @@ pub fn save_file(path: &str) -> Result<SavedDocumentResponse, AppError> {
     result
 }
 
-pub fn export_file(path: &str) -> Result<(), AppError> {
-    let (_, bytes) = document::generate_current_file_bytes_for_target(path)?;
+pub fn export_file(path: &str, document_id: u64, base_revision: u64) -> Result<(), AppError> {
+    let (_, bytes) =
+        document::generate_current_file_bytes_for_target(document_id, base_revision, path)?;
     write_file_atomically(Path::new(path), &bytes)
 }

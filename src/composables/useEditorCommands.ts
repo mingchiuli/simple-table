@@ -4,8 +4,13 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
-import type { EditorCommandContext } from "@/api";
-import type { EditorMutationResponse, FileData, SearchResult, SheetData } from "@/types";
+import type {
+  EditorCommandContext,
+  EditorMutationResponse,
+  FileData,
+  SearchResult,
+  SheetData,
+} from "@/types";
 import { workbookSheetCapabilities } from "@/types";
 import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 
@@ -47,7 +52,7 @@ export function useEditorCommands({
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.enqueueMutation(async () => {
-        await applyMutationResponse(await action(editorCommandContext()));
+        await applyMutationResponse(await action(documentSessionStore.requireCommandContext()));
       });
     } catch (error) {
       await refreshAfterMutationError({ refreshProjection: options.refreshProjectionOnError });
@@ -55,16 +60,6 @@ export function useEditorCommands({
     } finally {
       isLoading.value = false;
     }
-  }
-
-  function editorCommandContext(): EditorCommandContext {
-    if (documentSessionStore.documentId === null) {
-      throw new Error("No active editor document");
-    }
-    return {
-      documentId: documentSessionStore.documentId,
-      baseRevision: documentSessionStore.revision,
-    };
   }
 
   async function handleAddRow() {
@@ -158,7 +153,7 @@ export function useEditorCommands({
     try {
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
-      context = editorCommandContext();
+      context = documentSessionStore.requireCommandContext();
 
       const results = await api.search(
         context,

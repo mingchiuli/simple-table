@@ -41,7 +41,40 @@ describe("recentFileTracking", () => {
       "book.xlsx",
       42,
       "desktopPath",
+      undefined,
       undefined
+    );
+  });
+
+  it("passes document context for thumbnail generation", async () => {
+    const api = await import("@/api");
+    vi.mocked(api.getFileSize).mockResolvedValue(42);
+    vi.mocked(api.addRecentFileWithThumbnail).mockResolvedValue({
+      id: "recent",
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      lastOpened: 1,
+      fileSize: 42,
+      storageType: "desktopPath",
+    });
+    const { tryAddRecentFileWithThumbnail } = await import("@/utils/recentFileTracking");
+
+    await expect(
+      tryAddRecentFileWithThumbnail({
+        path: "/tmp/book.xlsx",
+        fileName: "book.xlsx",
+        storageType: "desktopPath",
+        context: { documentId: 7, baseRevision: 3 },
+      })
+    ).resolves.toBe(true);
+
+    expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
+      "/tmp/book.xlsx",
+      "book.xlsx",
+      42,
+      "desktopPath",
+      undefined,
+      { documentId: 7, baseRevision: 3 }
     );
   });
 

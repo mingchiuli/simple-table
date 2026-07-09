@@ -10,38 +10,38 @@ import type {
   NativeSavePlan,
   OpenDocumentResponse,
   SpreadsheetFormatOptions,
+  EditorCommandContext,
 } from "@/types";
-
-export type EditorCommandContext = {
-  documentId: number;
-  baseRevision: number;
-};
 
 export async function initFile(fileData: FileData): Promise<OpenDocumentResponse> {
   return invoke<OpenDocumentResponse>("init_file", { fileData });
 }
 
-export async function getCurrentFileData(): Promise<FileData> {
-  return invoke<FileData>("get_current_file_data");
+export async function getCurrentFileData(context: EditorCommandContext): Promise<FileData> {
+  return invoke<FileData>("get_current_file_data", context);
 }
 
-export async function closeCurrentDocument(): Promise<void> {
-  return invoke<void>("close_current_document");
-}
-
-export async function updateDocumentIdentity(path: string, fileName: string): Promise<void> {
-  return invoke<void>("update_document_identity", { path, fileName });
+export async function closeCurrentDocument(documentId: number): Promise<void> {
+  return invoke<void>("close_current_document", { documentId });
 }
 
 export async function getDocumentCapabilities(
+  context: EditorCommandContext,
   fileName: string,
   currentPath: string | null
 ): Promise<DocumentCapabilities> {
-  return invoke<DocumentCapabilities>("get_document_capabilities", { fileName, currentPath });
+  return invoke<DocumentCapabilities>("get_document_capabilities", {
+    ...context,
+    fileName,
+    currentPath,
+  });
 }
 
-export async function getNativeSavePlan(targetPathOrName: string): Promise<NativeSavePlan> {
-  return invoke<NativeSavePlan>("get_native_save_plan", { targetPathOrName });
+export async function getNativeSavePlan(
+  context: EditorCommandContext,
+  targetPathOrName: string
+): Promise<NativeSavePlan> {
+  return invoke<NativeSavePlan>("get_native_save_plan", { ...context, targetPathOrName });
 }
 
 export async function getSpreadsheetFormatOptions(): Promise<SpreadsheetFormatOptions> {
@@ -50,8 +50,13 @@ export async function getSpreadsheetFormatOptions(): Promise<SpreadsheetFormatOp
 
 // ==================== Editor Operations ====================
 
-export async function getEditorState(): Promise<EditorSessionInfo | null> {
-  return invoke<EditorSessionInfo | null>("get_editor_state");
+export async function getEditorState(
+  context: EditorCommandContext | null = null
+): Promise<EditorSessionInfo | null> {
+  return invoke<EditorSessionInfo | null>("get_editor_state", {
+    documentId: context?.documentId ?? null,
+    baseRevision: context?.baseRevision ?? null,
+  });
 }
 
 export async function undo(context: EditorCommandContext): Promise<EditorMutationResponse> {
@@ -176,7 +181,8 @@ export async function addRecentFileWithThumbnail(
   fileName: string,
   fileSize: number,
   storageType?: 'mobileSandboxPath' | 'desktopPath',
-  originalPath?: string
+  originalPath?: string,
+  context?: EditorCommandContext | null
 ): Promise<RecentFile> {
   return invoke<RecentFile>("add_recent_file_with_thumbnail", {
     request: {
@@ -185,6 +191,12 @@ export async function addRecentFileWithThumbnail(
       fileSize,
       storageType,
       originalPath,
+      ...(context
+        ? {
+          documentId: context.documentId,
+          baseRevision: context.baseRevision,
+        }
+        : {}),
     },
   });
 }

@@ -25,15 +25,23 @@ pub fn read_file_desktop(path: String) -> Result<OpenDocumentResponse, AppError>
 /// Desktop: 生成文件字节并写入路径
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn save_file_desktop(path: String) -> Result<SavedDocumentResponse, AppError> {
-    desktop::save_file(&path)
+pub fn save_file_desktop(
+    path: String,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<SavedDocumentResponse, AppError> {
+    desktop::save_file(&path, document_id, base_revision)
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn export_file_desktop(path: String) -> Result<(), AppError> {
-    desktop::export_file(&path)
+pub fn export_file_desktop(
+    path: String,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<(), AppError> {
+    desktop::export_file(&path, document_id, base_revision)
 }
 
 #[tauri::command]
@@ -41,32 +49,38 @@ pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> 
     document::init_file(file_data)
 }
 
-#[tauri::command]
-pub fn get_current_file_data() -> Result<FileData, AppError> {
-    document::current_file_data()
-}
-
-#[tauri::command]
-pub fn close_current_document() -> Result<(), AppError> {
-    document::close_current_document()
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_current_file_data(document_id: u64, base_revision: u64) -> Result<FileData, AppError> {
+    document::current_file_data_for_command(document_id, base_revision)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn update_document_identity(path: String, file_name: String) -> Result<(), AppError> {
-    document::update_current_file_identity(path, file_name)
+pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
+    document::close_current_document(document_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_document_capabilities(
+    document_id: u64,
+    base_revision: u64,
     file_name: String,
     current_path: Option<String>,
-) -> DocumentCapabilities {
-    document::document_capabilities(&file_name, current_path.as_deref())
+) -> Result<DocumentCapabilities, AppError> {
+    document::document_capabilities_for_command(
+        document_id,
+        base_revision,
+        &file_name,
+        current_path.as_deref(),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_native_save_plan(target_path_or_name: String) -> NativeSavePlan {
-    document::native_save_plan(&target_path_or_name)
+pub fn get_native_save_plan(
+    document_id: u64,
+    base_revision: u64,
+    target_path_or_name: String,
+) -> Result<NativeSavePlan, AppError> {
+    document::native_save_plan_for_command(document_id, base_revision, &target_path_or_name)
 }
 
 #[tauri::command]
@@ -76,10 +90,13 @@ pub fn get_spreadsheet_format_options() -> SpreadsheetFormatOptions {
 
 // ==================== Editor Operations ====================
 
-#[tauri::command]
-pub fn get_editor_state() -> Result<Option<EditorSessionInfo>, AppError> {
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_editor_state(
+    document_id: Option<u64>,
+    base_revision: Option<u64>,
+) -> Result<Option<EditorSessionInfo>, AppError> {
     let registry = active_document_store();
-    editor_ops::do_get_editor_state(&registry)
+    editor_ops::do_get_editor_state(&registry, document_id, base_revision)
 }
 
 #[tauri::command(rename_all = "camelCase")]

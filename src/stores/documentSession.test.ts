@@ -101,11 +101,23 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("fresh")]])],
     };
-    store.openDocument(current, current.path);
+    store.openDocumentResponse({
+      fileData: current,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, current.path);
 
     const result = await store.applyMutationResponseWithResync(
       response({ revision: 3 }),
-      async () => fresh
+      async (context) => {
+        expect(context).toEqual({ documentId: 1, baseRevision: 3 });
+        return fresh;
+      }
     );
 
     expect(result.resyncRequired).toBe(true);
@@ -121,7 +133,16 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
     };
-    store.openDocument(current, current.path);
+    store.openDocumentResponse({
+      fileData: current,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, current.path);
 
     await expect(
       store.applyMutationResponseWithResync(
@@ -129,16 +150,65 @@ describe("documentSession store", () => {
           revision: 3,
           editorState: editorState({ isDirty: true }),
         }),
-        async () => {
+        async (context) => {
+          expect(context).toEqual({ documentId: 1, baseRevision: 3 });
           throw new Error("projection unavailable");
         }
       )
     ).rejects.toThrow("projection unavailable");
 
-    expect(store.documentId).toBeNull();
+    expect(store.documentId).toBe(1);
     expect(store.revision).toBe(0);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(false);
+  });
+
+  it("does not restore an old document if the session changes while resync fails", async () => {
+    const store = useDocumentSessionStore();
+    const oldData: FileData = {
+      path: "/tmp/old.xlsx",
+      fileName: "old.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const nextData: FileData = {
+      path: "/tmp/next.xlsx",
+      fileName: "next.xlsx",
+      sheets: [sheet("Sheet1", [[text("next")]])],
+    };
+    store.openDocumentResponse({
+      fileData: oldData,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, oldData.path);
+
+    await expect(
+      store.applyMutationResponseWithResync(
+        response({ revision: 3 }),
+        async () => {
+          store.openDocumentResponse({
+            fileData: nextData,
+            editorSession: {
+              documentId: 2,
+              revision: 0,
+              formulaStatus: readyFormulaStatus(),
+              capabilities: defaultWorkbookCapabilities(),
+              editorState: editorState(),
+            },
+          }, nextData.path);
+          throw new Error("projection unavailable");
+        }
+      )
+    ).rejects.toThrow("projection unavailable");
+
+    expect(store.documentId).toBe(2);
+    expect(store.revision).toBe(0);
+    expect(store.data?.fileName).toBe("next.xlsx");
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
   });
 
   it("does not apply mutation failure session refresh when projection refresh fails", async () => {
@@ -149,24 +219,37 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
     };
-    store.openDocument(current, current.path);
+    store.openDocumentResponse({
+      fileData: current,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, current.path);
 
     await expect(
       store.refreshAfterMutationFailure(
-        async () => ({
-          documentId: 1,
-          revision: 3,
-          formulaStatus: readyFormulaStatus(),
-          capabilities: defaultWorkbookCapabilities(),
-          editorState: editorState({ isDirty: true }),
-        }),
-        async () => {
+        async (context) => {
+          expect(context).toEqual({ documentId: 1, baseRevision: 0 });
+          return {
+            documentId: 1,
+            revision: 3,
+            formulaStatus: readyFormulaStatus(),
+            capabilities: defaultWorkbookCapabilities(),
+            editorState: editorState({ isDirty: true }),
+          };
+        },
+        async (context) => {
+          expect(context).toEqual({ documentId: 1, baseRevision: 0 });
           throw new Error("projection unavailable");
         }
       )
     ).rejects.toThrow("projection unavailable");
 
-    expect(store.documentId).toBeNull();
+    expect(store.documentId).toBe(1);
     expect(store.revision).toBe(0);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(false);
@@ -301,6 +384,63 @@ describe("documentSession store", () => {
     expect(statusStore.isContentDirty).toBe(false);
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(statusStore.formulaStatus).toEqual(readyFormulaStatus());
+  });
+
+  it("does not clear a new document when a stale context refresh returns empty", () => {
+    const store = useDocumentSessionStore();
+    const oldData: FileData = {
+      path: "/tmp/old.xlsx",
+      fileName: "old.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const nextData: FileData = {
+      path: "/tmp/next.xlsx",
+      fileName: "next.xlsx",
+      sheets: [sheet("Sheet1", [[text("next")]])],
+    };
+
+    store.openDocumentResponse({
+      fileData: oldData,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, oldData.path);
+    const staleContext = store.requireCommandContext();
+
+    store.openDocumentResponse({
+      fileData: nextData,
+      editorSession: {
+        documentId: 2,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, nextData.path);
+    store.applyEditorSessionForContext(staleContext, null);
+
+    expect(store.documentId).toBe(2);
+    expect(store.data?.fileName).toBe("next.xlsx");
+  });
+
+  it("does not adopt backend session identity without a loaded projection", () => {
+    const store = useDocumentSessionStore();
+
+    store.applyEditorSessionForContext(null, {
+      documentId: 42,
+      revision: 7,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: editorState({ canUndo: true, isDirty: true }),
+    });
+
+    expect(store.data).toBeNull();
+    expect(store.documentId).toBeNull();
+    expect(store.revision).toBe(0);
   });
 
   it("clearDocument resets status owned by the active document", () => {

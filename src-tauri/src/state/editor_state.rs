@@ -70,6 +70,7 @@ impl EditorState {
         self.document.projection()
     }
 
+    #[cfg(test)]
     pub fn update_identity(&mut self, path: String, file_name: String) {
         if self.has_save_commit_in_progress() {
             return;

@@ -2,41 +2,25 @@
 import { Document, Delete } from "@element-plus/icons-vue";
 import type { RecentFile } from "@/types";
 import { useRecentFilesStore } from "@/stores/recentFiles";
-import * as api from "@/api";
 
 const recentFilesStore = useRecentFilesStore();
 
-const emit = defineEmits<{
-  (e: "open"): void;
+const props = defineProps<{
+  disabled?: boolean;
 }>();
 
-async function handleOpenRecent(file: RecentFile) {
-  // 预检查文件是否存在
-  const exists = await api.checkFileExists(file.path);
-  if (!exists) {
-    // 文件不存在，直接触发 relocate 流程
-    const success = await recentFilesStore.relocateAndOpen(file);
-    if (success) {
-      emit("open");
-    }
-    return;
-  }
+const emit = defineEmits<{
+  (e: "open", file: RecentFile): void;
+}>();
 
-  // 文件存在，正常打开
-  const result = await recentFilesStore.openFile(file.path);
-  if (result.success) {
-    emit("open");
-  } else if (result.needsRelocate) {
-    // 其他错误（如格式不支持），仍触发 relocate
-    const success = await recentFilesStore.relocateAndOpen(file);
-    if (success) {
-      emit("open");
-    }
-  }
+function handleOpenRecent(file: RecentFile) {
+  if (props.disabled) return;
+  emit("open", file);
 }
 
 async function handleDeleteRecent(id: string, event: Event) {
   event.stopPropagation();
+  if (props.disabled) return;
   await recentFilesStore.remove(id);
 }
 
@@ -70,7 +54,7 @@ function formatDate(timestamp: number): string {
       <div
         v-for="file in recentFilesStore.files"
         :key="file.id"
-        class="recent-card"
+        :class="['recent-card', { disabled: props.disabled }]"
         @click="handleOpenRecent(file)"
       >
         <div class="thumbnail">
@@ -141,6 +125,16 @@ function formatDate(timestamp: number): string {
 .recent-card:hover {
   border-color: var(--el-color-primary);
   box-shadow: 0 2px 12px rgba(64, 158, 255, 0.15);
+}
+
+.recent-card.disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.recent-card.disabled:hover {
+  border-color: var(--el-border-color-light);
+  box-shadow: none;
 }
 
 .thumbnail {

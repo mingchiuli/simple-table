@@ -32,8 +32,10 @@ pub async fn read_file_android(
 pub async fn save_file_android(
     app: AppHandle,
     path: String,
+    document_id: u64,
+    base_revision: u64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    mobile::save_file(&app, &path)
+    mobile::save_file(&app, &path, document_id, base_revision)
 }
 
 /// Android: export a sandboxed file to a user-selected destination.
@@ -42,13 +44,15 @@ pub async fn save_file_android(
 pub async fn export_file_android(
     app: AppHandle,
     default_name: String,
+    document_id: u64,
+    base_revision: u64,
 ) -> Result<Option<String>, AppError> {
-    mobile::export_file(&app, &default_name)
+    mobile::export_file(&app, &default_name, document_id, base_revision)
 }
 
 /// Android: create a new sandbox path for a file that will be written by save_file_android.
 #[cfg(target_os = "android")]
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn pick_save_location_android(
     app: AppHandle,
     default_name: String,

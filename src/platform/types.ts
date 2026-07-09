@@ -2,7 +2,7 @@
  * Platform-agnostic type definitions for dynamic platform loading
  */
 
-import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
+import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 
 export interface OpenFileResult extends OpenDocumentResponse {
   path: string;
@@ -17,13 +17,13 @@ export interface PlatformFileOps {
   /** 从已知路径读取并解析（用于最近文件列表） */
   readFile(path: string): Promise<OpenDocumentResponse>;
   /** 保存文件：生成字节 + 写入（一体化） */
-  saveFile(path: string): Promise<SavedDocumentResponse>;
+  saveFile(path: string, context: EditorCommandContext): Promise<SavedDocumentResponse>;
   /** 选择保存位置 */
   pickSaveLocation?(defaultName: string): Promise<string | null>;
   /** iOS: 在 App 沙盒创建新文件 */
   createPrivateFile?(fileName: string): Promise<{ path: string; originalPath: string; fileName: string }>;
   /** 导出当前编辑状态到用户选择的位置 */
-  exportFile?(defaultName: string): Promise<string | null>;
+  exportFile?(defaultName: string, context: EditorCommandContext): Promise<string | null>;
 }
 
 export type StorageType = 'mobileSandboxPath' | 'desktopPath';

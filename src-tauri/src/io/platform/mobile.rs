@@ -117,8 +117,13 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, Ap
     document::open_from_bytes(path.to_string(), bytes, Some(file_name))
 }
 
-pub fn save_file(_app: &AppHandle, path: &str) -> Result<SavedDocumentResponse, AppError> {
-    let prepared = document::prepare_current_file_save(path)?;
+pub fn save_file(
+    _app: &AppHandle,
+    path: &str,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<SavedDocumentResponse, AppError> {
+    let prepared = document::prepare_current_file_save(document_id, base_revision, path)?;
     let target = PathBuf::from(path);
     let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
@@ -152,7 +157,12 @@ pub fn create_file(app: &AppHandle, file_name: &str) -> Result<PickedFileInfo, A
     })
 }
 
-pub fn export_file(app: &AppHandle, default_name: &str) -> Result<Option<String>, AppError> {
+pub fn export_file(
+    app: &AppHandle,
+    default_name: &str,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<Option<String>, AppError> {
     use tauri_plugin_dialog::{DialogExt, PickerMode};
 
     let dest = match app
@@ -170,7 +180,11 @@ pub fn export_file(app: &AppHandle, default_name: &str) -> Result<Option<String>
     let selected_name = selected_file_name(&dest);
     let target_path_or_name =
         output_name_for_selected_target(selected_name.as_deref(), default_name);
-    let (_, bytes) = document::generate_current_file_bytes_for_target(&target_path_or_name)?;
+    let (_, bytes) = document::generate_current_file_bytes_for_target(
+        document_id,
+        base_revision,
+        &target_path_or_name,
+    )?;
 
     write_with_official_fs(app, dest.clone(), &bytes)
         .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;

@@ -95,6 +95,16 @@ impl ActiveDocumentStore {
             .map(|editor_state| editor_state.document_id()))
     }
 
+    pub fn close_active_document(&mut self, document_id: u64) -> Result<Option<u64>, AppError> {
+        let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+        if editor_state.document_id() != document_id {
+            return Err(AppError::DocumentStateInvalid(
+                "active document changed before it was closed".to_string(),
+            ));
+        }
+        self.close_active()
+    }
+
     pub fn active(&self) -> Option<&EditorState> {
         self.active.as_ref()
     }

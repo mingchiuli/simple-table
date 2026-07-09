@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { Document } from "@element-plus/icons-vue";
-import { defaultRichProjection, type FileData } from "@/types";
+import { defaultRichProjection, type FileData, type RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
-import { openFile, getStorageType } from "@/platform";
+import { openFile, readFile, getStorageType } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
 import {
   tryAddRecentFileWithResolvedStorage,
   tryRefreshRecentFiles,
+  warnRecentFileTrackingFailure,
 } from "@/utils/recentFileTracking";
 import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
+import { confirmDiscardUnsavedChanges } from "@/utils/unsavedChanges";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
@@ -23,13 +25,32 @@ onMounted(() => {
 });
 
 async function runHomeFileAction(action: () => Promise<void>) {
-  if (isBusy.value) return;
+  if (isBusy.value || !documentSessionStore.beginLifecycle("loading")) return;
   isBusy.value = true;
   try {
+    if (!(await confirmDiscardUnsavedChanges())) return;
     await action();
   } finally {
     isBusy.value = false;
+    documentSessionStore.endLifecycle("loading");
   }
+}
+
+async function trackOpenedFile(
+  path: string,
+  fileName: string,
+  originalPath?: string
+) {
+  await tryAddRecentFileWithResolvedStorage(
+    {
+      path,
+      fileName,
+      originalPath,
+      context: documentSessionStore.currentCommandContext(),
+    },
+    getStorageType
+  );
+  await tryRefreshRecentFiles(() => recentFilesStore.load());
 }
 
 async function handleOpenFile() {
@@ -43,16 +64,7 @@ async function handleOpenFile() {
 
       documentSessionStore.openDocumentResponse(result, result.path);
 
-      await tryAddRecentFileWithResolvedStorage(
-        {
-          path: result.path,
-          fileName: result.fileName,
-          originalPath: result.originalPath,
-        },
-        getStorageType
-      );
-
-      await tryRefreshRecentFiles(() => recentFilesStore.load());
+      await trackOpenedFile(result.path, result.fileName, result.originalPath);
       await router.push({ name: "table" });
     } catch (error) {
       ElMessage.error(`Failed to open file: ${error}`);
@@ -92,8 +104,52 @@ async function handleNewFile() {
   });
 }
 
-function handleNavigate() {
-  router.push({ name: "table" });
+async function handleOpenRecent(file: RecentFile) {
+  await runHomeFileAction(async () => {
+    const openedExisting = await openRecentPath(file);
+    if (openedExisting || (await relocateAndOpenRecent(file))) {
+      await router.push({ name: "table" });
+    }
+  });
+}
+
+async function openRecentPath(file: RecentFile): Promise<boolean> {
+  if (!(await api.checkFileExists(file.path))) {
+    return false;
+  }
+
+  try {
+    const opened = await readFile(file.path);
+    documentSessionStore.openDocumentResponse(opened, file.path);
+    await trackOpenedFile(file.path, file.fileName, file.originalPath);
+    return true;
+  } catch (error) {
+    ElMessage.error(`Failed to open file: ${error}`);
+    return false;
+  }
+}
+
+async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
+  try {
+    const result = await openFile();
+    if (!result) return false;
+
+    documentSessionStore.openDocumentResponse(result, result.path);
+    await trackOpenedFile(result.path, result.fileName, result.originalPath);
+
+    if (file.path !== result.path) {
+      try {
+        await api.removeRecentFile(file.id);
+      } catch (error) {
+        warnRecentFileTrackingFailure(error);
+      }
+    }
+    await tryRefreshRecentFiles(() => recentFilesStore.load());
+    return true;
+  } catch (error) {
+    ElMessage.error(`Failed to open file: ${error}`);
+    return false;
+  }
 }
 </script>
 
@@ -112,7 +168,7 @@ function handleNavigate() {
       </div>
     </div>
 
-    <RecentFilesSection v-else @open="handleNavigate">
+    <RecentFilesSection v-else :disabled="isBusy" @open="handleOpenRecent">
       <template #actions>
         <div class="header-actions">
           <el-button :disabled="isBusy" @click="handleOpenFile">Open File</el-button>

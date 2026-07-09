@@ -25,7 +25,7 @@ pub async fn read_file_ios(app: AppHandle, path: String) -> Result<OpenDocumentR
 
 /// iOS: create a new file in app sandbox.
 #[cfg(target_os = "ios")]
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn create_private_file_ios(
     app: AppHandle,
     file_name: String,
@@ -39,16 +39,20 @@ pub async fn create_private_file_ios(
 pub async fn save_file_ios(
     app: AppHandle,
     path: String,
+    document_id: u64,
+    base_revision: u64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    mobile::save_file(&app, &path)
+    mobile::save_file(&app, &path, document_id, base_revision)
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.
 #[cfg(target_os = "ios")]
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn export_file_ios(
     app: AppHandle,
     default_name: String,
+    document_id: u64,
+    base_revision: u64,
 ) -> Result<Option<String>, AppError> {
-    ios::export_file(&app, &default_name)
+    ios::export_file(&app, &default_name, document_id, base_revision)
 }

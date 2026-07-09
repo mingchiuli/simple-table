@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
-import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
+import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 
 interface PickFileIOSResult extends OpenDocumentResponse {
   info: {
@@ -31,8 +31,8 @@ export const iosFileOps = {
   },
 
   /** iOS: 生成文件字节并写入 App 沙盒路径 */
-  saveFile: (path: string) =>
-    invoke<SavedDocumentResponse>("save_file_ios", { path }),
+  saveFile: (path: string, context: EditorCommandContext) =>
+    invoke<SavedDocumentResponse>("save_file_ios", { path, ...context }),
 
   createPrivateFile: (fileName: string) =>
     invoke<{ path: string; originalPath: string; fileName: string }>("create_private_file_ios", { fileName }),
@@ -42,8 +42,8 @@ export const iosFileOps = {
     return info.path;
   },
 
-  exportFile: (defaultName: string) =>
-    invoke<string | null>("export_file_ios", { defaultName }),
+  exportFile: (defaultName: string, context: EditorCommandContext) =>
+    invoke<string | null>("export_file_ios", { defaultName, ...context }),
 };
 
 export const iosAPI: PlatformAPI = {

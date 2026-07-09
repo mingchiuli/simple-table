@@ -163,8 +163,9 @@ function enqueueRouteFileLoad(filePath: string | null) {
       if (filePath === lastLoadedRouteFilePath && documentSessionStore.currentFilePath === filePath) {
         return;
       }
-      lastLoadedRouteFilePath = filePath;
-      await loadFileFromPath(filePath);
+      if (await loadFileFromPath(filePath)) {
+        lastLoadedRouteFilePath = filePath;
+      }
     })
     .catch((error) => {
       console.error("Failed to handle route file load:", error);

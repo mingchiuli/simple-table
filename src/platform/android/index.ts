@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
-import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
+import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 
 interface PickFileAndroidResult extends OpenDocumentResponse {
   info: {
@@ -31,11 +31,11 @@ export const androidFileOps = {
   },
 
   /** Android: 生成文件字节并写入 App 沙盒路径 */
-  saveFile: (path: string) =>
-    invoke<SavedDocumentResponse>("save_file_android", { path }),
+  saveFile: (path: string, context: EditorCommandContext) =>
+    invoke<SavedDocumentResponse>("save_file_android", { path, ...context }),
 
-  exportFile: (defaultName: string) =>
-    invoke<string | null>("export_file_android", { defaultName }),
+  exportFile: (defaultName: string, context: EditorCommandContext) =>
+    invoke<string | null>("export_file_android", { defaultName, ...context }),
 
   pickSaveLocation: (defaultName: string) =>
     invoke<string | null>("pick_save_location_android", { defaultName }),
