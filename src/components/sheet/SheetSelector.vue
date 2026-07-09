@@ -2,6 +2,7 @@
 defineProps<{
   sheetNames: string[];
   currentSheetIndex: number;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -12,6 +13,7 @@ const emit = defineEmits<{
 <template>
   <el-select
     :model-value="currentSheetIndex"
+    :disabled="disabled"
     @update:model-value="(val: number) => emit('sheet-change', val)"
     placeholder="Select sheet"
     class="sheet-selector"

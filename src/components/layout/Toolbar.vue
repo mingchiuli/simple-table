@@ -86,6 +86,7 @@ function handleCheckUpdate() {
         <SheetSelector
           :sheet-names="props.sheetNames"
           :current-sheet-index="props.currentSheetIndex"
+          :disabled="props.isBusy"
           @sheet-change="emit('sheet-change', $event)"
         />
 
@@ -93,6 +94,7 @@ function handleCheckUpdate() {
           class="sheet-buttons"
           :sheet-count="props.sheetNames.length"
           :can-insert-delete-sheets="props.capabilities.canInsertDeleteSheets"
+          :disabled="props.isBusy"
           @add-sheet="emit('add-sheet')"
           @delete-sheet="emit('delete-sheet')"
         />
@@ -111,6 +113,7 @@ function handleCheckUpdate() {
         :can-redo="props.canRedo"
         :can-insert-delete-rows="props.capabilities.canInsertDeleteRows"
         :can-insert-delete-columns="props.capabilities.canInsertDeleteColumns"
+        :disabled="props.isBusy"
         @undo="emit('undo')"
         @redo="emit('redo')"
         @add-row="emit('add-row')"
@@ -142,6 +145,7 @@ function handleCheckUpdate() {
           v-if="props.fileData"
           :sheet-names="props.sheetNames"
           :current-sheet-index="props.currentSheetIndex"
+          :disabled="props.isBusy"
           @sheet-change="emit('sheet-change', $event)"
         />
       </div>
@@ -167,7 +171,7 @@ function handleCheckUpdate() {
         />
       </el-popover>
       <el-button
-        :disabled="!props.canUndo"
+        :disabled="props.isBusy || !props.canUndo"
         @click="emit('undo')"
         size="small"
         title="Undo"
@@ -175,7 +179,7 @@ function handleCheckUpdate() {
         <el-icon><RefreshLeft /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.canRedo"
+        :disabled="props.isBusy || !props.canRedo"
         @click="emit('redo')"
         size="small"
         title="Redo"
@@ -183,7 +187,7 @@ function handleCheckUpdate() {
         <el-icon><RefreshRight /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.capabilities.canInsertDeleteRows"
+        :disabled="props.isBusy || !props.capabilities.canInsertDeleteRows"
         @click="emit('add-row')"
         size="small"
         title="Add Row"
@@ -191,7 +195,7 @@ function handleCheckUpdate() {
         <el-icon><Plus /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.capabilities.canInsertDeleteColumns"
+        :disabled="props.isBusy || !props.capabilities.canInsertDeleteColumns"
         @click="emit('add-column')"
         size="small"
         title="Add Column"
@@ -199,7 +203,7 @@ function handleCheckUpdate() {
         <el-icon><Plus /></el-icon>
       </el-button>
       <el-button
-        :disabled="!props.capabilities.canInsertDeleteSheets"
+        :disabled="props.isBusy || !props.capabilities.canInsertDeleteSheets"
         @click="emit('add-sheet')"
         size="small"
         title="Add Sheet"
@@ -207,7 +211,7 @@ function handleCheckUpdate() {
         <el-icon><CirclePlus /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.sheetNames.length <= 1 || !props.capabilities.canInsertDeleteSheets"
+        :disabled="props.isBusy || props.sheetNames.length <= 1 || !props.capabilities.canInsertDeleteSheets"
         @click="emit('delete-sheet')"
         size="small"
         title="Delete Sheet"

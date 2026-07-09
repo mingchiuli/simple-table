@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -224,6 +225,11 @@ impl SearchService {
 
     fn enqueue(&self, job: IndexJob) {
         if let Ok(mut state) = self.scheduler.state.lock() {
+            if !self.scheduler.workers_available.load(Ordering::Acquire) {
+                state.stats.dropped_jobs_no_workers =
+                    state.stats.dropped_jobs_no_workers.saturating_add(1);
+                return;
+            }
             state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
             merge_job(&mut state.pending, job);
             self.scheduler.wake.notify_one();
@@ -248,6 +254,7 @@ fn index_scheduler() -> &'static Arc<IndexScheduler> {
         let scheduler = Arc::new(IndexScheduler {
             state: Mutex::new(IndexSchedulerState::default()),
             wake: Condvar::new(),
+            workers_available: AtomicBool::new(false),
         });
         let worker_count = thread::available_parallelism()
             .map(usize::from)
@@ -255,10 +262,13 @@ fn index_scheduler() -> &'static Arc<IndexScheduler> {
             .clamp(2, 4);
         for worker_index in 0..worker_count {
             let worker_scheduler = Arc::clone(&scheduler);
-            thread::Builder::new()
+            match thread::Builder::new()
                 .name(format!("simple-table-indexer-{worker_index}"))
                 .spawn(move || index_worker(&worker_scheduler))
-                .expect("failed to spawn index worker thread");
+            {
+                Ok(_) => scheduler.workers_available.store(true, Ordering::Release),
+                Err(error) => eprintln!("Failed to spawn search index worker thread: {error}"),
+            }
         }
         scheduler
     })
@@ -354,7 +364,7 @@ fn process_pending_sheet(
             .map(|update| update.stamp)
             .chain(std::iter::once(rebuild.stamp))
             .max()
-            .expect("rebuild stamp is present");
+            .unwrap_or(rebuild.stamp);
         if let Some(search_text) = snapshot_sheet_search_text(
             pending.document_id,
             sheet_index,
@@ -380,8 +390,10 @@ fn process_pending_sheet(
             .incremental
             .values()
             .map(|update| update.stamp)
-            .max()
-            .expect("incremental ops are non-empty");
+            .max();
+        let Some(latest_stamp) = latest_stamp else {
+            return;
+        };
         let updates: Vec<CellIndexUpdate> = pending.incremental.into_values().collect();
         if !run_incremental(
             pending.document_id,
@@ -447,10 +459,9 @@ fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> ((u64, usize), SheetPen
         let Some(key) = state.pending.keys().next().copied() else {
             continue;
         };
-        let pending = state
-            .pending
-            .remove(&key)
-            .expect("pending job exists for selected key");
+        let Some(pending) = state.pending.remove(&key) else {
+            continue;
+        };
         if !state.pending.is_empty() {
             scheduler.wake.notify_one();
         }
@@ -651,6 +662,17 @@ mod tests {
             scheduler: Arc::new(IndexScheduler {
                 state: Mutex::new(IndexSchedulerState::default()),
                 wake: Condvar::new(),
+                workers_available: AtomicBool::new(true),
+            }),
+        }
+    }
+
+    fn isolated_search_service_without_workers() -> SearchService {
+        SearchService {
+            scheduler: Arc::new(IndexScheduler {
+                state: Mutex::new(IndexSchedulerState::default()),
+                wake: Condvar::new(),
+                workers_available: AtomicBool::new(false),
             }),
         }
     }
@@ -905,6 +927,25 @@ mod tests {
                 .any(|(document_id, _)| *document_id == new_document_id)
         );
         assert_eq!(state.stats.canceled_batches, 1);
+    }
+
+    #[test]
+    fn enqueue_drops_index_jobs_when_no_workers_are_available() {
+        let service = isolated_search_service_without_workers();
+        let (registry, document_id) = make_registry(vec![vec![s("old")]]);
+        let stamp = current_stamp(&registry, document_id);
+
+        service.enqueue(IndexJob::Rebuild {
+            document_id,
+            sheet_index: 0,
+            stamp,
+            registry,
+        });
+
+        let state = service.scheduler.state.lock().unwrap();
+        assert!(state.pending.is_empty());
+        assert_eq!(state.stats.queued_jobs, 0);
+        assert_eq!(state.stats.dropped_jobs_no_workers, 1);
     }
 
     #[test]

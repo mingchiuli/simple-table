@@ -169,7 +169,7 @@ impl EditorCommand {
                     .unwrap_or_else(|| format!("Sheet{}", sheet_index + 1));
                 Ok(AppliedOperation::AddSheet {
                     sheet_index,
-                    sheet_data: empty_sheet(sheet_name),
+                    sheet_data: Box::new(empty_sheet(sheet_name)),
                 })
             }
             EditorCommand::DeleteSheet { sheet_index } => {

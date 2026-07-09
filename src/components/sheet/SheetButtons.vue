@@ -2,6 +2,7 @@
 defineProps<{
   sheetCount: number;
   canInsertDeleteSheets: boolean;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -14,7 +15,7 @@ const emit = defineEmits<{
   <div class="sheet-buttons">
     <el-button
       size="small"
-      :disabled="!canInsertDeleteSheets"
+      :disabled="disabled || !canInsertDeleteSheets"
       @click="emit('add-sheet')"
     >
       + Sheet
@@ -22,7 +23,7 @@ const emit = defineEmits<{
     <el-button
       size="small"
       type="danger"
-      :disabled="sheetCount <= 1 || !canInsertDeleteSheets"
+      :disabled="disabled || sheetCount <= 1 || !canInsertDeleteSheets"
       @click="emit('delete-sheet')"
     >
       - Sheet

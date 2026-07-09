@@ -84,8 +84,8 @@ const {
   clearPendingContentChange,
 } = useDocumentStatus();
 
-const canInteractWithDocument = computed(() => !documentSessionStore.isInteractionLocked);
 const isToolbarBusy = computed(() => documentSessionStore.isInteractionLocked || isLoading.value);
+const canInteractWithDocument = computed(() => !isToolbarBusy.value);
 const currentSheetCapabilities = computed(() =>
   workbookSheetCapabilities(capabilities.value, currentSheetIndex.value)
 );

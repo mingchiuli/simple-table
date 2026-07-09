@@ -89,10 +89,7 @@ pub fn prepare_current_file_save(
         snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
     }
 
-    let (output_name, bytes) = match snapshot.generate_file_bytes_for_target(target_path_or_name) {
-        Ok(result) => result,
-        Err(error) => return Err(error),
-    };
+    let (output_name, bytes) = snapshot.generate_file_bytes_for_target(target_path_or_name)?;
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
         .unwrap_or_else(default_extension_string);
@@ -135,13 +132,9 @@ where
             commit_write,
         );
     }
-    let result =
-        match read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name) {
-            Ok(result) => result,
-            Err(error) => return Err(error),
-        };
+    let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
     let registry = active_document_store();
-    let (lease, clear_history) = match begin_prepared_save_commit(
+    let (lease, clear_history) = begin_prepared_save_commit(
         &registry,
         document_id_token,
         revision_token,
@@ -152,10 +145,7 @@ where
                 .or_else(|| extension_of(&result.file_data.path));
             current_extension != saved_extension
         },
-    ) {
-        Ok(result) => result,
-        Err(error) => return Err(error),
-    };
+    )?;
 
     if let Err(error) = commit_write() {
         abort_save_commit(&registry, document_id_token, lease);
@@ -219,7 +209,7 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     let registry = active_document_store();
-    let (lease, clear_history) = match begin_prepared_save_commit(
+    let (lease, clear_history) = begin_prepared_save_commit(
         &registry,
         document_id_token,
         revision_token,
@@ -228,10 +218,7 @@ where
                 .or_else(|| extension_of(&editor_state.file_data().path));
             current_extension.as_deref() != Some(saved_extension.as_str())
         },
-    ) {
-        Ok(result) => result,
-        Err(error) => return Err(error),
-    };
+    )?;
 
     if let Err(error) = commit_write() {
         abort_save_commit(&registry, document_id_token, lease);

@@ -72,7 +72,7 @@ export function useFileActions({
 
   async function loadFileFromPath(filePath: string): Promise<boolean> {
     let loaded = false;
-    const ran = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
+    const lifecycleStatus = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await prepareForDocumentReplacement())) return;
@@ -85,7 +85,7 @@ export function useFileActions({
       await updateRecentFileEntry(filePath, fileName);
       loaded = true;
     });
-    if (ran) {
+    if (lifecycleStatus !== 'skipped') {
       isLoading.value = false;
       isFileLoading.value = false;
     }
@@ -93,7 +93,7 @@ export function useFileActions({
   }
 
   async function handleOpenFile() {
-    const ran = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
+    const lifecycleStatus = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
 
@@ -106,14 +106,14 @@ export function useFileActions({
 
       await updateRecentFileEntry(selection.path, selection.fileName, selection.originalPath);
     });
-    if (ran) {
+    if (lifecycleStatus !== 'skipped') {
       isLoading.value = false;
       isFileLoading.value = false;
     }
   }
 
   async function handleSaveFile() {
-    const ran = await runDocumentLifecycle('saving', 'Failed to save file', async () => {
+    const lifecycleStatus = await runDocumentLifecycle('saving', 'Failed to save file', async () => {
       const data = fileData.value;
       if (!data) return;
       if (!(await flushPendingCellChanges())) return;
@@ -169,13 +169,13 @@ export function useFileActions({
         ElMessage.success('File saved successfully');
       });
     });
-    if (ran) {
+    if (lifecycleStatus !== 'skipped') {
       isLoading.value = false;
     }
   }
 
   async function handleExportFile() {
-    const ran = await runDocumentLifecycle('saving', 'Failed to export file', async () => {
+    const lifecycleStatus = await runDocumentLifecycle('saving', 'Failed to export file', async () => {
       const data = fileData.value;
       if (!data) return;
       isLoading.value = true;
@@ -198,7 +198,7 @@ export function useFileActions({
         ElMessage.success('File exported successfully');
       }
     });
-    if (ran) {
+    if (lifecycleStatus !== 'skipped') {
       isLoading.value = false;
     }
   }

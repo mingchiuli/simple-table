@@ -263,12 +263,12 @@ pub fn workbook_capabilities(
         global_sheet_reasons.block_column_structure("threaded comments");
     }
     for limitation in formula_structure_limitations {
-        push_detected_feature(&mut detected_features, &limitation);
-        push_block_reason(&mut blocked_row_structure_reasons, &limitation);
-        push_block_reason(&mut blocked_column_structure_reasons, &limitation);
-        push_block_reason(&mut blocked_sheet_structure_reasons, &limitation);
-        global_sheet_reasons.block_row_structure(&limitation);
-        global_sheet_reasons.block_column_structure(&limitation);
+        push_detected_feature(&mut detected_features, limitation);
+        push_block_reason(&mut blocked_row_structure_reasons, limitation);
+        push_block_reason(&mut blocked_column_structure_reasons, limitation);
+        push_block_reason(&mut blocked_sheet_structure_reasons, limitation);
+        global_sheet_reasons.block_row_structure(limitation);
+        global_sheet_reasons.block_column_structure(limitation);
     }
     let mut sheets = Vec::with_capacity(workbook.sheet_count());
     for worksheet in workbook.sheet_collection() {
@@ -402,7 +402,7 @@ pub fn workbook_capabilities(
             blocked_sheet_structure_reasons,
         },
         rich: WorkbookRichCapabilities::default(),
-        sheets: sheets,
+        sheets,
     }
 }
 
@@ -469,7 +469,7 @@ pub fn unsupported_operation_features(
             push_block_reason(&mut reasons, "threaded comments");
         }
         for limitation in formula_structure_limitations {
-            push_block_reason(&mut reasons, &limitation);
+            push_block_reason(&mut reasons, limitation);
         }
     }
 
@@ -513,14 +513,13 @@ fn push_worksheet_operation_blockers(
     worksheet: &Worksheet,
     operation: &AppliedOperation,
 ) {
-    if worksheet.sheet_protection().is_some() {
-        if operation.impact().is_cell_edit()
+    if worksheet.sheet_protection().is_some()
+        && (operation.impact().is_cell_edit()
             || operation.impact().is_layout_change()
             || operation.impact().is_row_structure_change()
-            || operation.impact().is_column_structure_change()
-        {
-            push_block_reason(reasons, "sheet protection");
-        }
+            || operation.impact().is_column_structure_change())
+    {
+        push_block_reason(reasons, "sheet protection");
     }
 
     if operation.impact().is_structure_change() && !worksheet.defined_names().is_empty() {

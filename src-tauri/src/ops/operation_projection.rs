@@ -74,7 +74,7 @@ impl OperationPatchProjector<'_> {
                     .sheets
                     .get(*sheet_index)
                     .cloned()
-                    .unwrap_or_else(|| sheet_data.clone()),
+                    .unwrap_or_else(|| sheet_data.as_ref().clone()),
             },
             AppliedOperation::DeleteSheet { sheet_index } => AppliedOperationResult::DeleteSheet {
                 sheet_index: *sheet_index,

@@ -20,7 +20,7 @@ describe("useDocumentLifecycle", () => {
     const action = vi.fn().mockResolvedValue(undefined);
     const { runDocumentLifecycle } = useDocumentLifecycle();
 
-    await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe(true);
+    await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("completed");
 
     expect(action).toHaveBeenCalledTimes(1);
     expect(store.lifecycle).toBe("idle");
@@ -33,7 +33,7 @@ describe("useDocumentLifecycle", () => {
 
     store.beginLifecycle("saving");
 
-    await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe(false);
+    await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("skipped");
 
     expect(action).not.toHaveBeenCalled();
     expect(store.lifecycle).toBe("saving");
@@ -48,7 +48,7 @@ describe("useDocumentLifecycle", () => {
       runDocumentLifecycle("saving", "Save failed", async () => {
         throw new Error("disk full");
       })
-    ).resolves.toBe(true);
+    ).resolves.toBe("failed");
 
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith("Save failed: Error: disk full");
     expect(store.lifecycle).toBe("idle");

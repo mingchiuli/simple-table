@@ -92,6 +92,7 @@ fn upsert_recent_file(
         id: stable_id,
         ..file
     };
+    let updated = merged.clone();
 
     files.retain(|existing| existing.path != path);
     files.push(merged);
@@ -99,11 +100,11 @@ fn upsert_recent_file(
     files.sort_by_key(|file| Reverse(file.last_opened));
     truncate_preserving_path(&mut files, &path);
 
-    let updated = files
-        .iter()
-        .find(|file| file.path == path)
-        .cloned()
-        .expect("upserted recent file must be retained");
+    if !files.iter().any(|file| file.path == path) {
+        files.push(updated.clone());
+        files.sort_by_key(|file| Reverse(file.last_opened));
+        truncate_preserving_path(&mut files, &path);
+    }
 
     (files, updated)
 }

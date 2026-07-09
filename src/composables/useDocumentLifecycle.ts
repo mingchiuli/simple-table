@@ -5,6 +5,7 @@ import {
 } from "@/stores/documentSession";
 
 type ActiveDocumentLifecycle = Exclude<DocumentSessionLifecycle, "idle">;
+export type DocumentLifecycleRunStatus = "completed" | "failed" | "skipped";
 
 export function useDocumentLifecycle() {
   const documentSessionStore = useDocumentSessionStore();
@@ -13,18 +14,19 @@ export function useDocumentLifecycle() {
     lifecycle: ActiveDocumentLifecycle,
     errorPrefix: string,
     action: () => Promise<void>
-  ): Promise<boolean> {
+  ): Promise<DocumentLifecycleRunStatus> {
     if (!documentSessionStore.beginLifecycle(lifecycle)) {
-      return false;
+      return "skipped";
     }
     try {
       await action();
+      return "completed";
     } catch (error) {
       ElMessage.error(`${errorPrefix}: ${error}`);
+      return "failed";
     } finally {
       documentSessionStore.endLifecycle(lifecycle);
     }
-    return true;
   }
 
   return {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use crate::state::search_index::SearchIndexStamp;
@@ -69,6 +70,7 @@ pub(crate) struct SheetPending {
 pub(crate) struct IndexScheduler {
     pub(crate) state: Mutex<IndexSchedulerState>,
     pub(crate) wake: Condvar,
+    pub(crate) workers_available: AtomicBool,
 }
 
 #[derive(Default)]
@@ -80,6 +82,7 @@ pub(crate) struct IndexSchedulerState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SearchSchedulerStats {
     pub queued_jobs: u64,
+    pub dropped_jobs_no_workers: u64,
     pub canceled_batches: u64,
     pub drained_batches: u64,
     pub rebuild_jobs: u64,

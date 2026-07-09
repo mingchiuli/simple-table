@@ -4,6 +4,7 @@ defineProps<{
   canRedo: boolean;
   canInsertDeleteRows: boolean;
   canInsertDeleteColumns: boolean;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -16,20 +17,20 @@ const emit = defineEmits<{
 
 <template>
   <div class="edit-buttons">
-    <el-button @click="emit('undo')" :disabled="!canUndo">
+    <el-button @click="emit('undo')" :disabled="disabled || !canUndo">
       Undo
     </el-button>
-    <el-button @click="emit('redo')" :disabled="!canRedo">
+    <el-button @click="emit('redo')" :disabled="disabled || !canRedo">
       Redo
     </el-button>
     <el-button
-      :disabled="!canInsertDeleteRows"
+      :disabled="disabled || !canInsertDeleteRows"
       @click="emit('add-row')"
     >
       + Row
     </el-button>
     <el-button
-      :disabled="!canInsertDeleteColumns"
+      :disabled="disabled || !canInsertDeleteColumns"
       @click="emit('add-column')"
     >
       + Column

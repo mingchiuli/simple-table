@@ -1,4 +1,5 @@
 import type { ComputedRef, Ref } from "vue";
+import { ElMessage } from "element-plus";
 import * as api from "@/api";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
@@ -47,7 +48,7 @@ export function useEditorCommands({
     message: string,
     options: { refreshProjectionOnError?: boolean } = {}
   ) {
-    if (documentSessionStore.isInteractionLocked) return;
+    if (isEditorCommandBlocked()) return;
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -64,7 +65,7 @@ export function useEditorCommands({
   }
 
   async function handleAddRow() {
-    if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
+    if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
     const rowIndex = sheetExtent(currentSheet.value).rowCount;
     await runEditorMutation(
@@ -74,7 +75,7 @@ export function useEditorCommands({
   }
 
   async function handleDeleteRow(index: number) {
-    if (!currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
+    if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
     await runEditorMutation(
       (context) => api.deleteRow(context, sheetIndex, index),
@@ -83,7 +84,7 @@ export function useEditorCommands({
   }
 
   async function handleAddColumn() {
-    if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
+    if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
     const colIndex = selectedCell.value?.col ?? sheetExtent(currentSheet.value).columnCount;
     await runEditorMutation(
@@ -93,7 +94,7 @@ export function useEditorCommands({
   }
 
   async function handleDeleteColumn(index: number) {
-    if (!currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
+    if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
     await runEditorMutation(
       (context) => api.deleteColumn(context, sheetIndex, index),
@@ -102,7 +103,7 @@ export function useEditorCommands({
   }
 
   async function handleAddSheet() {
-    if (!fileData.value || !ensureStructureEditingAllowed("sheets")) return;
+    if (isEditorCommandBlocked() || !fileData.value || !ensureStructureEditingAllowed("sheets")) return;
     const newSheetIndex = fileData.value.sheets.length;
     await runEditorMutation(async (context) => {
       const response = await api.addSheet(context);
@@ -113,7 +114,7 @@ export function useEditorCommands({
   }
 
   async function handleDeleteSheet() {
-    if (!ensureStructureEditingAllowed("sheets")) return;
+    if (isEditorCommandBlocked() || !ensureStructureEditingAllowed("sheets")) return;
     if (!fileData.value || fileData.value.sheets.length <= 1) {
       ElMessage.warning("Cannot delete the last sheet");
       return;
@@ -129,6 +130,7 @@ export function useEditorCommands({
   }
 
   function handleSheetChange(index: number) {
+    if (isEditorCommandBlocked()) return;
     editorSelectionStore.rememberCurrentSheetSelection();
     cellEditorValue.value = "";
     editorSelectionStore.restoreSheetSelection(index, (cell) =>
@@ -137,17 +139,17 @@ export function useEditorCommands({
   }
 
   async function handleUndo() {
-    if (!documentStatusStore.canUndo) return;
+    if (isEditorCommandBlocked() || !documentStatusStore.canUndo) return;
     await runEditorMutation((context) => api.undo(context), "Failed to undo");
   }
 
   async function handleRedo() {
-    if (!documentStatusStore.canRedo) return;
+    if (isEditorCommandBlocked() || !documentStatusStore.canRedo) return;
     await runEditorMutation((context) => api.redo(context), "Failed to redo");
   }
 
   async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
-    if (!fileData.value || documentSessionStore.isInteractionLocked) return;
+    if (!fileData.value || isEditorCommandBlocked()) return;
 
     const requestId = searchSessionStore.beginSearch(query);
     let context: EditorCommandContext | null = null;
@@ -185,6 +187,7 @@ export function useEditorCommands({
   }
 
   function handleSearchResultClick(result: SearchResult) {
+    if (isEditorCommandBlocked()) return;
     if (result.sheetIndex !== currentSheetIndex.value) {
       currentSheetIndex.value = result.sheetIndex;
     }
@@ -197,11 +200,12 @@ export function useEditorCommands({
   }
 
   function handleSelectCell(row: number, col: number) {
+    if (isEditorCommandBlocked()) return;
     editorSelectionStore.selectCell(row, col, false);
   }
 
   async function handleColumnResize(colIndex: number, width: number) {
-    if (!fileData.value || documentSessionStore.isInteractionLocked || !ensureResizeAllowed()) return;
+    if (!fileData.value || isEditorCommandBlocked() || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
     await runEditorMutation(
       (context) => api.setColumnWidth(context, sheetIndex, colIndex, width),
@@ -211,7 +215,7 @@ export function useEditorCommands({
   }
 
   async function handleRowResize(rowIndex: number, height: number) {
-    if (!fileData.value || documentSessionStore.isInteractionLocked || !ensureResizeAllowed()) return;
+    if (!fileData.value || isEditorCommandBlocked() || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
     await runEditorMutation(
       (context) => api.setRowHeight(context, sheetIndex, rowIndex, height),
@@ -274,6 +278,10 @@ export function useEditorCommands({
 
   function currentSheetCapabilities() {
     return workbookSheetCapabilities(documentStatusStore.capabilities, currentSheetIndex.value);
+  }
+
+  function isEditorCommandBlocked(): boolean {
+    return isLoading.value || documentSessionStore.isInteractionLocked;
   }
 
   async function refreshAfterMutationError(

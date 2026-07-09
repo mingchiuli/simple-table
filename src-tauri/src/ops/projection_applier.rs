@@ -186,11 +186,11 @@ impl ProjectionMutation<'_> {
                 sheet_data,
             } => {
                 let index = (*sheet_index).min(file_data.sheets.len());
-                file_data.sheets.insert(index, sheet_data.clone());
+                file_data.sheets.insert(index, sheet_data.as_ref().clone());
                 AppliedOperationResult::AddSheet {
                     sheet_index: index,
                     name: sheet_data.name.clone(),
-                    sheet_data: sheet_data.clone(),
+                    sheet_data: sheet_data.as_ref().clone(),
                 }
             }
             AppliedOperation::DeleteSheet { sheet_index } => {

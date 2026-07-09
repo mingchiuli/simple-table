@@ -44,14 +44,35 @@ impl RecentFile {
             id: uuid::Uuid::new_v4().to_string(),
             path,
             file_name,
-            last_opened: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
+            last_opened: timestamp_millis(SystemTime::now()),
             file_size,
             thumbnail: None,
             storage_type: StorageType::default(),
             original_path: None,
         }
+    }
+}
+
+fn timestamp_millis(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn timestamp_millis_clamps_times_before_unix_epoch() {
+        assert_eq!(timestamp_millis(UNIX_EPOCH - Duration::from_millis(1)), 0);
+    }
+
+    #[test]
+    fn timestamp_millis_clamps_values_above_i64_range() {
+        let far_future = UNIX_EPOCH + Duration::from_millis(i64::MAX as u64 + 1);
+
+        assert_eq!(timestamp_millis(far_future), i64::MAX);
     }
 }

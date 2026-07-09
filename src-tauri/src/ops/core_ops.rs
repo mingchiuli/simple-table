@@ -97,7 +97,7 @@ pub enum AppliedOperation {
     },
     AddSheet {
         sheet_index: usize,
-        sheet_data: SheetData,
+        sheet_data: Box<SheetData>,
     },
     DeleteSheet {
         sheet_index: usize,
