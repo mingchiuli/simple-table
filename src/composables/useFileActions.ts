@@ -14,7 +14,6 @@ import { useOpenFileSelection } from '@/composables/useOpenFileSelection';
 import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
@@ -23,8 +22,6 @@ import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
-  isLoading: Ref<boolean>;
-  isFileLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
 };
 
@@ -38,13 +35,10 @@ function keepGoing() {
 
 export function useFileActions({
   fileData,
-  isLoading,
-  isFileLoading,
   flushPendingCellChanges,
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
-  const editorSelectionStore = useEditorSelectionStore();
   const { beginDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
@@ -60,18 +54,12 @@ export function useFileActions({
     shouldContinue: ContinuationGuard = keepGoing
   ): Promise<boolean> {
     let loaded = false;
-    let releasedByCancel = false;
     let removeCancelHandler: (() => void) | undefined;
-    const lifecycleStatus = await runDocumentLifecycle(
+    await runDocumentLifecycle(
       'loading',
       'Failed to open file',
       async ({ release }) => {
-        isLoading.value = true;
-        isFileLoading.value = true;
         removeCancelHandler = shouldContinue.onCancel?.(() => {
-          releasedByCancel = true;
-          isLoading.value = false;
-          isFileLoading.value = false;
           release();
         });
         if (!shouldContinue()) return;
@@ -84,7 +72,6 @@ export function useFileActions({
           if (!opened) return;
           replacement.commit();
           documentSessionStore.openDocumentResponse(opened, filePath);
-          editorSelectionStore.activateSheet(0);
           loaded = true;
 
           const fileName = await resolveRecentFileNameAfterOpen(
@@ -106,18 +93,11 @@ export function useFileActions({
       { waitForIdle: true, shouldContinue }
     );
     removeCancelHandler?.();
-    if (lifecycleStatus !== 'skipped' && !releasedByCancel) {
-      isLoading.value = false;
-      isFileLoading.value = false;
-    }
     return loaded;
   }
 
   async function handleOpenFile() {
-    const lifecycleStatus = await runDocumentLifecycle('loading', 'Failed to open file', async () => {
-      isLoading.value = true;
-      isFileLoading.value = true;
-
+    await runDocumentLifecycle('loading', 'Failed to open file', async () => {
       const selection = await pickOpenFile();
       if (!selection) return;
       const opened = await openSelectedFileOrDiscard(selection);
@@ -125,14 +105,10 @@ export function useFileActions({
 
       queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
     });
-    if (lifecycleStatus !== 'skipped') {
-      isLoading.value = false;
-      isFileLoading.value = false;
-    }
   }
 
   async function handleSaveFile() {
-    const lifecycleStatus = await runDocumentLifecycle('saving', 'Failed to save file', async () => {
+    await runDocumentLifecycle('saving', 'Failed to save file', async () => {
       const data = fileData.value;
       if (!data) return;
       if (!(await flushPendingCellChanges())) return;
@@ -147,7 +123,6 @@ export function useFileActions({
       const savePlan = await nativeSavePlan(context, existingTarget);
 
       if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
-        isLoading.value = true;
         const saved = await saveFile(existingPath, context);
         if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, existingPath)) {
           notifySavedButNotApplied();
@@ -177,7 +152,6 @@ export function useFileActions({
           return;
         }
 
-        isLoading.value = true;
         const saved = await saveFile(savePath, context);
         markPersisted();
         if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, savePath)) {
@@ -191,16 +165,12 @@ export function useFileActions({
         ElMessage.success('File saved successfully');
       });
     });
-    if (lifecycleStatus !== 'skipped') {
-      isLoading.value = false;
-    }
   }
 
   async function handleExportFile() {
-    const lifecycleStatus = await runDocumentLifecycle('saving', 'Failed to export file', async () => {
+    await runDocumentLifecycle('saving', 'Failed to export file', async () => {
       const data = fileData.value;
       if (!data) return;
-      isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
       const context = documentSessionStore.requireCommandContext();
@@ -220,33 +190,33 @@ export function useFileActions({
         ElMessage.success('File exported successfully');
       }
     });
-    if (lifecycleStatus !== 'skipped') {
-      isLoading.value = false;
-    }
   }
 
   async function closeCurrentDocument(): Promise<boolean> {
-    if (documentSessionStore.isInteractionLocked) return false;
-    const replacement = await beginDocumentReplacement();
-    if (!replacement) return false;
+    let closed = false;
+    const lifecycleStatus = await runDocumentLifecycle('closing', 'Failed to close file', async () => {
+      const replacement = await beginDocumentReplacement();
+      if (!replacement) return;
 
-    const context = documentSessionStore.currentCommandContext();
-    if (!context) {
+      const context = documentSessionStore.currentCommandContext();
+      if (!context) {
+        replacement.commit();
+        documentSessionStore.clearDocument();
+        closed = true;
+        return;
+      }
+
+      try {
+        await api.closeCurrentDocument(context.documentId);
+      } catch (error) {
+        replacement.cancel();
+        throw error;
+      }
       replacement.commit();
       documentSessionStore.clearDocument();
-      return true;
-    }
-
-    try {
-      await api.closeCurrentDocument(context.documentId);
-    } catch (error) {
-      replacement.cancel();
-      ElMessage.error(`Failed to close file: ${error}`);
-      return false;
-    }
-    replacement.commit();
-    documentSessionStore.clearDocument();
-    return true;
+      closed = true;
+    });
+    return lifecycleStatus !== 'skipped' && closed;
   }
 
   async function handleBack() {

@@ -1289,4 +1289,86 @@ describe("documentSession store", () => {
     store.endLifecycle("saving");
     expect(store.lifecycle).toBe("idle");
   });
+
+  it("locks document interaction while an editor command is running", () => {
+    const store = useDocumentSessionStore();
+
+    const release = store.beginEditorCommand();
+
+    expect(release).not.toBeNull();
+    expect(store.isInteractionLocked).toBe(true);
+    expect(store.isEditorInteractionLocked).toBe(true);
+    expect(store.beginEditorCommand()).toBeNull();
+
+    release?.();
+    release?.();
+
+    expect(store.isInteractionLocked).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(false);
+  });
+
+  it("does not allow document lifecycle actions while an editor command is running", () => {
+    const store = useDocumentSessionStore();
+    const release = store.beginEditorCommand();
+
+    expect(store.beginLifecycle("loading")).toBe(false);
+    expect(store.lifecycle).toBe("idle");
+
+    release?.();
+
+    expect(store.beginLifecycle("loading")).toBe(true);
+    store.endLifecycle("loading");
+  });
+
+  it("waits for editor commands before reporting document interaction idle", async () => {
+    const store = useDocumentSessionStore();
+    const release = store.beginEditorCommand();
+    let resumed = false;
+
+    const wait = store.waitForInteractionIdle().then(() => {
+      resumed = true;
+    });
+
+    await Promise.resolve();
+    expect(resumed).toBe(false);
+
+    release?.();
+    await wait;
+
+    expect(resumed).toBe(true);
+  });
+
+  it("resolves interaction idle waiters when opening a document clears editor command locks", async () => {
+    const store = useDocumentSessionStore();
+    store.beginEditorCommand();
+    let resumed = false;
+
+    const wait = store.waitForInteractionIdle().then(() => {
+      resumed = true;
+    });
+
+    await Promise.resolve();
+    expect(resumed).toBe(false);
+
+    openTestDocument(store, {
+      path: "/tmp/next.xlsx",
+      fileName: "next.xlsx",
+      sheets: [sheet("Sheet1", [[text("next")]])],
+    });
+    await wait;
+
+    expect(resumed).toBe(true);
+    expect(store.isInteractionLocked).toBe(false);
+  });
+
+  it("clears editor command locks when the active document is cleared", () => {
+    const store = useDocumentSessionStore();
+    const release = store.beginEditorCommand();
+
+    store.clearDocument();
+    release?.();
+
+    expect(store.isInteractionLocked).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(false);
+  });
 });

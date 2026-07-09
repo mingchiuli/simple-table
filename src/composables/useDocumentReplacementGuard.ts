@@ -35,6 +35,7 @@ export function useDocumentReplacementGuard({
   async function confirmDiscardWithAutosavePaused(): Promise<DocumentReplacementLease | null> {
     const replacement = createReplacementLease();
     if (await confirmReplacementIfUnsaved()) {
+      await documentSessionStore.waitForMutations();
       return replacement;
     }
     replacement.cancel();

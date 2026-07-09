@@ -21,7 +21,6 @@ type UseEditorCommandsOptions = {
   currentSheet: ComputedRef<SheetData | null>;
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<{ row: number; col: number } | null>;
-  isLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
   applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
@@ -32,7 +31,6 @@ export function useEditorCommands({
   currentSheet,
   currentSheetIndex,
   selectedCell,
-  isLoading,
   flushPendingCellChanges,
   editorValueForCell,
   applyMutationResponse,
@@ -50,11 +48,14 @@ export function useEditorCommands({
       afterApplied?: () => void;
     } = {}
   ) {
-    if (isEditorCommandBlocked()) return;
+    const releaseEditorCommand = documentSessionStore.beginEditorCommand();
+    if (!releaseEditorCommand) return;
     const initialContext = documentSessionStore.currentCommandContext();
-    if (!initialContext) return;
+    if (!initialContext) {
+      releaseEditorCommand();
+      return;
+    }
     try {
-      isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
         const response = await action(context);
@@ -78,7 +79,7 @@ export function useEditorCommands({
       });
       ElMessage.error(`${message}: ${error}`);
     } finally {
-      isLoading.value = false;
+      releaseEditorCommand();
     }
   }
 
@@ -302,7 +303,7 @@ export function useEditorCommands({
   }
 
   function isEditorCommandBlocked(): boolean {
-    return isLoading.value || documentSessionStore.isEditorInteractionLocked;
+    return documentSessionStore.isEditorInteractionLocked;
   }
 
   async function refreshAfterMutationError(

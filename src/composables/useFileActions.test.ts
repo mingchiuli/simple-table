@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useFileActions } from "@/composables/useFileActions";
 import { useDocumentSessionStore } from "@/stores/documentSession";
@@ -170,19 +170,10 @@ async function flushPromises() {
 
 function mountActions(flushPendingCellChanges: () => Promise<boolean>) {
   const documentSessionStore = useDocumentSessionStore();
-  const isLoading = ref(false);
-  const isFileLoading = ref(false);
-  const actions = useFileActions({
+  return useFileActions({
     fileData: computed(() => documentSessionStore.data),
-    isLoading,
-    isFileLoading,
     flushPendingCellChanges,
   });
-  return {
-    ...actions,
-    isLoading,
-    isFileLoading,
-  };
 }
 
 describe("useFileActions", () => {
@@ -259,8 +250,7 @@ describe("useFileActions", () => {
     await flushPromises();
 
     expect(documentSessionStore.lifecycle).toBe("loading");
-    expect(actions.isLoading.value).toBe(true);
-    expect(actions.isFileLoading.value).toBe(true);
+    expect(documentSessionStore.isInteractionLocked).toBe(true);
 
     shouldContinue = false;
     for (const handler of cancelHandlers) {
@@ -268,8 +258,7 @@ describe("useFileActions", () => {
     }
 
     expect(documentSessionStore.lifecycle).toBe("idle");
-    expect(actions.isLoading.value).toBe(false);
-    expect(actions.isFileLoading.value).toBe(false);
+    expect(documentSessionStore.isInteractionLocked).toBe(false);
 
     pendingRead.resolve(openedResponse("slow.xlsx", 2));
     await expect(loadPromise).resolves.toBe(false);
@@ -327,6 +316,29 @@ describe("useFileActions", () => {
     expect(documentSessionStore.lifecycle).toBe("saving");
 
     documentSessionStore.endLifecycle("saving");
+
+    await expect(loadPromise).resolves.toBe(true);
+    expect(platform.readFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/queued.xlsx");
+  });
+
+  it("waits for an active editor command before loading a route file path", async () => {
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    const releaseEditorCommand = documentSessionStore.beginEditorCommand();
+    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("queued.xlsx", 2));
+
+    const actions = mountActions(flushPendingCellChanges);
+    const loadPromise = actions.loadFileFromPath("/tmp/queued.xlsx");
+
+    await flushPromises();
+
+    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(documentSessionStore.lifecycle).toBe("idle");
+    expect(documentSessionStore.isInteractionLocked).toBe(true);
+
+    releaseEditorCommand?.();
 
     await expect(loadPromise).resolves.toBe(true);
     expect(platform.readFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
@@ -529,6 +541,32 @@ describe("useFileActions", () => {
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.projectionStale).toBe(false);
+  });
+
+  it("locks document interaction while backend close is pending", async () => {
+    const api = await import("@/api");
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    const pendingClose = deferred<void>();
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    vi.mocked(api.closeCurrentDocument).mockReturnValue(pendingClose.promise);
+
+    const actions = mountActions(flushPendingCellChanges);
+    const closePromise = actions.closeCurrentDocument();
+
+    await flushPromises();
+
+    expect(documentSessionStore.lifecycle).toBe("closing");
+    expect(documentSessionStore.isInteractionLocked).toBe(true);
+
+    await expect(actions.closeCurrentDocument()).resolves.toBe(false);
+    expect(api.closeCurrentDocument).toHaveBeenCalledTimes(1);
+
+    pendingClose.resolve();
+
+    await expect(closePromise).resolves.toBe(true);
+    expect(documentSessionStore.lifecycle).toBe("idle");
+    expect(documentSessionStore.data).toBeNull();
   });
 
   it("discards a reserved save-as location when the target cannot be saved", async () => {

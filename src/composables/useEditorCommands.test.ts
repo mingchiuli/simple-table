@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computed, ref, type Ref } from "vue";
+import { computed, type Ref } from "vue";
 import { createPinia, setActivePinia, storeToRefs } from "pinia";
 import { useEditorCommands } from "@/composables/useEditorCommands";
 import { useDocumentSessionStore } from "@/stores/documentSession";
@@ -86,7 +86,6 @@ function mutationResponse(partial: Partial<EditorMutationResponse> = {}): Editor
 }
 
 function setupCommands(
-  isLoading = ref(false),
   flushPendingCellChanges = vi.fn().mockResolvedValue(true),
   overrides: { currentSheetIndex?: Ref<number> } = {}
 ) {
@@ -104,7 +103,6 @@ function setupCommands(
     currentSheet,
     currentSheetIndex: activeSheetIndex,
     selectedCell,
-    isLoading,
     flushPendingCellChanges,
     editorValueForCell: () => "",
     applyMutationResponse,
@@ -137,9 +135,10 @@ describe("useEditorCommands", () => {
     vi.clearAllMocks();
   });
 
-  it("does not start structural mutations while another command is loading", async () => {
+  it("does not start structural mutations while another editor command is running", async () => {
     const api = await import("@/api");
-    const { commands, flushPendingCellChanges } = setupCommands(ref(true));
+    const { commands, flushPendingCellChanges, documentSessionStore } = setupCommands();
+    documentSessionStore.beginEditorCommand();
 
     await commands.handleAddRow();
 
@@ -147,24 +146,27 @@ describe("useEditorCommands", () => {
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
   });
 
-  it("does not switch sheets while another command is loading", () => {
-    const { commands, currentSheetIndex } = setupCommands(ref(true));
+  it("does not switch sheets while another editor command is running", () => {
+    const { commands, currentSheetIndex, documentSessionStore } = setupCommands();
+    documentSessionStore.beginEditorCommand();
 
     commands.handleSheetChange(1);
 
     expect(currentSheetIndex.value).toBe(0);
   });
 
-  it("does not change cell selection while another command is loading", () => {
-    const { commands, selectedCell } = setupCommands(ref(true));
+  it("does not change cell selection while another editor command is running", () => {
+    const { commands, selectedCell, documentSessionStore } = setupCommands();
+    documentSessionStore.beginEditorCommand();
 
     commands.handleSelectCell(0, 0);
 
     expect(selectedCell.value).toBeNull();
   });
 
-  it("does not navigate to search results while another command is loading", () => {
-    const { commands, currentSheetIndex, selectedCell } = setupCommands(ref(true));
+  it("does not navigate to search results while another editor command is running", () => {
+    const { commands, currentSheetIndex, selectedCell, documentSessionStore } = setupCommands();
+    documentSessionStore.beginEditorCommand();
     const result: SearchResult = {
       sheetIndex: 1,
       sheetName: "Sheet2",
@@ -187,7 +189,7 @@ describe("useEditorCommands", () => {
       documentSessionStore.openDocumentResponse(openedResponse(2, "next.xlsx"), "/tmp/next.xlsx");
       return true;
     });
-    const setup = setupCommands(ref(false), flushPendingCellChanges);
+    const setup = setupCommands(flushPendingCellChanges);
     documentSessionStore = setup.documentSessionStore;
 
     await setup.commands.handleAddRow();
@@ -204,7 +206,7 @@ describe("useEditorCommands", () => {
       documentSessionStore.openDocumentResponse(openedResponse(2, "next.xlsx"), "/tmp/next.xlsx");
       return true;
     });
-    const setup = setupCommands(ref(false), flushPendingCellChanges);
+    const setup = setupCommands(flushPendingCellChanges);
     documentSessionStore = setup.documentSessionStore;
 
     await setup.commands.handleSearch("A1", "allSheets");
@@ -217,7 +219,7 @@ describe("useEditorCommands", () => {
     const api = await import("@/api");
     const addSheet = deferred<EditorMutationResponse>();
     vi.mocked(api.addSheet).mockReturnValue(addSheet.promise);
-    const setup = setupCommands(ref(false));
+    const setup = setupCommands();
 
     const command = setup.commands.handleAddSheet();
     await Promise.resolve();
@@ -238,7 +240,7 @@ describe("useEditorCommands", () => {
       documentSessionStore.revision = 4;
       return true;
     });
-    const setup = setupCommands(ref(false), flushPendingCellChanges);
+    const setup = setupCommands(flushPendingCellChanges);
     documentSessionStore = setup.documentSessionStore;
 
     await setup.commands.handleAddRow();
@@ -253,7 +255,7 @@ describe("useEditorCommands", () => {
   it("does not report a mutation failure when stale projection recovery succeeds", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
-    const setup = setupCommands(ref(false));
+    const setup = setupCommands();
     const fresh: FileData = {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
@@ -287,7 +289,7 @@ describe("useEditorCommands", () => {
   it("reports refresh failure separately when a mutation was already applied", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
-    const setup = setupCommands(ref(false));
+    const setup = setupCommands();
     vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: 3 }));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
     vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
@@ -306,7 +308,7 @@ describe("useEditorCommands", () => {
   it("does not mark projection stale when only the post-apply UI callback fails", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
-    const setup = setupCommands(ref(false));
+    const setup = setupCommands();
     vi.spyOn(setup.selectionStore, "activateSheet")
       .mockImplementation(() => {
         throw new Error("sheet switch failed");

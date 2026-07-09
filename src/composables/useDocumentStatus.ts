@@ -1,7 +1,6 @@
 import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
-import type { EditorSessionInfo, EditorStateInfo } from '@/types';
 
 export function useDocumentStatus() {
   const documentSessionStore = useDocumentSessionStore();
@@ -16,14 +15,6 @@ export function useDocumentStatus() {
     capabilities,
     history,
   } = storeToRefs(documentStatusStore);
-
-  function applyEditorState(state: EditorStateInfo | null | undefined) {
-    documentStatusStore.applyEditorState(state);
-  }
-
-  function applyEditorSession(info: EditorSessionInfo | null | undefined) {
-    documentSessionStore.applyEditorSession(info);
-  }
 
   async function refreshEditorState() {
     const context = documentSessionStore.currentCommandContext();
@@ -46,8 +37,6 @@ export function useDocumentStatus() {
     history,
     isContentDirty,
     hasPendingContentChange,
-    applyEditorState,
-    applyEditorSession,
     refreshEditorState,
   };
 }

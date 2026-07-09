@@ -24,9 +24,6 @@ const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
 const searchSessionStore = useSearchSessionStore();
 
-// ========== State refs (must be declared before composables use them) ==========
-const isLoading = ref(false);
-const isFileLoading = ref(false);
 const {
   currentSheetIndex,
   selectedCell,
@@ -77,10 +74,9 @@ const {
   refreshEditorState,
 } = useDocumentStatus();
 
-const isFileActionBusy = computed(() => documentSessionStore.isInteractionLocked || isLoading.value);
-const isEditorLocked = computed(
-  () => isLoading.value || documentSessionStore.isEditorInteractionLocked
-);
+const isFileLoading = computed(() => documentSessionStore.lifecycle === 'loading');
+const isFileActionBusy = computed(() => documentSessionStore.isInteractionLocked);
+const isEditorLocked = computed(() => documentSessionStore.isEditorInteractionLocked);
 const canInteractWithDocument = computed(() => !isEditorLocked.value);
 const currentSheetCapabilities = computed(() =>
   workbookSheetCapabilities(capabilities.value, currentSheetIndex.value)
@@ -128,8 +124,6 @@ const {
   handleBack,
 } = useFileActions({
   fileData,
-  isLoading,
-  isFileLoading,
   flushPendingCellChanges,
 });
 
@@ -184,7 +178,6 @@ const {
   currentSheet,
   currentSheetIndex,
   selectedCell,
-  isLoading,
   flushPendingCellChanges,
   editorValueForCell: getEditorValue,
   applyMutationResponse,

@@ -3,7 +3,14 @@ import { createPinia, setActivePinia } from "pinia";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
-import type { CellValue } from "@/types";
+import { useDocumentSessionStore } from "@/stores/documentSession";
+import {
+  defaultHistoryStatus,
+  defaultRichProjection,
+  defaultWorkbookCapabilities,
+  readyFormulaStatus,
+  type CellValue,
+} from "@/types";
 
 const unsavedChanges = vi.hoisted(() => ({
   confirmDiscardUnsavedChanges: vi.fn(),
@@ -21,6 +28,28 @@ vi.mock("@/utils/unsavedChanges", async () => {
 
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
+}
+
+function openTestDocument(documentId = 1) {
+  useDocumentSessionStore().openDocumentResponse({
+    fileData: {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [{ name: "Sheet1", rows: [[text("old")]], merges: [], rich: defaultRichProjection() }],
+    },
+    editorSession: {
+      documentId,
+      revision: 0,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: {
+        canUndo: false,
+        canRedo: false,
+        isDirty: false,
+        history: defaultHistoryStatus(),
+      },
+    },
+  }, "/tmp/book.xlsx");
 }
 
 function queueDraftWithAutosave(committed: string[]) {
@@ -42,6 +71,12 @@ function queueDraftWithAutosave(committed: string[]) {
     100
   );
   return pendingStore;
+}
+
+async function flushPromises() {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe("useDocumentReplacementGuard", () => {
@@ -114,6 +149,37 @@ describe("useDocumentReplacementGuard", () => {
     expect(committed).toEqual([]);
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(pendingStore.hasPendingWork()).toBe(false);
+  });
+
+  it("waits for active document mutations before allowing confirmed discard replacement", async () => {
+    const statusStore = useDocumentStatusStore();
+    const documentSessionStore = useDocumentSessionStore();
+    openTestDocument(1);
+    statusStore.markPendingContentChange();
+    unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
+    let releaseMutation!: () => void;
+    let replacementResolved = false;
+    void documentSessionStore.enqueueDocumentMutation(1, async () => {
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+    });
+
+    const replacementPromise = useDocumentReplacementGuard()
+      .beginDocumentReplacement()
+      .then((replacement) => {
+        replacementResolved = true;
+        return replacement;
+      });
+
+    await flushPromises();
+
+    expect(replacementResolved).toBe(false);
+
+    releaseMutation();
+    const replacement = await replacementPromise;
+
+    expect(replacement).not.toBeNull();
   });
 
 });

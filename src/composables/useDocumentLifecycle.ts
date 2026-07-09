@@ -57,7 +57,7 @@ export function useDocumentLifecycle() {
       if (documentSessionStore.beginLifecycle(lifecycle)) {
         return true;
       }
-      await documentSessionStore.waitForIdleLifecycle();
+      await documentSessionStore.waitForInteractionIdle();
     }
 
     return false;

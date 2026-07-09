@@ -5,41 +5,39 @@ import type {
   OpenDocumentResponse,
   SavedDocumentResponse,
   EditorCommandContext,
-  EditorPatch,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
-import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
-import { useSearchSessionStore } from "@/stores/searchSession";
-import { useDocumentStatusStore } from "@/stores/documentStatus";
-import type { DocumentStatusSnapshot } from "@/stores/documentStatus";
-import { useEditorSelectionStore } from "@/stores/editorSelection";
-import type { EditorSelectionSnapshot } from "@/stores/editorSelection";
-import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
+import {
+  applyEditorSessionStatus,
+  applyResponseStatus,
+  applySelectionPatches,
+  beginSessionEditorCommand,
+  beginSessionLifecycle,
+  captureMutationSnapshot,
+  clampSelectionToCurrentSheet,
+  clearSearchSession,
+  endSessionLifecycle,
+  enqueueMutation,
+  mutationInvalidatesSearch,
+  replaceProjection,
+  resetDocumentStatus,
+  resetSessionEditorCommands,
+  resetSearchSession,
+  resetSessionLifecycle,
+  resetSessionUi,
+  resetTransientDocumentWork,
+  restoreMutationSnapshot,
+  waitForIdleSessionInteraction,
+  waitForQueuedMutations,
+  type DocumentSessionLifecycle,
+} from "@/stores/documentSessionRuntime";
+
+export type { DocumentSessionLifecycle } from "@/stores/documentSessionRuntime";
 
 export type MutationApplyResult = {
   data: FileData | null;
   resyncRequired: boolean;
 };
-
-export type DocumentSessionLifecycle = "idle" | "loading" | "saving";
-
-type DocumentSessionRuntime = {
-  tail: Promise<void> | null;
-  lifecycleIdleWaiters: Array<() => void>;
-};
-
-type DocumentSessionSnapshot = {
-  data: FileData | null;
-  currentFilePath: string | null;
-  documentId: number | null;
-  revision: number;
-  lifecycle: DocumentSessionLifecycle;
-  projectionStale: boolean;
-  status: DocumentStatusSnapshot;
-  selection: EditorSelectionSnapshot;
-};
-
-const documentSessionRuntimes = new WeakMap<object, DocumentSessionRuntime>();
 
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
@@ -48,33 +46,23 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     documentId: null as number | null,
     revision: 0,
     lifecycle: "idle" as DocumentSessionLifecycle,
+    editorCommandDepth: 0,
     projectionStale: false,
   }),
   getters: {
-    isInteractionLocked: (state) => state.lifecycle !== "idle",
-    isEditorInteractionLocked: (state) => state.lifecycle !== "idle" || state.projectionStale,
+    isInteractionLocked: (state) => state.lifecycle !== "idle" || state.editorCommandDepth > 0,
+    isEditorInteractionLocked: (state) =>
+      state.lifecycle !== "idle" || state.projectionStale || state.editorCommandDepth > 0,
   },
   actions: {
     beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">): boolean {
-      if (this.lifecycle !== "idle") {
-        return false;
-      }
-      this.lifecycle = lifecycle;
-      return true;
+      return beginSessionLifecycle(this, lifecycle);
     },
     endLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">) {
-      if (this.lifecycle === lifecycle) {
-        this.lifecycle = "idle";
-        resolveLifecycleIdleWaiters(this);
-      }
+      endSessionLifecycle(this, lifecycle);
     },
-    waitForIdleLifecycle(): Promise<void> {
-      if (this.lifecycle === "idle") {
-        return Promise.resolve();
-      }
-      return new Promise((resolve) => {
-        sessionRuntimeFor(this).lifecycleIdleWaiters.push(resolve);
-      });
+    waitForInteractionIdle(): Promise<void> {
+      return waitForIdleSessionInteraction(this);
     },
     enqueueDocumentMutation<T>(
       documentId: number,
@@ -92,7 +80,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       });
     },
     waitForMutations(): Promise<void> {
-      return sessionRuntimeFor(this).tail ?? Promise.resolve();
+      return waitForQueuedMutations(this);
+    },
+    beginEditorCommand(): (() => void) | null {
+      return beginSessionEditorCommand(this);
     },
     currentCommandContext(): EditorCommandContext | null {
       if (this.documentId === null) return null;
@@ -127,11 +118,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
+      resetSessionEditorCommands(this);
       this.projectionStale = false;
       resetSessionUi();
-      const statusStore = useDocumentStatusStore();
-      statusStore.reset();
-      statusStore.applyEditorSession(response.editorSession);
+      resetDocumentStatus();
+      applyEditorSessionStatus(response.editorSession);
     },
     applySavedDocumentResponse(response: SavedDocumentResponse, path: string | null = null) {
       resetTransientDocumentWork(this);
@@ -141,8 +132,8 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
       clampSelectionToCurrentSheet(this);
-      useSearchSessionStore().reset();
-      useDocumentStatusStore().applyEditorSession(response.editorSession);
+      resetSearchSession();
+      applyEditorSessionStatus(response.editorSession);
     },
     applySavedDocumentResponseForContext(
       context: EditorCommandContext,
@@ -175,11 +166,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = null;
       this.documentId = null;
       this.revision = 0;
-      this.lifecycle = "idle";
+      resetSessionEditorCommands(this);
       this.projectionStale = false;
-      resolveLifecycleIdleWaiters(this);
+      resetSessionLifecycle(this);
       resetSessionUi();
-      useDocumentStatusStore().reset();
+      resetDocumentStatus();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
       if (response.protocolVersion !== 1) {
@@ -201,13 +192,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         this.revision = response.revision;
         applyResponseStatus(response);
         this.projectionStale = true;
-        useSearchSessionStore().clearSearch();
+        clearSearchSession();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision && response.patches?.length) {
         applyResponseStatus(response);
         this.projectionStale = true;
-        useSearchSessionStore().clearSearch();
+        clearSearchSession();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision) {
@@ -219,9 +210,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       try {
         const result = applyDocumentPatches(this.data, response.patches);
         this.data = result.data;
-        useEditorSelectionStore().applyEditorPatches(response.patches);
+        applySelectionPatches(response.patches);
         if (mutationInvalidatesSearch(response.patches)) {
-          useSearchSessionStore().clearSearch();
+          clearSearchSession();
         }
         clampSelectionToCurrentSheet(this);
         return {
@@ -230,7 +221,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         };
       } catch (error) {
         this.projectionStale = true;
-        useSearchSessionStore().clearSearch();
+        clearSearchSession();
         throw error;
       }
     },
@@ -252,7 +243,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         applyResponseStatus(response);
       }
       this.projectionStale = true;
-      useSearchSessionStore().clearSearch();
+      clearSearchSession();
       return true;
     },
     async applyMutationResponseWithResync(
@@ -359,142 +350,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       const revisionAdvancedWithoutProjection = info.revision > this.revision;
       this.documentId = info.documentId;
       this.revision = Math.max(this.revision, info.revision);
-      useDocumentStatusStore().applyEditorSession(info);
+      applyEditorSessionStatus(info);
       if (revisionAdvancedWithoutProjection) {
         this.projectionStale = true;
-        useSearchSessionStore().clearSearch();
+        clearSearchSession();
       }
     },
   },
 });
-
-type DocumentSessionStateTarget = {
-  data: FileData | null;
-  currentFilePath: string | null;
-  documentId: number | null;
-  revision: number;
-  lifecycle: DocumentSessionLifecycle;
-  projectionStale: boolean;
-};
-
-function resetMutationQueue(store: object) {
-  sessionRuntimeFor(store).tail = null;
-}
-
-function enqueueMutation<T>(store: object, task: () => Promise<T>): Promise<T> {
-  const runtime = sessionRuntimeFor(store);
-  const tail = runtime.tail ?? Promise.resolve();
-  const run = tail.then(task, task);
-  const cleanup = run.then(
-    () => undefined,
-    () => undefined
-  );
-  runtime.tail = cleanup;
-  cleanup.finally(() => {
-    if (runtime.tail === cleanup) {
-      runtime.tail = null;
-    }
-  });
-  return run;
-}
-
-function resetTransientDocumentWork(store: object) {
-  resetMutationQueue(store);
-  usePendingCellSavesStore().reset();
-  useDocumentStatusStore().clearPendingContentChange();
-}
-
-function replaceProjection(store: DocumentSessionStateTarget, data: FileData) {
-  const currentFileName = store.data?.fileName;
-  store.data = {
-    ...data,
-    path: store.currentFilePath ?? data.path,
-    fileName: currentFileName ?? data.fileName,
-  };
-  store.projectionStale = false;
-  clampSelectionToCurrentSheet(store);
-  useSearchSessionStore().clearSearch();
-}
-
-function applyResponseStatus(response: EditorMutationResponse) {
-  const statusStore = useDocumentStatusStore();
-  statusStore.applyRuntimeStatus(response.formulaStatus, response.capabilities);
-  statusStore.applyEditorState(response.editorState);
-}
-
-function captureMutationSnapshot(store: DocumentSessionStateTarget): DocumentSessionSnapshot {
-  const statusStore = useDocumentStatusStore();
-  const selectionStore = useEditorSelectionStore();
-  return {
-    data: store.data,
-    currentFilePath: store.currentFilePath,
-    documentId: store.documentId,
-    revision: store.revision,
-    lifecycle: store.lifecycle,
-    projectionStale: store.projectionStale,
-    status: statusStore.captureSnapshot(),
-    selection: selectionStore.captureSnapshot(),
-  };
-}
-
-function restoreMutationSnapshot(
-  store: DocumentSessionStateTarget,
-  snapshot: DocumentSessionSnapshot
-) {
-  store.data = snapshot.data;
-  store.currentFilePath = snapshot.currentFilePath;
-  store.documentId = snapshot.documentId;
-  store.revision = snapshot.revision;
-  store.lifecycle = snapshot.lifecycle;
-  store.projectionStale = snapshot.projectionStale;
-
-  useDocumentStatusStore().restoreSnapshot(snapshot.status);
-  useEditorSelectionStore().restoreSnapshot(snapshot.selection);
-}
-
-function resetSessionUi() {
-  useEditorSelectionStore().reset();
-  useSearchSessionStore().reset();
-  usePendingCellSavesStore().reset();
-}
-
-function clampSelectionToCurrentSheet(store: DocumentSessionStateTarget) {
-  const selectionStore = useEditorSelectionStore();
-  if (!store.data) {
-    selectionStore.clearSelection();
-    return;
-  }
-  selectionStore.clampToSheetData(store.data.sheets.length, (sheetIndex, row, col) => {
-    const sheet = store.data?.sheets[sheetIndex];
-    if (!sheet) return false;
-    const extent = calculateSheetExtent(
-      sheet.rows,
-      sheet.merges,
-      sheet.columnWidths,
-      sheet.rowHeights,
-      sheet.rich
-    );
-    return row >= 0 && col >= 0 && row < extent.rowCount && col < extent.columnCount;
-  });
-}
-
-function sessionRuntimeFor(store: object): DocumentSessionRuntime {
-  let runtime = documentSessionRuntimes.get(store);
-  if (!runtime) {
-    runtime = { tail: null, lifecycleIdleWaiters: [] };
-    documentSessionRuntimes.set(store, runtime);
-  }
-  return runtime;
-}
-
-function resolveLifecycleIdleWaiters(store: object) {
-  const runtime = sessionRuntimeFor(store);
-  const waiters = runtime.lifecycleIdleWaiters.splice(0);
-  for (const resolve of waiters) {
-    resolve();
-  }
-}
-
-function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): boolean {
-  return (patches ?? []).some((patch) => patch.type !== "Layout");
-}
