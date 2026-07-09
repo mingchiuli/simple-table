@@ -17,9 +17,9 @@ import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
 const recentFilesStore = useRecentFilesStore();
-const { prepareForDocumentReplacement } = useDocumentReplacementGuard();
+const { beginDocumentReplacement } = useDocumentReplacementGuard();
 const { openSelectedFileOrDiscard } = useOpenFileSelection({
-  prepareForDocumentReplacement,
+  beginDocumentReplacement,
 });
 const { runDocumentLifecycle } = useDocumentLifecycle();
 const { queueRecentFileEntryUpdate, refreshRecentFiles } = useRecentFileUpdates();
@@ -47,7 +47,6 @@ async function handleOpenFile() {
     }
     const opened = await openSelectedFileOrDiscard(selection);
     if (!opened) return;
-    documentSessionStore.openDocumentResponse(opened, selection.path);
 
     queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
     await router.push({ name: "table" });
@@ -56,7 +55,8 @@ async function handleOpenFile() {
 
 async function handleNewFile() {
   await runHomeFileAction("Failed to create file", async () => {
-    if (!(await prepareForDocumentReplacement())) return;
+    const replacement = await beginDocumentReplacement();
+    if (!replacement) return;
     const defaultExtension = await defaultSpreadsheetExtension();
     const newFileData: FileData = {
       path: "",
@@ -77,16 +77,21 @@ async function handleNewFile() {
       ],
     };
 
-    const opened = await api.initFile(newFileData);
-    documentSessionStore.openDocumentResponse(opened, null);
-    await router.push({ name: "table" });
+    try {
+      const opened = await api.initFile(newFileData);
+      replacement.commit();
+      documentSessionStore.openDocumentResponse(opened, null);
+      await router.push({ name: "table" });
+    } catch (error) {
+      replacement.cancel();
+      throw error;
+    }
   });
 }
 
 async function handleOpenRecent(file: RecentFile) {
   await runHomeFileAction("Failed to open file", async () => {
     if (await api.checkFileExists(file.path)) {
-      if (!(await prepareForDocumentReplacement())) return;
       if (await openRecentPath(file)) {
         await router.push({ name: "table" });
       }
@@ -100,10 +105,18 @@ async function handleOpenRecent(file: RecentFile) {
 }
 
 async function openRecentPath(file: RecentFile): Promise<boolean> {
-  const opened = await readFile(file.path);
-  documentSessionStore.openDocumentResponse(opened, file.path);
-  queueRecentFileEntryUpdate(file.path, file.fileName, file.originalPath);
-  return true;
+  const replacement = await beginDocumentReplacement();
+  if (!replacement) return false;
+  try {
+    const opened = await readFile(file.path);
+    replacement.commit();
+    documentSessionStore.openDocumentResponse(opened, file.path);
+    queueRecentFileEntryUpdate(file.path, file.fileName, file.originalPath);
+    return true;
+  } catch (error) {
+    replacement.cancel();
+    throw error;
+  }
 }
 
 async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
@@ -111,7 +124,6 @@ async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
   if (!selection) return false;
   const opened = await openSelectedFileOrDiscard(selection);
   if (!opened) return false;
-  documentSessionStore.openDocumentResponse(opened, selection.path);
   queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
 
   if (file.path !== selection.path) {

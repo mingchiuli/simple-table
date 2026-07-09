@@ -35,6 +35,9 @@ type PendingCellSaveSchedulerState = {
   debounceTimer: ReturnType<typeof setTimeout> | null;
   pendingSavePromise: Promise<boolean> | null;
   generation: number;
+  autosaveSuspendCount: number;
+  lastCallbacks: PendingCellSaveCallbacks | null;
+  lastDebounceMs: number;
 };
 
 const pendingSaveSchedulers = new WeakMap<object, PendingCellSaveSchedulerState>();
@@ -169,8 +172,13 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     },
     schedulePendingSave(callbacks: PendingCellSaveCallbacks, debounceMs: number) {
       const scheduler = schedulerFor(this);
+      scheduler.lastCallbacks = callbacks;
+      scheduler.lastDebounceMs = debounceMs;
       clearSchedulerTimer(scheduler);
       this.setPhase("debouncing");
+      if (scheduler.autosaveSuspendCount > 0) {
+        return;
+      }
       const generation = scheduler.generation;
       scheduler.debounceTimer = setTimeout(() => {
         if (generation !== scheduler.generation) return;
@@ -180,7 +188,8 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     },
     startPendingSave(callbacks: PendingCellSaveCallbacks) {
       const scheduler = schedulerFor(this);
-      if (scheduler.pendingSavePromise) {
+      scheduler.lastCallbacks = callbacks;
+      if (scheduler.pendingSavePromise || scheduler.autosaveSuspendCount > 0) {
         return;
       }
 
@@ -248,8 +257,37 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
         clearPendingContentChange();
       }
     },
+    suspendAutosave(): () => void {
+      const scheduler = schedulerFor(this);
+      const generation = scheduler.generation;
+      let released = false;
+      scheduler.autosaveSuspendCount += 1;
+      clearSchedulerTimer(scheduler);
+
+      return () => {
+        if (released) return;
+        released = true;
+        if (generation !== scheduler.generation) return;
+
+        scheduler.autosaveSuspendCount = Math.max(0, scheduler.autosaveSuspendCount - 1);
+        if (
+          scheduler.autosaveSuspendCount === 0
+          && this.hasQueuedSaves
+          && !scheduler.pendingSavePromise
+          && !scheduler.debounceTimer
+          && scheduler.lastCallbacks
+        ) {
+          this.schedulePendingSave(scheduler.lastCallbacks, scheduler.lastDebounceMs);
+          return;
+        }
+        if (this.isIdle() && !scheduler.pendingSavePromise && !scheduler.debounceTimer) {
+          this.setPhase("idle");
+        }
+      };
+    },
     async flushPendingCellChanges(callbacks: PendingCellSaveCallbacks): Promise<boolean> {
       const scheduler = schedulerFor(this);
+      scheduler.lastCallbacks = callbacks;
       if (scheduler.debounceTimer) {
         clearSchedulerTimer(scheduler);
         if (this.hasQueuedSaves) {
@@ -312,6 +350,8 @@ function resetScheduler(scheduler: PendingCellSaveSchedulerState) {
   scheduler.generation += 1;
   clearSchedulerTimer(scheduler);
   scheduler.pendingSavePromise = null;
+  scheduler.autosaveSuspendCount = 0;
+  scheduler.lastCallbacks = null;
 }
 
 function schedulerFor(store: object): PendingCellSaveSchedulerState {
@@ -321,6 +361,9 @@ function schedulerFor(store: object): PendingCellSaveSchedulerState {
       debounceTimer: null,
       pendingSavePromise: null,
       generation: 0,
+      autosaveSuspendCount: 0,
+      lastCallbacks: null,
+      lastDebounceMs: 0,
     };
     pendingSaveSchedulers.set(store, scheduler);
   }

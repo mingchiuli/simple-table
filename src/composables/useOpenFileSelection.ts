@@ -1,26 +1,33 @@
 import { discardOpenFileSelection, readFile } from "@/platform";
 import type { OpenFileSelection } from "@/platform";
-import type { OpenDocumentResponse } from "@/types";
+import type { DocumentReplacementLease } from "@/composables/useDocumentReplacementGuard";
+import { useDocumentSessionStore } from "@/stores/documentSession";
 
 type OpenFileSelectionLifecycleOptions = {
-  prepareForDocumentReplacement: () => Promise<boolean>;
+  beginDocumentReplacement: () => Promise<DocumentReplacementLease | null>;
 };
 
 export function useOpenFileSelection({
-  prepareForDocumentReplacement,
+  beginDocumentReplacement,
 }: OpenFileSelectionLifecycleOptions) {
-  async function openSelectedFileOrDiscard(
-    selection: OpenFileSelection
-  ): Promise<OpenDocumentResponse | null> {
+  const documentSessionStore = useDocumentSessionStore();
+
+  async function openSelectedFileOrDiscard(selection: OpenFileSelection): Promise<boolean> {
     let shouldDiscard = true;
+    let replacement: DocumentReplacementLease | null = null;
     try {
-      if (!(await prepareForDocumentReplacement())) {
-        return null;
+      replacement = await beginDocumentReplacement();
+      if (!replacement) {
+        return false;
       }
       const opened = await readFile(selection.path);
       shouldDiscard = false;
-      return opened;
+      replacement.commit();
+      replacement = null;
+      documentSessionStore.openDocumentResponse(opened, selection.path);
+      return true;
     } finally {
+      replacement?.cancel();
       if (shouldDiscard) {
         await discardOpenFileSelection(selection);
       }

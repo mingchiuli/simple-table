@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import {
   defaultHistoryStatus,
@@ -273,6 +274,92 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(false);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+  });
+
+  it("moves the current selection with row and column structure patches", () => {
+    const store = useDocumentSessionStore();
+    const selectionStore = useEditorSelectionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [
+        [text("A1"), text("B1"), text("C1")],
+        [text("A2"), text("B2"), text("C2")],
+        [text("A3"), text("B3"), text("C3")],
+      ])],
+    });
+    selectionStore.selectCell(2, 2);
+
+    store.applyMutationResponse(response({
+      revision: 1,
+      patches: [{
+        type: "RowDeleted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            rowIndex: 0,
+            count: 1,
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "rows", start: 0 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      }],
+    }));
+
+    expect(selectionStore.selectedCell).toEqual({ row: 1, col: 2 });
+
+    store.applyMutationResponse(response({
+      revision: 2,
+      patches: [{
+        type: "ColumnInserted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            colIndex: 1,
+            values: [text("inserted"), text("inserted")],
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "columns", start: 1 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      }],
+    }));
+
+    expect(selectionStore.selectedCell).toEqual({ row: 1, col: 3 });
+  });
+
+  it("clears the current selection when a structure patch deletes it", () => {
+    const store = useDocumentSessionStore();
+    const selectionStore = useEditorSelectionStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1"), text("B1")]])],
+    });
+    selectionStore.selectCell(0, 1);
+
+    store.applyMutationResponse(response({
+      revision: 1,
+      patches: [{
+        type: "ColumnDeleted",
+        data: {
+          patch: {
+            sheetIndex: 0,
+            colIndex: 1,
+            count: 1,
+            metadata: {
+              merges: [],
+              rich: { scope: { type: "columns", start: 1 }, projection: defaultRichProjection() },
+            },
+          },
+        },
+      }],
+    }));
+
+    expect(selectionStore.selectedCell).toBeNull();
   });
 
   it("ignores stale responses from an older revision", () => {

@@ -10,6 +10,7 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
+  type EditorMutationResponse,
   type FileData,
   type OpenDocumentResponse,
   type SearchResult,
@@ -25,6 +26,8 @@ vi.mock("element-plus", () => ({
 
 vi.mock("@/api", () => ({
   addRow: vi.fn(),
+  addSheet: vi.fn(),
+  search: vi.fn().mockResolvedValue([]),
 }));
 
 function text(value: string): CellValue {
@@ -35,10 +38,10 @@ function sheet(name: string, rows: CellValue[][]): SheetData {
   return { name, rows, merges: [], rich: defaultRichProjection() };
 }
 
-function openedResponse(): OpenDocumentResponse {
+function openedResponse(documentId = 1, fileName = "book.xlsx"): OpenDocumentResponse {
   const fileData: FileData = {
-    path: "/tmp/book.xlsx",
-    fileName: "book.xlsx",
+    path: `/tmp/${fileName}`,
+    fileName,
     sheets: [
       sheet("Sheet1", [[text("A1")]]),
       sheet("Sheet2", [[text("B1")]]),
@@ -47,7 +50,7 @@ function openedResponse(): OpenDocumentResponse {
   return {
     fileData,
     editorSession: {
-      documentId: 1,
+      documentId,
       revision: 0,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
@@ -61,14 +64,35 @@ function openedResponse(): OpenDocumentResponse {
   };
 }
 
-function setupCommands(isLoading = ref(false)) {
+function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
+  return {
+    protocolVersion: 1,
+    documentId: 1,
+    revision: 1,
+    formulaStatus: readyFormulaStatus(),
+    capabilities: defaultWorkbookCapabilities(),
+    editorState: {
+      canUndo: true,
+      canRedo: false,
+      isDirty: true,
+      history: defaultHistoryStatus(),
+    },
+    patches: [],
+    searchIndexUpdate: { rebuildAll: false, rebuildSheets: [] },
+    ...partial,
+  };
+}
+
+function setupCommands(
+  isLoading = ref(false),
+  flushPendingCellChanges = vi.fn().mockResolvedValue(true)
+) {
   const documentSessionStore = useDocumentSessionStore();
   documentSessionStore.openDocumentResponse(openedResponse(), "/tmp/book.xlsx");
   const selectionStore = useEditorSelectionStore();
   const { currentSheetIndex, selectedCell, cellEditorValue } = storeToRefs(selectionStore);
   const fileData = computed(() => documentSessionStore.data);
   const currentSheet = computed(() => fileData.value?.sheets[currentSheetIndex.value] ?? null);
-  const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
   const applyMutationResponse = vi.fn();
 
   const commands = useEditorCommands({
@@ -85,10 +109,22 @@ function setupCommands(isLoading = ref(false)) {
 
   return {
     commands,
+    documentSessionStore,
     currentSheetIndex,
     selectedCell,
     flushPendingCellChanges,
+    applyMutationResponse,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("useEditorCommands", () => {
@@ -138,5 +174,75 @@ describe("useEditorCommands", () => {
 
     expect(currentSheetIndex.value).toBe(0);
     expect(selectedCell.value).toBeNull();
+  });
+
+  it("skips queued structural mutations when the document changes while flushing edits", async () => {
+    const api = await import("@/api");
+    let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
+    const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
+      documentSessionStore.openDocumentResponse(openedResponse(2, "next.xlsx"), "/tmp/next.xlsx");
+      return true;
+    });
+    const setup = setupCommands(ref(false), flushPendingCellChanges);
+    documentSessionStore = setup.documentSessionStore;
+
+    await setup.commands.handleAddRow();
+
+    expect(api.addRow).not.toHaveBeenCalled();
+    expect(setup.applyMutationResponse).not.toHaveBeenCalled();
+    expect(documentSessionStore.documentId).toBe(2);
+  });
+
+  it("skips search when the document changes while flushing edits", async () => {
+    const api = await import("@/api");
+    let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
+    const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
+      documentSessionStore.openDocumentResponse(openedResponse(2, "next.xlsx"), "/tmp/next.xlsx");
+      return true;
+    });
+    const setup = setupCommands(ref(false), flushPendingCellChanges);
+    documentSessionStore = setup.documentSessionStore;
+
+    await setup.commands.handleSearch("A1", "allSheets");
+
+    expect(api.search).not.toHaveBeenCalled();
+    expect(documentSessionStore.documentId).toBe(2);
+  });
+
+  it("switches to a newly added sheet only after the mutation is applied", async () => {
+    const api = await import("@/api");
+    const addSheet = deferred<EditorMutationResponse>();
+    vi.mocked(api.addSheet).mockReturnValue(addSheet.promise);
+    const setup = setupCommands(ref(false));
+
+    const command = setup.commands.handleAddSheet();
+    await Promise.resolve();
+
+    expect(setup.currentSheetIndex.value).toBe(0);
+
+    addSheet.resolve(mutationResponse());
+    await command;
+
+    expect(setup.applyMutationResponse).toHaveBeenCalledTimes(1);
+    expect(setup.currentSheetIndex.value).toBe(2);
+  });
+
+  it("uses the latest same-document revision after flushing pending edits", async () => {
+    const api = await import("@/api");
+    let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
+    const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
+      documentSessionStore.revision = 4;
+      return true;
+    });
+    const setup = setupCommands(ref(false), flushPendingCellChanges);
+    documentSessionStore = setup.documentSessionStore;
+
+    await setup.commands.handleAddRow();
+
+    expect(api.addRow).toHaveBeenCalledWith(
+      { documentId: 1, baseRevision: 4 },
+      0,
+      1
+    );
   });
 });

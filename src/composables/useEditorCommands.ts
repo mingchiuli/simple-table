@@ -47,15 +47,20 @@ export function useEditorCommands({
   async function runEditorMutation(
     action: (context: EditorCommandContext) => Promise<EditorMutationResponse>,
     message: string,
-    options: { refreshProjectionOnError?: boolean } = {}
+    options: {
+      refreshProjectionOnError?: boolean;
+      afterApplied?: () => void;
+    } = {}
   ) {
     if (isEditorCommandBlocked()) return;
+    const initialContext = documentSessionStore.currentCommandContext();
+    if (!initialContext) return;
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      const documentId = documentSessionStore.requireCommandContext().documentId;
-      await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
+      await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
         await applyMutationResponse(await action(context));
+        options.afterApplied?.();
       });
     } catch (error) {
       await refreshAfterMutationError({ refreshProjection: options.refreshProjectionOnError });
@@ -106,12 +111,16 @@ export function useEditorCommands({
   async function handleAddSheet() {
     if (isEditorCommandBlocked() || !fileData.value || !ensureStructureEditingAllowed("sheets")) return;
     const newSheetIndex = fileData.value.sheets.length;
-    await runEditorMutation(async (context) => {
-      const response = await api.addSheet(context);
-      editorSelectionStore.clearSelection();
-      currentSheetIndex.value = newSheetIndex;
-      return response;
-    }, "Failed to add sheet");
+    await runEditorMutation(
+      (context) => api.addSheet(context),
+      "Failed to add sheet",
+      {
+        afterApplied: () => {
+          editorSelectionStore.clearSelection();
+          currentSheetIndex.value = newSheetIndex;
+        },
+      }
+    );
   }
 
   async function handleDeleteSheet() {
@@ -122,12 +131,10 @@ export function useEditorCommands({
     }
 
     const deletedIndex = currentSheetIndex.value;
-    const nextSheetIndex = deletedIndex > 0 ? deletedIndex - 1 : 0;
-    await runEditorMutation(async (context) => {
-      const response = await api.deleteSheet(context, deletedIndex);
-      currentSheetIndex.value = nextSheetIndex;
-      return response;
-    }, "Failed to delete sheet");
+    await runEditorMutation(
+      (context) => api.deleteSheet(context, deletedIndex),
+      "Failed to delete sheet"
+    );
   }
 
   function handleSheetChange(index: number) {
@@ -151,13 +158,16 @@ export function useEditorCommands({
 
   async function handleSearch(query: string, scope: SearchScope) {
     if (!fileData.value || isEditorCommandBlocked()) return;
+    const initialContext = documentSessionStore.currentCommandContext();
+    if (!initialContext) return;
 
     const requestId = searchSessionStore.beginSearch(query);
     let context: EditorCommandContext | null = null;
     try {
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
-      context = documentSessionStore.requireCommandContext();
+      context = documentSessionStore.commandContextForDocument(initialContext.documentId);
+      if (!context) return;
 
       const results = await api.search(
         context,

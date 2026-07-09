@@ -17,6 +17,7 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
+import { warnRecentFileTrackingFailure } from '@/utils/recentFileTracking';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
@@ -44,11 +45,11 @@ export function useFileActions({
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
-  const { prepareForDocumentReplacement } = useDocumentReplacementGuard({
+  const { beginDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
   const { openSelectedFileOrDiscard } = useOpenFileSelection({
-    prepareForDocumentReplacement,
+    beginDocumentReplacement,
   });
   const { withReservedSaveLocation } = useSaveLocation();
   const { runDocumentLifecycle } = useDocumentLifecycle();
@@ -74,24 +75,33 @@ export function useFileActions({
           documentSessionStore.endLifecycle('loading');
         });
         if (!shouldContinue()) return;
-        if (!(await prepareForDocumentReplacement())) return;
-        if (!shouldContinue()) return;
+        const replacement = await beginDocumentReplacement();
+        if (!replacement) return;
 
-        const opened = await awaitRouteLoadStep(readFile(filePath), shouldContinue);
-        if (!opened) return;
-        if (!shouldContinue()) return;
-        const fileName = opened.fileData.fileName || (await awaitRouteLoadStep(
-          getFileName(filePath),
-          shouldContinue
-        ));
-        if (!fileName) return;
-        if (!shouldContinue()) return;
+        try {
+          if (!shouldContinue()) return;
+          const opened = await awaitRouteLoadStep(readFile(filePath), shouldContinue);
+          if (!opened) return;
+          replacement.commit();
+          documentSessionStore.openDocumentResponse(opened, filePath);
+          currentSheetIndex.value = 0;
+          loaded = true;
 
-        documentSessionStore.openDocumentResponse(opened, filePath);
-        currentSheetIndex.value = 0;
+          const fileName = await resolveRecentFileNameAfterOpen(
+            opened.fileData.fileName,
+            filePath,
+            shouldContinue
+          );
+          if (!shouldContinue()) return;
 
-        queueRecentFileEntryUpdate(filePath, fileName);
-        loaded = true;
+          if (fileName) {
+            queueRecentFileEntryUpdate(filePath, fileName);
+          }
+        } finally {
+          if (!loaded) {
+            replacement.cancel();
+          }
+        }
       },
       { waitForIdle: true, shouldContinue }
     );
@@ -112,8 +122,6 @@ export function useFileActions({
       if (!selection) return;
       const opened = await openSelectedFileOrDiscard(selection);
       if (!opened) return;
-      documentSessionStore.openDocumentResponse(opened, selection.path);
-      currentSheetIndex.value = 0;
 
       queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
     });
@@ -216,10 +224,12 @@ export function useFileActions({
 
   async function closeCurrentDocument(): Promise<boolean> {
     if (documentSessionStore.isInteractionLocked) return false;
-    if (!(await prepareForDocumentReplacement())) return false;
+    const replacement = await beginDocumentReplacement();
+    if (!replacement) return false;
 
     const context = documentSessionStore.currentCommandContext();
     if (!context) {
+      replacement.commit();
       documentSessionStore.clearDocument();
       return true;
     }
@@ -227,9 +237,11 @@ export function useFileActions({
     try {
       await api.closeCurrentDocument(context.documentId);
     } catch (error) {
+      replacement.cancel();
       ElMessage.error(`Failed to close file: ${error}`);
       return false;
     }
+    replacement.commit();
     documentSessionStore.clearDocument();
     return true;
   }
@@ -266,5 +278,19 @@ async function awaitRouteLoadStep<T>(
       return undefined;
     }
     throw error;
+  }
+}
+
+async function resolveRecentFileNameAfterOpen(
+  openedFileName: string,
+  filePath: string,
+  shouldContinue: ContinuationGuard
+): Promise<string | null> {
+  if (openedFileName) return openedFileName;
+  try {
+    return await awaitRouteLoadStep(getFileName(filePath), shouldContinue) ?? null;
+  } catch (error) {
+    warnRecentFileTrackingFailure(error);
+    return null;
   }
 }

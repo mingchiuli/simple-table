@@ -252,6 +252,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = response.revision;
       const result = applyDocumentPatches(this.data, response.patches);
       this.data = result.data;
+      useEditorSelectionStore().applyEditorPatches(response.patches);
       this.applyResponseStatus(response);
       this.clampSelectionToCurrentSheet();
       return {

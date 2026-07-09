@@ -150,4 +150,69 @@ describe("pendingCellSaves store", () => {
     await expect(flush).resolves.toBe(true);
     expect(store.isIdle()).toBe(true);
   });
+
+  it("suspends debounce autosave without dropping queued drafts", async () => {
+    vi.useFakeTimers();
+    const store = usePendingCellSavesStore();
+    const committed: string[] = [];
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const resume = store.suspendAutosave();
+    store.schedulePendingSave(
+      {
+        commitBatch: async (changes) => {
+          committed.push(changes[0].value);
+        },
+        clearPendingContentChange: () => undefined,
+      },
+      100
+    );
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual([]);
+    expect(store.queuedCellSaves.get("0,0,0")?.value).toBe("draft");
+
+    resume();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual(["draft"]);
+    expect(store.isIdle()).toBe(true);
+  });
+
+  it("does not resume suspended autosave after reset", async () => {
+    vi.useFakeTimers();
+    const store = usePendingCellSavesStore();
+    const committed: string[] = [];
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const resume = store.suspendAutosave();
+    store.schedulePendingSave(
+      {
+        commitBatch: async (changes) => {
+          committed.push(changes[0].value);
+        },
+        clearPendingContentChange: () => undefined,
+      },
+      100
+    );
+
+    store.reset();
+    resume();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual([]);
+    expect(store.hasPendingWork()).toBe(false);
+  });
 });

@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { useFileActions } from "@/composables/useFileActions";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -214,7 +215,7 @@ describe("useFileActions", () => {
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
   });
 
-  it("does not apply a path load after its continuation guard expires", async () => {
+  it("applies a path load after reading succeeds because the backend document has switched", async () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
@@ -235,13 +236,14 @@ describe("useFileActions", () => {
     shouldContinue = false;
     pendingRead.resolve(openedResponse("stale.xlsx", 2));
 
-    await expect(loadPromise).resolves.toBe(false);
-    expect(documentSessionStore.data).toBeNull();
-    expect(documentSessionStore.currentFilePath).toBeNull();
+    await expect(loadPromise).resolves.toBe(true);
+    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/stale.xlsx");
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
   it("releases the loading lifecycle when an in-flight path load is cancelled", async () => {
+    const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const pendingRead = deferred<OpenDocumentResponse>();
@@ -275,8 +277,10 @@ describe("useFileActions", () => {
     expect(actions.isFileLoading.value).toBe(false);
 
     pendingRead.resolve(openedResponse("slow.xlsx", 2));
-    await expect(loadPromise).resolves.toBe(false);
-    expect(documentSessionStore.data).toBeNull();
+    await expect(loadPromise).resolves.toBe(true);
+    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/slow.xlsx");
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
   it("suppresses stale path load errors after cancellation", async () => {
@@ -353,6 +357,22 @@ describe("useFileActions", () => {
     await flushPromises();
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalled();
+  });
+
+  it("keeps a route-loaded document open when recent file name fallback fails", async () => {
+    const api = await import("@/api");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("", 2));
+    vi.mocked(platform.getFileName).mockRejectedValue(new Error("name unavailable"));
+
+    const actions = mountActions(vi.fn().mockResolvedValue(true));
+
+    await expect(actions.loadFileFromPath("/tmp/nameless.xlsx")).resolves.toBe(true);
+
+    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/nameless.xlsx");
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
   it("asks before opening when pending work becomes dirty after flush", async () => {
@@ -455,7 +475,10 @@ describe("useFileActions", () => {
 
   it("discards selected imported files when reading fails", async () => {
     const platform = await import("@/platform");
+    const unsavedChanges = await import("@/utils/unsavedChanges");
     const documentSessionStore = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const pendingCellSavesStore = usePendingCellSavesStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     const selection = {
       path: "/tmp/broken.xlsx",
@@ -463,6 +486,13 @@ describe("useFileActions", () => {
       originalPath: "content://broken",
     };
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    statusStore.markPendingContentChange();
+    pendingCellSavesStore.applyDraft(
+      "0,0,0",
+      { sheetIndex: 0, row: 0, col: 0, value: "draft", oldValue: text("current") },
+      text("current")
+    );
+    vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
     vi.mocked(platform.pickOpenFile).mockResolvedValue(selection);
     vi.mocked(platform.readFile).mockRejectedValue(new Error("cannot parse"));
 
@@ -471,8 +501,12 @@ describe("useFileActions", () => {
     await actions.handleOpenFile();
 
     expect(platform.readFile).toHaveBeenCalledWith("/tmp/broken.xlsx");
+    expect(unsavedChanges.confirmDiscardUnsavedChanges).toHaveBeenCalledTimes(1);
+    expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
+    expect(statusStore.hasPendingContentChange).toBe(true);
+    expect(pendingCellSavesStore.draftCellValues.get("0,0,0")).toBe("draft");
   });
 
   it("discards a reserved save-as location when the target cannot be saved", async () => {
