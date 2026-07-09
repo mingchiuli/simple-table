@@ -8,41 +8,10 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "fs:default",
-    "fs:scope-applocaldata-recursive",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
     "deep-link:default",
     "store:default",
     "updater:default",
     "process:default",
-    "os:default",
-    {
-      "identifier": "fs:allow-write-file",
-      "allow": [
-        { "path": "$DESKTOP/**" },
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DOWNLOAD/**" }
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-text-file",
-      "allow": [
-        { "path": "$DESKTOP/**" },
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DOWNLOAD/**" }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [
-        { "path": "$DESKTOP/**" },
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DOWNLOAD/**" }
-      ]
-    }
+    "os:default"
   ]
 }
