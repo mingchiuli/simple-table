@@ -48,8 +48,7 @@ pub async fn save_file_ios(
 #[tauri::command]
 pub async fn export_file_ios(
     app: AppHandle,
-    source_path: String,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    ios::export_file(&app, &source_path, &default_name)
+    ios::export_file(&app, &default_name)
 }

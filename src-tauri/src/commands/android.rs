@@ -41,10 +41,9 @@ pub async fn save_file_android(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn export_file_android(
     app: AppHandle,
-    source_path: String,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    mobile::export_file(&app, &source_path, &default_name)
+    mobile::export_file(&app, &default_name)
 }
 
 /// Android: create a new sandbox path for a file that will be written by save_file_android.

@@ -2,6 +2,7 @@
 import { usePlatform } from "./composables/usePlatform";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { listen } from "@tauri-apps/api/event";
+import { decodeFileNameSegment } from "@/utils/fileFormats";
 import "./styles/base.css";
 import "./styles/platform.css";
 
@@ -54,7 +55,7 @@ function handleDeepLink(url: string) {
 
     if (url.startsWith("file:")) {
       const parsed = new URL(url);
-      filePath = decodeURIComponent(parsed.pathname);
+      filePath = decodeFileNameSegment(parsed.pathname);
     } else {
       // Windows/Linux 直接传递文件路径
       filePath = url;

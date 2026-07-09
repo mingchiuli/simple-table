@@ -1,10 +1,23 @@
-export type SpreadsheetFileExtension = "xlsx" | "csv";
+export function decodeFileNameSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
 
-export const DEFAULT_SPREADSHEET_EXTENSION: SpreadsheetFileExtension = "xlsx";
-export const SUPPORTED_SPREADSHEET_EXTENSIONS: SpreadsheetFileExtension[] = ["xlsx", "csv"];
+export function fileNameFromPathLike(name: string, fallback = "untitled"): string {
+  const withoutHash = name.split("#", 1)[0] ?? name;
+  const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
+  const normalized = withoutQuery.replace(/\\/g, "/").replace(/\/+$/, "");
+  const segment = normalized.split("/").pop() ?? "";
+  const decoded = decodeFileNameSegment(segment);
+  const decodedSegment = decoded.replace(/\\/g, "/").split("/").pop() ?? "";
+  return decodedSegment || fallback;
+}
 
 export function extensionFromName(name: string): string | null {
-  const fileName = name.split(/[\\/]/).pop() ?? name;
+  const fileName = fileNameFromPathLike(name, "");
   const dotIndex = fileName.lastIndexOf(".");
   if (dotIndex <= 0 || dotIndex === fileName.length - 1) {
     return null;
@@ -13,19 +26,18 @@ export function extensionFromName(name: string): string | null {
 }
 
 export function supportedSpreadsheetExtension(
-  name: string
-): SpreadsheetFileExtension | null {
+  name: string,
+  supportedExtensions: readonly string[]
+): string | null {
   const extension = extensionFromName(name);
-  return SUPPORTED_SPREADSHEET_EXTENSIONS.includes(extension as SpreadsheetFileExtension)
-    ? (extension as SpreadsheetFileExtension)
-    : null;
+  return extension && supportedExtensions.includes(extension) ? extension : null;
 }
 
 export function baseNameWithoutExtension(name: string): string {
-  const fileName = name.split(/[\\/]/).pop() ?? name;
+  const fileName = fileNameFromPathLike(name);
   const dotIndex = fileName.lastIndexOf(".");
   if (dotIndex <= 0) {
-    return fileName || "untitled";
+    return fileName;
   }
   return fileName.slice(0, dotIndex) || "untitled";
 }

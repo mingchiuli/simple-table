@@ -71,10 +71,6 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
     }))
 }
 
-pub fn export_file(
-    app: &AppHandle,
-    source_path: &str,
-    default_name: &str,
-) -> Result<Option<String>, AppError> {
-    mobile::export_file(app, source_path, default_name)
+pub fn export_file(app: &AppHandle, default_name: &str) -> Result<Option<String>, AppError> {
+    mobile::export_file(app, default_name)
 }

@@ -39,31 +39,9 @@ impl RecentStore {
     }
 
     pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentFile, AppError> {
-        let mut files = Self::get_all(app);
-
-        let existing_idx = files.iter().position(|f| f.path == file.path);
-        if let Some(idx) = existing_idx {
-            let path = file.path;
-            files[idx].last_opened = file.last_opened;
-            files[idx].file_size = file.file_size;
-            files[idx].thumbnail = file.thumbnail;
-            files[idx].storage_type = file.storage_type;
-            files[idx].original_path = file.original_path;
-            files.sort_by_key(|file| Reverse(file.last_opened));
-            let updated_index = files
-                .iter()
-                .position(|f| f.path == path)
-                .ok_or_else(|| AppError::FileNotFound(path.clone()))?;
-            Self::save(app, &files)?;
-            let updated = files.remove(updated_index);
-            return Ok(updated);
-        }
-
-        files.insert(0, file);
-        files.truncate(MAX_RECENT);
-
+        let (files, updated) = upsert_recent_file(Self::get_all(app), file);
         Self::save(app, &files)?;
-        Ok(files.remove(0))
+        Ok(updated)
     }
 
     pub fn remove(app: &AppHandle, id: &str) -> Result<(), AppError> {
@@ -99,5 +77,165 @@ impl RecentStore {
             return true;
         }
         Path::new(path).exists()
+    }
+}
+
+fn upsert_recent_file(
+    mut files: Vec<RecentFile>,
+    file: RecentFile,
+) -> (Vec<RecentFile>, RecentFile) {
+    let path = file.path.clone();
+    let stable_id = files
+        .iter()
+        .find(|existing| existing.path == path)
+        .map(|existing| existing.id.clone())
+        .unwrap_or_else(|| file.id.clone());
+    let merged = RecentFile {
+        id: stable_id,
+        ..file
+    };
+
+    files.retain(|existing| existing.path != path);
+    files.push(merged);
+
+    files.sort_by_key(|file| Reverse(file.last_opened));
+    truncate_preserving_path(&mut files, &path);
+
+    let updated = files
+        .iter()
+        .find(|file| file.path == path)
+        .cloned()
+        .expect("upserted recent file must be retained");
+
+    (files, updated)
+}
+
+fn truncate_preserving_path(files: &mut Vec<RecentFile>, path: &str) {
+    if files.len() <= MAX_RECENT {
+        return;
+    }
+
+    if files.iter().take(MAX_RECENT).any(|file| file.path == path) {
+        files.truncate(MAX_RECENT);
+        return;
+    }
+
+    let Some(upserted_index) = files.iter().position(|file| file.path == path) else {
+        files.truncate(MAX_RECENT);
+        return;
+    };
+    let upserted = files.remove(upserted_index);
+    files.truncate(MAX_RECENT - 1);
+    files.push(upserted);
+    files.sort_by_key(|file| Reverse(file.last_opened));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recent::types::StorageType;
+
+    fn recent(id: &str, path: &str, file_name: &str, last_opened: i64) -> RecentFile {
+        RecentFile {
+            id: id.to_string(),
+            path: path.to_string(),
+            file_name: file_name.to_string(),
+            last_opened,
+            file_size: 1,
+            thumbnail: None,
+            storage_type: StorageType::DesktopPath,
+            original_path: None,
+        }
+    }
+
+    #[test]
+    fn upsert_updates_existing_recent_file_metadata_without_changing_id() {
+        let existing = recent("stable-id", "/tmp/book.xlsx", "old.xlsx", 1);
+        let mut updated_input = recent("new-id", "/tmp/book.xlsx", "renamed.xlsx", 2);
+        updated_input.file_size = 99;
+        updated_input.thumbnail = Some("thumb".to_string());
+        updated_input.original_path = Some("/original/renamed.xlsx".to_string());
+
+        let (files, updated) = upsert_recent_file(vec![existing], updated_input);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].id, "stable-id");
+        assert_eq!(files[0].file_name, "renamed.xlsx");
+        assert_eq!(files[0].file_size, 99);
+        assert_eq!(files[0].thumbnail.as_deref(), Some("thumb"));
+        assert_eq!(
+            files[0].original_path.as_deref(),
+            Some("/original/renamed.xlsx")
+        );
+        assert_eq!(updated.id, "stable-id");
+        assert_eq!(updated.file_name, "renamed.xlsx");
+    }
+
+    #[test]
+    fn upsert_collapses_duplicate_paths_from_older_stores() {
+        let older = recent("oldest-id", "/tmp/book.xlsx", "oldest.xlsx", 1);
+        let newer_duplicate = recent("duplicate-id", "/tmp/book.xlsx", "duplicate.xlsx", 2);
+        let other = recent("other-id", "/tmp/other.xlsx", "other.xlsx", 3);
+        let updated_input = recent("new-id", "/tmp/book.xlsx", "current.xlsx", 4);
+
+        let (files, updated) =
+            upsert_recent_file(vec![older, newer_duplicate, other], updated_input);
+
+        let matching = files
+            .iter()
+            .filter(|file| file.path == "/tmp/book.xlsx")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].id, "oldest-id");
+        assert_eq!(matching[0].file_name, "current.xlsx");
+        assert_eq!(updated.id, "oldest-id");
+        assert_eq!(updated.file_name, "current.xlsx");
+    }
+
+    #[test]
+    fn upsert_sorts_recent_files_and_limits_history() {
+        let mut files = (0..MAX_RECENT)
+            .map(|index| {
+                recent(
+                    &format!("id-{index}"),
+                    &format!("/tmp/{index}.xlsx"),
+                    &format!("{index}.xlsx"),
+                    index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let newest = recent("new", "/tmp/new.xlsx", "new.xlsx", 100);
+        let (updated_files, updated) = upsert_recent_file(std::mem::take(&mut files), newest);
+
+        assert_eq!(updated_files.len(), MAX_RECENT);
+        assert_eq!(updated_files[0].path, "/tmp/new.xlsx");
+        assert_eq!(updated.path, "/tmp/new.xlsx");
+        assert!(!updated_files.iter().any(|file| file.path == "/tmp/0.xlsx"));
+    }
+
+    #[test]
+    fn upsert_retains_current_file_when_clock_moves_backwards() {
+        let files = (0..MAX_RECENT)
+            .map(|index| {
+                recent(
+                    &format!("id-{index}"),
+                    &format!("/tmp/{index}.xlsx"),
+                    &format!("{index}.xlsx"),
+                    100 + index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let current = recent("new", "/tmp/new.xlsx", "new.xlsx", 1);
+        let (updated_files, updated) = upsert_recent_file(files, current);
+
+        assert_eq!(updated.path, "/tmp/new.xlsx");
+        assert!(
+            updated_files
+                .iter()
+                .any(|file| file.path == "/tmp/new.xlsx")
+        );
+        assert_eq!(updated_files.len(), MAX_RECENT);
     }
 }

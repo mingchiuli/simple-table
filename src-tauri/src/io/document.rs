@@ -4,7 +4,8 @@ use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{
     default_spreadsheet_extension, export_extensions, extension_of, is_xlsx_extension,
-    open_extension_from_path_name_or_bytes, supported_extension_from_name,
+    open_extension_from_path_name_or_bytes, spreadsheet_format_options,
+    supported_extension_from_name,
 };
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
@@ -15,7 +16,7 @@ use crate::state::{
 };
 use crate::types::{
     DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, SavedDocumentResponse,
-    WorkbookCapabilities,
+    SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use umya_spreadsheet::Workbook;
 
@@ -392,6 +393,10 @@ pub fn native_save_plan(target_path_or_name: &str) -> NativeSavePlan {
         blocked_reason,
         capabilities,
     }
+}
+
+pub fn format_options() -> SpreadsheetFormatOptions {
+    spreadsheet_format_options()
 }
 
 fn active_workbook_capabilities(

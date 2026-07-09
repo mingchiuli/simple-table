@@ -389,6 +389,14 @@ pub struct SavedDocumentResponse {
     pub editor_session: EditorSessionInfo,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SpreadsheetFormatOptions {
+    pub default_extension: String,
+    pub supported_extensions: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename = "ReadOnlyRichProjection", rename_all = "camelCase")]

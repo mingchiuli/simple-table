@@ -34,8 +34,8 @@ export const androidFileOps = {
   saveFile: (path: string) =>
     invoke<SavedDocumentResponse>("save_file_android", { path }),
 
-  exportFile: (sourcePath: string, defaultName: string) =>
-    invoke<string | null>("export_file_android", { sourcePath, defaultName }),
+  exportFile: (defaultName: string) =>
+    invoke<string | null>("export_file_android", { defaultName }),
 
   pickSaveLocation: (defaultName: string) =>
     invoke<string | null>("pick_save_location_android", { defaultName }),

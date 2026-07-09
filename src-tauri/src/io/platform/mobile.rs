@@ -1,7 +1,10 @@
 use crate::error::AppError;
 use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 use crate::io::document;
-use crate::io::file_format::{SUPPORTED_SPREADSHEET_EXTENSIONS, supported_extension_or_default};
+use crate::io::file_format::{
+    SUPPORTED_SPREADSHEET_EXTENSIONS, output_name_for_selected_target,
+    supported_extension_or_default,
+};
 use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -74,6 +77,29 @@ pub(super) fn write_path_with_official_fs(
     write_with_official_fs(app, FilePath::from(path), bytes)
 }
 
+fn selected_file_name(path: &FilePath) -> Option<String> {
+    match path {
+        FilePath::Path(path) => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned),
+        FilePath::Url(url) => url
+            .to_file_path()
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| {
+                url.path_segments()
+                    .and_then(|mut segments| segments.next_back())
+                    .filter(|segment| !segment.is_empty())
+                    .map(ToOwned::to_owned)
+            }),
+    }
+}
+
 pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, AppError> {
     use tauri_plugin_fs::FsExt;
 
@@ -125,13 +151,8 @@ pub fn create_file(app: &AppHandle, file_name: &str) -> Result<PickedFileInfo, A
     })
 }
 
-pub fn export_file(
-    app: &AppHandle,
-    source_path: &str,
-    default_name: &str,
-) -> Result<Option<String>, AppError> {
+pub fn export_file(app: &AppHandle, default_name: &str) -> Result<Option<String>, AppError> {
     use tauri_plugin_dialog::{DialogExt, PickerMode};
-    use tauri_plugin_fs::FsExt;
 
     let dest = match app
         .dialog()
@@ -145,10 +166,10 @@ pub fn export_file(
         None => return Ok(None),
     };
 
-    let bytes = app
-        .fs()
-        .read(FilePath::from(PathBuf::from(source_path)))
-        .map_err(|e| AppError::ReadError(format!("Failed to read export source: {}", e)))?;
+    let selected_name = selected_file_name(&dest);
+    let target_path_or_name =
+        output_name_for_selected_target(selected_name.as_deref(), default_name);
+    let (_, bytes) = document::generate_current_file_bytes_for_target(&target_path_or_name)?;
 
     write_with_official_fs(app, dest.clone(), &bytes)
         .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;

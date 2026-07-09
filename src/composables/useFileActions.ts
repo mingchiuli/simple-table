@@ -5,11 +5,12 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
+import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 import {
-  DEFAULT_SPREADSHEET_EXTENSION,
-  baseNameWithoutExtension,
-  isUntitledSpreadsheet,
-} from '@/utils/fileFormats';
+  tryAddRecentFileWithResolvedStorage,
+  tryRefreshRecentFiles,
+} from '@/utils/recentFileTracking';
+import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -50,13 +51,12 @@ export function useFileActions({
   async function updateRecentFileEntry(
     path: string,
     fileName: string,
-    storageType: 'mobileSandboxPath' | 'desktopPath',
     originalPath?: string
   ) {
     if (!fileData.value) return;
 
-    const fileSize = await api.getFileSize(path);
-    await api.addRecentFileWithThumbnail(path, fileName, fileSize, storageType, originalPath);
+    await tryAddRecentFileWithResolvedStorage({ path, fileName, originalPath }, getStorageType);
+    await tryRefreshRecentFiles(() => recentFilesStore.load());
   }
 
   async function loadFileFromPath(filePath: string) {
@@ -71,9 +71,7 @@ export function useFileActions({
       currentSheetIndex.value = 0;
 
       const fileName = await getFileName(filePath);
-      const storageType = await getStorageType();
-      await updateRecentFileEntry(filePath, fileName, storageType);
-      await recentFilesStore.load();
+      await updateRecentFileEntry(filePath, fileName);
     });
     isLoading.value = false;
     isFileLoading.value = false;
@@ -92,15 +90,7 @@ export function useFileActions({
       documentSessionStore.openDocumentResponse(result, result.path);
       currentSheetIndex.value = 0;
 
-      const storageType = await getStorageType();
-      const fileSize = await api.getFileSize(result.path);
-      await api.addRecentFileWithThumbnail(
-        result.path,
-        result.fileName,
-        fileSize,
-        storageType,
-        result.originalPath
-      );
+      await updateRecentFileEntry(result.path, result.fileName, result.originalPath);
     });
     isLoading.value = false;
     isFileLoading.value = false;
@@ -118,7 +108,6 @@ export function useFileActions({
       const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
 
       const existingPath = documentSessionStore.currentFilePath;
-      const storageType = await getStorageType();
       const existingTarget = existingPath ?? data.fileName;
       const savePlan = await nativeSavePlan(existingTarget);
 
@@ -127,8 +116,7 @@ export function useFileActions({
         const saved = await saveFile(existingPath);
         documentSessionStore.applySavedDocumentResponse(saved, existingPath);
         const fileName = saved.fileData.fileName || await getFileName(existingPath);
-        await updateRecentFileEntry(existingPath, fileName, storageType);
-        await recentFilesStore.load();
+        await updateRecentFileEntry(existingPath, fileName);
         ElMessage.success('File saved successfully');
         return;
       }
@@ -153,43 +141,10 @@ export function useFileActions({
       documentSessionStore.applySavedDocumentResponse(saved, savePath);
       const fileName = saved.fileData.fileName || await getFileName(savePath);
 
-      await updateRecentFileEntry(savePath, fileName, storageType);
-      await recentFilesStore.load();
+      await updateRecentFileEntry(savePath, fileName);
       ElMessage.success('File saved successfully');
     });
     isLoading.value = false;
-  }
-
-  async function ensureSandboxPathForExport(defaultName: string, extension: string): Promise<string | null> {
-    if (!(await flushPendingCellChanges())) return null;
-    await documentSessionStore.waitForMutations();
-    if (!fileData.value) return null;
-
-    let path = documentSessionStore.currentFilePath;
-    const storageType = await getStorageType();
-    const pathPlan = path ? await nativeSavePlan(path) : null;
-
-    if (!path || pathPlan?.requiresSaveAs) {
-      if (storageType === 'desktopPath') {
-        throw new Error('Export is only supported for mobile sandbox files');
-      }
-      path = await pickSaveLocation(`${defaultName}.${extension}`);
-      if (!path) return null;
-
-      const targetPlan = await nativeSavePlan(path);
-      if (!targetPlan.canSave) {
-        throw new Error(targetPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
-      }
-    } else if (pathPlan && !pathPlan.canSave) {
-      throw new Error(pathPlan.blockedReason ?? 'Workbook cannot be saved in its current state.');
-    }
-
-    const saved = await saveFile(path);
-    documentSessionStore.applySavedDocumentResponse(saved, path);
-    const fileName = saved.fileData.fileName || await getFileName(path);
-    await updateRecentFileEntry(path, fileName, storageType);
-    await recentFilesStore.load();
-    return path;
   }
 
   async function handleExportFile() {
@@ -198,32 +153,19 @@ export function useFileActions({
 
     await withDocumentLifecycle('saving', 'Failed to export file', async () => {
       isLoading.value = true;
+      if (!(await flushPendingCellChanges())) return;
+      await documentSessionStore.waitForMutations();
+
       const isNewFile = isUntitledSpreadsheet(data.fileName);
       const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
       const capabilities = await documentCapabilities(
         data.fileName,
         documentSessionStore.currentFilePath
       );
-      const extension = isNewFile ? DEFAULT_SPREADSHEET_EXTENSION : capabilities.exportExtension;
-      const storageType = await getStorageType();
-
-      if (storageType === 'desktopPath') {
-        if (!(await flushPendingCellChanges())) return;
-        await documentSessionStore.waitForMutations();
-        const exportedPath = await exportFile(
-          documentSessionStore.currentFilePath ?? '',
-          `${defaultName}.${extension}`
-        );
-        if (exportedPath) {
-          ElMessage.success('File exported successfully');
-        }
-        return;
-      }
-
-      const sourcePath = await ensureSandboxPathForExport(defaultName, extension);
-      if (!sourcePath) return;
-
-      const exportedPath = await exportFile(sourcePath, `${defaultName}.${extension}`);
+      const extension = isNewFile
+        ? await defaultSpreadsheetExtension()
+        : capabilities.exportExtension;
+      const exportedPath = await exportFile(`${defaultName}.${extension}`);
       if (exportedPath) {
         ElMessage.success('File exported successfully');
       }

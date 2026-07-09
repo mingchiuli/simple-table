@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::types::SpreadsheetFormatOptions;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpreadsheetFileFormat {
     Xlsx,
@@ -127,6 +129,31 @@ pub fn export_extensions() -> Vec<String> {
         .collect()
 }
 
+pub fn spreadsheet_format_options() -> SpreadsheetFormatOptions {
+    SpreadsheetFormatOptions {
+        default_extension: default_spreadsheet_extension().to_string(),
+        supported_extensions: export_extensions(),
+    }
+}
+
+#[cfg_attr(
+    not(any(test, target_os = "android", target_os = "ios")),
+    allow(dead_code)
+)]
+pub fn output_name_for_selected_target(selected_name: Option<&str>, fallback_name: &str) -> String {
+    if let Some(selected_name) =
+        selected_name.filter(|name| supported_extension_from_name(name).is_some())
+    {
+        return selected_name.to_string();
+    }
+
+    if SpreadsheetFileFormat::from_path_or_default(fallback_name).is_some() {
+        return fallback_name.to_string();
+    }
+
+    default_spreadsheet_file_name("export")
+}
+
 fn supported_extension(extension: Option<&str>) -> Option<String> {
     extension
         .and_then(SpreadsheetFileFormat::from_extension)
@@ -165,6 +192,37 @@ mod tests {
         assert!(is_xlsx_extension("XLSX"));
         assert!(!is_xlsx_extension("csv"));
         assert!(!is_xlsx_extension("xlsm"));
+    }
+
+    #[test]
+    fn exposes_format_options_from_the_same_backend_source() {
+        assert_eq!(
+            spreadsheet_format_options(),
+            SpreadsheetFormatOptions {
+                default_extension: "xlsx".to_string(),
+                supported_extensions: vec!["xlsx".to_string(), "csv".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn selected_output_name_uses_selected_supported_extension_or_fallback() {
+        assert_eq!(
+            output_name_for_selected_target(Some("chosen.csv"), "default.xlsx"),
+            "chosen.csv"
+        );
+        assert_eq!(
+            output_name_for_selected_target(Some("content://provider/document/42"), "default.csv"),
+            "default.csv"
+        );
+        assert_eq!(
+            output_name_for_selected_target(Some("unsupported.bin"), "default.xlsx"),
+            "default.xlsx"
+        );
+        assert_eq!(
+            output_name_for_selected_target(Some("unsupported.bin"), "default.bin"),
+            "export.xlsx"
+        );
     }
 
     #[test]

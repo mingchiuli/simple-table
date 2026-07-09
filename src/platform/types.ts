@@ -22,8 +22,8 @@ export interface PlatformFileOps {
   pickSaveLocation?(defaultName: string): Promise<string | null>;
   /** iOS: 在 App 沙盒创建新文件 */
   createPrivateFile?(fileName: string): Promise<{ path: string; originalPath: string; fileName: string }>;
-  /** iOS: 导出文件 */
-  exportFile?(sourcePath: string, defaultName: string): Promise<string | null>;
+  /** 导出当前编辑状态到用户选择的位置 */
+  exportFile?(defaultName: string): Promise<string | null>;
 }
 
 export type StorageType = 'mobileSandboxPath' | 'desktopPath';

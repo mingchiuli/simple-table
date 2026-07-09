@@ -5,9 +5,8 @@ import { getPlatform } from '@/utils/platform';
 import { basename } from '@tauri-apps/api/path';
 import type { PlatformAPI, OpenFileResult } from './types';
 import type { OpenDocumentResponse } from '@/types';
-
-let cachedAPI: PlatformAPI | null = null;
-let loadingPromise: Promise<PlatformAPI> | null = null;
+import { createAsyncCache } from '@/utils/asyncCache';
+import { decodeFileNameSegment, fileNameFromPathLike } from '@/utils/fileFormats';
 
 async function loadPlatformAPI(): Promise<PlatformAPI> {
   const platform = getPlatform();
@@ -29,22 +28,13 @@ async function loadPlatformAPI(): Promise<PlatformAPI> {
   }
 }
 
+const platformAPICache = createAsyncCache(loadPlatformAPI);
+
 /**
  * Get the platform API (cached after first load)
  */
 export async function getPlatformAPI(): Promise<PlatformAPI> {
-  if (cachedAPI) {
-    return cachedAPI;
-  }
-
-  if (!loadingPromise) {
-    loadingPromise = loadPlatformAPI().then(api => {
-      cachedAPI = api;
-      return api;
-    });
-  }
-
-  return loadingPromise;
+  return platformAPICache.get();
 }
 
 // ==================== Convenience re-exports ====================
@@ -76,13 +66,13 @@ export async function pickSaveLocation(defaultName: string) {
   return api.fileOps.pickSaveLocation(defaultName);
 }
 
-/** 导出沙盒文件到用户选择的位置 */
-export async function exportFile(sourcePath: string, defaultName: string) {
+/** 导出当前编辑状态到用户选择的位置 */
+export async function exportFile(defaultName: string) {
   const api = await getPlatformAPI();
   if (!api.fileOps.exportFile) {
     throw new Error('exportFile not supported on this platform');
   }
-  return api.fileOps.exportFile(sourcePath, defaultName);
+  return api.fileOps.exportFile(defaultName);
 }
 
 /** 获取存储类型 */
@@ -93,5 +83,9 @@ export async function getStorageType() {
 
 /** 获取路径中的文件名 */
 export async function getFileName(path: string) {
-  return decodeURIComponent(await basename(path));
+  try {
+    return decodeFileNameSegment(await basename(path));
+  } catch {
+    return fileNameFromPathLike(path, "unknown");
+  }
 }

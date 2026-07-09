@@ -9,7 +9,7 @@ use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
-    SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
+    SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -67,6 +67,11 @@ pub fn get_document_capabilities(
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_native_save_plan(target_path_or_name: String) -> NativeSavePlan {
     document::native_save_plan(&target_path_or_name)
+}
+
+#[tauri::command]
+pub fn get_spreadsheet_format_options() -> SpreadsheetFormatOptions {
+    document::format_options()
 }
 
 // ==================== Editor Operations ====================

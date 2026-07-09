@@ -7,7 +7,11 @@ import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
 import { openFile, getStorageType } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
-import { DEFAULT_SPREADSHEET_EXTENSION } from "@/utils/fileFormats";
+import {
+  tryAddRecentFileWithResolvedStorage,
+  tryRefreshRecentFiles,
+} from "@/utils/recentFileTracking";
+import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
@@ -27,17 +31,16 @@ async function handleOpenFile() {
 
     documentSessionStore.openDocumentResponse(result, result.path);
 
-    const storageType = await getStorageType();
-    const fileSize = await api.getFileSize(result.path);
-    await api.addRecentFileWithThumbnail(
-      result.path,
-      result.fileName,
-      fileSize,
-      storageType,
-      result.originalPath
+    await tryAddRecentFileWithResolvedStorage(
+      {
+        path: result.path,
+        fileName: result.fileName,
+        originalPath: result.originalPath,
+      },
+      getStorageType
     );
 
-    await recentFilesStore.load();
+    await tryRefreshRecentFiles(() => recentFilesStore.load());
     router.push({ name: "table" });
   } catch (error) {
     ElMessage.error(`Failed to open file: ${error}`);
@@ -45,28 +48,33 @@ async function handleOpenFile() {
 }
 
 async function handleNewFile() {
-  const newFileData: FileData = {
-    path: "",
-    fileName: `untitled.${DEFAULT_SPREADSHEET_EXTENSION}`,
-    sheets: [
-      {
-        name: "Sheet1",
-        rows: [
-          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-          [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-        ],
-        merges: [],
-        rich: defaultRichProjection(),
-      },
-    ],
-  };
+  try {
+    const defaultExtension = await defaultSpreadsheetExtension();
+    const newFileData: FileData = {
+      path: "",
+      fileName: `untitled.${defaultExtension}`,
+      sheets: [
+        {
+          name: "Sheet1",
+          rows: [
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+          ],
+          merges: [],
+          rich: defaultRichProjection(),
+        },
+      ],
+    };
 
-  const opened = await api.initFile(newFileData);
-  documentSessionStore.openDocumentResponse(opened, null);
-  router.push({ name: "table" });
+    const opened = await api.initFile(newFileData);
+    documentSessionStore.openDocumentResponse(opened, null);
+    router.push({ name: "table" });
+  } catch (error) {
+    ElMessage.error(`Failed to create file: ${error}`);
+  }
 }
 
 function handleNavigate() {

@@ -2,6 +2,12 @@ import type { RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
 import { readFile, openFile, getStorageType } from "@/platform";
+import {
+  tryAddRecentFileWithResolvedStorage,
+  tryRefreshRecentFiles,
+  warnRecentFileTrackingFailure,
+} from "@/utils/recentFileTracking";
+import { fileNameFromPathLike } from "@/utils/fileFormats";
 
 export const useRecentFilesStore = defineStore("recentFiles", {
   state: () => ({
@@ -21,7 +27,7 @@ export const useRecentFilesStore = defineStore("recentFiles", {
 
     async openFile(path: string): Promise<{ success: boolean; needsRelocate?: boolean }> {
       const existingFile = this.files.find(f => f.path === path);
-      const fileName = existingFile?.fileName || path.split("/").pop()?.split("?")[0] || "unknown";
+      const fileName = existingFile?.fileName || fileNameFromPathLike(path, "unknown");
 
       try {
         const opened = await readFile(path);
@@ -29,16 +35,15 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         const documentSessionStore = useDocumentSessionStore();
         documentSessionStore.openDocumentResponse(opened, path);
 
-        const storageType = await getStorageType();
-        const fileSize = await api.getFileSize(path);
-        await api.addRecentFileWithThumbnail(
-          path,
-          fileName,
-          fileSize,
-          storageType,
-          existingFile?.originalPath
+        await tryAddRecentFileWithResolvedStorage(
+          {
+            path,
+            fileName,
+            originalPath: existingFile?.originalPath,
+          },
+          getStorageType
         );
-        await this.load();
+        await tryRefreshRecentFiles(() => this.load());
 
         return { success: true };
       } catch (e) {
@@ -68,18 +73,21 @@ export const useRecentFilesStore = defineStore("recentFiles", {
         const documentSessionStore = useDocumentSessionStore();
         documentSessionStore.openDocumentResponse(result, result.path);
 
-        const storageType = await getStorageType();
-        const fileSize = await api.getFileSize(result.path);
-        await api.addRecentFileWithThumbnail(
-          result.path,
-          result.fileName,
-          fileSize,
-          storageType,
-          result.originalPath
+        await tryAddRecentFileWithResolvedStorage(
+          {
+            path: result.path,
+            fileName: result.fileName,
+            originalPath: result.originalPath,
+          },
+          getStorageType
         );
 
-        await api.removeRecentFile(file.id);
-        await this.load();
+        try {
+          await api.removeRecentFile(file.id);
+        } catch (error) {
+          warnRecentFileTrackingFailure(error);
+        }
+        await tryRefreshRecentFiles(() => this.load());
         return true;
       } catch (e) {
         ElMessage.error(`Failed to open file: ${e}`);

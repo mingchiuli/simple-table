@@ -3,20 +3,19 @@ import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlatformAPI, OpenFileResult } from '../types';
 import type { OpenDocumentResponse, SavedDocumentResponse } from "@/types";
-import { SUPPORTED_SPREADSHEET_EXTENSIONS } from "@/utils/fileFormats";
-
-const SPREADSHEET_FILTER = [{ name: "Spreadsheet", extensions: SUPPORTED_SPREADSHEET_EXTENSIONS }];
+import { decodeFileNameSegment } from "@/utils/fileFormats";
+import { spreadsheetDialogFilters } from "@/utils/spreadsheetFormats";
 
 export const desktopFileOps = {
   /** Desktop: 打开文件选择器 + 直接调用 Rust 解析 */
   openFile: async (): Promise<OpenFileResult | null> => {
     const selected = await open({
       multiple: false,
-      filters: SPREADSHEET_FILTER,
+      filters: await spreadsheetDialogFilters(),
     });
     if (!selected) return null;
 
-    const fileName = decodeURIComponent(await basename(selected));
+    const fileName = decodeFileNameSegment(await basename(selected));
 
     // 直接调用 Rust 解析（一次调用）
     const document = await invoke<OpenDocumentResponse>("read_file_desktop", { path: selected });
@@ -41,15 +40,15 @@ export const desktopFileOps = {
   pickSaveLocation: async (defaultName: string) => {
     const selected = await save({
       defaultPath: defaultName,
-      filters: SPREADSHEET_FILTER,
+      filters: await spreadsheetDialogFilters(),
     });
     return selected;
   },
 
-  exportFile: async (_sourcePath: string, defaultName: string) => {
+  exportFile: async (defaultName: string) => {
     const selected = await save({
       defaultPath: defaultName,
-      filters: SPREADSHEET_FILTER,
+      filters: await spreadsheetDialogFilters(),
     });
     if (!selected) return null;
 

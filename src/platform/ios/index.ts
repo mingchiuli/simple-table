@@ -42,8 +42,8 @@ export const iosFileOps = {
     return info.path;
   },
 
-  exportFile: (sourcePath: string, defaultName: string) =>
-    invoke<string | null>("export_file_ios", { sourcePath, defaultName }),
+  exportFile: (defaultName: string) =>
+    invoke<string | null>("export_file_ios", { defaultName }),
 };
 
 export const iosAPI: PlatformAPI = {

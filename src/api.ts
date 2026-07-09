@@ -9,6 +9,7 @@ import type {
   DocumentCapabilities,
   NativeSavePlan,
   OpenDocumentResponse,
+  SpreadsheetFormatOptions,
 } from "@/types";
 
 export type EditorCommandContext = {
@@ -41,6 +42,10 @@ export async function getDocumentCapabilities(
 
 export async function getNativeSavePlan(targetPathOrName: string): Promise<NativeSavePlan> {
   return invoke<NativeSavePlan>("get_native_save_plan", { targetPathOrName });
+}
+
+export async function getSpreadsheetFormatOptions(): Promise<SpreadsheetFormatOptions> {
+  return invoke<SpreadsheetFormatOptions>("get_spreadsheet_format_options");
 }
 
 // ==================== Editor Operations ====================
