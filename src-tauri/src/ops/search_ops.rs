@@ -90,7 +90,7 @@ pub fn do_search(
                         sheet_name: sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
-                        value: cell.text,
+                        value: cell.display_text,
                         cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
                     });
                 }
@@ -107,7 +107,7 @@ pub fn do_search(
                         sheet_name: sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
-                        value: cell.text,
+                        value: cell.display_text,
                         cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
                     });
                 }
@@ -168,7 +168,7 @@ fn scan_sheet(
     };
     let mut cells = Vec::new();
     for cell in sheet_cells {
-        if !matcher.matches(&cell.display) {
+        if !matcher.matches(&cell.search_text) {
             continue;
         }
         cells.push(cell.clone());

@@ -79,6 +79,22 @@ impl ActiveDocumentStore {
         Ok(self.replace_active(editor_state))
     }
 
+    pub fn close_active(&mut self) -> Result<Option<u64>, AppError> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(EditorState::has_save_commit_in_progress)
+        {
+            return Err(AppError::DocumentStateInvalid(
+                "cannot close the active document while save is in progress".to_string(),
+            ));
+        }
+        Ok(self
+            .active
+            .take()
+            .map(|editor_state| editor_state.document_id()))
+    }
+
     pub fn active(&self) -> Option<&EditorState> {
         self.active.as_ref()
     }

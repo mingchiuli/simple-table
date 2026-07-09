@@ -62,8 +62,8 @@ pub struct SearchWriterHandle {
 pub struct SearchCellText {
     pub row: usize,
     pub col: usize,
-    pub text: String,
-    pub display: String,
+    pub search_text: String,
+    pub display_text: String,
 }
 
 static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -304,8 +304,8 @@ pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
                 (!text.is_empty()).then_some(SearchCellText {
                     row: row_idx,
                     col: col_idx,
-                    text,
-                    display,
+                    search_text: text,
+                    display_text: display,
                 })
             })
         })
@@ -331,8 +331,8 @@ pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
 
     for cell in cells {
         if let Err(error) = writer.add_document(doc!(
-            fields.text => cell.text.clone(),
-            fields.display => cell.display.clone(),
+            fields.text => cell.search_text.clone(),
+            fields.display => cell.display_text.clone(),
             fields.row => cell.row as u64,
             fields.col => cell.col as u64,
             fields.cell_id => format!("{}:{}", cell.row, cell.col),
@@ -432,6 +432,10 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
         Ok(field) => field,
         Err(_) => return vec![],
     };
+    let text_field = match index.schema.get_field("text") {
+        Ok(field) => field,
+        Err(_) => return vec![],
+    };
     let reader = match index.index.reader() {
         Ok(reader) => reader,
         Err(error) => {
@@ -474,11 +478,16 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
             && let (Some(row), Some(col), Some(display)) =
                 (row_val.as_u64(), col_val.as_u64(), display_val.as_str())
         {
+            let search_text = doc
+                .get_first(text_field)
+                .and_then(|value| value.as_str())
+                .unwrap_or(display)
+                .to_string();
             results.push(SearchCellText {
                 row: row as usize,
                 col: col as usize,
-                text: display.to_string(),
-                display: display.to_string(),
+                search_text,
+                display_text: display.to_string(),
             });
         }
     }
@@ -516,8 +525,8 @@ mod tests {
             Some(vec![SearchCellText {
                 row: 0,
                 col: 0,
-                text: "indexed text".to_string(),
-                display: "indexed text".to_string(),
+                search_text: "indexed text".to_string(),
+                display_text: "indexed text".to_string(),
             }])
         );
 
@@ -535,8 +544,8 @@ mod tests {
             Some(vec![SearchCellText {
                 row: 0,
                 col: 0,
-                text: "indexed text".to_string(),
-                display: "indexed text".to_string(),
+                search_text: "indexed text".to_string(),
+                display_text: "indexed text".to_string(),
             }])
         );
     }
@@ -594,8 +603,8 @@ mod tests {
 
         let cells = collect_sheet_search_text(&sheet);
 
-        assert_eq!(cells[0].display, "40%");
-        assert!(cells[0].text.contains("40%"));
-        assert!(cells[0].text.contains("0.4"));
+        assert_eq!(cells[0].display_text, "40%");
+        assert!(cells[0].search_text.contains("40%"));
+        assert!(cells[0].search_text.contains("0.4"));
     }
 }

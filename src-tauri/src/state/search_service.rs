@@ -207,6 +207,21 @@ impl SearchService {
         }
     }
 
+    pub fn cancel_document_jobs(&self, document_id: u64) {
+        if let Ok(mut state) = self.scheduler.state.lock() {
+            let before = state.pending.len();
+            state
+                .pending
+                .retain(|(pending_document_id, _), _| *pending_document_id != document_id);
+            let canceled = before.saturating_sub(state.pending.len());
+            if canceled > 0 {
+                state.stats.canceled_batches =
+                    state.stats.canceled_batches.saturating_add(canceled as u64);
+                self.scheduler.wake.notify_all();
+            }
+        }
+    }
+
     fn enqueue(&self, job: IndexJob) {
         if let Ok(mut state) = self.scheduler.state.lock() {
             state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
@@ -402,45 +417,46 @@ fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> ((u64, usize), SheetPen
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    while state.pending.is_empty() {
-        state = scheduler
-            .wake
-            .wait(state)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-    }
 
-    let deadline = Instant::now() + INDEX_DEBOUNCE;
     loop {
-        let now = Instant::now();
-        if now >= deadline {
-            break;
+        while state.pending.is_empty() {
+            state = scheduler
+                .wake
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
-        let wait = deadline - now;
-        let wait_result = scheduler.wake.wait_timeout(state, wait);
-        let (next_state, timeout) = match wait_result {
-            Ok(result) => result,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        state = next_state;
-        if timeout.timed_out() {
-            break;
-        }
-    }
 
-    let key = *state
-        .pending
-        .keys()
-        .next()
-        .expect("pending job exists after wait");
-    let pending = state
-        .pending
-        .remove(&key)
-        .expect("pending job exists for selected key");
-    if !state.pending.is_empty() {
-        scheduler.wake.notify_one();
+        let deadline = Instant::now() + INDEX_DEBOUNCE;
+        loop {
+            let now = Instant::now();
+            if now >= deadline || state.pending.is_empty() {
+                break;
+            }
+            let wait = deadline - now;
+            let wait_result = scheduler.wake.wait_timeout(state, wait);
+            let (next_state, timeout) = match wait_result {
+                Ok(result) => result,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            state = next_state;
+            if timeout.timed_out() {
+                break;
+            }
+        }
+
+        let Some(key) = state.pending.keys().next().copied() else {
+            continue;
+        };
+        let pending = state
+            .pending
+            .remove(&key)
+            .expect("pending job exists for selected key");
+        if !state.pending.is_empty() {
+            scheduler.wake.notify_one();
+        }
+        state.stats.drained_batches = state.stats.drained_batches.saturating_add(1);
+        return (key, pending);
     }
-    state.stats.drained_batches = state.stats.drained_batches.saturating_add(1);
-    (key, pending)
 }
 
 fn record_scheduler_event(
@@ -588,6 +604,10 @@ pub fn schedule_index_for_response(
     SearchService::global().schedule_for_response(response, registry);
 }
 
+pub fn cancel_index_jobs_for_document(document_id: u64) {
+    SearchService::global().cancel_document_jobs(document_id);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,7 +615,10 @@ mod tests {
     use crate::ops::search_ops::do_search;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;
-    use crate::types::{FileData, SearchScope, SheetData};
+    use crate::types::{
+        CellFormatProjection, FileData, ReadOnlyRichProjection, SearchScope, SheetData,
+    };
+    use serde_json::Value;
 
     fn s(value: &str) -> CellValue {
         CellValue::String(value.to_string())
@@ -618,6 +641,15 @@ mod tests {
         let mut registry = ActiveDocumentStore::new_for_test();
         registry.replace_active(editor);
         (Arc::new(RwLock::new(registry)), document_id)
+    }
+
+    fn isolated_search_service() -> SearchService {
+        SearchService {
+            scheduler: Arc::new(IndexScheduler {
+                state: Mutex::new(IndexSchedulerState::default()),
+                wake: Condvar::new(),
+            }),
+        }
     }
 
     fn rows_of(
@@ -648,6 +680,17 @@ mod tests {
             .collect();
         rows.sort();
         rows
+    }
+
+    fn values_of_current_search(
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        query: &str,
+    ) -> Vec<String> {
+        do_search(registry, query, SearchScope::CurrentSheet, Some(0))
+            .unwrap()
+            .into_iter()
+            .map(|result| result.value)
+            .collect()
     }
 
     fn current_stamp(
@@ -760,6 +803,49 @@ mod tests {
             Some(stamp)
         );
         assert!(sheet.incremental.is_empty());
+    }
+
+    #[test]
+    fn cancel_document_jobs_removes_only_matching_pending_batches() {
+        let service = isolated_search_service();
+        let (old_registry, old_document_id) = make_registry(vec![vec![s("old")]]);
+        let (new_registry, new_document_id) = make_registry(vec![vec![s("new")]]);
+        let old_stamp = current_stamp(&old_registry, old_document_id);
+        let new_stamp = current_stamp(&new_registry, new_document_id);
+
+        service.enqueue(IndexJob::Rebuild {
+            document_id: old_document_id,
+            sheet_index: 0,
+            stamp: old_stamp,
+            registry: Arc::clone(&old_registry),
+        });
+        service.enqueue(IndexJob::UpdateCell {
+            document_id: new_document_id,
+            sheet_index: 0,
+            stamp: new_stamp,
+            row: 0,
+            col: 0,
+            search_text: "newer".to_string(),
+            display_text: "newer".to_string(),
+            registry: Arc::clone(&new_registry),
+        });
+
+        service.cancel_document_jobs(old_document_id);
+
+        let state = service.scheduler.state.lock().unwrap();
+        assert!(
+            !state
+                .pending
+                .keys()
+                .any(|(document_id, _)| *document_id == old_document_id)
+        );
+        assert!(
+            state
+                .pending
+                .keys()
+                .any(|(document_id, _)| *document_id == new_document_id)
+        );
+        assert_eq!(state.stats.canceled_batches, 1);
     }
 
     #[test]
@@ -938,6 +1024,44 @@ mod tests {
         rebuild_current_sheet(&registry, document_id);
         assert!(rows_of(&registry, document_id, "apple").is_empty());
         assert_eq!(rows_of(&registry, document_id, "orange"), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn scan_fallback_matches_raw_search_text_but_returns_display_text() {
+        let sheet = SheetData {
+            name: "Test".to_string(),
+            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
+            rich: ReadOnlyRichProjection {
+                cell_formats: HashMap::from([(
+                    "A1".to_string(),
+                    CellFormatProjection {
+                        number_format: Some("0%".to_string()),
+                        style_id: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let editor = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "formatted.xlsx".to_string(),
+                sheets: vec![sheet],
+            },
+            None,
+        );
+        let document_id = editor.document_id();
+        let mut store = ActiveDocumentStore::new_for_test();
+        store.replace_active(editor);
+        let registry = Arc::new(RwLock::new(store));
+
+        assert_eq!(rows_of_current_search(&registry, "0.4"), vec![(0, 0)]);
+        assert_eq!(values_of_current_search(&registry, "0.4"), vec!["40%"]);
+
+        rebuild_current_sheet(&registry, document_id);
+        assert_eq!(rows_of_current_search(&registry, "0.4"), vec![(0, 0)]);
+        assert_eq!(values_of_current_search(&registry, "0.4"), vec!["40%"]);
     }
 
     #[test]

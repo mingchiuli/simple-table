@@ -234,6 +234,12 @@ export function useFileActions({
     if (!(await flushPendingCellChanges())) return;
     await documentSessionStore.waitForMutations();
 
+    try {
+      await api.closeCurrentDocument();
+    } catch (error) {
+      ElMessage.error(`Failed to close file: ${error}`);
+      return;
+    }
     documentSessionStore.clearDocument();
     resetDocumentStatus();
     router.push({ name: 'home' });

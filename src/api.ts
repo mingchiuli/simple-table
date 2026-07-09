@@ -24,6 +24,10 @@ export async function getCurrentFileData(): Promise<FileData> {
   return invoke<FileData>("get_current_file_data");
 }
 
+export async function closeCurrentDocument(): Promise<void> {
+  return invoke<void>("close_current_document");
+}
+
 export async function updateDocumentIdentity(path: string, fileName: string): Promise<void> {
   return invoke<void>("update_document_identity", { path, fileName });
 }

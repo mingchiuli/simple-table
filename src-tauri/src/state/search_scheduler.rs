@@ -80,6 +80,7 @@ pub(crate) struct IndexSchedulerState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SearchSchedulerStats {
     pub queued_jobs: u64,
+    pub canceled_batches: u64,
     pub drained_batches: u64,
     pub rebuild_jobs: u64,
     pub incremental_jobs: u64,

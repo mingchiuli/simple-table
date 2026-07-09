@@ -74,7 +74,7 @@ impl SpreadsheetDocument {
         &self.projection
     }
 
-    pub(crate) fn sheet_count(&self) -> usize {
+    pub(in crate::io) fn sheet_count(&self) -> usize {
         self.projection.sheets.len()
     }
 
@@ -253,7 +253,7 @@ impl SpreadsheetDocument {
         }
     }
 
-    pub(crate) fn restore_memento_side(
+    pub(in crate::io) fn restore_memento_side(
         &mut self,
         side: &DocumentMementoSide,
     ) -> Result<DocumentRestoreResult, AppError> {
@@ -620,7 +620,7 @@ impl SpreadsheetDocument {
         Ok(DocumentRestoreResult { patches })
     }
 
-    pub(crate) fn recalculate_after_operation(
+    pub(in crate::io) fn recalculate_after_operation(
         &mut self,
         operation: &AppliedOperation,
     ) -> Vec<SheetCellChange> {
@@ -633,7 +633,7 @@ impl SpreadsheetDocument {
         changes
     }
 
-    pub(crate) fn patch_workbook_after_operation(
+    pub(in crate::io) fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
         _result: &AppliedOperationResult,
@@ -648,7 +648,7 @@ impl SpreadsheetDocument {
         Ok(())
     }
 
-    pub(crate) fn apply_operation_to_body_and_projection(
+    pub(in crate::io) fn apply_operation_to_body_and_projection(
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
@@ -674,7 +674,7 @@ impl SpreadsheetDocument {
             }))
     }
 
-    pub(crate) fn patch_workbook_formula_changes(
+    pub(in crate::io) fn patch_workbook_formula_changes(
         &mut self,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
@@ -718,11 +718,11 @@ impl SpreadsheetDocument {
             .capabilities(&self.formulas.structure_formula_limitations());
     }
 
-    pub(crate) fn validate_projection_consistency(&self) -> Result<(), AppError> {
+    pub(in crate::io) fn validate_projection_consistency(&self) -> Result<(), AppError> {
         self.body.validate_projection_consistency(&self.projection)
     }
 
-    pub(crate) fn validate_projection_sheets(
+    pub(in crate::io) fn validate_projection_sheets(
         &self,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) -> Result<(), AppError> {
@@ -730,7 +730,7 @@ impl SpreadsheetDocument {
             .validate_projection_sheets(&self.projection, sheet_indexes)
     }
 
-    pub(crate) fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
+    pub(in crate::io) fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
         self.body
             .validate_persisted_projection_consistency(&self.projection)
     }
@@ -739,7 +739,7 @@ impl SpreadsheetDocument {
         self.transaction_failure.as_deref()
     }
 
-    pub(crate) fn mark_transaction_failed(&mut self, reason: String) {
+    pub(in crate::io) fn mark_transaction_failed(&mut self, reason: String) {
         self.refresh_capabilities();
         self.transaction_failure = Some(reason.clone());
         self.formulas.mark_degraded(reason);

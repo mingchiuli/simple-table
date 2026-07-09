@@ -92,7 +92,13 @@ export function useTableInteractionController({
     editingValue.value[key] = value ?? "";
   });
 
-  watch(selectedCell, (newCell) => {
+  const selectedCellKey = computed(() => {
+    const cell = selectedCell.value;
+    return cell ? `${cell.row}:${cell.col}` : "";
+  });
+
+  watch(selectedCellKey, () => {
+    const newCell = selectedCell.value;
     if (!newCell) {
       resetEditing();
       return;
@@ -107,7 +113,7 @@ export function useTableInteractionController({
       viewportWidth: scrollGeometry.viewportWidth.value,
       viewportHeight: scrollGeometry.viewportHeight.value,
     });
-  }, { deep: true });
+  });
 
   function getCellKey(rowIndex: number, colIndex: number): string {
     return `${rowIndex}-${colIndex}`;

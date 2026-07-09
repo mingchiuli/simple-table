@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
+use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
     active_document_store,
@@ -316,6 +316,20 @@ pub fn current_file_data() -> Result<FileData, AppError> {
         .ok_or(AppError::NoFileLoaded)
 }
 
+pub fn close_current_document() -> Result<(), AppError> {
+    let registry = active_document_store();
+    let closed_document_id = {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        registry_guard.close_active()?
+    };
+    if let Some(document_id) = closed_document_id {
+        cancel_index_jobs_for_document(document_id);
+    }
+    Ok(())
+}
+
 pub fn update_current_file_identity(path: String, file_name: String) -> Result<(), AppError> {
     let registry = active_document_store();
     let mut registry_guard = registry
@@ -480,15 +494,24 @@ fn init_editor_state(
     let initialized_file_data;
     let editor_session;
     let document_id;
+    let previous_document_id;
     {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        previous_document_id = registry_guard
+            .active()
+            .map(|editor_state| editor_state.document_id());
         let editor_state = EditorState::with_workbook(file_data, workbook);
         initialized_file_data = editor_state.file_data().clone();
         editor_session = editor_session_info(&editor_state);
         document_id = editor_state.document_id();
         registry_guard.try_replace_active(editor_state)?;
+    }
+    if let Some(previous_document_id) = previous_document_id
+        && previous_document_id != document_id
+    {
+        cancel_index_jobs_for_document(previous_document_id);
     }
     // 异步构建索引（后台线程）
     spawn_rebuild_all_sheets_index(&registry, document_id);

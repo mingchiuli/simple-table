@@ -46,6 +46,11 @@ pub fn get_current_file_data() -> Result<FileData, AppError> {
     document::current_file_data()
 }
 
+#[tauri::command]
+pub fn close_current_document() -> Result<(), AppError> {
+    document::close_current_document()
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn update_document_identity(path: String, file_name: String) -> Result<(), AppError> {
     document::update_current_file_identity(path, file_name)

@@ -33,6 +33,7 @@ describe("applyRichProjectionPatch", () => {
     expect(result.cellStyles?.A3).toEqual({ backgroundColor: "#fff" });
     expect(result.hiddenRows).toEqual([0, 2]);
     expect(result.hiddenColumns).toEqual([2]);
+    expect(result.hasStyleMetadata).toBe(true);
     expect(result.drawings).toEqual([
       { kind: "image", fromRow: 0, fromCol: 0, toRow: 0, toCol: 1 },
       { kind: "image", fromRow: 2, fromCol: 0, toRow: 3, toCol: 1 },
@@ -74,5 +75,36 @@ describe("applyRichProjectionPatch", () => {
     expect(result.hiddenRows).toEqual([1]);
     expect(result.hiddenColumns).toEqual([0, 1]);
     expect(result.freezePane).toBeNull();
+  });
+
+  it("recomputes flags after scoped patch merge", () => {
+    const result = applyRichProjectionPatch(
+      {
+        ...defaultRichProjection(),
+        cellStyles: { A1: { bold: true } },
+        hyperlinks: { A1: { url: "https://example.com", location: false } },
+        freezePane: {
+          topLeftCell: "A1",
+          horizontalSplit: 1,
+          verticalSplit: 1,
+          activePane: "bottomRight",
+          state: "frozen",
+        },
+        hasStyleMetadata: true,
+        hasHyperlinks: true,
+        hasFreezePane: true,
+      },
+      {
+        scope: { type: "rows", start: 2 },
+        projection: defaultRichProjection(),
+      }
+    );
+
+    expect(result.cellStyles?.A1).toEqual({ bold: true });
+    expect(result.hyperlinks?.A1).toEqual({ url: "https://example.com", location: false });
+    expect(result.freezePane?.topLeftCell).toBe("A1");
+    expect(result.hasStyleMetadata).toBe(true);
+    expect(result.hasHyperlinks).toBe(true);
+    expect(result.hasFreezePane).toBe(true);
   });
 });

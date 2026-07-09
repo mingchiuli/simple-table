@@ -1,3 +1,4 @@
+use crate::io::rich_projection::{RichProjectionScope, filter_rich_projection};
 use crate::state::editor_state::{EditorState, ExecutedOperation};
 use crate::state::state::EditorStateInfo;
 use crate::types::{
@@ -255,14 +256,7 @@ fn row_structure_metadata_patch(
         row_heights: sheet.row_heights.clone(),
         rich: RichProjectionPatch {
             scope: RichProjectionPatchScope::Rows { start },
-            projection: filter_rich_projection(
-                &sheet.rich,
-                |row, _| row >= start,
-                |row| row >= start,
-                |_| false,
-                |drawing| drawing_row_scope_affected(drawing, start),
-                |row, _| row >= start,
-            ),
+            projection: filter_rich_projection(&sheet.rich, RichProjectionScope::Rows { start }),
         },
     }
 }
@@ -277,118 +271,9 @@ fn column_structure_metadata_patch(
         row_heights: sheet.row_heights.clone(),
         rich: RichProjectionPatch {
             scope: RichProjectionPatchScope::Columns { start },
-            projection: filter_rich_projection(
-                &sheet.rich,
-                |_, col| col >= start,
-                |_| false,
-                |col| col >= start,
-                |drawing| drawing_column_scope_affected(drawing, start),
-                |_, col| col >= start,
-            ),
+            projection: filter_rich_projection(&sheet.rich, RichProjectionScope::Columns { start }),
         },
     }
-}
-
-fn filter_rich_projection(
-    source: &crate::types::ReadOnlyRichProjection,
-    include_cell: impl Fn(usize, usize) -> bool,
-    include_row: impl Fn(usize) -> bool,
-    include_column: impl Fn(usize) -> bool,
-    include_drawing: impl Fn(&crate::types::DrawingProjection) -> bool,
-    include_freeze_pane: impl Fn(usize, usize) -> bool,
-) -> crate::types::ReadOnlyRichProjection {
-    crate::types::ReadOnlyRichProjection {
-        cell_formats: source
-            .cell_formats
-            .iter()
-            .filter_map(|(key, value)| {
-                cell_key_matches(key, &include_cell).then(|| (key.clone(), value.clone()))
-            })
-            .collect(),
-        cell_styles: source
-            .cell_styles
-            .iter()
-            .filter_map(|(key, value)| {
-                cell_key_matches(key, &include_cell).then(|| (key.clone(), value.clone()))
-            })
-            .collect(),
-        hidden_rows: source
-            .hidden_rows
-            .iter()
-            .copied()
-            .filter(|row| include_row(*row))
-            .collect(),
-        hidden_columns: source
-            .hidden_columns
-            .iter()
-            .copied()
-            .filter(|column| include_column(*column))
-            .collect(),
-        freeze_pane: source.freeze_pane.clone().filter(|pane| {
-            parse_cell_key(&pane.top_left_cell)
-                .map(|(row, col)| include_freeze_pane(row, col))
-                .unwrap_or(false)
-        }),
-        hyperlinks: source
-            .hyperlinks
-            .iter()
-            .filter_map(|(key, value)| {
-                cell_key_matches(key, &include_cell).then(|| (key.clone(), value.clone()))
-            })
-            .collect(),
-        drawings: source
-            .drawings
-            .iter()
-            .filter(|drawing| include_drawing(drawing))
-            .cloned()
-            .collect(),
-        has_more_drawings: source.has_more_drawings,
-        has_style_metadata: source.has_style_metadata,
-        has_hyperlinks: source.has_hyperlinks,
-        has_freeze_pane: source.has_freeze_pane,
-    }
-}
-
-fn cell_key_matches(key: &str, predicate: &impl Fn(usize, usize) -> bool) -> bool {
-    parse_cell_key(key)
-        .map(|(row, col)| predicate(row, col))
-        .unwrap_or(false)
-}
-
-fn parse_cell_key(key: &str) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    let mut row = 0usize;
-    let mut saw_digit = false;
-    for byte in key.bytes() {
-        if byte.is_ascii_alphabetic() && !saw_digit {
-            col = col
-                .checked_mul(26)?
-                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
-        } else if byte.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
-        } else {
-            return None;
-        }
-    }
-    (col > 0 && row > 0).then_some((row - 1, col - 1))
-}
-
-fn drawing_row_scope_affected(drawing: &crate::types::DrawingProjection, row_index: usize) -> bool {
-    drawing.from_row as usize >= row_index
-        || drawing
-            .to_row
-            .is_some_and(|to_row| to_row as usize >= row_index)
-}
-
-fn drawing_column_scope_affected(
-    drawing: &crate::types::DrawingProjection,
-    col_index: usize,
-) -> bool {
-    drawing.from_col as usize >= col_index
-        || drawing
-            .to_col
-            .is_some_and(|to_col| to_col as usize >= col_index)
 }
 
 fn project_patch_display_formats(

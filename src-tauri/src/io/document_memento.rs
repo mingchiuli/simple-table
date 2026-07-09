@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::io::document_body::BodyStructureMemento;
+use crate::io::rich_projection::{
+    RichProjectionScope, filter_rich_projection, parse_cell_key, restore_rich_projection_scope,
+};
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingProjection, FreezePaneProjection,
     HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetCellChange, SheetData,
@@ -216,10 +219,7 @@ impl RichProjectionMemento {
             scope: RichProjectionScope::Rows { start: row_index },
             projection: filter_rich_projection(
                 source,
-                |row, _| row >= row_index,
-                |row| row >= row_index,
-                |_| false,
-                |drawing| drawing_row_scope_affected(drawing, row_index),
+                RichProjectionScope::Rows { start: row_index },
             ),
         }
     }
@@ -229,79 +229,18 @@ impl RichProjectionMemento {
             scope: RichProjectionScope::Columns { start: col_index },
             projection: filter_rich_projection(
                 source,
-                |_, col| col >= col_index,
-                |_| false,
-                |col| col >= col_index,
-                |drawing| drawing_column_scope_affected(drawing, col_index),
+                RichProjectionScope::Columns { start: col_index },
             ),
         }
     }
 
     pub(crate) fn restore_into(&self, target: &mut ReadOnlyRichProjection) {
-        match self.scope {
-            RichProjectionScope::Rows { start } => {
-                target
-                    .cell_formats
-                    .retain(|key, _| !cell_key_matches(key, |row, _| row >= start));
-                target
-                    .cell_styles
-                    .retain(|key, _| !cell_key_matches(key, |row, _| row >= start));
-                target
-                    .drawings
-                    .retain(|drawing| !drawing_row_scope_affected(drawing, start));
-                target.hidden_rows.retain(|row| *row < start);
-                target
-                    .hyperlinks
-                    .retain(|key, _| !cell_key_matches(key, |row, _| row >= start));
-            }
-            RichProjectionScope::Columns { start } => {
-                target
-                    .cell_formats
-                    .retain(|key, _| !cell_key_matches(key, |_, col| col >= start));
-                target
-                    .cell_styles
-                    .retain(|key, _| !cell_key_matches(key, |_, col| col >= start));
-                target
-                    .drawings
-                    .retain(|drawing| !drawing_column_scope_affected(drawing, start));
-                target.hidden_columns.retain(|col| *col < start);
-                target
-                    .hyperlinks
-                    .retain(|key, _| !cell_key_matches(key, |_, col| col >= start));
-            }
-        }
-
-        target
-            .cell_formats
-            .extend(self.projection.cell_formats.clone());
-        target
-            .cell_styles
-            .extend(self.projection.cell_styles.clone());
-        target
-            .hidden_rows
-            .extend(self.projection.hidden_rows.iter().copied());
-        target.hidden_rows.sort_unstable();
-        target.hidden_rows.dedup();
-        target
-            .hidden_columns
-            .extend(self.projection.hidden_columns.iter().copied());
-        target.hidden_columns.sort_unstable();
-        target.hidden_columns.dedup();
-        target.freeze_pane = self.projection.freeze_pane.clone();
-        target.hyperlinks.extend(self.projection.hyperlinks.clone());
-        target.drawings.extend(self.projection.drawings.clone());
-        target.has_more_drawings = self.projection.has_more_drawings;
+        restore_rich_projection_scope(target, self.scope, &self.projection);
     }
 
     fn estimated_bytes(&self) -> usize {
         std::mem::size_of::<Self>() + estimate_sheet_rich_projection_bytes(&self.projection)
     }
-}
-
-#[derive(Clone, Copy)]
-enum RichProjectionScope {
-    Rows { start: usize },
-    Columns { start: usize },
 }
 
 pub(crate) struct SheetTailMemento {
@@ -348,7 +287,7 @@ pub(crate) fn protected_rich_cell_positions(sheet: &SheetData) -> Vec<(usize, us
         .chain(sheet.rich.cell_styles.keys())
         .chain(sheet.rich.hyperlinks.keys())
     {
-        if let Some((row, col)) = parse_projection_cell_key(key)
+        if let Some((row, col)) = parse_cell_key(key)
             && seen.insert((row, col))
         {
             positions.push((row, col));
@@ -366,97 +305,6 @@ pub(crate) fn protected_rich_cell_positions(sheet: &SheetData) -> Vec<(usize, us
         }
     }
     positions
-}
-
-fn filter_rich_projection(
-    source: &ReadOnlyRichProjection,
-    cell_matches: impl Fn(usize, usize) -> bool,
-    row_matches: impl Fn(usize) -> bool,
-    column_matches: impl Fn(usize) -> bool,
-    drawing_matches: impl Fn(&DrawingProjection) -> bool,
-) -> ReadOnlyRichProjection {
-    let cell_formats = filter_cell_projection_map(&source.cell_formats, &cell_matches);
-    let cell_styles = filter_cell_projection_map(&source.cell_styles, &cell_matches);
-    let freeze_pane = source.freeze_pane.clone();
-    let hyperlinks = filter_cell_projection_map(&source.hyperlinks, &cell_matches);
-    let drawings: Vec<DrawingProjection> = source
-        .drawings
-        .iter()
-        .filter(|drawing| drawing_matches(drawing))
-        .cloned()
-        .collect();
-
-    ReadOnlyRichProjection {
-        has_style_metadata: !cell_formats.is_empty() || !cell_styles.is_empty(),
-        has_hyperlinks: !hyperlinks.is_empty(),
-        has_freeze_pane: freeze_pane.is_some(),
-        cell_formats,
-        cell_styles,
-        hidden_rows: source
-            .hidden_rows
-            .iter()
-            .copied()
-            .filter(|row| row_matches(*row))
-            .collect(),
-        hidden_columns: source
-            .hidden_columns
-            .iter()
-            .copied()
-            .filter(|column| column_matches(*column))
-            .collect(),
-        freeze_pane,
-        hyperlinks,
-        drawings,
-        has_more_drawings: source.has_more_drawings,
-    }
-}
-
-fn filter_cell_projection_map<T: Clone>(
-    source: &HashMap<String, T>,
-    cell_matches: &impl Fn(usize, usize) -> bool,
-) -> HashMap<String, T> {
-    source
-        .iter()
-        .filter(|(key, _)| cell_key_matches(key, cell_matches))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
-}
-
-fn cell_key_matches(key: &str, matches: impl Fn(usize, usize) -> bool) -> bool {
-    parse_projection_cell_key(key).is_some_and(|(row, col)| matches(row, col))
-}
-
-fn parse_projection_cell_key(key: &str) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    let mut row = 0usize;
-    let mut saw_digit = false;
-    for byte in key.bytes() {
-        if byte.is_ascii_alphabetic() && !saw_digit {
-            col = col
-                .checked_mul(26)?
-                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
-        } else if byte.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
-        } else {
-            return None;
-        }
-    }
-    (col > 0 && row > 0).then_some((row - 1, col - 1))
-}
-
-fn drawing_row_scope_affected(drawing: &DrawingProjection, row_index: usize) -> bool {
-    drawing.from_row as usize >= row_index
-        || drawing
-            .to_row
-            .is_some_and(|to_row| to_row as usize >= row_index)
-}
-
-fn drawing_column_scope_affected(drawing: &DrawingProjection, col_index: usize) -> bool {
-    drawing.from_col as usize >= col_index
-        || drawing
-            .to_col
-            .is_some_and(|to_col| to_col as usize >= col_index)
 }
 
 fn push_unique_position_2d(

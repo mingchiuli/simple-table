@@ -16,6 +16,7 @@ pub mod formula_coordinator;
 pub mod layout_units;
 pub mod projection_codec;
 pub mod projection_mapper;
+pub mod rich_projection;
 pub mod workbook_state;
 
 pub mod platform {

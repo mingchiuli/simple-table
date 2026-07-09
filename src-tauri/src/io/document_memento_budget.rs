@@ -7,6 +7,9 @@ use crate::io::document_memento::{
     RowStructureMemento, SheetShapeMemento, SheetTailMemento,
 };
 use crate::io::formula_coordinator::FormulaCoordinator;
+use crate::io::rich_projection::{
+    drawing_column_scope_affected, drawing_row_scope_affected, parse_cell_key,
+};
 use crate::ops::AppliedOperation;
 use crate::types::{CellValue, FileData, MergeRange, ReadOnlyRichProjection, SheetData};
 
@@ -283,42 +286,6 @@ fn estimate_cell_key_map_bytes<T>(values: &HashMap<String, T>) -> usize {
         .keys()
         .map(|key| key.len() + std::mem::size_of::<T>())
         .sum()
-}
-
-fn drawing_row_scope_affected(drawing: &crate::types::DrawingProjection, row_index: usize) -> bool {
-    drawing.from_row as usize >= row_index
-        || drawing
-            .to_row
-            .is_some_and(|to_row| to_row as usize >= row_index)
-}
-
-fn drawing_column_scope_affected(
-    drawing: &crate::types::DrawingProjection,
-    col_index: usize,
-) -> bool {
-    drawing.from_col as usize >= col_index
-        || drawing
-            .to_col
-            .is_some_and(|to_col| to_col as usize >= col_index)
-}
-
-fn parse_cell_key(key: &str) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    let mut row = 0usize;
-    let mut saw_digit = false;
-    for byte in key.bytes() {
-        if byte.is_ascii_alphabetic() && !saw_digit {
-            col = col
-                .checked_mul(26)?
-                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
-        } else if byte.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
-        } else {
-            return None;
-        }
-    }
-    (col > 0 && row > 0).then_some((row - 1, col - 1))
 }
 
 fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bool {

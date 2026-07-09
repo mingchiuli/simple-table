@@ -1,3 +1,3 @@
 pub use crate::state::search_service::{
-    schedule_index_for_response, spawn_rebuild_all_sheets_index,
+    cancel_index_jobs_for_document, schedule_index_for_response, spawn_rebuild_all_sheets_index,
 };

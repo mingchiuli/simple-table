@@ -14,14 +14,15 @@ export function applyRichProjectionPatch(
   const projection = normalizeRichProjection(patch.projection);
 
   if (patch.scope.type === "all") {
-    return projection;
+    return finalizeRichProjection(projection);
   }
 
   if (patch.scope.type === "rows") {
     const start = patch.scope.start;
-    return {
+    return finalizeRichProjection({
       ...base,
       ...projection,
+      hasMoreDrawings: base.hasMoreDrawings || projection.hasMoreDrawings,
       cellFormats: mergeCellMetadataByScope(base.cellFormats, projection.cellFormats, (row) => row >= start),
       cellStyles: mergeCellMetadataByScope(base.cellStyles, projection.cellStyles, (row) => row >= start),
       hyperlinks: mergeCellMetadataByScope(base.hyperlinks, projection.hyperlinks, (row) => row >= start),
@@ -29,13 +30,14 @@ export function applyRichProjectionPatch(
       hiddenColumns: base.hiddenColumns,
       freezePane: mergeFreezePaneByScope(base.freezePane, projection.freezePane, (row) => row >= start),
       drawings: mergeDrawingsByScope(base.drawings, projection.drawings, (drawing) => drawingRowScopeAffected(drawing, start)),
-    };
+    });
   }
 
   const start = patch.scope.start;
-  return {
+  return finalizeRichProjection({
     ...base,
     ...projection,
+    hasMoreDrawings: base.hasMoreDrawings || projection.hasMoreDrawings,
     cellFormats: mergeCellMetadataByScope(base.cellFormats, projection.cellFormats, (_row, col) => col >= start),
     cellStyles: mergeCellMetadataByScope(base.cellStyles, projection.cellStyles, (_row, col) => col >= start),
     hyperlinks: mergeCellMetadataByScope(base.hyperlinks, projection.hyperlinks, (_row, col) => col >= start),
@@ -43,7 +45,7 @@ export function applyRichProjectionPatch(
     hiddenColumns: mergeNumberArrayByScope(base.hiddenColumns, projection.hiddenColumns, (col) => col >= start),
     freezePane: mergeFreezePaneByScope(base.freezePane, projection.freezePane, (_row, col) => col >= start),
     drawings: mergeDrawingsByScope(base.drawings, projection.drawings, (drawing) => drawingColumnScopeAffected(drawing, start)),
-  };
+  });
 }
 
 function normalizeRichProjection(
@@ -58,6 +60,18 @@ function normalizeRichProjection(
     drawings: [...(projection?.drawings ?? [])],
     hiddenRows: [...(projection?.hiddenRows ?? [])],
     hiddenColumns: [...(projection?.hiddenColumns ?? [])],
+  };
+}
+
+function finalizeRichProjection(projection: ReadOnlyRichProjection): ReadOnlyRichProjection {
+  return {
+    ...projection,
+    hasStyleMetadata:
+      Object.keys(projection.cellFormats ?? {}).length > 0 ||
+      Object.keys(projection.cellStyles ?? {}).length > 0,
+    hasHyperlinks: Object.keys(projection.hyperlinks ?? {}).length > 0,
+    hasFreezePane: projection.freezePane != null,
+    hasMoreDrawings: Boolean(projection.hasMoreDrawings),
   };
 }
 
