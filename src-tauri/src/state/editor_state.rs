@@ -759,7 +759,7 @@ mod tests {
             let sheet = source.sheet_mut(0).expect("sheet");
             sheet.set_name("Inputs");
             sheet.cell_mut("A1").set_value_number(1);
-            sheet.cell_mut("B1").set_formula("Inputs!A1");
+            sheet.cell_mut("B1").set_formula("inputs!A1");
             sheet.cell_mut("B1").set_formula_result_number(1.0);
         }
 
@@ -782,7 +782,7 @@ mod tests {
             .expect("add row");
 
         match &state.file_data().sheets[0].rows[1][1] {
-            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A2"),
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=inputs!A2"),
             value => panic!("expected adjusted explicit same-sheet formula, got {value:?}"),
         }
 
@@ -797,7 +797,7 @@ mod tests {
                 .cell("B2")
                 .expect("B2")
                 .formula(),
-            "Inputs!A2"
+            "inputs!A2"
         );
     }
 
@@ -813,7 +813,7 @@ mod tests {
         }
         {
             let other = source.sheet_mut(1).expect("other sheet");
-            other.cell_mut("A1").set_formula("Inputs!A2");
+            other.cell_mut("A1").set_formula("inputs!A2");
             other.cell_mut("A1").set_formula_result_number(2.0);
         }
 
@@ -836,7 +836,7 @@ mod tests {
             .expect("add row");
 
         match &state.file_data().sheets[1].rows[0][0] {
-            CellValue::Formula { formula, .. } => assert_eq!(formula, "=Inputs!A3"),
+            CellValue::Formula { formula, .. } => assert_eq!(formula, "=inputs!A3"),
             value => panic!("expected adjusted cross-sheet formula, got {value:?}"),
         }
 
@@ -852,7 +852,7 @@ mod tests {
                 .cell("A1")
                 .expect("A1")
                 .formula(),
-            "Inputs!A3"
+            "inputs!A3"
         );
     }
 

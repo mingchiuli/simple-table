@@ -1,6 +1,7 @@
 use formualizer_parse::parser::{ASTNodeType, ReferenceType};
 
-use crate::formula::ast::FormulaAstService;
+use crate::formula::ast::{FormulaAstService, FormulaTextEdit, apply_formula_text_edits};
+use crate::formula::sheet_name::sheet_names_equal;
 
 #[derive(Clone, Copy)]
 pub enum StructureShift {
@@ -29,6 +30,24 @@ pub fn adjust_formula_references(
         target_sheet_name,
         current_sheet_name,
         ReferenceRewrite::Shift(shift),
+        ReferenceMatchMode::AllTargetReferences,
+    )
+}
+
+pub fn adjust_explicit_sheet_name_case_mismatched_references(
+    ast_service: &mut FormulaAstService,
+    formula: &str,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+    shift: StructureShift,
+) -> FormulaReferenceRewrite {
+    rewrite_formula_references(
+        ast_service,
+        formula,
+        target_sheet_name,
+        current_sheet_name,
+        ReferenceRewrite::Shift(shift),
+        ReferenceMatchMode::ExplicitSheetNameCaseMismatch,
     )
 }
 
@@ -44,6 +63,7 @@ pub fn invalidate_deleted_sheet_references(
         deleted_sheet_name,
         current_sheet_name,
         ReferenceRewrite::DeletedSheet,
+        ReferenceMatchMode::AllTargetReferences,
     )
 }
 
@@ -53,11 +73,10 @@ enum ReferenceRewrite {
     DeletedSheet,
 }
 
-#[derive(Clone)]
-struct FormulaTextEdit {
-    start: usize,
-    end: usize,
-    replacement: String,
+#[derive(Clone, Copy)]
+enum ReferenceMatchMode {
+    AllTargetReferences,
+    ExplicitSheetNameCaseMismatch,
 }
 
 fn rewrite_formula_references(
@@ -66,6 +85,7 @@ fn rewrite_formula_references(
     target_sheet_name: &str,
     current_sheet_name: &str,
     rewrite: ReferenceRewrite,
+    match_mode: ReferenceMatchMode,
 ) -> FormulaReferenceRewrite {
     let parsed = match ast_service.parse(formula) {
         Ok(parsed) => parsed,
@@ -84,7 +104,12 @@ fn rewrite_formula_references(
         let ASTNodeType::Reference { reference, .. } = &node.node_type else {
             continue;
         };
-        if !reference_targets_sheet(reference, target_sheet_name, current_sheet_name) {
+        if !reference_matches_target_sheet(
+            reference,
+            target_sheet_name,
+            current_sheet_name,
+            match_mode,
+        ) {
             continue;
         }
         let Some(token) = node.source_token.as_ref() else {
@@ -113,48 +138,29 @@ fn rewrite_formula_references(
     }
 
     FormulaReferenceRewrite {
-        formula: apply_text_edits(formula, edits).unwrap_or_else(|| formula.to_string()),
+        formula: apply_formula_text_edits(formula, edits).unwrap_or_else(|| formula.to_string()),
         skipped: false,
     }
 }
 
-fn apply_text_edits(source: &str, mut edits: Vec<FormulaTextEdit>) -> Option<String> {
-    edits.sort_by_key(|edit| edit.start);
-
-    let mut previous_end = 0;
-    for edit in &edits {
-        if edit.start < previous_end
-            || edit.start >= edit.end
-            || edit.end > source.len()
-            || !source.is_char_boundary(edit.start)
-            || !source.is_char_boundary(edit.end)
-        {
-            return None;
-        }
-        previous_end = edit.end;
-    }
-
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0;
-    for edit in edits {
-        output.push_str(&source[cursor..edit.start]);
-        output.push_str(&edit.replacement);
-        cursor = edit.end;
-    }
-    output.push_str(&source[cursor..]);
-    Some(output)
-}
-
-fn reference_targets_sheet(
+fn reference_matches_target_sheet(
     reference: &ReferenceType,
     target_sheet_name: &str,
     current_sheet_name: &str,
+    match_mode: ReferenceMatchMode,
 ) -> bool {
+    if matches!(
+        match_mode,
+        ReferenceMatchMode::ExplicitSheetNameCaseMismatch
+    ) {
+        return reference_has_case_mismatched_explicit_target_sheet(reference, target_sheet_name);
+    }
+
     match reference {
         ReferenceType::Cell { sheet, .. } | ReferenceType::Range { sheet, .. } => sheet
             .as_deref()
-            .map(|name| name == target_sheet_name)
-            .unwrap_or(current_sheet_name == target_sheet_name),
+            .map(|name| sheet_names_equal(name, target_sheet_name))
+            .unwrap_or_else(|| sheet_names_equal(current_sheet_name, target_sheet_name)),
         ReferenceType::Cell3D {
             sheet_first,
             sheet_last,
@@ -164,7 +170,40 @@ fn reference_targets_sheet(
             sheet_first,
             sheet_last,
             ..
-        } => sheet_first == target_sheet_name || sheet_last == target_sheet_name,
+        } => {
+            sheet_names_equal(sheet_first, target_sheet_name)
+                || sheet_names_equal(sheet_last, target_sheet_name)
+        }
+        ReferenceType::External(_) | ReferenceType::Table(_) | ReferenceType::NamedRange(_) => {
+            false
+        }
+    }
+}
+
+fn reference_has_case_mismatched_explicit_target_sheet(
+    reference: &ReferenceType,
+    target_sheet_name: &str,
+) -> bool {
+    match reference {
+        ReferenceType::Cell { sheet, .. } | ReferenceType::Range { sheet, .. } => {
+            sheet.as_deref().is_some_and(|name| {
+                sheet_names_equal(name, target_sheet_name) && name != target_sheet_name
+            })
+        }
+        ReferenceType::Cell3D {
+            sheet_first,
+            sheet_last,
+            ..
+        }
+        | ReferenceType::Range3D {
+            sheet_first,
+            sheet_last,
+            ..
+        } => {
+            (sheet_names_equal(sheet_first, target_sheet_name) && sheet_first != target_sheet_name)
+                || (sheet_names_equal(sheet_last, target_sheet_name)
+                    && sheet_last != target_sheet_name)
+        }
         ReferenceType::External(_) | ReferenceType::Table(_) | ReferenceType::NamedRange(_) => {
             false
         }
@@ -491,6 +530,22 @@ mod tests {
         )
     }
 
+    fn adjusted_case_mismatch(
+        formula: &str,
+        target_sheet_name: &str,
+        current_sheet_name: &str,
+        shift: StructureShift,
+    ) -> FormulaReferenceRewrite {
+        let mut ast_service = FormulaAstService::new();
+        adjust_explicit_sheet_name_case_mismatched_references(
+            &mut ast_service,
+            formula,
+            target_sheet_name,
+            current_sheet_name,
+            shift,
+        )
+    }
+
     #[test]
     fn adjusts_formula_references_for_inserted_columns() {
         assert_eq!(
@@ -657,6 +712,64 @@ mod tests {
                 },
             )),
             "Other!A1+Inputs!A2"
+        );
+    }
+
+    #[test]
+    fn matches_sheet_names_case_insensitively() {
+        assert_eq!(
+            rewritten(adjusted(
+                "inputs!A1",
+                "Inputs",
+                "Other",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            )),
+            "inputs!A2"
+        );
+
+        assert_eq!(
+            rewritten(adjusted(
+                "A1",
+                "Inputs",
+                "inputs",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            )),
+            "A2"
+        );
+
+        assert_eq!(
+            rewritten(adjusted(
+                "sheet1:sheet3!A1",
+                "Sheet1",
+                "Other",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            )),
+            "sheet1:sheet3!A2"
+        );
+    }
+
+    #[test]
+    fn adjusts_only_explicit_case_mismatched_current_sheet_references() {
+        assert_eq!(
+            rewritten(adjusted_case_mismatch(
+                "A2+Inputs!A2+inputs!A2",
+                "Inputs",
+                "Inputs",
+                StructureShift::InsertRows {
+                    row_index: 0,
+                    count: 1,
+                },
+            )),
+            "A2+Inputs!A2+inputs!A3"
         );
     }
 

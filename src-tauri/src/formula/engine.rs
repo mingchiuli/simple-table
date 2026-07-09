@@ -132,6 +132,7 @@ impl FormulaRuntime {
         row: usize,
         col: usize,
     ) -> Result<Vec<SheetCellChange>, AppError> {
+        let sheet_names = formula_sheet_names(file_data);
         let sheet = file_data
             .sheets
             .get(sheet_index)
@@ -157,6 +158,7 @@ impl FormulaRuntime {
             row,
             col,
             cell,
+            &sheet_names,
         )?;
         let mut changes = registration_result.invalid_formulas;
         if registration_result.registered_formulas.contains(&cell_ref) {
@@ -191,6 +193,7 @@ impl FormulaRuntime {
         changed_cells: impl IntoIterator<Item = FormulaCellRef>,
     ) -> Result<Vec<SheetCellChange>, AppError> {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
+        let sheet_names = formula_sheet_names(file_data);
         let mut changes = Vec::new();
         let mut dependency_updates = Vec::new();
 
@@ -218,6 +221,7 @@ impl FormulaRuntime {
                 cell_ref.row,
                 cell_ref.col,
                 cell,
+                &sheet_names,
             )?;
             changes.extend(registration_result.invalid_formulas);
             if registration_result.registered_formulas.contains(cell_ref) {
@@ -377,6 +381,14 @@ impl FormulaRuntime {
 
         Ok(changes)
     }
+}
+
+fn formula_sheet_names(file_data: &FileData) -> Vec<String> {
+    file_data
+        .sheets
+        .iter()
+        .map(|sheet| sheet.name.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -821,6 +833,35 @@ mod tests {
                 SheetData {
                     name: "Summary".to_string(),
                     rows: vec![vec![CellValue::formula("=Inputs!A1*3", CellValue::Null)]],
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
+
+        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(7));
+        runtime
+            .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
+            .expect("incremental recalc");
+
+        assert_eq!(file_data.sheets[1].rows[0][0].to_display_string(), "21.0");
+    }
+
+    #[test]
+    fn incrementally_recalculates_cross_sheet_dependencies_case_insensitively() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "formula.xlsx".to_string(),
+            sheets: vec![
+                SheetData {
+                    name: "Inputs".to_string(),
+                    rows: vec![vec![CellValue::Number(Value::from(4))]],
+                    ..Default::default()
+                },
+                SheetData {
+                    name: "Summary".to_string(),
+                    rows: vec![vec![CellValue::formula("=inputs!A1*3", CellValue::Null)]],
                     ..Default::default()
                 },
             ],

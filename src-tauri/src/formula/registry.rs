@@ -5,6 +5,7 @@ use formualizer_workbook::Workbook;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
+use crate::formula::sheet_name::canonicalize_formula_sheet_names;
 use crate::formula::value_codec::{cell_to_literal, to_formula_index};
 use crate::types::{CellValue, FileData, SheetCellChange};
 
@@ -20,6 +21,11 @@ pub(crate) fn register_workbook_cells(
     file_data: &mut FileData,
 ) -> Result<FormulaRegistrationResult, AppError> {
     let mut result = FormulaRegistrationResult::default();
+    let sheet_names: Vec<String> = file_data
+        .sheets
+        .iter()
+        .map(|sheet| sheet.name.clone())
+        .collect();
 
     for (sheet_index, sheet) in file_data.sheets.iter_mut().enumerate() {
         for (row_idx, row) in sheet.rows.iter_mut().enumerate() {
@@ -32,6 +38,7 @@ pub(crate) fn register_workbook_cells(
                     row_idx,
                     col_idx,
                     cell,
+                    &sheet_names,
                 )?;
                 result
                     .registered_formulas
@@ -52,17 +59,20 @@ pub(crate) fn set_workbook_cell(
     row_idx: usize,
     col_idx: usize,
     cell: &CellValue,
+    sheet_names: &[String],
 ) -> Result<FormulaRegistrationResult, AppError> {
     let mut result = FormulaRegistrationResult::default();
     let row = to_formula_index(row_idx);
     let col = to_formula_index(col_idx);
     match cell {
         CellValue::Formula { formula, .. } => {
-            match ast_service.validate(formula).and_then(|_| {
-                workbook
-                    .set_formula(sheet_name, row, col, formula)
-                    .map_err(|error| error.to_string())
-            }) {
+            match canonicalize_formula_sheet_names(ast_service, formula, sheet_names).and_then(
+                |formula| {
+                    workbook
+                        .set_formula(sheet_name, row, col, &formula)
+                        .map_err(|error| error.to_string())
+                },
+            ) {
                 Ok(()) => {
                     result.registered_formulas.insert(FormulaCellRef {
                         sheet_index,

@@ -4,6 +4,7 @@ use formualizer_parse::parser::ReferenceType;
 
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
+use crate::formula::sheet_name::sheet_name_key;
 use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaIssue, FormulaIssueKind};
 
 const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
@@ -285,7 +286,7 @@ impl FormulaDependencyIndex {
         file_data: &FileData,
         formula_ref: FormulaCellRef,
         registered_formulas: &HashSet<FormulaCellRef>,
-        sheet_indexes: &HashMap<&str, usize>,
+        sheet_indexes: &HashMap<String, usize>,
         ast_service: &mut FormulaAstService,
     ) {
         if !registered_formulas.contains(&formula_ref) {
@@ -441,13 +442,14 @@ pub(crate) fn build_dependency_index(
     index
 }
 
-fn sheet_indexes(file_data: &FileData) -> HashMap<&str, usize> {
-    file_data
-        .sheets
-        .iter()
-        .enumerate()
-        .map(|(sheet_index, sheet)| (sheet.name.as_str(), sheet_index))
-        .collect()
+fn sheet_indexes(file_data: &FileData) -> HashMap<String, usize> {
+    let mut indexes = HashMap::new();
+    for (sheet_index, sheet) in file_data.sheets.iter().enumerate() {
+        indexes
+            .entry(sheet_name_key(&sheet.name))
+            .or_insert(sheet_index);
+    }
+    indexes
 }
 
 fn bucket_index(index: usize) -> usize {
@@ -576,7 +578,7 @@ enum DependencyCollection {
 fn collect_formula_dependencies(
     formula: &str,
     current_sheet_index: usize,
-    sheet_indexes: &HashMap<&str, usize>,
+    sheet_indexes: &HashMap<String, usize>,
     ast_service: &mut FormulaAstService,
 ) -> DependencyCollection {
     let Ok(ast) = ast_service.parse(formula) else {
@@ -660,10 +662,10 @@ fn collect_formula_dependencies(
 fn resolve_reference_sheet(
     sheet_name: Option<&str>,
     current_sheet_index: usize,
-    sheet_indexes: &HashMap<&str, usize>,
+    sheet_indexes: &HashMap<String, usize>,
 ) -> Option<usize> {
     sheet_name
-        .map(|name| sheet_indexes.get(name).copied())
+        .map(|name| sheet_indexes.get(&sheet_name_key(name)).copied())
         .unwrap_or(Some(current_sheet_index))
 }
 

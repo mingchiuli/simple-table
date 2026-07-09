@@ -18,6 +18,7 @@ import { colToLetter } from '@/utils/excel';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
 import { workbookSheetCapabilities } from '@/types';
 import type { EditorMutationResponse } from '@/types';
+import type { MutationApplyResult } from '@/stores/documentSession';
 import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
@@ -91,9 +92,17 @@ const canResizeRowsColumns = computed(
   () => currentSheetCapabilities.value.canResizeRowsColumns && canInteractWithDocument.value
 );
 
-async function applyMutationResponse(response: EditorMutationResponse) {
-  await documentSessionStore.applyMutationResponseWithResync(response, api.getCurrentFileData);
-  refreshSelectedEditorValue();
+async function applyMutationResponse(
+  response: EditorMutationResponse
+): Promise<MutationApplyResult> {
+  const result = await documentSessionStore.applyMutationResponseWithResync(
+    response,
+    api.getCurrentFileData
+  );
+  if (result.applied) {
+    refreshSelectedEditorValue();
+  }
+  return result;
 }
 
 const {

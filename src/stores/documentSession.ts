@@ -37,6 +37,7 @@ export type { DocumentSessionLifecycle } from "@/stores/documentSessionRuntime";
 export type MutationApplyResult = {
   data: FileData | null;
   resyncRequired: boolean;
+  applied: boolean;
 };
 
 export const useDocumentSessionStore = defineStore("documentSession", {
@@ -177,33 +178,33 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
       if (this.documentId !== null && response.documentId !== this.documentId) {
-        return { data: this.data, resyncRequired: false };
+        return { data: this.data, resyncRequired: false, applied: false };
       }
       if (this.documentId === null && this.data === null) {
-        return { data: this.data, resyncRequired: false };
+        return { data: this.data, resyncRequired: false, applied: false };
       }
       if (this.documentId === null) {
         this.documentId = response.documentId;
       }
       if (response.revision < this.revision) {
-        return { data: this.data, resyncRequired: false };
+        return { data: this.data, resyncRequired: false, applied: false };
       }
       if (response.revision > this.revision + 1) {
         this.revision = response.revision;
         applyResponseStatus(response);
         this.projectionStale = true;
         clearSearchSession();
-        return { data: this.data, resyncRequired: true };
+        return { data: this.data, resyncRequired: true, applied: true };
       }
       if (response.revision === this.revision && response.patches?.length) {
         applyResponseStatus(response);
         this.projectionStale = true;
         clearSearchSession();
-        return { data: this.data, resyncRequired: true };
+        return { data: this.data, resyncRequired: true, applied: true };
       }
       if (response.revision === this.revision) {
         applyResponseStatus(response);
-        return { data: this.data, resyncRequired: false };
+        return { data: this.data, resyncRequired: false, applied: true };
       }
       applyResponseStatus(response);
       this.revision = response.revision;
@@ -218,6 +219,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         return {
           data: result.data,
           resyncRequired: result.resyncRequired,
+          applied: true,
         };
       } catch (error) {
         this.projectionStale = true;
@@ -252,6 +254,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     ): Promise<MutationApplyResult> {
       const snapshot = captureMutationSnapshot(this);
       const result = this.applyMutationResponse(response);
+      if (!result.applied) {
+        return result;
+      }
       if (!result.resyncRequired) {
         return result;
       }
@@ -265,6 +270,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
           return {
             data: this.data,
             resyncRequired: true,
+            applied: false,
           };
         }
         replaceProjection(this, projection);
@@ -281,6 +287,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       return {
         data: this.data,
         resyncRequired: true,
+        applied: true,
       };
     },
     async refreshAfterMutationFailure(

@@ -1,7 +1,10 @@
 import type { ComputedRef, Ref } from "vue";
 import { ElMessage } from "element-plus";
 import * as api from "@/api";
-import { useDocumentSessionStore } from "@/stores/documentSession";
+import {
+  useDocumentSessionStore,
+  type MutationApplyResult,
+} from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
@@ -23,7 +26,7 @@ type UseEditorCommandsOptions = {
   selectedCell: Ref<{ row: number; col: number } | null>;
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
-  applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
+  applyMutationResponse: (response: EditorMutationResponse) => Promise<MutationApplyResult>;
 };
 
 export function useEditorCommands({
@@ -59,10 +62,13 @@ export function useEditorCommands({
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
         const response = await action(context);
+        let applied = false;
         try {
-          await applyMutationResponse(response);
+          applied = (await applyMutationResponse(response)).applied;
         } catch (error) {
-          documentSessionStore.markProjectionStaleFromMutationResponse(response);
+          if (!documentSessionStore.markProjectionStaleFromMutationResponse(response)) {
+            return;
+          }
           const refreshed = await refreshAfterMutationError({ refreshProjection: true });
           if (refreshed) {
             runAfterApplied(options.afterApplied);
@@ -71,6 +77,7 @@ export function useEditorCommands({
           }
           return;
         }
+        if (!applied) return;
         runAfterApplied(options.afterApplied);
       });
     } catch (error) {

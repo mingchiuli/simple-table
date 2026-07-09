@@ -3,6 +3,7 @@ use formualizer_parse::parser::ReferenceType;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
+use crate::formula::sheet_name::sheet_names_equal;
 use crate::io::workbook_state::StructurePatchDiagnostics;
 use crate::ops::AppliedOperation;
 use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus, SheetCellChange};
@@ -364,7 +365,7 @@ fn reference_targets_sheet(
     match reference {
         ReferenceType::Cell { sheet, .. } | ReferenceType::Range { sheet, .. } => sheet
             .as_deref()
-            .map(|name| name == target.sheet_name)
+            .map(|name| sheet_names_equal(name, target.sheet_name))
             .unwrap_or(
                 target.include_implicit_current_sheet_refs
                     && formula_sheet_index == target.sheet_index,
@@ -378,7 +379,10 @@ fn reference_targets_sheet(
             sheet_first,
             sheet_last,
             ..
-        } => sheet_first == target.sheet_name || sheet_last == target.sheet_name,
+        } => {
+            sheet_names_equal(&sheet_first, target.sheet_name)
+                || sheet_names_equal(&sheet_last, target.sheet_name)
+        }
         ReferenceType::External(_) | ReferenceType::Table(_) | ReferenceType::NamedRange(_) => {
             false
         }

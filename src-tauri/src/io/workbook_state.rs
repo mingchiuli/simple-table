@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::reference_rewrite::{
-    StructureShift, adjust_formula_references, invalidate_deleted_sheet_references,
+    StructureShift, adjust_explicit_sheet_name_case_mismatched_references,
+    adjust_formula_references, invalidate_deleted_sheet_references,
 };
 use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
 use crate::io::document_body::BodySheetShape;
@@ -605,16 +606,23 @@ fn rewrite_formulas_after_native_structure_shift(
     let mut skipped = 0;
     for worksheet in workbook.sheet_collection_mut() {
         let current_sheet_name = worksheet.name().to_string();
-        if !should_rewrite_formula_sheet(&current_sheet_name, plan.target_sheet_name, plan.scope) {
-            continue;
+        if should_rewrite_formula_sheet(&current_sheet_name, plan.target_sheet_name, plan.scope) {
+            skipped += adjust_worksheet_formulas(
+                ast_service,
+                worksheet,
+                plan.target_sheet_name,
+                &current_sheet_name,
+                plan.shift,
+            );
+        } else if current_sheet_name == plan.target_sheet_name {
+            skipped += adjust_worksheet_explicit_sheet_name_case_mismatches(
+                ast_service,
+                worksheet,
+                plan.target_sheet_name,
+                &current_sheet_name,
+                plan.shift,
+            );
         }
-        skipped += adjust_worksheet_formulas(
-            ast_service,
-            worksheet,
-            plan.target_sheet_name,
-            &current_sheet_name,
-            plan.shift,
-        );
     }
     skipped
 }
@@ -719,6 +727,36 @@ fn adjust_worksheet_formulas(
             continue;
         }
         let rewrite = adjust_formula_references(
+            ast_service,
+            cell.formula(),
+            target_sheet_name,
+            current_sheet_name,
+            shift,
+        );
+        if rewrite.skipped {
+            skipped += 1;
+            continue;
+        }
+        if rewrite.formula != cell.formula() {
+            cell.set_formula(rewrite.formula);
+        }
+    }
+    skipped
+}
+
+fn adjust_worksheet_explicit_sheet_name_case_mismatches(
+    ast_service: &mut FormulaAstService,
+    worksheet: &mut Worksheet,
+    target_sheet_name: &str,
+    current_sheet_name: &str,
+    shift: StructureShift,
+) -> usize {
+    let mut skipped = 0;
+    for cell in worksheet.cells_mut() {
+        if !cell.is_formula() {
+            continue;
+        }
+        let rewrite = adjust_explicit_sheet_name_case_mismatched_references(
             ast_service,
             cell.formula(),
             target_sheet_name,

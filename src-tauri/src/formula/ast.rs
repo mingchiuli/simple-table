@@ -20,6 +20,13 @@ pub(crate) struct ParsedFormula {
     ast: ASTNode,
 }
 
+#[derive(Clone)]
+pub(crate) struct FormulaTextEdit {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) replacement: String,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FormulaSource {
     original: String,
@@ -47,10 +54,6 @@ impl FormulaAstService {
         let source = FormulaSource::new(formula);
         let ast = self.parse_ast(source.parsed())?;
         Ok(ParsedFormula { source, ast })
-    }
-
-    pub(crate) fn validate(&mut self, formula: &str) -> Result<(), String> {
-        self.parse(formula).map(|_| ())
     }
 
     fn parse_ast(&mut self, formula: &str) -> Result<ASTNode, String> {
@@ -141,6 +144,39 @@ impl FormulaSource {
     }
 }
 
+pub(crate) fn apply_formula_text_edits(
+    source: &str,
+    mut edits: Vec<FormulaTextEdit>,
+) -> Option<String> {
+    if edits.is_empty() {
+        return Some(source.to_string());
+    }
+
+    edits.sort_by_key(|edit| edit.start);
+    let mut previous_end = 0;
+    for edit in &edits {
+        if edit.start < previous_end
+            || edit.start >= edit.end
+            || edit.end > source.len()
+            || !source.is_char_boundary(edit.start)
+            || !source.is_char_boundary(edit.end)
+        {
+            return None;
+        }
+        previous_end = edit.end;
+    }
+
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    for edit in edits {
+        output.push_str(&source[cursor..edit.start]);
+        output.push_str(&edit.replacement);
+        cursor = edit.end;
+    }
+    output.push_str(source.get(cursor..)?);
+    Some(output)
+}
+
 fn collect_reference_nodes<'a>(ast: &'a ASTNode, nodes: &mut Vec<&'a ASTNode>) {
     match &ast.node_type {
         ASTNodeType::Reference { .. } => nodes.push(ast),
@@ -186,8 +222,8 @@ mod tests {
     fn parses_formulas_with_or_without_leading_equals() {
         let mut service = FormulaAstService::new();
 
-        assert!(service.validate("=A1+1").is_ok());
-        assert!(service.validate("A1+1").is_ok());
+        assert!(service.parse("=A1+1").is_ok());
+        assert!(service.parse("A1+1").is_ok());
     }
 
     #[test]

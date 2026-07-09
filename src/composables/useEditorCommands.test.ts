@@ -96,7 +96,11 @@ function setupCommands(
   const activeSheetIndex = overrides.currentSheetIndex ?? currentSheetIndex;
   const fileData = computed(() => documentSessionStore.data);
   const currentSheet = computed(() => fileData.value?.sheets[activeSheetIndex.value] ?? null);
-  const applyMutationResponse = vi.fn();
+  const applyMutationResponse = vi.fn(async (_response: EditorMutationResponse) => ({
+    data: documentSessionStore.data,
+    resyncRequired: false,
+    applied: true,
+  }));
 
   const commands = useEditorCommands({
     fileData,
@@ -233,6 +237,22 @@ describe("useEditorCommands", () => {
     expect(setup.currentSheetIndex.value).toBe(2);
   });
 
+  it("does not run post-apply sheet selection when a mutation response is ignored", async () => {
+    const api = await import("@/api");
+    const setup = setupCommands();
+    vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ documentId: 2 }));
+    setup.applyMutationResponse.mockResolvedValue({
+      data: setup.documentSessionStore.data,
+      resyncRequired: false,
+      applied: false,
+    });
+
+    await setup.commands.handleAddSheet();
+
+    expect(setup.applyMutationResponse).toHaveBeenCalledTimes(1);
+    expect(setup.currentSheetIndex.value).toBe(0);
+  });
+
   it("uses the latest same-document revision after flushing pending edits", async () => {
     const api = await import("@/api");
     let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
@@ -315,7 +335,7 @@ describe("useEditorCommands", () => {
       });
     vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: 1 }));
     setup.applyMutationResponse.mockImplementation(async (response) => {
-      setup.documentSessionStore.applyMutationResponse(response);
+      return setup.documentSessionStore.applyMutationResponse(response);
     });
 
     await setup.commands.handleAddSheet();

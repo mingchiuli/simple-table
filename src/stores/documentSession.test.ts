@@ -119,8 +119,39 @@ describe("documentSession store", () => {
     }));
 
     expect(result.resyncRequired).toBe(false);
+    expect(result.applied).toBe(true);
     expect(store.revision).toBe(1);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("new"));
+  });
+
+  it("reports mutation responses from another document as ignored", () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    openTestDocument(store, data, data.path);
+
+    const result = store.applyMutationResponse(response({
+      documentId: 2,
+      revision: 1,
+      patches: [
+        {
+          type: "SheetUpdated",
+          data: { patch: { sheetIndex: 0, sheet: sheet("Sheet1", [[text("new")]]) } },
+        },
+      ],
+    }));
+
+    expect(result).toEqual({
+      data,
+      resyncRequired: false,
+      applied: false,
+    });
+    expect(store.documentId).toBe(1);
+    expect(store.revision).toBe(0);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
   });
 
   it("requests resync when a mutation response skips revisions", () => {
@@ -134,6 +165,7 @@ describe("documentSession store", () => {
     const result = store.applyMutationResponse(response({ revision: 3 }));
 
     expect(result.resyncRequired).toBe(true);
+    expect(result.applied).toBe(true);
     expect(store.revision).toBe(3);
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
@@ -446,6 +478,50 @@ describe("documentSession store", () => {
       )
     ).rejects.toThrow("projection unavailable");
 
+    expect(store.documentId).toBe(2);
+    expect(store.revision).toBe(0);
+    expect(store.data?.fileName).toBe("next.xlsx");
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
+  });
+
+  it("reports a resync response as ignored if the active session changes before projection replacement", async () => {
+    const store = useDocumentSessionStore();
+    const oldData: FileData = {
+      path: "/tmp/old.xlsx",
+      fileName: "old.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const freshOldData: FileData = {
+      path: "/tmp/old.xlsx",
+      fileName: "old.xlsx",
+      sheets: [sheet("Sheet1", [[text("fresh old")]])],
+    };
+    const nextData: FileData = {
+      path: "/tmp/next.xlsx",
+      fileName: "next.xlsx",
+      sheets: [sheet("Sheet1", [[text("next")]])],
+    };
+    openTestDocument(store, oldData, oldData.path);
+
+    const result = await store.applyMutationResponseWithResync(
+      response({ revision: 3 }),
+      async () => {
+        store.openDocumentResponse({
+          fileData: nextData,
+          editorSession: {
+            documentId: 2,
+            revision: 0,
+            formulaStatus: readyFormulaStatus(),
+            capabilities: defaultWorkbookCapabilities(),
+            editorState: editorState(),
+          },
+        }, nextData.path);
+        return freshOldData;
+      }
+    );
+
+    expect(result.applied).toBe(false);
+    expect(result.resyncRequired).toBe(true);
     expect(store.documentId).toBe(2);
     expect(store.revision).toBe(0);
     expect(store.data?.fileName).toBe("next.xlsx");

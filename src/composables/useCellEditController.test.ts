@@ -117,7 +117,7 @@ describe("useCellEditController", () => {
           documentSessionStore.applyMutationResponseWithResync(
             response,
             api.getCurrentFileData
-          ).then(() => undefined),
+          ),
       });
     });
 
