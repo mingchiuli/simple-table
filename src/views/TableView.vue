@@ -85,8 +85,11 @@ const {
   clearPendingContentChange,
 } = useDocumentStatus();
 
-const isToolbarBusy = computed(() => documentSessionStore.isInteractionLocked || isLoading.value);
-const canInteractWithDocument = computed(() => !isToolbarBusy.value);
+const isFileActionBusy = computed(() => documentSessionStore.isInteractionLocked || isLoading.value);
+const isEditorLocked = computed(
+  () => isLoading.value || documentSessionStore.isEditorInteractionLocked
+);
+const canInteractWithDocument = computed(() => !isEditorLocked.value);
 const currentSheetCapabilities = computed(() =>
   workbookSheetCapabilities(capabilities.value, currentSheetIndex.value)
 );
@@ -216,7 +219,8 @@ watch(() => route.query.file, () => {
       :can-undo="canUndo"
       :can-redo="canRedo"
       :capabilities="toolbarCapabilities"
-      :is-busy="isToolbarBusy"
+      :is-busy="isFileActionBusy"
+      :is-editor-locked="isEditorLocked"
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"
@@ -282,7 +286,7 @@ watch(() => route.query.file, () => {
         class="search-panel-host"
         :results="searchResults"
         :query="searchQuery"
-        :disabled="isToolbarBusy"
+        :disabled="isEditorLocked"
         @result-click="handleSearchResultClick"
         @clear="handleClearSearch"
       />
@@ -296,7 +300,7 @@ watch(() => route.query.file, () => {
       :history-status="history"
     />
 
-    <el-button class="back-btn" circle :disabled="isToolbarBusy" @click="handleBack">
+    <el-button class="back-btn" circle :disabled="isFileActionBusy" @click="handleBack">
       <el-icon><HomeFilled /></el-icon>
     </el-button>
   </div>

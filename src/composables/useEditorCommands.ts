@@ -59,11 +59,23 @@ export function useEditorCommands({
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
-        await applyMutationResponse(await action(context));
-        options.afterApplied?.();
+        const response = await action(context);
+        try {
+          await applyMutationResponse(response);
+          options.afterApplied?.();
+        } catch (error) {
+          const refreshed = await refreshAfterMutationError({ refreshProjection: true });
+          if (refreshed) {
+            options.afterApplied?.();
+          } else {
+            ElMessage.error(`Change was applied, but the editor could not refresh: ${error}`);
+          }
+        }
       });
     } catch (error) {
-      await refreshAfterMutationError({ refreshProjection: options.refreshProjectionOnError });
+      await refreshAfterMutationError({
+        refreshProjection: options.refreshProjectionOnError || documentSessionStore.projectionStale,
+      });
       ElMessage.error(`${message}: ${error}`);
     } finally {
       isLoading.value = false;
@@ -292,19 +304,21 @@ export function useEditorCommands({
   }
 
   function isEditorCommandBlocked(): boolean {
-    return isLoading.value || documentSessionStore.isInteractionLocked;
+    return isLoading.value || documentSessionStore.isEditorInteractionLocked;
   }
 
   async function refreshAfterMutationError(
     options: { refreshProjection?: boolean } = {}
-  ) {
+  ): Promise<boolean> {
     try {
       await documentSessionStore.refreshAfterMutationFailure(
         api.getEditorState,
         options.refreshProjection && fileData.value ? api.getCurrentFileData : undefined
       );
+      return true;
     } catch (error) {
       console.error("Failed to refresh editor state after mutation error:", error);
+      return false;
     }
   }
 

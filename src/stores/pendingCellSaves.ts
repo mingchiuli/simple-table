@@ -202,7 +202,7 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
           this.startPendingSave(callbacks);
           return;
         }
-        if (this.isIdle()) {
+        if (this.isIdle() && this.phase !== "failed") {
           this.setPhase("idle");
           callbacks.clearPendingContentChange();
         }

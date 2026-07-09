@@ -507,6 +507,33 @@ describe("useFileActions", () => {
     expect(pendingCellSavesStore.draftCellValues.get("0,0,0")).toBe("draft");
   });
 
+  it("allows closing a stale projection after discard confirmation", async () => {
+    const api = await import("@/api");
+    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const documentSessionStore = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    statusStore.applyEditorState({
+      canUndo: true,
+      canRedo: false,
+      isDirty: true,
+      history: defaultHistoryStatus(),
+    });
+    documentSessionStore.projectionStale = true;
+    vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
+
+    const actions = mountActions(flushPendingCellChanges);
+
+    await expect(actions.closeCurrentDocument()).resolves.toBe(true);
+
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(1);
+    expect(flushPendingCellChanges).not.toHaveBeenCalled();
+    expect(documentSessionStore.data).toBeNull();
+    expect(documentSessionStore.documentId).toBeNull();
+    expect(documentSessionStore.projectionStale).toBe(false);
+  });
+
   it("discards a reserved save-as location when the target cannot be saved", async () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
@@ -609,6 +636,39 @@ describe("useFileActions", () => {
     expect(documentSessionStore.currentFilePath).toBe(existingPath);
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+    expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
+  });
+
+  it("allows saving a stale projection and replaces it with the saved backend snapshot", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const existingPath = "/tmp/current.xlsx";
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), existingPath);
+    documentSessionStore.revision = 3;
+    documentSessionStore.projectionStale = true;
+    vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
+    const saved = savedResponse("current.xlsx", existingPath, 1);
+    vi.mocked(platform.saveFile).mockResolvedValue({
+      ...saved,
+      editorSession: {
+        ...saved.editorSession,
+        revision: 3,
+      },
+    });
+
+    const actions = mountActions(flushPendingCellChanges);
+
+    await actions.handleSaveFile();
+
+    expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
+      documentId: 1,
+      baseRevision: 3,
+    });
+    expect(documentSessionStore.projectionStale).toBe(false);
+    expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("saved"));
     expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
   });
 

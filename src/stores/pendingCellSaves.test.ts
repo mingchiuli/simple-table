@@ -151,6 +151,37 @@ describe("pendingCellSaves store", () => {
     expect(store.isIdle()).toBe(true);
   });
 
+  it("reports flush failure when a queued batch cannot be committed", async () => {
+    const store = usePendingCellSavesStore();
+    let committed = false;
+    let failed: unknown = null;
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const flushed = await store.flushPendingCellChanges({
+      commitBatch: async () => {
+        throw new Error("stale projection");
+      },
+      clearPendingContentChange: () => undefined,
+      onBatchCommitted: () => {
+        committed = true;
+      },
+      onCommitFailed: (error) => {
+        failed = error;
+      },
+    });
+
+    expect(flushed).toBe(false);
+    expect(committed).toBe(false);
+    expect(String(failed)).toContain("stale projection");
+    expect(store.phase).toBe("failed");
+  });
+
   it("suspends debounce autosave without dropping queued drafts", async () => {
     vi.useFakeTimers();
     const store = usePendingCellSavesStore();

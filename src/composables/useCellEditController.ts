@@ -90,7 +90,14 @@ export function useCellEditController({
 
     await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
       const response = await api.setCells(context, payload);
-      await applyMutationResponse(response);
+      try {
+        await applyMutationResponse(response);
+      } catch (error) {
+        const refreshed = await refreshSessionAfterMutationError();
+        if (!refreshed) {
+          ElMessage.error(`保存已提交，但刷新失败: ${error}`);
+        }
+      }
     });
   }
 
@@ -99,14 +106,16 @@ export function useCellEditController({
     ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
   }
 
-  async function refreshSessionAfterMutationError() {
+  async function refreshSessionAfterMutationError(): Promise<boolean> {
     try {
       await documentSessionStore.refreshAfterMutationFailure(
         api.getEditorState,
         api.getCurrentFileData
       );
+      return true;
     } catch (error) {
       console.error('Failed to refresh editor state after cell save error:', error);
+      return false;
     }
   }
 

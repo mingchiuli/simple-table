@@ -27,6 +27,8 @@ vi.mock("element-plus", () => ({
 vi.mock("@/api", () => ({
   addRow: vi.fn(),
   addSheet: vi.fn(),
+  getCurrentFileData: vi.fn(),
+  getEditorState: vi.fn(),
   search: vi.fn().mockResolvedValue([]),
 }));
 
@@ -243,6 +245,67 @@ describe("useEditorCommands", () => {
       { documentId: 1, baseRevision: 4 },
       0,
       1
+    );
+  });
+
+  it("does not report a mutation failure when stale projection recovery succeeds", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const setup = setupCommands(ref(false));
+    const fresh: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("fresh")]])],
+    };
+    vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.getEditorState).mockResolvedValue({
+      documentId: 1,
+      revision: 3,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: {
+        canUndo: true,
+        canRedo: false,
+        isDirty: true,
+        history: defaultHistoryStatus(),
+      },
+    });
+    vi.mocked(api.getCurrentFileData).mockResolvedValue(fresh);
+    setup.applyMutationResponse.mockImplementation(async () => {
+      setup.documentSessionStore.revision = 3;
+      setup.documentSessionStore.projectionStale = true;
+      throw new Error("projection unavailable");
+    });
+
+    await setup.commands.handleAddRow();
+
+    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(api.getEditorState).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(setup.documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(setup.documentSessionStore.projectionStale).toBe(false);
+    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+  });
+
+  it("reports refresh failure separately when a mutation was already applied", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const setup = setupCommands(ref(false));
+    vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
+    vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
+    setup.applyMutationResponse.mockImplementation(async () => {
+      setup.documentSessionStore.revision = 3;
+      setup.documentSessionStore.projectionStale = true;
+      throw new Error("projection unavailable");
+    });
+
+    await setup.commands.handleAddRow();
+
+    expect(api.addRow).toHaveBeenCalled();
+    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(setup.documentSessionStore.projectionStale).toBe(true);
+    expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
+      "Change was applied, but the editor could not refresh: Error: projection unavailable"
     );
   });
 });

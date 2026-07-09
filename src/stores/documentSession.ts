@@ -55,6 +55,7 @@ type DocumentSessionSnapshot = {
   documentId: number | null;
   revision: number;
   lifecycle: DocumentSessionLifecycle;
+  projectionStale: boolean;
   status: DocumentStatusSnapshot;
   selection: EditorSelectionSnapshot;
 };
@@ -68,9 +69,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     documentId: null as number | null,
     revision: 0,
     lifecycle: "idle" as DocumentSessionLifecycle,
+    projectionStale: false,
   }),
   getters: {
     isInteractionLocked: (state) => state.lifecycle !== "idle",
+    isEditorInteractionLocked: (state) => state.lifecycle !== "idle" || state.projectionStale,
   },
   actions: {
     beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">): boolean {
@@ -118,6 +121,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       task: (context: EditorCommandContext) => Promise<T>
     ): Promise<T | undefined> {
       return this.enqueueMutation(async () => {
+        if (this.projectionStale) {
+          throw new Error("Document projection is stale; refresh the document before editing.");
+        }
         const context = this.commandContextForDocument(documentId);
         if (!context) {
           return undefined;
@@ -161,6 +167,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
       this.documentId = null;
       this.revision = 0;
+      this.projectionStale = false;
       this.resetSessionUi();
       useDocumentStatusStore().reset();
     },
@@ -170,6 +177,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
+      this.projectionStale = false;
       this.resetSessionUi();
       const statusStore = useDocumentStatusStore();
       statusStore.reset();
@@ -181,6 +189,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
+      this.projectionStale = false;
       this.clampSelectionToCurrentSheet();
       useSearchSessionStore().reset();
       useDocumentStatusStore().applyEditorSession(response.editorSession);
@@ -192,6 +201,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     ): boolean {
       if (
         response.editorSession.documentId !== context.documentId
+        || response.editorSession.revision < context.baseRevision
         || !this.matchesCommandContext(context)
       ) {
         return false;
@@ -216,6 +226,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = null;
       this.revision = 0;
       this.lifecycle = "idle";
+      this.projectionStale = false;
       resolveLifecycleIdleWaiters(this);
       this.resetSessionUi();
       useDocumentStatusStore().reset();
@@ -297,6 +308,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       } catch (error) {
         if (this.matchesCommandContext(resyncContext)) {
           this.restoreMutationSnapshot(snapshot);
+          this.documentId = response.documentId;
+          this.revision = response.revision;
+          this.applyResponseStatus(response);
+          this.projectionStale = true;
         }
         throw error;
       }
@@ -312,7 +327,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         path: this.currentFilePath ?? data.path,
         fileName: currentFileName ?? data.fileName,
       };
+      this.projectionStale = false;
       this.clampSelectionToCurrentSheet();
+      useSearchSessionStore().clearSearch();
     },
     applyResponseStatus(response: EditorMutationResponse) {
       useDocumentStatusStore().formulaStatus = response.formulaStatus;
@@ -328,6 +345,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         documentId: this.documentId,
         revision: this.revision,
         lifecycle: this.lifecycle,
+        projectionStale: this.projectionStale,
         status: {
           canUndo: statusStore.canUndo,
           canRedo: statusStore.canRedo,
@@ -352,6 +370,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = snapshot.documentId;
       this.revision = snapshot.revision;
       this.lifecycle = snapshot.lifecycle;
+      this.projectionStale = snapshot.projectionStale;
 
       const statusStore = useDocumentStatusStore();
       statusStore.canUndo = snapshot.status.canUndo;

@@ -34,6 +34,7 @@ const props = defineProps<{
     canInsertDeleteSheets: boolean;
   };
   isBusy: boolean;
+  isEditorLocked: boolean;
   isSearching: boolean;
 }>();
 
@@ -86,7 +87,7 @@ function handleCheckUpdate() {
         <SheetSelector
           :sheet-names="props.sheetNames"
           :current-sheet-index="props.currentSheetIndex"
-          :disabled="props.isBusy"
+          :disabled="props.isEditorLocked"
           @sheet-change="emit('sheet-change', $event)"
         />
 
@@ -94,7 +95,7 @@ function handleCheckUpdate() {
           class="sheet-buttons"
           :sheet-count="props.sheetNames.length"
           :can-insert-delete-sheets="props.capabilities.canInsertDeleteSheets"
-          :disabled="props.isBusy"
+          :disabled="props.isEditorLocked"
           @add-sheet="emit('add-sheet')"
           @delete-sheet="emit('delete-sheet')"
         />
@@ -102,7 +103,7 @@ function handleCheckUpdate() {
         <SearchBox
           class="search-box"
           :is-searching="props.isSearching"
-          :disabled="props.isBusy"
+          :disabled="props.isEditorLocked"
           @search="(query: string, scope: SearchScope) => emit('search', query, scope)"
           @clear-search="emit('clear-search')"
         />
@@ -114,7 +115,7 @@ function handleCheckUpdate() {
         :can-redo="props.canRedo"
         :can-insert-delete-rows="props.capabilities.canInsertDeleteRows"
         :can-insert-delete-columns="props.capabilities.canInsertDeleteColumns"
-        :disabled="props.isBusy"
+        :disabled="props.isEditorLocked"
         @undo="emit('undo')"
         @redo="emit('redo')"
         @add-row="emit('add-row')"
@@ -146,7 +147,7 @@ function handleCheckUpdate() {
           v-if="props.fileData"
           :sheet-names="props.sheetNames"
           :current-sheet-index="props.currentSheetIndex"
-          :disabled="props.isBusy"
+          :disabled="props.isEditorLocked"
           @sheet-change="emit('sheet-change', $event)"
         />
       </div>
@@ -161,19 +162,19 @@ function handleCheckUpdate() {
         @update:visible="searchPopoverVisible = $event"
       >
         <template #reference>
-          <el-button size="small" title="Search" :disabled="props.isBusy">
+          <el-button size="small" title="Search" :disabled="props.isEditorLocked">
             <el-icon><Search /></el-icon>
           </el-button>
         </template>
         <SearchBox
           :is-searching="props.isSearching"
-          :disabled="props.isBusy"
+          :disabled="props.isEditorLocked"
           @search="(query, scope) => { emit('search', query, scope); searchPopoverVisible = false; }"
           @clear-search="emit('clear-search')"
         />
       </el-popover>
       <el-button
-        :disabled="props.isBusy || !props.canUndo"
+        :disabled="props.isEditorLocked || !props.canUndo"
         @click="emit('undo')"
         size="small"
         title="Undo"
@@ -181,7 +182,7 @@ function handleCheckUpdate() {
         <el-icon><RefreshLeft /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.isBusy || !props.canRedo"
+        :disabled="props.isEditorLocked || !props.canRedo"
         @click="emit('redo')"
         size="small"
         title="Redo"
@@ -189,7 +190,7 @@ function handleCheckUpdate() {
         <el-icon><RefreshRight /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.isBusy || !props.capabilities.canInsertDeleteRows"
+        :disabled="props.isEditorLocked || !props.capabilities.canInsertDeleteRows"
         @click="emit('add-row')"
         size="small"
         title="Add Row"
@@ -197,7 +198,7 @@ function handleCheckUpdate() {
         <el-icon><Plus /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.isBusy || !props.capabilities.canInsertDeleteColumns"
+        :disabled="props.isEditorLocked || !props.capabilities.canInsertDeleteColumns"
         @click="emit('add-column')"
         size="small"
         title="Add Column"
@@ -205,7 +206,7 @@ function handleCheckUpdate() {
         <el-icon><Plus /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.isBusy || !props.capabilities.canInsertDeleteSheets"
+        :disabled="props.isEditorLocked || !props.capabilities.canInsertDeleteSheets"
         @click="emit('add-sheet')"
         size="small"
         title="Add Sheet"
@@ -213,7 +214,7 @@ function handleCheckUpdate() {
         <el-icon><CirclePlus /></el-icon>
       </el-button>
       <el-button
-        :disabled="props.isBusy || props.sheetNames.length <= 1 || !props.capabilities.canInsertDeleteSheets"
+        :disabled="props.isEditorLocked || props.sheetNames.length <= 1 || !props.capabilities.canInsertDeleteSheets"
         @click="emit('delete-sheet')"
         size="small"
         title="Delete Sheet"

@@ -223,9 +223,12 @@ describe("documentSession store", () => {
     expect(result.resyncRequired).toBe(true);
     expect(store.revision).toBe(3);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(store.projectionStale).toBe(false);
+    expect(store.isInteractionLocked).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(false);
   });
 
-  it("rolls back session state when required resync projection loading fails", async () => {
+  it("keeps authoritative session state when required resync projection loading fails", async () => {
     const store = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     const current: FileData = {
@@ -258,9 +261,12 @@ describe("documentSession store", () => {
     ).rejects.toThrow("projection unavailable");
 
     expect(store.documentId).toBe(1);
-    expect(store.revision).toBe(0);
+    expect(store.revision).toBe(3);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
-    expect(statusStore.isContentDirty).toBe(false);
+    expect(statusStore.isContentDirty).toBe(true);
+    expect(store.projectionStale).toBe(true);
+    expect(store.isInteractionLocked).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(true);
   });
 
   it("does not restore an old document if the session changes while resync fails", async () => {
@@ -353,6 +359,49 @@ describe("documentSession store", () => {
     expect(store.revision).toBe(0);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(false);
+  });
+
+  it("clears stale search results when a failure recovery replaces the projection", async () => {
+    const store = useDocumentSessionStore();
+    const searchStore = useSearchSessionStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const fresh: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("fresh")]])],
+    };
+    store.openDocumentResponse({
+      fileData: current,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, current.path);
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    await store.refreshAfterMutationFailure(
+      async () => ({
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      }),
+      async () => fresh
+    );
+
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
+    expect(searchStore.isSearching).toBe(false);
   });
 
   it("accepts status-only responses at the current revision", () => {
@@ -653,6 +702,41 @@ describe("documentSession store", () => {
     expect(store.data?.fileName).toBe("next.xlsx");
   });
 
+  it("rejects queued document mutations after the projection becomes stale", async () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, data.path);
+
+    let secondMutationRan = false;
+    const firstMutation = store.enqueueDocumentMutation(1, async () => {
+      store.projectionStale = true;
+      store.revision = 1;
+    });
+    const secondMutation = store.enqueueDocumentMutation(1, async () => {
+      secondMutationRan = true;
+    });
+
+    await firstMutation;
+    await expect(secondMutation).rejects.toThrow("Document projection is stale");
+
+    expect(secondMutationRan).toBe(false);
+    expect(store.projectionStale).toBe(true);
+    expect(store.revision).toBe(1);
+  });
+
   it("ignores saved responses for a stale document context", () => {
     const store = useDocumentSessionStore();
     const oldData: FileData = {
@@ -710,6 +794,48 @@ describe("documentSession store", () => {
     expect(store.documentId).toBe(2);
     expect(store.currentFilePath).toBe(nextData.path);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
+  });
+
+  it("rejects saved responses that would rewind the active document revision", () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("current")]])],
+    };
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 1,
+        revision: 3,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, data.path);
+    const context = store.requireCommandContext();
+
+    const applied = store.applySavedDocumentResponseForContext(
+      context,
+      {
+        fileData: {
+          ...data,
+          sheets: [sheet("Sheet1", [[text("older saved")]])],
+        },
+        editorSession: {
+          documentId: 1,
+          revision: 2,
+          formulaStatus: readyFormulaStatus(),
+          capabilities: defaultWorkbookCapabilities(),
+          editorState: editorState(),
+        },
+      },
+      data.path
+    );
+
+    expect(applied).toBe(false);
+    expect(store.revision).toBe(3);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
   });
 
   it("saved document responses clear stale search UI state", () => {
