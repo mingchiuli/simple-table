@@ -216,6 +216,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
           clearSearchSession();
         }
         clampSelectionToCurrentSheet(this);
+        if (result.resyncRequired) {
+          this.projectionStale = true;
+          clearSearchSession();
+        }
         return {
           data: result.data,
           resyncRequired: result.resyncRequired,

@@ -317,6 +317,53 @@ describe("documentSession store", () => {
     expect(store.isEditorInteractionLocked).toBe(false);
   });
 
+  it("locks editor interaction while a required projection resync is pending", async () => {
+    const store = useDocumentSessionStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const fresh: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("fresh")]])],
+    };
+    openTestDocument(store, current, current.path);
+
+    let resolveProjection!: (projection: FileData) => void;
+    const projectionRequest = new Promise<FileData>((resolve) => {
+      resolveProjection = resolve;
+    });
+    const pending = store.applyMutationResponseWithResync(
+      response({
+        revision: 1,
+        patches: [
+          {
+            type: "ResyncRequired",
+            data: { patch: { reason: "backend requested resync" } },
+          },
+        ],
+      }),
+      async () => projectionRequest
+    );
+
+    await Promise.resolve();
+
+    expect(store.revision).toBe(1);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.projectionStale).toBe(true);
+    expect(store.isEditorInteractionLocked).toBe(true);
+
+    resolveProjection(fresh);
+    const result = await pending;
+
+    expect(result.resyncRequired).toBe(true);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(store.projectionStale).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(false);
+  });
+
   it("keeps authoritative session state when required resync projection loading fails", async () => {
     const store = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
