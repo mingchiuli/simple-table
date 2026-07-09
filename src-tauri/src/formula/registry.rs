@@ -15,6 +15,13 @@ pub(crate) struct FormulaRegistrationResult {
     pub(crate) invalid_formulas: Vec<SheetCellChange>,
 }
 
+pub(crate) struct FormulaCellRegistration<'a> {
+    pub(crate) sheet_name: &'a str,
+    pub(crate) cell_ref: FormulaCellRef,
+    pub(crate) cell: &'a CellValue,
+    pub(crate) sheet_names: &'a [String],
+}
+
 pub(crate) fn register_workbook_cells(
     workbook: &mut Workbook,
     ast_service: &mut FormulaAstService,
@@ -33,12 +40,16 @@ pub(crate) fn register_workbook_cells(
                 let cell_result = set_workbook_cell(
                     workbook,
                     ast_service,
-                    &sheet.name,
-                    sheet_index,
-                    row_idx,
-                    col_idx,
-                    cell,
-                    &sheet_names,
+                    FormulaCellRegistration {
+                        sheet_name: &sheet.name,
+                        cell_ref: FormulaCellRef {
+                            sheet_index,
+                            row: row_idx,
+                            col: col_idx,
+                        },
+                        cell,
+                        sheet_names: &sheet_names,
+                    },
                 )?;
                 result
                     .registered_formulas
@@ -54,53 +65,50 @@ pub(crate) fn register_workbook_cells(
 pub(crate) fn set_workbook_cell(
     workbook: &mut Workbook,
     ast_service: &mut FormulaAstService,
-    sheet_name: &str,
-    sheet_index: usize,
-    row_idx: usize,
-    col_idx: usize,
-    cell: &CellValue,
-    sheet_names: &[String],
+    registration: FormulaCellRegistration<'_>,
 ) -> Result<FormulaRegistrationResult, AppError> {
     let mut result = FormulaRegistrationResult::default();
-    let row = to_formula_index(row_idx);
-    let col = to_formula_index(col_idx);
-    match cell {
+    let row = to_formula_index(registration.cell_ref.row);
+    let col = to_formula_index(registration.cell_ref.col);
+    match registration.cell {
         CellValue::Formula { formula, .. } => {
-            match canonicalize_formula_sheet_names(ast_service, formula, sheet_names).and_then(
-                |formula| {
+            match canonicalize_formula_sheet_names(ast_service, formula, registration.sheet_names)
+                .and_then(|formula| {
                     workbook
-                        .set_formula(sheet_name, row, col, &formula)
+                        .set_formula(registration.sheet_name, row, col, &formula)
                         .map_err(|error| error.to_string())
-                },
-            ) {
+                }) {
                 Ok(()) => {
-                    result.registered_formulas.insert(FormulaCellRef {
-                        sheet_index,
-                        row: row_idx,
-                        col: col_idx,
-                    });
+                    result.registered_formulas.insert(registration.cell_ref);
                 }
                 Err(error) => {
                     workbook
                         .set_value(
-                            sheet_name,
+                            registration.sheet_name,
                             row,
                             col,
                             formualizer_workbook::LiteralValue::Empty,
                         )
                         .map_err(|error| AppError::Internal(error.to_string()))?;
-                    let value = cell.with_formula_result(CellValue::Null, Some(error));
+                    let value = registration
+                        .cell
+                        .with_formula_result(CellValue::Null, Some(error));
                     result.invalid_formulas.push(SheetCellChange::new(
-                        sheet_index,
-                        row_idx,
-                        col_idx,
+                        registration.cell_ref.sheet_index,
+                        registration.cell_ref.row,
+                        registration.cell_ref.col,
                         value,
                     ));
                 }
             }
         }
         _ => workbook
-            .set_value(sheet_name, row, col, cell_to_literal(cell))
+            .set_value(
+                registration.sheet_name,
+                row,
+                col,
+                cell_to_literal(registration.cell),
+            )
             .map_err(|error| AppError::Internal(error.to_string()))?,
     }
 

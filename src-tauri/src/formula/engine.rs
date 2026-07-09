@@ -8,7 +8,9 @@ use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::index::{
     FormulaDependencyIndex, build_dependency_index, unregistered_formula_issues,
 };
-use crate::formula::registry::{apply_cell_changes, register_workbook_cells, set_workbook_cell};
+use crate::formula::registry::{
+    FormulaCellRegistration, apply_cell_changes, register_workbook_cells, set_workbook_cell,
+};
 use crate::formula::value_codec::{literal_to_cell, to_formula_index};
 use crate::types::{CellValue, FileData, FormulaDiagnostics, SheetCellChange};
 
@@ -153,12 +155,12 @@ impl FormulaRuntime {
         let registration_result = set_workbook_cell(
             &mut self.workbook,
             ast_service,
-            &sheet.name,
-            sheet_index,
-            row,
-            col,
-            cell,
-            &sheet_names,
+            FormulaCellRegistration {
+                sheet_name: &sheet.name,
+                cell_ref,
+                cell,
+                sheet_names: &sheet_names,
+            },
         )?;
         let mut changes = registration_result.invalid_formulas;
         if registration_result.registered_formulas.contains(&cell_ref) {
@@ -216,12 +218,12 @@ impl FormulaRuntime {
             let registration_result = set_workbook_cell(
                 &mut self.workbook,
                 ast_service,
-                &sheet.name,
-                cell_ref.sheet_index,
-                cell_ref.row,
-                cell_ref.col,
-                cell,
-                &sheet_names,
+                FormulaCellRegistration {
+                    sheet_name: &sheet.name,
+                    cell_ref: *cell_ref,
+                    cell,
+                    sheet_names: &sheet_names,
+                },
             )?;
             changes.extend(registration_result.invalid_formulas);
             if registration_result.registered_formulas.contains(cell_ref) {
