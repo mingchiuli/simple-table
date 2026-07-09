@@ -88,6 +88,36 @@ describe("pendingCellSaves store", () => {
     expect(cleared).toBeGreaterThan(0);
   });
 
+  it("reset cancels scheduled debounce work", async () => {
+    vi.useFakeTimers();
+    const store = usePendingCellSavesStore();
+    const committed: string[] = [];
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "discarded",
+      oldValue: text("old"),
+    });
+
+    store.schedulePendingSave(
+      {
+        commitBatch: async (changes) => {
+          committed.push(changes[0].value);
+        },
+        clearPendingContentChange: () => undefined,
+      },
+      100
+    );
+
+    store.reset();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual([]);
+    expect(store.phase).toBe("idle");
+    expect(store.hasPendingWork()).toBe(false);
+  });
+
   it("flushes through the store scheduler and waits for active saves", async () => {
     const store = usePendingCellSavesStore();
     let releaseSave!: () => void;

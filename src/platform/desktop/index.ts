@@ -1,14 +1,14 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
-import type { PlatformAPI, OpenFileResult } from '../types';
+import type { OpenFileSelection, PlatformAPI } from '../types';
 import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 import { decodeFileNameSegment } from "@/utils/fileFormats";
 import { spreadsheetDialogFilters } from "@/utils/spreadsheetFormats";
 
 export const desktopFileOps = {
-  /** Desktop: 打开文件选择器 + 直接调用 Rust 解析 */
-  openFile: async (): Promise<OpenFileResult | null> => {
+  /** Desktop: 只选择文件路径，不解析、不替换后端活动文档 */
+  pickOpenFile: async (): Promise<OpenFileSelection | null> => {
     const selected = await open({
       multiple: false,
       filters: await spreadsheetDialogFilters(),
@@ -17,11 +17,7 @@ export const desktopFileOps = {
 
     const fileName = decodeFileNameSegment(await basename(selected));
 
-    // 直接调用 Rust 解析（一次调用）
-    const document = await invoke<OpenDocumentResponse>("read_file_desktop", { path: selected });
-
     return {
-      ...document,
       path: selected,
       fileName,
     };

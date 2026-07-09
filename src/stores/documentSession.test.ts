@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -351,6 +352,173 @@ describe("documentSession store", () => {
     expect(store.revision).toBe(7);
     expect(store.currentFilePath).toBe(data.path);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("A1"));
+  });
+
+  it("returns command context only for the active document id", () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "/tmp/opened.xlsx",
+      fileName: "opened.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 42,
+        revision: 7,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, data.path);
+
+    expect(store.commandContextForDocument(42)).toEqual({
+      documentId: 42,
+      baseRevision: 7,
+    });
+    expect(store.commandContextForDocument(99)).toBeNull();
+  });
+
+  it("skips queued document mutations after the active document changes", async () => {
+    const store = useDocumentSessionStore();
+    const oldData: FileData = {
+      path: "/tmp/old.xlsx",
+      fileName: "old.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const nextData: FileData = {
+      path: "/tmp/next.xlsx",
+      fileName: "next.xlsx",
+      sheets: [sheet("Sheet1", [[text("next")]])],
+    };
+    store.openDocumentResponse({
+      fileData: oldData,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, oldData.path);
+
+    let releaseFirstMutation!: () => void;
+    const firstMutationStarted = new Promise<void>((resolve) => {
+      void store.enqueueDocumentMutation(1, async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseFirstMutation = release;
+        });
+      });
+    });
+    await firstMutationStarted;
+
+    let staleMutationRan = false;
+    const staleMutation = store.enqueueDocumentMutation(1, async () => {
+      staleMutationRan = true;
+    });
+
+    store.openDocumentResponse({
+      fileData: nextData,
+      editorSession: {
+        documentId: 2,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, nextData.path);
+
+    releaseFirstMutation();
+    await staleMutation;
+
+    expect(staleMutationRan).toBe(false);
+    expect(store.documentId).toBe(2);
+    expect(store.data?.fileName).toBe("next.xlsx");
+  });
+
+  it("ignores saved responses for a stale document context", () => {
+    const store = useDocumentSessionStore();
+    const oldData: FileData = {
+      path: "/tmp/old.xlsx",
+      fileName: "old.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    const nextData: FileData = {
+      path: "/tmp/next.xlsx",
+      fileName: "next.xlsx",
+      sheets: [sheet("Sheet1", [[text("next")]])],
+    };
+    store.openDocumentResponse({
+      fileData: oldData,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, oldData.path);
+    const staleContext = store.requireCommandContext();
+
+    store.openDocumentResponse({
+      fileData: nextData,
+      editorSession: {
+        documentId: 2,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, nextData.path);
+
+    const applied = store.applySavedDocumentResponseForContext(
+      staleContext,
+      {
+        fileData: {
+          ...oldData,
+          sheets: [sheet("Sheet1", [[text("saved-old")]])],
+        },
+        editorSession: {
+          documentId: 1,
+          revision: 0,
+          formulaStatus: readyFormulaStatus(),
+          capabilities: defaultWorkbookCapabilities(),
+          editorState: editorState(),
+        },
+      },
+      oldData.path
+    );
+
+    expect(applied).toBe(false);
+    expect(store.documentId).toBe(2);
+    expect(store.currentFilePath).toBe(nextData.path);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
+  });
+
+  it("discardPendingLocalWork clears queued drafts and pending dirty state", () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const pendingStore = usePendingCellSavesStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    });
+    statusStore.markPendingContentChange();
+    pendingStore.applyDraft(
+      "0,0,0",
+      { sheetIndex: 0, row: 0, col: 0, value: "draft", oldValue: text("old") },
+      text("old")
+    );
+
+    store.discardPendingLocalWork();
+
+    expect(statusStore.hasPendingContentChange).toBe(false);
+    expect(pendingStore.hasPendingWork()).toBe(false);
+    expect(pendingStore.draftCellValues.size).toBe(0);
+    expect(pendingStore.queuedCellSaves.size).toBe(0);
   });
 
   it("clears the frontend session when backend session is unavailable", () => {

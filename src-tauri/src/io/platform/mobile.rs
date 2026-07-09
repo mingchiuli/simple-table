@@ -21,14 +21,6 @@ pub struct PickedFileInfo {
     pub file_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PickFileResult {
-    #[serde(flatten)]
-    pub document: OpenDocumentResponse,
-    pub info: PickedFileInfo,
-}
-
 pub(super) fn extension_from_name(file_name: &str) -> String {
     supported_extension_or_default(file_name)
 }

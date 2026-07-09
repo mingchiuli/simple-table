@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { PlatformAPI, OpenFileResult } from '../types';
+import type { OpenFileSelection, PlatformAPI } from '../types';
 import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 
 interface PickFileIOSResult extends OpenDocumentResponse {
@@ -11,17 +11,15 @@ interface PickFileIOSResult extends OpenDocumentResponse {
 }
 
 export const iosFileOps = {
-  /** iOS: 后端用官方 dialog/fs 导入到 App 沙盒并解析 */
-  openFile: async (): Promise<OpenFileResult | null> => {
-    const result = await invoke<PickFileIOSResult | null>("pick_file_ios");
-    if (!result) return null;
+  /** iOS: 后端用官方 dialog/fs 导入到 App 沙盒，不解析、不替换后端活动文档 */
+  pickOpenFile: async (): Promise<OpenFileSelection | null> => {
+    const info = await invoke<PickFileIOSResult["info"] | null>("pick_open_file_ios");
+    if (!info) return null;
 
     return {
-      fileData: result.fileData,
-      editorSession: result.editorSession,
-      path: result.info.path,
-      fileName: result.info.fileName,
-      originalPath: result.info.originalPath,
+      path: info.path,
+      fileName: info.fileName,
+      originalPath: info.originalPath,
     };
   },
 

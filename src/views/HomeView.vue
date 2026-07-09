@@ -5,7 +5,7 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
 import * as api from "@/api";
-import { openFile, readFile, getStorageType } from "@/platform";
+import { pickOpenFile, readFile, getStorageType } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
 import {
   tryAddRecentFileWithResolvedStorage,
@@ -13,11 +13,12 @@ import {
   warnRecentFileTrackingFailure,
 } from "@/utils/recentFileTracking";
 import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
-import { confirmDiscardUnsavedChanges } from "@/utils/unsavedChanges";
+import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
 const recentFilesStore = useRecentFilesStore();
+const { prepareForDocumentReplacement } = useDocumentReplacementGuard();
 const isBusy = ref(false);
 
 onMounted(() => {
@@ -28,7 +29,6 @@ async function runHomeFileAction(action: () => Promise<void>) {
   if (isBusy.value || !documentSessionStore.beginLifecycle("loading")) return;
   isBusy.value = true;
   try {
-    if (!(await confirmDiscardUnsavedChanges())) return;
     await action();
   } finally {
     isBusy.value = false;
@@ -56,15 +56,17 @@ async function trackOpenedFile(
 async function handleOpenFile() {
   await runHomeFileAction(async () => {
     try {
-      const result = await openFile();
-      if (!result) {
+      const selection = await pickOpenFile();
+      if (!selection) {
         // 用户取消选择
         return;
       }
+      if (!(await prepareForDocumentReplacement())) return;
 
-      documentSessionStore.openDocumentResponse(result, result.path);
+      const opened = await readFile(selection.path);
+      documentSessionStore.openDocumentResponse(opened, selection.path);
 
-      await trackOpenedFile(result.path, result.fileName, result.originalPath);
+      await trackOpenedFile(selection.path, selection.fileName, selection.originalPath);
       await router.push({ name: "table" });
     } catch (error) {
       ElMessage.error(`Failed to open file: ${error}`);
@@ -75,6 +77,7 @@ async function handleOpenFile() {
 async function handleNewFile() {
   await runHomeFileAction(async () => {
     try {
+      if (!(await prepareForDocumentReplacement())) return;
       const defaultExtension = await defaultSpreadsheetExtension();
       const newFileData: FileData = {
         path: "",
@@ -106,18 +109,21 @@ async function handleNewFile() {
 
 async function handleOpenRecent(file: RecentFile) {
   await runHomeFileAction(async () => {
-    const openedExisting = await openRecentPath(file);
-    if (openedExisting || (await relocateAndOpenRecent(file))) {
+    if (await api.checkFileExists(file.path)) {
+      if (!(await prepareForDocumentReplacement())) return;
+      if (await openRecentPath(file)) {
+        await router.push({ name: "table" });
+      }
+      return;
+    }
+
+    if (await relocateAndOpenRecent(file)) {
       await router.push({ name: "table" });
     }
   });
 }
 
 async function openRecentPath(file: RecentFile): Promise<boolean> {
-  if (!(await api.checkFileExists(file.path))) {
-    return false;
-  }
-
   try {
     const opened = await readFile(file.path);
     documentSessionStore.openDocumentResponse(opened, file.path);
@@ -131,13 +137,15 @@ async function openRecentPath(file: RecentFile): Promise<boolean> {
 
 async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
   try {
-    const result = await openFile();
-    if (!result) return false;
+    const selection = await pickOpenFile();
+    if (!selection) return false;
+    if (!(await prepareForDocumentReplacement())) return false;
 
-    documentSessionStore.openDocumentResponse(result, result.path);
-    await trackOpenedFile(result.path, result.fileName, result.originalPath);
+    const opened = await readFile(selection.path);
+    documentSessionStore.openDocumentResponse(opened, selection.path);
+    await trackOpenedFile(selection.path, selection.fileName, selection.originalPath);
 
-    if (file.path !== result.path) {
+    if (file.path !== selection.path) {
       try {
         await api.removeRecentFile(file.id);
       } catch (error) {

@@ -72,6 +72,8 @@ export function useCellEditController({
   });
 
   async function commitBatch(changes: CellSaveRequest[]) {
+    const context = documentSessionStore.requireCommandContext();
+    const documentId = context.documentId;
     const currentFileData = fileData.value;
     if (!currentFileData) throw new Error('No file is loaded');
 
@@ -86,8 +88,8 @@ export function useCellEditController({
       };
     });
 
-    await documentSessionStore.enqueueMutation(async () => {
-      const response = await api.setCells(documentSessionStore.requireCommandContext(), payload);
+    await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
+      const response = await api.setCells(context, payload);
       await applyMutationResponse(response);
     });
   }

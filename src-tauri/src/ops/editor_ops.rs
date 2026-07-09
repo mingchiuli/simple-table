@@ -28,13 +28,7 @@ pub fn do_get_editor_state(
                     editor_state: editor_state_info(editor_state),
                 })
             }),
-        (None, None) => Ok(registry.active().map(|editor_state| EditorSessionInfo {
-            document_id: editor_state.document_id(),
-            revision: editor_state.revision(),
-            formula_status: editor_state.formula_status(),
-            capabilities: editor_state.capabilities(),
-            editor_state: editor_state_info(editor_state),
-        })),
+        (None, None) => Ok(None),
         _ => Err(AppError::DocumentStateInvalid(
             "document state request must include both documentId and baseRevision".to_string(),
         )),
@@ -147,5 +141,14 @@ mod tests {
             .expect_err("partial state request");
 
         assert!(matches!(error, AppError::DocumentStateInvalid(_)));
+    }
+
+    #[test]
+    fn get_editor_state_without_context_returns_no_session() {
+        let registry = make_registry();
+
+        let session = do_get_editor_state(&registry, None, None).expect("state request");
+
+        assert!(session.is_none());
     }
 }

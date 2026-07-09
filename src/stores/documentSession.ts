@@ -101,6 +101,18 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       });
       return run;
     },
+    enqueueDocumentMutation<T>(
+      documentId: number,
+      task: (context: EditorCommandContext) => Promise<T>
+    ): Promise<T | undefined> {
+      return this.enqueueMutation(async () => {
+        const context = this.commandContextForDocument(documentId);
+        if (!context) {
+          return undefined;
+        }
+        return task(context);
+      });
+    },
     waitForMutations(): Promise<void> {
       return mutationRuntimeFor(this).tail ?? Promise.resolve();
     },
@@ -111,6 +123,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         baseRevision: this.revision,
       };
     },
+    commandContextForDocument(documentId: number): EditorCommandContext | null {
+      const context = this.currentCommandContext();
+      if (!context || context.documentId !== documentId) {
+        return null;
+      }
+      return context;
+    },
     requireCommandContext(): EditorCommandContext {
       const context = this.currentCommandContext();
       if (!context) {
@@ -120,6 +139,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
     matchesCommandContext(context: EditorCommandContext): boolean {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
+    },
+    discardPendingLocalWork() {
+      this.resetMutationQueue();
+      usePendingCellSavesStore().reset();
+      useDocumentStatusStore().clearPendingContentChange();
     },
     openDocument(data: FileData, path: string | null = null) {
       this.resetMutationQueue();
@@ -150,6 +174,20 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       usePendingCellSavesStore().reset();
       useDocumentStatusStore().clearPendingContentChange();
       useDocumentStatusStore().applyEditorSession(response.editorSession);
+    },
+    applySavedDocumentResponseForContext(
+      context: EditorCommandContext,
+      response: SavedDocumentResponse,
+      path: string | null = null
+    ): boolean {
+      if (
+        response.editorSession.documentId !== context.documentId
+        || !this.matchesCommandContext(context)
+      ) {
+        return false;
+      }
+      this.applySavedDocumentResponse(response, path);
+      return true;
     },
     updateIdentity(path: string | null, fileName: string) {
       if (this.data) {

@@ -51,8 +51,9 @@ export function useEditorCommands({
     try {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.enqueueMutation(async () => {
-        await applyMutationResponse(await action(documentSessionStore.requireCommandContext()));
+      const documentId = documentSessionStore.requireCommandContext().documentId;
+      await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
+        await applyMutationResponse(await action(context));
       });
     } catch (error) {
       await refreshAfterMutationError({ refreshProjection: options.refreshProjectionOnError });

@@ -3,7 +3,7 @@
  */
 import { getPlatform } from '@/utils/platform';
 import { basename } from '@tauri-apps/api/path';
-import type { PlatformAPI, OpenFileResult } from './types';
+import type { PlatformAPI, OpenFileSelection } from './types';
 import type { EditorCommandContext, OpenDocumentResponse } from '@/types';
 import { createAsyncCache } from '@/utils/asyncCache';
 import { decodeFileNameSegment, fileNameFromPathLike } from '@/utils/fileFormats';
@@ -39,10 +39,10 @@ export async function getPlatformAPI(): Promise<PlatformAPI> {
 
 // ==================== Convenience re-exports ====================
 
-/** 打开文件：选择器 + 读取 + 解析（一体化） */
-export async function openFile(): Promise<OpenFileResult | null> {
+/** 只选择/导入文件，不解析、不替换后端活动文档 */
+export async function pickOpenFile(): Promise<OpenFileSelection | null> {
   const api = await getPlatformAPI();
-  return api.fileOps.openFile();
+  return api.fileOps.pickOpenFile();
 }
 
 /** 从已知路径读取并解析（用于最近文件列表） */

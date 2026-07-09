@@ -1,7 +1,7 @@
 #[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
-use crate::io::platform::mobile::{PickFileResult, PickedFileInfo};
+use crate::io::platform::mobile::PickedFileInfo;
 #[cfg(target_os = "ios")]
 use crate::io::platform::{ios, mobile};
 #[cfg(target_os = "ios")]
@@ -9,11 +9,11 @@ use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 #[cfg(target_os = "ios")]
 use tauri::AppHandle;
 
-/// iOS: use official dialog + fs plugins to import a picked file into the app sandbox.
+/// iOS: import a picked file into the app sandbox without opening it in the editor.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn pick_file_ios(app: AppHandle) -> Result<Option<PickFileResult>, AppError> {
-    ios::pick_file(&app)
+pub async fn pick_open_file_ios(app: AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
+    ios::pick_file_info(&app)
 }
 
 /// iOS: read and parse a sandboxed file path saved in recent files.

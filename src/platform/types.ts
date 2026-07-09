@@ -4,16 +4,16 @@
 
 import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
 
-export interface OpenFileResult extends OpenDocumentResponse {
+export type OpenFileSelection = {
   path: string;
   fileName: string;
   /** 原始选择来源路径（用于显示/诊断） */
   originalPath?: string;
-}
+};
 
 export interface PlatformFileOps {
-  /** 打开文件：选择器 + 读取 + 解析（一体化） */
-  openFile(): Promise<OpenFileResult | null>;
+  /** 只选择/导入文件，不解析、不替换后端活动文档 */
+  pickOpenFile(): Promise<OpenFileSelection | null>;
   /** 从已知路径读取并解析（用于最近文件列表） */
   readFile(path: string): Promise<OpenDocumentResponse>;
   /** 保存文件：生成字节 + 写入（一体化） */

@@ -1,6 +1,8 @@
 import type { ComputedRef, Ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import * as api from '@/api';
-import { exportFile, getFileName, getStorageType, openFile, pickSaveLocation, readFile, saveFile } from '@/platform';
+import { exportFile, getFileName, getStorageType, pickOpenFile, pickSaveLocation, readFile, saveFile } from '@/platform';
+import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import type { FileData } from '@/types';
@@ -11,10 +13,6 @@ import {
   tryRefreshRecentFiles,
 } from '@/utils/recentFileTracking';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
-import {
-  confirmDiscardUnsavedChanges,
-  hasUnsavedDocumentChanges,
-} from '@/utils/unsavedChanges';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -34,6 +32,9 @@ export function useFileActions({
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
+  const { prepareForDocumentReplacement } = useDocumentReplacementGuard({
+    flushPendingCellChanges,
+  });
 
   async function withDocumentLifecycle(
     lifecycle: 'loading' | 'saving',
@@ -72,15 +73,6 @@ export function useFileActions({
     await tryRefreshRecentFiles(() => recentFilesStore.load());
   }
 
-  async function prepareForDocumentReplacement(): Promise<boolean> {
-    if (hasUnsavedDocumentChanges()) {
-      return confirmDiscardUnsavedChanges();
-    }
-    if (!(await flushPendingCellChanges())) return false;
-    await documentSessionStore.waitForMutations();
-    return true;
-  }
-
   async function loadFileFromPath(filePath: string): Promise<boolean> {
     let loaded = false;
     const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
@@ -107,15 +99,16 @@ export function useFileActions({
     const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
+
+      const selection = await pickOpenFile();
+      if (!selection) return;
       if (!(await prepareForDocumentReplacement())) return;
 
-      const result = await openFile();
-      if (!result) return;
-
-      documentSessionStore.openDocumentResponse(result, result.path);
+      const opened = await readFile(selection.path);
+      documentSessionStore.openDocumentResponse(opened, selection.path);
       currentSheetIndex.value = 0;
 
-      await updateRecentFileEntry(result.path, result.fileName, result.originalPath);
+      await updateRecentFileEntry(selection.path, selection.fileName, selection.originalPath);
     });
     if (ran) {
       isLoading.value = false;
@@ -141,7 +134,9 @@ export function useFileActions({
       if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
         isLoading.value = true;
         const saved = await saveFile(existingPath, context);
-        documentSessionStore.applySavedDocumentResponse(saved, existingPath);
+        if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, existingPath)) {
+          return;
+        }
         const fileName = saved.fileData.fileName || await getFileName(existingPath);
         await updateRecentFileEntry(existingPath, fileName);
         ElMessage.success('File saved successfully');
@@ -165,7 +160,9 @@ export function useFileActions({
 
       isLoading.value = true;
       const saved = await saveFile(savePath, context);
-      documentSessionStore.applySavedDocumentResponse(saved, savePath);
+      if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, savePath)) {
+        return;
+      }
       const fileName = saved.fileData.fileName || await getFileName(savePath);
 
       await updateRecentFileEntry(savePath, fileName);

@@ -1,8 +1,5 @@
-use super::mobile::{
-    self, PickFileResult, PickedFileInfo, unique_import_path, write_path_with_official_fs,
-};
+use super::mobile::{self, PickedFileInfo, unique_import_path, write_path_with_official_fs};
 use crate::error::AppError;
-use crate::io::document;
 use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, default_spreadsheet_file_name, file_name_from_path_like,
     import_extension_from_name_or_bytes, normalized_import_file_name,
@@ -40,7 +37,7 @@ fn display_name_from_path(path: &FilePath) -> String {
     }
 }
 
-pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
+pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
     use tauri_plugin_dialog::{DialogExt, FileAccessMode, PickerMode};
     use tauri_plugin_fs::FsExt;
 
@@ -70,15 +67,11 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
 
     let path = sandbox_path.to_string_lossy().to_string();
-    let document = document::open_from_bytes(path.clone(), bytes, Some(file_name.clone()))?;
 
-    Ok(Some(PickFileResult {
-        document,
-        info: PickedFileInfo {
-            path,
-            original_path,
-            file_name,
-        },
+    Ok(Some(PickedFileInfo {
+        path,
+        original_path,
+        file_name,
     }))
 }
 

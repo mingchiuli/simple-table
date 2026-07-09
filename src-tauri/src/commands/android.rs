@@ -1,7 +1,7 @@
 #[cfg(target_os = "android")]
 use crate::error::AppError;
 #[cfg(target_os = "android")]
-use crate::io::platform::mobile::PickFileResult;
+use crate::io::platform::mobile::PickedFileInfo;
 #[cfg(target_os = "android")]
 use crate::io::platform::{android, mobile};
 #[cfg(target_os = "android")]
@@ -9,11 +9,11 @@ use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
 #[cfg(target_os = "android")]
 use tauri::AppHandle;
 
-/// Android: use official dialog + fs plugins to import a picked file into the app sandbox.
+/// Android: import a picked file into the app sandbox without opening it in the editor.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn pick_file_android(app: AppHandle) -> Result<Option<PickFileResult>, AppError> {
-    android::pick_file(&app)
+pub async fn pick_open_file_android(app: AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
+    android::pick_file_info(&app)
 }
 
 /// Android: read and parse a sandboxed file path saved in recent files.
