@@ -913,6 +913,40 @@ describe("documentSession store", () => {
     expect(store.data?.fileName).toBe("next.xlsx");
   });
 
+  it("invalidates queued document mutations when local work is discarded without changing documents", async () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    openTestDocument(store, data, data.path);
+
+    let releaseFirstMutation!: () => void;
+    const firstMutationStarted = new Promise<void>((resolve) => {
+      void store.enqueueDocumentMutation(1, async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseFirstMutation = release;
+        });
+      });
+    });
+    await firstMutationStarted;
+
+    let staleMutationRan = false;
+    const staleMutation = store.enqueueDocumentMutation(1, async () => {
+      staleMutationRan = true;
+    });
+
+    store.discardPendingLocalWork();
+    releaseFirstMutation();
+    await staleMutation;
+
+    expect(staleMutationRan).toBe(false);
+    expect(store.documentId).toBe(1);
+    expect(store.data?.fileName).toBe("book.xlsx");
+  });
+
   it("rejects queued document mutations after the projection becomes stale", async () => {
     const store = useDocumentSessionStore();
     const data: FileData = {

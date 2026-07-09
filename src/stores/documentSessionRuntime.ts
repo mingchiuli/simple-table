@@ -16,6 +16,7 @@ export type DocumentSessionLifecycle = "idle" | "loading" | "saving" | "closing"
 
 type DocumentSessionRuntime = {
   tail: Promise<void> | null;
+  generation: number;
   interactionIdleWaiters: Array<() => void>;
 };
 
@@ -97,10 +98,14 @@ export function waitForIdleSessionInteraction(store: DocumentSessionStateTarget)
   });
 }
 
-export function enqueueMutation<T>(store: object, task: () => Promise<T>): Promise<T> {
+export function enqueueMutation<T>(store: object, task: () => Promise<T>): Promise<T | undefined> {
   const runtime = sessionRuntimeFor(store);
+  const generation = runtime.generation;
   const tail = runtime.tail ?? Promise.resolve();
-  const run = tail.then(task, task);
+  const run = tail.then(
+    () => runMutationForGeneration(runtime, generation, task),
+    () => runMutationForGeneration(runtime, generation, task)
+  );
   const cleanup = run.then(
     () => undefined,
     () => undefined
@@ -227,16 +232,29 @@ export function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): b
 }
 
 function resetMutationQueue(store: object) {
-  sessionRuntimeFor(store).tail = null;
+  const runtime = sessionRuntimeFor(store);
+  runtime.generation += 1;
+  runtime.tail = null;
 }
 
 function sessionRuntimeFor(store: object): DocumentSessionRuntime {
   let runtime = documentSessionRuntimes.get(store);
   if (!runtime) {
-    runtime = { tail: null, interactionIdleWaiters: [] };
+    runtime = { tail: null, generation: 0, interactionIdleWaiters: [] };
     documentSessionRuntimes.set(store, runtime);
   }
   return runtime;
+}
+
+function runMutationForGeneration<T>(
+  runtime: DocumentSessionRuntime,
+  generation: number,
+  task: () => Promise<T>
+): Promise<T | undefined> {
+  if (runtime.generation !== generation) {
+    return Promise.resolve(undefined);
+  }
+  return task();
 }
 
 function resolveInteractionIdleWaiters(store: object) {

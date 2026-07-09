@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::error::AppError;
 use crate::ops::core_ops::{AppliedOperation, EditorCommand, ResolvedCellEdit};
 use crate::types::{CellValue, FileData, SheetData, parse_cell_text};
@@ -32,22 +34,30 @@ impl EditorCommand {
                         changes: Vec::new(),
                     });
                 }
-                let mut resolved = Vec::with_capacity(changes.len());
+                let mut resolved: Vec<ResolvedCellEdit> = Vec::with_capacity(changes.len());
+                let mut positions: HashMap<(usize, usize, usize), usize> = HashMap::new();
                 for change in changes {
                     require_sheet(file_data, change.sheet_index)?;
-                    let old_value = file_data.sheets[change.sheet_index]
-                        .rows
-                        .get(change.row)
-                        .and_then(|row_data| row_data.get(change.col))
-                        .cloned()
-                        .unwrap_or(CellValue::Null);
-                    resolved.push(ResolvedCellEdit {
-                        sheet_index: change.sheet_index,
-                        row: change.row,
-                        col: change.col,
-                        old_value,
-                        new_value: parse_cell_text(&change.text),
-                    });
+                    let key = (change.sheet_index, change.row, change.col);
+                    let new_value = parse_cell_text(&change.text);
+                    if let Some(index) = positions.get(&key) {
+                        resolved[*index].new_value = new_value;
+                    } else {
+                        let old_value = file_data.sheets[change.sheet_index]
+                            .rows
+                            .get(change.row)
+                            .and_then(|row_data| row_data.get(change.col))
+                            .cloned()
+                            .unwrap_or(CellValue::Null);
+                        positions.insert(key, resolved.len());
+                        resolved.push(ResolvedCellEdit {
+                            sheet_index: change.sheet_index,
+                            row: change.row,
+                            col: change.col,
+                            old_value,
+                            new_value,
+                        });
+                    }
                 }
                 Ok(AppliedOperation::SetCells { changes: resolved })
             }

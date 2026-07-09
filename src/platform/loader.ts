@@ -48,11 +48,7 @@ export async function pickOpenFile(): Promise<OpenFileSelection | null> {
 /** 丢弃已选择/导入但没有成功打开为当前文档的文件 */
 export async function discardOpenFileSelection(selection: OpenFileSelection): Promise<void> {
   const api = await getPlatformAPI();
-  try {
-    await api.fileOps.discardOpenFileSelection?.(selection);
-  } catch (error) {
-    console.warn("Failed to discard unused open file selection", error);
-  }
+  await api.fileOps.discardOpenFileSelection?.(selection);
 }
 
 /** 从已知路径读取并解析（用于最近文件列表） */
@@ -79,11 +75,7 @@ export async function pickSaveLocation(defaultName: string) {
 /** 丢弃已预留但没有成功保存接管的保存目标 */
 export async function discardSaveLocation(path: string): Promise<void> {
   const api = await getPlatformAPI();
-  try {
-    await api.fileOps.discardSaveLocation?.(path);
-  } catch (error) {
-    console.warn("Failed to discard unused save location", error);
-  }
+  await api.fileOps.discardSaveLocation?.(path);
 }
 
 /** 导出当前编辑状态到用户选择的位置 */

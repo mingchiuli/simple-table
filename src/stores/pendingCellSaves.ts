@@ -264,7 +264,7 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     clearPendingContentChangeIfIdle(clearPendingContentChange: () => void) {
       if (!this.hasPendingWork()) {
         this.setPhase("idle");
-        clearPendingContentChange();
+        safeClearPendingContentChangeCallback(clearPendingContentChange);
       }
     },
     suspendAutosave(): () => void {
@@ -384,8 +384,12 @@ function schedulerFor(store: object): PendingCellSaveSchedulerState {
 }
 
 function safeClearPendingContentChange(callbacks: PendingCellSaveCallbacks) {
+  safeClearPendingContentChangeCallback(callbacks.clearPendingContentChange);
+}
+
+function safeClearPendingContentChangeCallback(clearPendingContentChange: () => void) {
   try {
-    callbacks.clearPendingContentChange();
+    clearPendingContentChange();
   } catch (error) {
     console.error("Pending cell save state was updated, but dirty-state cleanup failed:", error);
   }

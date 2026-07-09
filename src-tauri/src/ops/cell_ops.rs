@@ -293,7 +293,8 @@ mod tests {
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;
     use crate::types::{
-        CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection, SheetData,
+        CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection,
+        SetCellRequest, SheetData,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -414,6 +415,84 @@ mod tests {
 
         assert_eq!(response.revision, 0);
         assert!(response.patches.is_empty());
+    }
+
+    #[test]
+    fn batched_duplicate_cell_edits_return_the_final_value_once() {
+        let registry = make_registry();
+        let (document_id, revision) = command_session(&registry);
+
+        let response = do_set_cells(
+            &registry,
+            document_id,
+            revision,
+            vec![
+                SetCellRequest {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "first".to_string(),
+                },
+                SetCellRequest {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "final".to_string(),
+                },
+            ],
+        )
+        .expect("batch edit");
+
+        let Some(EditorPatch::Cells { changes }) = response.patches.first() else {
+            panic!("expected cell patch");
+        };
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].row, 0);
+        assert_eq!(changes[0].col, 0);
+        assert_eq!(changes[0].value, CellValue::String("final".to_string()));
+
+        let guard = registry.read().expect("registry");
+        let editor = guard.active().expect("active document");
+        assert_eq!(
+            editor.file_data().sheets[0].rows[0][0],
+            CellValue::String("final".to_string())
+        );
+    }
+
+    #[test]
+    fn batched_duplicate_cell_edits_are_noop_when_final_value_matches_original() {
+        let registry = make_registry();
+        let (document_id, revision) = command_session(&registry);
+
+        let response = do_set_cells(
+            &registry,
+            document_id,
+            revision,
+            vec![
+                SetCellRequest {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "draft".to_string(),
+                },
+                SetCellRequest {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "A1".to_string(),
+                },
+            ],
+        )
+        .expect("batch edit");
+
+        assert_eq!(response.revision, revision);
+        assert!(response.patches.is_empty());
+        let guard = registry.read().expect("registry");
+        let editor = guard.active().expect("active document");
+        assert_eq!(
+            editor.file_data().sheets[0].rows[0][0],
+            CellValue::String("A1".to_string())
+        );
     }
 
     #[test]

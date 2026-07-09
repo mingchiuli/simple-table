@@ -84,17 +84,17 @@ export function applyDocumentPatches(
 
 function applySheetInserted(data: FileData | null, patch: SheetInsertedPatch): FileData | null {
   if (!data) return data;
+  assertSheetInsertIndex(data, patch.sheetIndex);
   const sheets = [...data.sheets];
-  sheets.splice(Math.min(patch.sheetIndex, sheets.length), 0, patch.sheet);
+  sheets.splice(patch.sheetIndex, 0, patch.sheet);
   return { ...data, sheets };
 }
 
 function applySheetDeleted(data: FileData | null, patch: SheetDeletedPatch): FileData | null {
   if (!data) return data;
+  assertSheetExists(data, patch.sheetIndex);
   const sheets = [...data.sheets];
-  if (patch.sheetIndex < sheets.length) {
-    sheets.splice(patch.sheetIndex, 1);
-  }
+  sheets.splice(patch.sheetIndex, 1);
   return { ...data, sheets };
 }
 
@@ -105,14 +105,15 @@ function applySheetUpdated(data: FileData | null, patch: SheetUpdatedPatch): Fil
 
 function applySheetsReplaced(data: FileData | null, patch: SheetsReplacedPatch): FileData | null {
   if (!data) return data;
-  const sheets = data.sheets.slice(0, Math.max(0, Math.min(patch.startIndex, data.sheets.length)));
+  assertSheetTailReplaceIndex(data, patch.startIndex);
+  const sheets = data.sheets.slice(0, patch.startIndex);
   sheets.push(...patch.sheets);
   return { ...data, sheets };
 }
 
 function applyRowInserted(data: FileData | null, patch: RowInsertedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
+  if (!data) return data;
+  const sheet = sheetAt(data, patch.sheetIndex);
   const rows = [...sheet.rows];
   while (rows.length < patch.rowIndex) {
     rows.push([]);
@@ -130,8 +131,8 @@ function applyRowInserted(data: FileData | null, patch: RowInsertedPatch): FileD
 }
 
 function applyRowDeleted(data: FileData | null, patch: RowDeletedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
+  if (!data) return data;
+  const sheet = sheetAt(data, patch.sheetIndex);
   const rows = [...sheet.rows];
   if (patch.rowIndex < rows.length) {
     rows.splice(patch.rowIndex, patch.count);
@@ -148,8 +149,8 @@ function applyRowDeleted(data: FileData | null, patch: RowDeletedPatch): FileDat
 }
 
 function applyColumnInserted(data: FileData | null, patch: ColumnInsertedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
+  if (!data) return data;
+  const sheet = sheetAt(data, patch.sheetIndex);
   const rowCount = Math.max(sheet.rows.length, patch.values.length);
   const rows = Array.from({ length: rowCount }, (_, rowIndex) => {
     const row = [...(sheet.rows[rowIndex] ?? [])];
@@ -171,8 +172,8 @@ function applyColumnInserted(data: FileData | null, patch: ColumnInsertedPatch):
 }
 
 function applyColumnDeleted(data: FileData | null, patch: ColumnDeletedPatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
+  if (!data) return data;
+  const sheet = sheetAt(data, patch.sheetIndex);
   const rows = sheet.rows.map((row) => {
     const nextRow = [...row];
     if (patch.colIndex < nextRow.length) {
@@ -266,8 +267,8 @@ function shiftNumberRecordOnDelete(
 }
 
 function applySheetShape(data: FileData | null, patch: SheetShapePatch): FileData | null {
-  const sheet = data?.sheets[patch.sheetIndex];
-  if (!data || !sheet) return data;
+  if (!data) return data;
+  const sheet = sheetAt(data, patch.sheetIndex);
   const rows = [...sheet.rows];
   rows.length = patch.rowLengths.length;
   for (let rowIndex = 0; rowIndex < patch.rowLengths.length; rowIndex += 1) {
@@ -292,6 +293,7 @@ function replaceSheet(
   sheetIndex: number,
   sheet: FileData["sheets"][number]
 ): FileData {
+  assertSheetExists(data, sheetIndex);
   const sheets = [...data.sheets];
   sheets[sheetIndex] = sheet;
   return { ...data, sheets };
@@ -313,8 +315,7 @@ function applyCellChanges(data: FileData | null, changes: SheetCellChange[]): Fi
   }
 
   for (const [sheetIndex, sheetChanges] of changesBySheet) {
-    const sheet = data.sheets[sheetIndex];
-    if (!sheet) continue;
+    const sheet = sheetAt(data, sheetIndex);
     const rows = [...sheet.rows];
     nextData.sheets[sheetIndex] = { ...sheet, rows };
     for (const change of sheetChanges) {
@@ -379,8 +380,8 @@ function applyLayoutPatch(
   columnWidths: Record<number, number | null>,
   rowHeights: Record<number, number | null>
 ): FileData | null {
-  const sheet = data?.sheets[sheetIndex];
-  if (!data || !sheet) return data;
+  if (!data) return data;
+  const sheet = sheetAt(data, sheetIndex);
 
   const nextData = {
     ...data,
@@ -417,6 +418,41 @@ function patchNumberRecord(
     }
   }
   return Object.keys(next).length ? next : undefined;
+}
+
+function sheetAt(data: FileData, sheetIndex: number): FileData["sheets"][number] {
+  assertSheetExists(data, sheetIndex);
+  const sheet = data.sheets[sheetIndex];
+  if (!sheet) {
+    throw new Error(
+      `Editor patch targets missing sheet ${sheetIndex}; current sheet count is ${data.sheets.length}`
+    );
+  }
+  return sheet;
+}
+
+function assertSheetExists(data: FileData, sheetIndex: number) {
+  if (!Number.isInteger(sheetIndex) || sheetIndex < 0 || sheetIndex >= data.sheets.length) {
+    throw new Error(
+      `Editor patch targets missing sheet ${sheetIndex}; current sheet count is ${data.sheets.length}`
+    );
+  }
+}
+
+function assertSheetInsertIndex(data: FileData, sheetIndex: number) {
+  if (!Number.isInteger(sheetIndex) || sheetIndex < 0 || sheetIndex > data.sheets.length) {
+    throw new Error(
+      `Editor patch inserts sheet at invalid index ${sheetIndex}; current sheet count is ${data.sheets.length}`
+    );
+  }
+}
+
+function assertSheetTailReplaceIndex(data: FileData, startIndex: number) {
+  if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex > data.sheets.length) {
+    throw new Error(
+      `Editor patch replaces sheet tail from invalid index ${startIndex}; current sheet count is ${data.sheets.length}`
+    );
+  }
 }
 
 function assertNever(value: never): never {

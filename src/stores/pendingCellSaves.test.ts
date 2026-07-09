@@ -243,6 +243,23 @@ describe("pendingCellSaves store", () => {
     }
   });
 
+  it("does not throw when idle dirty-state cleanup fails", () => {
+    const store = usePendingCellSavesStore();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      expect(() =>
+        store.clearPendingContentChangeIfIdle(() => {
+          throw new Error("dirty cleanup failed");
+        })
+      ).not.toThrow();
+      expect(store.phase).toBe("idle");
+      expect(consoleError).toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("suspends debounce autosave without dropping queued drafts", async () => {
     vi.useFakeTimers();
     const store = usePendingCellSavesStore();

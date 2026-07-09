@@ -333,4 +333,93 @@ describe("applyDocumentPatches", () => {
 
     expect(result.data?.sheets.map((item) => item.name)).toEqual(["Keep", "New 1", "New 2"]);
   });
+
+  it("fails fast when a cell patch targets a missing sheet", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    expect(() =>
+      applyDocumentPatches(data, [
+        {
+          type: "Cells",
+          data: {
+            changes: [{ sheetIndex: 1, row: 0, col: 0, value: text("stale") }],
+          },
+        },
+      ])
+    ).toThrow("Editor patch targets missing sheet 1");
+  });
+
+  it("fails fast when a layout patch targets a missing sheet", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    expect(() =>
+      applyDocumentPatches(data, [
+        {
+          type: "Layout",
+          data: { patch: { sheetIndex: 1, columnWidths: { 0: 120 }, rowHeights: {} } },
+        },
+      ])
+    ).toThrow("Editor patch targets missing sheet 1");
+  });
+
+  it("fails fast when a structural patch targets a missing sheet", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    expect(() =>
+      applyDocumentPatches(data, [
+        {
+          type: "RowDeleted",
+          data: {
+            patch: {
+              sheetIndex: 1,
+              rowIndex: 0,
+              count: 1,
+              metadata: {
+                merges: [],
+                rich: { scope: { type: "rows", start: 0 }, projection: defaultRichProjection() },
+              },
+            },
+          },
+        },
+      ])
+    ).toThrow("Editor patch targets missing sheet 1");
+  });
+
+  it("fails fast when a sheet insert or replace patch has an invalid sheet boundary", () => {
+    const data: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    expect(() =>
+      applyDocumentPatches(data, [
+        {
+          type: "SheetInserted",
+          data: { patch: { sheetIndex: 3, sheet: sheet("Late", [[text("late")]]) } },
+        },
+      ])
+    ).toThrow("Editor patch inserts sheet at invalid index 3");
+
+    expect(() =>
+      applyDocumentPatches(data, [
+        {
+          type: "SheetsReplaced",
+          data: { patch: { startIndex: 3, sheets: [sheet("Late", [[text("late")]])] } },
+        },
+      ])
+    ).toThrow("Editor patch replaces sheet tail from invalid index 3");
+  });
 });
