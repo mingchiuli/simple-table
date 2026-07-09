@@ -38,6 +38,16 @@ function mouseEvent(clientX: number, clientY: number = 0) {
   } as unknown as MouseEvent;
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("useGridResize", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -211,6 +221,50 @@ describe("useGridResize", () => {
     documentMock.dispatch("mouseup");
 
     expect(commitColumnWidth).toHaveBeenCalledWith(0, 170);
+    expect(clearColumnWidth).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps preview state until an async resize commit settles", async () => {
+    const documentMock = createDocumentMock();
+    vi.stubGlobal("document", documentMock);
+    const commit = deferred();
+    let columnWidth = 120;
+    const clearColumnWidth = vi.fn();
+    const commitColumnWidth = vi.fn(() => commit.promise);
+
+    const resize = useGridResize({
+      headerHeight: 50,
+      minColumnWidth: 56,
+      minRowHeight: 36,
+      scrollLeft: ref(0),
+      scrollTop: ref(0),
+      getColumnWidth: () => columnWidth,
+      getRowHeight: () => 72,
+      getColumnOffset: () => 0,
+      getRowOffset: () => 0,
+      setColumnWidth: vi.fn((_colIndex: number, width: number) => {
+        columnWidth = width;
+      }),
+      setRowHeight: vi.fn(),
+      clearColumnWidth,
+      clearRowHeight: vi.fn(),
+      commitColumnWidth,
+      commitRowHeight: vi.fn(),
+    });
+
+    resize.startColumnResize(mouseEvent(100), 0, 120);
+    documentMock.dispatch("mousemove", { clientX: 150 });
+    documentMock.dispatch("mouseup");
+
+    expect(commitColumnWidth).toHaveBeenCalledWith(0, 170);
+    expect(clearColumnWidth).not.toHaveBeenCalled();
+    expect(resize.resizingColumn.value).toBeNull();
+    expect(documentMock.listenerCount("mousemove")).toBe(0);
+
+    commit.resolve();
+    await commit.promise;
+    await Promise.resolve();
+
     expect(clearColumnWidth).toHaveBeenCalledWith(0);
   });
 

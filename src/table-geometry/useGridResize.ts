@@ -17,8 +17,8 @@ type UseGridResizeOptions = {
   setRowHeight: (rowIndex: number, height: number) => void;
   clearColumnWidth?: (colIndex: number) => void;
   clearRowHeight?: (rowIndex: number) => void;
-  commitColumnWidth: (colIndex: number, width: number) => void;
-  commitRowHeight: (rowIndex: number, height: number) => void;
+  commitColumnWidth: (colIndex: number, width: number) => void | Promise<void>;
+  commitRowHeight: (rowIndex: number, height: number) => void | Promise<void>;
 };
 
 export function useGridResize({
@@ -48,15 +48,20 @@ export function useGridResize({
   const resizeLineX = ref(0);
   const resizeLineY = ref(0);
   let listenersAttached = false;
+  let resizeSessionId = 0;
+  const columnPreviewSessions = new Map<number, number>();
+  const rowPreviewSessions = new Map<number, number>();
 
   function startColumnResize(event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number) {
     if (canResize?.value === false) return;
     event.preventDefault();
     finishActiveResize();
+    const sessionId = nextResizeSessionId();
     resizingColumn.value = colIndex;
     startX.value = getClientX(event);
     startWidth.value = getColumnWidth(colIndex);
     resizeLineX.value = boundaryX;
+    columnPreviewSessions.set(colIndex, sessionId);
     addDocumentListeners();
   }
 
@@ -64,10 +69,12 @@ export function useGridResize({
     if (canResize?.value === false) return;
     event.preventDefault();
     finishActiveResize();
+    const sessionId = nextResizeSessionId();
     resizingRow.value = rowIndex;
     startY.value = getClientY(event);
     startHeight.value = getRowHeight(rowIndex);
     resizeLineY.value = boundaryY ?? headerHeight + getRowOffset(rowIndex) + startHeight.value - scrollTop.value;
+    rowPreviewSessions.set(rowIndex, sessionId);
     addDocumentListeners();
   }
 
@@ -103,18 +110,22 @@ export function useGridResize({
       const colIndex = resizingColumn.value;
       const width = getColumnWidth(colIndex);
       if (width !== startWidth.value) {
-        commitColumnWidth(colIndex, width);
+        const sessionId = columnPreviewSessions.get(colIndex) ?? nextResizeSessionId();
+        commitColumnPreview(colIndex, width, sessionId);
+      } else {
+        clearColumnPreview(colIndex);
       }
-      clearColumnWidth?.(colIndex);
     }
 
     if (resizingRow.value !== null) {
       const rowIndex = resizingRow.value;
       const height = getRowHeight(rowIndex);
       if (height !== startHeight.value) {
-        commitRowHeight(rowIndex, height);
+        const sessionId = rowPreviewSessions.get(rowIndex) ?? nextResizeSessionId();
+        commitRowPreview(rowIndex, height, sessionId);
+      } else {
+        clearRowPreview(rowIndex);
       }
-      clearRowHeight?.(rowIndex);
     }
 
     resizingColumn.value = null;
@@ -125,10 +136,10 @@ export function useGridResize({
 
   function cancelActiveResize() {
     if (resizingColumn.value !== null) {
-      clearColumnWidth?.(resizingColumn.value);
+      clearColumnPreview(resizingColumn.value);
     }
     if (resizingRow.value !== null) {
-      clearRowHeight?.(resizingRow.value);
+      clearRowPreview(resizingRow.value);
     }
     resizingColumn.value = null;
     resizingRow.value = null;
@@ -159,6 +170,61 @@ export function useGridResize({
     document.removeEventListener("touchmove", onResize);
     document.removeEventListener("touchend", stopResize);
     document.removeEventListener("touchcancel", stopResize);
+  }
+
+  function nextResizeSessionId(): number {
+    resizeSessionId += 1;
+    return resizeSessionId;
+  }
+
+  function commitColumnPreview(colIndex: number, width: number, sessionId: number) {
+    try {
+      const result = commitColumnWidth(colIndex, width);
+      if (isPromiseLike(result)) {
+        result
+          .catch((error) => console.error("Column resize commit failed:", error))
+          .finally(() => clearColumnPreviewIfCurrent(colIndex, sessionId));
+        return;
+      }
+    } catch (error) {
+      console.error("Column resize commit failed:", error);
+    }
+    clearColumnPreviewIfCurrent(colIndex, sessionId);
+  }
+
+  function commitRowPreview(rowIndex: number, height: number, sessionId: number) {
+    try {
+      const result = commitRowHeight(rowIndex, height);
+      if (isPromiseLike(result)) {
+        result
+          .catch((error) => console.error("Row resize commit failed:", error))
+          .finally(() => clearRowPreviewIfCurrent(rowIndex, sessionId));
+        return;
+      }
+    } catch (error) {
+      console.error("Row resize commit failed:", error);
+    }
+    clearRowPreviewIfCurrent(rowIndex, sessionId);
+  }
+
+  function clearColumnPreview(colIndex: number) {
+    columnPreviewSessions.delete(colIndex);
+    clearColumnWidth?.(colIndex);
+  }
+
+  function clearRowPreview(rowIndex: number) {
+    rowPreviewSessions.delete(rowIndex);
+    clearRowHeight?.(rowIndex);
+  }
+
+  function clearColumnPreviewIfCurrent(colIndex: number, sessionId: number) {
+    if (columnPreviewSessions.get(colIndex) !== sessionId) return;
+    clearColumnPreview(colIndex);
+  }
+
+  function clearRowPreviewIfCurrent(rowIndex: number, sessionId: number) {
+    if (rowPreviewSessions.get(rowIndex) !== sessionId) return;
+    clearRowPreview(rowIndex);
   }
 
   if (canResize) {
@@ -193,4 +259,8 @@ function getClientY(event: MouseEvent | TouchEvent): number {
   if (event.touches && event.touches.length > 0) return event.touches[0].clientY;
   if (event.changedTouches && event.changedTouches.length > 0) return event.changedTouches[0].clientY;
   return 0;
+}
+
+function isPromiseLike(value: unknown): value is Promise<void> {
+  return !!value && typeof (value as { then?: unknown }).then === "function";
 }

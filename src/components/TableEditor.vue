@@ -32,6 +32,8 @@ const props = defineProps<{
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
   rich?: ReadOnlyRichProjection;
+  commitColumnResize: (colIndex: number, width: number) => void | Promise<void>;
+  commitRowResize: (rowIndex: number, height: number) => void | Promise<void>;
 }>();
 
 const emit = defineEmits<{
@@ -41,8 +43,6 @@ const emit = defineEmits<{
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
   (e: 'cell-edit-cancel', rowIndex: number, colIndex: number): void;
-  (e: 'column-resize', colIndex: number, width: number): void;
-  (e: 'row-resize', rowIndex: number, height: number): void;
 }>();
 
 const {
@@ -164,8 +164,8 @@ const {
   setRowHeight: setPreviewRowHeight,
   clearColumnWidth: clearPreviewColumnWidth,
   clearRowHeight: clearPreviewRowHeight,
-  commitColumnWidth: (colIndex, width) => emit('column-resize', colIndex, width),
-  commitRowHeight: (rowIndex, height) => emit('row-resize', rowIndex, height),
+  commitColumnWidth: (colIndex, width) => props.commitColumnResize(colIndex, width),
+  commitRowHeight: (rowIndex, height) => props.commitRowResize(rowIndex, height),
 });
 
 function handleDeleteRow(index: number) {

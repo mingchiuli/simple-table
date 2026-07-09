@@ -259,14 +259,14 @@ watch(() => route.query.file, () => {
               :column-widths="currentSheet?.columnWidths"
               :row-heights="currentSheet?.rowHeights"
               :rich="currentSheet?.rich"
+              :commit-column-resize="handleColumnResize"
+              :commit-row-resize="handleRowResize"
               @cell-change="handleCellChange"
               @cell-editing="handleCellEditing"
               @cell-edit-cancel="handleCellEditCancel"
               @delete-row="handleDeleteRow"
               @delete-column="handleDeleteColumn"
               @select-cell="handleSelectCell"
-              @column-resize="handleColumnResize"
-              @row-resize="handleRowResize"
             />
           </div>
         </template>
