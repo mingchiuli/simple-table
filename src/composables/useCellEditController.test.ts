@@ -118,8 +118,6 @@ describe("useCellEditController", () => {
             response,
             api.getCurrentFileData
           ).then(() => undefined),
-        markPendingContentChange: () => statusStore.markPendingContentChange(),
-        clearPendingContentChange: () => statusStore.clearPendingContentChange(),
       });
     });
 
@@ -172,8 +170,6 @@ describe("useCellEditController", () => {
         cellEditorValue: ref(""),
         canEditCells: computed(() => true),
         applyMutationResponse,
-        markPendingContentChange: () => statusStore.markPendingContentChange(),
-        clearPendingContentChange: () => statusStore.clearPendingContentChange(),
       });
     });
 

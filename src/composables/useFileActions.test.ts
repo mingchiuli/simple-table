@@ -170,19 +170,16 @@ async function flushPromises() {
 
 function mountActions(flushPendingCellChanges: () => Promise<boolean>) {
   const documentSessionStore = useDocumentSessionStore();
-  const currentSheetIndex = ref(0);
   const isLoading = ref(false);
   const isFileLoading = ref(false);
   const actions = useFileActions({
     fileData: computed(() => documentSessionStore.data),
-    currentSheetIndex,
     isLoading,
     isFileLoading,
     flushPendingCellChanges,
   });
   return {
     ...actions,
-    currentSheetIndex,
     isLoading,
     isFileLoading,
   };

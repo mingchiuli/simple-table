@@ -7,6 +7,10 @@ import {
 type ActiveDocumentLifecycle = Exclude<DocumentSessionLifecycle, "idle">;
 export type DocumentLifecycleRunStatus = "completed" | "failed" | "skipped";
 
+type DocumentLifecycleController = {
+  release: () => void;
+};
+
 type DocumentLifecycleOptions = {
   waitForIdle?: boolean;
   shouldContinue?: () => boolean;
@@ -18,20 +22,26 @@ export function useDocumentLifecycle() {
   async function runDocumentLifecycle(
     lifecycle: ActiveDocumentLifecycle,
     errorPrefix: string,
-    action: () => Promise<void>,
+    action: (controller: DocumentLifecycleController) => Promise<void>,
     options: DocumentLifecycleOptions = {}
   ): Promise<DocumentLifecycleRunStatus> {
     if (!(await acquireLifecycle(lifecycle, options))) {
       return "skipped";
     }
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      documentSessionStore.endLifecycle(lifecycle);
+    };
     try {
-      await action();
+      await action({ release });
       return "completed";
     } catch (error) {
       ElMessage.error(`${errorPrefix}: ${error}`);
       return "failed";
     } finally {
-      documentSessionStore.endLifecycle(lifecycle);
+      release();
     }
   }
 

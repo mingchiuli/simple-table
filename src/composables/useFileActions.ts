@@ -1,4 +1,4 @@
-import type { ComputedRef, Ref } from 'vue';
+import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as api from '@/api';
 import {
@@ -14,6 +14,7 @@ import { useOpenFileSelection } from '@/composables/useOpenFileSelection';
 import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
@@ -22,7 +23,6 @@ import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
-  currentSheetIndex: Ref<number>;
   isLoading: Ref<boolean>;
   isFileLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
@@ -38,13 +38,13 @@ function keepGoing() {
 
 export function useFileActions({
   fileData,
-  currentSheetIndex,
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
+  const editorSelectionStore = useEditorSelectionStore();
   const { beginDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
@@ -65,14 +65,14 @@ export function useFileActions({
     const lifecycleStatus = await runDocumentLifecycle(
       'loading',
       'Failed to open file',
-      async () => {
+      async ({ release }) => {
         isLoading.value = true;
         isFileLoading.value = true;
         removeCancelHandler = shouldContinue.onCancel?.(() => {
           releasedByCancel = true;
           isLoading.value = false;
           isFileLoading.value = false;
-          documentSessionStore.endLifecycle('loading');
+          release();
         });
         if (!shouldContinue()) return;
         const replacement = await beginDocumentReplacement();
@@ -84,7 +84,7 @@ export function useFileActions({
           if (!opened) return;
           replacement.commit();
           documentSessionStore.openDocumentResponse(opened, filePath);
-          currentSheetIndex.value = 0;
+          editorSelectionStore.activateSheet(0);
           loaded = true;
 
           const fileName = await resolveRecentFileNameAfterOpen(

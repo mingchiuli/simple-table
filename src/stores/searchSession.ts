@@ -1,22 +1,28 @@
 import type { SearchResult } from "@/types";
 
+type SearchSessionRuntime = {
+  requestId: number;
+};
+
+const searchSessionRuntimes = new WeakMap<object, SearchSessionRuntime>();
+
 export const useSearchSessionStore = defineStore("searchSession", {
   state: () => ({
     searchResults: [] as SearchResult[],
     searchQuery: "",
     isSearching: false,
-    requestId: 0,
   }),
   actions: {
     beginSearch(query: string): number {
-      this.requestId += 1;
+      const runtime = runtimeFor(this);
+      runtime.requestId += 1;
       this.searchQuery = query;
       this.searchResults = [];
       this.isSearching = true;
-      return this.requestId;
+      return runtime.requestId;
     },
     applySearchResults(requestId: number, results: SearchResult[]): boolean {
-      if (requestId !== this.requestId) {
+      if (requestId !== runtimeFor(this).requestId) {
         return false;
       }
       this.searchResults = results;
@@ -24,12 +30,12 @@ export const useSearchSessionStore = defineStore("searchSession", {
       return true;
     },
     finishSearch(requestId: number) {
-      if (requestId === this.requestId) {
+      if (requestId === runtimeFor(this).requestId) {
         this.isSearching = false;
       }
     },
     clearSearch() {
-      this.requestId += 1;
+      runtimeFor(this).requestId += 1;
       this.searchResults = [];
       this.searchQuery = "";
       this.isSearching = false;
@@ -39,3 +45,12 @@ export const useSearchSessionStore = defineStore("searchSession", {
     },
   },
 });
+
+function runtimeFor(store: object): SearchSessionRuntime {
+  let runtime = searchSessionRuntimes.get(store);
+  if (!runtime) {
+    runtime = { requestId: 0 };
+    searchSessionRuntimes.set(store, runtime);
+  }
+  return runtime;
+}

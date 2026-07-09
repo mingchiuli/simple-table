@@ -6,7 +6,6 @@ import { useFileActions } from '@/composables/useFileActions';
 import { useCellEditController } from '@/composables/useCellEditController';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
-import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
 import { useSearchSessionStore } from '@/stores/searchSession';
 import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
@@ -23,7 +22,6 @@ import { createRouteFileLoader } from '@/composables/useRouteFileLoader';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
-const pendingCellSavesStore = usePendingCellSavesStore();
 const searchSessionStore = useSearchSessionStore();
 
 // ========== State refs (must be declared before composables use them) ==========
@@ -40,10 +38,6 @@ const {
   searchQuery,
   isSearching,
 } = storeToRefs(searchSessionStore);
-const {
-  draftCellValues,
-} = storeToRefs(pendingCellSavesStore);
-
 // ========== Computed values ==========
 const fileData = computed(() => documentSessionStore.data);
 
@@ -81,8 +75,6 @@ const {
   capabilities,
   history,
   refreshEditorState,
-  markPendingContentChange,
-  clearPendingContentChange,
 } = useDocumentStatus();
 
 const isFileActionBusy = computed(() => documentSessionStore.isInteractionLocked || isLoading.value);
@@ -109,6 +101,7 @@ async function applyMutationResponse(response: EditorMutationResponse) {
 }
 
 const {
+  draftCellValues,
   flushPendingCellChanges,
   refreshSelectedEditorValue,
   handleCellChange,
@@ -124,8 +117,6 @@ const {
   cellEditorValue,
   canEditCells,
   applyMutationResponse,
-  markPendingContentChange,
-  clearPendingContentChange,
 });
 
 const {
@@ -137,7 +128,6 @@ const {
   handleBack,
 } = useFileActions({
   fileData,
-  currentSheetIndex,
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
@@ -194,7 +184,6 @@ const {
   currentSheet,
   currentSheetIndex,
   selectedCell,
-  cellEditorValue,
   isLoading,
   flushPendingCellChanges,
   editorValueForCell: getEditorValue,

@@ -11,6 +11,7 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
+  type EditorSessionInfo,
   type EditorPatch,
   type EditorMutationResponse,
   type EditorStateInfo,
@@ -51,6 +52,25 @@ function response(partial: Partial<EditorMutationResponse>): EditorMutationRespo
   };
 }
 
+function openTestDocument(
+  store: ReturnType<typeof useDocumentSessionStore>,
+  fileData: FileData,
+  path: string | null = fileData.path || null,
+  editorSession: Partial<EditorSessionInfo> = {}
+) {
+  store.openDocumentResponse({
+    fileData,
+    editorSession: {
+      documentId: 1,
+      revision: 0,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: editorState(),
+      ...editorSession,
+    },
+  }, path);
+}
+
 function queuePendingDraft(value = "draft") {
   const statusStore = useDocumentStatusStore();
   const pendingStore = usePendingCellSavesStore();
@@ -86,7 +106,7 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
     };
-    store.openDocument(data, data.path);
+    openTestDocument(store, data, data.path);
 
     const result = store.applyMutationResponse(response({
       revision: 1,
@@ -105,7 +125,7 @@ describe("documentSession store", () => {
 
   it("requests resync when a mutation response skips revisions", () => {
     const store = useDocumentSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
@@ -122,7 +142,7 @@ describe("documentSession store", () => {
   it("clears stale search results when a content mutation is applied", () => {
     const store = useDocumentSessionStore();
     const searchStore = useSearchSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
@@ -148,7 +168,7 @@ describe("documentSession store", () => {
   it("keeps search results for layout-only mutations", () => {
     const store = useDocumentSessionStore();
     const searchStore = useSearchSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
@@ -177,7 +197,7 @@ describe("documentSession store", () => {
   it("clears search results when a mutation response skips revisions", () => {
     const store = useDocumentSessionStore();
     const searchStore = useSearchSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
@@ -196,7 +216,7 @@ describe("documentSession store", () => {
   it("marks the projection stale when a current-revision response still requires patch resync", () => {
     const store = useDocumentSessionStore();
     const searchStore = useSearchSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("current")]])],
@@ -521,7 +541,7 @@ describe("documentSession store", () => {
 
   it("accepts status-only responses at the current revision", () => {
     const store = useDocumentSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("current")]])],
@@ -541,7 +561,7 @@ describe("documentSession store", () => {
   it("moves the current selection with row and column structure patches", () => {
     const store = useDocumentSessionStore();
     const selectionStore = useEditorSelectionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [
@@ -596,7 +616,7 @@ describe("documentSession store", () => {
   it("clears the current selection when a structure patch deletes it", () => {
     const store = useDocumentSessionStore();
     const selectionStore = useEditorSelectionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("A1"), text("B1")]])],
@@ -627,7 +647,7 @@ describe("documentSession store", () => {
   it("keeps selections inside layout-defined sparse sheet extent", () => {
     const store = useDocumentSessionStore();
     const selectionStore = useEditorSelectionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [{
@@ -656,7 +676,7 @@ describe("documentSession store", () => {
 
   it("ignores stale responses from an older revision", () => {
     const store = useDocumentSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("current")]])],
@@ -1004,7 +1024,7 @@ describe("documentSession store", () => {
 
   it("discardPendingLocalWork clears queued drafts and pending dirty state", () => {
     const store = useDocumentSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
@@ -1060,7 +1080,7 @@ describe("documentSession store", () => {
     expect(pendingStore.queuedCellSaves.size).toBe(0);
   });
 
-  it("openDocument clears local work from the previous backend document", () => {
+  it("openDocumentResponse clears local work from the previous backend document", () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse({
       fileData: {
@@ -1078,13 +1098,13 @@ describe("documentSession store", () => {
     }, "/tmp/old.xlsx");
     const { statusStore, pendingStore } = queuePendingDraft();
 
-    store.openDocument({
+    openTestDocument(store, {
       path: "",
       fileName: "untitled.xlsx",
       sheets: [sheet("Sheet1", [[text("blank")]])],
-    }, null);
+    }, null, { documentId: 2 });
 
-    expect(store.documentId).toBeNull();
+    expect(store.documentId).toBe(2);
     expect(store.data?.fileName).toBe("untitled.xlsx");
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(pendingStore.hasPendingWork()).toBe(false);
@@ -1094,7 +1114,7 @@ describe("documentSession store", () => {
 
   it("clearDocument clears local drafts and queued saves", () => {
     const store = useDocumentSessionStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],
@@ -1240,7 +1260,7 @@ describe("documentSession store", () => {
   it("clearDocument resets status owned by the active document", () => {
     const store = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    store.openDocument({
+    openTestDocument(store, {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("old")]])],

@@ -9,6 +9,16 @@ vi.mock("element-plus", () => ({
   },
 }));
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("useDocumentLifecycle", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -93,5 +103,25 @@ describe("useDocumentLifecycle", () => {
 
     expect(action).not.toHaveBeenCalled();
     expect(store.lifecycle).toBe("idle");
+  });
+
+  it("does not end a later lifecycle after an action released its own lifecycle early", async () => {
+    const store = useDocumentSessionStore();
+    const work = deferred<void>();
+    const { runDocumentLifecycle } = useDocumentLifecycle();
+
+    const runPromise = runDocumentLifecycle("loading", "Failed", async ({ release }) => {
+      release();
+      await work.promise;
+    });
+    await Promise.resolve();
+
+    expect(store.lifecycle).toBe("idle");
+    expect(store.beginLifecycle("saving")).toBe(true);
+
+    work.resolve();
+    await expect(runPromise).resolves.toBe("completed");
+
+    expect(store.lifecycle).toBe("saving");
   });
 });

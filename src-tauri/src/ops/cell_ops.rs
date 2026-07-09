@@ -312,7 +312,7 @@ mod tests {
             None,
         );
         let mut registry = ActiveDocumentStore::new_for_test();
-        registry.replace_active(editor);
+        registry.replace_active_for_test(editor);
         Arc::new(RwLock::new(registry))
     }
 
@@ -340,7 +340,7 @@ mod tests {
             None,
         );
         let mut registry = ActiveDocumentStore::new_for_test();
-        registry.replace_active(editor);
+        registry.replace_active_for_test(editor);
         Arc::new(RwLock::new(registry))
     }
 

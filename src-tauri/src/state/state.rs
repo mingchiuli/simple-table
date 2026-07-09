@@ -56,17 +56,25 @@ impl ActiveDocumentStore {
     }
 
     #[cfg(test)]
-    pub fn new_for_test() -> Self {
+    pub(crate) fn new_for_test() -> Self {
         Self::new()
     }
 
-    pub fn replace_active(&mut self, editor_state: EditorState) -> u64 {
+    fn replace_active(&mut self, editor_state: EditorState) -> u64 {
         let document_id = editor_state.document_id();
         self.active = Some(editor_state);
         document_id
     }
 
-    pub fn try_replace_active(&mut self, editor_state: EditorState) -> Result<u64, AppError> {
+    #[cfg(test)]
+    pub(crate) fn replace_active_for_test(&mut self, editor_state: EditorState) -> u64 {
+        self.replace_active(editor_state)
+    }
+
+    pub(crate) fn try_replace_active(
+        &mut self,
+        editor_state: EditorState,
+    ) -> Result<u64, AppError> {
         if self
             .active
             .as_ref()
@@ -79,7 +87,7 @@ impl ActiveDocumentStore {
         Ok(self.replace_active(editor_state))
     }
 
-    pub fn close_active(&mut self) -> Result<Option<u64>, AppError> {
+    fn close_active(&mut self) -> Result<Option<u64>, AppError> {
         if self
             .active
             .as_ref()
@@ -95,7 +103,10 @@ impl ActiveDocumentStore {
             .map(|editor_state| editor_state.document_id()))
     }
 
-    pub fn close_active_document(&mut self, document_id: u64) -> Result<Option<u64>, AppError> {
+    pub(crate) fn close_active_document(
+        &mut self,
+        document_id: u64,
+    ) -> Result<Option<u64>, AppError> {
         let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
         if editor_state.document_id() != document_id {
             return Err(AppError::DocumentStateInvalid(
@@ -105,15 +116,15 @@ impl ActiveDocumentStore {
         self.close_active()
     }
 
-    pub fn active(&self) -> Option<&EditorState> {
+    pub(crate) fn active(&self) -> Option<&EditorState> {
         self.active.as_ref()
     }
 
-    pub fn active_mut(&mut self) -> Option<&mut EditorState> {
+    fn active_mut(&mut self) -> Option<&mut EditorState> {
         self.active.as_mut()
     }
 
-    pub fn active_mut_for_command(
+    pub(crate) fn active_mut_for_command(
         &mut self,
         document_id: u64,
         base_revision: u64,
@@ -134,7 +145,7 @@ impl ActiveDocumentStore {
         Ok(editor_state)
     }
 
-    pub fn active_for_command(
+    pub(crate) fn active_for_command(
         &self,
         document_id: u64,
         base_revision: u64,
@@ -155,12 +166,12 @@ impl ActiveDocumentStore {
         Ok(editor_state)
     }
 
-    pub fn get(&self, document_id: u64) -> Option<&EditorState> {
+    pub(crate) fn get(&self, document_id: u64) -> Option<&EditorState> {
         self.active()
             .filter(|editor_state| editor_state.document_id() == document_id)
     }
 
-    pub fn get_mut(&mut self, document_id: u64) -> Option<&mut EditorState> {
+    pub(crate) fn get_mut(&mut self, document_id: u64) -> Option<&mut EditorState> {
         self.active_mut()
             .filter(|editor_state| editor_state.document_id() == document_id)
     }
@@ -169,7 +180,7 @@ impl ActiveDocumentStore {
 /// 全局活动文档状态。Simple Table 当前是单文档 UI；documentId 只用于丢弃过期异步任务。
 static ACTIVE_DOCUMENT_STORE: OnceLock<Arc<RwLock<ActiveDocumentStore>>> = OnceLock::new();
 
-pub fn active_document_store() -> Arc<RwLock<ActiveDocumentStore>> {
+pub(crate) fn active_document_store() -> Arc<RwLock<ActiveDocumentStore>> {
     Arc::clone(
         ACTIVE_DOCUMENT_STORE.get_or_init(|| Arc::new(RwLock::new(ActiveDocumentStore::new()))),
     )

@@ -23,7 +23,7 @@ const props = defineProps<{
   data: CellValue[][];
   columns: string[];
   sheetIndex: number;
-  draftCellValues?: Map<string, string>;
+  draftCellValues?: ReadonlyMap<string, string>;
   merges?: MergeRange[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;

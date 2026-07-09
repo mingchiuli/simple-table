@@ -2,6 +2,14 @@ import type { EditorPatch } from "@/types";
 
 type CellPosition = { row: number; col: number };
 
+export type EditorSelectionSnapshot = {
+  currentSheetIndex: number;
+  selectedCell: CellPosition | null;
+  cellEditorValue: string;
+  autoScroll: boolean;
+  sheetSelectedCells: Map<number, CellPosition>;
+};
+
 export const useEditorSelectionStore = defineStore("editorSelection", {
   state: () => ({
     currentSheetIndex: 0,
@@ -18,9 +26,41 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
       this.autoScroll = false;
       this.sheetSelectedCells = new Map();
     },
+    captureSnapshot(): EditorSelectionSnapshot {
+      return {
+        currentSheetIndex: this.currentSheetIndex,
+        selectedCell: cloneCellPosition(this.selectedCell),
+        cellEditorValue: this.cellEditorValue,
+        autoScroll: this.autoScroll,
+        sheetSelectedCells: cloneSelectedCells(this.sheetSelectedCells),
+      };
+    },
+    restoreSnapshot(snapshot: EditorSelectionSnapshot) {
+      this.currentSheetIndex = snapshot.currentSheetIndex;
+      this.selectedCell = cloneCellPosition(snapshot.selectedCell);
+      this.cellEditorValue = snapshot.cellEditorValue;
+      this.autoScroll = snapshot.autoScroll;
+      this.sheetSelectedCells = cloneSelectedCells(snapshot.sheetSelectedCells);
+    },
+    setEditorValue(value: string) {
+      this.cellEditorValue = value;
+    },
+    activateSheet(sheetIndex: number) {
+      this.currentSheetIndex = sheetIndex;
+      this.clearSelection();
+    },
+    switchSheet(sheetIndex: number, editorValueFor: (cell: CellPosition) => string) {
+      this.rememberCurrentSheetSelection();
+      this.restoreSheetSelection(sheetIndex, editorValueFor);
+    },
     selectCell(row: number, col: number, autoScroll = false) {
       this.autoScroll = autoScroll;
       this.selectedCell = { row, col };
+    },
+    focusSearchResult(sheetIndex: number, row: number, col: number, editorValue: string) {
+      this.currentSheetIndex = sheetIndex;
+      this.selectCell(row, col, true);
+      this.setEditorValue(editorValue);
     },
     clearSelection() {
       this.selectedCell = null;
@@ -202,4 +242,12 @@ function remapSheetSelections(
     }
   }
   return next;
+}
+
+function cloneCellPosition(cell: CellPosition | null): CellPosition | null {
+  return cell ? { ...cell } : null;
+}
+
+function cloneSelectedCells(cells: Map<number, CellPosition>): Map<number, CellPosition> {
+  return new Map(Array.from(cells, ([sheetIndex, cell]) => [sheetIndex, { ...cell }]));
 }

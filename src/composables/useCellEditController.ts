@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus';
 import * as api from '@/api';
 import { useCellEditTransactions } from '@/composables/useCellEditTransactions';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { CellSaveRequest } from '@/stores/pendingCellSaves';
 import type { ComputedRef, Ref } from 'vue';
 import type { EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
@@ -19,8 +20,6 @@ type UseCellEditControllerOptions = {
   cellEditorValue: Ref<string>;
   canEditCells: ComputedRef<boolean>;
   applyMutationResponse: (response: EditorMutationResponse) => Promise<void>;
-  markPendingContentChange: () => void;
-  clearPendingContentChange: () => void;
 };
 
 export function useCellEditController({
@@ -31,16 +30,13 @@ export function useCellEditController({
   cellEditorValue,
   canEditCells,
   applyMutationResponse,
-  markPendingContentChange,
-  clearPendingContentChange,
 }: UseCellEditControllerOptions) {
   const documentSessionStore = useDocumentSessionStore();
+  const editorSelectionStore = useEditorSelectionStore();
 
   const transactions = useCellEditTransactions({
     fileData,
     commitBatch,
-    markPendingContentChange,
-    clearPendingContentChange,
     onBatchCommitted: refreshSelectedEditorValue,
     onCommitFailed: handleCommitFailed,
   });
@@ -66,7 +62,7 @@ export function useCellEditController({
 
   watch(currentCellValue, () => {
     const key = selectedCellKey();
-    if (selectedCell.value && (!key || !transactions.draftCellValues.has(key))) {
+    if (selectedCell.value && (!key || !transactions.draftCellValues.value.has(key))) {
       refreshSelectedEditorValue();
     }
   });
@@ -137,7 +133,7 @@ export function useCellEditController({
   }
 
   function syncFormulaBarValue(value: string) {
-    cellEditorValue.value = value;
+    editorSelectionStore.setEditorValue(value);
   }
 
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
@@ -175,8 +171,7 @@ export function useCellEditController({
   }
 
   function handleDeselectCell() {
-    selectedCell.value = null;
-    syncFormulaBarValue('');
+    editorSelectionStore.clearSelection();
   }
 
   return {

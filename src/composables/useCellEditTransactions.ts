@@ -1,4 +1,4 @@
-import { onUnmounted } from 'vue';
+import { computed, onUnmounted } from 'vue';
 import type { ComputedRef } from 'vue';
 import {
   usePendingCellSavesStore,
@@ -6,6 +6,7 @@ import {
   type PendingCellSaveCallbacks,
   type QueueDraftResult,
 } from '@/stores/pendingCellSaves';
+import { useDocumentStatusStore } from '@/stores/documentStatus';
 import type { CellValue, FileData } from '@/types';
 import { blankCell, cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
@@ -13,8 +14,6 @@ import { getCellKey } from '@/utils/cellKey';
 type UseCellEditTransactionsOptions = {
   fileData: ComputedRef<FileData | null>;
   commitBatch: (changes: CellSaveRequest[]) => Promise<void>;
-  markPendingContentChange: () => void;
-  clearPendingContentChange: () => void;
   onBatchCommitted?: () => void;
   onCommitFailed?: (error: unknown) => Promise<void> | void;
   debounceMs?: number;
@@ -23,17 +22,18 @@ type UseCellEditTransactionsOptions = {
 export function useCellEditTransactions({
   fileData,
   commitBatch,
-  markPendingContentChange,
-  clearPendingContentChange,
   onBatchCommitted,
   onCommitFailed,
   debounceMs = 500,
 }: UseCellEditTransactionsOptions) {
   const pendingCellSavesStore = usePendingCellSavesStore();
-  const draftCellValues = pendingCellSavesStore.draftCellValues;
+  const documentStatusStore = useDocumentStatusStore();
+  const draftCellValues = computed<ReadonlyMap<string, string>>(
+    () => pendingCellSavesStore.draftCellValues
+  );
   const schedulerCallbacks: PendingCellSaveCallbacks = {
     commitBatch,
-    clearPendingContentChange,
+    clearPendingContentChange: () => documentStatusStore.clearPendingContentChange(),
     onBatchCommitted,
     onCommitFailed,
   };
@@ -102,7 +102,7 @@ export function useCellEditTransactions({
 
   function handleQueueResult(result: QueueDraftResult) {
     if (result.shouldMarkPending) {
-      markPendingContentChange();
+      documentStatusStore.markPendingContentChange();
     }
     if (result.queued) {
       schedulePendingSave();
@@ -123,7 +123,9 @@ export function useCellEditTransactions({
   }
 
   function clearPendingContentChangeIfIdle() {
-    pendingCellSavesStore.clearPendingContentChangeIfIdle(clearPendingContentChange);
+    pendingCellSavesStore.clearPendingContentChangeIfIdle(() =>
+      documentStatusStore.clearPendingContentChange()
+    );
   }
 
   async function flushPendingCellChanges(): Promise<boolean> {

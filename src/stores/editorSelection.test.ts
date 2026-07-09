@@ -68,6 +68,35 @@ describe("editorSelection store", () => {
     expect(store.sheetSelectedCells.get(1)).toEqual({ row: 2, col: 2 });
   });
 
+  it("switches sheets through the selection boundary", () => {
+    const store = useEditorSelectionStore();
+    store.selectCell(2, 3);
+    store.switchSheet(1, () => "restored");
+
+    expect(store.currentSheetIndex).toBe(1);
+    expect(store.selectedCell).toBeNull();
+    expect(store.sheetSelectedCells.get(0)).toEqual({ row: 2, col: 3 });
+
+    store.sheetSelectedCells.set(2, { row: 4, col: 5 });
+    store.switchSheet(2, () => "B5");
+
+    expect(store.currentSheetIndex).toBe(2);
+    expect(store.selectedCell).toEqual({ row: 4, col: 5 });
+    expect(store.cellEditorValue).toBe("B5");
+    expect(store.autoScroll).toBe(true);
+  });
+
+  it("focuses a search result as one selection update", () => {
+    const store = useEditorSelectionStore();
+
+    store.focusSearchResult(2, 4, 5, "found");
+
+    expect(store.currentSheetIndex).toBe(2);
+    expect(store.selectedCell).toEqual({ row: 4, col: 5 });
+    expect(store.cellEditorValue).toBe("found");
+    expect(store.autoScroll).toBe(true);
+  });
+
   it("remaps remembered sheet selections when a sheet is inserted", () => {
     const store = useEditorSelectionStore();
     store.currentSheetIndex = 2;

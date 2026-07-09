@@ -37,14 +37,6 @@ export function useDocumentStatus() {
     }
   }
 
-  function markPendingContentChange() {
-    documentStatusStore.markPendingContentChange();
-  }
-
-  function clearPendingContentChange() {
-    documentStatusStore.clearPendingContentChange();
-  }
-
   return {
     canUndo,
     canRedo,
@@ -57,7 +49,5 @@ export function useDocumentStatus() {
     applyEditorState,
     applyEditorSession,
     refreshEditorState,
-    markPendingContentChange,
-    clearPendingContentChange,
   };
 }

@@ -67,7 +67,7 @@ function fileData(fileName: string): FileData {
   };
 }
 
-function openDocument(fileName: string, documentId: number, revision: number) {
+function openRecentTestDocument(fileName: string, documentId: number, revision: number) {
   useDocumentSessionStore().openDocumentResponse({
     fileData: fileData(fileName),
     editorSession: {
@@ -95,11 +95,11 @@ describe("useRecentFileUpdates", () => {
     const api = await import("@/api");
     const storageType = deferred<"desktopPath">();
     platformMocks.getStorageType.mockReturnValue(storageType.promise);
-    openDocument("old.xlsx", 1, 3);
+    openRecentTestDocument("old.xlsx", 1, 3);
     const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
 
     queueRecentFileEntryUpdate("/tmp/old.xlsx", "old.xlsx");
-    openDocument("new.xlsx", 2, 0);
+    openRecentTestDocument("new.xlsx", 2, 0);
 
     storageType.resolve("desktopPath");
     await flushPromises();

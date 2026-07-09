@@ -7,6 +7,16 @@ import type {
   WorkbookCapabilities,
 } from "@/types";
 
+export type DocumentStatusSnapshot = {
+  canUndo: boolean;
+  canRedo: boolean;
+  isContentDirty: boolean;
+  hasPendingContentChange: boolean;
+  formulaStatus: FormulaStatus;
+  capabilities: WorkbookCapabilities;
+  history: HistoryStatus;
+};
+
 export const useDocumentStatusStore = defineStore("documentStatus", {
   state: () => ({
     canUndo: false,
@@ -27,14 +37,37 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
       this.isContentDirty = state?.isDirty ?? false;
       this.history = state?.history ?? defaultHistoryStatus();
     },
+    applyRuntimeStatus(formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities) {
+      this.formulaStatus = formulaStatus;
+      this.capabilities = capabilities;
+    },
     applyEditorSession(info: EditorSessionInfo | null | undefined) {
       if (!info) {
         this.reset();
         return;
       }
-      this.formulaStatus = info.formulaStatus;
-      this.capabilities = info.capabilities;
+      this.applyRuntimeStatus(info.formulaStatus, info.capabilities);
       this.applyEditorState(info.editorState);
+    },
+    captureSnapshot(): DocumentStatusSnapshot {
+      return {
+        canUndo: this.canUndo,
+        canRedo: this.canRedo,
+        isContentDirty: this.isContentDirty,
+        hasPendingContentChange: this.hasPendingContentChange,
+        formulaStatus: this.formulaStatus,
+        capabilities: this.capabilities,
+        history: this.history,
+      };
+    },
+    restoreSnapshot(snapshot: DocumentStatusSnapshot) {
+      this.canUndo = snapshot.canUndo;
+      this.canRedo = snapshot.canRedo;
+      this.isContentDirty = snapshot.isContentDirty;
+      this.hasPendingContentChange = snapshot.hasPendingContentChange;
+      this.formulaStatus = snapshot.formulaStatus;
+      this.capabilities = snapshot.capabilities;
+      this.history = snapshot.history;
     },
     reset() {
       this.canUndo = false;

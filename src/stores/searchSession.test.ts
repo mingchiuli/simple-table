@@ -56,4 +56,16 @@ describe("searchSession store", () => {
     expect(store.searchResults).toEqual([]);
     expect(store.isSearching).toBe(true);
   });
+
+  it("keeps request tokens out of serializable UI state", () => {
+    const store = useSearchSessionStore();
+
+    store.beginSearch("value");
+
+    expect(Object.keys(store.$state)).toEqual([
+      "searchResults",
+      "searchQuery",
+      "isSearching",
+    ]);
+  });
 });

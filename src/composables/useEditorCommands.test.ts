@@ -93,7 +93,7 @@ function setupCommands(
   const documentSessionStore = useDocumentSessionStore();
   documentSessionStore.openDocumentResponse(openedResponse(), "/tmp/book.xlsx");
   const selectionStore = useEditorSelectionStore();
-  const { currentSheetIndex, selectedCell, cellEditorValue } = storeToRefs(selectionStore);
+  const { currentSheetIndex, selectedCell } = storeToRefs(selectionStore);
   const activeSheetIndex = overrides.currentSheetIndex ?? currentSheetIndex;
   const fileData = computed(() => documentSessionStore.data);
   const currentSheet = computed(() => fileData.value?.sheets[activeSheetIndex.value] ?? null);
@@ -104,7 +104,6 @@ function setupCommands(
     currentSheet,
     currentSheetIndex: activeSheetIndex,
     selectedCell,
-    cellEditorValue,
     isLoading,
     flushPendingCellChanges,
     editorValueForCell: () => "",
@@ -114,6 +113,7 @@ function setupCommands(
   return {
     commands,
     documentSessionStore,
+    selectionStore,
     currentSheetIndex: activeSheetIndex,
     selectedCell,
     flushPendingCellChanges,
@@ -306,15 +306,11 @@ describe("useEditorCommands", () => {
   it("does not mark projection stale when only the post-apply UI callback fails", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
-    const currentSheetIndex = computed({
-      get: () => 0,
-      set: () => {
+    const setup = setupCommands(ref(false));
+    vi.spyOn(setup.selectionStore, "activateSheet")
+      .mockImplementation(() => {
         throw new Error("sheet switch failed");
-      },
-    });
-    const setup = setupCommands(ref(false), vi.fn().mockResolvedValue(true), {
-      currentSheetIndex,
-    });
+      });
     vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: 1 }));
     setup.applyMutationResponse.mockImplementation(async (response) => {
       setup.documentSessionStore.applyMutationResponse(response);

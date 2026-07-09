@@ -2,19 +2,18 @@ import type {
   EditorMutationResponse,
   EditorSessionInfo,
   FileData,
-  FormulaStatus,
-  HistoryStatus,
   OpenDocumentResponse,
   SavedDocumentResponse,
   EditorCommandContext,
-  WorkbookCapabilities,
   EditorPatch,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
+import type { DocumentStatusSnapshot } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
+import type { EditorSelectionSnapshot } from "@/stores/editorSelection";
 import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 
 export type MutationApplyResult = {
@@ -27,26 +26,6 @@ export type DocumentSessionLifecycle = "idle" | "loading" | "saving";
 type DocumentSessionRuntime = {
   tail: Promise<void> | null;
   lifecycleIdleWaiters: Array<() => void>;
-};
-
-type CellPosition = { row: number; col: number };
-
-type DocumentStatusSnapshot = {
-  canUndo: boolean;
-  canRedo: boolean;
-  isContentDirty: boolean;
-  hasPendingContentChange: boolean;
-  formulaStatus: FormulaStatus;
-  capabilities: WorkbookCapabilities;
-  history: HistoryStatus;
-};
-
-type EditorSelectionSnapshot = {
-  currentSheetIndex: number;
-  selectedCell: CellPosition | null;
-  cellEditorValue: string;
-  autoScroll: boolean;
-  sheetSelectedCells: Map<number, CellPosition>;
 };
 
 type DocumentSessionSnapshot = {
@@ -97,30 +76,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         sessionRuntimeFor(this).lifecycleIdleWaiters.push(resolve);
       });
     },
-    resetMutationQueue() {
-      sessionRuntimeFor(this).tail = null;
-    },
-    enqueueMutation<T>(task: () => Promise<T>): Promise<T> {
-      const runtime = sessionRuntimeFor(this);
-      const tail = runtime.tail ?? Promise.resolve();
-      const run = tail.then(task, task);
-      const cleanup = run.then(
-        () => undefined,
-        () => undefined
-      );
-      runtime.tail = cleanup;
-      cleanup.finally(() => {
-        if (runtime.tail === cleanup) {
-          runtime.tail = null;
-        }
-      });
-      return run;
-    },
     enqueueDocumentMutation<T>(
       documentId: number,
       task: (context: EditorCommandContext) => Promise<T>
     ): Promise<T | undefined> {
-      return this.enqueueMutation(async () => {
+      return enqueueMutation(this, async () => {
         if (this.projectionStale) {
           throw new Error("Document projection is stale; refresh the document before editing.");
         }
@@ -159,38 +119,28 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
     },
     discardPendingLocalWork() {
-      this.resetTransientDocumentWork();
-    },
-    openDocument(data: FileData, path: string | null = null) {
-      this.resetTransientDocumentWork();
-      this.data = data;
-      this.currentFilePath = path;
-      this.documentId = null;
-      this.revision = 0;
-      this.projectionStale = false;
-      this.resetSessionUi();
-      useDocumentStatusStore().reset();
+      resetTransientDocumentWork(this);
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
-      this.resetTransientDocumentWork();
+      resetTransientDocumentWork(this);
       this.data = response.fileData;
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
-      this.resetSessionUi();
+      resetSessionUi();
       const statusStore = useDocumentStatusStore();
       statusStore.reset();
       statusStore.applyEditorSession(response.editorSession);
     },
     applySavedDocumentResponse(response: SavedDocumentResponse, path: string | null = null) {
-      this.resetTransientDocumentWork();
+      resetTransientDocumentWork(this);
       this.data = response.fileData;
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
-      this.clampSelectionToCurrentSheet();
+      clampSelectionToCurrentSheet(this);
       useSearchSessionStore().reset();
       useDocumentStatusStore().applyEditorSession(response.editorSession);
     },
@@ -220,7 +170,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.currentFilePath = path;
     },
     clearDocument() {
-      this.resetTransientDocumentWork();
+      resetTransientDocumentWork(this);
       this.data = null;
       this.currentFilePath = null;
       this.documentId = null;
@@ -228,13 +178,8 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.lifecycle = "idle";
       this.projectionStale = false;
       resolveLifecycleIdleWaiters(this);
-      this.resetSessionUi();
+      resetSessionUi();
       useDocumentStatusStore().reset();
-    },
-    resetTransientDocumentWork() {
-      this.resetMutationQueue();
-      usePendingCellSavesStore().reset();
-      useDocumentStatusStore().clearPendingContentChange();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
       if (response.protocolVersion !== 1) {
@@ -254,22 +199,22 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       }
       if (response.revision > this.revision + 1) {
         this.revision = response.revision;
-        this.applyResponseStatus(response);
+        applyResponseStatus(response);
         this.projectionStale = true;
         useSearchSessionStore().clearSearch();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision && response.patches?.length) {
-        this.applyResponseStatus(response);
+        applyResponseStatus(response);
         this.projectionStale = true;
         useSearchSessionStore().clearSearch();
         return { data: this.data, resyncRequired: true };
       }
       if (response.revision === this.revision) {
-        this.applyResponseStatus(response);
+        applyResponseStatus(response);
         return { data: this.data, resyncRequired: false };
       }
-      this.applyResponseStatus(response);
+      applyResponseStatus(response);
       this.revision = response.revision;
       try {
         const result = applyDocumentPatches(this.data, response.patches);
@@ -278,7 +223,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         if (mutationInvalidatesSearch(response.patches)) {
           useSearchSessionStore().clearSearch();
         }
-        this.clampSelectionToCurrentSheet();
+        clampSelectionToCurrentSheet(this);
         return {
           data: result.data,
           resyncRequired: result.resyncRequired,
@@ -304,7 +249,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       }
       this.revision = response.revision;
       if (response.protocolVersion === 1) {
-        this.applyResponseStatus(response);
+        applyResponseStatus(response);
       }
       this.projectionStale = true;
       useSearchSessionStore().clearSearch();
@@ -314,7 +259,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       response: EditorMutationResponse,
       fetchProjection: (context: EditorCommandContext) => Promise<FileData>
     ): Promise<MutationApplyResult> {
-      const snapshot = this.captureMutationSnapshot();
+      const snapshot = captureMutationSnapshot(this);
       const result = this.applyMutationResponse(response);
       if (!result.resyncRequired) {
         return result;
@@ -331,13 +276,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
             resyncRequired: true,
           };
         }
-        this.replaceProjection(projection);
+        replaceProjection(this, projection);
       } catch (error) {
         if (this.matchesCommandContext(resyncContext)) {
-          this.restoreMutationSnapshot(snapshot);
+          restoreMutationSnapshot(this, snapshot);
           this.documentId = response.documentId;
           this.revision = response.revision;
-          this.applyResponseStatus(response);
+          applyResponseStatus(response);
           this.projectionStale = true;
         }
         throw error;
@@ -346,74 +291,6 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         data: this.data,
         resyncRequired: true,
       };
-    },
-    replaceProjection(data: FileData) {
-      const currentFileName = this.data?.fileName;
-      this.data = {
-        ...data,
-        path: this.currentFilePath ?? data.path,
-        fileName: currentFileName ?? data.fileName,
-      };
-      this.projectionStale = false;
-      this.clampSelectionToCurrentSheet();
-      useSearchSessionStore().clearSearch();
-    },
-    applyResponseStatus(response: EditorMutationResponse) {
-      useDocumentStatusStore().formulaStatus = response.formulaStatus;
-      useDocumentStatusStore().capabilities = response.capabilities;
-      useDocumentStatusStore().applyEditorState(response.editorState);
-    },
-    captureMutationSnapshot(): DocumentSessionSnapshot {
-      const statusStore = useDocumentStatusStore();
-      const selectionStore = useEditorSelectionStore();
-      return {
-        data: this.data,
-        currentFilePath: this.currentFilePath,
-        documentId: this.documentId,
-        revision: this.revision,
-        lifecycle: this.lifecycle,
-        projectionStale: this.projectionStale,
-        status: {
-          canUndo: statusStore.canUndo,
-          canRedo: statusStore.canRedo,
-          isContentDirty: statusStore.isContentDirty,
-          hasPendingContentChange: statusStore.hasPendingContentChange,
-          formulaStatus: statusStore.formulaStatus,
-          capabilities: statusStore.capabilities,
-          history: statusStore.history,
-        },
-        selection: {
-          currentSheetIndex: selectionStore.currentSheetIndex,
-          selectedCell: cloneCellPosition(selectionStore.selectedCell),
-          cellEditorValue: selectionStore.cellEditorValue,
-          autoScroll: selectionStore.autoScroll,
-          sheetSelectedCells: cloneSelectedCells(selectionStore.sheetSelectedCells),
-        },
-      };
-    },
-    restoreMutationSnapshot(snapshot: DocumentSessionSnapshot) {
-      this.data = snapshot.data;
-      this.currentFilePath = snapshot.currentFilePath;
-      this.documentId = snapshot.documentId;
-      this.revision = snapshot.revision;
-      this.lifecycle = snapshot.lifecycle;
-      this.projectionStale = snapshot.projectionStale;
-
-      const statusStore = useDocumentStatusStore();
-      statusStore.canUndo = snapshot.status.canUndo;
-      statusStore.canRedo = snapshot.status.canRedo;
-      statusStore.isContentDirty = snapshot.status.isContentDirty;
-      statusStore.hasPendingContentChange = snapshot.status.hasPendingContentChange;
-      statusStore.formulaStatus = snapshot.status.formulaStatus;
-      statusStore.capabilities = snapshot.status.capabilities;
-      statusStore.history = snapshot.status.history;
-
-      const selectionStore = useEditorSelectionStore();
-      selectionStore.currentSheetIndex = snapshot.selection.currentSheetIndex;
-      selectionStore.selectedCell = cloneCellPosition(snapshot.selection.selectedCell);
-      selectionStore.cellEditorValue = snapshot.selection.cellEditorValue;
-      selectionStore.autoScroll = snapshot.selection.autoScroll;
-      selectionStore.sheetSelectedCells = cloneSelectedCells(snapshot.selection.sheetSelectedCells);
     },
     async refreshAfterMutationFailure(
       fetchEditorSession: (
@@ -427,7 +304,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         return;
       }
 
-      const snapshot = this.captureMutationSnapshot();
+      const snapshot = captureMutationSnapshot(this);
       try {
         const [projection, session] = await Promise.all([
           fetchProjection(context),
@@ -436,11 +313,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         if (!this.matchesCommandContext(context)) {
           return;
         }
-        this.replaceProjection(projection);
+        replaceProjection(this, projection);
         this.applyEditorSessionForContext(context, session);
       } catch (error) {
         if (this.matchesCommandContext(context)) {
-          this.restoreMutationSnapshot(snapshot);
+          restoreMutationSnapshot(this, snapshot);
         }
         throw error;
       }
@@ -488,32 +365,118 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         useSearchSessionStore().clearSearch();
       }
     },
-    resetSessionUi() {
-      useEditorSelectionStore().reset();
-      useSearchSessionStore().reset();
-      usePendingCellSavesStore().reset();
-    },
-    clampSelectionToCurrentSheet() {
-      const selectionStore = useEditorSelectionStore();
-      if (!this.data) {
-        selectionStore.clearSelection();
-        return;
-      }
-      selectionStore.clampToSheetData(this.data.sheets.length, (sheetIndex, row, col) => {
-        const sheet = this.data?.sheets[sheetIndex];
-        if (!sheet) return false;
-        const extent = calculateSheetExtent(
-          sheet.rows,
-          sheet.merges,
-          sheet.columnWidths,
-          sheet.rowHeights,
-          sheet.rich
-        );
-        return row >= 0 && col >= 0 && row < extent.rowCount && col < extent.columnCount;
-      });
-    },
   },
 });
+
+type DocumentSessionStateTarget = {
+  data: FileData | null;
+  currentFilePath: string | null;
+  documentId: number | null;
+  revision: number;
+  lifecycle: DocumentSessionLifecycle;
+  projectionStale: boolean;
+};
+
+function resetMutationQueue(store: object) {
+  sessionRuntimeFor(store).tail = null;
+}
+
+function enqueueMutation<T>(store: object, task: () => Promise<T>): Promise<T> {
+  const runtime = sessionRuntimeFor(store);
+  const tail = runtime.tail ?? Promise.resolve();
+  const run = tail.then(task, task);
+  const cleanup = run.then(
+    () => undefined,
+    () => undefined
+  );
+  runtime.tail = cleanup;
+  cleanup.finally(() => {
+    if (runtime.tail === cleanup) {
+      runtime.tail = null;
+    }
+  });
+  return run;
+}
+
+function resetTransientDocumentWork(store: object) {
+  resetMutationQueue(store);
+  usePendingCellSavesStore().reset();
+  useDocumentStatusStore().clearPendingContentChange();
+}
+
+function replaceProjection(store: DocumentSessionStateTarget, data: FileData) {
+  const currentFileName = store.data?.fileName;
+  store.data = {
+    ...data,
+    path: store.currentFilePath ?? data.path,
+    fileName: currentFileName ?? data.fileName,
+  };
+  store.projectionStale = false;
+  clampSelectionToCurrentSheet(store);
+  useSearchSessionStore().clearSearch();
+}
+
+function applyResponseStatus(response: EditorMutationResponse) {
+  const statusStore = useDocumentStatusStore();
+  statusStore.applyRuntimeStatus(response.formulaStatus, response.capabilities);
+  statusStore.applyEditorState(response.editorState);
+}
+
+function captureMutationSnapshot(store: DocumentSessionStateTarget): DocumentSessionSnapshot {
+  const statusStore = useDocumentStatusStore();
+  const selectionStore = useEditorSelectionStore();
+  return {
+    data: store.data,
+    currentFilePath: store.currentFilePath,
+    documentId: store.documentId,
+    revision: store.revision,
+    lifecycle: store.lifecycle,
+    projectionStale: store.projectionStale,
+    status: statusStore.captureSnapshot(),
+    selection: selectionStore.captureSnapshot(),
+  };
+}
+
+function restoreMutationSnapshot(
+  store: DocumentSessionStateTarget,
+  snapshot: DocumentSessionSnapshot
+) {
+  store.data = snapshot.data;
+  store.currentFilePath = snapshot.currentFilePath;
+  store.documentId = snapshot.documentId;
+  store.revision = snapshot.revision;
+  store.lifecycle = snapshot.lifecycle;
+  store.projectionStale = snapshot.projectionStale;
+
+  useDocumentStatusStore().restoreSnapshot(snapshot.status);
+  useEditorSelectionStore().restoreSnapshot(snapshot.selection);
+}
+
+function resetSessionUi() {
+  useEditorSelectionStore().reset();
+  useSearchSessionStore().reset();
+  usePendingCellSavesStore().reset();
+}
+
+function clampSelectionToCurrentSheet(store: DocumentSessionStateTarget) {
+  const selectionStore = useEditorSelectionStore();
+  if (!store.data) {
+    selectionStore.clearSelection();
+    return;
+  }
+  selectionStore.clampToSheetData(store.data.sheets.length, (sheetIndex, row, col) => {
+    const sheet = store.data?.sheets[sheetIndex];
+    if (!sheet) return false;
+    const extent = calculateSheetExtent(
+      sheet.rows,
+      sheet.merges,
+      sheet.columnWidths,
+      sheet.rowHeights,
+      sheet.rich
+    );
+    return row >= 0 && col >= 0 && row < extent.rowCount && col < extent.columnCount;
+  });
+}
 
 function sessionRuntimeFor(store: object): DocumentSessionRuntime {
   let runtime = documentSessionRuntimes.get(store);
@@ -530,14 +493,6 @@ function resolveLifecycleIdleWaiters(store: object) {
   for (const resolve of waiters) {
     resolve();
   }
-}
-
-function cloneCellPosition(cell: CellPosition | null): CellPosition | null {
-  return cell ? { ...cell } : null;
-}
-
-function cloneSelectedCells(cells: Map<number, CellPosition>): Map<number, CellPosition> {
-  return new Map(Array.from(cells, ([sheetIndex, cell]) => [sheetIndex, { ...cell }]));
 }
 
 function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): boolean {

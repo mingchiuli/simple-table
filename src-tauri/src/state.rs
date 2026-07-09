@@ -11,4 +11,4 @@ pub mod search_service;
 pub mod search_session;
 pub mod state;
 
-pub use state::active_document_store;
+pub(crate) use state::active_document_store;

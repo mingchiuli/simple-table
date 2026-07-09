@@ -21,7 +21,6 @@ type UseEditorCommandsOptions = {
   currentSheet: ComputedRef<SheetData | null>;
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<{ row: number; col: number } | null>;
-  cellEditorValue: Ref<string>;
   isLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
@@ -33,7 +32,6 @@ export function useEditorCommands({
   currentSheet,
   currentSheetIndex,
   selectedCell,
-  cellEditorValue,
   isLoading,
   flushPendingCellChanges,
   editorValueForCell,
@@ -139,8 +137,7 @@ export function useEditorCommands({
       "Failed to add sheet",
       {
         afterApplied: () => {
-          editorSelectionStore.clearSelection();
-          currentSheetIndex.value = newSheetIndex;
+          editorSelectionStore.activateSheet(newSheetIndex);
         },
       }
     );
@@ -162,9 +159,7 @@ export function useEditorCommands({
 
   function handleSheetChange(index: number) {
     if (isEditorCommandBlocked()) return;
-    editorSelectionStore.rememberCurrentSheetSelection();
-    cellEditorValue.value = "";
-    editorSelectionStore.restoreSheetSelection(index, (cell) =>
+    editorSelectionStore.switchSheet(index, (cell) =>
       editorValueForCell(index, cell.row, cell.col)
     );
   }
@@ -198,20 +193,11 @@ export function useEditorCommands({
         scope,
         scope === "currentSheet" ? currentSheetIndex.value : null
       );
-      if (
-        documentSessionStore.documentId === context.documentId
-        && documentSessionStore.revision === context.baseRevision
-      ) {
+      if (documentSessionStore.matchesCommandContext(context)) {
         searchSessionStore.applySearchResults(requestId, results);
       }
     } catch (error) {
-      if (
-        context
-        && (
-          documentSessionStore.documentId !== context.documentId
-          || documentSessionStore.revision !== context.baseRevision
-        )
-      ) {
+      if (context && !documentSessionStore.matchesCommandContext(context)) {
         return;
       }
       ElMessage.error(`Search failed: ${error}`);
@@ -222,11 +208,12 @@ export function useEditorCommands({
 
   function handleSearchResultClick(result: SearchResult) {
     if (isEditorCommandBlocked()) return;
-    if (result.sheetIndex !== currentSheetIndex.value) {
-      currentSheetIndex.value = result.sheetIndex;
-    }
-    editorSelectionStore.selectCell(result.row, result.col, true);
-    cellEditorValue.value = editorValueForCell(result.sheetIndex, result.row, result.col);
+    editorSelectionStore.focusSearchResult(
+      result.sheetIndex,
+      result.row,
+      result.col,
+      editorValueForCell(result.sheetIndex, result.row, result.col)
+    );
   }
 
   function handleClearSearch() {

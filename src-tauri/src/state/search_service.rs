@@ -653,7 +653,7 @@ mod tests {
         );
         let document_id = editor.document_id();
         let mut registry = ActiveDocumentStore::new_for_test();
-        registry.replace_active(editor);
+        registry.replace_active_for_test(editor);
         (Arc::new(RwLock::new(registry)), document_id)
     }
 
@@ -1153,7 +1153,7 @@ mod tests {
         );
         let document_id = editor.document_id();
         let mut store = ActiveDocumentStore::new_for_test();
-        store.replace_active(editor);
+        store.replace_active_for_test(editor);
         let registry = Arc::new(RwLock::new(store));
 
         assert_eq!(rows_of_current_search(&registry, "0.4"), vec![(0, 0)]);
@@ -1184,7 +1184,7 @@ mod tests {
         );
         {
             let mut guard = registry.write().unwrap();
-            guard.replace_active(new_editor);
+            guard.replace_active_for_test(new_editor);
         }
 
         run_rebuild(old_document_id, 0, old_stamp, old_search_text, &registry);
