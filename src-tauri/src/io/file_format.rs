@@ -40,11 +40,75 @@ impl SpreadsheetFileFormat {
 }
 
 pub fn extension_of(path_or_name: &str) -> Option<String> {
-    Path::new(path_or_name)
+    let file_name = file_name_from_path_like(path_or_name, "");
+    Path::new(&file_name)
         .extension()
         .and_then(|extension| extension.to_str())
         .filter(|extension| !extension.is_empty())
         .map(|extension| extension.to_ascii_lowercase())
+}
+
+pub fn file_name_from_path_like(path_or_name: &str, fallback: &str) -> String {
+    let without_hash = path_or_name.split('#').next().unwrap_or(path_or_name);
+    let without_query = without_hash.split('?').next().unwrap_or(without_hash);
+    let normalized = without_query.replace('\\', "/");
+    let segment = normalized
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    let decoded = decode_percent_segment(segment);
+    let decoded_normalized = decoded.replace('\\', "/");
+    let decoded_segment = decoded_normalized
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+
+    if decoded_segment.is_empty() {
+        fallback.to_string()
+    } else {
+        decoded_segment.to_string()
+    }
+}
+
+pub fn file_stem_from_path_like(path_or_name: &str, fallback: &str) -> String {
+    let file_name = file_name_from_path_like(path_or_name, "");
+    let stem = Path::new(&file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty());
+    stem.unwrap_or(fallback).to_string()
+}
+
+fn decode_percent_segment(segment: &str) -> String {
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        {
+            decoded.push((high << 4) | low);
+            index += 3;
+            continue;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8(decoded).unwrap_or_else(|_| segment.to_string())
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub fn default_spreadsheet_extension() -> &'static str {
@@ -192,6 +256,77 @@ mod tests {
         assert!(is_xlsx_extension("XLSX"));
         assert!(!is_xlsx_extension("csv"));
         assert!(!is_xlsx_extension("xlsm"));
+    }
+
+    #[test]
+    fn extracts_file_name_from_path_like_inputs() {
+        assert_eq!(
+            file_name_from_path_like(r"C:\Users\me\book.xlsx", "fallback.xlsx"),
+            "book.xlsx"
+        );
+        assert_eq!(
+            file_name_from_path_like(
+                "content://provider/document/primary%3ADownload%2Freports%2Fscore.xlsx?x=1#top",
+                "fallback.xlsx"
+            ),
+            "score.xlsx"
+        );
+        assert_eq!(
+            file_name_from_path_like(
+                "content://provider/document/%E7%BB%A9%E6%95%88.xlsx",
+                "fallback.xlsx"
+            ),
+            "绩效.xlsx"
+        );
+        assert_eq!(
+            file_name_from_path_like(
+                "content://provider/document/bad%ZZname.xlsx",
+                "fallback.xlsx"
+            ),
+            "bad%ZZname.xlsx"
+        );
+        assert_eq!(
+            file_name_from_path_like("content://provider/document/", "fallback.xlsx"),
+            "document"
+        );
+    }
+
+    #[test]
+    fn extracts_extensions_from_path_like_inputs() {
+        assert_eq!(
+            extension_of(r"C:\Users\me\book.XLSX"),
+            Some("xlsx".to_string())
+        );
+        assert_eq!(
+            extension_of(
+                "content://provider/document/primary%3ADownload%2Freports%2Fscore.CSV?x=1#top"
+            ),
+            Some("csv".to_string())
+        );
+        assert_eq!(
+            extension_of("content://provider/document/bad%ZZname.xlsx"),
+            Some("xlsx".to_string())
+        );
+        assert_eq!(extension_of("content://provider/document/"), None);
+    }
+
+    #[test]
+    fn extracts_stems_from_path_like_inputs() {
+        assert_eq!(
+            file_stem_from_path_like(r"C:\Users\me\book.xlsx", "untitled"),
+            "book"
+        );
+        assert_eq!(
+            file_stem_from_path_like(
+                "content://provider/document/primary%3ADownload%2Freports%2Fscore.final.xlsx?x=1",
+                "untitled"
+            ),
+            "score.final"
+        );
+        assert_eq!(
+            file_stem_from_path_like("content://provider/document/", "untitled"),
+            "document"
+        );
     }
 
     #[test]

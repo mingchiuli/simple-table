@@ -214,6 +214,37 @@ describe("documentSession store", () => {
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
   });
 
+  it("ignores mutation responses after the document has been cleared", () => {
+    const store = useDocumentSessionStore();
+
+    const result = store.applyMutationResponse(response({
+      documentId: 99,
+      revision: 1,
+      patches: [
+        {
+          type: "SheetUpdated",
+          data: { patch: { sheetIndex: 0, sheet: sheet("Stale", [[text("stale")]]) } },
+        },
+      ],
+    }));
+
+    expect(result.resyncRequired).toBe(false);
+    expect(store.documentId).toBeNull();
+    expect(store.revision).toBe(0);
+    expect(store.data).toBeNull();
+  });
+
+  it("does not clear busy state when an overlapping lifecycle is rejected", () => {
+    const store = useDocumentSessionStore();
+
+    expect(store.beginLifecycle("saving")).toBe(true);
+    expect(store.beginLifecycle("loading")).toBe(false);
+
+    store.endLifecycle("loading");
+
+    expect(store.lifecycle).toBe("saving");
+  });
+
   it("opens a document response with backend session identity", () => {
     const store = useDocumentSessionStore();
     const data: FileData = {
@@ -237,5 +268,71 @@ describe("documentSession store", () => {
     expect(store.revision).toBe(7);
     expect(store.currentFilePath).toBe(data.path);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("A1"));
+  });
+
+  it("clears the frontend session when backend session is unavailable", () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const data: FileData = {
+      path: "/tmp/opened.xlsx",
+      fileName: "opened.xlsx",
+      sheets: [sheet("Sheet1", [[text("A1")]])],
+    };
+
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 42,
+        revision: 7,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState({ canUndo: true, isDirty: true }),
+      },
+    }, data.path);
+    statusStore.markPendingContentChange();
+
+    store.applyEditorSession(null);
+
+    expect(store.data).toBeNull();
+    expect(store.currentFilePath).toBeNull();
+    expect(store.documentId).toBeNull();
+    expect(store.revision).toBe(0);
+    expect(statusStore.canUndo).toBe(false);
+    expect(statusStore.isContentDirty).toBe(false);
+    expect(statusStore.hasPendingContentChange).toBe(false);
+    expect(statusStore.formulaStatus).toEqual(readyFormulaStatus());
+  });
+
+  it("clearDocument resets status owned by the active document", () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    store.openDocument({
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    });
+    statusStore.applyEditorState(editorState({ canUndo: true, isDirty: true }));
+    statusStore.markPendingContentChange();
+
+    store.clearDocument();
+
+    expect(store.data).toBeNull();
+    expect(statusStore.canUndo).toBe(false);
+    expect(statusStore.isContentDirty).toBe(false);
+    expect(statusStore.hasPendingContentChange).toBe(false);
+  });
+
+  it("does not allow overlapping document lifecycle actions", () => {
+    const store = useDocumentSessionStore();
+
+    expect(store.beginLifecycle("saving")).toBe(true);
+    expect(store.lifecycle).toBe("saving");
+    expect(store.beginLifecycle("loading")).toBe(false);
+    expect(store.lifecycle).toBe("saving");
+
+    store.endLifecycle("loading");
+    expect(store.lifecycle).toBe("saving");
+    store.endLifecycle("saving");
+    expect(store.lifecycle).toBe("idle");
   });
 });

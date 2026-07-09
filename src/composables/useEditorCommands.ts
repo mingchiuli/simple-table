@@ -153,21 +153,38 @@ export function useEditorCommands({
   async function handleSearch(query: string, scope: "currentSheet" | "allSheets") {
     if (!fileData.value || documentSessionStore.isInteractionLocked) return;
 
-    searchSessionStore.searchQuery = query;
+    const requestId = searchSessionStore.beginSearch(query);
+    let context: EditorCommandContext | null = null;
     try {
-      searchSessionStore.isSearching = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
+      context = editorCommandContext();
 
-      searchSessionStore.searchResults = await api.search(
+      const results = await api.search(
+        context,
         query,
         scope,
         scope === "currentSheet" ? currentSheetIndex.value : null
       );
+      if (
+        documentSessionStore.documentId === context.documentId
+        && documentSessionStore.revision === context.baseRevision
+      ) {
+        searchSessionStore.applySearchResults(requestId, results);
+      }
     } catch (error) {
+      if (
+        context
+        && (
+          documentSessionStore.documentId !== context.documentId
+          || documentSessionStore.revision !== context.baseRevision
+        )
+      ) {
+        return;
+      }
       ElMessage.error(`Search failed: ${error}`);
     } finally {
-      searchSessionStore.isSearching = false;
+      searchSessionStore.finishSearch(requestId);
     }
   }
 

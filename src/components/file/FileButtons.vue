@@ -4,6 +4,7 @@ import type { FileData } from '@/types';
 defineProps<{
   fileData: FileData | null;
   showExport?: boolean;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -15,20 +16,20 @@ const emit = defineEmits<{
 
 <template>
   <div class="file-buttons">
-    <el-button type="primary" @click="emit('open-file')">
+    <el-button type="primary" :disabled="disabled" @click="emit('open-file')">
       Open File
     </el-button>
     <el-button
       type="success"
       @click="emit('save-file')"
-      :disabled="!fileData"
+      :disabled="disabled || !fileData"
     >
       Save
     </el-button>
     <el-button
       v-if="showExport"
       @click="emit('export-file')"
-      :disabled="!fileData"
+      :disabled="disabled || !fileData"
     >
       Export
     </el-button>

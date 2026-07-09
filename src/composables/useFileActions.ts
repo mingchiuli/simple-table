@@ -18,7 +18,6 @@ type UseFileActionsOptions = {
   isLoading: Ref<boolean>;
   isFileLoading: Ref<boolean>;
   flushPendingCellChanges: () => Promise<boolean>;
-  resetDocumentStatus: () => void;
 };
 
 export function useFileActions({
@@ -27,7 +26,6 @@ export function useFileActions({
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  resetDocumentStatus,
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
@@ -37,15 +35,18 @@ export function useFileActions({
     lifecycle: 'loading' | 'saving',
     errorPrefix: string,
     action: () => Promise<void>
-  ) {
+  ): Promise<boolean> {
+    if (!documentSessionStore.beginLifecycle(lifecycle)) {
+      return false;
+    }
     try {
-      documentSessionStore.beginLifecycle(lifecycle);
       await action();
     } catch (error) {
       ElMessage.error(`${errorPrefix}: ${error}`);
     } finally {
       documentSessionStore.endLifecycle(lifecycle);
     }
+    return true;
   }
 
   async function updateRecentFileEntry(
@@ -60,7 +61,7 @@ export function useFileActions({
   }
 
   async function loadFileFromPath(filePath: string) {
-    await withDocumentLifecycle('loading', 'Failed to open file', async () => {
+    const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -73,12 +74,14 @@ export function useFileActions({
       const fileName = await getFileName(filePath);
       await updateRecentFileEntry(filePath, fileName);
     });
-    isLoading.value = false;
-    isFileLoading.value = false;
+    if (ran) {
+      isLoading.value = false;
+      isFileLoading.value = false;
+    }
   }
 
   async function handleOpenFile() {
-    await withDocumentLifecycle('loading', 'Failed to open file', async () => {
+    const ran = await withDocumentLifecycle('loading', 'Failed to open file', async () => {
       isLoading.value = true;
       isFileLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
@@ -92,15 +95,17 @@ export function useFileActions({
 
       await updateRecentFileEntry(result.path, result.fileName, result.originalPath);
     });
-    isLoading.value = false;
-    isFileLoading.value = false;
+    if (ran) {
+      isLoading.value = false;
+      isFileLoading.value = false;
+    }
   }
 
   async function handleSaveFile() {
     const data = fileData.value;
     if (!data) return;
 
-    await withDocumentLifecycle('saving', 'Failed to save file', async () => {
+    const ran = await withDocumentLifecycle('saving', 'Failed to save file', async () => {
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
 
@@ -144,14 +149,16 @@ export function useFileActions({
       await updateRecentFileEntry(savePath, fileName);
       ElMessage.success('File saved successfully');
     });
-    isLoading.value = false;
+    if (ran) {
+      isLoading.value = false;
+    }
   }
 
   async function handleExportFile() {
     const data = fileData.value;
     if (!data) return;
 
-    await withDocumentLifecycle('saving', 'Failed to export file', async () => {
+    const ran = await withDocumentLifecycle('saving', 'Failed to export file', async () => {
       isLoading.value = true;
       if (!(await flushPendingCellChanges())) return;
       await documentSessionStore.waitForMutations();
@@ -170,21 +177,28 @@ export function useFileActions({
         ElMessage.success('File exported successfully');
       }
     });
-    isLoading.value = false;
+    if (ran) {
+      isLoading.value = false;
+    }
   }
 
-  async function handleBack() {
-    if (!(await flushPendingCellChanges())) return;
+  async function closeCurrentDocument(): Promise<boolean> {
+    if (documentSessionStore.isInteractionLocked) return false;
+    if (!(await flushPendingCellChanges())) return false;
     await documentSessionStore.waitForMutations();
 
     try {
       await api.closeCurrentDocument();
     } catch (error) {
       ElMessage.error(`Failed to close file: ${error}`);
-      return;
+      return false;
     }
     documentSessionStore.clearDocument();
-    resetDocumentStatus();
+    return true;
+  }
+
+  async function handleBack() {
+    if (!(await closeCurrentDocument())) return;
     router.push({ name: 'home' });
   }
 
@@ -193,6 +207,7 @@ export function useFileActions({
     handleOpenFile,
     handleSaveFile,
     handleExportFile,
+    closeCurrentDocument,
     handleBack,
   };
 }

@@ -4,7 +4,7 @@ use super::mobile::{
 use crate::error::AppError;
 use crate::io::document;
 use crate::io::file_format::{
-    SUPPORTED_SPREADSHEET_EXTENSIONS, default_spreadsheet_file_name,
+    SUPPORTED_SPREADSHEET_EXTENSIONS, default_spreadsheet_file_name, file_name_from_path_like,
     import_extension_from_name_or_bytes, normalized_import_file_name,
 };
 use tauri::AppHandle;
@@ -24,6 +24,17 @@ fn display_name_from_path(path: &FilePath) -> String {
                 p.file_name()
                     .and_then(|name| name.to_str())
                     .map(|name| name.to_string())
+            })
+            .or_else(|| {
+                url.path_segments()
+                    .and_then(|mut segments| segments.next_back())
+                    .filter(|segment| !segment.is_empty())
+                    .map(|segment| {
+                        file_name_from_path_like(
+                            segment,
+                            &default_spreadsheet_file_name("imported"),
+                        )
+                    })
             })
             .unwrap_or_else(|| default_spreadsheet_file_name("imported")),
     }

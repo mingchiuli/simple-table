@@ -42,10 +42,6 @@ export function useDocumentStatus() {
     documentStatusStore.clearPendingContentChange();
   }
 
-  function resetDocumentStatus() {
-    documentStatusStore.reset();
-  }
-
   return {
     canUndo,
     canRedo,
@@ -60,6 +56,5 @@ export function useDocumentStatus() {
     refreshEditorState,
     markPendingContentChange,
     clearPendingContentChange,
-    resetDocumentStatus,
   };
 }

@@ -22,6 +22,8 @@ fn col_to_letter(col: usize) -> String {
 /// 搜索单元格
 pub fn do_search(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+    base_revision: u64,
     query: &str,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
@@ -34,10 +36,7 @@ pub fn do_search(
         let registry = registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = match registry.active() {
-            Some(s) => s,
-            None => return Err(AppError::NoFileLoaded),
-        };
+        let editor_state = registry.active_for_command(document_id, base_revision)?;
 
         match scope {
             SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
@@ -64,9 +63,7 @@ pub fn do_search(
             let registry = registry
                 .read()
                 .map_err(|_| AppError::poisoned_lock("document registry"))?;
-            let Some(editor_state) = registry.active() else {
-                return Err(AppError::NoFileLoaded);
-            };
+            let editor_state = registry.active_for_command(document_id, base_revision)?;
             search_input_for_sheet(
                 editor_state,
                 sheet_index,

@@ -5,6 +5,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use crate::error::AppError;
+use crate::io::file_format::file_name_from_path_like;
 
 use super::types::RecentFile;
 
@@ -59,10 +60,7 @@ impl RecentStore {
             .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
 
         file.path = new_path.to_string();
-
-        if let Some(name) = Path::new(new_path).file_name() {
-            file.file_name = name.to_string_lossy().to_string();
-        }
+        file.file_name = file_name_from_path_like(new_path, &file.file_name);
 
         files.sort_by_key(|file| Reverse(file.last_opened));
 

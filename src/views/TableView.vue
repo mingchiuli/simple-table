@@ -82,10 +82,10 @@ const {
   refreshEditorState,
   markPendingContentChange,
   clearPendingContentChange,
-  resetDocumentStatus,
 } = useDocumentStatus();
 
 const canInteractWithDocument = computed(() => !documentSessionStore.isInteractionLocked);
+const isToolbarBusy = computed(() => documentSessionStore.isInteractionLocked || isLoading.value);
 const currentSheetCapabilities = computed(() =>
   workbookSheetCapabilities(capabilities.value, currentSheetIndex.value)
 );
@@ -129,6 +129,7 @@ const {
   handleOpenFile,
   handleSaveFile,
   handleExportFile,
+  closeCurrentDocument,
   handleBack,
 } = useFileActions({
   fileData,
@@ -136,7 +137,6 @@ const {
   isLoading,
   isFileLoading,
   flushPendingCellChanges,
-  resetDocumentStatus,
 });
 
 let routeLoadQueue = Promise.resolve();
@@ -170,6 +170,14 @@ function enqueueRouteFileLoad(filePath: string | null) {
       console.error("Failed to handle route file load:", error);
     });
 }
+
+onBeforeRouteLeave(async () => {
+  await routeLoadQueue.catch(() => undefined);
+  if (!documentSessionStore.data && documentSessionStore.documentId === null) {
+    return true;
+  }
+  return closeCurrentDocument();
+});
 
 function getEditorValue(sheetIndex: number, row: number, col: number): string {
   const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));
@@ -224,6 +232,7 @@ watch(() => route.query.file, () => {
       :can-undo="canUndo"
       :can-redo="canRedo"
       :capabilities="toolbarCapabilities"
+      :is-busy="isToolbarBusy"
       :is-searching="isSearching"
       @open-file="handleOpenFile"
       @save-file="handleSaveFile"
@@ -302,7 +311,7 @@ watch(() => route.query.file, () => {
       :history-status="history"
     />
 
-    <el-button class="back-btn" circle @click="handleBack">
+    <el-button class="back-btn" circle :disabled="isToolbarBusy" @click="handleBack">
       <el-icon><HomeFilled /></el-icon>
     </el-button>
   </div>

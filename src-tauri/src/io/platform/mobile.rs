@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 use crate::io::document;
 use crate::io::file_format::{
-    SUPPORTED_SPREADSHEET_EXTENSIONS, output_name_for_selected_target,
+    SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
 use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
@@ -82,22 +82,23 @@ fn selected_file_name(path: &FilePath) -> Option<String> {
         FilePath::Path(path) => path
             .file_name()
             .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned),
+            .map(|name| file_name_from_path_like(name, "")),
         FilePath::Url(url) => url
             .to_file_path()
             .ok()
             .and_then(|path| {
                 path.file_name()
                     .and_then(|name| name.to_str())
-                    .map(ToOwned::to_owned)
+                    .map(|name| file_name_from_path_like(name, ""))
             })
             .or_else(|| {
                 url.path_segments()
                     .and_then(|mut segments| segments.next_back())
                     .filter(|segment| !segment.is_empty())
-                    .map(ToOwned::to_owned)
+                    .map(|segment| file_name_from_path_like(segment, ""))
             }),
     }
+    .filter(|name| !name.is_empty())
 }
 
 pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, AppError> {

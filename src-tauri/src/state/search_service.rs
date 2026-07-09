@@ -613,6 +613,7 @@ pub fn cancel_index_jobs_for_document(document_id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
     use crate::ops::EditorCommand;
     use crate::ops::search_ops::do_search;
     use crate::state::editor_state::EditorState;
@@ -675,11 +676,19 @@ mod tests {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         query: &str,
     ) -> Vec<(usize, usize)> {
-        let mut rows: Vec<_> = do_search(registry, query, SearchScope::CurrentSheet, Some(0))
-            .unwrap()
-            .into_iter()
-            .map(|result| (result.row, result.col))
-            .collect();
+        let (document_id, revision) = active_search_context(registry);
+        let mut rows: Vec<_> = do_search(
+            registry,
+            document_id,
+            revision,
+            query,
+            SearchScope::CurrentSheet,
+            Some(0),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|result| (result.row, result.col))
+        .collect();
         rows.sort();
         rows
     }
@@ -688,11 +697,25 @@ mod tests {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         query: &str,
     ) -> Vec<String> {
-        do_search(registry, query, SearchScope::CurrentSheet, Some(0))
-            .unwrap()
-            .into_iter()
-            .map(|result| result.value)
-            .collect()
+        let (document_id, revision) = active_search_context(registry);
+        do_search(
+            registry,
+            document_id,
+            revision,
+            query,
+            SearchScope::CurrentSheet,
+            Some(0),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|result| result.value)
+        .collect()
+    }
+
+    fn active_search_context(registry: &Arc<RwLock<ActiveDocumentStore>>) -> (u64, u64) {
+        let guard = registry.read().unwrap();
+        let editor = guard.active().unwrap();
+        (editor.document_id(), editor.revision())
     }
 
     fn current_stamp(
@@ -724,6 +747,40 @@ mod tests {
             search_text_snapshot(registry, document_id),
             registry,
         );
+    }
+
+    #[test]
+    fn search_rejects_stale_document_revision() {
+        let (registry, document_id) = make_registry(vec![vec![s("old")]]);
+        let revision = {
+            let guard = registry.read().unwrap();
+            guard.get(document_id).unwrap().revision()
+        };
+        {
+            let mut guard = registry.write().unwrap();
+            guard
+                .get_mut(document_id)
+                .unwrap()
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "new".to_string(),
+                })
+                .unwrap();
+        }
+
+        let error = do_search(
+            &registry,
+            document_id,
+            revision,
+            "new",
+            SearchScope::CurrentSheet,
+            Some(0),
+        )
+        .expect_err("stale search context should be rejected");
+
+        assert!(matches!(error, AppError::DocumentStateInvalid(_)));
     }
 
     #[test]

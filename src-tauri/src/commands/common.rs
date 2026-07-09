@@ -255,12 +255,21 @@ pub fn delete_sheet(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn search(
+    document_id: u64,
+    base_revision: u64,
     query: String,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
     let registry = active_document_store();
-    search_ops::do_search(&registry, &query, scope, current_sheet_index)
+    search_ops::do_search(
+        &registry,
+        document_id,
+        base_revision,
+        &query,
+        scope,
+        current_sheet_index,
+    )
 }
 
 // ==================== Recent Files Operations ====================

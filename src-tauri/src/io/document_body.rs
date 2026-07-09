@@ -1,9 +1,9 @@
-use std::{collections::BTreeSet, path::Path, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::io::codec::writer;
-use crate::io::file_format::SpreadsheetFileFormat;
+use crate::io::file_format::{SpreadsheetFileFormat, extension_of};
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::ops::AppliedOperation;
@@ -604,10 +604,8 @@ fn estimate_worksheet_bytes(worksheet: &Worksheet) -> usize {
 }
 
 fn is_csv_document(file_data: &FileData) -> bool {
-    Path::new(&file_data.file_name)
-        .extension()
-        .or_else(|| Path::new(&file_data.path).extension())
-        .and_then(|extension| extension.to_str())
+    extension_of(&file_data.file_name)
+        .or_else(|| extension_of(&file_data.path))
         .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
 }
 

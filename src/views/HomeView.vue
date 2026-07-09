@@ -16,65 +16,80 @@ import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
 const router = useRouter();
 const documentSessionStore = useDocumentSessionStore();
 const recentFilesStore = useRecentFilesStore();
+const isBusy = ref(false);
 
 onMounted(() => {
   recentFilesStore.load();
 });
 
-async function handleOpenFile() {
+async function runHomeFileAction(action: () => Promise<void>) {
+  if (isBusy.value) return;
+  isBusy.value = true;
   try {
-    const result = await openFile();
-    if (!result) {
-      // 用户取消选择
-      return;
-    }
-
-    documentSessionStore.openDocumentResponse(result, result.path);
-
-    await tryAddRecentFileWithResolvedStorage(
-      {
-        path: result.path,
-        fileName: result.fileName,
-        originalPath: result.originalPath,
-      },
-      getStorageType
-    );
-
-    await tryRefreshRecentFiles(() => recentFilesStore.load());
-    router.push({ name: "table" });
-  } catch (error) {
-    ElMessage.error(`Failed to open file: ${error}`);
+    await action();
+  } finally {
+    isBusy.value = false;
   }
 }
 
-async function handleNewFile() {
-  try {
-    const defaultExtension = await defaultSpreadsheetExtension();
-    const newFileData: FileData = {
-      path: "",
-      fileName: `untitled.${defaultExtension}`,
-      sheets: [
-        {
-          name: "Sheet1",
-          rows: [
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-          ],
-          merges: [],
-          rich: defaultRichProjection(),
-        },
-      ],
-    };
+async function handleOpenFile() {
+  await runHomeFileAction(async () => {
+    try {
+      const result = await openFile();
+      if (!result) {
+        // 用户取消选择
+        return;
+      }
 
-    const opened = await api.initFile(newFileData);
-    documentSessionStore.openDocumentResponse(opened, null);
-    router.push({ name: "table" });
-  } catch (error) {
-    ElMessage.error(`Failed to create file: ${error}`);
-  }
+      documentSessionStore.openDocumentResponse(result, result.path);
+
+      await tryAddRecentFileWithResolvedStorage(
+        {
+          path: result.path,
+          fileName: result.fileName,
+          originalPath: result.originalPath,
+        },
+        getStorageType
+      );
+
+      await tryRefreshRecentFiles(() => recentFilesStore.load());
+      await router.push({ name: "table" });
+    } catch (error) {
+      ElMessage.error(`Failed to open file: ${error}`);
+    }
+  });
+}
+
+async function handleNewFile() {
+  await runHomeFileAction(async () => {
+    try {
+      const defaultExtension = await defaultSpreadsheetExtension();
+      const newFileData: FileData = {
+        path: "",
+        fileName: `untitled.${defaultExtension}`,
+        sheets: [
+          {
+            name: "Sheet1",
+            rows: [
+              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+              [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
+            ],
+            merges: [],
+            rich: defaultRichProjection(),
+          },
+        ],
+      };
+
+      const opened = await api.initFile(newFileData);
+      documentSessionStore.openDocumentResponse(opened, null);
+      await router.push({ name: "table" });
+    } catch (error) {
+      ElMessage.error(`Failed to create file: ${error}`);
+    }
+  });
 }
 
 function handleNavigate() {
@@ -88,10 +103,10 @@ function handleNavigate() {
       <el-icon class="empty-icon"><Document /></el-icon>
       <p>No file opened</p>
       <div class="button-group">
-        <el-button type="primary" @click="handleNewFile">
+        <el-button type="primary" :disabled="isBusy" @click="handleNewFile">
           New Table
         </el-button>
-        <el-button @click="handleOpenFile">
+        <el-button :disabled="isBusy" @click="handleOpenFile">
           Open File
         </el-button>
       </div>
@@ -100,8 +115,8 @@ function handleNavigate() {
     <RecentFilesSection v-else @open="handleNavigate">
       <template #actions>
         <div class="header-actions">
-          <el-button @click="handleOpenFile">Open File</el-button>
-          <el-button type="primary" @click="handleNewFile">New Table</el-button>
+          <el-button :disabled="isBusy" @click="handleOpenFile">Open File</el-button>
+          <el-button type="primary" :disabled="isBusy" @click="handleNewFile">New Table</el-button>
         </div>
       </template>
     </RecentFilesSection>

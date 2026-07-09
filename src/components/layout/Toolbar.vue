@@ -33,6 +33,7 @@ const props = defineProps<{
     canInsertDeleteColumns: boolean;
     canInsertDeleteSheets: boolean;
   };
+  isBusy: boolean;
   isSearching: boolean;
 }>();
 
@@ -66,6 +67,7 @@ function handleCheckUpdate() {
         <FileButtons
           :file-data="props.fileData"
           :show-export="canExport"
+          :disabled="props.isBusy"
           @open-file="emit('open-file')"
           @save-file="emit('save-file')"
           @export-file="emit('export-file')"
@@ -123,6 +125,7 @@ function handleCheckUpdate() {
       <FileButtons
         :file-data="props.fileData"
         :show-export="canExport"
+        :disabled="props.isBusy"
         @open-file="emit('open-file')"
         @save-file="emit('save-file')"
         @export-file="emit('export-file')"

@@ -124,6 +124,27 @@ impl ActiveDocumentStore {
         Ok(editor_state)
     }
 
+    pub fn active_for_command(
+        &self,
+        document_id: u64,
+        base_revision: u64,
+    ) -> Result<&EditorState, AppError> {
+        let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+        if editor_state.document_id() != document_id {
+            return Err(AppError::DocumentStateInvalid(
+                "active document changed before the editor command was applied".to_string(),
+            ));
+        }
+        if editor_state.revision() != base_revision {
+            return Err(AppError::DocumentStateInvalid(format!(
+                "document revision changed before the editor command was applied: expected {}, got {}",
+                base_revision,
+                editor_state.revision()
+            )));
+        }
+        Ok(editor_state)
+    }
+
     pub fn get(&self, document_id: u64) -> Option<&EditorState> {
         self.active()
             .filter(|editor_state| editor_state.document_id() == document_id)

@@ -4,10 +4,10 @@ use super::mobile::{
 use crate::error::AppError;
 use crate::io::document;
 use crate::io::file_format::{
-    default_spreadsheet_file_name, import_extension_from_name_or_bytes,
-    normalized_import_file_name, supported_extension_or_default,
+    default_spreadsheet_file_name, file_name_from_path_like, file_stem_from_path_like,
+    import_extension_from_name_or_bytes, normalized_import_file_name,
+    supported_extension_or_default,
 };
-use std::path::Path;
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -22,7 +22,9 @@ fn display_name_from_path(path: &FilePath) -> String {
             .path_segments()
             .and_then(|mut segments| segments.next_back())
             .filter(|segment| !segment.is_empty())
-            .map(|segment| segment.to_string())
+            .map(|segment| {
+                file_name_from_path_like(segment, &default_spreadsheet_file_name("imported"))
+            })
             .unwrap_or_else(|| default_spreadsheet_file_name("imported")),
     }
 }
@@ -76,11 +78,7 @@ pub fn pick_file(app: &AppHandle) -> Result<Option<PickFileResult>, AppError> {
 }
 
 pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<String, AppError> {
-    let stem = Path::new(default_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("untitled");
+    let stem = file_stem_from_path_like(default_name, "untitled");
     let path = mobile_dir(app)?.join(format!(
         "{}-{}.{}",
         stem,

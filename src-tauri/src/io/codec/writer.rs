@@ -1,8 +1,9 @@
-use std::path::Path;
 use std::str::FromStr;
 
 use crate::error::AppError;
-use crate::io::file_format::SpreadsheetFileFormat;
+use crate::io::file_format::{
+    SpreadsheetFileFormat, file_name_from_path_like, file_stem_from_path_like,
+};
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::types::{CellValue, FileData};
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
@@ -14,11 +15,8 @@ pub fn generate_file_bytes_for_target(
     file_data: &FileData,
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    let target_name = Path::new(target_path_or_name)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(target_path_or_name);
-    generate_file_bytes_for_name(file_data, target_name)
+    let target_name = file_name_from_path_like(target_path_or_name, target_path_or_name);
+    generate_file_bytes_for_name(file_data, &target_name)
 }
 
 fn generate_file_bytes_for_name(
@@ -28,11 +26,7 @@ fn generate_file_bytes_for_name(
     let format = SpreadsheetFileFormat::from_path_or_default(output_name)
         .ok_or(AppError::UnsupportedFormat)?;
     let extension = format.extension();
-    let output_stem = Path::new(output_name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or("untitled");
+    let output_stem = file_stem_from_path_like(output_name, "untitled");
 
     match format {
         SpreadsheetFileFormat::Xlsx => {
@@ -52,18 +46,11 @@ pub fn generate_excel_bytes_from_workbook_for_target(
     workbook: &Workbook,
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    let target_name = Path::new(target_path_or_name)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(target_path_or_name);
-    let format = SpreadsheetFileFormat::from_path_or_default(target_name)
+    let target_name = file_name_from_path_like(target_path_or_name, target_path_or_name);
+    let format = SpreadsheetFileFormat::from_path_or_default(&target_name)
         .ok_or(AppError::UnsupportedFormat)?;
     let extension = format.extension();
-    let output_stem = Path::new(target_name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or("untitled");
+    let output_stem = file_stem_from_path_like(&target_name, "untitled");
 
     if format != SpreadsheetFileFormat::Xlsx {
         return Err(AppError::UnsupportedFormat);
@@ -499,6 +486,27 @@ mod tests {
                 .and_then(|heights| heights.get(&1)),
             Some(&120)
         );
+    }
+
+    #[test]
+    fn output_name_uses_decoded_path_like_target_name() {
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "source.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::String("ok".to_string())]],
+                ..Default::default()
+            }],
+        };
+
+        let (output_name, _) = generate_file_bytes_for_target(
+            &file_data,
+            "content://provider/document/primary%3ADownload%2Freports%2Fscore.final.xlsx?token=1",
+        )
+        .expect("write path-like target");
+
+        assert_eq!(output_name, "score.final.xlsx");
     }
 
     #[test]

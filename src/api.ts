@@ -157,11 +157,12 @@ export async function deleteSheet(
 // ==================== Search Operations ====================
 
 export async function search(
+  context: EditorCommandContext,
   query: string,
   scope: "currentSheet" | "allSheets",
   currentSheetIndex: number | null
 ): Promise<SearchResult[]> {
-  return invoke<SearchResult[]>("search", { query, scope, currentSheetIndex });
+  return invoke<SearchResult[]>("search", { ...context, query, scope, currentSheetIndex });
 }
 
 // ==================== Recent Files Operations ====================

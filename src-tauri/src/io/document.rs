@@ -1,10 +1,8 @@
-use std::path::Path;
-
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{
-    default_spreadsheet_extension, export_extensions, extension_of, is_xlsx_extension,
-    open_extension_from_path_name_or_bytes, spreadsheet_format_options,
+    default_spreadsheet_extension, export_extensions, extension_of, file_name_from_path_like,
+    is_xlsx_extension, open_extension_from_path_name_or_bytes, spreadsheet_format_options,
     supported_extension_from_name,
 };
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
@@ -26,17 +24,11 @@ pub fn open_from_bytes(
     bytes: Vec<u8>,
     file_name: Option<String>,
 ) -> Result<OpenDocumentResponse, AppError> {
-    let path_obj = Path::new(&path);
     let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
 
     // 如果调用方已经解析出文件名，优先使用；否则从路径解析
-    let resolved_file_name = file_name.unwrap_or_else(|| {
-        path_obj
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string()
-    });
+    let resolved_file_name =
+        file_name.unwrap_or_else(|| file_name_from_path_like(&path, "unknown"));
 
     // 传入 path 到 reader，同时保留 Excel 原始 Workbook 用于后续无损 patch 保存。
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path, resolved_file_name)?;

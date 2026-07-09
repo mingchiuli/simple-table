@@ -69,8 +69,12 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     isInteractionLocked: (state) => state.lifecycle !== "idle",
   },
   actions: {
-    beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">) {
+    beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">): boolean {
+      if (this.lifecycle !== "idle") {
+        return false;
+      }
       this.lifecycle = lifecycle;
+      return true;
     },
     endLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">) {
       if (this.lifecycle === lifecycle) {
@@ -106,6 +110,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = null;
       this.revision = 0;
       this.resetSessionUi();
+      useDocumentStatusStore().reset();
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
       this.resetMutationQueue();
@@ -146,12 +151,16 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = 0;
       this.lifecycle = "idle";
       this.resetSessionUi();
+      useDocumentStatusStore().reset();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
       if (response.protocolVersion !== 1) {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
       if (this.documentId !== null && response.documentId !== this.documentId) {
+        return { data: this.data, resyncRequired: false };
+      }
+      if (this.documentId === null && this.data === null) {
         return { data: this.data, resyncRequired: false };
       }
       if (this.documentId === null) {
@@ -285,7 +294,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
     applyEditorSession(info: EditorSessionInfo | null | undefined) {
       if (!info) {
-        useDocumentStatusStore().applyEditorSession(null);
+        this.clearDocument();
         return;
       }
       if (this.documentId !== null && info.documentId !== this.documentId) {

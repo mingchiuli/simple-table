@@ -29,8 +29,7 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
     },
     applyEditorSession(info: EditorSessionInfo | null | undefined) {
       if (!info) {
-        this.applyEditorState(null);
-        this.capabilities = defaultWorkbookCapabilities();
+        this.reset();
         return;
       }
       this.formulaStatus = info.formulaStatus;
