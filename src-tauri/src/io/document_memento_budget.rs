@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::io::document_body::SpreadsheetDocumentBody;
@@ -11,7 +11,10 @@ use crate::io::rich_projection::{
     drawing_column_scope_affected, drawing_row_scope_affected, parse_cell_key,
 };
 use crate::ops::AppliedOperation;
-use crate::types::{CellValue, FileData, MergeRange, ReadOnlyRichProjection, SheetData};
+use crate::types::{
+    CellFormatProjection, CellStyleProjection, CellValue, FileData, FreezePaneProjection,
+    HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
+};
 
 pub(crate) fn estimate_memento_side_bytes(
     projection: &FileData,
@@ -82,20 +85,27 @@ fn estimate_cell_memento_bytes(
             cell.col,
         );
     }
-    let sheet_shape_count = positions
+    let touched_sheets = positions
         .iter()
         .map(|(sheet_index, _, _)| *sheet_index)
-        .collect::<HashSet<_>>()
-        .len();
+        .collect::<HashSet<_>>();
     let cell_bytes = positions
         .into_iter()
         .map(|(sheet_index, row, col)| {
             estimate_cell_value_bytes(&projection_cell(projection, sheet_index, row, col))
         })
         .sum::<usize>();
-    cell_bytes
-        + sheet_shape_count * std::mem::size_of::<SheetShapeMemento>()
-        + usize::from(formula_capabilities_may_change)
+    let sheet_shape_bytes = touched_sheets
+        .into_iter()
+        .map(|sheet_index| {
+            projection
+                .sheets
+                .get(sheet_index)
+                .map(estimate_sheet_shape_memento_bytes)
+                .unwrap_or(std::mem::size_of::<SheetShapeMemento>())
+        })
+        .sum::<usize>();
+    cell_bytes + sheet_shape_bytes + usize::from(formula_capabilities_may_change)
 }
 
 fn estimate_file_structure_memento_bytes(
@@ -186,6 +196,19 @@ fn projection_cell(file_data: &FileData, sheet_index: usize, row: usize, col: us
         .unwrap_or(CellValue::Null)
 }
 
+fn estimate_sheet_shape_memento_bytes(sheet: &SheetData) -> usize {
+    std::mem::size_of::<SheetShapeMemento>()
+        + sheet.rows.len() * std::mem::size_of::<usize>()
+        + estimate_protected_rich_cell_count(sheet) * std::mem::size_of::<(usize, usize)>()
+}
+
+fn estimate_protected_rich_cell_count(sheet: &SheetData) -> usize {
+    sheet.rich.cell_formats.len()
+        + sheet.rich.cell_styles.len()
+        + sheet.rich.hyperlinks.len()
+        + sheet.rich.drawings.len() * 2
+}
+
 fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
     std::mem::size_of::<SheetData>()
         + sheet.name.len()
@@ -229,11 +252,28 @@ fn estimate_cell_value_bytes(cell: &CellValue) -> usize {
 
 fn estimate_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize {
     std::mem::size_of::<ReadOnlyRichProjection>()
-        + estimate_cell_key_map_bytes(&rich.cell_formats)
-        + estimate_cell_key_map_bytes(&rich.cell_styles)
+        + rich
+            .cell_formats
+            .iter()
+            .map(|(cell, format)| cell.len() + estimate_cell_format_projection_bytes(format))
+            .sum::<usize>()
+        + rich
+            .cell_styles
+            .iter()
+            .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
+            .sum::<usize>()
         + rich.hidden_rows.len() * std::mem::size_of::<usize>()
         + rich.hidden_columns.len() * std::mem::size_of::<usize>()
-        + estimate_cell_key_map_bytes(&rich.hyperlinks)
+        + rich
+            .freeze_pane
+            .as_ref()
+            .map(estimate_freeze_pane_projection_bytes)
+            .unwrap_or_default()
+        + rich
+            .hyperlinks
+            .iter()
+            .map(|(cell, hyperlink)| cell.len() + estimate_hyperlink_projection_bytes(hyperlink))
+            .sum::<usize>()
         + rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
 }
 
@@ -253,21 +293,39 @@ fn estimate_rich_projection_tail_bytes(
     std::mem::size_of::<RichProjectionMemento>()
         + rich
             .cell_formats
-            .keys()
-            .filter(|key| matches_cell(key))
-            .map(String::len)
+            .iter()
+            .filter(|(key, _)| matches_cell(key))
+            .map(|(cell, format)| cell.len() + estimate_cell_format_projection_bytes(format))
             .sum::<usize>()
         + rich
             .cell_styles
-            .keys()
-            .filter(|key| matches_cell(key))
-            .map(String::len)
+            .iter()
+            .filter(|(key, _)| matches_cell(key))
+            .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
             .sum::<usize>()
         + rich
+            .hidden_rows
+            .iter()
+            .filter(|row| min_row.is_some_and(|min_row| **row >= min_row))
+            .count()
+            * std::mem::size_of::<usize>()
+        + rich
+            .hidden_columns
+            .iter()
+            .filter(|col| min_col.is_some_and(|min_col| **col >= min_col))
+            .count()
+            * std::mem::size_of::<usize>()
+        + rich
+            .freeze_pane
+            .as_ref()
+            .filter(|pane| freeze_pane_matches_scope(pane, min_row, min_col))
+            .map(estimate_freeze_pane_projection_bytes)
+            .unwrap_or_default()
+        + rich
             .hyperlinks
-            .keys()
-            .filter(|key| matches_cell(key))
-            .map(String::len)
+            .iter()
+            .filter(|(key, _)| matches_cell(key))
+            .map(|(cell, hyperlink)| cell.len() + estimate_hyperlink_projection_bytes(hyperlink))
             .sum::<usize>()
         + rich
             .drawings
@@ -281,11 +339,75 @@ fn estimate_rich_projection_tail_bytes(
             * std::mem::size_of::<crate::types::DrawingProjection>()
 }
 
-fn estimate_cell_key_map_bytes<T>(values: &HashMap<String, T>) -> usize {
-    values
-        .keys()
-        .map(|key| key.len() + std::mem::size_of::<T>())
-        .sum()
+fn freeze_pane_matches_scope(
+    freeze_pane: &FreezePaneProjection,
+    min_row: Option<usize>,
+    min_col: Option<usize>,
+) -> bool {
+    parse_cell_key(&freeze_pane.top_left_cell).is_some_and(|(row, col)| {
+        min_row.is_some_and(|min_row| row >= min_row)
+            || min_col.is_some_and(|min_col| col >= min_col)
+    })
+}
+
+fn estimate_cell_format_projection_bytes(format: &CellFormatProjection) -> usize {
+    std::mem::size_of::<CellFormatProjection>()
+        + format
+            .number_format
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + format
+            .style_id
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+}
+
+fn estimate_cell_style_projection_bytes(style: &CellStyleProjection) -> usize {
+    std::mem::size_of::<CellStyleProjection>()
+        + style
+            .font_color
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .background_color
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .horizontal_align
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .vertical_align
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+        + style
+            .number_format
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
+}
+
+fn estimate_freeze_pane_projection_bytes(freeze_pane: &FreezePaneProjection) -> usize {
+    std::mem::size_of::<FreezePaneProjection>()
+        + freeze_pane.top_left_cell.len()
+        + freeze_pane.active_pane.len()
+        + freeze_pane.state.len()
+}
+
+fn estimate_hyperlink_projection_bytes(hyperlink: &HyperlinkProjection) -> usize {
+    std::mem::size_of::<HyperlinkProjection>()
+        + hyperlink.url.len()
+        + hyperlink
+            .tooltip
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default()
 }
 
 fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bool {
@@ -326,5 +448,163 @@ fn push_unique_position(
 ) {
     if seen.insert((sheet_index, row, col)) {
         positions.push((sheet_index, row, col));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{DrawingKind, DrawingProjection};
+
+    fn freeze(top_left_cell: &str) -> FreezePaneProjection {
+        FreezePaneProjection {
+            top_left_cell: top_left_cell.to_string(),
+            horizontal_split: 1.0,
+            vertical_split: 1.0,
+            active_pane: "bottomRight".to_string(),
+            state: "frozen".to_string(),
+        }
+    }
+
+    #[test]
+    fn rich_tail_budget_includes_hidden_rows_columns_and_freeze_pane() {
+        let row_freeze = freeze("A5");
+        let row_tail = estimate_rich_projection_tail_bytes(
+            &ReadOnlyRichProjection {
+                hidden_rows: vec![0, 3, 4],
+                freeze_pane: Some(row_freeze.clone()),
+                ..Default::default()
+            },
+            Some(3),
+            None,
+        );
+        let empty_row_tail =
+            estimate_rich_projection_tail_bytes(&ReadOnlyRichProjection::default(), Some(3), None);
+
+        assert!(
+            row_tail
+                >= empty_row_tail
+                    + 2 * std::mem::size_of::<usize>()
+                    + estimate_freeze_pane_projection_bytes(&row_freeze)
+        );
+
+        let column_freeze = freeze("E1");
+        let column_tail = estimate_rich_projection_tail_bytes(
+            &ReadOnlyRichProjection {
+                hidden_columns: vec![0, 4, 5],
+                freeze_pane: Some(column_freeze.clone()),
+                ..Default::default()
+            },
+            None,
+            Some(4),
+        );
+        let empty_column_tail =
+            estimate_rich_projection_tail_bytes(&ReadOnlyRichProjection::default(), None, Some(4));
+
+        assert!(
+            column_tail
+                >= empty_column_tail
+                    + 2 * std::mem::size_of::<usize>()
+                    + estimate_freeze_pane_projection_bytes(&column_freeze)
+        );
+    }
+
+    #[test]
+    fn rich_tail_budget_includes_hyperlink_value_size() {
+        let short = estimate_rich_projection_tail_bytes(
+            &ReadOnlyRichProjection {
+                hyperlinks: [(
+                    "A2".to_string(),
+                    HyperlinkProjection {
+                        url: "https://x.test".to_string(),
+                        tooltip: None,
+                        location: false,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+            Some(0),
+            None,
+        );
+        let long = estimate_rich_projection_tail_bytes(
+            &ReadOnlyRichProjection {
+                hyperlinks: [(
+                    "A2".to_string(),
+                    HyperlinkProjection {
+                        url: format!("https://x.test/{}", "a".repeat(1024)),
+                        tooltip: Some("tooltip".repeat(64)),
+                        location: false,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+            Some(0),
+            None,
+        );
+
+        assert!(long > short + 1024);
+    }
+
+    #[test]
+    fn cell_memento_budget_includes_sheet_shape_rows_and_rich_positions() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "shape-budget.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::Null]; 12],
+                rich: ReadOnlyRichProjection {
+                    cell_styles: [(
+                        "A1".to_string(),
+                        CellStyleProjection {
+                            bold: Some(true),
+                            ..Default::default()
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    hyperlinks: [(
+                        "B2".to_string(),
+                        HyperlinkProjection {
+                            url: "https://example.com".to_string(),
+                            tooltip: None,
+                            location: false,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    drawings: vec![DrawingProjection {
+                        kind: DrawingKind::Image,
+                        from_row: 1,
+                        from_col: 1,
+                        to_row: Some(3),
+                        to_col: Some(3),
+                    }],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+        };
+        let formulas = FormulaCoordinator::new(&mut file_data);
+
+        let estimate = estimate_cell_memento_bytes(
+            &file_data,
+            &formulas,
+            [FormulaCellRef {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+            }],
+            false,
+        );
+
+        assert!(
+            estimate
+                >= 12 * std::mem::size_of::<usize>() + 4 * std::mem::size_of::<(usize, usize)>()
+        );
     }
 }

@@ -306,10 +306,6 @@ impl EditorState {
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         self.ensure_not_saving()?;
         let operation = command.resolve(self.file_data())?;
-        self.ensure_operation_supported(&operation)?;
-        self.ensure_memento_budget(&operation)?;
-        let should_mark_search_stale = operation.impact().requires_search_rebuild();
-        let before = self.document.capture_memento_side(&operation);
         if operation.impact().is_noop() {
             self.refresh_content_hash();
             return Ok(ExecutedOperation {
@@ -319,6 +315,10 @@ impl EditorState {
                 search_index_update: SearchIndexUpdatePlan::default(),
             });
         }
+        self.ensure_operation_supported(&operation)?;
+        self.ensure_memento_budget(&operation)?;
+        let should_mark_search_stale = operation.impact().requires_search_rebuild();
+        let before = self.document.capture_memento_side(&operation);
 
         let result = self.document.execute_operation(&operation, &before)?;
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
@@ -480,7 +480,7 @@ mod tests {
     use super::*;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
     use crate::ops::EditorCommand;
-    use crate::types::CellValue;
+    use crate::types::{CellValue, SetCellRequest};
     use serde_json::Value;
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
@@ -1167,6 +1167,18 @@ mod tests {
                 .contains(&"sheet protection".to_string())
         );
 
+        let revision = state.revision();
+        let no_op = state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: String::new(),
+            })
+            .expect("no-op edit on protected sheet should not require workbook mutation support");
+        assert!(no_op.operation.is_none());
+        assert_eq!(state.revision(), revision);
+
         assert!(matches!(
             state.execute(EditorCommand::SetCell {
                 sheet_index: 0,
@@ -1232,6 +1244,29 @@ mod tests {
                 text: "editable".to_string(),
             })
             .expect("unprotected sheet remains editable");
+
+        state
+            .execute(EditorCommand::SetCells {
+                changes: vec![
+                    SetCellRequest {
+                        sheet_index: 0,
+                        row: 0,
+                        col: 0,
+                        text: String::new(),
+                    },
+                    SetCellRequest {
+                        sheet_index: 1,
+                        row: 0,
+                        col: 1,
+                        text: "batch editable".to_string(),
+                    },
+                ],
+            })
+            .expect("protected-sheet no-op should not block editable batch changes");
+        assert_eq!(
+            state.file_data().sheets[1].rows[0][1],
+            CellValue::String("batch editable".to_string())
+        );
         assert!(matches!(
             state.execute(EditorCommand::SetCell {
                 sheet_index: 0,
@@ -2173,6 +2208,37 @@ mod tests {
         assert!(state.history.undo_len() < 40);
         assert!(state.history.undo_estimated_bytes() <= MAX_HISTORY_BYTES);
         assert!(state.can_undo());
+    }
+
+    #[test]
+    fn no_op_cell_edit_bypasses_memento_budget() {
+        let huge_text = "x".repeat(MAX_SINGLE_HISTORY_ENTRY_BYTES + 1024);
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "huge-no-op.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Huge".to_string(),
+                    rows: vec![vec![CellValue::String(huge_text.clone())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        let revision = state.revision();
+        let result = state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: huge_text,
+            })
+            .expect("unchanged cell should not allocate rollback history");
+
+        assert!(result.operation.is_none());
+        assert_eq!(state.revision(), revision);
+        assert!(!state.can_undo());
     }
 
     #[test]

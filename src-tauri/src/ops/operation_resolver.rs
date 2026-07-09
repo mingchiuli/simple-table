@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::error::AppError;
+use crate::io::rich_projection::parse_cell_key;
 use crate::ops::core_ops::{AppliedOperation, EditorCommand, ResolvedCellEdit};
-use crate::types::{CellValue, FileData, SheetData, parse_cell_text};
+use crate::types::{CellValue, FileData, ReadOnlyRichProjection, SheetData, parse_cell_text};
 
 impl EditorCommand {
     pub fn resolve(self, file_data: &FileData) -> Result<AppliedOperation, AppError> {
@@ -59,6 +60,7 @@ impl EditorCommand {
                         });
                     }
                 }
+                resolved.retain(|change| change.old_value != change.new_value);
                 Ok(AppliedOperation::SetCells { changes: resolved })
             }
             EditorCommand::AddRow {
@@ -231,10 +233,14 @@ impl SheetMutationExtent {
             .as_ref()
             .and_then(|widths| widths.keys().max().map(|index| index + 1))
             .unwrap_or(0);
+        let rich = rich_projection_extent(&sheet.rich);
 
         Self {
-            rows: value_rows.max(merge_rows).max(layout_rows),
-            columns: value_columns.max(merge_columns).max(layout_columns),
+            rows: value_rows.max(merge_rows).max(layout_rows).max(rich.rows),
+            columns: value_columns
+                .max(merge_columns)
+                .max(layout_columns)
+                .max(rich.columns),
         }
     }
 
@@ -253,5 +259,164 @@ fn empty_sheet(name: String) -> SheetData {
         rows: vec![vec![CellValue::Null; 5]; 5],
         merges: vec![],
         ..Default::default()
+    }
+}
+
+fn rich_projection_extent(rich: &ReadOnlyRichProjection) -> SheetMutationExtent {
+    let mut rows = 0;
+    let mut columns = 0;
+
+    for key in rich
+        .cell_formats
+        .keys()
+        .chain(rich.cell_styles.keys())
+        .chain(rich.hyperlinks.keys())
+    {
+        if let Some((row, col)) = parse_cell_key(key) {
+            rows = rows.max(row + 1);
+            columns = columns.max(col + 1);
+        }
+    }
+
+    rows = rows.max(
+        rich.hidden_rows
+            .iter()
+            .copied()
+            .max()
+            .map(|row| row + 1)
+            .unwrap_or(0),
+    );
+    columns = columns.max(
+        rich.hidden_columns
+            .iter()
+            .copied()
+            .max()
+            .map(|col| col + 1)
+            .unwrap_or(0),
+    );
+
+    for drawing in &rich.drawings {
+        rows = rows.max(
+            (drawing
+                .to_row
+                .unwrap_or(drawing.from_row)
+                .max(drawing.from_row) as usize)
+                + 1,
+        );
+        columns = columns.max(
+            (drawing
+                .to_col
+                .unwrap_or(drawing.from_col)
+                .max(drawing.from_col) as usize)
+                + 1,
+        );
+    }
+
+    SheetMutationExtent { rows, columns }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        CellStyleProjection, DrawingKind, DrawingProjection, HyperlinkProjection,
+        ReadOnlyRichProjection,
+    };
+
+    fn file_data_with_rich(rich: ReadOnlyRichProjection) -> FileData {
+        FileData {
+            path: String::new(),
+            file_name: "rich.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: Vec::new(),
+                rich,
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn sheet_extent_includes_rich_cell_metadata() {
+        let file_data = file_data_with_rich(ReadOnlyRichProjection {
+            cell_styles: [(
+                "E4".to_string(),
+                CellStyleProjection {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            hyperlinks: [(
+                "F5".to_string(),
+                HyperlinkProjection {
+                    url: "https://example.com".to_string(),
+                    tooltip: None,
+                    location: false,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+
+        assert!(
+            matches!(
+                EditorCommand::SetRowHeight {
+                    sheet_index: 0,
+                    row_index: 4,
+                    height: Some(80),
+                }
+                .resolve(&file_data),
+                Ok(AppliedOperation::SetRowHeight { row_index: 4, .. })
+            ),
+            "row extent should include hyperlink/style-only rows"
+        );
+        assert!(
+            matches!(
+                EditorCommand::SetColumnWidth {
+                    sheet_index: 0,
+                    col_index: 5,
+                    width: Some(120),
+                }
+                .resolve(&file_data),
+                Ok(AppliedOperation::SetColumnWidth { col_index: 5, .. })
+            ),
+            "column extent should include hyperlink/style-only columns"
+        );
+    }
+
+    #[test]
+    fn sheet_extent_includes_hidden_rows_columns_and_drawings() {
+        let file_data = file_data_with_rich(ReadOnlyRichProjection {
+            hidden_rows: vec![9],
+            hidden_columns: vec![7],
+            drawings: vec![DrawingProjection {
+                kind: DrawingKind::Image,
+                from_row: 11,
+                from_col: 12,
+                to_row: Some(14),
+                to_col: Some(15),
+            }],
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            EditorCommand::DeleteRow {
+                sheet_index: 0,
+                row_index: 14,
+            }
+            .resolve(&file_data),
+            Ok(AppliedOperation::DeleteRow { row_index: 14, .. })
+        ));
+        assert!(matches!(
+            EditorCommand::DeleteColumn {
+                sheet_index: 0,
+                col_index: 15,
+            }
+            .resolve(&file_data),
+            Ok(AppliedOperation::DeleteColumn { col_index: 15, .. })
+        ));
     }
 }
