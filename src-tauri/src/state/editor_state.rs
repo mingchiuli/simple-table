@@ -1958,6 +1958,50 @@ mod tests {
     }
 
     #[test]
+    fn editing_formula_cell_to_plain_value_clears_saved_formula() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_number(1);
+            sheet.cell_mut("B1").set_formula("A1+1");
+            sheet.cell_mut("B1").set_formula_result_number(2.0);
+        }
+
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "formula-to-value.xlsx".to_string(),
+        )
+        .expect("read source");
+
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 1,
+                text: "plain".to_string(),
+            })
+            .expect("edit formula to plain value");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("formula-to-value.xlsx")
+            .expect("save");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let cell = saved.sheet(0).expect("sheet").cell("B1").expect("B1");
+
+        assert_eq!(cell.value(), "plain");
+        assert!(
+            !cell.cell_value().is_formula(),
+            "saved B1 should be a plain value, formula was {:?}",
+            cell.formula()
+        );
+    }
+
+    #[test]
     fn batched_invalid_formula_returns_error_cell_and_keeps_dependencies_live() {
         let mut state = EditorState::with_workbook(
             FileData {

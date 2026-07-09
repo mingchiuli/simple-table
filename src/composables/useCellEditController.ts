@@ -93,6 +93,7 @@ export function useCellEditController({
       try {
         await applyMutationResponse(response);
       } catch (error) {
+        documentSessionStore.markProjectionStaleFromMutationResponse(response);
         const refreshed = await refreshSessionAfterMutationError();
         if (!refreshed) {
           ElMessage.error(`保存已提交，但刷新失败: ${error}`);

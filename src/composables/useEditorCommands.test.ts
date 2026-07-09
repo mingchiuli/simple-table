@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computed, ref } from "vue";
+import { computed, ref, type Ref } from "vue";
 import { createPinia, setActivePinia, storeToRefs } from "pinia";
 import { useEditorCommands } from "@/composables/useEditorCommands";
 import { useDocumentSessionStore } from "@/stores/documentSession";
@@ -87,20 +87,22 @@ function mutationResponse(partial: Partial<EditorMutationResponse> = {}): Editor
 
 function setupCommands(
   isLoading = ref(false),
-  flushPendingCellChanges = vi.fn().mockResolvedValue(true)
+  flushPendingCellChanges = vi.fn().mockResolvedValue(true),
+  overrides: { currentSheetIndex?: Ref<number> } = {}
 ) {
   const documentSessionStore = useDocumentSessionStore();
   documentSessionStore.openDocumentResponse(openedResponse(), "/tmp/book.xlsx");
   const selectionStore = useEditorSelectionStore();
   const { currentSheetIndex, selectedCell, cellEditorValue } = storeToRefs(selectionStore);
+  const activeSheetIndex = overrides.currentSheetIndex ?? currentSheetIndex;
   const fileData = computed(() => documentSessionStore.data);
-  const currentSheet = computed(() => fileData.value?.sheets[currentSheetIndex.value] ?? null);
+  const currentSheet = computed(() => fileData.value?.sheets[activeSheetIndex.value] ?? null);
   const applyMutationResponse = vi.fn();
 
   const commands = useEditorCommands({
     fileData,
     currentSheet,
-    currentSheetIndex,
+    currentSheetIndex: activeSheetIndex,
     selectedCell,
     cellEditorValue,
     isLoading,
@@ -112,7 +114,7 @@ function setupCommands(
   return {
     commands,
     documentSessionStore,
-    currentSheetIndex,
+    currentSheetIndex: activeSheetIndex,
     selectedCell,
     flushPendingCellChanges,
     applyMutationResponse,
@@ -271,11 +273,7 @@ describe("useEditorCommands", () => {
       },
     });
     vi.mocked(api.getCurrentFileData).mockResolvedValue(fresh);
-    setup.applyMutationResponse.mockImplementation(async () => {
-      setup.documentSessionStore.revision = 3;
-      setup.documentSessionStore.projectionStale = true;
-      throw new Error("projection unavailable");
-    });
+    setup.applyMutationResponse.mockRejectedValue(new Error("projection unavailable"));
 
     await setup.commands.handleAddRow();
 
@@ -293,11 +291,7 @@ describe("useEditorCommands", () => {
     vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: 3 }));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
     vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
-    setup.applyMutationResponse.mockImplementation(async () => {
-      setup.documentSessionStore.revision = 3;
-      setup.documentSessionStore.projectionStale = true;
-      throw new Error("projection unavailable");
-    });
+    setup.applyMutationResponse.mockRejectedValue(new Error("projection unavailable"));
 
     await setup.commands.handleAddRow();
 
@@ -306,6 +300,37 @@ describe("useEditorCommands", () => {
     expect(setup.documentSessionStore.projectionStale).toBe(true);
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
       "Change was applied, but the editor could not refresh: Error: projection unavailable"
+    );
+  });
+
+  it("does not mark projection stale when only the post-apply UI callback fails", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const currentSheetIndex = computed({
+      get: () => 0,
+      set: () => {
+        throw new Error("sheet switch failed");
+      },
+    });
+    const setup = setupCommands(ref(false), vi.fn().mockResolvedValue(true), {
+      currentSheetIndex,
+    });
+    vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: 1 }));
+    setup.applyMutationResponse.mockImplementation(async (response) => {
+      setup.documentSessionStore.applyMutationResponse(response);
+    });
+
+    await setup.commands.handleAddSheet();
+
+    expect(setup.applyMutationResponse).toHaveBeenCalledTimes(1);
+    expect(api.getCurrentFileData).not.toHaveBeenCalled();
+    expect(api.getEditorState).not.toHaveBeenCalled();
+    expect(setup.documentSessionStore.projectionStale).toBe(false);
+    expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
+      "Change was applied, but the editor UI could not update: Error: sheet switch failed"
+    );
+    expect(elementPlus.ElMessage.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Failed to add sheet")
     );
   });
 });

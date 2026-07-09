@@ -144,4 +144,62 @@ describe("useCellEditController", () => {
 
     scope.stop();
   });
+
+  it("locks the editor as stale when backend cell save succeeds but frontend apply and refresh fail", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const documentSessionStore = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    documentSessionStore.openDocumentResponse({
+      fileData: fileData("old"),
+      editorSession: editorSession(0),
+    }, "/tmp/book.xlsx");
+    vi.mocked(api.setCells).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
+    vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
+    const applyMutationResponse = vi.fn().mockRejectedValue(new Error("frontend apply failed"));
+
+    const scope = effectScope();
+    const controller = scope.run(() => {
+      const file = computed(() => documentSessionStore.data);
+      const currentSheet = computed(() => file.value?.sheets[0] ?? null);
+      const selectedCell = ref({ row: 0, col: 0 });
+      return useCellEditController({
+        fileData: file,
+        currentSheet,
+        currentSheetIndex: ref(0),
+        selectedCell,
+        cellEditorValue: ref(""),
+        canEditCells: computed(() => true),
+        applyMutationResponse,
+        markPendingContentChange: () => statusStore.markPendingContentChange(),
+        clearPendingContentChange: () => statusStore.clearPendingContentChange(),
+      });
+    });
+
+    if (!controller) {
+      throw new Error("controller setup failed");
+    }
+    controller.handleCellEditing(0, 0, "draft");
+    await expect(controller.flushPendingCellChanges()).resolves.toBe(true);
+
+    expect(api.setCells).toHaveBeenCalledWith(
+      { documentId: 1, baseRevision: 0 },
+      [{ sheetIndex: 0, row: 0, col: 0, text: "draft" }]
+    );
+    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(api.getEditorState).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(documentSessionStore.revision).toBe(3);
+    expect(documentSessionStore.projectionStale).toBe(true);
+    expect(documentSessionStore.isEditorInteractionLocked).toBe(true);
+    expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(usePendingCellSavesStore().phase).toBe("idle");
+    expect(usePendingCellSavesStore().draftCellValues.size).toBe(0);
+    expect(statusStore.hasPendingContentChange).toBe(false);
+    expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
+      "保存已提交，但刷新失败: Error: frontend apply failed"
+    );
+
+    scope.stop();
+  });
 });

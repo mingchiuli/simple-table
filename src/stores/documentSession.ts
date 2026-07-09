@@ -283,6 +283,27 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         resyncRequired: result.resyncRequired,
       };
     },
+    markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
+      if (this.documentId !== null && response.documentId !== this.documentId) {
+        return false;
+      }
+      if (this.documentId === null && this.data === null) {
+        return false;
+      }
+      if (response.revision < this.revision) {
+        return false;
+      }
+      if (this.documentId === null) {
+        this.documentId = response.documentId;
+      }
+      this.revision = response.revision;
+      if (response.protocolVersion === 1) {
+        this.applyResponseStatus(response);
+      }
+      this.projectionStale = true;
+      useSearchSessionStore().clearSearch();
+      return true;
+    },
     async applyMutationResponseWithResync(
       response: EditorMutationResponse,
       fetchProjection: (context: EditorCommandContext) => Promise<FileData>

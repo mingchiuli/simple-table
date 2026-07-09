@@ -269,6 +269,45 @@ describe("documentSession store", () => {
     expect(store.isEditorInteractionLocked).toBe(true);
   });
 
+  it("marks the projection stale from an applied mutation response when frontend apply fails early", () => {
+    const store = useDocumentSessionStore();
+    const statusStore = useDocumentStatusStore();
+    const searchStore = useSearchSessionStore();
+    const current: FileData = {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: [sheet("Sheet1", [[text("old")]])],
+    };
+    store.openDocumentResponse({
+      fileData: current,
+      editorSession: {
+        documentId: 1,
+        revision: 0,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    }, current.path);
+    const requestId = searchStore.beginSearch("old");
+    searchStore.applySearchResults(requestId, [searchResult()]);
+
+    const marked = store.markProjectionStaleFromMutationResponse(response({
+      revision: 3,
+      editorState: editorState({ isDirty: true }),
+    }));
+
+    expect(marked).toBe(true);
+    expect(store.documentId).toBe(1);
+    expect(store.revision).toBe(3);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(statusStore.isContentDirty).toBe(true);
+    expect(store.projectionStale).toBe(true);
+    expect(store.isInteractionLocked).toBe(false);
+    expect(store.isEditorInteractionLocked).toBe(true);
+    expect(searchStore.searchQuery).toBe("");
+    expect(searchStore.searchResults).toEqual([]);
+  });
+
   it("does not restore an old document if the session changes while resync fails", async () => {
     const store = useDocumentSessionStore();
     const oldData: FileData = {

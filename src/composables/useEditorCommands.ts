@@ -62,15 +62,17 @@ export function useEditorCommands({
         const response = await action(context);
         try {
           await applyMutationResponse(response);
-          options.afterApplied?.();
         } catch (error) {
+          documentSessionStore.markProjectionStaleFromMutationResponse(response);
           const refreshed = await refreshAfterMutationError({ refreshProjection: true });
           if (refreshed) {
-            options.afterApplied?.();
+            runAfterApplied(options.afterApplied);
           } else {
             ElMessage.error(`Change was applied, but the editor could not refresh: ${error}`);
           }
+          return;
         }
+        runAfterApplied(options.afterApplied);
       });
     } catch (error) {
       await refreshAfterMutationError({
@@ -79,6 +81,15 @@ export function useEditorCommands({
       ElMessage.error(`${message}: ${error}`);
     } finally {
       isLoading.value = false;
+    }
+  }
+
+  function runAfterApplied(afterApplied: (() => void) | undefined) {
+    try {
+      afterApplied?.();
+    } catch (error) {
+      console.error("Post-mutation UI update failed:", error);
+      ElMessage.error(`Change was applied, but the editor UI could not update: ${error}`);
     }
   }
 
