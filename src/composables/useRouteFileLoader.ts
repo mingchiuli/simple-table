@@ -13,6 +13,16 @@ type RouteContinuationGuard = (() => boolean) & {
   onCancel: (handler: () => void) => () => void;
 };
 
+type RouteFileLoaderCancellation = {
+  cancel: () => void;
+};
+
+type RouteLeaveHandlerOptions = {
+  routeFileLoader: RouteFileLoaderCancellation;
+  hasActiveDocument: () => boolean;
+  closeCurrentDocument: () => Promise<boolean>;
+};
+
 export function createRouteFileLoader({
   getRouteFilePath,
   getCurrentFilePath,
@@ -97,5 +107,24 @@ export function createRouteFileLoader({
   return {
     enqueue,
     cancel,
+  };
+}
+
+export function createRouteLeaveHandler({
+  routeFileLoader,
+  hasActiveDocument,
+  closeCurrentDocument,
+}: RouteLeaveHandlerOptions) {
+  return async () => {
+    if (!hasActiveDocument()) {
+      routeFileLoader.cancel();
+      return true;
+    }
+
+    const canLeave = await closeCurrentDocument();
+    if (canLeave) {
+      routeFileLoader.cancel();
+    }
+    return canLeave;
   };
 }

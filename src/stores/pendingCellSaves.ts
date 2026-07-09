@@ -204,7 +204,7 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
         }
         if (this.isIdle() && this.phase !== "failed") {
           this.setPhase("idle");
-          callbacks.clearPendingContentChange();
+          safeClearPendingContentChange(callbacks);
         }
       });
     },
@@ -213,7 +213,7 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       generation: number
     ): Promise<boolean> {
       if (!this.hasQueuedSaves) {
-        callbacks.clearPendingContentChange();
+        safeClearPendingContentChange(callbacks);
         return true;
       }
 
@@ -223,21 +223,31 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
         await callbacks.commitBatch(changes);
         if (generation !== schedulerFor(this).generation) return false;
         this.completeBatch(changes);
-        callbacks.onBatchCommitted?.();
+        try {
+          callbacks.onBatchCommitted?.();
+        } catch (error) {
+          console.error("Pending cell save committed, but post-commit handling failed:", error);
+        }
       } catch (error) {
         if (generation !== schedulerFor(this).generation) return false;
-        await callbacks.onCommitFailed?.(error);
+        let failureReason = error;
+        try {
+          await callbacks.onCommitFailed?.(error);
+        } catch (failureHandlerError) {
+          failureReason = failureHandlerError;
+          console.error("Pending cell save failure handling failed:", failureHandlerError);
+        }
         this.failBatch(changes);
-        this.setPhase("failed", String(error));
+        this.setPhase("failed", String(failureReason));
         if (this.isIdle()) {
-          callbacks.clearPendingContentChange();
+          safeClearPendingContentChange(callbacks);
         }
         return false;
       }
 
       if (this.isIdle()) {
         this.setPhase("idle");
-        callbacks.clearPendingContentChange();
+        safeClearPendingContentChange(callbacks);
       }
       return true;
     },
@@ -317,6 +327,9 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
         }
       }
     },
+    waitForInFlightSave(): Promise<boolean> {
+      return schedulerFor(this).pendingSavePromise ?? Promise.resolve(true);
+    },
     releaseSchedulerIfIdle() {
       if (this.hasPendingWork()) {
         return;
@@ -368,4 +381,12 @@ function schedulerFor(store: object): PendingCellSaveSchedulerState {
     pendingSaveSchedulers.set(store, scheduler);
   }
   return scheduler;
+}
+
+function safeClearPendingContentChange(callbacks: PendingCellSaveCallbacks) {
+  try {
+    callbacks.clearPendingContentChange();
+  } catch (error) {
+    console.error("Pending cell save state was updated, but dirty-state cleanup failed:", error);
+  }
 }

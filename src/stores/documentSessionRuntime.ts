@@ -127,7 +127,6 @@ export function resetTransientDocumentWork(store: object) {
 export function resetSessionUi() {
   useEditorSelectionStore().reset();
   useSearchSessionStore().reset();
-  usePendingCellSavesStore().reset();
 }
 
 export function resetDocumentStatus() {

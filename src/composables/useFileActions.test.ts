@@ -19,9 +19,13 @@ import {
   type SheetData,
 } from "@/types";
 
+const routerMocks = vi.hoisted(() => ({
+  push: vi.fn(),
+}));
+
 vi.mock("vue-router", () => ({
   useRouter: () => ({
-    push: vi.fn(),
+    push: routerMocks.push,
   }),
 }));
 
@@ -166,6 +170,14 @@ async function flushPromises() {
   for (let i = 0; i < 8; i += 1) {
     await Promise.resolve();
   }
+}
+
+async function waitForCondition(condition: () => boolean) {
+  for (let i = 0; i < 32; i += 1) {
+    if (condition()) return;
+    await Promise.resolve();
+  }
+  throw new Error("Timed out waiting for condition");
 }
 
 function mountActions(flushPendingCellChanges: () => Promise<boolean>) {
@@ -567,6 +579,53 @@ describe("useFileActions", () => {
     await expect(closePromise).resolves.toBe(true);
     expect(documentSessionStore.lifecycle).toBe("idle");
     expect(documentSessionStore.data).toBeNull();
+  });
+
+  it("delegates document closing to the route-leave guard when returning home", async () => {
+    const api = await import("@/api");
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    const pendingNavigation = deferred<void>();
+    let backResolved = false;
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    routerMocks.push.mockReturnValue(pendingNavigation.promise);
+
+    const actions = mountActions(flushPendingCellChanges);
+    const backPromise = actions.handleBack().then(() => {
+      backResolved = true;
+    });
+
+    await waitForCondition(() => routerMocks.push.mock.calls.length > 0);
+
+    expect(api.closeCurrentDocument).not.toHaveBeenCalled();
+    expect(routerMocks.push).toHaveBeenCalledWith({ name: "home" });
+    expect(documentSessionStore.documentId).toBe(1);
+    expect(backResolved).toBe(false);
+
+    pendingNavigation.resolve();
+    await backPromise;
+
+    expect(backResolved).toBe(true);
+  });
+
+  it("reports a home navigation failure after closing the current document", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    routerMocks.push.mockRejectedValue(new Error("navigation failed"));
+
+    const actions = mountActions(flushPendingCellChanges);
+
+    await expect(actions.handleBack()).resolves.toBeUndefined();
+
+    expect(api.closeCurrentDocument).not.toHaveBeenCalled();
+    expect(routerMocks.push).toHaveBeenCalledWith({ name: "home" });
+    expect(documentSessionStore.documentId).toBe(1);
+    expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
+      "Failed to return home: Error: navigation failed"
+    );
   });
 
   it("discards a reserved save-as location when the target cannot be saved", async () => {

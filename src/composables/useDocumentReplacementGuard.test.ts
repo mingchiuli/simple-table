@@ -79,6 +79,16 @@ async function flushPromises() {
   }
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("useDocumentReplacementGuard", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -135,6 +145,21 @@ describe("useDocumentReplacementGuard", () => {
     expect(committed).toEqual(["draft"]);
   });
 
+  it("resumes pending autosave if discard confirmation fails unexpectedly", async () => {
+    const statusStore = useDocumentStatusStore();
+    const committed: string[] = [];
+    queueDraftWithAutosave(committed);
+    statusStore.markPendingContentChange();
+    unsavedChanges.confirmDiscardUnsavedChanges.mockRejectedValue(new Error("dialog failed"));
+
+    await expect(useDocumentReplacementGuard().beginDocumentReplacement()).rejects.toThrow(
+      "dialog failed"
+    );
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(committed).toEqual(["draft"]);
+  });
+
   it("drops pending work when a replacement is committed", async () => {
     const statusStore = useDocumentStatusStore();
     const committed: string[] = [];
@@ -177,6 +202,60 @@ describe("useDocumentReplacementGuard", () => {
     expect(replacementResolved).toBe(false);
 
     releaseMutation();
+    const replacement = await replacementPromise;
+
+    expect(replacement).not.toBeNull();
+  });
+
+  it("waits for in-flight cell saves before allowing confirmed discard replacement", async () => {
+    const statusStore = useDocumentStatusStore();
+    const pendingStore = usePendingCellSavesStore();
+    const documentSessionStore = useDocumentSessionStore();
+    const enqueueGate = deferred();
+    const mutationGate = deferred();
+    openTestDocument(1);
+    statusStore.markPendingContentChange();
+    unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
+    let saveStarted = false;
+    let replacementResolved = false;
+
+    pendingStore.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+    pendingStore.startPendingSave({
+      commitBatch: async () => {
+        saveStarted = true;
+        await enqueueGate.promise;
+        await documentSessionStore.enqueueDocumentMutation(1, async () => {
+          await mutationGate.promise;
+        });
+      },
+      clearPendingContentChange: () => undefined,
+    });
+    await flushPromises();
+
+    expect(saveStarted).toBe(true);
+
+    const replacementPromise = useDocumentReplacementGuard()
+      .beginDocumentReplacement()
+      .then((replacement) => {
+        replacementResolved = true;
+        return replacement;
+      });
+    await flushPromises();
+
+    expect(replacementResolved).toBe(false);
+
+    enqueueGate.resolve();
+    await flushPromises();
+
+    expect(replacementResolved).toBe(false);
+
+    mutationGate.resolve();
     const replacement = await replacementPromise;
 
     expect(replacement).not.toBeNull();

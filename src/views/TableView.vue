@@ -18,7 +18,7 @@ import { colToLetter } from '@/utils/excel';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
 import { workbookSheetCapabilities } from '@/types';
 import type { EditorMutationResponse } from '@/types';
-import { createRouteFileLoader } from '@/composables/useRouteFileLoader';
+import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
@@ -142,13 +142,12 @@ const routeFileLoader = createRouteFileLoader({
   refreshEditorState,
 });
 
-onBeforeRouteLeave(async () => {
-  routeFileLoader.cancel();
-  if (!documentSessionStore.data && documentSessionStore.documentId === null) {
-    return true;
-  }
-  return closeCurrentDocument();
-});
+onBeforeRouteLeave(createRouteLeaveHandler({
+  routeFileLoader,
+  hasActiveDocument: () =>
+    documentSessionStore.data !== null || documentSessionStore.documentId !== null,
+  closeCurrentDocument,
+}));
 
 function getEditorValue(sheetIndex: number, row: number, col: number): string {
   const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));

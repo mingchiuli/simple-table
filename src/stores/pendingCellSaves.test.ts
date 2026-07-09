@@ -182,6 +182,67 @@ describe("pendingCellSaves store", () => {
     expect(store.phase).toBe("failed");
   });
 
+  it("clears active saves when commit failure handling throws", async () => {
+    const store = usePendingCellSavesStore();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const flushed = await store.flushPendingCellChanges({
+      commitBatch: async () => {
+        throw new Error("backend failed");
+      },
+      clearPendingContentChange: () => undefined,
+      onCommitFailed: () => {
+        throw new Error("refresh failed");
+      },
+    });
+
+    try {
+      expect(flushed).toBe(false);
+      expect(store.hasActiveSaves).toBe(false);
+      expect(store.hasPendingWork()).toBe(false);
+      expect(store.phase).toBe("failed");
+      expect(store.lastError).toContain("refresh failed");
+      expect(consoleError).toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("does not reject saves when dirty-state cleanup throws", async () => {
+    const store = usePendingCellSavesStore();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const flushed = await store.flushPendingCellChanges({
+      commitBatch: async () => undefined,
+      clearPendingContentChange: () => {
+        throw new Error("dirty cleanup failed");
+      },
+    });
+
+    try {
+      expect(flushed).toBe(true);
+      expect(store.hasPendingWork()).toBe(false);
+      expect(store.phase).toBe("idle");
+      expect(consoleError).toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("suspends debounce autosave without dropping queued drafts", async () => {
     vi.useFakeTimers();
     const store = usePendingCellSavesStore();

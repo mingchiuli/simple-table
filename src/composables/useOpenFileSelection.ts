@@ -15,6 +15,7 @@ export function useOpenFileSelection({
   async function openSelectedFileOrDiscard(selection: OpenFileSelection): Promise<boolean> {
     let shouldDiscard = true;
     let replacement: DocumentReplacementLease | null = null;
+    let actionError: unknown;
     try {
       replacement = await beginDocumentReplacement();
       if (!replacement) {
@@ -26,10 +27,13 @@ export function useOpenFileSelection({
       replacement = null;
       documentSessionStore.openDocumentResponse(opened, selection.path);
       return true;
+    } catch (error) {
+      actionError = error;
+      throw error;
     } finally {
       replacement?.cancel();
       if (shouldDiscard) {
-        await discardOpenFileSelection(selection);
+        await discardUnusedOpenFileSelection(selection, actionError);
       }
     }
   }
@@ -37,4 +41,19 @@ export function useOpenFileSelection({
   return {
     openSelectedFileOrDiscard,
   };
+}
+
+async function discardUnusedOpenFileSelection(
+  selection: OpenFileSelection,
+  originalError?: unknown
+) {
+  try {
+    await discardOpenFileSelection(selection);
+  } catch (cleanupError) {
+    if (originalError !== undefined) {
+      console.error("Failed to discard open file selection after open error:", cleanupError);
+      return;
+    }
+    console.warn("Failed to discard unused open file selection:", cleanupError);
+  }
 }

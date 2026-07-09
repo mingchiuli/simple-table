@@ -1,141 +1,21 @@
 <script setup lang="ts">
 import { Document } from "@element-plus/icons-vue";
-import { defaultRichProjection, type FileData, type RecentFile } from "@/types";
-import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { RecentFilesSection } from '@/components/file';
-import * as api from "@/api";
-import { pickOpenFile, readFile } from "@/platform";
-import { blankCell } from "@/utils/cellValue";
-import { warnRecentFileTrackingFailure } from "@/utils/recentFileTracking";
-import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
-import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
-import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
-import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
-import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
+import { useHomeFileActions } from "@/composables/useHomeFileActions";
 
-const router = useRouter();
-const documentSessionStore = useDocumentSessionStore();
 const recentFilesStore = useRecentFilesStore();
-const { beginDocumentReplacement } = useDocumentReplacementGuard();
-const { openSelectedFileOrDiscard } = useOpenFileSelection({
-  beginDocumentReplacement,
-});
-const { runDocumentLifecycle } = useDocumentLifecycle();
-const { queueRecentFileEntryUpdate, refreshRecentFiles } = useRecentFileUpdates();
-const isBusy = ref(false);
+const {
+  isBusy,
+  refreshRecentFiles,
+  handleOpenFile,
+  handleNewFile,
+  handleOpenRecent,
+} = useHomeFileActions();
 
 onMounted(() => {
   void refreshRecentFiles();
 });
-
-async function runHomeFileAction(errorPrefix: string, action: () => Promise<void>) {
-  if (isBusy.value) return;
-  isBusy.value = true;
-  try {
-    await runDocumentLifecycle("loading", errorPrefix, action);
-  } finally {
-    isBusy.value = false;
-  }
-}
-
-async function handleOpenFile() {
-  await runHomeFileAction("Failed to open file", async () => {
-    const selection = await pickOpenFile();
-    if (!selection) {
-      return;
-    }
-    const opened = await openSelectedFileOrDiscard(selection);
-    if (!opened) return;
-
-    queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
-    await router.push({ name: "table" });
-  });
-}
-
-async function handleNewFile() {
-  await runHomeFileAction("Failed to create file", async () => {
-    const replacement = await beginDocumentReplacement();
-    if (!replacement) return;
-    const defaultExtension = await defaultSpreadsheetExtension();
-    const newFileData: FileData = {
-      path: "",
-      fileName: `untitled.${defaultExtension}`,
-      sheets: [
-        {
-          name: "Sheet1",
-          rows: [
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-            [blankCell(), blankCell(), blankCell(), blankCell(), blankCell()],
-          ],
-          merges: [],
-          rich: defaultRichProjection(),
-        },
-      ],
-    };
-
-    try {
-      const opened = await api.initFile(newFileData);
-      replacement.commit();
-      documentSessionStore.openDocumentResponse(opened, null);
-      await router.push({ name: "table" });
-    } catch (error) {
-      replacement.cancel();
-      throw error;
-    }
-  });
-}
-
-async function handleOpenRecent(file: RecentFile) {
-  await runHomeFileAction("Failed to open file", async () => {
-    if (await api.checkFileExists(file.path)) {
-      if (await openRecentPath(file)) {
-        await router.push({ name: "table" });
-      }
-      return;
-    }
-
-    if (await relocateAndOpenRecent(file)) {
-      await router.push({ name: "table" });
-    }
-  });
-}
-
-async function openRecentPath(file: RecentFile): Promise<boolean> {
-  const replacement = await beginDocumentReplacement();
-  if (!replacement) return false;
-  try {
-    const opened = await readFile(file.path);
-    replacement.commit();
-    documentSessionStore.openDocumentResponse(opened, file.path);
-    queueRecentFileEntryUpdate(file.path, file.fileName, file.originalPath);
-    return true;
-  } catch (error) {
-    replacement.cancel();
-    throw error;
-  }
-}
-
-async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
-  const selection = await pickOpenFile();
-  if (!selection) return false;
-  const opened = await openSelectedFileOrDiscard(selection);
-  if (!opened) return false;
-  queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
-
-  if (file.path !== selection.path) {
-    try {
-      await api.removeRecentFile(file.id);
-    } catch (error) {
-      warnRecentFileTrackingFailure(error);
-    }
-  }
-  void refreshRecentFiles();
-  return true;
-}
 
 </script>
 

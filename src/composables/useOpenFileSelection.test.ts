@@ -97,6 +97,53 @@ describe("useOpenFileSelection", () => {
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
   });
 
+  it("keeps the read error when discarding the failed selection also fails", async () => {
+    const platform = await import("@/platform");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const replacement = replacementLease();
+    const beginDocumentReplacement = vi.fn().mockResolvedValue(replacement);
+    const { openSelectedFileOrDiscard } = useOpenFileSelection({
+      beginDocumentReplacement,
+    });
+    vi.mocked(platform.readFile).mockRejectedValue(new Error("broken file"));
+    vi.mocked(platform.discardOpenFileSelection).mockRejectedValue(new Error("cleanup failed"));
+
+    try {
+      await expect(openSelectedFileOrDiscard(selection)).rejects.toThrow("broken file");
+
+      expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to discard open file selection after open error:",
+        expect.any(Error)
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("does not fail a cancelled replacement when discarding the selection fails", async () => {
+    const platform = await import("@/platform");
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const beginDocumentReplacement = vi.fn().mockResolvedValue(null);
+    const { openSelectedFileOrDiscard } = useOpenFileSelection({
+      beginDocumentReplacement,
+    });
+    vi.mocked(platform.discardOpenFileSelection).mockRejectedValue(new Error("cleanup failed"));
+
+    try {
+      await expect(openSelectedFileOrDiscard(selection)).resolves.toBe(false);
+
+      expect(platform.readFile).not.toHaveBeenCalled();
+      expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "Failed to discard unused open file selection:",
+        expect.any(Error)
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
   it("does not discard a selection after successful open", async () => {
     const platform = await import("@/platform");
     const response = openedResponse();

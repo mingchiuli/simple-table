@@ -220,8 +220,11 @@ export function useFileActions({
   }
 
   async function handleBack() {
-    if (!(await closeCurrentDocument())) return;
-    router.push({ name: 'home' });
+    try {
+      await router.push({ name: 'home' });
+    } catch (error) {
+      ElMessage.error(`Failed to return home: ${error}`);
+    }
   }
 
   function notifySavedButNotApplied() {

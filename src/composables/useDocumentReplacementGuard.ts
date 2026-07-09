@@ -34,12 +34,20 @@ export function useDocumentReplacementGuard({
 
   async function confirmDiscardWithAutosavePaused(): Promise<DocumentReplacementLease | null> {
     const replacement = createReplacementLease();
-    if (await confirmReplacementIfUnsaved()) {
+    let keepReplacement = false;
+    try {
+      if (!(await confirmReplacementIfUnsaved())) {
+        return null;
+      }
+      await pendingCellSavesStore.waitForInFlightSave();
       await documentSessionStore.waitForMutations();
+      keepReplacement = true;
       return replacement;
+    } finally {
+      if (!keepReplacement) {
+        replacement.cancel();
+      }
     }
-    replacement.cancel();
-    return null;
   }
 
   async function confirmReplacementIfUnsaved(): Promise<boolean> {
