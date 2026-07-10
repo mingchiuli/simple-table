@@ -7,13 +7,12 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
-use crate::io::projection_limits::validate_input_file_size;
+use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::transient_files::transient_file_registry;
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::ErrorKind;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FilePath;
@@ -80,6 +79,18 @@ pub(super) fn write_with_official_fs(
         .map_err(|e| AppError::WriteError(format!("Failed to open file for writing: {}", e)))?;
     file.write_all(bytes)
         .map_err(|e| AppError::WriteError(format!("Failed to write file: {}", e)))
+}
+
+pub(super) fn read_with_official_fs(app: &AppHandle, path: FilePath) -> Result<Vec<u8>, AppError> {
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    let file = app
+        .fs()
+        .open(path, options)
+        .map_err(|e| AppError::ReadError(format!("Failed to open selected file: {e}")))?;
+    read_input_bytes(file)
 }
 
 pub(super) fn write_path_with_official_fs(

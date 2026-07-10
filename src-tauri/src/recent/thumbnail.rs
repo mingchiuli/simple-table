@@ -15,13 +15,21 @@ const MAX_COLS: usize = 10;
 enum ThumbnailCell {
     Empty,
     Number,
-    String(String),
+    String { is_link: bool },
     Bool,
     Error,
 }
 
-pub fn generate_thumbnail_from_file_data(file_data: &FileData) -> Option<String> {
-    let rows = thumbnail_rows_from_file_data(file_data)?;
+pub(super) struct ThumbnailSnapshot {
+    rows: Vec<Vec<ThumbnailCell>>,
+}
+
+pub(super) fn capture_thumbnail(file_data: &FileData) -> Option<ThumbnailSnapshot> {
+    thumbnail_rows_from_file_data(file_data).map(|rows| ThumbnailSnapshot { rows })
+}
+
+pub(super) fn generate_thumbnail(snapshot: ThumbnailSnapshot) -> Option<String> {
+    let rows = snapshot.rows;
     if rows.is_empty() {
         return None;
     }
@@ -90,7 +98,9 @@ fn thumbnail_cell_from_value(cell: &CellValue) -> ThumbnailCell {
     match cell {
         CellValue::Null => ThumbnailCell::Empty,
         CellValue::String(value) if value.is_empty() => ThumbnailCell::Empty,
-        CellValue::String(value) => ThumbnailCell::String(value.clone()),
+        CellValue::String(value) => ThumbnailCell::String {
+            is_link: value.starts_with("http") || value.starts_with("www"),
+        },
         CellValue::Number(_) => ThumbnailCell::Number,
         CellValue::Boolean(_) => ThumbnailCell::Bool,
         CellValue::Formula {
@@ -126,8 +136,8 @@ fn get_cell_color(cell: &ThumbnailCell) -> Rgba<u8> {
     match cell {
         ThumbnailCell::Empty => Rgba([245, 245, 245, 255]),
         ThumbnailCell::Number => Rgba([230, 242, 255, 255]),
-        ThumbnailCell::String(s) => {
-            if s.starts_with("http") || s.starts_with("www") {
+        ThumbnailCell::String { is_link } => {
+            if *is_link {
                 Rgba([255, 240, 230, 255])
             } else {
                 Rgba([240, 255, 240, 255])
@@ -166,8 +176,29 @@ mod tests {
             }],
         };
 
-        let thumbnail = generate_thumbnail_from_file_data(&file_data).expect("thumbnail");
+        let snapshot = capture_thumbnail(&file_data).expect("thumbnail snapshot");
+        let thumbnail = generate_thumbnail(snapshot).expect("thumbnail");
 
         assert!(thumbnail.starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn thumbnail_snapshot_does_not_retain_cell_text() {
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "projection.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::String("https://example.com".repeat(1024))]],
+                ..Default::default()
+            }],
+        };
+
+        let snapshot = capture_thumbnail(&file_data).expect("thumbnail snapshot");
+
+        assert!(matches!(
+            snapshot.rows[0][0],
+            ThumbnailCell::String { is_link: true }
+        ));
     }
 }

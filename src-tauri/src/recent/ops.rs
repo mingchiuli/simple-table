@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::io::document;
 
 use super::store::RecentStore;
-use super::thumbnail::generate_thumbnail_from_file_data;
+use super::thumbnail::{capture_thumbnail, generate_thumbnail};
 use super::types::{AddRecentFileRequest, RecentFile, StorageType};
 
 pub fn do_get_recent_files(app: &AppHandle) -> Vec<RecentFile> {
@@ -20,29 +20,30 @@ pub fn do_add_recent_file_with_thumbnail(
         document_id,
         base_revision,
     } = request;
-    let file_data = document::current_file_data_for_command(document_id, base_revision)?;
+    let (path, file_name, thumbnail) =
+        document::inspect_current_file_for_command(document_id, base_revision, |file_data| {
+            (
+                file_data.path.clone(),
+                file_data.file_name.clone(),
+                capture_thumbnail(file_data),
+            )
+        })?;
 
-    if file_data.path.is_empty() {
+    if path.is_empty() {
         return Err(AppError::DocumentStateInvalid(
             "cannot add an unsaved document to recent files".to_string(),
         ));
     }
 
-    let file_size = recent_file_size(&file_data.path);
-    let mut recent_file = RecentFile::new(
-        file_data.path.clone(),
-        file_data.file_name.clone(),
-        file_size,
-    );
+    let file_size = recent_file_size(&path);
+    let mut recent_file = RecentFile::new(path, file_name, file_size);
     recent_file.storage_type = current_platform_storage_type();
 
     if let Some(op) = original_path {
         recent_file.original_path = Some(op);
     }
 
-    if let Some(thumbnail) = generate_thumbnail_from_file_data(&file_data) {
-        recent_file.thumbnail = Some(thumbnail);
-    }
+    recent_file.thumbnail = thumbnail.and_then(generate_thumbnail);
 
     RecentStore::add(app, recent_file)
 }

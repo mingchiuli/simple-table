@@ -336,6 +336,14 @@ pub fn current_file_data_for_command(
     document_id: u64,
     base_revision: u64,
 ) -> Result<FileData, AppError> {
+    inspect_current_file_for_command(document_id, base_revision, Clone::clone)
+}
+
+pub(crate) fn inspect_current_file_for_command<T>(
+    document_id: u64,
+    base_revision: u64,
+    inspect: impl FnOnce(&FileData) -> T,
+) -> Result<T, AppError> {
     let registry = active_document_store();
     let registry_guard = registry
         .read()
@@ -343,7 +351,7 @@ pub fn current_file_data_for_command(
 
     registry_guard
         .active_for_command(document_id, base_revision)
-        .map(|editor_state| editor_state.file_data().clone())
+        .map(|editor_state| inspect(editor_state.file_data()))
 }
 
 pub fn close_current_document(document_id: u64) -> Result<(), AppError> {

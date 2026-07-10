@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -8,11 +9,16 @@ use crate::error::AppError;
 const STORE_FILE: &str = "recent-files.json";
 const STORE_KEY: &str = "recent_files";
 const MAX_RECENT: usize = 10;
+static RECENT_STORE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub struct RecentStore;
 
 impl RecentStore {
     pub fn get_all(app: &AppHandle) -> Vec<RecentFile> {
+        with_store_transaction(|| Ok(Self::get_all_unlocked(app))).unwrap_or_default()
+    }
+
+    fn get_all_unlocked(app: &AppHandle) -> Vec<RecentFile> {
         let store = match app.store(STORE_FILE) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -23,29 +29,48 @@ impl RecentStore {
             .unwrap_or_default()
     }
 
-    pub fn save(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
+    fn save_unlocked(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
         let store = app
             .store(STORE_FILE)
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let value = serde_json::to_value(files).map_err(|e| AppError::Internal(e.to_string()))?;
+        let previous = store.get(STORE_KEY);
         store.set(STORE_KEY, value);
-        store
-            .save()
-            .map_err(|e| AppError::WriteError(e.to_string()))?;
+        if let Err(error) = store.save() {
+            match previous {
+                Some(value) => store.set(STORE_KEY, value),
+                None => {
+                    store.delete(STORE_KEY);
+                }
+            }
+            return Err(AppError::WriteError(error.to_string()));
+        }
         Ok(())
     }
 
     pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentFile, AppError> {
-        let (files, updated) = upsert_recent_file(Self::get_all(app), file);
-        Self::save(app, &files)?;
-        Ok(updated)
+        with_store_transaction(|| {
+            let (files, updated) = upsert_recent_file(Self::get_all_unlocked(app), file);
+            Self::save_unlocked(app, &files)?;
+            Ok(updated)
+        })
     }
 
     pub fn remove(app: &AppHandle, id: &str) -> Result<(), AppError> {
-        let mut files = Self::get_all(app);
-        files.retain(|f| f.id != id);
-        Self::save(app, &files)
+        with_store_transaction(|| {
+            let mut files = Self::get_all_unlocked(app);
+            files.retain(|f| f.id != id);
+            Self::save_unlocked(app, &files)
+        })
     }
+}
+
+fn with_store_transaction<T>(action: impl FnOnce() -> Result<T, AppError>) -> Result<T, AppError> {
+    let _guard = RECENT_STORE_TRANSACTION
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| AppError::poisoned_lock("recent file store transaction"))?;
+    action()
 }
 
 fn upsert_recent_file(
@@ -103,6 +128,10 @@ fn truncate_preserving_path(files: &mut Vec<RecentFile>, path: &str) {
 mod tests {
     use super::*;
     use crate::recent::types::StorageType;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
 
     fn recent(id: &str, path: &str, file_name: &str, last_opened: i64) -> RecentFile {
         RecentFile {
@@ -206,5 +235,37 @@ mod tests {
                 .any(|file| file.path == "/tmp/new.xlsx")
         );
         assert_eq!(updated_files.len(), MAX_RECENT);
+    }
+
+    #[test]
+    fn recent_store_transactions_serialize_concurrent_callers() {
+        const CALLERS: usize = 4;
+        let barrier = Arc::new(Barrier::new(CALLERS));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let handles = (0..CALLERS)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let active = Arc::clone(&active);
+                let max_active = Arc::clone(&max_active);
+                thread::spawn(move || {
+                    barrier.wait();
+                    with_store_transaction(|| {
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active.fetch_max(current, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(5));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .expect("recent store transaction");
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("transaction caller");
+        }
+
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
     }
 }

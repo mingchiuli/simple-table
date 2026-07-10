@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Read;
 
 use crate::error::AppError;
 use crate::io::rich_projection::parse_cell_key;
@@ -28,6 +29,26 @@ pub fn validate_input_file_size(byte_count: u64) -> Result<(), AppError> {
         )));
     }
     Ok(())
+}
+
+pub fn read_input_bytes(reader: impl Read) -> Result<Vec<u8>, AppError> {
+    read_to_end_with_limit(reader, MAX_INPUT_BYTES)
+}
+
+fn read_to_end_with_limit(reader: impl Read, maximum_bytes: usize) -> Result<Vec<u8>, AppError> {
+    let read_limit = (maximum_bytes as u64).saturating_add(1);
+    let mut bytes = Vec::new();
+    reader
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| AppError::ReadError(error.to_string()))?;
+    if bytes.len() > maximum_bytes {
+        return Err(limit_error(format!(
+            "file bytes is at least {}, maximum is {maximum_bytes}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
 }
 
 pub fn validate_file_data(file_data: &FileData) -> Result<(), AppError> {
@@ -310,6 +331,7 @@ fn limit_error(message: String) -> AppError {
 mod tests {
     use super::*;
     use crate::types::{CellValue, SheetData};
+    use std::io::Cursor;
 
     #[test]
     fn rejects_oversized_input_without_allocating_it() {
@@ -319,6 +341,22 @@ mod tests {
         let error = validate_input_file_size(MAX_INPUT_BYTES as u64 + 1)
             .expect_err("oversized input metadata");
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn bounded_input_read_rejects_data_before_reading_past_the_limit() {
+        let error =
+            read_to_end_with_limit(Cursor::new(vec![0; 9]), 8).expect_err("oversized input stream");
+
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn bounded_input_read_accepts_data_at_the_limit() {
+        let bytes =
+            read_to_end_with_limit(Cursor::new(vec![1; 8]), 8).expect("bounded input stream");
+
+        assert_eq!(bytes, vec![1; 8]);
     }
 
     #[test]

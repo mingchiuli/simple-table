@@ -1,5 +1,6 @@
 use super::mobile::{
-    self, PickedFileInfo, mobile_dir, unique_import_path, write_path_with_official_fs,
+    self, PickedFileInfo, mobile_dir, read_with_official_fs, unique_import_path,
+    write_path_with_official_fs,
 };
 use crate::error::AppError;
 use crate::io::file_format::{
@@ -30,7 +31,6 @@ fn display_name_from_path(path: &FilePath) -> String {
 
 pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
     use tauri_plugin_dialog::{DialogExt, PickerMode};
-    use tauri_plugin_fs::FsExt;
 
     let source = match app
         .dialog()
@@ -52,10 +52,7 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
 
     let original_path = source.to_string();
     let raw_file_name = display_name_from_path(&source);
-    let bytes = app
-        .fs()
-        .read(source)
-        .map_err(|e| AppError::ReadError(format!("Failed to read selected file: {}", e)))?;
+    let bytes = read_with_official_fs(app, source)?;
 
     let extension = import_extension_from_name_or_bytes(&raw_file_name, &bytes)
         .ok_or(AppError::UnsupportedFormat)?;
