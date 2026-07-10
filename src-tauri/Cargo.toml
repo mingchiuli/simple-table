@@ -39,6 +39,7 @@ tantivy-jieba = "0.20.0"
 image = "0.25"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }

@@ -11,12 +11,12 @@ use crate::types::{
     FormulaDiagnostics, FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection,
     HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch, RichProjectionPatch,
-    RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SavedDocumentResponse,
-    ScalarCellValue, SearchIndexUpdatePlan, SearchResult, SearchScope, SetCellRequest,
-    SheetCapabilities, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
-    SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch, SpreadsheetFormatOptions,
-    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
+    RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity,
+    SavedDocumentResponse, ScalarCellValue, SearchIndexUpdatePlan, SearchResult, SearchScope,
+    SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch, SheetInsertedPatch,
+    SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch,
+    SpreadsheetFormatOptions, WorkbookCapabilities, WorkbookRichCapabilities,
+    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -82,6 +82,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);
     push_decl::<PreparedOpenDocument>(&mut output, &cfg);
+    push_decl::<SavedDocumentIdentity>(&mut output, &cfg);
     push_decl::<SavedDocumentResponse>(&mut output, &cfg);
 
     output

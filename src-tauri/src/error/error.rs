@@ -15,6 +15,8 @@ pub enum AppError {
     // 格式操作
     #[error("Unsupported file format")]
     UnsupportedFormat,
+    #[error("Document exceeds the supported resource limits: {0}")]
+    ResourceLimitExceeded(String),
 
     // 状态操作
     #[error("No file loaded")]
@@ -71,6 +73,7 @@ impl AppError {
             Self::WriteError(_) => "write_error",
             Self::FileNotFound(_) => "file_not_found",
             Self::UnsupportedFormat => "unsupported_format",
+            Self::ResourceLimitExceeded(_) => "resource_limit_exceeded",
             Self::NoFileLoaded => "no_file_loaded",
             Self::InvalidSheetIndex(_) => "invalid_sheet_index",
             Self::InvalidCellPosition { .. } => "invalid_cell_position",

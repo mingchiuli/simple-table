@@ -139,5 +139,7 @@ export type OpenDocumentResponse = { fileData: FileData, editorSession: EditorSe
 
 export type PreparedOpenDocument = { token: string, };
 
-export type SavedDocumentResponse = { fileData: FileData, editorSession: EditorSessionInfo, };
+export type SavedDocumentIdentity = { path: string, fileName: string, };
+
+export type SavedDocumentResponse = { fileData?: FileData, identity?: SavedDocumentIdentity, editorSession: EditorSessionInfo, };
 

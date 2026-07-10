@@ -18,6 +18,7 @@ pub mod history_restore_transaction;
 pub mod layout_units;
 pub mod prepared_documents;
 pub mod projection_codec;
+pub mod projection_limits;
 pub mod projection_mapper;
 pub mod rich_projection;
 #[cfg(any(target_os = "android", target_os = "ios", test))]

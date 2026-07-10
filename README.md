@@ -1,6 +1,6 @@
 # Simple Table
 
-> A cross-platform desktop application for viewing and editing Excel/CSV files, built with Tauri 2.0 and Vue 3.
+> A cross-platform spreadsheet editor for Excel and CSV files, built with Tauri 2 and Vue 3.
 
 ## Features
 
@@ -18,11 +18,13 @@
 
 ### Platform Support
 - **Desktop**: macOS, Linux, Windows
+- **Mobile**: Android and iOS Tauri builds
 - Platform detection via `src/composables/usePlatform.ts` and `src/utils/platform.ts`
 
 ### Limitations
 
-- **Does not support Excel styles**: Font colors, background colors, borders, cell alignment, and other formatting styles are not preserved. Only cell values and merged cell information are maintained.
+- Excel styles, hyperlinks, freeze panes, and drawings are projected read-only. The original XLSX workbook remains the persistence source, so supported edits preserve this metadata, but the app does not edit rich formatting directly.
+- CSV files contain cell values only and cannot persist XLSX-specific layout or rich metadata.
 
 ## Installation
 
@@ -93,7 +95,13 @@ src-tauri/                # Rust backend
 File operations are abstracted through `src/platform/` which provides a unified API:
 
 ```ts
-import { pickFile, readFile, saveFile, pickSaveLocation, getPlatformAPI } from '@/platform';
+import {
+  getPlatformAPI,
+  pickOpenFile,
+  prepareOpenFile,
+  saveFile,
+  pickSaveLocation,
+} from '@/platform';
 ```
 
 Platform modules are **dynamically loaded** at runtime based on the current OS. Vite code-splits each platform into separate chunks for optimal bundle size.

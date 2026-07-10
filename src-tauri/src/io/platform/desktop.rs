@@ -7,6 +7,7 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_from_name,
 };
+use crate::io::projection_limits::validate_input_file_size;
 use crate::recent::store::RecentStore;
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::Serialize;
@@ -77,6 +78,11 @@ pub fn prepare_recent_file(app: &AppHandle, id: &str) -> Result<PreparedOpenDocu
 }
 
 fn prepare_file_trusted(path: &str) -> Result<PreparedOpenDocument, AppError> {
+    let metadata = fs::metadata(path).map_err(|e| match e.kind() {
+        ErrorKind::NotFound => AppError::FileNotFound(path.to_string()),
+        _ => AppError::ReadError(e.to_string()),
+    })?;
+    validate_input_file_size(metadata.len())?;
     let bytes = fs::read(path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => AppError::FileNotFound(path.to_string()),
         _ => AppError::ReadError(e.to_string()),

@@ -7,6 +7,7 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
+use crate::io::projection_limits::validate_input_file_size;
 use crate::io::transient_files::transient_file_registry;
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
@@ -120,6 +121,9 @@ pub fn prepare_file(app: &AppHandle, path: &str) -> Result<PreparedOpenDocument,
     if !target.exists() {
         return Err(AppError::FileNotFound(path.to_string()));
     }
+    let metadata = fs::metadata(&target)
+        .map_err(|e| AppError::ReadError(format!("Failed to inspect file: {}", e)))?;
+    validate_input_file_size(metadata.len())?;
 
     let file_name = target
         .file_name()

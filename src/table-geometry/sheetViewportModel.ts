@@ -29,6 +29,7 @@ export type SheetViewportSource = {
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
   rich?: ReadOnlyRichProjection;
+  extent?: SheetExtent;
 };
 
 export function createSheetViewportModel(source: SheetViewportSource): SheetViewportModel {
@@ -38,7 +39,7 @@ export function createSheetViewportModel(source: SheetViewportSource): SheetView
   const columnWidths = { ...(source.columnWidths ?? {}) };
   const rowHeights = { ...(source.rowHeights ?? {}) };
   const rich = source.rich ?? defaultRichProjection();
-  const extent = calculateSheetExtent(rows, merges, columnWidths, rowHeights, rich);
+  const extent = source.extent ?? calculateSheetExtent(rows, merges, columnWidths, rowHeights, rich);
 
   return {
     rows,

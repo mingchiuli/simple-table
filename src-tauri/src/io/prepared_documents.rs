@@ -10,18 +10,10 @@ pub(crate) struct PreparedDocument {
     pub(crate) source_path: Option<PathBuf>,
 }
 
+#[derive(Default)]
 struct PreparedDocumentStore {
     pending: HashMap<String, PreparedDocument>,
     order: VecDeque<String>,
-}
-
-impl Default for PreparedDocumentStore {
-    fn default() -> Self {
-        Self {
-            pending: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
 }
 
 impl PreparedDocumentStore {

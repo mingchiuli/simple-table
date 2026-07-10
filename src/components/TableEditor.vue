@@ -8,6 +8,7 @@ import { useGridResize } from '@/table-geometry/useGridResize';
 import { useGridViewport } from '@/table-geometry/useGridViewport';
 import { useTableInteractionController } from '@/table-geometry/useTableInteractionController';
 import { createSheetViewportModel } from '@/table-geometry/sheetViewportModel';
+import type { SheetExtent } from '@/table-geometry/sheetExtent';
 
 const { isTouchDevice } = usePlatform();
 
@@ -32,6 +33,7 @@ const props = defineProps<{
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
   rich?: ReadOnlyRichProjection;
+  extent?: SheetExtent;
   commitColumnResize: (colIndex: number, width: number) => void | Promise<void>;
   commitRowResize: (rowIndex: number, height: number) => void | Promise<void>;
 }>();
@@ -71,6 +73,7 @@ const viewportModel = computed(() =>
     columnWidths: props.columnWidths,
     rowHeights: props.rowHeights,
     rich: props.rich,
+    extent: props.extent,
   })
 );
 

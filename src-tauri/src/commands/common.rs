@@ -108,6 +108,11 @@ pub fn abort_prepared_document(token: String) -> Result<(), AppError> {
     document::abort_prepared_document(&token)
 }
 
+#[tauri::command]
+pub fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
+    document::active_document_response()
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_current_file_data(document_id: u64, base_revision: u64) -> Result<FileData, AppError> {
     document::current_file_data_for_command(document_id, base_revision)

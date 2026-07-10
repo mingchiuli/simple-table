@@ -7,6 +7,11 @@ use crate::io::layout_units::{
     DEFAULT_ROW_HEIGHT_PX, excel_column_width_to_px, is_default_column_width, points_to_px,
 };
 use crate::io::projection_codec::WorkbookProjectionCodec;
+use crate::io::projection_limits::{
+    MAX_DENSE_CELL_SLOTS, MAX_ROWS_PER_SHEET, MAX_TOTAL_ROWS, MAX_WORKBOOK_SHEETS,
+    MAX_XLSX_ARCHIVE_ENTRIES, MAX_XLSX_UNCOMPRESSED_BYTES, validate_file_data, validate_input_size,
+    validate_position,
+};
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
     FreezePaneProjection, HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
@@ -27,13 +32,44 @@ pub fn read_file_with_workbook_from_bytes(
     path: String,
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
-    let cursor = Cursor::new(bytes);
+    validate_input_size(bytes.len())?;
 
     match SpreadsheetFileFormat::from_extension(extension) {
-        Some(SpreadsheetFileFormat::Xlsx) => read_xlsx_from_bytes(cursor, path, file_name),
-        Some(SpreadsheetFileFormat::Csv) => read_csv_from_bytes(cursor, path, file_name),
+        Some(SpreadsheetFileFormat::Xlsx) => {
+            validate_xlsx_archive(&bytes)?;
+            read_xlsx_from_bytes(Cursor::new(bytes), path, file_name)
+        }
+        Some(SpreadsheetFileFormat::Csv) => {
+            read_csv_from_bytes(Cursor::new(bytes), path, file_name)
+        }
         None => Err(AppError::UnsupportedFormat),
     }
+}
+
+fn validate_xlsx_archive(bytes: &[u8]) -> Result<(), AppError> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| AppError::ReadError(error.to_string()))?;
+    if archive.len() > MAX_XLSX_ARCHIVE_ENTRIES {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "XLSX archive entries is {}, maximum is {}",
+            archive.len(),
+            MAX_XLSX_ARCHIVE_ENTRIES
+        )));
+    }
+
+    let mut uncompressed_bytes = 0u64;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| AppError::ReadError(error.to_string()))?;
+        uncompressed_bytes = uncompressed_bytes.saturating_add(entry.size());
+        if uncompressed_bytes > MAX_XLSX_UNCOMPRESSED_BYTES {
+            return Err(AppError::ResourceLimitExceeded(format!(
+                "XLSX uncompressed bytes exceed the maximum of {MAX_XLSX_UNCOMPRESSED_BYTES}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn read_xlsx_from_bytes(
@@ -42,15 +78,59 @@ fn read_xlsx_from_bytes(
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
     let workbook = read_workbook_from_reader(cursor)?;
+    validate_workbook_before_projection(&workbook)?;
+    let file_data = FileData {
+        path,
+        file_name,
+        sheets: WorkbookProjectionCodec::read_sheets(&workbook),
+    };
+    validate_file_data(&file_data)?;
 
     Ok(ReadFileResult {
-        file_data: FileData {
-            path,
-            file_name,
-            sheets: WorkbookProjectionCodec::read_sheets(&workbook),
-        },
+        file_data,
         workbook: Some(workbook),
     })
+}
+
+fn validate_workbook_before_projection(workbook: &Workbook) -> Result<(), AppError> {
+    if workbook.sheet_count() > MAX_WORKBOOK_SHEETS {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "workbook sheets is {}, maximum is {}",
+            workbook.sheet_count(),
+            MAX_WORKBOOK_SHEETS
+        )));
+    }
+
+    let mut total_rows = 0usize;
+    let mut total_slots = 0usize;
+    for worksheet in workbook.sheet_collection() {
+        let mut row_lengths = HashMap::<usize, usize>::new();
+        let mut row_count = 0usize;
+        for cell in worksheet.cells() {
+            let row = cell.coordinate().row_num().saturating_sub(1) as usize;
+            let col = cell.coordinate().col_num().saturating_sub(1) as usize;
+            validate_position(row, col)?;
+            if cell.cell_value().is_empty() {
+                continue;
+            }
+            row_count = row_count.max(row + 1);
+            row_lengths
+                .entry(row)
+                .and_modify(|length| *length = (*length).max(col + 1))
+                .or_insert(col + 1);
+        }
+        total_rows = total_rows.saturating_add(row_count);
+        total_slots = total_slots.saturating_add(row_lengths.into_values().sum::<usize>());
+        if row_count > MAX_ROWS_PER_SHEET
+            || total_rows > MAX_TOTAL_ROWS
+            || total_slots > MAX_DENSE_CELL_SLOTS
+        {
+            return Err(AppError::ResourceLimitExceeded(
+                "workbook projection is too large to load safely".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn read_workbook_from_reader(cursor: Cursor<Vec<u8>>) -> Result<Workbook, AppError> {
@@ -411,9 +491,17 @@ fn read_csv_from_bytes(
     let mut reader = ReaderBuilder::new().has_headers(false).from_reader(cursor);
 
     let mut rows: Vec<Vec<CellValue>> = Vec::new();
+    let mut total_slots = 0usize;
 
     for result in reader.records() {
         let record = result.map_err(|e| AppError::ReadError(e.to_string()))?;
+        validate_position(rows.len(), record.len().saturating_sub(1))?;
+        total_slots = total_slots.saturating_add(record.len());
+        if total_slots > MAX_DENSE_CELL_SLOTS {
+            return Err(AppError::ResourceLimitExceeded(format!(
+                "CSV cell slots exceed the maximum of {MAX_DENSE_CELL_SLOTS}"
+            )));
+        }
         let row: Vec<CellValue> = record
             .iter()
             .map(|field| {
@@ -444,16 +532,18 @@ fn read_csv_from_bytes(
         rows.push(row);
     }
 
+    let file_data = FileData {
+        path,
+        file_name,
+        sheets: vec![SheetData {
+            name: "Sheet1".to_string(),
+            rows,
+            ..Default::default()
+        }],
+    };
+    validate_file_data(&file_data)?;
     Ok(ReadFileResult {
-        file_data: FileData {
-            path,
-            file_name,
-            sheets: vec![SheetData {
-                name: "Sheet1".to_string(),
-                rows,
-                ..Default::default()
-            }],
-        },
+        file_data,
         workbook: None,
     })
 }

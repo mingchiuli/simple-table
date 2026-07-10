@@ -6,6 +6,7 @@ use crate::io::file_format::{
     supported_extension_from_name,
 };
 use crate::io::prepared_documents;
+use crate::io::projection_limits::validate_file_data;
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -15,7 +16,7 @@ use crate::state::{
 };
 use crate::types::{
     DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
-    SavedDocumentResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
+    SavedDocumentIdentity, SavedDocumentResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
@@ -42,6 +43,7 @@ pub fn prepare_open_from_bytes(
 /// 准备新文档。只有 commit_prepared_document 才会替换当前活动文档。
 pub fn prepare_new_file(mut file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
     file_data.path.clear();
+    validate_file_data(&file_data)?;
     prepare_editor_state(file_data, None, None)
 }
 
@@ -83,6 +85,20 @@ pub fn commit_prepared_document(
 
 pub fn abort_prepared_document(token: &str) -> Result<(), AppError> {
     prepared_documents::abort(token)
+}
+
+/// Restores the frontend after its runtime state was lost while the Rust process stayed alive.
+pub fn active_document_response() -> Result<Option<OpenDocumentResponse>, AppError> {
+    let registry = active_document_store();
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    Ok(registry_guard
+        .active()
+        .map(|editor_state| OpenDocumentResponse {
+            file_data: editor_state.file_data().clone(),
+            editor_session: editor_session_info(editor_state),
+        }))
 }
 
 pub fn generate_current_file_bytes_for_target(
@@ -207,7 +223,8 @@ where
         editor_state.finish_save_commit(lease, result.file_data, result.workbook, clear_history)?;
         document_id = editor_state.document_id();
         response = SavedDocumentResponse {
-            file_data: editor_state.file_data().clone(),
+            file_data: Some(editor_state.file_data().clone()),
+            identity: None,
             editor_session: editor_session_info(editor_state),
         };
     }
@@ -278,7 +295,11 @@ where
         })?;
         editor_state.finish_save_commit_without_reparse(lease, path, output_name, clear_history)?;
         response = SavedDocumentResponse {
-            file_data: editor_state.file_data().clone(),
+            file_data: None,
+            identity: Some(SavedDocumentIdentity {
+                path: editor_state.file_data().path.clone(),
+                file_name: editor_state.file_data().file_name.clone(),
+            }),
             editor_session: editor_session_info(editor_state),
         };
     }

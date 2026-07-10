@@ -391,8 +391,21 @@ pub struct PreparedOpenDocument {
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
+pub struct SavedDocumentIdentity {
+    pub path: String,
+    pub file_name: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct SavedDocumentResponse {
-    pub file_data: FileData,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub file_data: Option<FileData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub identity: Option<SavedDocumentIdentity>,
     pub editor_session: EditorSessionInfo,
 }
 

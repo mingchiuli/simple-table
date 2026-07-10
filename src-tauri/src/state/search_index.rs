@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -16,6 +16,8 @@ use crate::types::CellValue;
 use crate::types::SheetData;
 
 const WRITER_ARENA_BYTES: usize = 15_000_000;
+pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
+const MAX_SNAPSHOT_DELTA_DEPTH: usize = 64;
 
 struct SchemaFields {
     text: Field,
@@ -88,6 +90,7 @@ pub struct SearchCellSnapshotChange {
 #[derive(Debug)]
 pub struct SearchSheetSnapshot {
     revision: u64,
+    delta_depth: usize,
     data: SearchSheetSnapshotData,
 }
 
@@ -108,17 +111,23 @@ impl SearchSheetSnapshot {
     pub fn from_cells(cells: Arc<[SearchCellText]>, revision: u64) -> Arc<Self> {
         Arc::new(Self {
             revision,
+            delta_depth: 0,
             data: SearchSheetSnapshotData::Full(cells),
         })
     }
 
     pub fn with_changes(
-        parent: Arc<Self>,
+        mut parent: Arc<Self>,
         changes: Vec<SearchCellSnapshotChange>,
         revision: u64,
     ) -> Arc<Self> {
+        if parent.delta_depth >= MAX_SNAPSHOT_DELTA_DEPTH {
+            parent = Self::from_cells(parent.materialize(), parent.revision);
+        }
+        let delta_depth = parent.delta_depth + 1;
         Arc::new(Self {
             revision,
+            delta_depth,
             data: SearchSheetSnapshotData::Delta {
                 parent,
                 changes: Arc::from(changes),
@@ -179,6 +188,7 @@ pub struct SearchIndexStore {
     revision: u64,
     sheet_revisions: Vec<u64>,
     sheets: Vec<SearchSheetSlot>,
+    resident_order: VecDeque<usize>,
 }
 
 impl Default for SearchIndexStore {
@@ -188,6 +198,7 @@ impl Default for SearchIndexStore {
             revision: 0,
             sheet_revisions: Vec::new(),
             sheets: Vec::new(),
+            resident_order: VecDeque::new(),
         }
     }
 }
@@ -306,19 +317,25 @@ impl SearchIndexStore {
             return;
         }
         self.ensure_sheet_slot(sheet_index);
-        self.sheets[sheet_index] = index
-            .map(|index| {
+        self.remove_resident(sheet_index);
+        self.sheets[sheet_index] = match index {
+            Some(index) => {
+                self.evict_resident_if_full();
+                self.resident_order.push_back(sheet_index);
                 SearchSheetSlot::Fresh(SearchSheetIndexEntry {
                     revision: stamp.revision,
                     index: Arc::new(index),
                 })
-            })
-            .unwrap_or(SearchSheetSlot::Missing);
+            }
+            None => SearchSheetSlot::Missing,
+        };
     }
 
     pub fn truncate(&mut self, sheet_count: usize) {
         self.sheets.truncate(sheet_count);
         self.sheet_revisions.truncate(sheet_count);
+        self.resident_order
+            .retain(|sheet_index| *sheet_index < sheet_count);
     }
 
     pub fn writer_handle(
@@ -391,6 +408,27 @@ impl SearchIndexStore {
             .get(sheet_index)
             .copied()
             .unwrap_or(self.revision)
+    }
+
+    fn remove_resident(&mut self, sheet_index: usize) {
+        self.resident_order
+            .retain(|resident_sheet| *resident_sheet != sheet_index);
+    }
+
+    fn evict_resident_if_full(&mut self) {
+        while self.resident_order.len() >= MAX_RESIDENT_SEARCH_INDEXES {
+            let Some(sheet_index) = self.resident_order.pop_front() else {
+                return;
+            };
+            if let Some(slot) = self.sheets.get_mut(sheet_index) {
+                *slot = SearchSheetSlot::Missing;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn resident_index_count(&self) -> usize {
+        self.resident_order.len()
     }
 }
 
@@ -1072,5 +1110,24 @@ mod tests {
         assert_eq!(cells[0].display_text, "40%");
         assert!(cells[0].search_text.contains("40%"));
         assert!(cells[0].search_text.contains("0.4"));
+    }
+
+    #[test]
+    fn resident_indexes_are_evicted_at_the_memory_limit() {
+        let document_id = 7;
+        let mut store = SearchIndexStore::default();
+
+        for sheet_index in 0..=MAX_RESIDENT_SEARCH_INDEXES {
+            let stamp = store.sheet_stamp(document_id, sheet_index);
+            store.install_sheet_index(document_id, sheet_index, stamp, build_sheet_index(&[]));
+        }
+
+        assert_eq!(store.resident_index_count(), MAX_RESIDENT_SEARCH_INDEXES);
+        assert!(store.fresh_sheet_index(0).is_none());
+        assert!(
+            store
+                .fresh_sheet_index(MAX_RESIDENT_SEARCH_INDEXES)
+                .is_some()
+        );
     }
 }

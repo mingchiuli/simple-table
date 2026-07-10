@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use crate::error::AppError;
+use crate::io::projection_limits::{
+    validate_added_column, validate_added_row, validate_added_sheet, validate_cell_changes,
+};
 use crate::io::rich_projection::parse_cell_key;
 use crate::ops::core_ops::{AppliedOperation, EditorCommand, ResolvedCellEdit};
 use crate::types::{CellValue, FileData, ReadOnlyRichProjection, SheetData, parse_cell_text};
@@ -21,12 +24,19 @@ impl EditorCommand {
                     .and_then(|row_data| row_data.get(col))
                     .cloned()
                     .unwrap_or(CellValue::Null);
+                let new_value = parse_cell_text(&text);
+                if old_value != new_value {
+                    validate_cell_changes(
+                        file_data,
+                        [(sheet_index, row, col, &old_value, &new_value)],
+                    )?;
+                }
                 Ok(AppliedOperation::SetCell {
                     sheet_index,
                     row,
                     col,
                     old_value,
-                    new_value: parse_cell_text(&text),
+                    new_value,
                 })
             }
             EditorCommand::SetCells { changes } => {
@@ -61,6 +71,20 @@ impl EditorCommand {
                     }
                 }
                 resolved.retain(|change| change.old_value != change.new_value);
+                if !resolved.is_empty() {
+                    validate_cell_changes(
+                        file_data,
+                        resolved.iter().map(|change| {
+                            (
+                                change.sheet_index,
+                                change.row,
+                                change.col,
+                                &change.old_value,
+                                &change.new_value,
+                            )
+                        }),
+                    )?;
+                }
                 Ok(AppliedOperation::SetCells { changes: resolved })
             }
             EditorCommand::AddRow {
@@ -72,6 +96,12 @@ impl EditorCommand {
                 if row_index > extent.rows {
                     return Err(AppError::RowNotFound(row_index));
                 }
+                validate_added_row(
+                    file_data,
+                    sheet,
+                    sheet.rows.len().max(row_index).saturating_add(1),
+                    extent.columns,
+                )?;
                 Ok(AppliedOperation::AddRow {
                     sheet_index,
                     row_index,
@@ -105,6 +135,7 @@ impl EditorCommand {
                         col: col_index,
                     });
                 }
+                validate_added_column(file_data, sheet, extent.rows, col_index)?;
                 Ok(AppliedOperation::AddColumn {
                     sheet_index,
                     col_index,
@@ -175,6 +206,7 @@ impl EditorCommand {
                 })
             }
             EditorCommand::AddSheet { name } => {
+                validate_added_sheet(file_data)?;
                 let sheet_index = file_data.sheets.len();
                 let sheet_name = name
                     .filter(|name| !name.is_empty())

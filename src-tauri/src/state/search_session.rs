@@ -63,10 +63,10 @@ impl SearchSession {
         revision: u64,
         cells: Arc<[SearchCellText]>,
     ) {
-        if let Some(snapshot) = self.snapshots.get_mut(sheet_index) {
-            if snapshot.revision() <= revision {
-                *snapshot = SearchSheetSnapshot::from_cells(cells, revision);
-            }
+        if let Some(snapshot) = self.snapshots.get_mut(sheet_index)
+            && snapshot.revision() <= revision
+        {
+            *snapshot = SearchSheetSnapshot::from_cells(cells, revision);
         }
     }
 

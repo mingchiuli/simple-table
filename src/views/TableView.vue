@@ -49,16 +49,22 @@ const tableData = computed(() => {
   return currentSheet.value.rows;
 });
 
-const columns = computed(() => {
-  const extent = calculateSheetExtent(
+const currentSheetExtent = computed(() => {
+  if (!currentSheet.value) {
+    return { rowCount: 0, columnCount: 0 };
+  }
+  return calculateSheetExtent(
     tableData.value,
-    currentSheet.value?.merges ?? [],
-    currentSheet.value?.columnWidths,
-    currentSheet.value?.rowHeights,
-    currentSheet.value?.rich
+    currentSheet.value.merges,
+    currentSheet.value.columnWidths,
+    currentSheet.value.rowHeights,
+    currentSheet.value.rich
   );
-  return Array.from({ length: extent.columnCount }, (_, i) => colToLetter(i));
 });
+
+const columns = computed(() =>
+  Array.from({ length: currentSheetExtent.value.columnCount }, (_, i) => colToLetter(i))
+);
 
 const sheetNames = computed(() => {
   if (!fileData.value) return [];
@@ -259,6 +265,7 @@ watch(() => route.query.file, () => {
               :column-widths="currentSheet?.columnWidths"
               :row-heights="currentSheet?.rowHeights"
               :rich="currentSheet?.rich"
+              :extent="currentSheetExtent"
               :commit-column-resize="handleColumnResize"
               :commit-row-resize="handleRowResize"
               @cell-change="handleCellChange"

@@ -47,7 +47,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -62,8 +62,36 @@ jobs:
         run: cargo check --quiet
         working-directory: src-tauri
 
+      - name: Run strict Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        working-directory: src-tauri
+
       - name: Run Rust tests
         run: cargo test --quiet
+        working-directory: src-tauri
+
+  desktop-platforms:
+    name: Desktop check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Check Rust code
+        run: cargo check --quiet
         working-directory: src-tauri
 
   android:

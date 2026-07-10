@@ -8,13 +8,6 @@
     "core:default",
     "opener:default",
     "deep-link:default",
-    "fs:default",
-    "fs:scope-applocaldata-recursive",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
-    "fs:allow-applocaldata-read",
-    "fs:allow-applocaldata-write",
-    "fs:allow-applocaldata-meta",
     "os:default"
   ]
 }

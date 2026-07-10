@@ -126,9 +126,21 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       applyEditorSessionStatus(response.editorSession);
     },
     applySavedDocumentResponse(response: SavedDocumentResponse, path: string | null = null) {
+      if (!response.fileData && (!response.identity || !this.data)) {
+        throw new Error("Saved document response did not include projection or identity data");
+      }
       resetTransientDocumentWork(this);
-      this.data = response.fileData;
-      this.currentFilePath = path !== null ? path : response.fileData.path || null;
+      if (response.fileData) {
+        this.data = response.fileData;
+      } else if (this.data && response.identity) {
+        this.data = {
+          ...this.data,
+          path: response.identity.path,
+          fileName: response.identity.fileName,
+        };
+      }
+      const responsePath = response.fileData?.path ?? response.identity?.path;
+      this.currentFilePath = path !== null ? path : responsePath || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.projectionStale = false;

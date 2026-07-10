@@ -1179,6 +1179,46 @@ describe("documentSession store", () => {
     expect(searchStore.isSearching).toBe(false);
   });
 
+  it("applies identity-only save responses without replacing the projection", () => {
+    const store = useDocumentSessionStore();
+    const data: FileData = {
+      path: "",
+      fileName: "untitled.xlsx",
+      sheets: [sheet("Sheet1", [[text("current")]])],
+    };
+    store.openDocumentResponse({
+      fileData: data,
+      editorSession: {
+        documentId: 1,
+        revision: 2,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    });
+
+    store.applySavedDocumentResponse({
+      identity: {
+        path: "/tmp/book.xlsx",
+        fileName: "book.xlsx",
+      },
+      editorSession: {
+        documentId: 1,
+        revision: 3,
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+    });
+
+    expect(store.data?.path).toBe("/tmp/book.xlsx");
+    expect(store.data?.fileName).toBe("book.xlsx");
+    expect(store.data?.sheets).toStrictEqual(data.sheets);
+    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.currentFilePath).toBe("/tmp/book.xlsx");
+    expect(store.revision).toBe(3);
+  });
+
   it("discardPendingLocalWork clears queued drafts and pending dirty state", () => {
     const store = useDocumentSessionStore();
     openTestDocument(store, {

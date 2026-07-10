@@ -8,7 +8,8 @@ use tantivy::{Term, doc};
 
 use crate::display::DisplayProjection;
 use crate::state::search_index::{
-    SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel, search_position,
+    MAX_RESIDENT_SEARCH_INDEXES, SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel,
+    search_position,
 };
 #[cfg(test)]
 use crate::state::search_index::{SearchQueryPlan, SearchSheetSource};
@@ -59,6 +60,7 @@ impl SearchService {
                         .sheets
                         .iter()
                         .enumerate()
+                        .take(MAX_RESIDENT_SEARCH_INDEXES)
                         .map(|(sheet_index, _sheet)| {
                             let stamp = editor.search_sheet_index_stamp(sheet_index);
                             (sheet_index, stamp)

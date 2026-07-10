@@ -35,6 +35,10 @@ export async function abortPreparedDocument(token: string): Promise<void> {
   return invoke<void>("abort_prepared_document", { token });
 }
 
+export async function getActiveDocument(): Promise<OpenDocumentResponse | null> {
+  return invoke<OpenDocumentResponse | null>("get_active_document");
+}
+
 export async function getCurrentFileData(context: EditorCommandContext): Promise<FileData> {
   return invoke<FileData>("get_current_file_data", context);
 }
