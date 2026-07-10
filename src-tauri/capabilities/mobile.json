@@ -7,7 +7,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "dialog:default",
     "deep-link:default",
     "fs:default",
     "fs:scope-applocaldata-recursive",
@@ -16,7 +15,6 @@
     "fs:allow-applocaldata-read",
     "fs:allow-applocaldata-write",
     "fs:allow-applocaldata-meta",
-    "store:default",
     "os:default"
   ]
 }

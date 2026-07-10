@@ -49,5 +49,4 @@ export const androidFileOps = {
 
 export const androidAPI: PlatformAPI = {
   fileOps: androidFileOps,
-  storageType: 'mobileSandboxPath',
 };

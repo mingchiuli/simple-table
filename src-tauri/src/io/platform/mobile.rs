@@ -114,6 +114,10 @@ fn selected_file_name(path: &FilePath) -> Option<String> {
 pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, AppError> {
     use tauri_plugin_fs::FsExt;
 
+    if !Path::new(path).exists() {
+        return Err(AppError::FileNotFound(path.to_string()));
+    }
+
     let file_name = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())

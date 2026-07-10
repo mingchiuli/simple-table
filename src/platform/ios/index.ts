@@ -49,5 +49,4 @@ export const iosFileOps = {
 
 export const iosAPI: PlatformAPI = {
   fileOps: iosFileOps,
-  storageType: 'mobileSandboxPath',
 };

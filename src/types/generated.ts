@@ -83,7 +83,7 @@ storageType: StorageType,
  */
 originalPath?: string, };
 
-export type AddRecentFileRequest = { path: string, fileName: string, fileSize: number, storageType?: StorageType, originalPath?: string, documentId?: number, baseRevision?: number, };
+export type AddRecentFileRequest = { originalPath?: string, documentId: number, baseRevision: number, };
 
 export type HistoryStatus = { isTruncated: boolean, reason?: string, undoEntries: number, redoEntries: number, undoEstimatedBytes: number, redoEstimatedBytes: number, maxHistoryBytes: number, maxSingleEntryBytes: number, };
 

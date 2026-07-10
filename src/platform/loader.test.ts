@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultHistoryStatus,
+  defaultWorkbookCapabilities,
+  readyFormulaStatus,
+  type OpenDocumentResponse,
+} from "@/types";
 
 function mockDesktopPlatform(fileOps: Record<string, unknown>) {
   vi.doMock("@/utils/platform", () => ({
@@ -6,7 +12,6 @@ function mockDesktopPlatform(fileOps: Record<string, unknown>) {
   }));
   vi.doMock("@/platform/desktop", () => ({
     desktopAPI: {
-      storageType: "desktopPath",
       fileOps: {
         pickOpenFile: vi.fn(),
         readFile: vi.fn(),
@@ -15,6 +20,28 @@ function mockDesktopPlatform(fileOps: Record<string, unknown>) {
       },
     },
   }));
+}
+
+function openedResponse(): OpenDocumentResponse {
+  return {
+    fileData: {
+      path: "/tmp/recent.xlsx",
+      fileName: "recent.xlsx",
+      sheets: [],
+    },
+    editorSession: {
+      documentId: 1,
+      revision: 0,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: {
+        canUndo: false,
+        canRedo: false,
+        isDirty: false,
+        history: defaultHistoryStatus(),
+      },
+    },
+  };
 }
 
 describe("platform loader", () => {
@@ -51,5 +78,46 @@ describe("platform loader", () => {
       "cleanup failed"
     );
     expect(discardSaveLocation).toHaveBeenCalledWith("/tmp/reserved.xlsx");
+  });
+
+  it("uses trusted recent-file reads when the platform provides them", async () => {
+    const readFile = vi.fn();
+    const opened = openedResponse();
+    const readRecentFile = vi.fn().mockResolvedValue(opened);
+    mockDesktopPlatform({ readFile, readRecentFile });
+    const recent = {
+      id: "recent",
+      path: "/tmp/recent.xlsx",
+      fileName: "recent.xlsx",
+      lastOpened: 1,
+      fileSize: 2,
+      storageType: "desktopPath" as const,
+    };
+
+    const platform = await import("@/platform/loader");
+
+    await expect(platform.readRecentFile(recent)).resolves.toBe(opened);
+    expect(readRecentFile).toHaveBeenCalledWith(recent);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to path reads for platforms without trusted recent-file reads", async () => {
+    const opened = openedResponse();
+    const readFile = vi.fn().mockResolvedValue(opened);
+    mockDesktopPlatform({ readFile });
+
+    const platform = await import("@/platform/loader");
+
+    await expect(
+      platform.readRecentFile({
+        id: "recent",
+        path: "/tmp/recent.xlsx",
+        fileName: "recent.xlsx",
+        lastOpened: 1,
+        fileSize: 2,
+        storageType: "desktopPath",
+      })
+    ).resolves.toBe(opened);
+    expect(readFile).toHaveBeenCalledWith("/tmp/recent.xlsx");
   });
 });

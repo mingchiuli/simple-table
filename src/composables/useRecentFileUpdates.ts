@@ -1,9 +1,8 @@
-import { getStorageType } from "@/platform";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import type { EditorCommandContext } from "@/types";
 import {
-  tryAddRecentFileWithResolvedStorage,
+  tryAddRecentFileWithThumbnail,
   tryRefreshRecentFiles,
 } from "@/utils/recentFileTracking";
 
@@ -11,30 +10,19 @@ export function useRecentFileUpdates() {
   const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
 
-  function queueRecentFileEntryUpdate(
-    path: string,
-    fileName: string,
-    originalPath?: string
-  ) {
+  function queueRecentFileEntryUpdate(originalPath?: string) {
     const context = documentSessionStore.currentCommandContext();
-    void updateRecentFileEntry(path, fileName, originalPath, context);
+    void updateRecentFileEntry(originalPath, context);
   }
 
   async function updateRecentFileEntry(
-    path: string,
-    fileName: string,
     originalPath: string | undefined,
     context: EditorCommandContext | null
   ) {
-    await tryAddRecentFileWithResolvedStorage(
-      {
-        path,
-        fileName,
-        originalPath,
-        context,
-      },
-      getStorageType
-    );
+    if (!context) {
+      return;
+    }
+    await tryAddRecentFileWithThumbnail({ originalPath, context });
     await refreshRecentFiles();
   }
 

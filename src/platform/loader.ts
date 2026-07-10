@@ -4,7 +4,7 @@
 import { getPlatform } from '@/utils/platform';
 import { basename } from '@tauri-apps/api/path';
 import type { PlatformAPI, OpenFileSelection } from './types';
-import type { EditorCommandContext, OpenDocumentResponse } from '@/types';
+import type { EditorCommandContext, OpenDocumentResponse, RecentFile } from '@/types';
 import { createAsyncCache } from '@/utils/asyncCache';
 import { decodeFileNameSegment, fileNameFromPathLike } from '@/utils/fileFormats';
 
@@ -57,6 +57,12 @@ export async function readFile(path: string): Promise<OpenDocumentResponse> {
   return api.fileOps.readFile(path);
 }
 
+/** 从平台受信任的最近文件记录读取并解析 */
+export async function readRecentFile(file: RecentFile): Promise<OpenDocumentResponse> {
+  const api = await getPlatformAPI();
+  return api.fileOps.readRecentFile?.(file) ?? api.fileOps.readFile(file.path);
+}
+
 /** 保存文件：生成字节 + 写入（一体化） */
 export async function saveFile(path: string, context: EditorCommandContext) {
   const api = await getPlatformAPI();
@@ -85,12 +91,6 @@ export async function exportFile(defaultName: string, context: EditorCommandCont
     throw new Error('exportFile not supported on this platform');
   }
   return api.fileOps.exportFile(defaultName, context);
-}
-
-/** 获取存储类型 */
-export async function getStorageType() {
-  const api = await getPlatformAPI();
-  return api.storageType;
 }
 
 /** 获取路径中的文件名 */

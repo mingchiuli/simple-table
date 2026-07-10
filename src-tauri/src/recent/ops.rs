@@ -5,7 +5,7 @@ use crate::io::document;
 
 use super::store::RecentStore;
 use super::thumbnail::generate_thumbnail_from_file_data;
-use super::types::{AddRecentFileRequest, RecentFile};
+use super::types::{AddRecentFileRequest, RecentFile, StorageType};
 
 pub fn do_get_recent_files(app: &AppHandle) -> Vec<RecentFile> {
     RecentStore::get_all(app)
@@ -16,40 +16,32 @@ pub fn do_add_recent_file_with_thumbnail(
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
     let AddRecentFileRequest {
-        path,
-        file_name,
-        file_size,
-        storage_type,
         original_path,
         document_id,
         base_revision,
     } = request;
-    let mut recent_file = RecentFile::new(path, file_name, file_size);
+    let file_data = document::current_file_data_for_command(document_id, base_revision)?;
 
-    if let Some(storage_type) = storage_type {
-        recent_file.storage_type = storage_type;
+    if file_data.path.is_empty() {
+        return Err(AppError::DocumentStateInvalid(
+            "cannot add an unsaved document to recent files".to_string(),
+        ));
     }
+
+    let file_size = recent_file_size(&file_data.path);
+    let mut recent_file = RecentFile::new(
+        file_data.path.clone(),
+        file_data.file_name.clone(),
+        file_size,
+    );
+    recent_file.storage_type = current_platform_storage_type();
 
     if let Some(op) = original_path {
         recent_file.original_path = Some(op);
     }
 
-    match (document_id, base_revision) {
-        (Some(document_id), Some(base_revision)) => {
-            if let Ok(file_data) =
-                document::current_file_data_for_command(document_id, base_revision)
-                && let Some(thumbnail) = generate_thumbnail_from_file_data(&file_data)
-            {
-                recent_file.thumbnail = Some(thumbnail);
-            }
-        }
-        (None, None) => {}
-        _ => {
-            return Err(AppError::DocumentStateInvalid(
-                "recent file thumbnail request must include both documentId and baseRevision"
-                    .to_string(),
-            ));
-        }
+    if let Some(thumbnail) = generate_thumbnail_from_file_data(&file_data) {
+        recent_file.thumbnail = Some(thumbnail);
     }
 
     RecentStore::add(app, recent_file)
@@ -59,16 +51,18 @@ pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> 
     RecentStore::remove(app, id)
 }
 
-pub fn do_check_file_exists(path: &str) -> bool {
-    RecentStore::exists(path)
+fn recent_file_size(path: &str) -> i64 {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len() as i64)
+        .unwrap_or_default()
 }
 
-pub fn do_update_recent_file_path(
-    app: &AppHandle,
-    id: &str,
-    new_path: &str,
-) -> Result<(), AppError> {
-    RecentStore::update_path(app, id, new_path)
+fn current_platform_storage_type() -> StorageType {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        StorageType::MobileSandboxPath
+    } else {
+        StorageType::DesktopPath
+    }
 }
 
 #[cfg(test)]
@@ -80,26 +74,38 @@ mod tests {
     #[test]
     fn add_recent_request_uses_generated_storage_type_contract() {
         let request: AddRecentFileRequest = serde_json::from_value(json!({
-            "path": "/tmp/book.xlsx",
-            "fileName": "book.xlsx",
-            "fileSize": 42,
-            "storageType": "mobileSandboxPath"
+            "documentId": 7,
+            "baseRevision": 3,
+            "originalPath": "/original/book.xlsx"
         }))
         .expect("recent request");
 
-        assert_eq!(request.storage_type, Some(StorageType::MobileSandboxPath));
+        assert_eq!(request.document_id, 7);
+        assert_eq!(request.base_revision, 3);
+        assert_eq!(
+            request.original_path.as_deref(),
+            Some("/original/book.xlsx")
+        );
     }
 
     #[test]
-    fn add_recent_request_rejects_unknown_storage_type() {
+    fn add_recent_request_requires_document_context() {
         let error = serde_json::from_value::<AddRecentFileRequest>(json!({
-            "path": "/tmp/book.xlsx",
-            "fileName": "book.xlsx",
-            "fileSize": 42,
-            "storageType": "unknown"
+            "originalPath": "/original/book.xlsx"
         }))
-        .expect_err("unknown storage type should fail deserialization");
+        .expect_err("document context should be required");
 
-        assert!(error.to_string().contains("unknown variant"));
+        assert!(error.to_string().contains("missing field"));
+    }
+
+    #[test]
+    fn platform_storage_type_matches_target_family() {
+        let storage_type = current_platform_storage_type();
+
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            assert_eq!(storage_type, StorageType::MobileSandboxPath);
+        } else {
+            assert_eq!(storage_type, StorageType::DesktopPath);
+        }
     }
 }

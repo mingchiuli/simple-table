@@ -40,7 +40,8 @@ pub fn open_from_bytes(
 }
 
 /// 初始化编辑器状态（用于新建文件）
-pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
+pub fn init_file(mut file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
+    file_data.path.clear();
     init_editor_state(file_data, None)
 }
 
@@ -543,7 +544,7 @@ fn default_extension_string() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CellValue;
+    use crate::types::{CellValue, SheetData};
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
@@ -589,5 +590,18 @@ mod tests {
         assert_eq!(rows[0][1], CellValue::String("score".to_string()));
         assert_eq!(rows[1][0], CellValue::String("alice".to_string()));
         assert_eq!(rows[1][1], CellValue::Number(42.into()));
+    }
+
+    #[test]
+    fn init_file_does_not_trust_frontend_path() {
+        let response = init_file(FileData {
+            path: "/tmp/should-not-be-trusted.xlsx".to_string(),
+            file_name: "untitled.xlsx".to_string(),
+            sheets: vec![SheetData::default()],
+        })
+        .expect("init file");
+
+        assert_eq!(response.file_data.path, "");
+        assert_eq!(response.file_data.file_name, "untitled.xlsx");
     }
 }

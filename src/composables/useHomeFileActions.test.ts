@@ -32,8 +32,6 @@ vi.mock("element-plus", () => ({
 
 vi.mock("@/api", () => ({
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue(undefined),
-  checkFileExists: vi.fn(),
-  getFileSize: vi.fn().mockResolvedValue(42),
   getSpreadsheetFormatOptions: vi.fn().mockResolvedValue({
     defaultExtension: "xlsx",
     supportedExtensions: ["xlsx", "csv"],
@@ -45,9 +43,9 @@ vi.mock("@/api", () => ({
 vi.mock("@/platform", () => ({
   discardOpenFileSelection: vi.fn(),
   getFileName: vi.fn(),
-  getStorageType: vi.fn().mockResolvedValue("desktopPath"),
   pickOpenFile: vi.fn(),
   readFile: vi.fn(),
+  readRecentFile: vi.fn(),
 }));
 
 vi.mock("@/utils/unsavedChanges", async () => {
@@ -206,21 +204,67 @@ describe("useHomeFileActions", () => {
   });
 
   it("opens an existing recent file from the home workflow", async () => {
-    const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const navigateToTable = vi.fn();
-    vi.mocked(api.checkFileExists).mockResolvedValue(true);
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("recent.xlsx", 2));
+    vi.mocked(platform.readRecentFile).mockResolvedValue(openedResponse("recent.xlsx", 2));
 
     const actions = useHomeFileActions({ navigateToTable });
 
     await actions.handleOpenRecent(recentFile());
     await flushPromises();
 
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/recent.xlsx");
+    expect(platform.readRecentFile).toHaveBeenCalledWith(recentFile());
     expect(documentSessionStore.documentId).toBe(2);
     expect(documentSessionStore.currentFilePath).toBe("/tmp/recent.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
+  });
+
+  it("relocates a recent file after direct open fails", async () => {
+    const api = await import("@/api");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const navigateToTable = vi.fn();
+    const stale = recentFile({ id: "stale", path: "/tmp/missing.xlsx" });
+    vi.mocked(platform.readRecentFile).mockRejectedValueOnce(
+      new Error("File not found: /tmp/missing.xlsx")
+    );
+    vi.mocked(platform.pickOpenFile).mockResolvedValue({
+      path: "/tmp/relocated.xlsx",
+      fileName: "relocated.xlsx",
+    });
+    vi.mocked(platform.readFile).mockResolvedValueOnce(openedResponse("relocated.xlsx", 3));
+
+    const actions = useHomeFileActions({ navigateToTable });
+
+    await actions.handleOpenRecent(stale);
+    await flushPromises();
+
+    expect(platform.readRecentFile).toHaveBeenCalledWith(stale);
+    expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
+    expect(api.removeRecentFile).toHaveBeenCalledWith("stale");
+    expect(documentSessionStore.documentId).toBe(3);
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/relocated.xlsx");
+    expect(navigateToTable).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports recent file parse failures instead of relocating", async () => {
+    const elementPlus = await import("element-plus");
+    const platform = await import("@/platform");
+    const navigateToTable = vi.fn();
+    vi.mocked(platform.readRecentFile).mockRejectedValueOnce(
+      new Error("Unsupported file format")
+    );
+
+    const actions = useHomeFileActions({ navigateToTable });
+
+    await actions.handleOpenRecent(recentFile());
+    await flushPromises();
+
+    expect(platform.pickOpenFile).not.toHaveBeenCalled();
+    expect(navigateToTable).not.toHaveBeenCalled();
+    expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
+      "Failed to open file: Error: Unsupported file format"
+    );
   });
 });

@@ -1,31 +1,29 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import type { OpenFileSelection, PlatformAPI } from '../types';
-import type { EditorCommandContext, OpenDocumentResponse, SavedDocumentResponse } from "@/types";
-import { decodeFileNameSegment } from "@/utils/fileFormats";
-import { spreadsheetDialogFilters } from "@/utils/spreadsheetFormats";
+import type {
+  EditorCommandContext,
+  OpenDocumentResponse,
+  RecentFile,
+  SavedDocumentResponse,
+} from "@/types";
 
 export const desktopFileOps = {
-  /** Desktop: 只选择文件路径，不解析、不替换后端活动文档 */
+  /** Desktop: 后端选择文件路径并授权随后读取，不在前端直接使用 dialog/fs 插件。 */
   pickOpenFile: async (): Promise<OpenFileSelection | null> => {
-    const selected = await open({
-      multiple: false,
-      filters: await spreadsheetDialogFilters(),
-    });
-    if (!selected) return null;
-
-    const fileName = decodeFileNameSegment(await basename(selected));
-
-    return {
-      path: selected,
-      fileName,
-    };
+    return invoke<OpenFileSelection | null>("pick_open_file_desktop");
   },
 
-  /** Desktop: 从已知路径读取并解析（用于最近文件列表） */
+  discardOpenFileSelection: (selection: OpenFileSelection): Promise<void> => {
+    return invoke<void>("discard_open_file_selection_desktop", { path: selection.path });
+  },
+
+  /** Desktop: 从后端已授权路径读取并解析。 */
   readFile: async (path: string): Promise<OpenDocumentResponse> => {
     return invoke<OpenDocumentResponse>("read_file_desktop", { path });
+  },
+
+  readRecentFile: (file: RecentFile): Promise<OpenDocumentResponse> => {
+    return invoke<OpenDocumentResponse>("read_recent_file_desktop", { id: file.id });
   },
 
   /** Desktop: 生成文件字节并写入路径 */
@@ -34,26 +32,18 @@ export const desktopFileOps = {
   },
 
   pickSaveLocation: async (defaultName: string) => {
-    const selected = await save({
-      defaultPath: defaultName,
-      filters: await spreadsheetDialogFilters(),
-    });
-    return selected;
+    return invoke<string | null>("pick_save_location_desktop", { defaultName });
+  },
+
+  discardSaveLocation: (path: string): Promise<void> => {
+    return invoke<void>("discard_save_location_desktop", { path });
   },
 
   exportFile: async (defaultName: string, context: EditorCommandContext) => {
-    const selected = await save({
-      defaultPath: defaultName,
-      filters: await spreadsheetDialogFilters(),
-    });
-    if (!selected) return null;
-
-    await invoke<void>("export_file_desktop", { path: selected, ...context });
-    return selected;
+    return invoke<string | null>("export_file_desktop", { defaultName, ...context });
   },
 };
 
 export const desktopAPI: PlatformAPI = {
   fileOps: desktopFileOps,
-  storageType: 'desktopPath',
 };

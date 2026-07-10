@@ -3,7 +3,6 @@ import { ElMessage } from 'element-plus';
 import * as api from '@/api';
 import {
   exportFile,
-  getFileName,
   pickOpenFile,
   readFile,
   saveFile,
@@ -17,7 +16,6 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
-import { warnRecentFileTrackingFailure } from '@/utils/recentFileTracking';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
@@ -74,16 +72,7 @@ export function useFileActions({
           documentSessionStore.openDocumentResponse(opened, filePath);
           loaded = true;
 
-          const fileName = await resolveRecentFileNameAfterOpen(
-            opened.fileData.fileName,
-            filePath,
-            shouldContinue
-          );
-          if (!shouldContinue()) return;
-
-          if (fileName) {
-            queueRecentFileEntryUpdate(filePath, fileName);
-          }
+          queueRecentFileEntryUpdate();
         } finally {
           if (!loaded) {
             replacement.cancel();
@@ -103,7 +92,7 @@ export function useFileActions({
       const opened = await openSelectedFileOrDiscard(selection);
       if (!opened) return;
 
-      queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
+      queueRecentFileEntryUpdate(selection.originalPath);
     });
   }
 
@@ -128,10 +117,7 @@ export function useFileActions({
           notifySavedButNotApplied();
           return;
         }
-        const fileName = await resolveRecentFileNameAfterSave(saved.fileData.fileName, existingPath);
-        if (fileName) {
-          queueRecentFileEntryUpdate(existingPath, fileName);
-        }
+        queueRecentFileEntryUpdate();
         ElMessage.success('File saved successfully');
         return;
       }
@@ -158,10 +144,7 @@ export function useFileActions({
           notifySavedButNotApplied();
           return;
         }
-        const fileName = await resolveRecentFileNameAfterSave(saved.fileData.fileName, savePath);
-        if (fileName) {
-          queueRecentFileEntryUpdate(savePath, fileName);
-        }
+        queueRecentFileEntryUpdate();
         ElMessage.success('File saved successfully');
       });
     });
@@ -258,32 +241,5 @@ async function awaitRouteLoadStep<T>(
       return undefined;
     }
     throw error;
-  }
-}
-
-async function resolveRecentFileNameAfterOpen(
-  openedFileName: string,
-  filePath: string,
-  shouldContinue: ContinuationGuard
-): Promise<string | null> {
-  if (openedFileName) return openedFileName;
-  try {
-    return await awaitRouteLoadStep(getFileName(filePath), shouldContinue) ?? null;
-  } catch (error) {
-    warnRecentFileTrackingFailure(error);
-    return null;
-  }
-}
-
-async function resolveRecentFileNameAfterSave(
-  savedFileName: string,
-  filePath: string
-): Promise<string | null> {
-  if (savedFileName) return savedFileName;
-  try {
-    return await getFileName(filePath);
-  } catch (error) {
-    warnRecentFileTrackingFailure(error);
-    return null;
   }
 }

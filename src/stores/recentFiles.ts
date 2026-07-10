@@ -36,11 +36,6 @@ export const useRecentFilesStore = defineStore("recentFiles", {
       await api.removeRecentFile(id);
       await this.load();
     },
-
-    async updatePath(id: string, newPath: string) {
-      await api.updateRecentFilePath(id, newPath);
-      await this.load();
-    },
   },
 });
 

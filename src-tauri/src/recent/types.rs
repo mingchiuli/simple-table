@@ -42,22 +42,13 @@ pub struct RecentFile {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct AddRecentFileRequest {
-    pub path: String,
-    pub file_name: String,
-    #[ts(type = "number")]
-    pub file_size: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub storage_type: Option<StorageType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub original_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "number")]
-    pub document_id: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "number")]
-    pub base_revision: Option<u64>,
+    #[ts(type = "number")]
+    pub document_id: u64,
+    #[ts(type = "number")]
+    pub base_revision: u64,
 }
 
 impl RecentFile {

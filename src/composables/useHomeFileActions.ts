@@ -2,7 +2,7 @@ import { computed, ref } from "vue";
 import { defaultRichProjection, type FileData, type RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
-import { pickOpenFile, readFile } from "@/platform";
+import { pickOpenFile, readRecentFile } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
 import { warnRecentFileTrackingFailure } from "@/utils/recentFileTracking";
 import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
@@ -48,7 +48,7 @@ export function useHomeFileActions({
       const opened = await openSelectedFileOrDiscard(selection);
       if (!opened) return;
 
-      queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
+      queueRecentFileEntryUpdate(selection.originalPath);
       await navigateToTableRoute();
     });
   }
@@ -73,15 +73,20 @@ export function useHomeFileActions({
 
   async function handleOpenRecent(file: RecentFile) {
     await runHomeFileAction("Failed to open file", async () => {
-      if (await api.checkFileExists(file.path)) {
+      try {
         if (await openRecentPath(file)) {
           await navigateToTableRoute();
+          return;
         }
-        return;
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          throw error;
+        }
       }
 
       if (await relocateAndOpenRecent(file)) {
         await navigateToTableRoute();
+        return;
       }
     });
   }
@@ -90,10 +95,10 @@ export function useHomeFileActions({
     const replacement = await beginDocumentReplacement();
     if (!replacement) return false;
     try {
-      const opened = await readFile(file.path);
+      const opened = await readRecentFile(file);
       replacement.commit();
       documentSessionStore.openDocumentResponse(opened, file.path);
-      queueRecentFileEntryUpdate(file.path, file.fileName, file.originalPath);
+      queueRecentFileEntryUpdate(file.originalPath);
       return true;
     } catch (error) {
       replacement.cancel();
@@ -106,7 +111,7 @@ export function useHomeFileActions({
     if (!selection) return false;
     const opened = await openSelectedFileOrDiscard(selection);
     if (!opened) return false;
-    queueRecentFileEntryUpdate(selection.path, selection.fileName, selection.originalPath);
+    queueRecentFileEntryUpdate(selection.originalPath);
 
     if (file.path !== selection.path) {
       try {
@@ -134,6 +139,10 @@ export function useHomeFileActions({
     handleNewFile,
     handleOpenRecent,
   };
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return String(error).includes("File not found:");
 }
 
 function newUntitledFileData(defaultExtension: string): FileData {

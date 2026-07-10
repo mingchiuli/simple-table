@@ -1,13 +1,9 @@
 use std::cmp::Reverse;
-use std::path::Path;
-
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use crate::error::AppError;
-use crate::io::file_format::file_name_from_path_like;
-
 use super::types::RecentFile;
+use crate::error::AppError;
 
 const STORE_FILE: &str = "recent-files.json";
 const STORE_KEY: &str = "recent_files";
@@ -49,33 +45,6 @@ impl RecentStore {
         let mut files = Self::get_all(app);
         files.retain(|f| f.id != id);
         Self::save(app, &files)
-    }
-
-    pub fn update_path(app: &AppHandle, id: &str, new_path: &str) -> Result<(), AppError> {
-        let mut files = Self::get_all(app);
-
-        let file = files
-            .iter_mut()
-            .find(|f| f.id == id)
-            .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
-
-        file.path = new_path.to_string();
-        file.file_name = file_name_from_path_like(new_path, &file.file_name);
-
-        files.sort_by_key(|file| Reverse(file.last_opened));
-
-        Self::save(app, &files)
-    }
-
-    pub fn exists(path: &str) -> bool {
-        let lower_path = path.to_ascii_lowercase();
-        if lower_path.starts_with("content://")
-            || lower_path.starts_with("file://")
-            || lower_path.starts_with("blob:")
-        {
-            return true;
-        }
-        Path::new(path).exists()
     }
 }
 
@@ -169,14 +138,6 @@ mod tests {
         );
         assert_eq!(updated.id, "stable-id");
         assert_eq!(updated.file_name, "renamed.xlsx");
-    }
-
-    #[test]
-    fn virtual_uri_exists_checks_are_case_insensitive() {
-        assert!(RecentStore::exists("content://provider/document"));
-        assert!(RecentStore::exists("CONTENT://provider/document"));
-        assert!(RecentStore::exists("FILE://server/share/book.xlsx"));
-        assert!(RecentStore::exists("BLOB:temporary-id"));
     }
 
     #[test]

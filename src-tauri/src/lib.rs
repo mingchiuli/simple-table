@@ -23,14 +23,18 @@ use commands::ios::{
     pick_open_file_ios, pick_save_location_ios, read_file_ios, save_file_ios,
 };
 use commands::{
-    add_column, add_recent_file_with_thumbnail, add_row, add_sheet, check_file_exists,
-    close_current_document, delete_column, delete_row, delete_sheet, get_current_file_data,
-    get_document_capabilities, get_editor_state, get_file_size, get_native_save_plan,
-    get_recent_files, get_spreadsheet_format_options, init_file, redo, remove_recent_file, search,
-    set_cell, set_cells, set_column_width, set_row_height, undo, update_recent_file_path,
+    add_column, add_recent_file_with_thumbnail, add_row, add_sheet, close_current_document,
+    delete_column, delete_row, delete_sheet, get_current_file_data, get_document_capabilities,
+    get_editor_state, get_native_save_plan, get_recent_files, get_spreadsheet_format_options,
+    init_file, redo, remove_recent_file, search, set_cell, set_cells, set_column_width,
+    set_row_height, undo,
 };
 #[cfg(desktop)]
-use commands::{export_file_desktop, read_file_desktop, save_file_desktop};
+use commands::{
+    discard_open_file_selection_desktop, discard_save_location_desktop, export_file_desktop,
+    pick_open_file_desktop, pick_save_location_desktop, read_file_desktop,
+    read_recent_file_desktop, save_file_desktop,
+};
 
 use tauri::Emitter;
 
@@ -43,10 +47,11 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             println!("new app instance opened with {argv:?}");
             // File path is passed as argv[1], emit event for frontend to handle
-            if argv.len() > 1
-                && let Err(e) = app.emit("deep-link-received", argv[1].clone())
-            {
-                eprintln!("Failed to emit deep link: {}", e);
+            if argv.len() > 1 {
+                io::platform::desktop::authorize_open_target(&argv[1]);
+                if let Err(e) = app.emit("deep-link-received", argv[1].clone()) {
+                    eprintln!("Failed to emit deep link: {}", e);
+                }
             }
         }));
     }
@@ -58,16 +63,40 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_process::init());
     }
 
+    #[cfg(desktop)]
+    {
+        builder = builder.setup(|_| {
+            for arg in std::env::args().skip(1) {
+                io::platform::desktop::authorize_open_target(&arg);
+            }
+            Ok(())
+        });
+    }
+
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_fs::init());
+    }
+
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_os::init())
         .invoke_handler(tauri::generate_handler![
             #[cfg(desktop)]
+            pick_open_file_desktop,
+            #[cfg(desktop)]
+            discard_open_file_selection_desktop,
+            #[cfg(desktop)]
             read_file_desktop,
+            #[cfg(desktop)]
+            read_recent_file_desktop,
+            #[cfg(desktop)]
+            pick_save_location_desktop,
+            #[cfg(desktop)]
+            discard_save_location_desktop,
             #[cfg(desktop)]
             save_file_desktop,
             #[cfg(desktop)]
@@ -95,9 +124,6 @@ pub fn run() {
             get_recent_files,
             add_recent_file_with_thumbnail,
             remove_recent_file,
-            check_file_exists,
-            get_file_size,
-            update_recent_file_path,
             // Android 专用命令
             #[cfg(target_os = "android")]
             pick_open_file_android,

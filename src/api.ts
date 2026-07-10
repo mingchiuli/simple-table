@@ -11,7 +11,6 @@ import type {
   OpenDocumentResponse,
   SpreadsheetFormatOptions,
   EditorCommandContext,
-  StorageType,
   SearchScope,
   AddRecentFileRequest,
 } from "@/types";
@@ -180,25 +179,13 @@ export async function getRecentFiles(): Promise<RecentFile[]> {
 }
 
 export async function addRecentFileWithThumbnail(
-  path: string,
-  fileName: string,
-  fileSize: number,
-  storageType?: StorageType,
-  originalPath?: string,
-  context?: EditorCommandContext | null
+  context: EditorCommandContext,
+  originalPath?: string
 ): Promise<RecentFile> {
   const request: AddRecentFileRequest = {
-    path,
-    fileName,
-    fileSize,
-    storageType,
     originalPath,
-    ...(context
-      ? {
-        documentId: context.documentId,
-        baseRevision: context.baseRevision,
-      }
-      : {}),
+    documentId: context.documentId,
+    baseRevision: context.baseRevision,
   };
 
   return invoke<RecentFile>("add_recent_file_with_thumbnail", {
@@ -208,16 +195,4 @@ export async function addRecentFileWithThumbnail(
 
 export async function removeRecentFile(id: string): Promise<void> {
   return invoke<void>("remove_recent_file", { id });
-}
-
-export async function checkFileExists(path: string): Promise<boolean> {
-  return invoke<boolean>("check_file_exists", { path });
-}
-
-export async function getFileSize(path: string): Promise<number> {
-  return invoke<number>("get_file_size", { path });
-}
-
-export async function updateRecentFilePath(id: string, newPath: string): Promise<void> {
-  return invoke<void>("update_recent_file_path", { id, newPath });
 }

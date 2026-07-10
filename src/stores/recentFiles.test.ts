@@ -6,7 +6,6 @@ import type { RecentFile } from "@/types";
 vi.mock("@/api", () => ({
   getRecentFiles: vi.fn(),
   removeRecentFile: vi.fn(),
-  updateRecentFilePath: vi.fn(),
 }));
 
 function deferred<T>() {

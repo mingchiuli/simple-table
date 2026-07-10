@@ -38,11 +38,11 @@ vi.mock("element-plus", () => ({
 }));
 
 vi.mock("@/api", () => ({
-  getFileSize: vi.fn().mockResolvedValue(42),
   getSpreadsheetFormatOptions: vi.fn().mockResolvedValue({
     defaultExtension: "xlsx",
     supportedExtensions: ["xlsx", "csv"],
   }),
+  getRecentFiles: vi.fn().mockResolvedValue([]),
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
     id: "recent",
     path: "/tmp/next.xlsx",
@@ -60,7 +60,6 @@ vi.mock("@/platform", () => ({
   discardSaveLocation: vi.fn(),
   exportFile: vi.fn(),
   getFileName: vi.fn(),
-  getStorageType: vi.fn().mockResolvedValue("desktopPath"),
   pickOpenFile: vi.fn(),
   pickSaveLocation: vi.fn(),
   readFile: vi.fn(),
@@ -220,7 +219,6 @@ describe("useFileActions", () => {
     const pendingRead = deferred<OpenDocumentResponse>();
     let shouldContinue = true;
     vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
-    vi.mocked(platform.getFileName).mockResolvedValue("stale.xlsx");
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
     const loadPromise = actions.loadFileFromPath(
@@ -361,8 +359,8 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
-    const storageType = deferred<"desktopPath">();
-    vi.mocked(platform.getStorageType).mockReturnValue(storageType.promise);
+    const recentUpdate = deferred<Awaited<ReturnType<typeof api.addRecentFileWithThumbnail>>>();
+    vi.mocked(api.addRecentFileWithThumbnail).mockReturnValue(recentUpdate.promise);
     vi.mocked(platform.readFile).mockResolvedValue(openedResponse("fast.xlsx", 2));
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
@@ -370,28 +368,48 @@ describe("useFileActions", () => {
     await expect(actions.loadFileFromPath("/tmp/fast.xlsx")).resolves.toBe(true);
 
     expect(documentSessionStore.currentFilePath).toBe("/tmp/fast.xlsx");
-    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+    expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
+      { documentId: 2, baseRevision: 0 },
+      undefined
+    );
 
-    storageType.resolve("desktopPath");
+    recentUpdate.resolve({
+      id: "recent",
+      path: "/tmp/fast.xlsx",
+      fileName: "fast.xlsx",
+      lastOpened: 1,
+      fileSize: 42,
+      storageType: "desktopPath",
+    });
     await flushPromises();
-
-    expect(api.addRecentFileWithThumbnail).toHaveBeenCalled();
   });
 
-  it("keeps a route-loaded document open when recent file name fallback fails", async () => {
+  it("keeps a route-loaded document open when recent metadata refresh fails", async () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("", 2));
-    vi.mocked(platform.getFileName).mockRejectedValue(new Error("name unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("nameless.xlsx", 2));
+    vi.mocked(api.addRecentFileWithThumbnail).mockRejectedValueOnce(
+      new Error("metadata unavailable")
+    );
 
-    const actions = mountActions(vi.fn().mockResolvedValue(true));
+    try {
+      const actions = mountActions(vi.fn().mockResolvedValue(true));
 
-    await expect(actions.loadFileFromPath("/tmp/nameless.xlsx")).resolves.toBe(true);
+      await expect(actions.loadFileFromPath("/tmp/nameless.xlsx")).resolves.toBe(true);
+      await flushPromises();
 
-    expect(documentSessionStore.documentId).toBe(2);
-    expect(documentSessionStore.currentFilePath).toBe("/tmp/nameless.xlsx");
-    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+      expect(documentSessionStore.documentId).toBe(2);
+      expect(documentSessionStore.currentFilePath).toBe("/tmp/nameless.xlsx");
+      expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
+        { documentId: 2, baseRevision: 0 },
+        undefined
+      );
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("asks before opening when pending work becomes dirty after flush", async () => {
@@ -677,11 +695,12 @@ describe("useFileActions", () => {
     expect(documentSessionStore.currentFilePath).toBe(savePath);
   });
 
-  it("keeps a save-as result when recent file name fallback fails", async () => {
+  it("keeps a save-as result when recent metadata refresh fails", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const savePath = "/tmp/saved-without-name.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     documentSessionStore.openDocumentResponse(newUntitledResponse(1), null);
@@ -689,48 +708,71 @@ describe("useFileActions", () => {
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan());
     vi.mocked(platform.pickSaveLocation).mockResolvedValue(savePath);
-    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("", savePath, 1));
-    vi.mocked(platform.getFileName).mockRejectedValue(new Error("name unavailable"));
+    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("saved-without-name.xlsx", savePath, 1));
+    vi.mocked(api.addRecentFileWithThumbnail).mockRejectedValueOnce(
+      new Error("metadata unavailable")
+    );
 
-    const actions = mountActions(flushPendingCellChanges);
+    try {
+      const actions = mountActions(flushPendingCellChanges);
 
-    await actions.handleSaveFile();
+      await actions.handleSaveFile();
+      await flushPromises();
 
-    expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
-      documentId: 1,
-      baseRevision: 0,
-    });
-    expect(platform.discardSaveLocation).not.toHaveBeenCalled();
-    expect(documentSessionStore.currentFilePath).toBe(savePath);
-    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
-    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
-    expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
+      expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
+        documentId: 1,
+        baseRevision: 0,
+      });
+      expect(platform.discardSaveLocation).not.toHaveBeenCalled();
+      expect(documentSessionStore.currentFilePath).toBe(savePath);
+      expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
+        { documentId: 1, baseRevision: 0 },
+        undefined
+      );
+      expect(warn).toHaveBeenCalled();
+      expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+      expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it("keeps an existing-file save when recent file name fallback fails", async () => {
+  it("keeps an existing-file save when recent metadata refresh fails", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const existingPath = "/tmp/current.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), existingPath);
     vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
-    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("", existingPath, 1));
-    vi.mocked(platform.getFileName).mockRejectedValue(new Error("name unavailable"));
+    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("current.xlsx", existingPath, 1));
+    vi.mocked(api.addRecentFileWithThumbnail).mockRejectedValueOnce(
+      new Error("metadata unavailable")
+    );
 
-    const actions = mountActions(flushPendingCellChanges);
+    try {
+      const actions = mountActions(flushPendingCellChanges);
 
-    await actions.handleSaveFile();
+      await actions.handleSaveFile();
+      await flushPromises();
 
-    expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
-      documentId: 1,
-      baseRevision: 0,
-    });
-    expect(documentSessionStore.currentFilePath).toBe(existingPath);
-    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
-    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
-    expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
+      expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
+        documentId: 1,
+        baseRevision: 0,
+      });
+      expect(documentSessionStore.currentFilePath).toBe(existingPath);
+      expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
+        { documentId: 1, baseRevision: 0 },
+        undefined
+      );
+      expect(warn).toHaveBeenCalled();
+      expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+      expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("allows saving a stale projection and replaces it with the saved backend snapshot", async () => {

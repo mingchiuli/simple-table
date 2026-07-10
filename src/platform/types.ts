@@ -5,8 +5,8 @@
 import type {
   EditorCommandContext,
   OpenDocumentResponse,
+  RecentFile,
   SavedDocumentResponse,
-  StorageType,
 } from "@/types";
 
 export type OpenFileSelection = {
@@ -23,6 +23,8 @@ export interface PlatformFileOps {
   discardOpenFileSelection?(selection: OpenFileSelection): Promise<void>;
   /** 从已知路径读取并解析（用于最近文件列表） */
   readFile(path: string): Promise<OpenDocumentResponse>;
+  /** 从平台受信任的最近文件记录读取并解析；未实现的平台回退到 readFile(file.path) */
+  readRecentFile?(file: RecentFile): Promise<OpenDocumentResponse>;
   /** 保存文件：生成字节 + 写入（一体化） */
   saveFile(path: string, context: EditorCommandContext): Promise<SavedDocumentResponse>;
   /** 选择保存位置 */
@@ -35,5 +37,4 @@ export interface PlatformFileOps {
 
 export interface PlatformAPI {
   fileOps: PlatformFileOps;
-  storageType: StorageType;
 }

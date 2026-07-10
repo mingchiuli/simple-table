@@ -15,11 +15,54 @@ use tauri::AppHandle;
 
 // ==================== File Operations ====================
 
-/// Desktop: 从路径直接读取并解析文件
+/// Desktop: 后端选择文件路径并授权随后读取。
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn pick_open_file_desktop(
+    app: AppHandle,
+) -> Result<Option<desktop::DesktopOpenFileInfo>, AppError> {
+    desktop::pick_open_file(&app)
+}
+
+/// Desktop: 释放已选择但没有被读取的文件路径授权。
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn discard_open_file_selection_desktop(path: String) {
+    desktop::discard_open_file_selection(&path)
+}
+
+/// Desktop: 从后端已授权路径读取并解析文件。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub fn read_file_desktop(path: String) -> Result<OpenDocumentResponse, AppError> {
     desktop::read_file(&path)
+}
+
+/// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn read_recent_file_desktop(
+    app: AppHandle,
+    id: String,
+) -> Result<OpenDocumentResponse, AppError> {
+    desktop::read_recent_file(&app, &id)
+}
+
+/// Desktop: 后端选择保存路径并授权随后保存。
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn pick_save_location_desktop(
+    app: AppHandle,
+    default_name: String,
+) -> Result<Option<String>, AppError> {
+    desktop::pick_save_location(&app, &default_name)
+}
+
+/// Desktop: 释放未使用的保存路径授权。
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn discard_save_location_desktop(path: String) {
+    desktop::discard_save_location(&path)
 }
 
 /// Desktop: 生成文件字节并写入路径
@@ -37,11 +80,12 @@ pub fn save_file_desktop(
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub fn export_file_desktop(
-    path: String,
+    app: AppHandle,
+    default_name: String,
     document_id: u64,
     base_revision: u64,
-) -> Result<(), AppError> {
-    desktop::export_file(&path, document_id, base_revision)
+) -> Result<Option<String>, AppError> {
+    desktop::export_file(&app, &default_name, document_id, base_revision)
 }
 
 #[tauri::command]
@@ -299,27 +343,6 @@ pub fn get_recent_files(app: AppHandle) -> Vec<RecentFile> {
 #[tauri::command]
 pub fn remove_recent_file(app: AppHandle, id: String) -> Result<(), AppError> {
     recent::do_remove_recent_file(&app, &id)
-}
-
-#[tauri::command]
-pub fn check_file_exists(path: String) -> bool {
-    recent::do_check_file_exists(&path)
-}
-
-#[tauri::command]
-pub fn get_file_size(path: String) -> i64 {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.len() as i64)
-        .unwrap_or(0)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn update_recent_file_path(
-    app: AppHandle,
-    id: String,
-    new_path: String,
-) -> Result<(), AppError> {
-    recent::do_update_recent_file_path(&app, &id, &new_path)
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -11,16 +11,7 @@ import {
   type FileData,
 } from "@/types";
 
-const platformMocks = vi.hoisted(() => ({
-  getStorageType: vi.fn(),
-}));
-
-vi.mock("@/platform", () => ({
-  getStorageType: platformMocks.getStorageType,
-}));
-
 vi.mock("@/api", () => ({
-  getFileSize: vi.fn().mockResolvedValue(42),
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
     id: "recent",
     path: "/tmp/book.xlsx",
@@ -31,16 +22,6 @@ vi.mock("@/api", () => ({
   }),
   getRecentFiles: vi.fn().mockResolvedValue([]),
 }));
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
 
 async function flushPromises() {
   for (let i = 0; i < 8; i += 1) {
@@ -93,24 +74,17 @@ describe("useRecentFileUpdates", () => {
 
   it("captures the active document context before running background recent updates", async () => {
     const api = await import("@/api");
-    const storageType = deferred<"desktopPath">();
-    platformMocks.getStorageType.mockReturnValue(storageType.promise);
     openRecentTestDocument("old.xlsx", 1, 3);
     const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
 
-    queueRecentFileEntryUpdate("/tmp/old.xlsx", "old.xlsx");
+    queueRecentFileEntryUpdate("/original/old.xlsx");
     openRecentTestDocument("new.xlsx", 2, 0);
 
-    storageType.resolve("desktopPath");
     await flushPromises();
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      "/tmp/old.xlsx",
-      "old.xlsx",
-      42,
-      "desktopPath",
-      undefined,
-      { documentId: 1, baseRevision: 3 }
+      { documentId: 1, baseRevision: 3 },
+      "/original/old.xlsx"
     );
   });
 });
