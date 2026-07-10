@@ -18,6 +18,14 @@ const spreadsheetFormats = vi.hoisted(() => ({
   defaultSpreadsheetExtension: vi.fn(),
 }));
 
+const openProtocolMocks = vi.hoisted(() => ({
+  prepareNewFile: vi.fn(),
+  prepareOpenFile: vi.fn(),
+  prepareRecentFile: vi.fn(),
+  commitPreparedDocument: vi.fn(),
+  abortPreparedDocument: vi.fn(),
+}));
+
 vi.mock("vue-router", () => ({
   useRouter: () => ({
     push: vi.fn(),
@@ -36,15 +44,17 @@ vi.mock("@/api", () => ({
     defaultExtension: "xlsx",
     supportedExtensions: ["xlsx", "csv"],
   }),
-  initFile: vi.fn(),
+  prepareNewFile: openProtocolMocks.prepareNewFile,
+  commitPreparedDocument: openProtocolMocks.commitPreparedDocument,
+  abortPreparedDocument: openProtocolMocks.abortPreparedDocument,
   removeRecentFile: vi.fn(),
 }));
 
 vi.mock("@/platform", () => ({
   discardOpenFileSelection: vi.fn(),
   pickOpenFile: vi.fn(),
-  readFile: vi.fn(),
-  readRecentFile: vi.fn(),
+  prepareOpenFile: openProtocolMocks.prepareOpenFile,
+  prepareRecentFile: openProtocolMocks.prepareRecentFile,
 }));
 
 vi.mock("@/utils/unsavedChanges", async () => {
@@ -92,6 +102,21 @@ function openedResponse(fileName = "book.xlsx", documentId = 1): OpenDocumentRes
   };
 }
 
+function mockPreparedNew(response: OpenDocumentResponse, token = "prepared-new") {
+  openProtocolMocks.prepareNewFile.mockResolvedValue({ token });
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+}
+
+function mockPreparedRecent(response: OpenDocumentResponse, token = "prepared-recent") {
+  openProtocolMocks.prepareRecentFile.mockResolvedValue({ token });
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+}
+
+function mockPreparedSelection(response: OpenDocumentResponse, token = "prepared-selection") {
+  openProtocolMocks.prepareOpenFile.mockResolvedValue({ token });
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+}
+
 function recentFile(partial: Partial<RecentFile> = {}): RecentFile {
   return {
     id: "recent-1",
@@ -121,13 +146,14 @@ describe("useHomeFileActions", () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
     const navigateToTable = vi.fn();
-    vi.mocked(api.initFile).mockResolvedValue(openedResponse("untitled.xlsx", 1));
+    mockPreparedNew(openedResponse("untitled.xlsx", 1));
 
     const actions = useHomeFileActions({ navigateToTable });
 
     await actions.handleNewFile();
 
-    expect(api.initFile).toHaveBeenCalledTimes(1);
+    expect(api.prepareNewFile).toHaveBeenCalledTimes(1);
+    expect(api.commitPreparedDocument).toHaveBeenCalledWith("prepared-new", null);
     expect(documentSessionStore.documentId).toBe(1);
     expect(documentSessionStore.data?.fileName).toBe("untitled.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
@@ -137,7 +163,7 @@ describe("useHomeFileActions", () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
-    vi.mocked(api.initFile).mockRejectedValue(new Error("init failed"));
+    vi.mocked(api.prepareNewFile).mockRejectedValue(new Error("init failed"));
 
     const actions = useHomeFileActions({ navigateToTable: vi.fn() });
 
@@ -199,21 +225,21 @@ describe("useHomeFileActions", () => {
     expect(actions.isBusy.value).toBe(true);
     await actions.handleNewFile();
 
-    expect(api.initFile).not.toHaveBeenCalled();
+    expect(api.prepareNewFile).not.toHaveBeenCalled();
   });
 
   it("opens an existing recent file from the home workflow", async () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const navigateToTable = vi.fn();
-    vi.mocked(platform.readRecentFile).mockResolvedValue(openedResponse("recent.xlsx", 2));
+    mockPreparedRecent(openedResponse("recent.xlsx", 2));
 
     const actions = useHomeFileActions({ navigateToTable });
 
     await actions.handleOpenRecent(recentFile());
     await flushPromises();
 
-    expect(platform.readRecentFile).toHaveBeenCalledWith(recentFile());
+    expect(platform.prepareRecentFile).toHaveBeenCalledWith(recentFile());
     expect(documentSessionStore.documentId).toBe(2);
     expect(documentSessionStore.currentFilePath).toBe("/tmp/recent.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
@@ -225,21 +251,24 @@ describe("useHomeFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const navigateToTable = vi.fn();
     const stale = recentFile({ id: "stale", path: "/tmp/missing.xlsx" });
-    vi.mocked(platform.readRecentFile).mockRejectedValueOnce(
-      new Error("File not found: /tmp/missing.xlsx")
+    vi.mocked(platform.prepareRecentFile).mockRejectedValueOnce(
+      {
+        code: "file_not_found",
+        message: "File not found: /tmp/missing.xlsx",
+      }
     );
     vi.mocked(platform.pickOpenFile).mockResolvedValue({
       path: "/tmp/relocated.xlsx",
       fileName: "relocated.xlsx",
     });
-    vi.mocked(platform.readFile).mockResolvedValueOnce(openedResponse("relocated.xlsx", 3));
+    mockPreparedSelection(openedResponse("relocated.xlsx", 3));
 
     const actions = useHomeFileActions({ navigateToTable });
 
     await actions.handleOpenRecent(stale);
     await flushPromises();
 
-    expect(platform.readRecentFile).toHaveBeenCalledWith(stale);
+    expect(platform.prepareRecentFile).toHaveBeenCalledWith(stale);
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(api.removeRecentFile).toHaveBeenCalledWith("stale");
     expect(documentSessionStore.documentId).toBe(3);
@@ -251,7 +280,7 @@ describe("useHomeFileActions", () => {
     const elementPlus = await import("element-plus");
     const platform = await import("@/platform");
     const navigateToTable = vi.fn();
-    vi.mocked(platform.readRecentFile).mockRejectedValueOnce(
+    vi.mocked(platform.prepareRecentFile).mockRejectedValueOnce(
       new Error("Unsupported file format")
     );
 

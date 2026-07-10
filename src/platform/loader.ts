@@ -3,7 +3,7 @@
  */
 import { getPlatform } from '@/utils/platform';
 import type { PlatformAPI, OpenFileSelection } from './types';
-import type { EditorCommandContext, OpenDocumentResponse, RecentFile } from '@/types';
+import type { EditorCommandContext, PreparedOpenDocument, RecentFile } from '@/types';
 import { createAsyncCache } from '@/utils/asyncCache';
 
 async function loadPlatformAPI(): Promise<PlatformAPI> {
@@ -50,15 +50,15 @@ export async function discardOpenFileSelection(selection: OpenFileSelection): Pr
 }
 
 /** 从已知路径读取并解析（用于最近文件列表） */
-export async function readFile(path: string): Promise<OpenDocumentResponse> {
+export async function prepareOpenFile(path: string): Promise<PreparedOpenDocument> {
   const api = await getPlatformAPI();
-  return api.fileOps.readFile(path);
+  return api.fileOps.prepareOpenFile(path);
 }
 
 /** 从平台受信任的最近文件记录读取并解析 */
-export async function readRecentFile(file: RecentFile): Promise<OpenDocumentResponse> {
+export async function prepareRecentFile(file: RecentFile): Promise<PreparedOpenDocument> {
   const api = await getPlatformAPI();
-  return api.fileOps.readRecentFile?.(file) ?? api.fileOps.readFile(file.path);
+  return api.fileOps.prepareRecentFile?.(file) ?? api.fileOps.prepareOpenFile(file.path);
 }
 
 /** 保存文件：生成字节 + 写入（一体化） */

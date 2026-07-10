@@ -8,7 +8,7 @@ use crate::io::file_format::{
     supported_extension_or_default,
 };
 use crate::io::transient_files::transient_file_registry;
-use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
+use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::ErrorKind;
@@ -113,7 +113,7 @@ fn selected_file_name(path: &FilePath) -> Option<String> {
     .filter(|name| !name.is_empty())
 }
 
-pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, AppError> {
+pub fn prepare_file(app: &AppHandle, path: &str) -> Result<PreparedOpenDocument, AppError> {
     use tauri_plugin_fs::FsExt;
 
     let target = validated_mobile_files_path(app, Path::new(path))?;
@@ -131,10 +131,7 @@ pub fn read_file(app: &AppHandle, path: &str) -> Result<OpenDocumentResponse, Ap
         .read(FilePath::from(target.clone()))
         .map_err(|e| AppError::ReadError(format!("Failed to read file: {}", e)))?;
 
-    let opened =
-        document::open_from_bytes(target.to_string_lossy().to_string(), bytes, Some(file_name))?;
-    adopt_transient_path_if_registered(app, &target);
-    Ok(opened)
+    document::prepare_open_from_bytes(target.to_string_lossy().to_string(), bytes, Some(file_name))
 }
 
 pub fn discard_transient_file(app: &AppHandle, path: &str) -> Result<(), AppError> {

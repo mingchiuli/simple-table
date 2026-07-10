@@ -137,5 +137,7 @@ export type EditorSessionInfo = { documentId: number, revision: number, formulaS
 
 export type OpenDocumentResponse = { fileData: FileData, editorSession: EditorSessionInfo, };
 
+export type PreparedOpenDocument = { token: string, };
+
 export type SavedDocumentResponse = { fileData: FileData, editorSession: EditorSessionInfo, };
 

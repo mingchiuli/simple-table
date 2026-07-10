@@ -5,6 +5,7 @@ use crate::io::file_format::{
     is_xlsx_extension, open_extension_from_path_name_or_bytes, spreadsheet_format_options,
     supported_extension_from_name,
 };
+use crate::io::prepared_documents;
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -13,17 +14,18 @@ use crate::state::{
     state::EditorSessionInfo,
 };
 use crate::types::{
-    DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, SavedDocumentResponse,
-    SpreadsheetFormatOptions, WorkbookCapabilities,
+    DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
+    SavedDocumentResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
 };
+use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
-pub fn open_from_bytes(
+pub fn prepare_open_from_bytes(
     path: String,
     bytes: Vec<u8>,
     file_name: Option<String>,
-) -> Result<OpenDocumentResponse, AppError> {
+) -> Result<PreparedOpenDocument, AppError> {
     let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
 
     // 如果调用方已经解析出文件名，优先使用；否则从路径解析
@@ -31,18 +33,56 @@ pub fn open_from_bytes(
         file_name.unwrap_or_else(|| file_name_from_path_like(&path, "unknown"));
 
     // 传入 path 到 reader，同时保留 Excel 原始 Workbook 用于后续无损 patch 保存。
+    let source_path = PathBuf::from(&path);
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
-    // 初始化编辑器状态
-    let document = init_editor_state(result.file_data, result.workbook)?;
-
-    Ok(document)
+    prepare_editor_state(result.file_data, result.workbook, Some(source_path))
 }
 
-/// 初始化编辑器状态（用于新建文件）
-pub fn init_file(mut file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
+/// 准备新文档。只有 commit_prepared_document 才会替换当前活动文档。
+pub fn prepare_new_file(mut file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
     file_data.path.clear();
-    init_editor_state(file_data, None)
+    prepare_editor_state(file_data, None, None)
+}
+
+pub fn commit_prepared_document(
+    token: &str,
+    expected_document_id: Option<u64>,
+    expected_revision: Option<u64>,
+) -> Result<OpenDocumentResponse, AppError> {
+    let registry = active_document_store();
+    let previous_document_id;
+    let document_id;
+    let source_path;
+    let response;
+    {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        (document_id, previous_document_id, source_path) = registry_guard
+            .replace_active_for_context(expected_document_id, expected_revision, || {
+                let prepared = prepared_documents::take(token)?;
+                Ok((prepared.editor_state, prepared.source_path))
+            })?;
+        let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
+        response = OpenDocumentResponse {
+            file_data: editor_state.file_data().clone(),
+            editor_session: editor_session_info(editor_state),
+        };
+    }
+
+    if let Some(previous_document_id) = previous_document_id
+        && previous_document_id != document_id
+    {
+        cancel_index_jobs_for_document(previous_document_id);
+    }
+    adopt_source_path_if_transient(source_path.as_deref());
+    spawn_rebuild_all_sheets_index(&registry, document_id);
+    Ok(response)
+}
+
+pub fn abort_prepared_document(token: &str) -> Result<(), AppError> {
+    prepared_documents::abort(token)
 }
 
 pub fn generate_current_file_bytes_for_target(
@@ -472,39 +512,25 @@ fn first_reason<const N: usize>(reason_groups: [&Vec<String>; N], fallback: &str
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn init_editor_state(
+fn prepare_editor_state(
     file_data: FileData,
     workbook: Option<Workbook>,
-) -> Result<OpenDocumentResponse, AppError> {
-    let registry = active_document_store();
-    let initialized_file_data;
-    let editor_session;
-    let document_id;
-    let previous_document_id;
-    {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        previous_document_id = registry_guard
-            .active()
-            .map(|editor_state| editor_state.document_id());
-        let editor_state = EditorState::with_workbook(file_data, workbook);
-        initialized_file_data = editor_state.file_data().clone();
-        editor_session = editor_session_info(&editor_state);
-        document_id = editor_state.document_id();
-        registry_guard.try_replace_active(editor_state)?;
+    source_path: Option<PathBuf>,
+) -> Result<PreparedOpenDocument, AppError> {
+    let editor_state = EditorState::with_workbook(file_data, workbook);
+    let token = prepared_documents::replace(editor_state, source_path)?;
+    Ok(PreparedOpenDocument { token })
+}
+
+fn adopt_source_path_if_transient(source_path: Option<&std::path::Path>) {
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    if let Some(source_path) = source_path {
+        let _ =
+            crate::io::transient_files::transient_file_registry().adopt_if_registered(source_path);
     }
-    if let Some(previous_document_id) = previous_document_id
-        && previous_document_id != document_id
-    {
-        cancel_index_jobs_for_document(previous_document_id);
-    }
-    // 异步构建索引（后台线程）
-    spawn_rebuild_all_sheets_index(&registry, document_id);
-    Ok(OpenDocumentResponse {
-        file_data: initialized_file_data,
-        editor_session,
-    })
+
+    #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
+    let _ = source_path;
 }
 
 fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
@@ -578,14 +604,15 @@ mod tests {
 
     #[test]
     fn open_from_bytes_detects_extensionless_csv_content() {
-        let response = open_from_bytes(
+        let prepared = prepare_open_from_bytes(
             "/tmp/imported".to_string(),
             b"name,score\nalice,42".to_vec(),
             Some("imported".to_string()),
         )
         .expect("open extensionless csv");
+        let response = prepared_documents::take(&prepared.token).expect("prepared document");
 
-        let rows = &response.file_data.sheets[0].rows;
+        let rows = &response.editor_state.file_data().sheets[0].rows;
         assert_eq!(rows[0][0], CellValue::String("name".to_string()));
         assert_eq!(rows[0][1], CellValue::String("score".to_string()));
         assert_eq!(rows[1][0], CellValue::String("alice".to_string()));
@@ -594,14 +621,15 @@ mod tests {
 
     #[test]
     fn init_file_does_not_trust_frontend_path() {
-        let response = init_file(FileData {
+        let prepared = prepare_new_file(FileData {
             path: "/tmp/should-not-be-trusted.xlsx".to_string(),
             file_name: "untitled.xlsx".to_string(),
             sheets: vec![SheetData::default()],
         })
         .expect("init file");
+        let response = prepared_documents::take(&prepared.token).expect("prepared document");
 
-        assert_eq!(response.file_data.path, "");
-        assert_eq!(response.file_data.file_name, "untitled.xlsx");
+        assert_eq!(response.editor_state.file_data().path, "");
+        assert_eq!(response.editor_state.file_data().file_name, "untitled.xlsx");
     }
 }

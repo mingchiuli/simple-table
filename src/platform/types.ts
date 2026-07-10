@@ -4,7 +4,7 @@
 
 import type {
   EditorCommandContext,
-  OpenDocumentResponse,
+  PreparedOpenDocument,
   RecentFile,
   SavedDocumentResponse,
 } from "@/types";
@@ -22,9 +22,9 @@ export interface PlatformFileOps {
   /** 释放已选择/导入但没有被当前文档接管的文件；桌面路径通常无需实现 */
   discardOpenFileSelection?(selection: OpenFileSelection): Promise<void>;
   /** 从已知路径读取并解析（用于最近文件列表） */
-  readFile(path: string): Promise<OpenDocumentResponse>;
-  /** 从平台受信任的最近文件记录读取并解析；未实现的平台回退到 readFile(file.path) */
-  readRecentFile?(file: RecentFile): Promise<OpenDocumentResponse>;
+  prepareOpenFile(path: string): Promise<PreparedOpenDocument>;
+  /** 从平台受信任的最近文件记录读取并解析；未实现的平台回退到 prepareOpenFile(file.path) */
+  prepareRecentFile?(file: RecentFile): Promise<PreparedOpenDocument>;
   /** 保存文件：生成字节 + 写入（一体化） */
   saveFile(path: string, context: EditorCommandContext): Promise<SavedDocumentResponse>;
   /** 选择保存位置 */

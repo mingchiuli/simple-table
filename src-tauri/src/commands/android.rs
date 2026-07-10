@@ -5,7 +5,7 @@ use crate::io::platform::mobile::PickedFileInfo;
 #[cfg(target_os = "android")]
 use crate::io::platform::{android, mobile};
 #[cfg(target_os = "android")]
-use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
+use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "android")]
 use tauri::AppHandle;
 
@@ -36,11 +36,11 @@ pub async fn discard_save_location_android(app: AppHandle, path: String) -> Resu
 /// Android: read and parse a sandboxed file path saved in recent files.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn read_file_android(
+pub async fn prepare_open_file_android(
     app: AppHandle,
     path: String,
-) -> Result<OpenDocumentResponse, AppError> {
-    mobile::read_file(&app, &path)
+) -> Result<PreparedOpenDocument, AppError> {
+    mobile::prepare_file(&app, &path)
 }
 
 /// Android: generate file bytes and write them to the sandbox path.

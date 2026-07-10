@@ -75,12 +75,20 @@ impl HistoryStore {
         Some(entry)
     }
 
+    pub(crate) fn peek_undo(&self) -> Option<&HistoryEntry> {
+        self.undo_stack.last()
+    }
+
     pub(crate) fn pop_redo(&mut self) -> Option<HistoryEntry> {
         let entry = self.redo_stack.pop()?;
         self.redo_estimated_bytes = self
             .redo_estimated_bytes
             .saturating_sub(entry.estimated_bytes);
         Some(entry)
+    }
+
+    pub(crate) fn peek_redo(&self) -> Option<&HistoryEntry> {
+        self.redo_stack.last()
     }
 
     pub(crate) fn push_redo(&mut self, entry: HistoryEntry) {

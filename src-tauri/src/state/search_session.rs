@@ -1,13 +1,75 @@
 use crate::state::search_index::{
-    SearchCellText, SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
+    SearchCellSnapshotChange, SearchCellText, SearchIndexStamp, SearchIndexStore, SearchSheetIndex,
+    SearchSheetSnapshot, SearchSheetSource, SearchWriterHandle,
 };
+use crate::types::FileData;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct SearchSession {
     index: SearchIndexStore,
+    snapshots: Vec<Arc<SearchSheetSnapshot>>,
 }
 
 impl SearchSession {
+    pub fn from_file_data(file_data: &FileData, revision: u64) -> Self {
+        let mut session = Self::default();
+        session.replace_snapshots(file_data, revision);
+        session
+    }
+
+    pub fn replace_snapshots(&mut self, file_data: &FileData, revision: u64) {
+        self.snapshots = file_data
+            .sheets
+            .iter()
+            .map(|sheet| SearchSheetSnapshot::from_sheet(sheet, revision))
+            .collect();
+    }
+
+    pub fn update_snapshots(&mut self, revision: u64, changes: Vec<SearchCellSnapshotChange>) {
+        let mut by_sheet = std::collections::BTreeMap::<usize, Vec<_>>::new();
+        for change in changes {
+            by_sheet.entry(change.sheet_index).or_default().push(change);
+        }
+        for (sheet_index, changes) in by_sheet {
+            let Some(parent) = self.snapshots.get(sheet_index).cloned() else {
+                continue;
+            };
+            if parent.revision() > revision {
+                continue;
+            }
+            self.snapshots[sheet_index] =
+                SearchSheetSnapshot::with_changes(parent, changes, revision);
+        }
+    }
+
+    pub fn sheet_source(&self, sheet_index: usize) -> Option<SearchSheetSource> {
+        if let Some(index) = self.index.fresh_sheet_index(sheet_index) {
+            return Some(SearchSheetSource::Indexed(index));
+        }
+        self.snapshots
+            .get(sheet_index)
+            .cloned()
+            .map(SearchSheetSource::Snapshot)
+    }
+
+    pub fn sheet_snapshot(&self, sheet_index: usize) -> Option<Arc<SearchSheetSnapshot>> {
+        self.snapshots.get(sheet_index).cloned()
+    }
+
+    pub fn compact_snapshot(
+        &mut self,
+        sheet_index: usize,
+        revision: u64,
+        cells: Arc<[SearchCellText]>,
+    ) {
+        if let Some(snapshot) = self.snapshots.get_mut(sheet_index) {
+            if snapshot.revision() <= revision {
+                *snapshot = SearchSheetSnapshot::from_cells(cells, revision);
+            }
+        }
+    }
+
     pub fn sheet_stamp(&self, document_id: u64, sheet_index: usize) -> SearchIndexStamp {
         self.index.sheet_stamp(document_id, sheet_index)
     }
@@ -51,14 +113,5 @@ impl SearchSession {
         stamp: SearchIndexStamp,
     ) -> Option<SearchWriterHandle> {
         self.index.writer_handle(document_id, sheet_index, stamp)
-    }
-
-    pub fn indexed_search_sheet(
-        &self,
-        sheet_index: usize,
-        query: &str,
-        limit: usize,
-    ) -> Option<Vec<SearchCellText>> {
-        self.index.search_sheet(sheet_index, query, limit)
     }
 }

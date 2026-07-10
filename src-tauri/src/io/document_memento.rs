@@ -271,12 +271,6 @@ impl ProjectionSheetSnapshot {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum MementoSide {
-    Before,
-    After,
-}
-
 pub(crate) fn protected_rich_cell_positions(sheet: &SheetData) -> Vec<(usize, usize)> {
     let mut positions = Vec::new();
     let mut seen = HashSet::new();

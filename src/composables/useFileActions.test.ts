@@ -15,12 +15,19 @@ import {
   type FileData,
   type NativeSavePlan,
   type OpenDocumentResponse,
+  type PreparedOpenDocument,
   type SavedDocumentResponse,
   type SheetData,
 } from "@/types";
 
 const routerMocks = vi.hoisted(() => ({
   push: vi.fn(),
+}));
+
+const openProtocolMocks = vi.hoisted(() => ({
+  prepareOpenFile: vi.fn(),
+  commitPreparedDocument: vi.fn(),
+  abortPreparedDocument: vi.fn(),
 }));
 
 vi.mock("vue-router", () => ({
@@ -53,6 +60,8 @@ vi.mock("@/api", () => ({
   }),
   closeCurrentDocument: vi.fn(),
   getNativeSavePlan: vi.fn(),
+  commitPreparedDocument: openProtocolMocks.commitPreparedDocument,
+  abortPreparedDocument: openProtocolMocks.abortPreparedDocument,
 }));
 
 vi.mock("@/platform", () => ({
@@ -61,7 +70,7 @@ vi.mock("@/platform", () => ({
   exportFile: vi.fn(),
   pickOpenFile: vi.fn(),
   pickSaveLocation: vi.fn(),
-  readFile: vi.fn(),
+  prepareOpenFile: openProtocolMocks.prepareOpenFile,
   saveFile: vi.fn(),
 }));
 
@@ -107,6 +116,15 @@ function openedResponse(fileName: string, documentId: number): OpenDocumentRespo
       },
     },
   };
+}
+
+function preparedOpen(token = "prepared-open"): PreparedOpenDocument {
+  return { token };
+}
+
+function mockPreparedOpen(response: OpenDocumentResponse, token = "prepared-open") {
+  openProtocolMocks.prepareOpenFile.mockResolvedValue(preparedOpen(token));
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
 }
 
 function newUntitledResponse(documentId: number): OpenDocumentResponse {
@@ -207,7 +225,7 @@ describe("useFileActions", () => {
     expect(unsavedChanges.confirmDiscardUnsavedChanges).not.toHaveBeenCalled();
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
   });
 
@@ -215,9 +233,9 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
-    const pendingRead = deferred<OpenDocumentResponse>();
+    const pendingPrepare = deferred<PreparedOpenDocument>();
     let shouldContinue = true;
-    vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
+    vi.mocked(platform.prepareOpenFile).mockReturnValue(pendingPrepare.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
     const loadPromise = actions.loadFileFromPath(
@@ -226,14 +244,16 @@ describe("useFileActions", () => {
     );
 
     await flushPromises();
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/stale.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/stale.xlsx");
 
     shouldContinue = false;
-    pendingRead.resolve(openedResponse("stale.xlsx", 2));
+    pendingPrepare.resolve(preparedOpen("stale-token"));
 
     await expect(loadPromise).resolves.toBe(false);
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.currentFilePath).toBeNull();
+    expect(api.commitPreparedDocument).not.toHaveBeenCalled();
+    expect(api.abortPreparedDocument).toHaveBeenCalledWith("stale-token");
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
@@ -241,7 +261,7 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
-    const pendingRead = deferred<OpenDocumentResponse>();
+    const pendingPrepare = deferred<PreparedOpenDocument>();
     const cancelHandlers: Array<() => void> = [];
     let shouldContinue = true;
     const guard = (() => shouldContinue) as (() => boolean) & {
@@ -251,7 +271,7 @@ describe("useFileActions", () => {
       cancelHandlers.push(handler);
       return () => undefined;
     };
-    vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
+    vi.mocked(platform.prepareOpenFile).mockReturnValue(pendingPrepare.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
     const loadPromise = actions.loadFileFromPath("/tmp/slow.xlsx", guard);
@@ -269,10 +289,12 @@ describe("useFileActions", () => {
     expect(documentSessionStore.lifecycle).toBe("idle");
     expect(documentSessionStore.isInteractionLocked).toBe(false);
 
-    pendingRead.resolve(openedResponse("slow.xlsx", 2));
+    pendingPrepare.resolve(preparedOpen("slow-token"));
     await expect(loadPromise).resolves.toBe(false);
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.currentFilePath).toBeNull();
+    expect(api.commitPreparedDocument).not.toHaveBeenCalled();
+    expect(api.abortPreparedDocument).toHaveBeenCalledWith("slow-token");
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
@@ -280,7 +302,7 @@ describe("useFileActions", () => {
     const elementPlus = await import("element-plus");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
-    const pendingRead = deferred<OpenDocumentResponse>();
+    const pendingPrepare = deferred<PreparedOpenDocument>();
     const cancelHandlers: Array<() => void> = [];
     let shouldContinue = true;
     const guard = (() => shouldContinue) as (() => boolean) & {
@@ -290,7 +312,7 @@ describe("useFileActions", () => {
       cancelHandlers.push(handler);
       return () => undefined;
     };
-    vi.mocked(platform.readFile).mockReturnValue(pendingRead.promise);
+    vi.mocked(platform.prepareOpenFile).mockReturnValue(pendingPrepare.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
     const loadPromise = actions.loadFileFromPath("/tmp/stale-error.xlsx", guard);
@@ -301,7 +323,7 @@ describe("useFileActions", () => {
     for (const handler of cancelHandlers) {
       handler();
     }
-    pendingRead.reject(new Error("stale read failed"));
+    pendingPrepare.reject(new Error("stale read failed"));
 
     await expect(loadPromise).resolves.toBe(false);
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
@@ -314,20 +336,20 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     documentSessionStore.beginLifecycle("saving");
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("queued.xlsx", 2));
+    mockPreparedOpen(openedResponse("queued.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
     const loadPromise = actions.loadFileFromPath("/tmp/queued.xlsx");
 
     await flushPromises();
 
-    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(documentSessionStore.lifecycle).toBe("saving");
 
     documentSessionStore.endLifecycle("saving");
 
     await expect(loadPromise).resolves.toBe(true);
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
     expect(documentSessionStore.currentFilePath).toBe("/tmp/queued.xlsx");
   });
 
@@ -336,31 +358,30 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     const releaseEditorCommand = documentSessionStore.beginEditorCommand();
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("queued.xlsx", 2));
+    mockPreparedOpen(openedResponse("queued.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
     const loadPromise = actions.loadFileFromPath("/tmp/queued.xlsx");
 
     await flushPromises();
 
-    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(documentSessionStore.lifecycle).toBe("idle");
     expect(documentSessionStore.isInteractionLocked).toBe(true);
 
     releaseEditorCommand?.();
 
     await expect(loadPromise).resolves.toBe(true);
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
     expect(documentSessionStore.currentFilePath).toBe("/tmp/queued.xlsx");
   });
 
   it("does not block path loading on recent file metadata updates", async () => {
     const api = await import("@/api");
-    const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const recentUpdate = deferred<Awaited<ReturnType<typeof api.addRecentFileWithThumbnail>>>();
     vi.mocked(api.addRecentFileWithThumbnail).mockReturnValue(recentUpdate.promise);
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("fast.xlsx", 2));
+    mockPreparedOpen(openedResponse("fast.xlsx", 2));
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
 
@@ -385,10 +406,9 @@ describe("useFileActions", () => {
 
   it("keeps a route-loaded document open when recent metadata refresh fails", async () => {
     const api = await import("@/api");
-    const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("nameless.xlsx", 2));
+    mockPreparedOpen(openedResponse("nameless.xlsx", 2));
     vi.mocked(api.addRecentFileWithThumbnail).mockRejectedValueOnce(
       new Error("metadata unavailable")
     );
@@ -440,7 +460,7 @@ describe("useFileActions", () => {
       path: "/tmp/next.xlsx",
       fileName: "next.xlsx",
     });
-    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
   });
 
@@ -462,7 +482,7 @@ describe("useFileActions", () => {
       path: "/tmp/next.xlsx",
       fileName: "next.xlsx",
     });
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("next.xlsx", 2));
+    mockPreparedOpen(openedResponse("next.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
 
@@ -472,7 +492,7 @@ describe("useFileActions", () => {
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/next.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/next.xlsx");
     expect(documentSessionStore.documentId).toBe(2);
   });
 
@@ -487,7 +507,7 @@ describe("useFileActions", () => {
       path: "/tmp/next.xlsx",
       fileName: "next.xlsx",
     });
-    vi.mocked(platform.readFile).mockResolvedValue(openedResponse("next.xlsx", 2));
+    mockPreparedOpen(openedResponse("next.xlsx", 2));
 
     const actions = mountActions(async () => {
       statusStore.applyEditorState({
@@ -504,7 +524,7 @@ describe("useFileActions", () => {
     expect(unsavedChanges.confirmDiscardUnsavedChanges).toHaveBeenCalledTimes(1);
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/next.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/next.xlsx");
     expect(documentSessionStore.documentId).toBe(2);
     expect(documentSessionStore.currentFilePath).toBe("/tmp/next.xlsx");
   });
@@ -530,13 +550,13 @@ describe("useFileActions", () => {
     );
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
     vi.mocked(platform.pickOpenFile).mockResolvedValue(selection);
-    vi.mocked(platform.readFile).mockRejectedValue(new Error("cannot parse"));
+    vi.mocked(platform.prepareOpenFile).mockRejectedValue(new Error("cannot parse"));
 
     const actions = mountActions(flushPendingCellChanges);
 
     await actions.handleOpenFile();
 
-    expect(platform.readFile).toHaveBeenCalledWith("/tmp/broken.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/broken.xlsx");
     expect(unsavedChanges.confirmDiscardUnsavedChanges).toHaveBeenCalledTimes(1);
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);

@@ -18,6 +18,7 @@ import type {
 } from "@/types";
 import { workbookSheetCapabilities } from "@/types";
 import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
+import { appErrorMessage } from "@/utils/appError";
 
 type UseEditorCommandsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -73,7 +74,9 @@ export function useEditorCommands({
           if (refreshed) {
             runAfterApplied(options.afterApplied);
           } else {
-            ElMessage.error(`Change was applied, but the editor could not refresh: ${error}`);
+            ElMessage.error(
+              `Change was applied, but the editor could not refresh: ${appErrorMessage(error)}`
+            );
           }
           return;
         }
@@ -84,7 +87,7 @@ export function useEditorCommands({
       await refreshAfterMutationError({
         refreshProjection: options.refreshProjectionOnError || documentSessionStore.projectionStale,
       });
-      ElMessage.error(`${message}: ${error}`);
+      ElMessage.error(`${message}: ${appErrorMessage(error)}`);
     } finally {
       releaseEditorCommand();
     }
@@ -95,7 +98,9 @@ export function useEditorCommands({
       afterApplied?.();
     } catch (error) {
       console.error("Post-mutation UI update failed:", error);
-      ElMessage.error(`Change was applied, but the editor UI could not update: ${error}`);
+      ElMessage.error(
+        `Change was applied, but the editor UI could not update: ${appErrorMessage(error)}`
+      );
     }
   }
 
@@ -208,7 +213,7 @@ export function useEditorCommands({
       if (context && !documentSessionStore.matchesCommandContext(context)) {
         return;
       }
-      ElMessage.error(`Search failed: ${error}`);
+      ElMessage.error(`Search failed: ${appErrorMessage(error)}`);
     } finally {
       searchSessionStore.finishSearch(requestId);
     }

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { OpenFileSelection, PlatformAPI } from '../types';
 import type {
   EditorCommandContext,
-  OpenDocumentResponse,
+  PreparedOpenDocument,
   RecentFile,
   SavedDocumentResponse,
 } from "@/types";
@@ -18,12 +18,12 @@ export const desktopFileOps = {
   },
 
   /** Desktop: 从后端已授权路径读取并解析。 */
-  readFile: async (path: string): Promise<OpenDocumentResponse> => {
-    return invoke<OpenDocumentResponse>("read_file_desktop", { path });
+  prepareOpenFile: async (path: string): Promise<PreparedOpenDocument> => {
+    return invoke<PreparedOpenDocument>("prepare_open_file_desktop", { path });
   },
 
-  readRecentFile: (file: RecentFile): Promise<OpenDocumentResponse> => {
-    return invoke<OpenDocumentResponse>("read_recent_file_desktop", { id: file.id });
+  prepareRecentFile: (file: RecentFile): Promise<PreparedOpenDocument> => {
+    return invoke<PreparedOpenDocument>("prepare_recent_file_desktop", { id: file.id });
   },
 
   /** Desktop: 生成文件字节并写入路径 */

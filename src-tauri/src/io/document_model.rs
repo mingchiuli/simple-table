@@ -4,9 +4,9 @@ use crate::io::document_body::BodySheetShape;
 use crate::io::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
 use crate::io::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
-    FileStructureMemento, LayoutMemento, MementoSide, ProjectionSheetSnapshot,
-    RichProjectionMemento, RowStructureMemento, SheetShapeMemento, SheetTailMemento,
-    StructureMemento, protected_rich_cell_positions,
+    FileStructureMemento, LayoutMemento, ProjectionSheetSnapshot, RichProjectionMemento,
+    RowStructureMemento, SheetShapeMemento, SheetTailMemento, StructureMemento,
+    protected_rich_cell_positions,
 };
 use crate::io::document_memento_budget;
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
@@ -14,7 +14,6 @@ use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::io::document_transaction::DocumentTransaction;
 use crate::io::formula_coordinator::FormulaCoordinator;
 use crate::ops::AppliedOperation;
-use crate::state::content_hash::{ContentFingerprint, ContentHash, hash_content_fingerprint};
 use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
@@ -52,6 +51,10 @@ pub struct SpreadsheetDocument {
     cached_capabilities: WorkbookCapabilities,
     formulas: FormulaCoordinator,
     transaction_failure: Option<String>,
+    #[cfg(test)]
+    injected_restore_failures: usize,
+    #[cfg(test)]
+    injected_post_patch_restore_failures: usize,
 }
 
 impl SpreadsheetDocument {
@@ -67,6 +70,10 @@ impl SpreadsheetDocument {
             cached_capabilities,
             formulas,
             transaction_failure: None,
+            #[cfg(test)]
+            injected_restore_failures: 0,
+            #[cfg(test)]
+            injected_post_patch_restore_failures: 0,
         }
     }
 
@@ -81,10 +88,6 @@ impl SpreadsheetDocument {
     pub fn update_identity(&mut self, path: String, file_name: String) {
         self.projection.path = path;
         self.projection.file_name = file_name;
-    }
-
-    pub fn content_hash(&self) -> ContentHash {
-        hash_content_fingerprint(&ContentFingerprint::from_file_data(&self.projection))
     }
 
     pub fn formula_status(&self) -> FormulaStatus {
@@ -242,17 +245,6 @@ impl SpreadsheetDocument {
         )
     }
 
-    pub fn restore_memento(
-        &mut self,
-        memento: &DocumentMemento,
-        side: MementoSide,
-    ) -> Result<DocumentRestoreResult, AppError> {
-        match side {
-            MementoSide::Before => self.restore_memento_side(&memento.before),
-            MementoSide::After => self.restore_memento_side(&memento.after),
-        }
-    }
-
     pub(in crate::io) fn restore_memento_side(
         &mut self,
         side: &DocumentMementoSide,
@@ -262,6 +254,38 @@ impl SpreadsheetDocument {
             DocumentMementoSide::Layout(memento) => self.restore_layout(memento),
             DocumentMementoSide::Structure(memento) => self.restore_structure(memento),
         }
+    }
+
+    fn fail_restore_if_injected(&mut self) -> Result<(), AppError> {
+        #[cfg(test)]
+        if self.injected_restore_failures > 0 {
+            self.injected_restore_failures -= 1;
+            return Err(AppError::WorkbookPatchFailed(
+                "injected history restore failure".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_restore_failures(&mut self, count: usize) {
+        self.injected_restore_failures = count;
+    }
+
+    fn fail_post_patch_restore_if_injected(&mut self) -> Result<(), AppError> {
+        #[cfg(test)]
+        if self.injected_post_patch_restore_failures > 0 {
+            self.injected_post_patch_restore_failures -= 1;
+            return Err(AppError::WorkbookPatchFailed(
+                "injected post-patch history restore failure".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_post_patch_restore_failures(&mut self, count: usize) {
+        self.injected_post_patch_restore_failures = count;
     }
 
     fn cell_memento(
@@ -485,6 +509,7 @@ impl SpreadsheetDocument {
             sheet.rows[change.row][change.col] = change.value.clone();
         }
 
+        self.fail_restore_if_injected()?;
         self.patch_workbook_formula_changes(&memento.cells)?;
         self.restore_cell_shapes(&memento.sheet_shapes);
         self.patch_workbook_cell_shapes(&memento.sheet_shapes)?;
@@ -495,6 +520,7 @@ impl SpreadsheetDocument {
         if memento.formula_capabilities_may_change {
             self.refresh_capabilities();
         }
+        self.fail_post_patch_restore_if_injected()?;
         self.validate_projection_sheets(cell_memento_sheet_indexes(memento))?;
         let mut patches = Vec::new();
         let mut cell_changes = memento.cells.clone();
@@ -570,7 +596,9 @@ impl SpreadsheetDocument {
             }
         }
 
+        self.fail_restore_if_injected()?;
         self.patch_workbook_layout(memento)?;
+        self.fail_post_patch_restore_if_injected()?;
         self.validate_projection_sheets([memento.sheet_index])?;
         Ok(DocumentRestoreResult {
             patches: vec![EditorPatch::Layout {
@@ -596,11 +624,13 @@ impl SpreadsheetDocument {
                 restore_projection_structure(&mut self.projection, &memento.projection);
             }
         }
+        self.fail_restore_if_injected()?;
         self.refresh_capabilities();
         let formula_changes = self.formulas.rebuild(&mut self.projection);
         if !formula_changes.is_empty() {
             self.patch_workbook_formula_changes(&formula_changes)?;
         }
+        self.fail_post_patch_restore_if_injected()?;
         self.validate_persisted_projection_consistency()?;
         self.validate_projection_consistency()?;
         let mut patches =

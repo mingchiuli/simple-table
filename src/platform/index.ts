@@ -2,11 +2,11 @@
  * Platform module - Dynamic OS-based loading
  *
  * Usage:
- *   import { getPlatformAPI, pickOpenFile, readFile, saveFile } from '@/platform';
+ *   import { getPlatformAPI, pickOpenFile, prepareOpenFile, saveFile } from '@/platform';
  *
  *   const api = await getPlatformAPI();
  *   const selection = await pickOpenFile();
- *   const opened = selection ? await readFile(selection.path) : null;
+ *   const prepared = selection ? await prepareOpenFile(selection.path) : null;
  */
 export * from './types';
 export * from './loader';

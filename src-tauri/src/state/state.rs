@@ -71,20 +71,51 @@ impl ActiveDocumentStore {
         self.replace_active(editor_state)
     }
 
-    pub(crate) fn try_replace_active(
+    pub(crate) fn replace_active_for_context<T>(
         &mut self,
-        editor_state: EditorState,
-    ) -> Result<u64, AppError> {
-        if self
-            .active
-            .as_ref()
-            .is_some_and(EditorState::has_save_commit_in_progress)
-        {
-            return Err(AppError::DocumentStateInvalid(
-                "cannot replace the active document while save is in progress".to_string(),
-            ));
+        expected_document_id: Option<u64>,
+        expected_revision: Option<u64>,
+        load_prepared: impl FnOnce() -> Result<(EditorState, T), AppError>,
+    ) -> Result<(u64, Option<u64>, T), AppError> {
+        self.ensure_replacement_context(expected_document_id, expected_revision)?;
+        let (editor_state, metadata) = load_prepared()?;
+        let previous_document_id = self.active.as_ref().map(EditorState::document_id);
+        let document_id = self.replace_active(editor_state);
+        Ok((document_id, previous_document_id, metadata))
+    }
+
+    pub(crate) fn ensure_replacement_context(
+        &self,
+        document_id: Option<u64>,
+        revision: Option<u64>,
+    ) -> Result<(), AppError> {
+        match (document_id, revision) {
+            (Some(document_id), Some(revision)) => {
+                let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+                if editor_state.document_id() != document_id || editor_state.revision() != revision
+                {
+                    return Err(AppError::DocumentStateInvalid(
+                        "active document changed before the prepared document was committed"
+                            .to_string(),
+                    ));
+                }
+                if editor_state.has_save_commit_in_progress() {
+                    return Err(AppError::DocumentStateInvalid(
+                        "cannot replace the active document while save is in progress".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+            (None, None) if self.active.is_none() => Ok(()),
+            (None, None) => Err(AppError::DocumentStateInvalid(
+                "an active backend document exists but the replacement request did not identify it"
+                    .to_string(),
+            )),
+            _ => Err(AppError::DocumentStateInvalid(
+                "prepared document commit must include both expected documentId and revision"
+                    .to_string(),
+            )),
         }
-        Ok(self.replace_active(editor_state))
     }
 
     fn close_active(&mut self) -> Result<Option<u64>, AppError> {
@@ -184,4 +215,157 @@ pub(crate) fn active_document_store() -> Arc<RwLock<ActiveDocumentStore>> {
     Arc::clone(
         ACTIVE_DOCUMENT_STORE.get_or_init(|| Arc::new(RwLock::new(ActiveDocumentStore::new()))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{FileData, SheetData};
+
+    fn editor_state(name: &str) -> EditorState {
+        EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: name.to_string(),
+                sheets: vec![SheetData::default()],
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn replacement_context_accepts_an_empty_store_without_tokens() {
+        let store = ActiveDocumentStore::new_for_test();
+
+        assert!(store.ensure_replacement_context(None, None).is_ok());
+    }
+
+    #[test]
+    fn replacement_context_requires_the_active_document_and_revision() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let state = editor_state("current.xlsx");
+        let document_id = state.document_id();
+        let revision = state.revision();
+        store.replace_active_for_test(state);
+
+        assert!(
+            store
+                .ensure_replacement_context(Some(document_id), Some(revision))
+                .is_ok()
+        );
+        assert!(
+            store
+                .ensure_replacement_context(Some(document_id), Some(revision + 1))
+                .is_err()
+        );
+        assert!(store.ensure_replacement_context(None, None).is_err());
+        assert_eq!(
+            store.active().map(EditorState::document_id),
+            Some(document_id)
+        );
+    }
+
+    #[test]
+    fn replacement_context_rejects_a_document_with_save_commit_in_progress() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let mut state = editor_state("current.xlsx");
+        let document_id = state.document_id();
+        let revision = state.revision();
+        state
+            .begin_save_commit(document_id, revision)
+            .expect("begin save commit");
+        store.replace_active_for_test(state);
+
+        assert!(
+            store
+                .ensure_replacement_context(Some(document_id), Some(revision))
+                .is_err()
+        );
+        assert_eq!(
+            store.active().map(EditorState::document_id),
+            Some(document_id)
+        );
+    }
+
+    #[test]
+    fn contextual_replacement_does_not_load_or_replace_on_stale_context() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let current = editor_state("current.xlsx");
+        let current_document_id = current.document_id();
+        let current_revision = current.revision();
+        store.replace_active_for_test(current);
+        let mut loaded = false;
+
+        let result = store.replace_active_for_context(
+            Some(current_document_id),
+            Some(current_revision + 1),
+            || {
+                loaded = true;
+                Ok((editor_state("next.xlsx"), ()))
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(!loaded);
+        assert_eq!(
+            store
+                .active()
+                .map(|state| state.file_data().file_name.as_str()),
+            Some("current.xlsx")
+        );
+    }
+
+    #[test]
+    fn contextual_replacement_keeps_active_document_when_loading_token_fails() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let current = editor_state("current.xlsx");
+        let current_document_id = current.document_id();
+        let current_revision = current.revision();
+        store.replace_active_for_test(current);
+
+        let result = store.replace_active_for_context::<()>(
+            Some(current_document_id),
+            Some(current_revision),
+            || {
+                Err(AppError::DocumentStateInvalid(
+                    "prepared token expired".to_string(),
+                ))
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            store
+                .active()
+                .map(|state| state.file_data().file_name.as_str()),
+            Some("current.xlsx")
+        );
+    }
+
+    #[test]
+    fn contextual_replacement_commits_after_context_and_token_validation() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let current = editor_state("current.xlsx");
+        let current_document_id = current.document_id();
+        let current_revision = current.revision();
+        store.replace_active_for_test(current);
+        let next = editor_state("next.xlsx");
+        let next_document_id = next.document_id();
+
+        let (document_id, previous_document_id, metadata) = store
+            .replace_active_for_context(Some(current_document_id), Some(current_revision), || {
+                Ok((next, "prepared metadata"))
+            })
+            .expect("commit prepared document");
+
+        assert_eq!(document_id, next_document_id);
+        assert_eq!(previous_document_id, Some(current_document_id));
+        assert_eq!(metadata, "prepared metadata");
+        assert_eq!(
+            store
+                .active()
+                .map(|state| state.file_data().file_name.as_str()),
+            Some("next.xlsx")
+        );
+    }
 }

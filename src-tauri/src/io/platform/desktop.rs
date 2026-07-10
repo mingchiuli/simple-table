@@ -8,7 +8,7 @@ use crate::io::file_format::{
     supported_extension_from_name,
 };
 use crate::recent::store::RecentStore;
-use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
+use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
@@ -59,29 +59,29 @@ pub fn pick_open_file(app: &AppHandle) -> Result<Option<DesktopOpenFileInfo>, Ap
     Ok(Some(DesktopOpenFileInfo { path, file_name }))
 }
 
-pub fn read_file(path: &str) -> Result<OpenDocumentResponse, AppError> {
+pub fn prepare_file(path: &str) -> Result<PreparedOpenDocument, AppError> {
     if !consume_path(open_paths(), &normalize_existing_path(Path::new(path))) {
         return Err(AppError::DocumentStateInvalid(
             "desktop file open path was not selected by the user".to_string(),
         ));
     }
-    read_file_trusted(path)
+    prepare_file_trusted(path)
 }
 
-pub fn read_recent_file(app: &AppHandle, id: &str) -> Result<OpenDocumentResponse, AppError> {
+pub fn prepare_recent_file(app: &AppHandle, id: &str) -> Result<PreparedOpenDocument, AppError> {
     let recent = RecentStore::get_all(app)
         .into_iter()
         .find(|file| file.id == id)
         .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
-    read_file_trusted(&recent.path)
+    prepare_file_trusted(&recent.path)
 }
 
-fn read_file_trusted(path: &str) -> Result<OpenDocumentResponse, AppError> {
+fn prepare_file_trusted(path: &str) -> Result<PreparedOpenDocument, AppError> {
     let bytes = fs::read(path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => AppError::FileNotFound(path.to_string()),
         _ => AppError::ReadError(e.to_string()),
     })?;
-    document::open_from_bytes(path.to_string(), bytes, None)
+    document::prepare_open_from_bytes(path.to_string(), bytes, None)
 }
 
 pub fn discard_open_file_selection(path: &str) {

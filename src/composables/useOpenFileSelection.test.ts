@@ -12,9 +12,20 @@ import {
 import type { OpenFileSelection } from "@/platform";
 import type { DocumentReplacementLease } from "@/composables/useDocumentReplacementGuard";
 
+const openProtocolMocks = vi.hoisted(() => ({
+  prepareOpenFile: vi.fn(),
+  commitPreparedDocument: vi.fn(),
+  abortPreparedDocument: vi.fn(),
+}));
+
+vi.mock("@/api", () => ({
+  commitPreparedDocument: openProtocolMocks.commitPreparedDocument,
+  abortPreparedDocument: openProtocolMocks.abortPreparedDocument,
+}));
+
 vi.mock("@/platform", () => ({
   discardOpenFileSelection: vi.fn(),
-  readFile: vi.fn(),
+  prepareOpenFile: openProtocolMocks.prepareOpenFile,
 }));
 
 const selection: OpenFileSelection = {
@@ -75,7 +86,7 @@ describe("useOpenFileSelection", () => {
     await expect(openSelectedFileOrDiscard(selection)).resolves.toBe(false);
 
     expect(beginDocumentReplacement).toHaveBeenCalledTimes(1);
-    expect(platform.readFile).not.toHaveBeenCalled();
+    expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
   });
 
@@ -86,15 +97,41 @@ describe("useOpenFileSelection", () => {
     const { openSelectedFileOrDiscard } = useOpenFileSelection({
       beginDocumentReplacement,
     });
-    vi.mocked(platform.readFile).mockRejectedValue(new Error("broken file"));
+    vi.mocked(platform.prepareOpenFile).mockRejectedValue(new Error("broken file"));
 
     await expect(openSelectedFileOrDiscard(selection)).rejects.toThrow("broken file");
 
     expect(beginDocumentReplacement).toHaveBeenCalledTimes(1);
-    expect(platform.readFile).toHaveBeenCalledWith(selection.path);
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(selection.path);
     expect(replacement.commit).not.toHaveBeenCalled();
     expect(replacement.cancel).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
+  });
+
+  it("aborts a prepared document when commit fails", async () => {
+    const api = await import("@/api");
+    const platform = await import("@/platform");
+    const replacement = replacementLease();
+    const documentSessionStore = useDocumentSessionStore();
+    documentSessionStore.openDocumentResponse(openedResponse(), "/tmp/current.xlsx");
+    vi.mocked(platform.prepareOpenFile).mockResolvedValue({ token: "prepared-selection" });
+    vi.mocked(api.commitPreparedDocument).mockRejectedValue(new Error("context changed"));
+
+    const { openSelectedFileOrDiscard } = useOpenFileSelection({
+      beginDocumentReplacement: vi.fn().mockResolvedValue(replacement),
+    });
+
+    await expect(openSelectedFileOrDiscard(selection)).rejects.toThrow("context changed");
+
+    expect(api.commitPreparedDocument).toHaveBeenCalledWith("prepared-selection", {
+      documentId: 1,
+      baseRevision: 0,
+    });
+    expect(api.abortPreparedDocument).toHaveBeenCalledWith("prepared-selection");
+    expect(replacement.commit).not.toHaveBeenCalled();
+    expect(replacement.cancel).toHaveBeenCalledTimes(1);
+    expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
+    expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
   });
 
   it("keeps the read error when discarding the failed selection also fails", async () => {
@@ -105,8 +142,8 @@ describe("useOpenFileSelection", () => {
     const { openSelectedFileOrDiscard } = useOpenFileSelection({
       beginDocumentReplacement,
     });
-    vi.mocked(platform.readFile).mockRejectedValue(new Error("broken file"));
-    vi.mocked(platform.discardOpenFileSelection).mockRejectedValue(new Error("cleanup failed"));
+    vi.mocked(platform.prepareOpenFile).mockRejectedValue(new Error("broken file"));
+    vi.mocked(platform.discardOpenFileSelection).mockRejectedValueOnce(new Error("cleanup failed"));
 
     try {
       await expect(openSelectedFileOrDiscard(selection)).rejects.toThrow("broken file");
@@ -133,7 +170,7 @@ describe("useOpenFileSelection", () => {
     try {
       await expect(openSelectedFileOrDiscard(selection)).resolves.toBe(false);
 
-      expect(platform.readFile).not.toHaveBeenCalled();
+      expect(platform.prepareOpenFile).not.toHaveBeenCalled();
       expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
       expect(consoleWarn).toHaveBeenCalledWith(
         "Failed to discard unused open file selection:",
@@ -152,11 +189,16 @@ describe("useOpenFileSelection", () => {
     const { openSelectedFileOrDiscard } = useOpenFileSelection({
       beginDocumentReplacement: vi.fn().mockResolvedValue(replacement),
     });
-    vi.mocked(platform.readFile).mockResolvedValue(response);
+    vi.mocked(platform.prepareOpenFile).mockResolvedValue({ token: "prepared-selection" });
+    openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
 
     await expect(openSelectedFileOrDiscard(selection)).resolves.toBe(true);
 
-    expect(platform.readFile).toHaveBeenCalledWith(selection.path);
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(selection.path);
+    expect(openProtocolMocks.commitPreparedDocument).toHaveBeenCalledWith(
+      "prepared-selection",
+      null
+    );
     expect(documentSessionStore.documentId).toBe(response.editorSession.documentId);
     expect(documentSessionStore.currentFilePath).toBe(selection.path);
     expect(documentSessionStore.data).toStrictEqual(response.fileData);
@@ -178,7 +220,8 @@ describe("useOpenFileSelection", () => {
     const { openSelectedFileOrDiscard } = useOpenFileSelection({
       beginDocumentReplacement: vi.fn().mockResolvedValue(replacement),
     });
-    vi.mocked(platform.readFile).mockResolvedValue(response);
+    vi.mocked(platform.prepareOpenFile).mockResolvedValue({ token: "prepared-selection" });
+    openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
 
     await expect(openSelectedFileOrDiscard(selection)).resolves.toBe(true);
 

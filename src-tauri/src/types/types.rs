@@ -381,6 +381,13 @@ pub struct OpenDocumentResponse {
     pub editor_session: EditorSessionInfo,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PreparedOpenDocument {
+    pub token: String,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

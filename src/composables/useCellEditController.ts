@@ -12,6 +12,7 @@ import type { ComputedRef, Ref } from 'vue';
 import type { EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
+import { appErrorMessage } from '@/utils/appError';
 
 type CellPosition = { row: number; col: number };
 
@@ -100,7 +101,7 @@ export function useCellEditController({
         }
         const refreshed = await refreshSessionAfterMutationError();
         if (!refreshed) {
-          ElMessage.error(`保存已提交，但刷新失败: ${error}`);
+          ElMessage.error(`保存已提交，但刷新失败: ${appErrorMessage(error)}`);
         }
       }
     });
@@ -108,7 +109,7 @@ export function useCellEditController({
 
   async function handleCommitFailed(error: unknown) {
     await refreshSessionAfterMutationError();
-    ElMessage.error(`保存失败: ${error}，已恢复所有更改`);
+    ElMessage.error(`保存失败: ${appErrorMessage(error)}，已恢复所有更改`);
   }
 
   async function refreshSessionAfterMutationError(): Promise<boolean> {

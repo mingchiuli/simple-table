@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  defaultHistoryStatus,
-  defaultWorkbookCapabilities,
-  readyFormulaStatus,
-  type OpenDocumentResponse,
+  type PreparedOpenDocument,
 } from "@/types";
 
 function mockDesktopPlatform(fileOps: Record<string, unknown>) {
@@ -14,7 +11,7 @@ function mockDesktopPlatform(fileOps: Record<string, unknown>) {
     desktopAPI: {
       fileOps: {
         pickOpenFile: vi.fn(),
-        readFile: vi.fn(),
+        prepareOpenFile: vi.fn(),
         saveFile: vi.fn(),
         ...fileOps,
       },
@@ -22,26 +19,8 @@ function mockDesktopPlatform(fileOps: Record<string, unknown>) {
   }));
 }
 
-function openedResponse(): OpenDocumentResponse {
-  return {
-    fileData: {
-      path: "/tmp/recent.xlsx",
-      fileName: "recent.xlsx",
-      sheets: [],
-    },
-    editorSession: {
-      documentId: 1,
-      revision: 0,
-      formulaStatus: readyFormulaStatus(),
-      capabilities: defaultWorkbookCapabilities(),
-      editorState: {
-        canUndo: false,
-        canRedo: false,
-        isDirty: false,
-        history: defaultHistoryStatus(),
-      },
-    },
-  };
+function preparedOpen(): PreparedOpenDocument {
+  return { token: "prepared-recent" };
 }
 
 describe("platform loader", () => {
@@ -80,11 +59,11 @@ describe("platform loader", () => {
     expect(discardSaveLocation).toHaveBeenCalledWith("/tmp/reserved.xlsx");
   });
 
-  it("uses trusted recent-file reads when the platform provides them", async () => {
-    const readFile = vi.fn();
-    const opened = openedResponse();
-    const readRecentFile = vi.fn().mockResolvedValue(opened);
-    mockDesktopPlatform({ readFile, readRecentFile });
+  it("uses trusted recent-file preparation when the platform provides it", async () => {
+    const prepareOpenFile = vi.fn();
+    const prepared = preparedOpen();
+    const prepareRecentFile = vi.fn().mockResolvedValue(prepared);
+    mockDesktopPlatform({ prepareOpenFile, prepareRecentFile });
     const recent = {
       id: "recent",
       path: "/tmp/recent.xlsx",
@@ -96,20 +75,20 @@ describe("platform loader", () => {
 
     const platform = await import("@/platform/loader");
 
-    await expect(platform.readRecentFile(recent)).resolves.toBe(opened);
-    expect(readRecentFile).toHaveBeenCalledWith(recent);
-    expect(readFile).not.toHaveBeenCalled();
+    await expect(platform.prepareRecentFile(recent)).resolves.toBe(prepared);
+    expect(prepareRecentFile).toHaveBeenCalledWith(recent);
+    expect(prepareOpenFile).not.toHaveBeenCalled();
   });
 
-  it("falls back to path reads for platforms without trusted recent-file reads", async () => {
-    const opened = openedResponse();
-    const readFile = vi.fn().mockResolvedValue(opened);
-    mockDesktopPlatform({ readFile });
+  it("falls back to path preparation without trusted recent-file preparation", async () => {
+    const prepared = preparedOpen();
+    const prepareOpenFile = vi.fn().mockResolvedValue(prepared);
+    mockDesktopPlatform({ prepareOpenFile });
 
     const platform = await import("@/platform/loader");
 
     await expect(
-      platform.readRecentFile({
+      platform.prepareRecentFile({
         id: "recent",
         path: "/tmp/recent.xlsx",
         fileName: "recent.xlsx",
@@ -117,7 +96,7 @@ describe("platform loader", () => {
         fileSize: 2,
         storageType: "desktopPath",
       })
-    ).resolves.toBe(opened);
-    expect(readFile).toHaveBeenCalledWith("/tmp/recent.xlsx");
+    ).resolves.toBe(prepared);
+    expect(prepareOpenFile).toHaveBeenCalledWith("/tmp/recent.xlsx");
   });
 });

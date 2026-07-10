@@ -5,7 +5,7 @@ use crate::io::platform::mobile::PickedFileInfo;
 #[cfg(target_os = "ios")]
 use crate::io::platform::{ios, mobile};
 #[cfg(target_os = "ios")]
-use crate::types::{OpenDocumentResponse, SavedDocumentResponse};
+use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "ios")]
 use tauri::AppHandle;
 
@@ -33,8 +33,11 @@ pub async fn discard_save_location_ios(app: AppHandle, path: String) -> Result<(
 /// iOS: read and parse a sandboxed file path saved in recent files.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn read_file_ios(app: AppHandle, path: String) -> Result<OpenDocumentResponse, AppError> {
-    mobile::read_file(&app, &path)
+pub async fn prepare_open_file_ios(
+    app: AppHandle,
+    path: String,
+) -> Result<PreparedOpenDocument, AppError> {
+    mobile::prepare_file(&app, &path)
 }
 
 /// iOS: create a new sandbox save target that must be adopted by save_file_ios or discarded.

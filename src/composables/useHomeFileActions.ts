@@ -2,7 +2,7 @@ import { computed, ref } from "vue";
 import { defaultRichProjection, type FileData, type RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
-import { pickOpenFile, readRecentFile } from "@/platform";
+import { pickOpenFile, prepareRecentFile } from "@/platform";
 import { blankCell } from "@/utils/cellValue";
 import { warnRecentFileTrackingFailure } from "@/utils/recentFileTracking";
 import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
@@ -10,6 +10,8 @@ import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
+import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
+import { isAppErrorCode } from "@/utils/appError";
 
 type UseHomeFileActionsOptions = {
   navigateToTable?: () => Promise<void> | void;
@@ -60,7 +62,9 @@ export function useHomeFileActions({
       try {
         const defaultExtension = await defaultSpreadsheetExtension();
         const newFileData = newUntitledFileData(defaultExtension);
-        const opened = await api.initFile(newFileData);
+        const expectedContext = documentSessionStore.currentCommandContext();
+        const prepared = await api.prepareNewFile(newFileData);
+        const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
         replacement.commit();
         documentSessionStore.openDocumentResponse(opened, null);
         await navigateToTableRoute();
@@ -95,7 +99,9 @@ export function useHomeFileActions({
     const replacement = await beginDocumentReplacement();
     if (!replacement) return false;
     try {
-      const opened = await readRecentFile(file);
+      const expectedContext = documentSessionStore.currentCommandContext();
+      const prepared = await prepareRecentFile(file);
+      const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
       replacement.commit();
       documentSessionStore.openDocumentResponse(opened, file.path);
       queueRecentFileEntryUpdate(file.originalPath);
@@ -142,7 +148,7 @@ export function useHomeFileActions({
 }
 
 function isFileNotFoundError(error: unknown): boolean {
-  return String(error).includes("File not found:");
+  return isAppErrorCode(error, "file_not_found") || String(error).includes("File not found:");
 }
 
 function newUntitledFileData(defaultExtension: string): FileData {

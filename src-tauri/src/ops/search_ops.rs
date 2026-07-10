@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::state::search_index::{SearchCellText, SearchMatcher, collect_sheet_search_text};
+use crate::state::search_index::{SearchCellText, SearchQueryPlan, SearchSheetSource};
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{SearchResult, SearchScope};
 
@@ -28,17 +28,17 @@ pub fn do_search(
     scope: SearchScope,
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
-    if query.is_empty() {
+    let Some(plan) = SearchQueryPlan::new(query) else {
         return Ok(vec![]);
-    }
+    };
 
-    let sheet_indexes = {
+    let inputs = {
         let registry = registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry.active_for_command(document_id, base_revision)?;
 
-        match scope {
+        let sheet_indexes = match scope {
             SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
             SearchScope::AllSheets => editor_state
                 .file_data()
@@ -47,44 +47,34 @@ pub fn do_search(
                 .enumerate()
                 .map(|(sheet_idx, _)| sheet_idx)
                 .collect(),
-        }
+        };
+        sheet_indexes
+            .into_iter()
+            .filter_map(|sheet_index| {
+                Some(SearchInput {
+                    sheet_index,
+                    sheet_name: editor_state.sheet_name(sheet_index)?,
+                    source: editor_state.search_sheet_source(sheet_index)?,
+                })
+            })
+            .collect::<Vec<_>>()
     };
 
-    let matcher = SearchMatcher::new(query);
     let mut results = Vec::new();
     let mut used_scan_fallback = false;
 
-    for sheet_index in sheet_indexes {
+    for input in inputs {
         if results.len() >= SEARCH_RESULT_LIMIT {
             break;
         }
         let remaining = SEARCH_RESULT_LIMIT - results.len();
-        let input = {
-            let registry = registry
-                .read()
-                .map_err(|_| AppError::poisoned_lock("document registry"))?;
-            let editor_state = registry.active_for_command(document_id, base_revision)?;
-            search_input_for_sheet(
-                editor_state,
-                sheet_index,
-                query,
-                matcher.as_ref(),
-                remaining,
-            )
-        };
-        let Some(input) = input else {
-            continue;
-        };
-        match input {
-            SearchInput::Indexed {
-                sheet_index,
-                sheet_name,
-                cells,
-            } => {
+        match input.source {
+            SearchSheetSource::Indexed(index) => {
+                let cells = index.search(&plan, remaining);
                 for cell in cells.into_iter().take(remaining) {
                     results.push(SearchResult {
-                        sheet_index,
-                        sheet_name: sheet_name.clone(),
+                        sheet_index: input.sheet_index,
+                        sheet_name: input.sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
                         value: cell.display_text,
@@ -92,16 +82,13 @@ pub fn do_search(
                     });
                 }
             }
-            SearchInput::Scan {
-                sheet_index,
-                sheet_name,
-                cells,
-            } => {
+            SearchSheetSource::Snapshot(snapshot) => {
                 used_scan_fallback = true;
-                for cell in scan_sheet(&cells, matcher.as_ref(), remaining) {
+                let cells = snapshot.materialize();
+                for cell in scan_sheet(&cells, &plan, remaining) {
                     results.push(SearchResult {
-                        sheet_index,
-                        sheet_name: sheet_name.clone(),
+                        sheet_index: input.sheet_index,
+                        sheet_name: input.sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
                         value: cell.display_text,
@@ -119,53 +106,20 @@ pub fn do_search(
     Ok(results)
 }
 
-enum SearchInput {
-    Indexed {
-        sheet_index: usize,
-        sheet_name: String,
-        cells: Vec<SearchCellText>,
-    },
-    Scan {
-        sheet_index: usize,
-        sheet_name: String,
-        cells: Vec<SearchCellText>,
-    },
-}
-
-fn search_input_for_sheet(
-    editor_state: &crate::state::editor_state::EditorState,
+struct SearchInput {
     sheet_index: usize,
-    query: &str,
-    matcher: Option<&SearchMatcher>,
-    limit: usize,
-) -> Option<SearchInput> {
-    if let Some(cells) = editor_state.indexed_search_sheet(sheet_index, query, limit) {
-        return Some(SearchInput::Indexed {
-            sheet_index,
-            sheet_name: editor_state.sheet_name(sheet_index)?,
-            cells,
-        });
-    }
-    let sheet = editor_state.file_data().sheets.get(sheet_index)?;
-    matcher?;
-    Some(SearchInput::Scan {
-        sheet_index,
-        sheet_name: sheet.name.clone(),
-        cells: collect_sheet_search_text(sheet),
-    })
+    sheet_name: String,
+    source: SearchSheetSource,
 }
 
 fn scan_sheet(
     sheet_cells: &[SearchCellText],
-    matcher: Option<&SearchMatcher>,
+    plan: &SearchQueryPlan,
     limit: usize,
 ) -> Vec<SearchCellText> {
-    let Some(matcher) = matcher else {
-        return Vec::new();
-    };
     let mut cells = Vec::new();
     for cell in sheet_cells {
-        if !matcher.matches(&cell.search_text) {
+        if !plan.matches(&cell.search_text) {
             continue;
         }
         cells.push(cell.clone());

@@ -8,8 +8,10 @@ use tantivy::{Term, doc};
 
 use crate::display::DisplayProjection;
 use crate::state::search_index::{
-    SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel, collect_sheet_search_text,
+    SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel, search_position,
 };
+#[cfg(test)]
+use crate::state::search_index::{SearchQueryPlan, SearchSheetSource};
 use crate::state::search_scheduler::{
     CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, RebuildIndexUpdate,
     SearchSchedulerStats, SheetPending,
@@ -503,6 +505,7 @@ fn run_rebuild(
         && let Some(editor_state) = guard.get_mut(document_id)
     {
         editor_state.install_search_index(sheet_index, stamp, built_index);
+        editor_state.compact_search_sheet_snapshot(sheet_index, stamp, search_text);
     }
 }
 
@@ -529,19 +532,16 @@ fn snapshot_sheet_search_text(
     stamp: SearchIndexStamp,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) -> Option<Arc<[SearchCellText]>> {
-    match registry.read() {
+    let snapshot = match registry.read() {
         Ok(guard) => guard.get(document_id).and_then(|editor| {
             if editor.search_sheet_index_stamp(sheet_index) != stamp {
                 return None;
             }
-            editor
-                .file_data()
-                .sheets
-                .get(sheet_index)
-                .map(|sheet| Arc::from(collect_sheet_search_text(sheet)))
+            editor.search_sheet_snapshot(sheet_index)
         }),
         Err(_) => None,
-    }
+    }?;
+    Some(snapshot.materialize())
 }
 
 fn run_incremental(
@@ -577,9 +577,11 @@ fn run_incremental(
         if !op.search_text.is_empty()
             && let Err(error) = writer.add_document(doc!(
                 handle.text_field => op.search_text.clone(),
+                handle.literal_field => op.search_text.to_lowercase(),
                 handle.display_field => op.display_text.clone(),
                 handle.row_field => op.row as u64,
                 handle.col_field => op.col as u64,
+                handle.position_field => search_position(op.row, op.col),
                 handle.cell_id_field => cell_id,
             ))
         {
@@ -594,9 +596,21 @@ fn run_incremental(
     }
     drop(writer);
 
+    let compacted_snapshot = registry.read().ok().and_then(|guard| {
+        let editor = guard.get(document_id)?;
+        if editor.search_sheet_index_stamp(sheet_index) != latest_stamp {
+            return None;
+        }
+        editor.search_sheet_snapshot(sheet_index)
+    });
+    let compacted_snapshot = compacted_snapshot.map(|snapshot| snapshot.materialize());
+
     if let Ok(mut guard) = registry.write()
         && let Some(editor_state) = guard.get_mut(document_id)
     {
+        if let Some(cells) = compacted_snapshot {
+            editor_state.compact_search_sheet_snapshot(sheet_index, latest_stamp, cells);
+        }
         editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp);
     }
 
@@ -684,9 +698,18 @@ mod tests {
     ) -> Vec<(usize, usize)> {
         let guard = registry.read().unwrap();
         let editor = guard.get(document_id).unwrap();
-        let mut rows: Vec<_> = editor
-            .indexed_search_sheet(0, query, 10)
-            .unwrap_or_default()
+        let plan = SearchQueryPlan::new(query).expect("query plan");
+        let cells = match editor.search_sheet_source(0).expect("search source") {
+            SearchSheetSource::Indexed(index) => index.search(&plan, 10),
+            SearchSheetSource::Snapshot(snapshot) => snapshot
+                .materialize()
+                .iter()
+                .filter(|cell| plan.matches(&cell.search_text))
+                .take(10)
+                .cloned()
+                .collect(),
+        };
+        let mut rows: Vec<_> = cells
             .into_iter()
             .map(|position| (position.row, position.col))
             .collect();
@@ -803,6 +826,47 @@ mod tests {
         .expect_err("stale search context should be rejected");
 
         assert!(matches!(error, AppError::DocumentStateInvalid(_)));
+    }
+
+    #[test]
+    fn search_sources_remain_usable_without_holding_the_document_lock() {
+        let (registry, document_id) = make_registry(vec![vec![s("alpha beta")]]);
+        let snapshot = {
+            let guard = registry.read().unwrap();
+            guard
+                .get(document_id)
+                .unwrap()
+                .search_sheet_source(0)
+                .expect("snapshot source")
+        };
+        let write_guard = registry
+            .try_write()
+            .expect("snapshot does not retain registry lock");
+        let snapshot_cells = match snapshot {
+            SearchSheetSource::Snapshot(snapshot) => snapshot.materialize(),
+            SearchSheetSource::Indexed(_) => panic!("index should not exist before rebuild"),
+        };
+        assert_eq!(snapshot_cells[0].search_text, "alpha beta");
+        drop(write_guard);
+
+        rebuild_current_sheet(&registry, document_id);
+        let indexed = {
+            let guard = registry.read().unwrap();
+            guard
+                .get(document_id)
+                .unwrap()
+                .search_sheet_source(0)
+                .expect("indexed source")
+        };
+        let _write_guard = registry
+            .try_write()
+            .expect("index does not retain registry lock");
+        let plan = SearchQueryPlan::new("alpha beta").expect("query plan");
+        let cells = match indexed {
+            SearchSheetSource::Indexed(index) => index.search(&plan, 10),
+            SearchSheetSource::Snapshot(_) => panic!("rebuilt index should be fresh"),
+        };
+        assert_eq!(cells.len(), 1);
     }
 
     #[test]

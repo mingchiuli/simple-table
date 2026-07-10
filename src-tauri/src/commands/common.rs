@@ -9,7 +9,8 @@ use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
-    SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest, SpreadsheetFormatOptions,
+    PreparedOpenDocument, SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
+    SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -34,18 +35,18 @@ pub fn discard_open_file_selection_desktop(path: String) {
 /// Desktop: 从后端已授权路径读取并解析文件。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn read_file_desktop(path: String) -> Result<OpenDocumentResponse, AppError> {
-    desktop::read_file(&path)
+pub fn prepare_open_file_desktop(path: String) -> Result<PreparedOpenDocument, AppError> {
+    desktop::prepare_file(&path)
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn read_recent_file_desktop(
+pub fn prepare_recent_file_desktop(
     app: AppHandle,
     id: String,
-) -> Result<OpenDocumentResponse, AppError> {
-    desktop::read_recent_file(&app, &id)
+) -> Result<PreparedOpenDocument, AppError> {
+    desktop::prepare_recent_file(&app, &id)
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -89,8 +90,22 @@ pub fn export_file_desktop(
 }
 
 #[tauri::command]
-pub fn init_file(file_data: FileData) -> Result<OpenDocumentResponse, AppError> {
-    document::init_file(file_data)
+pub fn prepare_new_file(file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
+    document::prepare_new_file(file_data)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn commit_prepared_document(
+    token: String,
+    expected_document_id: Option<u64>,
+    expected_revision: Option<u64>,
+) -> Result<OpenDocumentResponse, AppError> {
+    document::commit_prepared_document(&token, expected_document_id, expected_revision)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn abort_prepared_document(token: String) -> Result<(), AppError> {
+    document::abort_prepared_document(&token)
 }
 
 #[tauri::command(rename_all = "camelCase")]

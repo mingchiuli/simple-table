@@ -587,7 +587,11 @@ fn estimate_worksheet_bytes(worksheet: &Worksheet) -> usize {
         + worksheet.column_dimensions().len() * 64
         + worksheet.row_dimensions().len() * 64
         + worksheet.merge_cells().len() * 48
-        + worksheet.image_collection().len() * 1024
+        + worksheet
+            .image_collection()
+            .iter()
+            .map(|image| std::mem::size_of_val(image) + image.image_data().len())
+            .sum::<usize>()
         + worksheet.chart_collection().len() * 2048
         + worksheet
             .cells()
@@ -639,4 +643,29 @@ fn csv_unsupported_operation_features(operation: &AppliedOperation) -> Vec<Strin
         return vec!["CSV files only persist one sheet".into()];
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use umya_spreadsheet::structs::Image;
+    use umya_spreadsheet::structs::drawing::spreadsheet::MarkerType;
+
+    #[test]
+    fn worksheet_estimate_includes_actual_image_bytes() {
+        let mut worksheet = Worksheet::default();
+        let baseline = estimate_worksheet_bytes(&worksheet);
+        let image_bytes = vec![0x5a; 2 * 1024 * 1024];
+        let mut image = Image::default();
+        image.new_image_with_dimensions(
+            16,
+            16,
+            "large.png",
+            image_bytes.clone(),
+            MarkerType::default(),
+        );
+        worksheet.add_image(image);
+
+        assert!(estimate_worksheet_bytes(&worksheet) >= baseline + image_bytes.len());
+    }
 }

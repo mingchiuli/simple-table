@@ -3,6 +3,7 @@ import {
   useDocumentSessionStore,
   type DocumentSessionLifecycle,
 } from "@/stores/documentSession";
+import { appErrorMessage } from "@/utils/appError";
 
 type ActiveDocumentLifecycle = Exclude<DocumentSessionLifecycle, "idle">;
 export type DocumentLifecycleRunStatus = "completed" | "failed" | "skipped";
@@ -38,7 +39,7 @@ export function useDocumentLifecycle() {
       await action({ release });
       return "completed";
     } catch (error) {
-      ElMessage.error(`${errorPrefix}: ${error}`);
+      ElMessage.error(`${errorPrefix}: ${appErrorMessage(error)}`);
       return "failed";
     } finally {
       release();

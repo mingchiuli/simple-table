@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde::ser::SerializeStruct;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -56,12 +57,54 @@ impl Serialize for AppError {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        let mut state = serializer.serialize_struct("AppError", 2)?;
+        state.serialize_field("code", self.code())?;
+        state.serialize_field("message", &self.to_string())?;
+        state.end()
     }
 }
 
 impl AppError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ReadError(_) => "read_error",
+            Self::WriteError(_) => "write_error",
+            Self::FileNotFound(_) => "file_not_found",
+            Self::UnsupportedFormat => "unsupported_format",
+            Self::NoFileLoaded => "no_file_loaded",
+            Self::InvalidSheetIndex(_) => "invalid_sheet_index",
+            Self::InvalidCellPosition { .. } => "invalid_cell_position",
+            Self::RowNotFound(_) => "row_not_found",
+            Self::NothingToUndo => "nothing_to_undo",
+            Self::NothingToRedo => "nothing_to_redo",
+            Self::CannotDeleteLastSheet => "cannot_delete_last_sheet",
+            Self::WorkbookPatchFailed(_) => "workbook_patch_failed",
+            Self::TransactionRollbackFailed { .. } => "transaction_rollback_failed",
+            Self::DocumentStateInvalid(_) => "document_state_invalid",
+            Self::UnsupportedWorkbookStructure(_) => "unsupported_workbook_structure",
+            Self::Internal(_) => "internal",
+        }
+    }
+
     pub fn poisoned_lock(name: &'static str) -> Self {
         Self::Internal(format!("{name} lock poisoned"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+    use serde_json::json;
+
+    #[test]
+    fn serializes_stable_error_code_and_human_message() {
+        assert_eq!(
+            serde_json::to_value(AppError::FileNotFound("/tmp/missing.xlsx".to_string()))
+                .expect("serialize error"),
+            json!({
+                "code": "file_not_found",
+                "message": "File not found: /tmp/missing.xlsx",
+            })
+        );
     }
 }

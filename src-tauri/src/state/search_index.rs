@@ -1,11 +1,14 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value};
-use tantivy::tokenizer::{TextAnalyzer, TokenStream};
-use tantivy::{Index, IndexWriter, TantivyDocument, Term, doc};
+use tantivy::query::{BooleanQuery, Occur, Query, RegexQuery, TermQuery};
+use tantivy::schema::{
+    Field, IndexRecordOption, STRING, Schema, TextFieldIndexing, TextOptions, Value,
+};
+use tantivy::tokenizer::{LowerCaser, TextAnalyzer, TokenStream};
+use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
 #[cfg(test)]
@@ -16,9 +19,11 @@ const WRITER_ARENA_BYTES: usize = 15_000_000;
 
 struct SchemaFields {
     text: Field,
+    literal: Field,
     display: Field,
     row: Field,
     col: Field,
+    position: Field,
     cell_id: Field,
 }
 
@@ -26,6 +31,7 @@ pub struct SearchSheetIndex {
     index: Index,
     schema: Schema,
     text_field: Field,
+    literal_field: Field,
     display_field: Field,
     cell_id_field: Field,
     writer: Arc<Mutex<IndexWriter>>,
@@ -33,7 +39,7 @@ pub struct SearchSheetIndex {
 
 struct SearchSheetIndexEntry {
     revision: u64,
-    index: SearchSheetIndex,
+    index: Arc<SearchSheetIndex>,
 }
 
 enum SearchSheetSlot {
@@ -55,9 +61,11 @@ pub struct SearchIndexStamp {
 pub struct SearchWriterHandle {
     pub writer: Arc<Mutex<IndexWriter>>,
     pub text_field: Field,
+    pub literal_field: Field,
     pub display_field: Field,
     pub row_field: Field,
     pub col_field: Field,
+    pub position_field: Field,
     pub cell_id_field: Field,
 }
 
@@ -67,6 +75,101 @@ pub struct SearchCellText {
     pub col: usize,
     pub search_text: String,
     pub display_text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchCellSnapshotChange {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub cell: Option<SearchCellText>,
+}
+
+#[derive(Debug)]
+pub struct SearchSheetSnapshot {
+    revision: u64,
+    data: SearchSheetSnapshotData,
+}
+
+#[derive(Debug)]
+enum SearchSheetSnapshotData {
+    Full(Arc<[SearchCellText]>),
+    Delta {
+        parent: Arc<SearchSheetSnapshot>,
+        changes: Arc<[SearchCellSnapshotChange]>,
+    },
+}
+
+impl SearchSheetSnapshot {
+    pub fn from_sheet(sheet: &SheetData, revision: u64) -> Arc<Self> {
+        Self::from_cells(Arc::from(collect_sheet_search_text(sheet)), revision)
+    }
+
+    pub fn from_cells(cells: Arc<[SearchCellText]>, revision: u64) -> Arc<Self> {
+        Arc::new(Self {
+            revision,
+            data: SearchSheetSnapshotData::Full(cells),
+        })
+    }
+
+    pub fn with_changes(
+        parent: Arc<Self>,
+        changes: Vec<SearchCellSnapshotChange>,
+        revision: u64,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            revision,
+            data: SearchSheetSnapshotData::Delta {
+                parent,
+                changes: Arc::from(changes),
+            },
+        })
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn materialize(&self) -> Arc<[SearchCellText]> {
+        let mut layers = Vec::new();
+        let mut current = self;
+        let base = loop {
+            match &current.data {
+                SearchSheetSnapshotData::Full(cells) => break Arc::clone(cells),
+                SearchSheetSnapshotData::Delta { parent, changes } => {
+                    layers.push(Arc::clone(changes));
+                    current = parent;
+                }
+            }
+        };
+        if layers.is_empty() {
+            return base;
+        }
+
+        let mut cells: BTreeMap<(usize, usize), SearchCellText> = base
+            .iter()
+            .cloned()
+            .map(|cell| ((cell.row, cell.col), cell))
+            .collect();
+        for changes in layers.into_iter().rev() {
+            for change in changes.iter() {
+                match &change.cell {
+                    Some(cell) => {
+                        cells.insert((change.row, change.col), cell.clone());
+                    }
+                    None => {
+                        cells.remove(&(change.row, change.col));
+                    }
+                }
+            }
+        }
+        Arc::from(cells.into_values().collect::<Vec<_>>())
+    }
+}
+
+pub enum SearchSheetSource {
+    Indexed(Arc<SearchSheetIndex>),
+    Snapshot(Arc<SearchSheetSnapshot>),
 }
 
 static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -207,7 +310,7 @@ impl SearchIndexStore {
             .map(|index| {
                 SearchSheetSlot::Fresh(SearchSheetIndexEntry {
                     revision: stamp.revision,
-                    index,
+                    index: Arc::new(index),
                 })
             })
             .unwrap_or(SearchSheetSlot::Missing);
@@ -240,36 +343,37 @@ impl SearchIndexStore {
         }
         let row_field = entry.index.schema.get_field("row").ok()?;
         let col_field = entry.index.schema.get_field("col").ok()?;
+        let position_field = entry.index.schema.get_field("position").ok()?;
         Some(SearchWriterHandle {
-            writer: std::sync::Arc::clone(&entry.index.writer),
+            writer: Arc::clone(&entry.index.writer),
             text_field: entry.index.text_field,
+            literal_field: entry.index.literal_field,
             display_field: entry.index.display_field,
             row_field,
             col_field,
+            position_field,
             cell_id_field: entry.index.cell_id_field,
         })
     }
 
+    #[cfg(test)]
     pub fn search_sheet(
         &self,
         sheet_index: usize,
         query: &str,
         limit: usize,
     ) -> Option<Vec<SearchCellText>> {
-        let query = query.trim();
-        if query.is_empty() {
-            return Some(vec![]);
-        }
+        let plan = SearchQueryPlan::new(query)?;
+        self.fresh_sheet_index(sheet_index)
+            .map(|index| index.search(&plan, limit))
+    }
 
+    pub fn fresh_sheet_index(&self, sheet_index: usize) -> Option<Arc<SearchSheetIndex>> {
         let entry = match self.sheets.get(sheet_index)? {
             SearchSheetSlot::Fresh(entry) => entry,
             SearchSheetSlot::Stale { .. } | SearchSheetSlot::Missing => return None,
         };
-        if entry.revision != self.sheet_revision(sheet_index) {
-            return None;
-        };
-
-        Some(search_index(&entry.index, query, limit))
+        (entry.revision == self.sheet_revision(sheet_index)).then(|| Arc::clone(&entry.index))
     }
 
     fn ensure_sheet_slot(&mut self, sheet_index: usize) {
@@ -290,21 +394,27 @@ impl SearchIndexStore {
     }
 }
 
-#[derive(Debug)]
-pub struct SearchMatcher {
-    query: String,
-    query_terms: Vec<String>,
+#[derive(Debug, Clone)]
+pub struct SearchQueryPlan {
+    literal: String,
+    terms: Vec<String>,
 }
 
-impl SearchMatcher {
+impl SearchQueryPlan {
     pub fn new(query: &str) -> Option<Self> {
         let query = query.trim();
         if query.is_empty() {
             return None;
         }
+        let mut terms = Vec::new();
+        for term in tokenize_search_text(query) {
+            if !terms.iter().any(|existing| existing == &term) {
+                terms.push(term);
+            }
+        }
         Some(Self {
-            query: query.to_lowercase(),
-            query_terms: tokenize_search_text(query),
+            literal: query.to_lowercase(),
+            terms,
         })
     }
 
@@ -314,16 +424,20 @@ impl SearchMatcher {
             return false;
         }
         let text_lower = text.to_lowercase();
-        if text_lower.contains(&self.query) {
+        if text_lower.contains(&self.literal) {
             return true;
         }
-        if self.query_terms.is_empty() {
+        if self.terms.is_empty() {
             return false;
         }
         let text_terms = tokenize_search_text(text);
-        self.query_terms
+        self.terms
             .iter()
             .all(|query_term| text_terms.iter().any(|text_term| text_term == query_term))
+    }
+
+    fn terms(&self) -> &[String] {
+        &self.terms
     }
 }
 
@@ -345,6 +459,27 @@ pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
             })
         })
         .collect()
+}
+
+pub fn sheet_cell_search_text(
+    sheet: &SheetData,
+    sheet_index: usize,
+    row: usize,
+    col: usize,
+) -> SearchCellSnapshotChange {
+    let search_text = sheet.cell_search_text(row, col);
+    let cell = (!search_text.is_empty()).then(|| SearchCellText {
+        row,
+        col,
+        search_text,
+        display_text: sheet.cell_display_text(row, col),
+    });
+    SearchCellSnapshotChange {
+        sheet_index,
+        row,
+        col,
+        cell,
+    }
 }
 
 #[cfg(test)]
@@ -382,9 +517,11 @@ pub fn build_sheet_index_with_cancel(
         }
         if let Err(error) = writer.add_document(doc!(
             fields.text => cell.search_text.clone(),
+            fields.literal => cell.search_text.to_lowercase(),
             fields.display => cell.display_text.clone(),
             fields.row => cell.row as u64,
             fields.col => cell.col as u64,
+            fields.position => search_position(cell.row, cell.col),
             fields.cell_id => format!("{}:{}", cell.row, cell.col),
         )) {
             eprintln!("Failed to add document: {error:?}");
@@ -408,6 +545,7 @@ pub fn build_sheet_index_with_cancel(
         index,
         schema,
         text_field: fields.text,
+        literal_field: fields.literal,
         display_field: fields.display,
         cell_id_field: fields.cell_id,
         writer: Arc::new(Mutex::new(writer)),
@@ -427,12 +565,14 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
             )
             .set_stored(),
     );
+    let literal_field = schema_builder.add_text_field("literal", STRING);
     let display_field =
         schema_builder.add_text_field("display", TextOptions::default().set_stored());
     let row_field =
         schema_builder.add_u64_field("row", tantivy::schema::FAST | tantivy::schema::STORED);
     let col_field =
         schema_builder.add_u64_field("col", tantivy::schema::FAST | tantivy::schema::STORED);
+    let position_field = schema_builder.add_u64_field("position", tantivy::schema::FAST);
     let cell_id_field = schema_builder.add_text_field(
         "cell_id",
         TextOptions::default().set_indexing_options(
@@ -444,7 +584,9 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
 
     let schema = schema_builder.build();
     let index = Index::create_in_ram(schema.clone());
-    let analyzer = TextAnalyzer::builder(JiebaTokenizer::new()).build();
+    let analyzer = TextAnalyzer::builder(JiebaTokenizer::new())
+        .filter(LowerCaser)
+        .build();
     index.tokenizers().register("jieba", analyzer);
 
     Ok((
@@ -452,16 +594,20 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
         schema,
         SchemaFields {
             text: text_field,
+            literal: literal_field,
             display: display_field,
             row: row_field,
             col: col_field,
+            position: position_field,
             cell_id: cell_id_field,
         },
     ))
 }
 
 fn search_analyzer() -> TextAnalyzer {
-    TextAnalyzer::builder(JiebaTokenizer::new()).build()
+    TextAnalyzer::builder(JiebaTokenizer::new())
+        .filter(LowerCaser)
+        .build()
 }
 
 fn tokenize_search_text(text: &str) -> Vec<String> {
@@ -477,7 +623,11 @@ fn tokenize_search_text(text: &str) -> Vec<String> {
     tokens
 }
 
-fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<SearchCellText> {
+fn search_index(
+    index: &SearchSheetIndex,
+    plan: &SearchQueryPlan,
+    limit: usize,
+) -> Vec<SearchCellText> {
     let row_field = match index.schema.get_field("row") {
         Ok(field) => field,
         Err(_) => return vec![],
@@ -502,26 +652,17 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
         }
     };
     let searcher = reader.searcher();
-    let query_parser = QueryParser::for_index(&index.index, vec![index.text_field]);
-
-    let top_docs = match query_parser.parse_query(query) {
-        Ok(query) => match searcher.search(&query, &TopDocs::with_limit(limit).order_by_score()) {
-            Ok(docs) => docs,
-            Err(error) => {
-                eprintln!("Search failed: {error:?}");
-                return vec![];
-            }
-        },
-        Err(_) => {
-            let term = Term::from_field_text(index.text_field, &query.to_lowercase());
-            let term_query = tantivy::query::TermQuery::new(term, IndexRecordOption::Basic);
-            match searcher.search(&term_query, &TopDocs::with_limit(limit).order_by_score()) {
-                Ok(docs) => docs,
-                Err(error) => {
-                    eprintln!("Term search failed: {error:?}");
-                    return vec![];
-                }
-            }
+    let Some(query) = compile_index_query(index.text_field, index.literal_field, plan) else {
+        return vec![];
+    };
+    let top_docs = match searcher.search(
+        &query,
+        &TopDocs::with_limit(limit).order_by_fast_field::<u64>("position", Order::Asc),
+    ) {
+        Ok(docs) => docs,
+        Err(error) => {
+            eprintln!("Search failed: {error:?}");
+            return vec![];
         }
     };
 
@@ -541,6 +682,9 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
                 .and_then(|value| value.as_str())
                 .unwrap_or(display)
                 .to_string();
+            if !plan.matches(&search_text) {
+                continue;
+            }
             results.push(SearchCellText {
                 row: row as usize,
                 col: col as usize,
@@ -550,6 +694,57 @@ fn search_index(index: &SearchSheetIndex, query: &str, limit: usize) -> Vec<Sear
         }
     }
     results
+}
+
+pub(crate) fn search_position(row: usize, col: usize) -> u64 {
+    ((row as u64) << 32) | (col as u64 & u32::MAX as u64)
+}
+
+impl SearchSheetIndex {
+    pub fn search(&self, plan: &SearchQueryPlan, limit: usize) -> Vec<SearchCellText> {
+        search_index(self, plan, limit)
+    }
+}
+
+fn compile_index_query(
+    text_field: Field,
+    literal_field: Field,
+    plan: &SearchQueryPlan,
+) -> Option<BooleanQuery> {
+    let term_clauses: Vec<(Occur, Box<dyn Query>)> = plan
+        .terms()
+        .iter()
+        .map(|term| {
+            let query = TermQuery::new(
+                Term::from_field_text(text_field, term),
+                IndexRecordOption::Basic,
+            );
+            (Occur::Must, Box::new(query) as Box<dyn Query>)
+        })
+        .collect();
+    let mut alternatives = Vec::<(Occur, Box<dyn Query>)>::new();
+    let literal_pattern = format!(".*{}.*", escape_regex_literal(&plan.literal));
+    if let Ok(query) = RegexQuery::from_pattern(&literal_pattern, literal_field) {
+        alternatives.push((Occur::Should, Box::new(query)));
+    }
+    if !term_clauses.is_empty() {
+        alternatives.push((Occur::Should, Box::new(BooleanQuery::new(term_clauses))));
+    }
+    (!alternatives.is_empty()).then(|| BooleanQuery::new(alternatives))
+}
+
+fn escape_regex_literal(literal: &str) -> String {
+    let mut escaped = String::with_capacity(literal.len());
+    for character in literal.chars() {
+        if matches!(
+            character,
+            '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -683,13 +878,175 @@ mod tests {
     }
 
     #[test]
-    fn fallback_matcher_supports_substring_and_token_matches() {
-        let matcher = SearchMatcher::new("开发").expect("matcher");
+    fn query_plan_supports_literal_and_all_token_matches() {
+        let matcher = SearchQueryPlan::new("开发").expect("matcher");
         assert!(matcher.matches("AI应用开发工程师"));
 
-        let matcher = SearchMatcher::new("indexed text").expect("matcher");
+        let matcher = SearchQueryPlan::new("indexed text").expect("matcher");
         assert!(matcher.matches("old indexed text value"));
         assert!(!matcher.matches("indexed only"));
+    }
+
+    #[test]
+    fn indexed_and_scan_plans_use_the_same_multi_term_semantics() {
+        let rows = vec![
+            vec![CellValue::String("alpha only".to_string())],
+            vec![CellValue::String("beta only".to_string())],
+            vec![CellValue::String("alpha and beta".to_string())],
+        ];
+        let sheet = SheetData {
+            name: "Test".to_string(),
+            rows: rows.clone(),
+            ..Default::default()
+        };
+        let cells = collect_sheet_search_text(&sheet);
+        let plan = SearchQueryPlan::new("alpha beta").expect("query plan");
+        let index = index_rows(&rows);
+        let indexed: Vec<_> = search_index(&index, &plan, 10)
+            .into_iter()
+            .map(|cell| (cell.row, cell.col))
+            .collect();
+        let scanned: Vec<_> = cells
+            .iter()
+            .filter(|cell| plan.matches(&cell.search_text))
+            .map(|cell| (cell.row, cell.col))
+            .collect();
+
+        assert_eq!(indexed, scanned);
+        assert_eq!(indexed, vec![(2, 0)]);
+    }
+
+    #[test]
+    fn indexed_and_scan_plans_preserve_literal_substring_semantics() {
+        let rows = vec![
+            vec![CellValue::String("alpha".to_string())],
+            vec![CellValue::String("other".to_string())],
+            vec![CellValue::String("cost (net)".to_string())],
+        ];
+        let sheet = SheetData {
+            name: "Test".to_string(),
+            rows: rows.clone(),
+            ..Default::default()
+        };
+        let cells = collect_sheet_search_text(&sheet);
+        let index = index_rows(&rows);
+
+        for query in ["pha", "(net)"] {
+            let plan = SearchQueryPlan::new(query).expect("query plan");
+            let mut indexed: Vec<_> = search_index(&index, &plan, 10)
+                .into_iter()
+                .map(|cell| (cell.row, cell.col))
+                .collect();
+            let scanned: Vec<_> = cells
+                .iter()
+                .filter(|cell| plan.matches(&cell.search_text))
+                .map(|cell| (cell.row, cell.col))
+                .collect();
+            indexed.sort_unstable();
+
+            assert_eq!(indexed, scanned, "query {query}");
+        }
+    }
+
+    #[test]
+    fn indexed_and_scan_plans_apply_limits_in_sheet_order() {
+        let rows = vec![
+            vec![
+                CellValue::String("match a".to_string()),
+                CellValue::String("match b".to_string()),
+            ],
+            vec![CellValue::String("match c".to_string())],
+        ];
+        let sheet = SheetData {
+            name: "Test".to_string(),
+            rows: rows.clone(),
+            ..Default::default()
+        };
+        let cells = collect_sheet_search_text(&sheet);
+        let plan = SearchQueryPlan::new("match").expect("query plan");
+        let index = index_rows(&rows);
+        let indexed: Vec<_> = search_index(&index, &plan, 2)
+            .into_iter()
+            .map(|cell| (cell.row, cell.col))
+            .collect();
+        let scanned: Vec<_> = cells
+            .iter()
+            .filter(|cell| plan.matches(&cell.search_text))
+            .take(2)
+            .map(|cell| (cell.row, cell.col))
+            .collect();
+
+        assert_eq!(indexed, scanned);
+        assert_eq!(indexed, vec![(0, 0), (0, 1)]);
+    }
+
+    #[test]
+    fn snapshot_deltas_materialize_latest_cells_in_sheet_order() {
+        let base = SearchSheetSnapshot::from_cells(
+            Arc::from([
+                SearchCellText {
+                    row: 0,
+                    col: 0,
+                    search_text: "old".to_string(),
+                    display_text: "old".to_string(),
+                },
+                SearchCellText {
+                    row: 2,
+                    col: 0,
+                    search_text: "tail".to_string(),
+                    display_text: "tail".to_string(),
+                },
+            ]),
+            0,
+        );
+        let first = SearchSheetSnapshot::with_changes(
+            base,
+            vec![SearchCellSnapshotChange {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                cell: Some(SearchCellText {
+                    row: 0,
+                    col: 0,
+                    search_text: "new".to_string(),
+                    display_text: "new".to_string(),
+                }),
+            }],
+            1,
+        );
+        let latest = SearchSheetSnapshot::with_changes(
+            first,
+            vec![
+                SearchCellSnapshotChange {
+                    sheet_index: 0,
+                    row: 2,
+                    col: 0,
+                    cell: None,
+                },
+                SearchCellSnapshotChange {
+                    sheet_index: 0,
+                    row: 1,
+                    col: 1,
+                    cell: Some(SearchCellText {
+                        row: 1,
+                        col: 1,
+                        search_text: "middle".to_string(),
+                        display_text: "middle".to_string(),
+                    }),
+                },
+            ],
+            2,
+        );
+
+        let cells = latest.materialize();
+
+        assert_eq!(
+            cells
+                .iter()
+                .map(|cell| (cell.row, cell.col, cell.search_text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(0, 0, "new"), (1, 1, "middle")]
+        );
     }
 
     #[test]

@@ -13,27 +13,28 @@ mod utils;
 #[cfg(target_os = "android")]
 use commands::android::{
     discard_open_file_selection_android, discard_save_location_android, export_file_android,
-    pick_open_file_android, pick_save_location_android, read_file_android, save_file_android,
+    pick_open_file_android, pick_save_location_android, prepare_open_file_android,
+    save_file_android,
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use commands::check_update_mobile;
 #[cfg(target_os = "ios")]
 use commands::ios::{
     discard_open_file_selection_ios, discard_save_location_ios, export_file_ios,
-    pick_open_file_ios, pick_save_location_ios, read_file_ios, save_file_ios,
+    pick_open_file_ios, pick_save_location_ios, prepare_open_file_ios, save_file_ios,
 };
 use commands::{
-    add_column, add_recent_file_with_thumbnail, add_row, add_sheet, close_current_document,
-    delete_column, delete_row, delete_sheet, get_current_file_data, get_document_capabilities,
-    get_editor_state, get_native_save_plan, get_recent_files, get_spreadsheet_format_options,
-    init_file, redo, remove_recent_file, search, set_cell, set_cells, set_column_width,
-    set_row_height, undo,
+    abort_prepared_document, add_column, add_recent_file_with_thumbnail, add_row, add_sheet,
+    close_current_document, commit_prepared_document, delete_column, delete_row, delete_sheet,
+    get_current_file_data, get_document_capabilities, get_editor_state, get_native_save_plan,
+    get_recent_files, get_spreadsheet_format_options, prepare_new_file, redo, remove_recent_file,
+    search, set_cell, set_cells, set_column_width, set_row_height, undo,
 };
 #[cfg(desktop)]
 use commands::{
     discard_open_file_selection_desktop, discard_save_location_desktop, export_file_desktop,
-    pick_open_file_desktop, pick_save_location_desktop, read_file_desktop,
-    read_recent_file_desktop, save_file_desktop,
+    pick_open_file_desktop, pick_save_location_desktop, prepare_open_file_desktop,
+    prepare_recent_file_desktop, save_file_desktop,
 };
 
 use tauri::Emitter;
@@ -90,9 +91,9 @@ pub fn run() {
             #[cfg(desktop)]
             discard_open_file_selection_desktop,
             #[cfg(desktop)]
-            read_file_desktop,
+            prepare_open_file_desktop,
             #[cfg(desktop)]
-            read_recent_file_desktop,
+            prepare_recent_file_desktop,
             #[cfg(desktop)]
             pick_save_location_desktop,
             #[cfg(desktop)]
@@ -106,7 +107,9 @@ pub fn run() {
             get_document_capabilities,
             get_native_save_plan,
             get_spreadsheet_format_options,
-            init_file,
+            prepare_new_file,
+            commit_prepared_document,
+            abort_prepared_document,
             undo,
             redo,
             set_cell,
@@ -132,7 +135,7 @@ pub fn run() {
             #[cfg(target_os = "android")]
             discard_save_location_android,
             #[cfg(target_os = "android")]
-            read_file_android,
+            prepare_open_file_android,
             #[cfg(target_os = "android")]
             save_file_android,
             #[cfg(target_os = "android")]
@@ -147,7 +150,7 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             discard_save_location_ios,
             #[cfg(target_os = "ios")]
-            read_file_ios,
+            prepare_open_file_ios,
             #[cfg(target_os = "ios")]
             pick_save_location_ios,
             #[cfg(target_os = "ios")]

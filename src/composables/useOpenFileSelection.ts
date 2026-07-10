@@ -1,7 +1,8 @@
-import { discardOpenFileSelection, readFile } from "@/platform";
+import { discardOpenFileSelection, prepareOpenFile } from "@/platform";
 import type { OpenFileSelection } from "@/platform";
 import type { DocumentReplacementLease } from "@/composables/useDocumentReplacementGuard";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
 
 type OpenFileSelectionLifecycleOptions = {
   beginDocumentReplacement: () => Promise<DocumentReplacementLease | null>;
@@ -21,7 +22,9 @@ export function useOpenFileSelection({
       if (!replacement) {
         return false;
       }
-      const opened = await readFile(selection.path);
+      const expectedContext = documentSessionStore.currentCommandContext();
+      const prepared = await prepareOpenFile(selection.path);
+      const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
       shouldDiscard = false;
       replacement.commit();
       replacement = null;

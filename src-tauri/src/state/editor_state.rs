@@ -1,9 +1,9 @@
 use crate::error::AppError;
-use crate::io::document_memento::MementoSide;
 use crate::io::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 #[cfg(test)]
 use crate::io::file_format::is_xlsx_extension;
+use crate::io::history_restore_transaction::{HistoryRestoreDirection, HistoryRestoreTransaction};
 use crate::ops::EditorCommand;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
@@ -13,7 +13,8 @@ use crate::state::history_store::{HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_index::{
-    SearchCellText, SearchIndexStamp, SearchSheetIndex, SearchWriterHandle,
+    SearchCellText, SearchIndexStamp, SearchSheetIndex, SearchSheetSnapshot, SearchSheetSource,
+    SearchWriterHandle, sheet_cell_search_text,
 };
 use crate::state::search_session::SearchSession;
 use crate::state::state::HistoryStatus;
@@ -22,6 +23,7 @@ use crate::types::{
     WorkbookCapabilities,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
 
@@ -55,13 +57,14 @@ pub struct EditorState {
 impl EditorState {
     pub fn with_workbook(file_data: FileData, workbook: Option<Workbook>) -> Self {
         let document = SpreadsheetDocument::new(file_data, workbook);
-        let content_hash = document.content_hash();
+        let search = SearchSession::from_file_data(document.projection(), 0);
+        let dirty = DirtyTracker::new(document.projection());
         Self {
             session: EditorSession::new(),
             document,
             history: HistoryStore::default(),
-            dirty: DirtyTracker::new(content_hash),
-            search: SearchSession::default(),
+            dirty,
+            search,
             save_commit: None,
         }
     }
@@ -89,7 +92,9 @@ impl EditorState {
             self.history.clear_all();
         }
         self.bump_revision();
-        self.refresh_content_hash();
+        self.search
+            .replace_snapshots(self.document.projection(), self.revision());
+        self.dirty.replace_current(self.document.projection());
     }
 
     pub fn has_save_commit_in_progress(&self) -> bool {
@@ -186,7 +191,6 @@ impl EditorState {
             self.history.clear_all();
         }
         self.bump_revision();
-        self.refresh_content_hash();
         self.mark_saved();
         Ok(())
     }
@@ -200,11 +204,11 @@ impl EditorState {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.history.can_undo()
+        self.transaction_failure().is_none() && self.history.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.history.can_redo()
+        self.transaction_failure().is_none() && self.history.can_redo()
     }
 
     pub fn history_status(&self) -> HistoryStatus {
@@ -269,13 +273,24 @@ impl EditorState {
             .writer_handle(self.document_id(), sheet_index, stamp)
     }
 
-    pub fn indexed_search_sheet(
-        &self,
+    pub fn search_sheet_source(&self, sheet_index: usize) -> Option<SearchSheetSource> {
+        self.search.sheet_source(sheet_index)
+    }
+
+    pub fn search_sheet_snapshot(&self, sheet_index: usize) -> Option<Arc<SearchSheetSnapshot>> {
+        self.search.sheet_snapshot(sheet_index)
+    }
+
+    pub fn compact_search_sheet_snapshot(
+        &mut self,
         sheet_index: usize,
-        query: &str,
-        limit: usize,
-    ) -> Option<Vec<SearchCellText>> {
-        self.search.indexed_search_sheet(sheet_index, query, limit)
+        stamp: SearchIndexStamp,
+        cells: Arc<[SearchCellText]>,
+    ) {
+        if self.search_sheet_index_stamp(sheet_index) == stamp {
+            self.search
+                .compact_snapshot(sheet_index, self.revision(), cells);
+        }
     }
 
     pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
@@ -290,7 +305,7 @@ impl EditorState {
     }
 
     pub fn mark_saved(&mut self) {
-        self.dirty.mark_saved(self.document.content_hash());
+        self.dirty.mark_saved();
     }
 
     #[cfg(test)]
@@ -305,9 +320,9 @@ impl EditorState {
     /// 执行命令并记录到历史，返回增量结果。
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         self.ensure_not_saving()?;
+        self.ensure_transaction_available()?;
         let operation = command.resolve(self.file_data())?;
         if operation.impact().is_noop() {
-            self.refresh_content_hash();
             return Ok(ExecutedOperation {
                 operation: None,
                 cell_changes: Vec::new(),
@@ -322,8 +337,12 @@ impl EditorState {
 
         let result = self.document.execute_operation(&operation, &before)?;
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
+        let snapshot_changes = (!should_mark_search_stale)
+            .then(|| search_snapshot_changes(self.file_data(), &operation, &result.cell_changes));
         let operation_result = result.operation;
         let cell_changes = result.cell_changes;
+        self.dirty
+            .apply_operation(&operation, &cell_changes, self.document.projection());
 
         if before.estimated_bytes() > MAX_SINGLE_HISTORY_ENTRY_BYTES {
             self.history.clear_all();
@@ -336,9 +355,10 @@ impl EditorState {
 
         self.bump_revision();
         if should_mark_search_stale {
+            self.search
+                .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
             let search_index_update = SearchIndexUpdatePlan::rebuild_all();
-            self.refresh_content_hash();
             return Ok(ExecutedOperation {
                 operation: Some(operation_result),
                 cell_changes,
@@ -346,9 +366,11 @@ impl EditorState {
                 search_index_update,
             });
         } else {
+            if let Some(changes) = snapshot_changes {
+                self.search.update_snapshots(self.revision(), changes);
+            }
             self.mark_search_sheets_stale(stale_sheets);
         }
-        self.refresh_content_hash();
         Ok(ExecutedOperation {
             operation: Some(operation_result),
             cell_changes,
@@ -360,14 +382,19 @@ impl EditorState {
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         self.ensure_not_saving()?;
-        if let Some(entry) = self.history.pop_undo() {
-            let restore = self
-                .document
-                .restore_memento(&entry.memento, MementoSide::Before)?;
-            self.history.push_redo(entry);
+        self.ensure_transaction_available()?;
+        if let Some(restore) = HistoryRestoreTransaction::new(
+            &mut self.document,
+            &mut self.history,
+            &mut self.dirty,
+            HistoryRestoreDirection::Undo,
+        )
+        .commit()?
+        {
             self.bump_revision();
+            self.search
+                .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
-            self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
                 operation: None,
                 cell_changes: Vec::new(),
@@ -382,14 +409,19 @@ impl EditorState {
     /// 重做上一个被撤销的操作
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         self.ensure_not_saving()?;
-        if let Some(entry) = self.history.pop_redo() {
-            let restore = self
-                .document
-                .restore_memento(&entry.memento, MementoSide::After)?;
-            self.history.push_undo(entry);
+        self.ensure_transaction_available()?;
+        if let Some(restore) = HistoryRestoreTransaction::new(
+            &mut self.document,
+            &mut self.history,
+            &mut self.dirty,
+            HistoryRestoreDirection::Redo,
+        )
+        .commit()?
+        {
             self.bump_revision();
+            self.search
+                .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
-            self.refresh_content_hash();
             Ok(Some(ExecutedOperation {
                 operation: None,
                 cell_changes: Vec::new(),
@@ -401,8 +433,9 @@ impl EditorState {
         }
     }
 
+    #[cfg(test)]
     fn refresh_content_hash(&mut self) {
-        self.dirty.refresh(self.document.content_hash());
+        self.dirty.replace_current(self.document.projection());
     }
 
     fn bump_revision(&mut self) {
@@ -421,6 +454,13 @@ impl EditorState {
             return Err(AppError::UnsupportedWorkbookStructure(
                 unsupported.join(", "),
             ));
+        }
+        Ok(())
+    }
+
+    fn ensure_transaction_available(&self) -> Result<(), AppError> {
+        if let Some(reason) = self.transaction_failure() {
+            return Err(AppError::DocumentStateInvalid(reason.to_string()));
         }
         Ok(())
     }
@@ -446,6 +486,54 @@ impl EditorState {
         }
         Ok(())
     }
+}
+
+fn search_snapshot_changes(
+    file_data: &FileData,
+    operation: &crate::ops::AppliedOperation,
+    formula_changes: &[SheetCellChange],
+) -> Vec<crate::state::search_index::SearchCellSnapshotChange> {
+    let mut positions = HashSet::new();
+    match operation {
+        crate::ops::AppliedOperation::SetCell {
+            sheet_index,
+            row,
+            col,
+            ..
+        } => {
+            positions.insert((*sheet_index, *row, *col));
+        }
+        crate::ops::AppliedOperation::SetCells { changes } => {
+            positions.extend(
+                changes
+                    .iter()
+                    .map(|change| (change.sheet_index, change.row, change.col)),
+            );
+        }
+        crate::ops::AppliedOperation::SetColumnWidth { .. }
+        | crate::ops::AppliedOperation::SetRowHeight { .. }
+        | crate::ops::AppliedOperation::AddRow { .. }
+        | crate::ops::AppliedOperation::DeleteRow { .. }
+        | crate::ops::AppliedOperation::AddColumn { .. }
+        | crate::ops::AppliedOperation::DeleteColumn { .. }
+        | crate::ops::AppliedOperation::AddSheet { .. }
+        | crate::ops::AppliedOperation::DeleteSheet { .. } => {}
+    }
+    positions.extend(
+        formula_changes
+            .iter()
+            .map(|change| (change.sheet_index, change.row, change.col)),
+    );
+
+    positions
+        .into_iter()
+        .filter_map(|(sheet_index, row, col)| {
+            file_data
+                .sheets
+                .get(sheet_index)
+                .map(|sheet| sheet_cell_search_text(sheet, sheet_index, row, col))
+        })
+        .collect()
 }
 
 trait SearchInvalidation {
@@ -484,6 +572,13 @@ mod tests {
     use serde_json::Value;
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
+    fn assert_incremental_content_hash_is_current(state: &EditorState) {
+        let rebuilt = crate::state::content_hash::hash_content_fingerprint(
+            &crate::state::content_hash::ContentFingerprint::from_file_data(state.file_data()),
+        );
+        assert_eq!(state.current_content_hash(), rebuilt);
+    }
+
     #[test]
     fn updating_file_identity_does_not_mark_content_dirty() {
         let mut state = EditorState::with_workbook(
@@ -507,6 +602,172 @@ mod tests {
         assert_eq!(state.file_data().file_name, "renamed.xlsx");
         assert_eq!(state.current_content_hash(), original_hash);
         assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn incremental_content_hash_tracks_cells_layout_and_history() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "incremental.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("saved".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let saved_hash = state.current_content_hash();
+
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 3,
+                col: 4,
+                text: "far".to_string(),
+            })
+            .expect("extend projection");
+        assert_incremental_content_hash_is_current(&state);
+        assert!(state.is_dirty());
+
+        state.undo().expect("undo far edit").expect("undo result");
+        assert_incremental_content_hash_is_current(&state);
+        assert_eq!(state.current_content_hash(), saved_hash);
+        assert!(!state.is_dirty());
+
+        state.redo().expect("redo far edit").expect("redo result");
+        assert_incremental_content_hash_is_current(&state);
+
+        state
+            .execute(EditorCommand::SetColumnWidth {
+                sheet_index: 0,
+                col_index: 4,
+                width: Some(180),
+            })
+            .expect("resize column");
+        assert_incremental_content_hash_is_current(&state);
+        state.undo().expect("undo resize").expect("undo result");
+        assert_incremental_content_hash_is_current(&state);
+    }
+
+    #[test]
+    fn incremental_content_hash_returns_clean_when_saved_value_is_restored() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "incremental.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("saved".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "changed".to_string(),
+            })
+            .expect("change value");
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "saved".to_string(),
+            })
+            .expect("restore saved value");
+
+        assert_incremental_content_hash_is_current(&state);
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn incremental_content_hash_rebuilds_only_structurally_affected_state() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "incremental.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("value".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        for command in [
+            EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 1,
+            },
+            EditorCommand::AddColumn {
+                sheet_index: 0,
+                col_index: 1,
+            },
+            EditorCommand::AddSheet {
+                name: Some("Second".to_string()),
+            },
+            EditorCommand::DeleteSheet { sheet_index: 1 },
+        ] {
+            state.execute(command).expect("structure edit");
+            assert_incremental_content_hash_is_current(&state);
+            state.undo().expect("undo structure").expect("undo result");
+            assert_incremental_content_hash_is_current(&state);
+            state.redo().expect("redo structure").expect("redo result");
+            assert_incremental_content_hash_is_current(&state);
+        }
+    }
+
+    #[test]
+    fn incremental_content_hash_tracks_cross_sheet_formula_rewrites() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "incremental.xlsx".to_string(),
+                sheets: vec![
+                    crate::types::SheetData {
+                        name: "Data".to_string(),
+                        rows: vec![vec![CellValue::Number(1.into())]],
+                        ..Default::default()
+                    },
+                    crate::types::SheetData {
+                        name: "Summary".to_string(),
+                        rows: vec![vec![CellValue::formula(
+                            "=Data!A1",
+                            CellValue::Number(1.into()),
+                        )]],
+                        ..Default::default()
+                    },
+                ],
+            },
+            None,
+        );
+
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("insert referenced row");
+        assert_incremental_content_hash_is_current(&state);
+
+        state
+            .undo()
+            .expect("undo referenced row")
+            .expect("undo result");
+        assert_incremental_content_hash_is_current(&state);
+        state
+            .redo()
+            .expect("redo referenced row")
+            .expect("redo result");
+        assert_incremental_content_hash_is_current(&state);
     }
 
     #[test]
@@ -547,6 +808,216 @@ mod tests {
                 text: "new".to_string(),
             })
             .expect("mutation after save lease release");
+    }
+
+    #[test]
+    fn failed_undo_rolls_back_document_and_keeps_history_entry() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "history.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("old".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect("edit");
+        let revision = state.revision();
+        let content_hash = state.current_content_hash();
+        state.document.inject_restore_failures(1);
+
+        let error = state.undo().expect_err("injected undo failure");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected history restore failure")
+        );
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("new".to_string())
+        );
+        assert_eq!(state.revision(), revision);
+        assert_eq!(state.current_content_hash(), content_hash);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+        assert!(state.transaction_failure().is_none());
+
+        state.undo().expect("retry undo").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("old".to_string())
+        );
+    }
+
+    #[test]
+    fn failed_redo_rolls_back_document_and_keeps_history_entry() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "history.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("old".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect("edit");
+        state.undo().expect("undo").expect("undo result");
+        let revision = state.revision();
+        state.document.inject_restore_failures(1);
+
+        state.redo().expect_err("injected redo failure");
+
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("old".to_string())
+        );
+        assert_eq!(state.revision(), revision);
+        assert!(!state.can_undo());
+        assert!(state.can_redo());
+        assert!(state.transaction_failure().is_none());
+
+        state.redo().expect("retry redo").expect("redo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("new".to_string())
+        );
+    }
+
+    #[test]
+    fn failed_undo_after_workbook_patch_restores_workbook_and_history() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("sheet")
+            .cell_mut("A1")
+            .set_value_string("old");
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "history-post-patch.xlsx".to_string(),
+        )
+        .expect("read source");
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect("edit");
+        let revision = state.revision();
+        let content_hash = state.current_content_hash();
+        state.document.inject_post_patch_restore_failures(1);
+
+        let error = state.undo().expect_err("injected post-patch failure");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected post-patch history restore failure")
+        );
+        assert_eq!(state.revision(), revision);
+        assert_eq!(state.current_content_hash(), content_hash);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("new".to_string())
+        );
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("history-post-patch.xlsx")
+            .expect("save rolled-back workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true)
+            .expect("read rolled-back workbook");
+        assert_eq!(
+            saved
+                .sheet(0)
+                .expect("sheet")
+                .cell("A1")
+                .expect("A1")
+                .value(),
+            "new"
+        );
+
+        state.undo().expect("retry undo").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("old".to_string())
+        );
+    }
+
+    #[test]
+    fn failed_history_rollback_marks_document_unavailable() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "history.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("old".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "new".to_string(),
+            })
+            .expect("edit");
+        let revision = state.revision();
+        state.document.inject_restore_failures(2);
+
+        let error = state
+            .undo()
+            .expect_err("injected undo and rollback failure");
+
+        assert!(matches!(error, AppError::TransactionRollbackFailed { .. }));
+        assert_eq!(state.revision(), revision);
+        assert!(!state.can_undo());
+        assert!(!state.can_redo());
+        assert_eq!(state.history_status().undo_entries, 1);
+        assert!(state.transaction_failure().is_some());
+        assert!(!state.capabilities().save.can_native_save);
+        assert!(state.undo().is_err());
+        assert!(
+            state
+                .execute(EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "blocked".to_string(),
+                })
+                .is_err()
+        );
     }
 
     #[test]

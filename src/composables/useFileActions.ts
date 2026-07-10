@@ -4,7 +4,7 @@ import * as api from '@/api';
 import {
   exportFile,
   pickOpenFile,
-  readFile,
+  prepareOpenFile,
   saveFile,
 } from '@/platform';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
@@ -12,11 +12,13 @@ import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
 import { useOpenFileSelection } from '@/composables/useOpenFileSelection';
 import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
+import { commitPreparedDocumentOrAbort } from '@/composables/preparedDocument';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import type { FileData } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
+import { appErrorMessage } from '@/utils/appError';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<FileData | null>;
@@ -63,11 +65,18 @@ export function useFileActions({
         if (!shouldContinue()) return;
         const replacement = await beginDocumentReplacement();
         if (!replacement) return;
-
         try {
           if (!shouldContinue()) return;
-          const opened = await awaitRouteLoadStep(readFile(filePath), shouldContinue);
-          if (!opened) return;
+          const expectedContext = documentSessionStore.currentCommandContext();
+          const preparedResult = await awaitRouteLoadStep(
+            prepareOpenFile(filePath),
+            shouldContinue,
+            abortPreparedDocumentQuietly
+          );
+          if (!preparedResult) return;
+          removeCancelHandler?.();
+          removeCancelHandler = undefined;
+          const opened = await commitPreparedDocumentOrAbort(preparedResult, expectedContext);
           replacement.commit();
           documentSessionStore.openDocumentResponse(opened, filePath);
           loaded = true;
@@ -206,7 +215,7 @@ export function useFileActions({
     try {
       await router.push({ name: 'home' });
     } catch (error) {
-      ElMessage.error(`Failed to return home: ${error}`);
+      ElMessage.error(`Failed to return home: ${appErrorMessage(error)}`);
     }
   }
 
@@ -226,13 +235,23 @@ export function useFileActions({
   };
 }
 
+async function abortPreparedDocumentQuietly(prepared: { token: string }) {
+  try {
+    await api.abortPreparedDocument(prepared.token);
+  } catch (error) {
+    console.warn('Failed to abort unused prepared document:', error);
+  }
+}
+
 async function awaitRouteLoadStep<T>(
   promise: Promise<T>,
-  shouldContinue: ContinuationGuard
+  shouldContinue: ContinuationGuard,
+  discardResult: (result: T) => Promise<void>
 ): Promise<T | undefined> {
   try {
     const result = await promise;
     if (!shouldContinue()) {
+      await discardResult(result);
       return undefined;
     }
     return result;

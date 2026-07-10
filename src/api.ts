@@ -9,14 +9,30 @@ import type {
   DocumentCapabilities,
   NativeSavePlan,
   OpenDocumentResponse,
+  PreparedOpenDocument,
   SpreadsheetFormatOptions,
   EditorCommandContext,
   SearchScope,
   AddRecentFileRequest,
 } from "@/types";
 
-export async function initFile(fileData: FileData): Promise<OpenDocumentResponse> {
-  return invoke<OpenDocumentResponse>("init_file", { fileData });
+export async function prepareNewFile(fileData: FileData): Promise<PreparedOpenDocument> {
+  return invoke<PreparedOpenDocument>("prepare_new_file", { fileData });
+}
+
+export async function commitPreparedDocument(
+  token: string,
+  expectedContext: EditorCommandContext | null
+): Promise<OpenDocumentResponse> {
+  return invoke<OpenDocumentResponse>("commit_prepared_document", {
+    token,
+    expectedDocumentId: expectedContext?.documentId ?? null,
+    expectedRevision: expectedContext?.baseRevision ?? null,
+  });
+}
+
+export async function abortPreparedDocument(token: string): Promise<void> {
+  return invoke<void>("abort_prepared_document", { token });
 }
 
 export async function getCurrentFileData(context: EditorCommandContext): Promise<FileData> {
