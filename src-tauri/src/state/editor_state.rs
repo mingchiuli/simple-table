@@ -166,6 +166,10 @@ impl EditorState {
         self.document.save_snapshot_for_target(target_path_or_name)
     }
 
+    pub fn is_csv_backed(&self) -> bool {
+        self.document.is_csv_backed()
+    }
+
     pub fn finish_save_commit_without_reparse(
         &mut self,
         lease: SaveCommitLease,

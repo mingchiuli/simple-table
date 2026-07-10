@@ -356,7 +356,7 @@ pub fn search(
 // ==================== Recent Files Operations ====================
 
 #[tauri::command]
-pub fn get_recent_files(app: AppHandle) -> Vec<RecentFile> {
+pub fn get_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, AppError> {
     recent::do_get_recent_files(&app)
 }
 

@@ -14,19 +14,15 @@ static RECENT_STORE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 pub struct RecentStore;
 
 impl RecentStore {
-    pub fn get_all(app: &AppHandle) -> Vec<RecentFile> {
-        with_store_transaction(|| Ok(Self::get_all_unlocked(app))).unwrap_or_default()
+    pub fn get_all(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+        with_store_transaction(|| Self::get_all_unlocked(app))
     }
 
-    fn get_all_unlocked(app: &AppHandle) -> Vec<RecentFile> {
-        let store = match app.store(STORE_FILE) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        store
-            .get(STORE_KEY)
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
+    fn get_all_unlocked(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+        let store = app
+            .store(STORE_FILE)
+            .map_err(|error| AppError::ReadError(error.to_string()))?;
+        decode_recent_files(store.get(STORE_KEY))
     }
 
     fn save_unlocked(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
@@ -50,7 +46,7 @@ impl RecentStore {
 
     pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentFile, AppError> {
         with_store_transaction(|| {
-            let (files, updated) = upsert_recent_file(Self::get_all_unlocked(app), file);
+            let (files, updated) = upsert_recent_file(Self::get_all_unlocked(app)?, file);
             Self::save_unlocked(app, &files)?;
             Ok(updated)
         })
@@ -58,10 +54,18 @@ impl RecentStore {
 
     pub fn remove(app: &AppHandle, id: &str) -> Result<(), AppError> {
         with_store_transaction(|| {
-            let mut files = Self::get_all_unlocked(app);
+            let mut files = Self::get_all_unlocked(app)?;
             files.retain(|f| f.id != id);
             Self::save_unlocked(app, &files)
         })
+    }
+}
+
+fn decode_recent_files(value: Option<serde_json::Value>) -> Result<Vec<RecentFile>, AppError> {
+    match value {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| AppError::ReadError(format!("Invalid recent file store: {error}"))),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -144,6 +148,19 @@ mod tests {
             storage_type: StorageType::DesktopPath,
             original_path: None,
         }
+    }
+
+    #[test]
+    fn missing_recent_store_value_is_an_empty_list() {
+        assert!(decode_recent_files(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_recent_store_value_is_not_treated_as_an_empty_list() {
+        let error = decode_recent_files(Some(serde_json::json!({ "invalid": true })))
+            .expect_err("malformed recent data must fail");
+
+        assert!(matches!(error, AppError::ReadError(_)));
     }
 
     #[test]

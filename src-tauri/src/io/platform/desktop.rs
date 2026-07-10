@@ -70,7 +70,7 @@ pub fn prepare_file(path: &str) -> Result<PreparedOpenDocument, AppError> {
 }
 
 pub fn prepare_recent_file(app: &AppHandle, id: &str) -> Result<PreparedOpenDocument, AppError> {
-    let recent = RecentStore::get_all(app)
+    let recent = RecentStore::get_all(app)?
         .into_iter()
         .find(|file| file.id == id)
         .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;

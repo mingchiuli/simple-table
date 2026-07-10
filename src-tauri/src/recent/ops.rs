@@ -7,7 +7,7 @@ use super::store::RecentStore;
 use super::thumbnail::{capture_thumbnail, generate_thumbnail};
 use super::types::{AddRecentFileRequest, RecentFile, StorageType};
 
-pub fn do_get_recent_files(app: &AppHandle) -> Vec<RecentFile> {
+pub fn do_get_recent_files(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
     RecentStore::get_all(app)
 }
 

@@ -134,6 +134,10 @@ impl SpreadsheetDocument {
         self.body.is_excel_backed()
     }
 
+    pub fn is_csv_backed(&self) -> bool {
+        self.body.is_csv_backed()
+    }
+
     pub fn save_snapshot_for_target(
         &self,
         target_path_or_name: &str,

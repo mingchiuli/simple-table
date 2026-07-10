@@ -173,6 +173,10 @@ impl SpreadsheetDocumentBody {
         matches!(self, Self::Excel(_))
     }
 
+    pub fn is_csv_backed(&self) -> bool {
+        matches!(self, Self::Csv)
+    }
+
     pub fn can_generate_without_projection(&self, target_path_or_name: &str) -> bool {
         SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
             .is_some_and(SpreadsheetFileFormat::is_xlsx)

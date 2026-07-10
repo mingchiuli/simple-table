@@ -21,6 +21,8 @@ use crate::types::{
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
 
+const LOSSY_CSV_SAVE_REASON: &str = "Saving a non-CSV document as CSV would discard sheets, formulas, or formatting; use Export instead.";
+
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
 pub fn prepare_open_from_bytes(
     path: String,
@@ -138,6 +140,7 @@ pub fn prepare_current_file_save(
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry_guard.active_for_command(document_id_token, revision_token)?;
+        ensure_native_save_target_allowed(editor_state, target_path_or_name)?;
         if editor_state.has_save_commit_in_progress() {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
@@ -432,8 +435,12 @@ pub fn native_save_plan_for_command(
     let export_extension =
         export_extension(target_path_or_name).unwrap_or_else(|| source_format.clone());
     let export_formats = export_formats_for(&source_format);
-    let workbook =
-        workbook_capabilities_for_command(document_id, base_revision, native_save_allowed)?;
+    let workbook = native_save_workbook_capabilities_for_command(
+        document_id,
+        base_revision,
+        native_save_allowed,
+        target_path_or_name,
+    )?;
     let capabilities = DocumentCapabilities {
         source_format,
         can_save_original: native_save_allowed,
@@ -500,15 +507,77 @@ fn workbook_capabilities_for_command(
     base_revision: u64,
     native_save_allowed: bool,
 ) -> Result<WorkbookCapabilities, AppError> {
+    workbook_capabilities_for_command_and_target(
+        document_id,
+        base_revision,
+        native_save_allowed,
+        None,
+    )
+}
+
+fn native_save_workbook_capabilities_for_command(
+    document_id: u64,
+    base_revision: u64,
+    native_save_allowed: bool,
+    target_path_or_name: &str,
+) -> Result<WorkbookCapabilities, AppError> {
+    workbook_capabilities_for_command_and_target(
+        document_id,
+        base_revision,
+        native_save_allowed,
+        Some(target_path_or_name),
+    )
+}
+
+fn workbook_capabilities_for_command_and_target(
+    document_id: u64,
+    base_revision: u64,
+    native_save_allowed: bool,
+    target_path_or_name: Option<&str>,
+) -> Result<WorkbookCapabilities, AppError> {
     let registry = active_document_store();
     let registry_guard = registry
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let mut capabilities = registry_guard
-        .active_for_command(document_id, base_revision)?
-        .capabilities();
+    let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+    let mut capabilities = editor_state.capabilities();
     capabilities.save.can_native_save = native_save_allowed && capabilities.save.can_native_save;
+    if let Some(reason) =
+        target_path_or_name.and_then(|target| native_save_target_block_reason(editor_state, target))
+    {
+        capabilities.save.can_native_save = false;
+        if !capabilities
+            .save
+            .blocked_save_reasons
+            .iter()
+            .any(|item| item == reason)
+        {
+            capabilities
+                .save
+                .blocked_save_reasons
+                .push(reason.to_string());
+        }
+    }
     Ok(capabilities)
+}
+
+fn ensure_native_save_target_allowed(
+    editor_state: &EditorState,
+    target_path_or_name: &str,
+) -> Result<(), AppError> {
+    if let Some(reason) = native_save_target_block_reason(editor_state, target_path_or_name) {
+        return Err(AppError::DocumentStateInvalid(reason.to_string()));
+    }
+    Ok(())
+}
+
+fn native_save_target_block_reason(
+    editor_state: &EditorState,
+    target_path_or_name: &str,
+) -> Option<&'static str> {
+    let target_extension =
+        extension_of(target_path_or_name).unwrap_or_else(default_extension_string);
+    (target_extension == "csv" && !editor_state.is_csv_backed()).then_some(LOSSY_CSV_SAVE_REASON)
 }
 
 fn native_save_blocked_reason(capabilities: &DocumentCapabilities) -> Option<String> {
@@ -660,5 +729,37 @@ mod tests {
 
         assert_eq!(response.editor_state.file_data().path, "");
         assert_eq!(response.editor_state.file_data().file_name, "untitled.xlsx");
+    }
+
+    #[test]
+    fn native_save_rejects_lossy_csv_conversion_but_export_remains_available() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "untitled.xlsx".to_string(),
+                sheets: vec![SheetData::default(), SheetData::default()],
+            },
+            None,
+        );
+
+        let error = ensure_native_save_target_allowed(&state, "converted.csv")
+            .expect_err("native save must reject lossy CSV conversion");
+
+        assert!(error.to_string().contains("use Export instead"));
+        assert!(state.generate_file_bytes_for_target("export.csv").is_ok());
+    }
+
+    #[test]
+    fn native_save_allows_an_existing_csv_document_to_remain_csv() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: "/tmp/data.csv".to_string(),
+                file_name: "data.csv".to_string(),
+                sheets: vec![SheetData::default()],
+            },
+            None,
+        );
+
+        assert!(ensure_native_save_target_allowed(&state, "/tmp/data.csv").is_ok());
     }
 }

@@ -298,6 +298,42 @@ describe("useFileActions", () => {
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
+  it("closes an initial document committed after its route load was cancelled", async () => {
+    const api = await import("@/api");
+    const platform = await import("@/platform");
+    const documentSessionStore = useDocumentSessionStore();
+    const pendingCommit = deferred<OpenDocumentResponse>();
+    let shouldContinue = true;
+    const cancelHandlers = new Set<() => void>();
+    const guard = (() => shouldContinue) as (() => boolean) & {
+      onCancel: (handler: () => void) => () => void;
+    };
+    guard.onCancel = (handler) => {
+      cancelHandlers.add(handler);
+      return () => cancelHandlers.delete(handler);
+    };
+    vi.mocked(platform.prepareOpenFile).mockResolvedValue(preparedOpen("committing-token"));
+    vi.mocked(api.commitPreparedDocument).mockReturnValue(pendingCommit.promise);
+
+    const actions = mountActions(vi.fn().mockResolvedValue(true));
+    const loadPromise = actions.loadFileFromPath("/tmp/committing.xlsx", guard);
+    await waitForCondition(() => vi.mocked(api.commitPreparedDocument).mock.calls.length > 0);
+
+    shouldContinue = false;
+    for (const handler of cancelHandlers) {
+      handler();
+    }
+    expect(documentSessionStore.lifecycle).toBe("loading");
+
+    pendingCommit.resolve(openedResponse("committing.xlsx", 2));
+
+    await expect(loadPromise).resolves.toBe(false);
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(2);
+    expect(documentSessionStore.data).toBeNull();
+    expect(documentSessionStore.documentId).toBeNull();
+    expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
+  });
+
   it("suppresses stale path load errors after cancellation", async () => {
     const elementPlus = await import("element-plus");
     const platform = await import("@/platform");
