@@ -15,7 +15,3 @@ export async function defaultSpreadsheetExtension(): Promise<string> {
 export async function supportedSpreadsheetExtensions(): Promise<string[]> {
   return [...(await spreadsheetFormatOptions()).supportedExtensions];
 }
-
-export async function spreadsheetDialogFilters() {
-  return [{ name: "Spreadsheet", extensions: await supportedSpreadsheetExtensions() }];
-}

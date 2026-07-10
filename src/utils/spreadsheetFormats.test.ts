@@ -21,9 +21,6 @@ describe("spreadsheetFormats", () => {
 
     await expect(formats.defaultSpreadsheetExtension()).resolves.toBe("xlsx");
     await expect(formats.supportedSpreadsheetExtensions()).resolves.toEqual(["xlsx", "csv"]);
-    await expect(formats.spreadsheetDialogFilters()).resolves.toEqual([
-      { name: "Spreadsheet", extensions: ["xlsx", "csv"] },
-    ]);
     expect(api.getSpreadsheetFormatOptions).toHaveBeenCalledTimes(1);
   });
 

@@ -38,7 +38,10 @@ struct SearchSheetIndexEntry {
 
 enum SearchSheetSlot {
     Fresh(SearchSheetIndexEntry),
-    Stale(Option<SearchSheetIndexEntry>),
+    Stale {
+        entry: Option<SearchSheetIndexEntry>,
+        incremental_allowed: bool,
+    },
     Missing,
 }
 
@@ -109,13 +112,22 @@ impl SearchIndexStore {
             .resize(self.sheets.len(), self.revision.saturating_sub(1));
         for (sheet_index, slot) in self.sheets.iter_mut().enumerate() {
             self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index].wrapping_add(1);
-            if let SearchSheetSlot::Fresh(_) = slot {
-                let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
-                *slot = match previous {
-                    SearchSheetSlot::Fresh(entry) => SearchSheetSlot::Stale(Some(entry)),
-                    other => other,
-                };
-            }
+            let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
+            *slot = match previous {
+                SearchSheetSlot::Fresh(entry)
+                | SearchSheetSlot::Stale {
+                    entry: Some(entry), ..
+                } => SearchSheetSlot::Stale {
+                    entry: Some(entry),
+                    incremental_allowed: false,
+                },
+                SearchSheetSlot::Stale { entry: None, .. } | SearchSheetSlot::Missing => {
+                    SearchSheetSlot::Stale {
+                        entry: None,
+                        incremental_allowed: false,
+                    }
+                }
+            };
         }
         self.stamp(document_id)
     }
@@ -125,10 +137,21 @@ impl SearchIndexStore {
         self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index].wrapping_add(1);
         let previous = std::mem::replace(&mut self.sheets[sheet_index], SearchSheetSlot::Missing);
         self.sheets[sheet_index] = match previous {
-            SearchSheetSlot::Fresh(entry) | SearchSheetSlot::Stale(Some(entry)) => {
-                SearchSheetSlot::Stale(Some(entry))
-            }
-            SearchSheetSlot::Stale(None) | SearchSheetSlot::Missing => SearchSheetSlot::Stale(None),
+            SearchSheetSlot::Fresh(entry) => SearchSheetSlot::Stale {
+                entry: Some(entry),
+                incremental_allowed: true,
+            },
+            SearchSheetSlot::Stale {
+                entry,
+                incremental_allowed,
+            } => SearchSheetSlot::Stale {
+                entry,
+                incremental_allowed,
+            },
+            SearchSheetSlot::Missing => SearchSheetSlot::Stale {
+                entry: None,
+                incremental_allowed: true,
+            },
         };
     }
 
@@ -142,11 +165,14 @@ impl SearchIndexStore {
             return;
         }
         if let Some(slot) = self.sheets.get_mut(sheet_index)
-            && matches!(slot, SearchSheetSlot::Stale(_))
+            && matches!(slot, SearchSheetSlot::Stale { .. })
         {
             let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
             *slot = match previous {
-                SearchSheetSlot::Stale(Some(mut entry)) if entry.revision <= stamp.revision => {
+                SearchSheetSlot::Stale {
+                    entry: Some(mut entry),
+                    incremental_allowed: true,
+                } if entry.revision <= stamp.revision => {
                     entry.revision = stamp.revision;
                     SearchSheetSlot::Fresh(entry)
                 }
@@ -154,7 +180,13 @@ impl SearchIndexStore {
                     entry.revision = stamp.revision;
                     SearchSheetSlot::Fresh(entry)
                 }
-                SearchSheetSlot::Stale(entry) => SearchSheetSlot::Stale(entry),
+                SearchSheetSlot::Stale {
+                    entry,
+                    incremental_allowed,
+                } => SearchSheetSlot::Stale {
+                    entry,
+                    incremental_allowed,
+                },
                 other => other,
             };
         }
@@ -197,8 +229,11 @@ impl SearchIndexStore {
         }
         let entry = match self.sheets.get(sheet_index)? {
             SearchSheetSlot::Fresh(entry) => entry,
-            SearchSheetSlot::Stale(Some(entry)) => entry,
-            SearchSheetSlot::Stale(None) | SearchSheetSlot::Missing => return None,
+            SearchSheetSlot::Stale {
+                entry: Some(entry),
+                incremental_allowed: true,
+            } => entry,
+            SearchSheetSlot::Stale { .. } | SearchSheetSlot::Missing => return None,
         };
         if entry.revision > stamp.revision {
             return None;
@@ -228,7 +263,7 @@ impl SearchIndexStore {
 
         let entry = match self.sheets.get(sheet_index)? {
             SearchSheetSlot::Fresh(entry) => entry,
-            SearchSheetSlot::Stale(_) | SearchSheetSlot::Missing => return None,
+            SearchSheetSlot::Stale { .. } | SearchSheetSlot::Missing => return None,
         };
         if entry.revision != self.sheet_revision(sheet_index) {
             return None;
@@ -606,6 +641,45 @@ mod tests {
         let replacement = index_rows(&rows);
         store.install_sheet_index(document_id, 0, fresh_stamp, Some(replacement));
         assert!(store.search_sheet(0, "old", 10).is_some());
+    }
+
+    #[test]
+    fn cell_stale_index_can_be_incrementally_updated() {
+        let rows = vec![vec![CellValue::String("old indexed text".to_string())]];
+        let index = index_rows(&rows);
+        let mut store = SearchIndexStore::default();
+        let document_id = 7;
+        let stamp = store.sheet_stamp(document_id, 0);
+
+        store.install_sheet_index(document_id, 0, stamp, Some(index));
+        store.mark_sheet_stale(0);
+        let stale_stamp = store.sheet_stamp(document_id, 0);
+
+        assert!(store.writer_handle(document_id, 0, stale_stamp).is_some());
+        store.mark_sheet_fresh(document_id, 0, stale_stamp);
+        assert!(store.search_sheet(0, "old", 10).is_some());
+    }
+
+    #[test]
+    fn rebuild_required_stale_index_cannot_be_incrementally_updated() {
+        let rows = vec![vec![CellValue::String("old indexed text".to_string())]];
+        let index = index_rows(&rows);
+        let mut store = SearchIndexStore::default();
+        let document_id = 7;
+        let stamp = store.sheet_stamp(document_id, 0);
+
+        store.install_sheet_index(document_id, 0, stamp, Some(index));
+        store.mark_stale(document_id);
+        let rebuild_stamp = store.sheet_stamp(document_id, 0);
+
+        assert!(store.writer_handle(document_id, 0, rebuild_stamp).is_none());
+
+        store.mark_sheet_stale(0);
+        let later_stamp = store.sheet_stamp(document_id, 0);
+
+        assert!(store.writer_handle(document_id, 0, later_stamp).is_none());
+        store.mark_sheet_fresh(document_id, 0, later_stamp);
+        assert_eq!(store.search_sheet(0, "old", 10), None);
     }
 
     #[test]

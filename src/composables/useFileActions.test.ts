@@ -59,7 +59,6 @@ vi.mock("@/platform", () => ({
   discardOpenFileSelection: vi.fn(),
   discardSaveLocation: vi.fn(),
   exportFile: vi.fn(),
-  getFileName: vi.fn(),
   pickOpenFile: vi.fn(),
   pickSaveLocation: vi.fn(),
   readFile: vi.fn(),

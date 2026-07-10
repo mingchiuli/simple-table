@@ -29,6 +29,6 @@ pub mod platform {
     pub mod desktop;
     #[cfg(target_os = "ios")]
     pub mod ios;
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
     pub mod mobile;
 }

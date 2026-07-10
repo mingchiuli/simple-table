@@ -1,14 +1,16 @@
+#![cfg_attr(test, allow(dead_code))]
+
 use crate::error::AppError;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 use std::sync::OnceLock;
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 static TRANSIENT_FILE_REGISTRY: OnceLock<TransientFileRegistry> = OnceLock::new();
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 pub fn transient_file_registry() -> &'static TransientFileRegistry {
     TRANSIENT_FILE_REGISTRY.get_or_init(TransientFileRegistry::default)
 }

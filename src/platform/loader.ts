@@ -2,11 +2,9 @@
  * Platform loader - Dynamic import factory with caching
  */
 import { getPlatform } from '@/utils/platform';
-import { basename } from '@tauri-apps/api/path';
 import type { PlatformAPI, OpenFileSelection } from './types';
 import type { EditorCommandContext, OpenDocumentResponse, RecentFile } from '@/types';
 import { createAsyncCache } from '@/utils/asyncCache';
-import { decodeFileNameSegment, fileNameFromPathLike } from '@/utils/fileFormats';
 
 async function loadPlatformAPI(): Promise<PlatformAPI> {
   const platform = getPlatform();
@@ -91,13 +89,4 @@ export async function exportFile(defaultName: string, context: EditorCommandCont
     throw new Error('exportFile not supported on this platform');
   }
   return api.fileOps.exportFile(defaultName, context);
-}
-
-/** 获取路径中的文件名 */
-export async function getFileName(path: string) {
-  try {
-    return decodeFileNameSegment(await basename(path));
-  } catch {
-    return fileNameFromPathLike(path, "unknown");
-  }
 }

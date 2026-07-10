@@ -42,7 +42,6 @@ vi.mock("@/api", () => ({
 
 vi.mock("@/platform", () => ({
   discardOpenFileSelection: vi.fn(),
-  getFileName: vi.fn(),
   pickOpenFile: vi.fn(),
   readFile: vi.fn(),
   readRecentFile: vi.fn(),
