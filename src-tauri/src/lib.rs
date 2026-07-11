@@ -26,8 +26,8 @@ use commands::ios::{
 use commands::{
     abort_prepared_document, add_column, add_recent_file_with_thumbnail, add_row, add_sheet,
     close_current_document, commit_prepared_document, delete_column, delete_row, delete_sheet,
-    get_active_document, get_current_file_data, get_document_capabilities, get_editor_state,
-    get_native_save_plan, get_recent_files, get_sheet_projection, get_sheet_region_projection,
+    get_active_document, get_current_document_projection, get_document_capabilities,
+    get_editor_state, get_native_save_plan, get_recent_files, get_sheet_region_projection,
     get_spreadsheet_format_options, prepare_new_file, redo, remove_recent_file, search, set_cell,
     set_cells, set_column_width, set_row_height, undo,
 };
@@ -115,8 +115,7 @@ pub fn run() {
             save_file_desktop,
             #[cfg(desktop)]
             export_file_desktop,
-            get_current_file_data,
-            get_sheet_projection,
+            get_current_document_projection,
             get_sheet_region_projection,
             close_current_document,
             get_document_capabilities,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::types::{DrawingProjection, ReadOnlyRichProjection};
+use crate::types::{DrawingProjection, ReadOnlyRichProjection, SheetRegion};
 
 #[derive(Clone, Copy)]
 pub(crate) enum RichProjectionScope {
@@ -76,6 +76,69 @@ pub(crate) fn filter_rich_projection(
             .filter(|drawing| scope.contains_drawing(drawing))
             .cloned()
             .collect(),
+        has_more_drawings: source.has_more_drawings,
+        has_style_metadata: source.has_style_metadata,
+        has_hyperlinks: source.has_hyperlinks,
+        has_freeze_pane: source.has_freeze_pane,
+    }
+}
+
+pub(crate) fn filter_rich_projection_region(
+    source: &ReadOnlyRichProjection,
+    region: &SheetRegion,
+) -> ReadOnlyRichProjection {
+    let contains_cell = |row: usize, col: usize| {
+        row >= region.row_start
+            && row < region.row_end
+            && col >= region.col_start
+            && col < region.col_end
+    };
+    let drawings = source
+        .drawings
+        .iter()
+        .filter(|drawing| {
+            let end_row = drawing.to_row.unwrap_or(drawing.from_row) as usize;
+            let end_col = drawing.to_col.unwrap_or(drawing.from_col) as usize;
+            (drawing.from_row as usize) < region.row_end
+                && end_row >= region.row_start
+                && (drawing.from_col as usize) < region.col_end
+                && end_col >= region.col_start
+        })
+        .cloned()
+        .collect();
+    ReadOnlyRichProjection {
+        cell_formats: source
+            .cell_formats
+            .iter()
+            .filter(|(key, _)| cell_key_matches(key, contains_cell))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        cell_styles: source
+            .cell_styles
+            .iter()
+            .filter(|(key, _)| cell_key_matches(key, contains_cell))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        hidden_rows: source
+            .hidden_rows
+            .iter()
+            .copied()
+            .filter(|row| *row >= region.row_start && *row < region.row_end)
+            .collect(),
+        hidden_columns: source
+            .hidden_columns
+            .iter()
+            .copied()
+            .filter(|col| *col >= region.col_start && *col < region.col_end)
+            .collect(),
+        freeze_pane: source.freeze_pane.clone(),
+        hyperlinks: source
+            .hyperlinks
+            .iter()
+            .filter(|(key, _)| cell_key_matches(key, contains_cell))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        drawings,
         has_more_drawings: source.has_more_drawings,
         has_style_metadata: source.has_style_metadata,
         has_hyperlinks: source.has_hyperlinks,
@@ -267,5 +330,30 @@ mod tests {
                 .map(|pane| pane.top_left_cell.as_str()),
             Some("D1")
         );
+    }
+
+    #[test]
+    fn region_filter_excludes_metadata_outside_the_requested_tile() {
+        let source = ReadOnlyRichProjection {
+            cell_styles: HashMap::from([
+                ("A1".to_string(), CellStyleProjection::default()),
+                ("A200".to_string(), CellStyleProjection::default()),
+            ]),
+            hidden_rows: vec![0, 199],
+            ..Default::default()
+        };
+        let region = SheetRegion {
+            sheet_index: 0,
+            row_start: 0,
+            row_end: 128,
+            col_start: 0,
+            col_end: 32,
+        };
+
+        let filtered = filter_rich_projection_region(&source, &region);
+
+        assert!(filtered.cell_styles.contains_key("A1"));
+        assert!(!filtered.cell_styles.contains_key("A200"));
+        assert_eq!(filtered.hidden_rows, vec![0]);
     }
 }

@@ -388,7 +388,7 @@ mod tests {
         assert!(matches!(
             add_row_response.patches.first(),
             Some(EditorPatch::RowInserted { patch })
-                if patch.sheet_index == 0 && patch.row_index == 1 && patch.rows.len() == 1
+                if patch.sheet_index == 0 && patch.row_index == 1 && patch.count == 1
         ));
         assert_eq!(add_row_response.patches.len(), 1);
         assert!(add_row_response.search_index_update.rebuild_all);
@@ -400,7 +400,7 @@ mod tests {
         assert!(matches!(
             add_column_response.patches.first(),
             Some(EditorPatch::ColumnInserted { patch })
-                if patch.sheet_index == 0 && patch.col_index == 1 && patch.values.len() == 1
+                if patch.sheet_index == 0 && patch.col_index == 1 && patch.count == 1
         ));
         assert_eq!(add_column_response.patches.len(), 1);
         assert!(add_column_response.search_index_update.rebuild_all);

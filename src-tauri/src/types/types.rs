@@ -477,21 +477,32 @@ pub struct FileData {
     pub sheets: Vec<SheetData>,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetManifest {
+    pub name: String,
+    pub extent: SheetExtent,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DocumentManifest {
+    pub path: String,
+    pub file_name: String,
+    pub sheets: Vec<SheetManifest>,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct OpenDocumentResponse {
-    pub file_data: FileData,
+    pub document: DocumentManifest,
     pub editor_session: EditorSessionInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub sheet_extents: Option<Vec<SheetExtent>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub loaded_sheet_indexes: Option<Vec<usize>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub loaded_sheet_regions: Option<Vec<SheetRegion>>,
+    pub initial_region: Option<SheetRegionProjectionResponse>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -508,17 +519,14 @@ pub struct SheetRegion {
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
-pub struct SheetProjectionResponse {
-    #[serde(with = "crate::types::u64_string")]
-    #[ts(type = "U64String")]
-    pub document_id: u64,
-    #[serde(with = "crate::types::u64_string")]
-    #[ts(type = "U64String")]
-    pub revision: u64,
-    pub sheet_index: usize,
-    pub sheet: SheetData,
-    pub extent: SheetExtent,
-    pub loaded_region: SheetRegion,
+pub struct SheetRegionMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merges: Vec<MergeRange>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub column_widths: HashMap<usize, u32>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub row_heights: HashMap<usize, u32>,
+    pub rich: ReadOnlyRichProjection,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -533,6 +541,7 @@ pub struct SheetRegionProjectionResponse {
     pub revision: u64,
     pub region: SheetRegion,
     pub cells: Vec<SheetCellChange>,
+    pub metadata: SheetRegionMetadata,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -556,7 +565,7 @@ pub struct SavedDocumentIdentity {
 pub struct SavedDocumentResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub file_data: Option<FileData>,
+    pub document: Option<DocumentManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub identity: Option<SavedDocumentIdentity>,
@@ -1041,7 +1050,7 @@ pub struct LayoutPatch {
 pub struct SheetInsertedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
-    pub sheet: SheetData,
+    pub sheet: SheetManifest,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1055,10 +1064,9 @@ pub struct SheetDeletedPatch {
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
-pub struct SheetUpdatedPatch {
+pub struct SheetInvalidatedPatch {
     #[serde(rename = "sheetIndex")]
     pub sheet_index: usize,
-    pub sheet: SheetData,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1067,38 +1075,7 @@ pub struct SheetUpdatedPatch {
 pub struct SheetsReplacedPatch {
     #[serde(rename = "startIndex")]
     pub start_index: usize,
-    pub sheets: Vec<SheetData>,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type", rename_all = "camelCase")]
-pub enum RichProjectionPatchScope {
-    All,
-    Rows { start: usize },
-    Columns { start: usize },
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RichProjectionPatch {
-    pub scope: RichProjectionPatchScope,
-    pub projection: ReadOnlyRichProjection,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct SheetStructureMetadataPatch {
-    pub merges: Vec<MergeRange>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub column_widths: Option<HashMap<usize, u32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub row_heights: Option<HashMap<usize, u32>>,
-    pub rich: RichProjectionPatch,
+    pub sheets: Vec<SheetManifest>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1109,8 +1086,7 @@ pub struct RowInsertedPatch {
     pub sheet_index: usize,
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
-    pub rows: Vec<Vec<CellValue>>,
-    pub metadata: SheetStructureMetadataPatch,
+    pub count: usize,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1122,7 +1098,6 @@ pub struct RowDeletedPatch {
     #[serde(rename = "rowIndex")]
     pub row_index: usize,
     pub count: usize,
-    pub metadata: SheetStructureMetadataPatch,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1133,8 +1108,7 @@ pub struct ColumnInsertedPatch {
     pub sheet_index: usize,
     #[serde(rename = "colIndex")]
     pub col_index: usize,
-    pub values: Vec<CellValue>,
-    pub metadata: SheetStructureMetadataPatch,
+    pub count: usize,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1146,16 +1120,6 @@ pub struct ColumnDeletedPatch {
     #[serde(rename = "colIndex")]
     pub col_index: usize,
     pub count: usize,
-    pub metadata: SheetStructureMetadataPatch,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct SheetShapePatch {
-    #[serde(rename = "sheetIndex")]
-    pub sheet_index: usize,
-    pub row_lengths: Vec<usize>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -1177,8 +1141,8 @@ pub enum EditorPatch {
     SheetInserted { patch: SheetInsertedPatch },
     #[serde(rename = "SheetDeleted")]
     SheetDeleted { patch: SheetDeletedPatch },
-    #[serde(rename = "SheetUpdated")]
-    SheetUpdated { patch: SheetUpdatedPatch },
+    #[serde(rename = "SheetInvalidated")]
+    SheetInvalidated { patch: SheetInvalidatedPatch },
     #[serde(rename = "SheetsReplaced")]
     SheetsReplaced { patch: SheetsReplacedPatch },
     #[serde(rename = "RowInserted")]
@@ -1189,8 +1153,6 @@ pub enum EditorPatch {
     ColumnInserted { patch: ColumnInsertedPatch },
     #[serde(rename = "ColumnDeleted")]
     ColumnDeleted { patch: ColumnDeletedPatch },
-    #[serde(rename = "SheetShape")]
-    SheetShape { patch: SheetShapePatch },
     #[serde(rename = "ResyncRequired")]
     ResyncRequired { patch: ResyncRequiredPatch },
 }
@@ -1227,7 +1189,7 @@ pub struct EditorCommandContext {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
-    #[ts(type = "1")]
+    #[ts(type = "2")]
     pub protocol_version: u16,
     #[serde(with = "crate::types::u64_string")]
     #[ts(type = "U64String")]

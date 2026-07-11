@@ -14,15 +14,14 @@ import type {
   EditorMutationResponse,
   SearchResult,
   SearchScope,
-  SheetData,
+  LoadedSheetSlot,
 } from "@/types";
 import { workbookSheetCapabilities } from "@/types";
-import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 import { appErrorMessage } from "@/utils/appError";
 
 type UseEditorCommandsOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
-  currentSheet: ComputedRef<SheetData | null>;
+  currentSheet: ComputedRef<LoadedSheetSlot | null>;
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<{ row: number; col: number } | null>;
   flushPendingCellChanges: () => Promise<boolean>;
@@ -62,7 +61,7 @@ export function useEditorCommands({
   async function handleAddRow() {
     if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
-    const rowIndex = sheetExtent(currentSheet.value).rowCount;
+    const rowIndex = currentSheet.value.extent.rowCount;
     await runEditorMutation(
       (context) => api.addRow(context, sheetIndex, rowIndex),
       "Failed to add row"
@@ -81,7 +80,7 @@ export function useEditorCommands({
   async function handleAddColumn() {
     if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
-    const colIndex = selectedCell.value?.col ?? sheetExtent(currentSheet.value).columnCount;
+    const colIndex = selectedCell.value?.col ?? currentSheet.value.extent.columnCount;
     await runEditorMutation(
       (context) => api.addColumn(context, sheetIndex, colIndex),
       "Failed to add column"
@@ -170,6 +169,13 @@ export function useEditorCommands({
   async function handleSearchResultClick(result: SearchResult) {
     if (isEditorCommandBlocked()) return;
     if (!(await commandBus.ensureSheetLoaded(result.sheetIndex, flushPendingCellChanges))) return;
+    if (!(await commandBus.ensureSheetRegionLoaded({
+      sheetIndex: result.sheetIndex,
+      rowStart: result.row,
+      rowEnd: result.row + 1,
+      colStart: result.col,
+      colEnd: result.col + 1,
+    }))) return;
     editorSelectionStore.focusSearchResult(
       result.sheetIndex,
       result.row,
@@ -284,14 +290,4 @@ export function useEditorCommands({
     handleColumnResize,
     handleRowResize,
   };
-}
-
-function sheetExtent(sheet: SheetData) {
-  return calculateSheetExtent(
-    sheet.rows,
-    sheet.merges,
-    sheet.columnWidths,
-    sheet.rowHeights,
-    sheet.rich
-  );
 }

@@ -14,7 +14,7 @@ export async function restoreActiveDocument(): Promise<boolean> {
 
   documentSessionStore.openDocumentResponse(
     activeDocument,
-    activeDocument.fileData.path || null
+    activeDocument.document.path || null
   );
   return true;
 }

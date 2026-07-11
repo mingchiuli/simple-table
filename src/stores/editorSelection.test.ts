@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
-import { defaultRichProjection, type EditorPatch } from "@/types";
+import type { EditorPatch } from "@/types";
 
 function rowDeleted(sheetIndex: number, rowIndex: number, count: number): EditorPatch {
   return {
@@ -11,10 +11,6 @@ function rowDeleted(sheetIndex: number, rowIndex: number, count: number): Editor
         sheetIndex,
         rowIndex,
         count,
-        metadata: {
-          merges: [],
-          rich: { scope: { type: "rows", start: rowIndex }, projection: defaultRichProjection() },
-        },
       },
     },
   };
@@ -28,9 +24,7 @@ function sheetInserted(sheetIndex: number): EditorPatch {
         sheetIndex,
         sheet: {
           name: "Inserted",
-          rows: [],
-          merges: [],
-          rich: defaultRichProjection(),
+          extent: { rowCount: 0, columnCount: 0 },
         },
       },
     },
@@ -45,9 +39,7 @@ function sheetsReplaced(startIndex: number): EditorPatch {
         startIndex,
         sheets: [{
           name: "Replacement",
-          rows: [],
-          merges: [],
-          rich: defaultRichProjection(),
+          extent: { rowCount: 0, columnCount: 0 },
         }],
       },
     },

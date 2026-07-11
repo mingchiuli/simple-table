@@ -11,6 +11,7 @@ import {
   readyFormulaStatus,
   type CellValue,
 } from "@/types";
+import { openResponseFromFileData } from "@/test/documentFixtures";
 
 const unsavedChanges = vi.hoisted(() => ({
   confirmDiscardUnsavedChanges: vi.fn(),
@@ -31,15 +32,14 @@ function text(value: string): CellValue {
 }
 
 function openTestDocument(documentId: number | string = '1') {
-  useDocumentSessionStore().openDocumentResponse({
-    fileData: {
+  const fileData = {
       path: "/tmp/book.xlsx",
       fileName: "book.xlsx",
       sheets: [{ name: "Sheet1", rows: [[text("old")]], merges: [], rich: defaultRichProjection() }],
-    },
-    editorSession: {
+    };
+  const editorSession = {
         documentId: String(documentId) as `${bigint}`,
-      revision: '0',
+      revision: '0' as const,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -48,8 +48,11 @@ function openTestDocument(documentId: number | string = '1') {
         isDirty: false,
         history: defaultHistoryStatus(),
       },
-    },
-  }, "/tmp/book.xlsx");
+    };
+  useDocumentSessionStore().openDocumentResponse(
+    openResponseFromFileData(fileData, editorSession),
+    "/tmp/book.xlsx"
+  );
 }
 
 function queueDraftWithAutosave(committed: string[]) {

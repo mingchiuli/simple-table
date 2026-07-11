@@ -19,6 +19,10 @@ import {
   type SavedDocumentResponse,
   type SheetData,
 } from "@/types";
+import {
+  openResponseFromFileData,
+  savedResponseFromFileData,
+} from "@/test/documentFixtures";
 
 const routerMocks = vi.hoisted(() => ({
   push: vi.fn(),
@@ -101,11 +105,9 @@ function fileData(fileName: string, value: string): FileData {
 }
 
 function openedResponse(fileName: string, documentId: number | string): OpenDocumentResponse {
-  return {
-    fileData: fileData(fileName, "opened"),
-    editorSession: {
+  const editorSession = {
       documentId: String(documentId) as `${bigint}`,
-      revision: '0',
+      revision: '0' as const,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -114,8 +116,8 @@ function openedResponse(fileName: string, documentId: number | string): OpenDocu
         isDirty: false,
         history: defaultHistoryStatus(),
       },
-    },
-  };
+    };
+  return openResponseFromFileData(fileData(fileName, "opened"), editorSession);
 }
 
 function preparedOpen(token = "prepared-open"): PreparedOpenDocument {
@@ -128,23 +130,16 @@ function mockPreparedOpen(response: OpenDocumentResponse, token = "prepared-open
 }
 
 function newUntitledResponse(documentId: number): OpenDocumentResponse {
-  return {
-    ...openedResponse("untitled.xlsx", documentId),
-    fileData: {
-      ...fileData("untitled.xlsx", "opened"),
-      path: "",
-    },
-  };
+  const response = openedResponse("untitled.xlsx", documentId);
+  return { ...response, document: { ...response.document, path: "" } };
 }
 
 function savedResponse(fileName: string, path: string, documentId: number): SavedDocumentResponse {
-  return {
-    ...openedResponse(fileName, documentId),
-    fileData: {
-      ...fileData(fileName, "saved"),
-      path,
-    },
-  };
+  const opened = openedResponse(fileName, documentId);
+  return savedResponseFromFileData(
+    { ...fileData(fileName, "saved"), path },
+    opened.editorSession
+  );
 }
 
 function documentCapabilities(): DocumentCapabilities {
@@ -923,7 +918,8 @@ describe("useFileActions", () => {
       baseRevision: '3',
     });
     expect(documentSessionStore.projectionStale).toBe(false);
-    expect(documentSessionStore.loadedSheet(0)?.rows[0][0]).toEqual(text("saved"));
+    expect(documentSessionStore.loadedSheet(0)?.blocks).toHaveLength(0);
+    expect(documentSessionStore.data?.fileName).toBe("current.xlsx");
     expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
   });
 

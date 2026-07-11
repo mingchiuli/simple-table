@@ -39,6 +39,10 @@ export type SheetExtent = { rowCount: number, columnCount: number, };
 
 export type FileData = { path: string, fileName: string, sheets: Array<SheetData>, };
 
+export type SheetManifest = { name: string, extent: SheetExtent, };
+
+export type DocumentManifest = { path: string, fileName: string, sheets: Array<SheetManifest>, };
+
 export type CellStyleProjection = { fontColor?: string | null, backgroundColor?: string | null, bold?: boolean | null, italic?: boolean | null, horizontalAlign?: string | null, verticalAlign?: string | null, numberFormat?: string | null, };
 
 export type FreezePaneProjection = { topLeftCell: string, horizontalSplit: number, verticalSplit: number, activePane: string, state: string, };
@@ -103,53 +107,45 @@ export type FormulaStatus = { "state": "ready", diagnostics: FormulaDiagnostics,
 
 export type LayoutPatch = { sheetIndex: number, columnWidths?: { [key in number]: number | null }, rowHeights?: { [key in number]: number | null }, };
 
-export type SheetInsertedPatch = { sheetIndex: number, sheet: SheetData, };
+export type SheetInsertedPatch = { sheetIndex: number, sheet: SheetManifest, };
 
 export type SheetDeletedPatch = { sheetIndex: number, };
 
-export type SheetUpdatedPatch = { sheetIndex: number, sheet: SheetData, };
+export type SheetInvalidatedPatch = { sheetIndex: number, };
 
-export type SheetsReplacedPatch = { startIndex: number, sheets: Array<SheetData>, };
+export type SheetsReplacedPatch = { startIndex: number, sheets: Array<SheetManifest>, };
 
-export type RichProjectionPatchScope = { "type": "all" } | { "type": "rows", start: number, } | { "type": "columns", start: number, };
+export type RowInsertedPatch = { sheetIndex: number, rowIndex: number, count: number, };
 
-export type RichProjectionPatch = { scope: RichProjectionPatchScope, projection: ReadOnlyRichProjection, };
+export type RowDeletedPatch = { sheetIndex: number, rowIndex: number, count: number, };
 
-export type SheetStructureMetadataPatch = { merges: Array<MergeRange>, columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, rich: RichProjectionPatch, };
+export type ColumnInsertedPatch = { sheetIndex: number, colIndex: number, count: number, };
 
-export type RowInsertedPatch = { sheetIndex: number, rowIndex: number, rows: Array<Array<CellValue>>, metadata: SheetStructureMetadataPatch, };
-
-export type RowDeletedPatch = { sheetIndex: number, rowIndex: number, count: number, metadata: SheetStructureMetadataPatch, };
-
-export type ColumnInsertedPatch = { sheetIndex: number, colIndex: number, values: Array<CellValue>, metadata: SheetStructureMetadataPatch, };
-
-export type ColumnDeletedPatch = { sheetIndex: number, colIndex: number, count: number, metadata: SheetStructureMetadataPatch, };
-
-export type SheetShapePatch = { sheetIndex: number, rowLengths: Array<number>, };
+export type ColumnDeletedPatch = { sheetIndex: number, colIndex: number, count: number, };
 
 export type ResyncRequiredPatch = { reason: string, };
 
-export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetUpdated", "data": { patch: SheetUpdatedPatch, } } | { "type": "SheetsReplaced", "data": { patch: SheetsReplacedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "SheetShape", "data": { patch: SheetShapePatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
+export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetInvalidated", "data": { patch: SheetInvalidatedPatch, } } | { "type": "SheetsReplaced", "data": { patch: SheetsReplacedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
 
 export type EditorCommandContext = { documentId: U64String, baseRevision: U64String, };
 
-export type EditorMutationResponse = { protocolVersion: 1, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
+export type EditorMutationResponse = { protocolVersion: 2, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
 
 export type EditorSessionInfo = { documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, };
 
-export type OpenDocumentResponse = { fileData: FileData, editorSession: EditorSessionInfo, sheetExtents?: Array<SheetExtent>, loadedSheetIndexes?: Array<number>, loadedSheetRegions?: Array<SheetRegion>, };
-
-export type SheetProjectionResponse = { documentId: U64String, revision: U64String, sheetIndex: number, sheet: SheetData, extent: SheetExtent, loadedRegion: SheetRegion, };
+export type OpenDocumentResponse = { document: DocumentManifest, editorSession: EditorSessionInfo, initialRegion?: SheetRegionProjectionResponse, };
 
 export type SheetRegion = { sheetIndex: number, rowStart: number, rowEnd: number, colStart: number, colEnd: number, };
 
-export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, };
+export type SheetRegionMetadata = { merges?: Array<MergeRange>, columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, rich: ReadOnlyRichProjection, };
+
+export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, metadata: SheetRegionMetadata, };
 
 export type PreparedOpenDocument = { token: string, };
 
 export type SavedDocumentIdentity = { path: string, fileName: string, };
 
-export type SavedDocumentResponse = { fileData?: FileData, identity?: SavedDocumentIdentity, editorSession: EditorSessionInfo, };
+export type SavedDocumentResponse = { document?: DocumentManifest, identity?: SavedDocumentIdentity, editorSession: EditorSessionInfo, };
 
 export type TauriCommandMap = {
   "pick_open_file_desktop": { args: Record<string, never>, result: { path: string, fileName: string } | null },
@@ -164,8 +160,7 @@ export type TauriCommandMap = {
   "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
   "abort_prepared_document": { args: { token: string }, result: void },
   "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },
-  "get_current_file_data": { args: { documentId: U64String, baseRevision: U64String }, result: FileData },
-  "get_sheet_projection": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number }, result: SheetProjectionResponse },
+  "get_current_document_projection": { args: { documentId: U64String, baseRevision: U64String, preferredSheetIndex: number }, result: OpenDocumentResponse },
   "get_sheet_region_projection": { args: { documentId: U64String, baseRevision: U64String, region: SheetRegion }, result: SheetRegionProjectionResponse },
   "close_current_document": { args: { documentId: U64String }, result: void },
   "get_document_capabilities": { args: { documentId: U64String, baseRevision: U64String }, result: DocumentCapabilities },

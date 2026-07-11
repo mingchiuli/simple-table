@@ -15,8 +15,12 @@ import { SearchPanel } from '@/components/search';
 import { getCellKey } from '@/utils/cellKey';
 import { cellToEditorString } from '@/utils/cellValue';
 import { colToLetter } from '@/utils/excel';
-import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
-import { loadedSheetData, workbookSheetCapabilities } from '@/types';
+import { workbookSheetCapabilities } from '@/types';
+import {
+  isCellLoaded,
+  loadedSheetMetadata,
+  sheetCell,
+} from '@/stores/documentProjection';
 import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
 import { useApplicationExitGuard } from '@/composables/useApplicationExit';
 const route = useRoute();
@@ -41,27 +45,15 @@ const fileData = computed(() => documentSessionStore.data);
 
 const currentSheet = computed(() => {
   if (!fileData.value || !fileData.value.sheets.length) return null;
-  return loadedSheetData(fileData.value.sheets[currentSheetIndex.value]);
+  return documentSessionStore.loadedSheet(currentSheetIndex.value);
 });
 
-const tableData = computed(() => {
-  if (!currentSheet.value) return [];
-  return currentSheet.value.rows;
-});
+const currentSheetMetadata = computed(() =>
+  currentSheet.value ? loadedSheetMetadata(currentSheet.value) : null
+);
 
 const currentSheetExtent = computed(() => {
-  if (!currentSheet.value) {
-    return { rowCount: 0, columnCount: 0 };
-  }
-  const backendExtent = fileData.value?.sheets[currentSheetIndex.value]?.extent;
-  if (backendExtent) return backendExtent;
-  return calculateSheetExtent(
-    tableData.value,
-    currentSheet.value.merges,
-    currentSheet.value.columnWidths,
-    currentSheet.value.rowHeights,
-    currentSheet.value.rich
-  );
+  return currentSheet.value?.extent ?? { rowCount: 0, columnCount: 0 };
 });
 
 const columns = computed(() =>
@@ -156,8 +148,15 @@ onBeforeRouteLeave(createRouteLeaveHandler({
 function getEditorValue(sheetIndex: number, row: number, col: number): string {
   const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));
   if (draftValue !== undefined) return draftValue;
-  const sheet = fileData.value?.sheets[sheetIndex];
-  return cellToEditorString(sheet?.state === 'loaded' ? sheet.data.rows[row]?.[col] : undefined);
+  return cellToEditorString(sheetCell(fileData.value?.sheets[sheetIndex], row, col));
+}
+
+function currentCellAt(row: number, col: number) {
+  return sheetCell(fileData.value?.sheets[currentSheetIndex.value], row, col);
+}
+
+function currentCellIsLoaded(row: number, col: number) {
+  return isCellLoaded(fileData.value?.sheets[currentSheetIndex.value], row, col);
 }
 
 function handleViewportChange(
@@ -250,25 +249,26 @@ watch(() => route.query.file, () => {
             v-if="selectedCell && fileData"
             v-model="cellEditorValue"
             :cell-position="selectedCell"
-            :disabled="!canEditCells"
+            :disabled="!canEditCells || !currentCellIsLoaded(selectedCell.row, selectedCell.col)"
             @submit="handleCellEditorSubmit"
             @close="handleDeselectCell"
           />
 
           <div class="table-wrapper">
             <TableEditor
-              :data="tableData"
+              :cell-at="currentCellAt"
+              :is-cell-loaded="currentCellIsLoaded"
               :columns="columns"
               :sheet-index="currentSheetIndex"
               :draft-cell-values="draftCellValues"
-              :merges="currentSheet?.merges"
+              :merges="currentSheetMetadata?.merges"
               :selected-cell="selectedCell"
               :auto-scroll="autoScroll"
               :can-edit-cells="canEditCells"
               :can-resize-rows-columns="canResizeRowsColumns"
-              :column-widths="currentSheet?.columnWidths"
-              :row-heights="currentSheet?.rowHeights"
-              :rich="currentSheet?.rich"
+              :column-widths="currentSheetMetadata?.columnWidths"
+              :row-heights="currentSheetMetadata?.rowHeights"
+              :rich="currentSheetMetadata?.rich"
               :extent="currentSheetExtent"
               :commit-column-resize="handleColumnResize"
               :commit-row-resize="handleRowResize"

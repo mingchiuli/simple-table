@@ -7,6 +7,7 @@ use crate::io::file_format::{
 };
 use crate::io::prepared_documents;
 use crate::io::projection_limits::validate_file_data;
+use crate::io::rich_projection::filter_rich_projection_region;
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -15,9 +16,10 @@ use crate::state::{
     state::EditorSessionInfo,
 };
 use crate::types::{
-    DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
-    SavedDocumentIdentity, SavedDocumentResponse, SheetData, SheetProjectionResponse, SheetRegion,
-    SheetRegionProjectionResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
+    DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
+    PreparedOpenDocument, SavedDocumentIdentity, SavedDocumentResponse, SheetData, SheetManifest,
+    SheetRegion, SheetRegionMetadata, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+    WorkbookCapabilities,
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
@@ -236,7 +238,7 @@ where
         editor_state.finish_save_commit(lease, result.file_data, result.workbook, clear_history)?;
         document_id = editor_state.document_id();
         response = SavedDocumentResponse {
-            file_data: Some(editor_state.file_data().clone()),
+            document: Some(document_manifest(editor_state)),
             identity: None,
             editor_session: editor_session_info(editor_state),
         };
@@ -308,7 +310,7 @@ where
         })?;
         editor_state.finish_save_commit_without_reparse(lease, path, output_name, clear_history)?;
         response = SavedDocumentResponse {
-            file_data: None,
+            document: None,
             identity: Some(SavedDocumentIdentity {
                 path: editor_state.file_data().path.clone(),
                 file_name: editor_state.file_data().file_name.clone(),
@@ -345,41 +347,20 @@ fn abort_save_commit(
     }
 }
 
-pub fn current_file_data_for_command(
+pub fn current_document_projection_for_command(
     document_id: u64,
     base_revision: u64,
-) -> Result<FileData, AppError> {
-    inspect_current_file_for_command(document_id, base_revision, Clone::clone)
-}
-
-pub fn sheet_projection_for_command(
-    document_id: u64,
-    base_revision: u64,
-    sheet_index: usize,
-) -> Result<SheetProjectionResponse, AppError> {
+    preferred_sheet_index: usize,
+) -> Result<OpenDocumentResponse, AppError> {
     let registry = active_document_store();
     let registry_guard = registry
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-    let source_sheet = editor_state
-        .file_data()
-        .sheets
-        .get(sheet_index)
-        .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-    let extent = editor_state
-        .sheet_extent(sheet_index)
-        .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-    let loaded_region = initial_sheet_region(sheet_index, &extent);
-    let sheet = project_sheet_with_region(source_sheet, &loaded_region);
-    Ok(SheetProjectionResponse {
-        document_id,
-        revision: base_revision,
-        sheet_index,
-        sheet,
-        extent,
-        loaded_region,
-    })
+    Ok(open_document_response_for_sheet(
+        editor_state,
+        preferred_sheet_index,
+    ))
 }
 
 pub fn sheet_region_projection_for_command(
@@ -393,26 +374,7 @@ pub fn sheet_region_projection_for_command(
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-    let sheet = editor_state
-        .file_data()
-        .sheets
-        .get(region.sheet_index)
-        .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
-    let extent = editor_state
-        .sheet_extent(region.sheet_index)
-        .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
-    if region.row_end > extent.row_count || region.col_end > extent.column_count {
-        return Err(AppError::DocumentStateInvalid(
-            "sheet region exceeds the current sheet extent".to_string(),
-        ));
-    }
-    let cells = project_region_cells(sheet, &region);
-    Ok(SheetRegionProjectionResponse {
-        document_id,
-        revision: base_revision,
-        region,
-        cells,
-    })
+    project_sheet_region(editor_state, region)
 }
 
 pub(crate) fn inspect_current_file_for_command<T>(
@@ -715,49 +677,75 @@ fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
     EditorSessionInfo {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
-        formula_status: editor_state.formula_status(),
+        formula_status: editor_state.formula_status().bounded(100),
         capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
     }
 }
 
 fn open_document_response(editor_state: &EditorState) -> OpenDocumentResponse {
-    let source = editor_state.file_data();
-    let sheet_extents = editor_state.sheet_extents();
-    let loaded_sheet_indexes = (!source.sheets.is_empty())
-        .then_some(0)
-        .into_iter()
-        .collect();
-    let loaded_sheet_regions = (!source.sheets.is_empty())
-        .then(|| initial_sheet_region(0, &sheet_extents[0]))
-        .into_iter()
-        .collect::<Vec<_>>();
-    let sheets = source
-        .sheets
-        .iter()
-        .enumerate()
-        .map(|(sheet_index, sheet)| {
-            if sheet_index == 0 {
-                project_sheet_with_region(sheet, &loaded_sheet_regions[0])
-            } else {
-                SheetData {
-                    name: sheet.name.clone(),
-                    ..Default::default()
-                }
-            }
-        })
-        .collect();
+    open_document_response_for_sheet(editor_state, 0)
+}
+
+fn open_document_response_for_sheet(
+    editor_state: &EditorState,
+    preferred_sheet_index: usize,
+) -> OpenDocumentResponse {
+    let initial_region = editor_state
+        .sheet_extent(preferred_sheet_index)
+        .map(|extent| initial_sheet_region(preferred_sheet_index, &extent))
+        .and_then(|region| project_sheet_region(editor_state, region).ok());
     OpenDocumentResponse {
-        file_data: FileData {
-            path: source.path.clone(),
-            file_name: source.file_name.clone(),
-            sheets,
-        },
+        document: document_manifest(editor_state),
         editor_session: editor_session_info(editor_state),
-        sheet_extents: Some(sheet_extents),
-        loaded_sheet_indexes: Some(loaded_sheet_indexes),
-        loaded_sheet_regions: Some(loaded_sheet_regions),
+        initial_region,
     }
+}
+
+fn document_manifest(editor_state: &EditorState) -> DocumentManifest {
+    let source = editor_state.file_data();
+    let extents = editor_state.sheet_extents();
+    DocumentManifest {
+        path: source.path.clone(),
+        file_name: source.file_name.clone(),
+        sheets: source
+            .sheets
+            .iter()
+            .zip(extents)
+            .map(|(sheet, extent)| SheetManifest {
+                name: sheet.name.clone(),
+                extent,
+            })
+            .collect(),
+    }
+}
+
+fn project_sheet_region(
+    editor_state: &EditorState,
+    region: SheetRegion,
+) -> Result<SheetRegionProjectionResponse, AppError> {
+    let sheet = editor_state
+        .file_data()
+        .sheets
+        .get(region.sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
+    let extent = editor_state
+        .sheet_extent(region.sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
+    if region.row_end > extent.row_count || region.col_end > extent.column_count {
+        return Err(AppError::DocumentStateInvalid(
+            "sheet region exceeds the current sheet extent".to_string(),
+        ));
+    }
+    let metadata = project_region_metadata(sheet, &region);
+    let cells = project_region_cells(sheet, &region);
+    Ok(SheetRegionProjectionResponse {
+        document_id: editor_state.document_id(),
+        revision: editor_state.revision(),
+        region,
+        cells,
+        metadata,
+    })
 }
 
 fn initial_sheet_region(sheet_index: usize, extent: &crate::types::SheetExtent) -> SheetRegion {
@@ -802,28 +790,38 @@ fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError> {
     Ok(())
 }
 
-fn project_sheet_with_region(sheet: &SheetData, region: &SheetRegion) -> SheetData {
-    let mut projected = sheet.clone();
-    projected.rows = project_region_rows(sheet, region);
-    projected
-}
-
-fn project_region_rows(
-    sheet: &SheetData,
+fn project_region_metadata(
+    sheet: &crate::types::SheetData,
     region: &SheetRegion,
-) -> Vec<Vec<crate::types::CellValue>> {
-    (region.row_start..region.row_end)
-        .map(|row_index| {
-            let row = sheet
-                .rows
-                .get(row_index)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let start = region.col_start.min(row.len());
-            let end = region.col_end.min(row.len());
-            row[start..end].to_vec()
-        })
-        .collect()
+) -> SheetRegionMetadata {
+    SheetRegionMetadata {
+        merges: sheet
+            .merges
+            .iter()
+            .filter(|merge| {
+                (merge.start_row as usize) < region.row_end
+                    && (merge.end_row as usize) >= region.row_start
+                    && (merge.start_col as usize) < region.col_end
+                    && (merge.end_col as usize) >= region.col_start
+            })
+            .cloned()
+            .collect(),
+        column_widths: sheet
+            .column_widths
+            .iter()
+            .flat_map(|widths| widths.iter())
+            .filter(|(col, _)| **col >= region.col_start && **col < region.col_end)
+            .map(|(col, width)| (*col, *width))
+            .collect(),
+        row_heights: sheet
+            .row_heights
+            .iter()
+            .flat_map(|heights| heights.iter())
+            .filter(|(row, _)| **row >= region.row_start && **row < region.row_end)
+            .map(|(row, height)| (*row, *height))
+            .collect(),
+        rich: filter_rich_projection_region(&sheet.rich, region),
+    }
 }
 
 fn project_region_cells(
@@ -946,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn open_document_response_only_projects_the_initial_sheet() {
+    fn open_document_response_contains_manifest_and_initial_region() {
         let first_sheet = SheetData {
             name: "First".to_string(),
             rows: vec![vec![CellValue::String("loaded".to_string())]],
@@ -968,13 +966,16 @@ mod tests {
 
         let response = open_document_response(&state);
 
-        assert_eq!(response.file_data.sheets[0].rows.len(), 1);
-        assert!(response.file_data.sheets[1].rows.is_empty());
-        assert_eq!(response.file_data.sheets[1].name, "Second");
-        assert_eq!(response.loaded_sheet_indexes, Some(vec![0]));
+        assert_eq!(response.document.sheets[0].name, "First");
+        assert_eq!(response.document.sheets[1].name, "Second");
         assert_eq!(
-            response.sheet_extents,
-            Some(vec![
+            response
+                .document
+                .sheets
+                .iter()
+                .map(|sheet| sheet.extent)
+                .collect::<Vec<_>>(),
+            vec![
                 crate::types::SheetExtent {
                     row_count: 1,
                     column_count: 1,
@@ -983,8 +984,11 @@ mod tests {
                     row_count: 1,
                     column_count: 1,
                 },
-            ])
+            ]
         );
+        let initial = response.initial_region.expect("initial region");
+        assert_eq!(initial.region.sheet_index, 0);
+        assert_eq!(initial.cells.len(), 1);
     }
 
     #[test]

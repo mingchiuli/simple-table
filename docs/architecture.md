@@ -9,7 +9,7 @@ document; Vue owns a renderable projection and transient UI state.
 flowchart TB
     UI[Vue views and components]
     APP[DocumentCommandBus and composables]
-    STORE[Pinia SheetSlot and region cache]
+    STORE[Pinia SheetSlot and bounded region-block cache]
     RPC[Rust-signature generated TauriCommandMap]
     IPC[Typed invoke adapter]
     OPS[Rust command and operation layer]
@@ -34,8 +34,9 @@ operation layer.
   persistence body. XLSX documents retain the original workbook so supported
   edits preserve metadata that is only projected read-only.
 - `documentSession` stores a `DocumentProjection` made of explicit `SheetSlot`
-  values. An unloaded sheet has only name and extent; a loaded sheet also has
-  cell regions and metadata. Empty sheets are never used as loading sentinels.
+  values. An unloaded sheet has only name and extent. A loaded sheet owns sparse
+  region blocks containing cells and region-scoped metadata. It never constructs
+  dense row arrays or fake empty `SheetData` values.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
   is the backend dirty flag OR pending frontend content.
 - Selection and search result state are UI-only and must not influence document
@@ -54,11 +55,17 @@ JavaScript `number`.
 3. Rust rejects a command if the active document or revision changed.
 4. Rust applies the operation transactionally, updates history and dirty state,
    and advances the revision exactly once for a non-no-op mutation.
-5. Rust returns status plus projection patches.
+5. Rust returns status plus protocol-v2 projection patches. Structural patches
+   carry coordinate changes or invalidation markers, never complete Sheets.
 6. The frontend applies only the next revision. A gap, duplicate revision with
    patches, unsupported protocol, or patch failure marks the projection stale.
-7. A stale projection is locked and replaced from `get_current_file_data`
-   before editing resumes.
+7. A stale projection is locked and replaced from
+   `get_current_document_projection`, which returns a manifest and one bounded
+   preferred-Sheet region, before editing resumes.
+
+Cell patches are capped at 4,096 changes and an estimated 2 MiB per response.
+Larger recalculations are represented as per-Sheet invalidations. Formula status
+exposes complete counts but at most 100 diagnostic samples per response.
 
 Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`.
@@ -102,26 +109,28 @@ Closing or replacing an active document while a save lease is held is invalid.
 
 ## Resource Boundaries
 
-Opening a document returns workbook identity, sheet names and extents, but only
-the first bounded cell region. Selecting a deferred sheet loads its metadata and
-initial region through `get_sheet_projection`; scrolling loads additional
-bounded rectangles through `get_sheet_region_projection` for the exact current
-revision. The grid renders only the visible region plus overscan.
+Opening a document returns a `DocumentManifest` and only the first bounded cell
+region. Selecting a deferred Sheet and scrolling both load aligned tiles through
+`get_sheet_region_projection` for the exact current revision. Cell values,
+merges, dimensions, styles, hyperlinks, and drawings are filtered to the tile.
+The grid renders only the visible region plus overscan and refuses to edit a
+cell until its tile is resident.
 
-The frontend retains at most four resident Sheet slots. Rust retains at most
-four persistent search snapshots/indexes; other sheets use temporary scan
-snapshots when required. Full stale-state recovery is accepted on the wire but
-immediately reduced to the frontend resident set.
+The frontend retains at most four resident Sheet slots, eight blocks per Sheet,
+and 24 blocks overall. Requests use 128x32 aligned tiles and share in-flight
+promises. Rust retains at most four persistent search snapshots/indexes; other
+Sheets are snapshotted and scanned one at a time, stopping as soon as the result
+limit is reached.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,
 instead of scanning the entire workbook for every mutation.
 
 Rust still owns the complete workbook and computes mutations, dirty hashing,
-formula recalculation, undo/redo, and search across all sheets. A full
-`get_current_file_data` projection remains available only as stale-state
-recovery. History, prepared-document, region-size, resident-Sheet, and search
-budgets are correctness constraints.
+formula recalculation, undo/redo, and search across all Sheets. No command
+returns the complete frontend document projection. History, prepared-document,
+region-size, response-size, resident-Sheet, region-block, diagnostics, and
+search budgets are correctness constraints.
 
 ## Verification
 

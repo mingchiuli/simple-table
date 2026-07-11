@@ -10,6 +10,7 @@ import { useDocumentStatusStore } from '@/stores/documentStatus';
 import type { CellValue, DocumentProjection } from '@/types';
 import { blankCell, cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
+import { sheetCell } from '@/stores/documentProjection';
 
 type UseCellEditTransactionsOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
@@ -51,8 +52,7 @@ export function useCellEditTransactions({
   }
 
   function committedCellValue(sheetIndex: number, row: number, col: number): CellValue {
-    const slot = fileData.value?.sheets[sheetIndex];
-    return slot?.state === 'loaded' ? slot.data.rows[row]?.[col] ?? blankCell() : blankCell();
+    return sheetCell(fileData.value?.sheets[sheetIndex], row, col) ?? blankCell();
   }
 
   function visibleBaseEditorString(sheetIndex: number, row: number, col: number): string {

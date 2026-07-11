@@ -158,7 +158,7 @@ impl SearchService {
                         );
                     }
                 }
-                EditorPatch::SheetUpdated { patch } => {
+                EditorPatch::SheetInvalidated { patch } => {
                     let Some(stamp) =
                         current_search_stamp(registry, document_id, patch.sheet_index)
                     else {
@@ -198,8 +198,7 @@ impl SearchService {
                     };
                     self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
                 }
-                EditorPatch::SheetShape { .. }
-                | EditorPatch::ResyncRequired { .. }
+                EditorPatch::ResyncRequired { .. }
                 | EditorPatch::SheetInserted { .. }
                 | EditorPatch::SheetDeleted { .. }
                 | EditorPatch::SheetsReplaced { .. } => needs_rebuild = true,

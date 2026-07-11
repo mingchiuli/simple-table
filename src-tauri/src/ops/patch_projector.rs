@@ -1,15 +1,16 @@
-use crate::io::rich_projection::{RichProjectionScope, filter_rich_projection};
 use crate::state::editor_state::{EditorState, ExecutedOperation};
 use crate::state::state::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
-    EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RichProjectionPatch,
-    RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SearchIndexUpdatePlan,
-    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetStructureMetadataPatch,
-    SheetUpdatedPatch,
+    EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
+    SearchIndexUpdatePlan, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
+    SheetInvalidatedPatch, SheetManifest,
 };
+use std::collections::BTreeSet;
 
-const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 1;
+const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 2;
+const MAX_CELL_CHANGES_PER_RESPONSE: usize = 4_096;
+const MAX_CELL_PATCH_BYTES_PER_RESPONSE: usize = 2 * 1024 * 1024;
 
 pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
     EditorStateInfo {
@@ -36,12 +37,15 @@ pub fn mutation_response_with_search_index_update(
     patches: Vec<EditorPatch>,
     search_index_update: SearchIndexUpdatePlan,
 ) -> EditorMutationResponse {
-    let patches = project_patch_display_formats(editor_state.file_data(), patches);
+    let patches = bounded_patches(
+        editor_state.file_data(),
+        project_patch_display_formats(editor_state.file_data(), patches),
+    );
     EditorMutationResponse {
         protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
-        formula_status: editor_state.formula_status(),
+        formula_status: editor_state.formula_status().bounded(100),
         capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
         patches,
@@ -140,76 +144,48 @@ pub fn restore_mutation_response(
 }
 
 pub fn structural_patches(
-    file_data: &FileData,
+    _file_data: &FileData,
     operation: &AppliedOperationResult,
 ) -> Vec<EditorPatch> {
     match operation {
-        AppliedOperationResult::AddRow { sheet_index, row } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![EditorPatch::RowInserted {
-                    patch: RowInsertedPatch {
-                        sheet_index: *sheet_index,
-                        row_index: row.index,
-                        rows: vec![row.values.clone()],
-                        metadata: row_structure_metadata_patch(sheet, row.index),
-                    },
-                }]
-            })
-            .unwrap_or_default(),
+        AppliedOperationResult::AddRow { sheet_index, row } => vec![EditorPatch::RowInserted {
+            patch: RowInsertedPatch {
+                sheet_index: *sheet_index,
+                row_index: row.index,
+                count: 1,
+            },
+        }],
         AppliedOperationResult::DeleteRow {
             sheet_index,
             row_index,
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![EditorPatch::RowDeleted {
-                    patch: RowDeletedPatch {
-                        sheet_index: *sheet_index,
-                        row_index: *row_index,
-                        count: 1,
-                        metadata: row_structure_metadata_patch(sheet, *row_index),
-                    },
-                }]
-            })
-            .unwrap_or_default(),
+        } => vec![EditorPatch::RowDeleted {
+            patch: RowDeletedPatch {
+                sheet_index: *sheet_index,
+                row_index: *row_index,
+                count: 1,
+            },
+        }],
         AppliedOperationResult::AddColumn {
             sheet_index,
             column,
-            col_data,
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![EditorPatch::ColumnInserted {
-                    patch: ColumnInsertedPatch {
-                        sheet_index: *sheet_index,
-                        col_index: column.index,
-                        values: col_data.clone(),
-                        metadata: column_structure_metadata_patch(sheet, column.index),
-                    },
-                }]
-            })
-            .unwrap_or_default(),
+            ..
+        } => vec![EditorPatch::ColumnInserted {
+            patch: ColumnInsertedPatch {
+                sheet_index: *sheet_index,
+                col_index: column.index,
+                count: 1,
+            },
+        }],
         AppliedOperationResult::DeleteColumn {
             sheet_index,
             column_index,
-        } => file_data
-            .sheets
-            .get(*sheet_index)
-            .map(|sheet| {
-                vec![EditorPatch::ColumnDeleted {
-                    patch: ColumnDeletedPatch {
-                        sheet_index: *sheet_index,
-                        col_index: *column_index,
-                        count: 1,
-                        metadata: column_structure_metadata_patch(sheet, *column_index),
-                    },
-                }]
-            })
-            .unwrap_or_default(),
+        } => vec![EditorPatch::ColumnDeleted {
+            patch: ColumnDeletedPatch {
+                sheet_index: *sheet_index,
+                col_index: *column_index,
+                count: 1,
+            },
+        }],
         AppliedOperationResult::AddSheet {
             sheet_index,
             sheet_data,
@@ -217,7 +193,10 @@ pub fn structural_patches(
         } => vec![EditorPatch::SheetInserted {
             patch: SheetInsertedPatch {
                 sheet_index: *sheet_index,
-                sheet: sheet_data.clone(),
+                sheet: SheetManifest {
+                    name: sheet_data.name.clone(),
+                    extent: sheet_data.extent(),
+                },
             },
         }],
         AppliedOperationResult::DeleteSheet { sheet_index, .. } => {
@@ -234,47 +213,54 @@ pub fn structural_patches(
     }
 }
 
-pub(crate) fn sheet_updated_patch(file_data: &FileData, sheet_index: usize) -> Vec<EditorPatch> {
-    file_data
-        .sheets
-        .get(sheet_index)
-        .cloned()
-        .map(|sheet| {
-            vec![EditorPatch::SheetUpdated {
-                patch: SheetUpdatedPatch { sheet_index, sheet },
-            }]
-        })
-        .unwrap_or_default()
+pub(crate) fn sheet_invalidated_patch(sheet_index: usize) -> Vec<EditorPatch> {
+    vec![EditorPatch::SheetInvalidated {
+        patch: SheetInvalidatedPatch { sheet_index },
+    }]
 }
 
-fn row_structure_metadata_patch(
-    sheet: &crate::types::SheetData,
-    start: usize,
-) -> SheetStructureMetadataPatch {
-    SheetStructureMetadataPatch {
-        merges: sheet.merges.clone(),
-        column_widths: None,
-        row_heights: None,
-        rich: RichProjectionPatch {
-            scope: RichProjectionPatchScope::Rows { start },
-            projection: filter_rich_projection(&sheet.rich, RichProjectionScope::Rows { start }),
-        },
+fn bounded_patches(file_data: &FileData, patches: Vec<EditorPatch>) -> Vec<EditorPatch> {
+    let mut cell_change_count = 0usize;
+    let mut estimated_bytes = 0usize;
+    for patch in &patches {
+        if let EditorPatch::Cells { changes } = patch {
+            cell_change_count = cell_change_count.saturating_add(changes.len());
+            for change in changes {
+                estimated_bytes = estimated_bytes.saturating_add(
+                    serde_json::to_vec(change)
+                        .map_or(MAX_CELL_PATCH_BYTES_PER_RESPONSE + 1, |v| v.len()),
+                );
+                if estimated_bytes > MAX_CELL_PATCH_BYTES_PER_RESPONSE {
+                    break;
+                }
+            }
+        }
     }
-}
+    if cell_change_count <= MAX_CELL_CHANGES_PER_RESPONSE
+        && estimated_bytes <= MAX_CELL_PATCH_BYTES_PER_RESPONSE
+    {
+        return patches;
+    }
 
-fn column_structure_metadata_patch(
-    sheet: &crate::types::SheetData,
-    start: usize,
-) -> SheetStructureMetadataPatch {
-    SheetStructureMetadataPatch {
-        merges: sheet.merges.clone(),
-        column_widths: None,
-        row_heights: None,
-        rich: RichProjectionPatch {
-            scope: RichProjectionPatchScope::Columns { start },
-            projection: filter_rich_projection(&sheet.rich, RichProjectionScope::Columns { start }),
-        },
+    let mut invalidated = BTreeSet::new();
+    let mut bounded = Vec::new();
+    for patch in patches {
+        match patch {
+            EditorPatch::Cells { changes } => {
+                invalidated.extend(changes.into_iter().map(|change| change.sheet_index));
+            }
+            other => bounded.push(other),
+        }
     }
+    invalidated.retain(|sheet_index| *sheet_index < file_data.sheets.len());
+    bounded.extend(
+        invalidated
+            .into_iter()
+            .map(|sheet_index| EditorPatch::SheetInvalidated {
+                patch: SheetInvalidatedPatch { sheet_index },
+            }),
+    );
+    bounded
 }
 
 fn project_patch_display_formats(
@@ -312,5 +298,58 @@ fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: 
             && existing.col == change.col
     }) {
         cell_changes.push(change);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{CellValue, SheetData};
+
+    #[test]
+    fn oversized_cell_patch_becomes_sheet_invalidation() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "book.xlsx".to_string(),
+                sheets: vec![SheetData::default()],
+            },
+            None,
+        );
+        let changes = (0..=MAX_CELL_CHANGES_PER_RESPONSE)
+            .map(|row| SheetCellChange::new(0, row, 0, CellValue::Null))
+            .collect();
+
+        let response = mutation_response(&state, vec![EditorPatch::Cells { changes }]);
+
+        assert!(matches!(
+            response.patches.as_slice(),
+            [EditorPatch::SheetInvalidated { patch }] if patch.sheet_index == 0
+        ));
+    }
+
+    #[test]
+    fn oversized_cell_patch_bytes_become_sheet_invalidation() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "book.xlsx".to_string(),
+                sheets: vec![SheetData::default()],
+            },
+            None,
+        );
+        let changes = vec![SheetCellChange::new(
+            0,
+            0,
+            0,
+            CellValue::String("x".repeat(MAX_CELL_PATCH_BYTES_PER_RESPONSE + 1)),
+        )];
+
+        let response = mutation_response(&state, vec![EditorPatch::Cells { changes }]);
+
+        assert!(matches!(
+            response.patches.as_slice(),
+            [EditorPatch::SheetInvalidated { patch }] if patch.sheet_index == 0
+        ));
     }
 }

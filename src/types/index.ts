@@ -4,9 +4,10 @@ import type {
   FormulaDiagnostics,
   FormulaStatus,
   HistoryStatus,
+  CellValue,
   ReadOnlyRichProjection,
+  SheetRegionMetadata,
   SheetCapabilities,
-  SheetData,
   SheetExtent,
   SheetRegion,
   WorkbookCapabilities,
@@ -16,8 +17,14 @@ export type LoadedSheetSlot = {
   state: 'loaded';
   name: string;
   extent: SheetExtent;
-  data: SheetData;
-  regions: SheetRegion[];
+  blocks: SheetRegionBlock[];
+};
+
+export type SheetRegionBlock = {
+  key: string;
+  region: SheetRegion;
+  cells: Map<string, CellValue>;
+  metadata: SheetRegionMetadata;
 };
 
 export type UnloadedSheetSlot = {
@@ -33,10 +40,6 @@ export type DocumentProjection = {
   fileName: string;
   sheets: SheetSlot[];
 };
-
-export function loadedSheetData(slot: SheetSlot | undefined): SheetData | null {
-  return slot?.state === 'loaded' ? slot.data : null;
-}
 
 export function defaultSheetCapabilities(): SheetCapabilities {
   return {

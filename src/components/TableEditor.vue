@@ -21,7 +21,8 @@ const MIN_ROW_HEIGHT = 36;
 const OVERSCAN_PX = 240;
 
 const props = defineProps<{
-  data: CellValue[][];
+  cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
+  isCellLoaded: (rowIndex: number, colIndex: number) => boolean;
   columns: string[];
   sheetIndex: number;
   draftCellValues?: ReadonlyMap<string, string>;
@@ -68,13 +69,13 @@ function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
 
 const viewportModel = computed(() =>
   createSheetViewportModel({
-    rows: props.data,
+    cellAt: props.cellAt,
     columns: props.columns,
     merges: props.merges ?? [],
     columnWidths: props.columnWidths,
     rowHeights: props.rowHeights,
     rich: props.rich,
-    extent: props.extent,
+    extent: props.extent ?? { rowCount: 0, columnCount: 0 },
   })
 );
 
@@ -147,10 +148,11 @@ const {
   handleCommit,
   handleCancel,
 } = useTableInteractionController({
-  data: computed(() => props.data),
+  cellAt: props.cellAt,
   selectedCell: computed(() => props.selectedCell),
   autoScroll: computed(() => props.autoScroll),
   canEditCells: computed(() => props.canEditCells ?? true),
+  isCellLoaded: props.isCellLoaded,
   getDraftValue,
   normalizeCellPosition,
   scrollCellIntoView,

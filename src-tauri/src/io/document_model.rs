@@ -17,7 +17,7 @@ use crate::ops::AppliedOperation;
 use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
-    SheetCapabilities, SheetCellChange, SheetData, SheetShapePatch, WorkbookCapabilities,
+    SheetCapabilities, SheetCellChange, SheetData, SheetInvalidatedPatch, WorkbookCapabilities,
 };
 use std::collections::{HashMap, HashSet};
 use umya_spreadsheet::Workbook;
@@ -967,13 +967,16 @@ fn cell_memento_sheet_indexes(memento: &CellMemento) -> Vec<usize> {
 }
 
 fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<EditorPatch> {
-    shapes
+    let mut sheet_indexes = shapes
         .iter()
-        .map(|shape| EditorPatch::SheetShape {
-            patch: SheetShapePatch {
-                sheet_index: shape.sheet_index,
-                row_lengths: shape.row_lengths.clone(),
-            },
+        .map(|shape| shape.sheet_index)
+        .collect::<Vec<_>>();
+    sheet_indexes.sort_unstable();
+    sheet_indexes.dedup();
+    sheet_indexes
+        .into_iter()
+        .map(|sheet_index| EditorPatch::SheetInvalidated {
+            patch: SheetInvalidatedPatch { sheet_index },
         })
         .collect()
 }

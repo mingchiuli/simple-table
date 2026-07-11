@@ -93,7 +93,9 @@ export function useDocumentCommandBus() {
     try {
       await documentSessionStore.refreshAfterMutationFailure(
         api.getEditorState,
-        refreshProjection && documentSessionStore.data ? api.getCurrentFileData : undefined
+        refreshProjection && documentSessionStore.data
+          ? api.getCurrentDocumentProjection
+          : undefined
       );
       return true;
     } catch (error) {
@@ -141,7 +143,7 @@ export function useDocumentCommandBus() {
   function applyMutationResponse(response: EditorMutationResponse) {
     return documentSessionStore.applyMutationResponseWithResync(
       response,
-      api.getCurrentFileData
+      api.getCurrentDocumentProjection
     );
   }
 
@@ -149,13 +151,12 @@ export function useDocumentCommandBus() {
     sheetIndex: number,
     flushPendingChanges: () => Promise<boolean>
   ): Promise<boolean> {
-    if (documentSessionStore.isSheetLoaded(sheetIndex)) return true;
     const releaseEditorCommand = documentSessionStore.beginEditorCommand();
     if (!releaseEditorCommand) return false;
     try {
       if (!(await flushPendingChanges())) return false;
       await documentSessionStore.waitForMutations();
-      return await documentSessionStore.ensureSheetLoaded(sheetIndex, api.getSheetProjection);
+      return await documentSessionStore.ensureSheetLoaded(sheetIndex, api.getSheetRegionProjection);
     } catch (error) {
       ElMessage.error(`Failed to load sheet: ${appErrorMessage(error)}`);
       return false;

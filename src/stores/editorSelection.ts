@@ -98,7 +98,7 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
             this.shiftRowSelectionsOnInsert(
               patch.data.patch.sheetIndex,
               patch.data.patch.rowIndex,
-              patch.data.patch.rows.length
+              patch.data.patch.count
             );
             break;
           case "RowDeleted":
@@ -109,7 +109,11 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
             );
             break;
           case "ColumnInserted":
-            this.shiftColumnSelectionsOnInsert(patch.data.patch.sheetIndex, patch.data.patch.colIndex);
+            this.shiftColumnSelectionsOnInsert(
+              patch.data.patch.sheetIndex,
+              patch.data.patch.colIndex,
+              patch.data.patch.count
+            );
             break;
           case "ColumnDeleted":
             this.shiftColumnSelectionsOnDelete(
@@ -163,9 +167,9 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
         return cell.row >= end ? { ...cell, row: cell.row - count } : cell;
       });
     },
-    shiftColumnSelectionsOnInsert(sheetIndex: number, colIndex: number) {
+    shiftColumnSelectionsOnInsert(sheetIndex: number, colIndex: number, count: number) {
       this.transformSelectionsForSheet(sheetIndex, (cell) =>
-        cell.col >= colIndex ? { ...cell, col: cell.col + 1 } : cell
+        cell.col >= colIndex ? { ...cell, col: cell.col + count } : cell
       );
     },
     shiftColumnSelectionsOnDelete(sheetIndex: number, colIndex: number, count: number) {

@@ -14,7 +14,6 @@ import type {
   EditorCommandContext,
   SearchScope,
   AddRecentFileRequest,
-  SheetProjectionResponse,
   SheetRegion,
   SheetRegionProjectionResponse,
   U64String,
@@ -43,15 +42,11 @@ export async function getActiveDocument(): Promise<OpenDocumentResponse | null> 
   return invokeCommand("get_active_document", {});
 }
 
-export async function getCurrentFileData(context: EditorCommandContext): Promise<FileData> {
-  return invokeCommand("get_current_file_data", context);
-}
-
-export async function getSheetProjection(
+export async function getCurrentDocumentProjection(
   context: EditorCommandContext,
-  sheetIndex: number
-): Promise<SheetProjectionResponse> {
-  return invokeCommand("get_sheet_projection", { ...context, sheetIndex });
+  preferredSheetIndex: number
+): Promise<OpenDocumentResponse> {
+  return invokeCommand("get_current_document_projection", { ...context, preferredSheetIndex });
 }
 
 export async function getSheetRegionProjection(

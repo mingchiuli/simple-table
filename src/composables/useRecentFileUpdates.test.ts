@@ -10,6 +10,7 @@ import {
   type CellValue,
   type FileData,
 } from "@/types";
+import { openResponseFromFileData } from "@/test/documentFixtures";
 
 vi.mock("@/api", () => ({
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
@@ -53,9 +54,7 @@ function openRecentTestDocument(
   documentId: number | string,
   revision: number | string
 ) {
-  useDocumentSessionStore().openDocumentResponse({
-    fileData: fileData(fileName),
-    editorSession: {
+  const editorSession = {
       documentId: String(documentId) as `${bigint}`,
       revision: String(revision) as `${bigint}`,
       formulaStatus: readyFormulaStatus(),
@@ -66,8 +65,11 @@ function openRecentTestDocument(
         isDirty: false,
         history: defaultHistoryStatus(),
       },
-    },
-  }, `/tmp/${fileName}`);
+    };
+  useDocumentSessionStore().openDocumentResponse(
+    openResponseFromFileData(fileData(fileName), editorSession),
+    `/tmp/${fileName}`
+  );
 }
 
 describe("useRecentFileUpdates", () => {

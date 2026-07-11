@@ -9,7 +9,8 @@ import {
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { CellSaveRequest } from '@/stores/pendingCellSaves';
 import type { ComputedRef, Ref } from 'vue';
-import type { DocumentProjection, SetCellRequest, SheetData } from '@/types';
+import type { DocumentProjection, LoadedSheetSlot, SetCellRequest } from '@/types';
+import { isCellLoaded, sheetCell } from '@/stores/documentProjection';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
 import { appErrorMessage } from '@/utils/appError';
@@ -18,7 +19,7 @@ type CellPosition = { row: number; col: number };
 
 type UseCellEditControllerOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
-  currentSheet: ComputedRef<SheetData | null>;
+  currentSheet: ComputedRef<LoadedSheetSlot | null>;
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<CellPosition | null>;
   cellEditorValue: Ref<string>;
@@ -46,7 +47,7 @@ export function useCellEditController({
 
   const currentCellValue = computed(() => {
     if (!selectedCell.value || !currentSheet.value) return undefined;
-    return currentSheet.value.rows[selectedCell.value.row]?.[selectedCell.value.col];
+    return sheetCell(currentSheet.value, selectedCell.value.row, selectedCell.value.col);
   });
 
   watch(
@@ -78,8 +79,8 @@ export function useCellEditController({
 
     const payload: SetCellRequest[] = changes.map((change) => {
       const sheet = currentFileData.sheets[change.sheetIndex];
-      if (!sheet || sheet.state !== 'loaded') {
-        throw new Error(`Sheet ${change.sheetIndex} is not loaded`);
+      if (!sheet || !isCellLoaded(sheet, change.row, change.col)) {
+        throw new Error(`Cell ${change.row},${change.col} is not loaded`);
       }
       return {
         sheetIndex: change.sheetIndex,
@@ -124,7 +125,7 @@ export function useCellEditController({
   }
 
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
-    if (!canEditCells.value || !currentSheet.value) return;
+    if (!canEditCells.value || !isCellLoaded(currentSheet.value, rowIndex, colIndex)) return;
 
     transactions.updateDraftCell(currentSheetIndex.value, rowIndex, colIndex, value);
     void transactions.flushPendingCellChanges();
@@ -136,12 +137,12 @@ export function useCellEditController({
       syncFormulaBarValue(value);
     }
 
-    if (!currentSheet.value) return;
+    if (!isCellLoaded(currentSheet.value, row, col)) return;
     transactions.updateDraftCell(currentSheetIndex.value, row, col, value);
   }
 
   function handleCellEditCancel(row: number, col: number) {
-    if (!canEditCells.value || !currentSheet.value) return;
+    if (!canEditCells.value || !isCellLoaded(currentSheet.value, row, col)) return;
 
     transactions.cancelDraftCell(currentSheetIndex.value, row, col);
     if (selectedCell.value?.row === row && selectedCell.value?.col === col) {
@@ -153,6 +154,7 @@ export function useCellEditController({
     if (!canEditCells.value || !selectedCell.value || !currentSheet.value) return;
 
     const { row, col } = selectedCell.value;
+    if (!isCellLoaded(currentSheet.value, row, col)) return;
     transactions.updateDraftCell(currentSheetIndex.value, row, col, cellEditorValue.value);
     void transactions.flushPendingCellChanges();
   }

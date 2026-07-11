@@ -208,11 +208,14 @@ fn is_current_document_path(
     document_id: u64,
     base_revision: u64,
 ) -> Result<bool, AppError> {
-    let file_data = document::current_file_data_for_command(document_id, base_revision)?;
-    if file_data.path.is_empty() {
+    let current_path =
+        document::inspect_current_file_for_command(document_id, base_revision, |file_data| {
+            file_data.path.clone()
+        })?;
+    if current_path.is_empty() {
         return Ok(false);
     }
-    Ok(normalize_target_path(Path::new(&file_data.path)) == target)
+    Ok(normalize_target_path(Path::new(&current_path)) == target)
 }
 
 fn open_paths() -> &'static Mutex<HashSet<PathBuf>> {

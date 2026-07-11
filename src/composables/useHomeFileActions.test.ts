@@ -13,6 +13,7 @@ import {
   type OpenDocumentResponse,
   type RecentFile,
 } from "@/types";
+import { openResponseFromFileData } from "@/test/documentFixtures";
 
 const spreadsheetFormats = vi.hoisted(() => ({
   defaultSpreadsheetExtension: vi.fn(),
@@ -74,8 +75,7 @@ function text(value: string): CellValue {
 }
 
 function openedResponse(fileName = "book.xlsx", documentId: number | string = '1'): OpenDocumentResponse {
-  return {
-    fileData: {
+  const fileData = {
       path: `/tmp/${fileName}`,
       fileName,
       sheets: [
@@ -86,10 +86,10 @@ function openedResponse(fileName = "book.xlsx", documentId: number | string = '1
           rich: defaultRichProjection(),
         },
       ],
-    },
-    editorSession: {
+    };
+  const editorSession = {
       documentId: String(documentId) as `${bigint}`,
-      revision: '0',
+      revision: '0' as const,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -98,8 +98,8 @@ function openedResponse(fileName = "book.xlsx", documentId: number | string = '1
         isDirty: false,
         history: defaultHistoryStatus(),
       },
-    },
-  };
+    };
+  return openResponseFromFileData(fileData, editorSession);
 }
 
 function mockPreparedNew(response: OpenDocumentResponse, token = "prepared-new") {

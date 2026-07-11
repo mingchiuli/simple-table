@@ -79,4 +79,37 @@ impl FormulaStatus {
             diagnostics,
         }
     }
+
+    pub fn bounded(mut self, maximum_issues: usize) -> Self {
+        let diagnostics = match &mut self {
+            Self::Ready { diagnostics } | Self::Degraded { diagnostics, .. } => diagnostics,
+        };
+        diagnostics.issues.truncate(maximum_issues);
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_status_preserves_counts_and_limits_samples() {
+        let diagnostics = FormulaDiagnostics {
+            invalid_formula_count: 20,
+            issues: (0..20)
+                .map(|row| {
+                    FormulaIssue::new(0, row, 0, FormulaIssueKind::InvalidFormula, "invalid")
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let FormulaStatus::Ready { diagnostics } = FormulaStatus::ready(diagnostics).bounded(3)
+        else {
+            panic!("ready status");
+        };
+        assert_eq!(diagnostics.invalid_formula_count, 20);
+        assert_eq!(diagnostics.issues.len(), 3);
+    }
 }

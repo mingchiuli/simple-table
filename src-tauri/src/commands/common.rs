@@ -11,7 +11,7 @@ use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
-    SheetProjectionResponse, SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+    SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -119,20 +119,16 @@ pub fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_current_file_data(
+pub fn get_current_document_projection(
     document_id: CommandU64,
     base_revision: CommandU64,
-) -> Result<FileData, AppError> {
-    document::current_file_data_for_command(document_id.get(), base_revision.get())
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn get_sheet_projection(
-    document_id: CommandU64,
-    base_revision: CommandU64,
-    sheet_index: usize,
-) -> Result<SheetProjectionResponse, AppError> {
-    document::sheet_projection_for_command(document_id.get(), base_revision.get(), sheet_index)
+    preferred_sheet_index: usize,
+) -> Result<OpenDocumentResponse, AppError> {
+    document::current_document_projection_for_command(
+        document_id.get(),
+        base_revision.get(),
+        preferred_sheet_index,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]

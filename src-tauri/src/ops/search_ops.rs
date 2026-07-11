@@ -32,13 +32,13 @@ pub fn do_search(
         return Ok(vec![]);
     };
 
-    let inputs = {
+    let sheet_indexes = {
         let registry = registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry.active_for_command(document_id, base_revision)?;
 
-        let sheet_indexes = match scope {
+        match scope {
             SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
             SearchScope::AllSheets => editor_state
                 .file_data()
@@ -47,26 +47,33 @@ pub fn do_search(
                 .enumerate()
                 .map(|(sheet_idx, _)| sheet_idx)
                 .collect(),
-        };
-        sheet_indexes
-            .into_iter()
-            .filter_map(|sheet_index| {
-                Some(SearchInput {
-                    sheet_index,
-                    sheet_name: editor_state.sheet_name(sheet_index)?,
-                    source: editor_state.search_sheet_source(sheet_index)?,
-                })
-            })
-            .collect::<Vec<_>>()
+        }
     };
 
     let mut results = Vec::new();
     let mut used_scan_fallback = false;
 
-    for input in inputs {
+    for sheet_index in sheet_indexes {
         if results.len() >= SEARCH_RESULT_LIMIT {
             break;
         }
+        let input = {
+            let registry = registry
+                .read()
+                .map_err(|_| AppError::poisoned_lock("document registry"))?;
+            let editor_state = registry.active_for_command(document_id, base_revision)?;
+            let Some(sheet_name) = editor_state.sheet_name(sheet_index) else {
+                continue;
+            };
+            let Some(source) = editor_state.search_sheet_source(sheet_index) else {
+                continue;
+            };
+            SearchInput {
+                sheet_index,
+                sheet_name,
+                source,
+            }
+        };
         let remaining = SEARCH_RESULT_LIMIT - results.len();
         match input.source {
             SearchSheetSource::Indexed(index) => {

@@ -3,7 +3,7 @@ import type {
   EditorSessionInfo,
   EditorPatch,
   DocumentProjection,
-  FileData,
+  OpenDocumentResponse,
   U64String,
 } from "@/types";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
@@ -158,17 +158,14 @@ export function applySelectionPatches(patches: EditorPatch[] | undefined) {
   useEditorSelectionStore().applyEditorPatches(patches);
 }
 
-export function replaceProjection(store: DocumentSessionStateTarget, data: FileData) {
-  const currentFileName = store.data?.fileName;
-  const resident = store.data?.sheets
-    .map((slot, index) => slot.state === 'loaded' ? index : -1)
-    .filter((index) => index >= 0) ?? [0];
-  store.data = createDocumentProjection({
-    ...data,
-    path: store.currentFilePath ?? data.path,
-    fileName: currentFileName ?? data.fileName,
-  }, undefined, resident);
-  store.residentSheetOrder = resident;
+export function replaceProjection(
+  store: DocumentSessionStateTarget,
+  response: OpenDocumentResponse
+) {
+  store.data = createDocumentProjection(response.document, response.initialRegion);
+  store.residentSheetOrder = response.initialRegion
+    ? [response.initialRegion.region.sheetIndex]
+    : [];
   store.projectionStale = false;
   clampSelectionToCurrentSheet(store);
   useSearchSessionStore().clearSearch();

@@ -1,6 +1,6 @@
 use crate::io::document_memento::FileStructureMemento;
-use crate::ops::patch_projector::sheet_updated_patch;
-use crate::types::{EditorPatch, FileData, SheetsReplacedPatch};
+use crate::ops::patch_projector::sheet_invalidated_patch;
+use crate::types::{EditorPatch, FileData, SheetManifest, SheetsReplacedPatch};
 
 pub(crate) enum CurrentStructureShape {
     Empty,
@@ -25,10 +25,8 @@ pub(crate) fn restore_structure_patches(
     restored: &FileData,
 ) -> Vec<EditorPatch> {
     match (current_shape, target_memento) {
-        (_, FileStructureMemento::Row(target)) => sheet_updated_patch(restored, target.sheet_index),
-        (_, FileStructureMemento::Column(target)) => {
-            sheet_updated_patch(restored, target.sheet_index)
-        }
+        (_, FileStructureMemento::Row(target)) => sheet_invalidated_patch(target.sheet_index),
+        (_, FileStructureMemento::Column(target)) => sheet_invalidated_patch(target.sheet_index),
         (CurrentStructureShape::Sheets { sheet_index }, FileStructureMemento::Sheets(target))
             if *sheet_index == target.truncate_from =>
         {
@@ -39,7 +37,12 @@ pub(crate) fn restore_structure_patches(
                         .sheets
                         .get(target.truncate_from..)
                         .unwrap_or_default()
-                        .to_vec(),
+                        .iter()
+                        .map(|sheet| SheetManifest {
+                            name: sheet.name.clone(),
+                            extent: sheet.extent(),
+                        })
+                        .collect(),
                 },
             }]
         }

@@ -8,18 +8,17 @@ use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::state::state::{EditorSessionInfo, EditorStateInfo, HistoryStatus};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
-    CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DrawingKind,
-    DrawingProjection, EditorCommandContext, EditorMutationResponse, EditorPatch, FileData,
-    FormulaDiagnostics, FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection,
-    HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse,
-    PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch, RichProjectionPatch,
-    RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity,
-    SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope, SetCellRequest,
-    SheetCapabilities, SheetData, SheetDeletedPatch, SheetExtent, SheetInsertedPatch,
-    SheetProjectionResponse, SheetRegion, SheetRegionProjectionResponse, SheetShapePatch,
-    SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch, SpreadsheetFormatOptions,
-    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
+    CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DocumentManifest,
+    DrawingKind, DrawingProjection, EditorCommandContext, EditorMutationResponse, EditorPatch,
+    FileData, FormulaDiagnostics, FormulaIssue, FormulaIssueKind, FormulaStatus,
+    FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan,
+    OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch,
+    RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse,
+    ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetCapabilities, SheetData,
+    SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch, SheetManifest,
+    SheetRegion, SheetRegionMetadata, SheetRegionProjectionResponse, SheetsReplacedPatch,
+    SpreadsheetFormatOptions, WorkbookCapabilities, WorkbookRichCapabilities,
+    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -39,6 +38,8 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetData>(&mut output, &cfg);
     push_decl::<SheetExtent>(&mut output, &cfg);
     push_decl::<FileData>(&mut output, &cfg);
+    push_decl::<SheetManifest>(&mut output, &cfg);
+    push_decl::<DocumentManifest>(&mut output, &cfg);
     push_decl::<CellStyleProjection>(&mut output, &cfg);
     push_decl::<FreezePaneProjection>(&mut output, &cfg);
     push_decl::<HyperlinkProjection>(&mut output, &cfg);
@@ -69,24 +70,20 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<LayoutPatch>(&mut output, &cfg);
     push_decl::<SheetInsertedPatch>(&mut output, &cfg);
     push_decl::<SheetDeletedPatch>(&mut output, &cfg);
-    push_decl::<SheetUpdatedPatch>(&mut output, &cfg);
+    push_decl::<SheetInvalidatedPatch>(&mut output, &cfg);
     push_decl::<SheetsReplacedPatch>(&mut output, &cfg);
-    push_decl::<RichProjectionPatchScope>(&mut output, &cfg);
-    push_decl::<RichProjectionPatch>(&mut output, &cfg);
-    push_decl::<SheetStructureMetadataPatch>(&mut output, &cfg);
     push_decl::<RowInsertedPatch>(&mut output, &cfg);
     push_decl::<RowDeletedPatch>(&mut output, &cfg);
     push_decl::<ColumnInsertedPatch>(&mut output, &cfg);
     push_decl::<ColumnDeletedPatch>(&mut output, &cfg);
-    push_decl::<SheetShapePatch>(&mut output, &cfg);
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);
     push_decl::<EditorCommandContext>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);
-    push_decl::<SheetProjectionResponse>(&mut output, &cfg);
     push_decl::<SheetRegion>(&mut output, &cfg);
+    push_decl::<SheetRegionMetadata>(&mut output, &cfg);
     push_decl::<SheetRegionProjectionResponse>(&mut output, &cfg);
     push_decl::<PreparedOpenDocument>(&mut output, &cfg);
     push_decl::<SavedDocumentIdentity>(&mut output, &cfg);

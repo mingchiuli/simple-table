@@ -15,10 +15,11 @@ type ScrollGeometry = {
 };
 
 type UseTableInteractionControllerOptions = {
-  data: ComputedRef<CellValue[][]>;
+  cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
   selectedCell: ComputedRef<CellPosition | null | undefined>;
   autoScroll: ComputedRef<boolean | undefined>;
   canEditCells: ComputedRef<boolean>;
+  isCellLoaded: (rowIndex: number, colIndex: number) => boolean;
   getDraftValue: (rowIndex: number, colIndex: number) => string | undefined;
   normalizeCellPosition: (rowIndex: number, colIndex: number) => {
     rowIndex: number;
@@ -44,10 +45,11 @@ type UseTableInteractionControllerOptions = {
 };
 
 export function useTableInteractionController({
-  data,
+  cellAt,
   selectedCell,
   autoScroll,
   canEditCells,
+  isCellLoaded,
   getDraftValue,
   normalizeCellPosition,
   scrollCellIntoView,
@@ -120,7 +122,7 @@ export function useTableInteractionController({
   }
 
   function getCellEditorValue(rowIndex: number, colIndex: number): string {
-    return cellToEditorString(data.value[rowIndex]?.[colIndex]);
+    return cellToEditorString(cellAt(rowIndex, colIndex));
   }
 
   function getDisplayValue(rowIndex: number, colIndex: number, cellValue: CellValue | undefined): string {
@@ -152,7 +154,7 @@ export function useTableInteractionController({
   }
 
   function handleCellDoubleClick(rowIndex: number, colIndex: number) {
-    if (!canEditCells.value) return;
+    if (!canEditCells.value || !isCellLoaded(rowIndex, colIndex)) return;
     const normalized = normalizeCellPosition(rowIndex, colIndex);
     emitSelectCell(normalized.rowIndex, normalized.colIndex);
     beginEdit(normalized.rowIndex, normalized.colIndex);

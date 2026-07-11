@@ -12,6 +12,7 @@ import {
 } from "@/types";
 import type { OpenFileSelection } from "@/platform";
 import type { DocumentReplacementLease } from "@/composables/useDocumentReplacementGuard";
+import { openResponseFromFileData } from "@/test/documentFixtures";
 
 const openProtocolMocks = vi.hoisted(() => ({
   prepareOpenFile: vi.fn(),
@@ -36,8 +37,7 @@ const selection: OpenFileSelection = {
 };
 
 function openedResponse(): OpenDocumentResponse {
-  return {
-    fileData: {
+  const fileData = {
       path: selection.path,
       fileName: selection.fileName,
       sheets: [
@@ -48,10 +48,10 @@ function openedResponse(): OpenDocumentResponse {
           rich: defaultRichProjection(),
         },
       ],
-    },
-    editorSession: {
-      documentId: '1',
-      revision: '0',
+    };
+  const editorSession = {
+      documentId: '1' as const,
+      revision: '0' as const,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -60,8 +60,8 @@ function openedResponse(): OpenDocumentResponse {
         isDirty: false,
         history: defaultHistoryStatus(),
       },
-    },
-  };
+    };
+  return openResponseFromFileData(fileData, editorSession);
 }
 
 function replacementLease(): DocumentReplacementLease {
@@ -202,7 +202,9 @@ describe("useOpenFileSelection", () => {
     );
     expect(documentSessionStore.documentId).toBe(response.editorSession.documentId);
     expect(documentSessionStore.currentFilePath).toBe(selection.path);
-    expect(documentSessionStore.data).toStrictEqual(createDocumentProjection(response.fileData));
+    expect(documentSessionStore.data).toStrictEqual(
+      createDocumentProjection(response.document, response.initialRegion)
+    );
     expect(replacement.commit).toHaveBeenCalledTimes(1);
     expect(replacement.cancel).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
@@ -229,6 +231,8 @@ describe("useOpenFileSelection", () => {
     expect(replacement.commit).toHaveBeenCalledTimes(1);
     expect(replacement.cancel).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(documentSessionStore.data).toStrictEqual(createDocumentProjection(response.fileData));
+    expect(documentSessionStore.data).toStrictEqual(
+      createDocumentProjection(response.document, response.initialRegion)
+    );
   });
 });

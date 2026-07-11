@@ -8,7 +8,6 @@ import {
   defaultHistoryStatus,
   defaultRichProjection,
   defaultWorkbookCapabilities,
-  loadedSheetData,
   readyFormulaStatus,
   type CellValue,
   type EditorMutationResponse,
@@ -17,6 +16,8 @@ import {
   type SearchResult,
   type SheetData,
 } from "@/types";
+import { openResponseFromFileData } from "@/test/documentFixtures";
+import { sheetCell } from "@/stores/documentProjection";
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -28,7 +29,8 @@ vi.mock("element-plus", () => ({
 vi.mock("@/api", () => ({
   addRow: vi.fn(),
   addSheet: vi.fn(),
-  getCurrentFileData: vi.fn(),
+  getCurrentDocumentProjection: vi.fn(),
+  getSheetRegionProjection: vi.fn(),
   getEditorState: vi.fn(),
   search: vi.fn().mockResolvedValue([]),
 }));
@@ -50,11 +52,9 @@ function openedResponse(documentId: number | string = '1', fileName = "book.xlsx
       sheet("Sheet2", [[text("B1")]]),
     ],
   };
-  return {
-    fileData,
-    editorSession: {
+  const editorSession = {
       documentId: String(documentId) as `${bigint}`,
-      revision: '0',
+      revision: '0' as const,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -63,13 +63,13 @@ function openedResponse(documentId: number | string = '1', fileName = "book.xlsx
         isDirty: false,
         history: defaultHistoryStatus(),
       },
-    },
-  };
+    };
+  return openResponseFromFileData(fileData, editorSession);
 }
 
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
-    protocolVersion: 1,
+    protocolVersion: 2,
     documentId: '1',
     revision: '1',
     formulaStatus: readyFormulaStatus(),
@@ -95,9 +95,7 @@ function setupCommands(
   const { currentSheetIndex, selectedCell } = storeToRefs(selectionStore);
   const activeSheetIndex = overrides.currentSheetIndex ?? currentSheetIndex;
   const fileData = computed(() => documentSessionStore.data);
-  const currentSheet = computed(() =>
-    loadedSheetData(fileData.value?.sheets[activeSheetIndex.value])
-  );
+  const currentSheet = computed(() => documentSessionStore.loadedSheet(activeSheetIndex.value));
   const applyMutationResponse = vi.spyOn(
     documentSessionStore,
     "applyMutationResponseWithResync"
@@ -276,6 +274,27 @@ describe("useEditorCommands", () => {
     );
   });
 
+  it("appends rows at the manifest extent instead of the loaded tile boundary", async () => {
+    const api = await import("@/api");
+    const setup = setupCommands();
+    const data = setup.documentSessionStore.data;
+    if (!data) throw new Error("document setup failed");
+    setup.documentSessionStore.data = {
+      ...data,
+      sheets: data.sheets.map((slot, index) =>
+        index === 0 ? { ...slot, extent: { rowCount: 10_000, columnCount: 1 } } : slot
+      ),
+    };
+
+    await setup.commands.handleAddRow();
+
+    expect(api.addRow).toHaveBeenCalledWith(
+      { documentId: '1', baseRevision: '0' },
+      0,
+      10_000
+    );
+  });
+
   it("does not report a mutation failure when stale projection recovery succeeds", async () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
@@ -298,14 +317,22 @@ describe("useEditorCommands", () => {
         history: defaultHistoryStatus(),
       },
     });
-    vi.mocked(api.getCurrentFileData).mockResolvedValue(fresh);
+    vi.mocked(api.getCurrentDocumentProjection).mockResolvedValue(
+      openResponseFromFileData(fresh, {
+        ...openedResponse().editorSession,
+        revision: '3',
+      })
+    );
     setup.applyMutationResponse.mockRejectedValue(new Error("projection unavailable"));
 
     await setup.commands.handleAddRow();
 
-    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
+    expect(api.getCurrentDocumentProjection).toHaveBeenCalledWith(
+      { documentId: '1', baseRevision: '3' },
+      0
+    );
     expect(api.getEditorState).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
-    expect(setup.documentSessionStore.loadedSheet(0)?.rows[0][0]).toEqual(text("fresh"));
+    expect(sheetCell(setup.documentSessionStore.data?.sheets[0], 0, 0)).toEqual(text("fresh"));
     expect(setup.documentSessionStore.projectionStale).toBe(false);
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
   });
@@ -316,13 +343,17 @@ describe("useEditorCommands", () => {
     const setup = setupCommands();
     vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: '3' }));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
-    vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
+    vi.mocked(api.getCurrentDocumentProjection)
+      .mockRejectedValue(new Error("projection unavailable"));
     setup.applyMutationResponse.mockRejectedValue(new Error("projection unavailable"));
 
     await setup.commands.handleAddRow();
 
     expect(api.addRow).toHaveBeenCalled();
-    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
+    expect(api.getCurrentDocumentProjection).toHaveBeenCalledWith(
+      { documentId: '1', baseRevision: '3' },
+      0
+    );
     expect(setup.documentSessionStore.projectionStale).toBe(true);
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
       "Change was applied, but the editor could not refresh: Error: projection unavailable"
@@ -345,7 +376,7 @@ describe("useEditorCommands", () => {
     await setup.commands.handleAddSheet();
 
     expect(setup.applyMutationResponse).toHaveBeenCalledTimes(1);
-    expect(api.getCurrentFileData).not.toHaveBeenCalled();
+    expect(api.getCurrentDocumentProjection).not.toHaveBeenCalled();
     expect(api.getEditorState).not.toHaveBeenCalled();
     expect(setup.documentSessionStore.projectionStale).toBe(false);
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(

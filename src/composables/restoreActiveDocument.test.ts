@@ -5,21 +5,21 @@ import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import type { OpenDocumentResponse } from "@/types";
 import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
+import { openResponseFromFileData } from "@/test/documentFixtures";
 
 vi.mock("@/api", () => ({
   getActiveDocument: vi.fn(),
 }));
 
 function activeDocument(): OpenDocumentResponse {
-  return {
-    fileData: {
+  const fileData = {
       path: "/tmp/recovered.xlsx",
       fileName: "recovered.xlsx",
       sheets: [{ name: "Sheet1", rows: [], merges: [], rich: { hasMoreDrawings: false, hasStyleMetadata: false, hasHyperlinks: false, hasFreezePane: false } }],
-    },
-    editorSession: {
-      documentId: '9',
-      revision: '4',
+    };
+  const editorSession = {
+      documentId: '9' as const,
+      revision: '4' as const,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -36,8 +36,8 @@ function activeDocument(): OpenDocumentResponse {
           maxSingleEntryBytes: 50,
         },
       },
-    },
-  };
+    };
+  return openResponseFromFileData(fileData, editorSession);
 }
 
 describe("restoreActiveDocument", () => {

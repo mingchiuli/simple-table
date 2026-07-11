@@ -6,11 +6,10 @@ import type {
   ReadOnlyRichProjection,
 } from "@/types";
 import { defaultRichProjection } from "@/types";
-import { calculateSheetExtent, type SheetExtent } from "@/table-geometry/sheetExtent";
+import type { SheetExtent } from "@/table-geometry/sheetExtent";
 import { cellKey } from "@/utils/cellAddress";
 
 export type SheetViewportModel = {
-  rows: CellValue[][];
   columns: string[];
   merges: MergeRange[];
   columnWidths: Record<number, number>;
@@ -23,33 +22,31 @@ export type SheetViewportModel = {
 };
 
 export type SheetViewportSource = {
-  rows: CellValue[][];
+  cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
   columns: string[];
   merges?: MergeRange[];
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
   rich?: ReadOnlyRichProjection;
-  extent?: SheetExtent;
+  extent: SheetExtent;
 };
 
 export function createSheetViewportModel(source: SheetViewportSource): SheetViewportModel {
-  const rows = source.rows;
   const columns = source.columns;
   const merges = source.merges ?? [];
   const columnWidths = { ...(source.columnWidths ?? {}) };
   const rowHeights = { ...(source.rowHeights ?? {}) };
   const rich = source.rich ?? defaultRichProjection();
-  const extent = source.extent ?? calculateSheetExtent(rows, merges, columnWidths, rowHeights, rich);
+  const extent = source.extent;
 
   return {
-    rows,
     columns,
     merges,
     columnWidths,
     rowHeights,
     rich,
     extent,
-    cellAt: (rowIndex, colIndex) => rows[rowIndex]?.[colIndex],
+    cellAt: source.cellAt,
     formatAt: (rowIndex, colIndex) => {
       const key = cellKey(rowIndex, colIndex);
       const explicit = rich.cellFormats?.[key];
