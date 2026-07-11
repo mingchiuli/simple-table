@@ -12,11 +12,11 @@ use crate::types::{
     HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch, RichProjectionPatch,
     RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity,
-    SavedDocumentResponse, ScalarCellValue, SearchIndexUpdatePlan, SearchResult, SearchScope,
-    SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch, SheetInsertedPatch,
-    SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch,
-    SpreadsheetFormatOptions, WorkbookCapabilities, WorkbookRichCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope, SetCellRequest,
+    SheetCapabilities, SheetData, SheetDeletedPatch, SheetInsertedPatch, SheetShapePatch,
+    SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch, SpreadsheetFormatOptions,
+    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -76,7 +76,6 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetShapePatch>(&mut output, &cfg);
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);
-    push_decl::<SearchIndexUpdatePlan>(&mut output, &cfg);
     push_decl::<EditorCommandContext>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);

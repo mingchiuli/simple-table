@@ -47,7 +47,6 @@ function response(partial: Partial<EditorMutationResponse>): EditorMutationRespo
     capabilities: defaultWorkbookCapabilities(),
     editorState: editorState(),
     patches: [],
-    searchIndexUpdate: { rebuildAll: false, rebuildSheets: [] },
     ...partial,
   };
 }

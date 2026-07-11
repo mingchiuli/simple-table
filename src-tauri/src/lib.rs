@@ -72,10 +72,10 @@ pub fn run() {
             }
 
             use tauri_plugin_deep_link::DeepLinkExt;
-            if let Ok(Some(urls)) = app.deep_link().get_current() {
-                if let Some(url) = urls.first() {
-                    io::platform::desktop::authorize_open_target(url.as_str());
-                }
+            if let Ok(Some(urls)) = app.deep_link().get_current()
+                && let Some(url) = urls.first()
+            {
+                io::platform::desktop::authorize_open_target(url.as_str());
             }
             app.deep_link().on_open_url(|event| {
                 if let Some(url) = event.urls().first() {

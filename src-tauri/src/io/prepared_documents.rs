@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
@@ -12,12 +13,22 @@ pub(crate) struct PreparedDocument {
 
 #[derive(Default)]
 struct PreparedDocumentStore {
-    pending: HashMap<String, PreparedDocument>,
+    pending: HashMap<String, PreparedDocumentEntry>,
     order: VecDeque<String>,
+}
+
+struct PreparedDocumentEntry {
+    document: PreparedDocument,
+    created_at: Instant,
 }
 
 impl PreparedDocumentStore {
     fn insert(&mut self, token: String, prepared: PreparedDocument) {
+        self.insert_at(token, prepared, Instant::now());
+    }
+
+    fn insert_at(&mut self, token: String, prepared: PreparedDocument, now: Instant) {
+        self.prune_expired(now);
         while self.pending.len() >= MAX_PREPARED_DOCUMENTS {
             let Some(expired) = self.order.pop_front() else {
                 break;
@@ -25,22 +36,39 @@ impl PreparedDocumentStore {
             self.pending.remove(&expired);
         }
         self.order.push_back(token.clone());
-        self.pending.insert(token, prepared);
+        self.pending.insert(
+            token,
+            PreparedDocumentEntry {
+                document: prepared,
+                created_at: now,
+            },
+        );
     }
 
     fn take(&mut self, token: &str) -> Option<PreparedDocument> {
-        let prepared = self.pending.remove(token)?;
+        self.prune_expired(Instant::now());
+        let prepared = self.pending.remove(token)?.document;
         self.order.retain(|pending_token| pending_token != token);
         Some(prepared)
     }
 
     fn abort(&mut self, token: &str) {
+        self.prune_expired(Instant::now());
         self.pending.remove(token);
         self.order.retain(|pending_token| pending_token != token);
     }
+
+    fn prune_expired(&mut self, now: Instant) {
+        self.pending.retain(|_, entry| {
+            now.saturating_duration_since(entry.created_at) < PREPARED_DOCUMENT_TTL
+        });
+        self.order
+            .retain(|pending_token| self.pending.contains_key(pending_token));
+    }
 }
 
-const MAX_PREPARED_DOCUMENTS: usize = 8;
+const MAX_PREPARED_DOCUMENTS: usize = 2;
+const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
 
 static PREPARED_DOCUMENTS: OnceLock<Mutex<PreparedDocumentStore>> = OnceLock::new();
 
@@ -137,5 +165,36 @@ mod tests {
         assert!(store.take("token-0").is_none());
         assert!(store.take("token-1").is_some());
         assert_eq!(store.pending.len(), MAX_PREPARED_DOCUMENTS - 1);
+    }
+
+    #[test]
+    fn insertion_prunes_expired_documents_before_enforcing_capacity() {
+        let mut store = PreparedDocumentStore::default();
+        let now = Instant::now();
+        store.insert_at(
+            "expired".to_string(),
+            prepared("expired.xlsx"),
+            now - PREPARED_DOCUMENT_TTL,
+        );
+
+        store.insert_at("current".to_string(), prepared("current.xlsx"), now);
+
+        assert!(!store.pending.contains_key("expired"));
+        assert!(store.pending.contains_key("current"));
+        assert_eq!(store.order, VecDeque::from(["current".to_string()]));
+    }
+
+    #[test]
+    fn taking_an_expired_token_removes_it() {
+        let mut store = PreparedDocumentStore::default();
+        store.insert_at(
+            "expired".to_string(),
+            prepared("expired.xlsx"),
+            Instant::now() - PREPARED_DOCUMENT_TTL,
+        );
+
+        assert!(store.take("expired").is_none());
+        assert!(store.pending.is_empty());
+        assert!(store.order.is_empty());
     }
 }

@@ -80,7 +80,6 @@ function mutationResponse(partial: Partial<EditorMutationResponse> = {}): Editor
       history: defaultHistoryStatus(),
     },
     patches: [],
-    searchIndexUpdate: { rebuildAll: false, rebuildSheets: [] },
     ...partial,
   };
 }

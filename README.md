@@ -90,6 +90,9 @@ src-tauri/                # Rust backend
 │   └── lib.rs            # App setup and command registration
 ```
 
+The document ownership model, mutation protocol, save transaction, and resource
+boundaries are documented in [docs/architecture.md](docs/architecture.md).
+
 ## Platform Architecture
 
 File operations are abstracted through `src/platform/` which provides a unified API:
