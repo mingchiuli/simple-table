@@ -81,10 +81,11 @@ export function useFileActions({
           removeCancelHandler?.();
           removeCancelHandler = undefined;
           const opened = await commitPreparedDocumentOrAbort(preparedResult, expectedContext);
-          if (!shouldContinue() && expectedContext === null) {
+          if (!shouldContinue()) {
             try {
               await api.closeCurrentDocument(opened.editorSession.documentId);
               replacement.commit();
+              documentSessionStore.clearDocument();
             } catch (error) {
               replacement.commit();
               documentSessionStore.openDocumentResponse(opened, filePath);

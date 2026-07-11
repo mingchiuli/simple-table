@@ -346,4 +346,16 @@ mod tests {
 
         assert_eq!(path, PathBuf::from("/tmp/simple table.xlsx"));
     }
+
+    #[test]
+    fn file_association_url_authorizes_the_resolved_spreadsheet_path() {
+        let path = temp_path("file-association.xlsx");
+        std::fs::write(&path, b"").expect("write associated file");
+        let target = format!("file://{}", path.to_string_lossy());
+
+        authorize_open_target(&target);
+
+        assert!(consume_path(open_paths(), &normalize_existing_path(&path)));
+        let _ = std::fs::remove_file(path);
+    }
 }

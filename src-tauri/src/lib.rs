@@ -66,10 +66,22 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
-        builder = builder.setup(|_| {
+        builder = builder.setup(|app| {
             for arg in std::env::args().skip(1) {
                 io::platform::desktop::authorize_open_target(&arg);
             }
+
+            use tauri_plugin_deep_link::DeepLinkExt;
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                if let Some(url) = urls.first() {
+                    io::platform::desktop::authorize_open_target(url.as_str());
+                }
+            }
+            app.deep_link().on_open_url(|event| {
+                if let Some(url) = event.urls().first() {
+                    io::platform::desktop::authorize_open_target(url.as_str());
+                }
+            });
             Ok(())
         });
     }
