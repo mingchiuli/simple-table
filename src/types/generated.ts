@@ -1,6 +1,6 @@
 // Generated from Rust editor contract by ts-rs. Do not edit by hand.
 
-export type U64String = string;
+export type U64String = `${bigint}`;
 
 export type ScalarCellValue = string | number | boolean | null;
 
@@ -137,9 +137,13 @@ export type EditorMutationResponse = { protocolVersion: 1, documentId: U64String
 
 export type EditorSessionInfo = { documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, };
 
-export type OpenDocumentResponse = { fileData: FileData, editorSession: EditorSessionInfo, sheetExtents?: Array<SheetExtent>, loadedSheetIndexes?: Array<number>, };
+export type OpenDocumentResponse = { fileData: FileData, editorSession: EditorSessionInfo, sheetExtents?: Array<SheetExtent>, loadedSheetIndexes?: Array<number>, loadedSheetRegions?: Array<SheetRegion>, };
 
-export type SheetProjectionResponse = { documentId: U64String, revision: U64String, sheetIndex: number, sheet: SheetData, extent: SheetExtent, };
+export type SheetProjectionResponse = { documentId: U64String, revision: U64String, sheetIndex: number, sheet: SheetData, extent: SheetExtent, loadedRegion: SheetRegion, };
+
+export type SheetRegion = { sheetIndex: number, rowStart: number, rowEnd: number, colStart: number, colEnd: number, };
+
+export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, };
 
 export type PreparedOpenDocument = { token: string, };
 
@@ -154,49 +158,50 @@ export type TauriCommandMap = {
   "prepare_recent_file_desktop": { args: { id: string }, result: PreparedOpenDocument },
   "pick_save_location_desktop": { args: { defaultName: string }, result: string | null },
   "discard_save_location_desktop": { args: { path: string }, result: void },
-  "save_file_desktop": { args: { path: string } & EditorCommandContext, result: SavedDocumentResponse },
-  "export_file_desktop": { args: { defaultName: string } & EditorCommandContext, result: string | null },
-  "pick_open_file_android": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
-  "discard_open_file_selection_android": { args: { path: string }, result: void },
-  "prepare_open_file_android": { args: { path: string }, result: PreparedOpenDocument },
-  "pick_save_location_android": { args: { defaultName: string }, result: string | null },
-  "discard_save_location_android": { args: { path: string }, result: void },
-  "save_file_android": { args: { path: string } & EditorCommandContext, result: SavedDocumentResponse },
-  "export_file_android": { args: { defaultName: string } & EditorCommandContext, result: string | null },
-  "pick_open_file_ios": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
-  "discard_open_file_selection_ios": { args: { path: string }, result: void },
-  "prepare_open_file_ios": { args: { path: string }, result: PreparedOpenDocument },
-  "pick_save_location_ios": { args: { defaultName: string }, result: string | null },
-  "discard_save_location_ios": { args: { path: string }, result: void },
-  "save_file_ios": { args: { path: string } & EditorCommandContext, result: SavedDocumentResponse },
-  "export_file_ios": { args: { defaultName: string } & EditorCommandContext, result: string | null },
+  "save_file_desktop": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
+  "export_file_desktop": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
   "prepare_new_file": { args: { fileData: FileData }, result: PreparedOpenDocument },
   "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
   "abort_prepared_document": { args: { token: string }, result: void },
   "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },
-  "get_current_file_data": { args: EditorCommandContext, result: FileData },
-  "get_sheet_projection": { args: EditorCommandContext & { sheetIndex: number }, result: SheetProjectionResponse },
+  "get_current_file_data": { args: { documentId: U64String, baseRevision: U64String }, result: FileData },
+  "get_sheet_projection": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number }, result: SheetProjectionResponse },
+  "get_sheet_region_projection": { args: { documentId: U64String, baseRevision: U64String, region: SheetRegion }, result: SheetRegionProjectionResponse },
   "close_current_document": { args: { documentId: U64String }, result: void },
-  "get_document_capabilities": { args: EditorCommandContext & { fileName: string, currentPath: string | null }, result: DocumentCapabilities },
-  "get_native_save_plan": { args: EditorCommandContext & { targetPathOrName: string }, result: NativeSavePlan },
+  "get_document_capabilities": { args: { documentId: U64String, baseRevision: U64String }, result: DocumentCapabilities },
+  "get_native_save_plan": { args: { documentId: U64String, baseRevision: U64String, targetPathOrName: string }, result: NativeSavePlan },
   "get_spreadsheet_format_options": { args: Record<string, never>, result: SpreadsheetFormatOptions },
   "get_editor_state": { args: { documentId: U64String | null, baseRevision: U64String | null }, result: EditorSessionInfo | null },
-  "undo": { args: EditorCommandContext, result: EditorMutationResponse },
-  "redo": { args: EditorCommandContext, result: EditorMutationResponse },
-  "set_cell": { args: EditorCommandContext & { sheetIndex: number, row: number, col: number, text: string }, result: EditorMutationResponse },
-  "set_cells": { args: EditorCommandContext & { changes: Array<SetCellRequest> }, result: EditorMutationResponse },
-  "add_row": { args: EditorCommandContext & { sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
-  "delete_row": { args: EditorCommandContext & { sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
-  "add_column": { args: EditorCommandContext & { sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
-  "delete_column": { args: EditorCommandContext & { sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
-  "set_column_width": { args: EditorCommandContext & { sheetIndex: number, colIndex: number, width: number | null }, result: EditorMutationResponse },
-  "set_row_height": { args: EditorCommandContext & { sheetIndex: number, rowIndex: number, height: number | null }, result: EditorMutationResponse },
-  "add_sheet": { args: EditorCommandContext, result: EditorMutationResponse },
-  "delete_sheet": { args: EditorCommandContext & { sheetIndex: number }, result: EditorMutationResponse },
-  "search": { args: EditorCommandContext & { query: string, scope: SearchScope, currentSheetIndex: number | null }, result: Array<SearchResult> },
+  "undo": { args: { documentId: U64String, baseRevision: U64String }, result: EditorMutationResponse },
+  "redo": { args: { documentId: U64String, baseRevision: U64String }, result: EditorMutationResponse },
+  "set_cell": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, row: number, col: number, text: string }, result: EditorMutationResponse },
+  "set_cells": { args: { documentId: U64String, baseRevision: U64String, changes: Array<SetCellRequest> }, result: EditorMutationResponse },
+  "add_row": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
+  "delete_row": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
+  "add_column": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
+  "delete_column": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
+  "set_column_width": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, colIndex: number, width: number | null }, result: EditorMutationResponse },
+  "set_row_height": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, rowIndex: number, height: number | null }, result: EditorMutationResponse },
+  "add_sheet": { args: { documentId: U64String, baseRevision: U64String }, result: EditorMutationResponse },
+  "delete_sheet": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number }, result: EditorMutationResponse },
+  "search": { args: { documentId: U64String, baseRevision: U64String, query: string, scope: SearchScope, currentSheetIndex: number | null }, result: Array<SearchResult> },
   "get_recent_files": { args: Record<string, never>, result: Array<RecentFile> },
-  "add_recent_file_with_thumbnail": { args: { request: AddRecentFileRequest }, result: RecentFile },
   "remove_recent_file": { args: { id: string }, result: void },
+  "add_recent_file_with_thumbnail": { args: { request: AddRecentFileRequest }, result: RecentFile },
+  "pick_open_file_android": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
+  "discard_open_file_selection_android": { args: { path: string }, result: void },
+  "discard_save_location_android": { args: { path: string }, result: void },
+  "prepare_open_file_android": { args: { path: string }, result: PreparedOpenDocument },
+  "save_file_android": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
+  "export_file_android": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
+  "pick_save_location_android": { args: { defaultName: string }, result: string | null },
+  "pick_open_file_ios": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
+  "discard_open_file_selection_ios": { args: { path: string }, result: void },
+  "discard_save_location_ios": { args: { path: string }, result: void },
+  "prepare_open_file_ios": { args: { path: string }, result: PreparedOpenDocument },
+  "pick_save_location_ios": { args: { defaultName: string }, result: string | null },
+  "save_file_ios": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
+  "export_file_ios": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
   "check_update_mobile": { args: { currentVersion: string }, result: { version: string, tag_name: string, release_url: string, apk_url: string | null } | null },
 }
 

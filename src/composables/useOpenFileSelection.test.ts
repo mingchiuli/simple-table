@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { createDocumentProjection } from "@/stores/documentProjection";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -201,7 +202,7 @@ describe("useOpenFileSelection", () => {
     );
     expect(documentSessionStore.documentId).toBe(response.editorSession.documentId);
     expect(documentSessionStore.currentFilePath).toBe(selection.path);
-    expect(documentSessionStore.data).toStrictEqual(response.fileData);
+    expect(documentSessionStore.data).toStrictEqual(createDocumentProjection(response.fileData));
     expect(replacement.commit).toHaveBeenCalledTimes(1);
     expect(replacement.cancel).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
@@ -228,6 +229,6 @@ describe("useOpenFileSelection", () => {
     expect(replacement.commit).toHaveBeenCalledTimes(1);
     expect(replacement.cancel).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(documentSessionStore.data).toStrictEqual(response.fileData);
+    expect(documentSessionStore.data).toStrictEqual(createDocumentProjection(response.fileData));
   });
 });

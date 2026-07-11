@@ -8,6 +8,7 @@ import {
   defaultHistoryStatus,
   defaultRichProjection,
   defaultWorkbookCapabilities,
+  loadedSheetData,
   readyFormulaStatus,
   type CellValue,
   type EditorMutationResponse,
@@ -52,7 +53,7 @@ function openedResponse(documentId: number | string = '1', fileName = "book.xlsx
   return {
     fileData,
     editorSession: {
-      documentId: String(documentId),
+      documentId: String(documentId) as `${bigint}`,
       revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
@@ -94,8 +95,13 @@ function setupCommands(
   const { currentSheetIndex, selectedCell } = storeToRefs(selectionStore);
   const activeSheetIndex = overrides.currentSheetIndex ?? currentSheetIndex;
   const fileData = computed(() => documentSessionStore.data);
-  const currentSheet = computed(() => fileData.value?.sheets[activeSheetIndex.value] ?? null);
-  const applyMutationResponse = vi.fn(async (_response: EditorMutationResponse) => ({
+  const currentSheet = computed(() =>
+    loadedSheetData(fileData.value?.sheets[activeSheetIndex.value])
+  );
+  const applyMutationResponse = vi.spyOn(
+    documentSessionStore,
+    "applyMutationResponseWithResync"
+  ).mockImplementation(async (_response: EditorMutationResponse) => ({
     data: documentSessionStore.data,
     resyncRequired: false,
     applied: true,
@@ -108,7 +114,6 @@ function setupCommands(
     selectedCell,
     flushPendingCellChanges,
     editorValueForCell: () => "",
-    applyMutationResponse,
   });
 
   return {
@@ -300,7 +305,7 @@ describe("useEditorCommands", () => {
 
     expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
     expect(api.getEditorState).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
-    expect(setup.documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(setup.documentSessionStore.loadedSheet(0)?.rows[0][0]).toEqual(text("fresh"));
     expect(setup.documentSessionStore.projectionStale).toBe(false);
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
   });

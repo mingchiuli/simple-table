@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { FileData } from '@/types';
+import type { DocumentProjection } from '@/types';
 
 defineProps<{
-  fileData: FileData | null;
+  fileData: DocumentProjection | null;
   showExport?: boolean;
   disabled?: boolean;
 }>();

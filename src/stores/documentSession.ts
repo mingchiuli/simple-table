@@ -1,16 +1,26 @@
 import type {
   EditorMutationResponse,
+  CellValue,
   EditorSessionInfo,
+  DocumentProjection,
   FileData,
   OpenDocumentResponse,
   SavedDocumentResponse,
   EditorCommandContext,
   SheetExtent,
+  SheetData,
   SheetProjectionResponse,
+  SheetRegion,
+  SheetRegionProjectionResponse,
   U64String,
 } from "@/types";
-import { applyDocumentPatches } from "@/stores/documentPatches";
+import {
+  applyProjectionPatches,
+  createDocumentProjection,
+} from "@/stores/documentProjection";
 import { compareU64, isNextU64, maxU64, ZERO_U64 } from "@/utils/u64";
+import { blankCell } from "@/utils/cellValue";
+import { useEditorSelectionStore } from "@/stores/editorSelection";
 import {
   applyEditorSessionStatus,
   applyResponseStatus,
@@ -31,8 +41,6 @@ import {
   resetSessionUi,
   resetTransientDocumentWork,
   restoreMutationSnapshot,
-  projectionExtents,
-  updateLoadedSheetIndexes,
   waitForIdleSessionInteraction,
   waitForQueuedMutations,
   type DocumentSessionLifecycle,
@@ -41,27 +49,30 @@ import {
 export type { DocumentSessionLifecycle } from "@/stores/documentSessionRuntime";
 
 export type MutationApplyResult = {
-  data: FileData | null;
+  data: DocumentProjection | null;
   resyncRequired: boolean;
   applied: boolean;
 };
 
 export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
-    data: null as FileData | null,
+    data: null as DocumentProjection | null,
     currentFilePath: null as string | null,
     documentId: null as U64String | null,
     revision: ZERO_U64,
     lifecycle: "idle" as DocumentSessionLifecycle,
     editorCommandDepth: 0,
     projectionStale: false,
-    sheetExtents: [] as SheetExtent[],
-    loadedSheetIndexes: [] as number[],
+    residentSheetOrder: [] as number[],
   }),
   getters: {
     isInteractionLocked: (state) => state.lifecycle !== "idle" || state.editorCommandDepth > 0,
     isEditorInteractionLocked: (state) =>
       state.lifecycle !== "idle" || state.projectionStale || state.editorCommandDepth > 0,
+    sheetExtents: (state): SheetExtent[] => state.data?.sheets.map((slot) => slot.extent) ?? [],
+    loadedSheetIndexes: (state): number[] => state.data?.sheets
+      .map((slot, index) => slot.state === 'loaded' ? index : -1)
+      .filter((index) => index >= 0) ?? [],
   },
   actions: {
     beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, "idle">): boolean {
@@ -123,19 +134,20 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
       resetTransientDocumentWork(this);
-      this.data = response.fileData;
+      this.data = createDocumentProjection(
+        response.fileData,
+        response.sheetExtents,
+        response.loadedSheetIndexes,
+        response.loadedSheetRegions
+      );
+      this.residentSheetOrder = this.loadedSheetIndexes;
       this.currentFilePath = path !== null ? path : response.fileData.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       resetSessionEditorCommands(this);
       this.projectionStale = false;
-      this.sheetExtents = response.sheetExtents
-        ? response.sheetExtents
-        : projectionExtents(response.fileData);
-      this.loadedSheetIndexes = response.loadedSheetIndexes
-        ? [...response.loadedSheetIndexes]
-        : response.fileData.sheets.map((_, index) => index);
       resetSessionUi();
+      this.enforceResidentSheetBudget();
       resetDocumentStatus();
       applyEditorSessionStatus(response.editorSession);
     },
@@ -145,7 +157,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       }
       resetTransientDocumentWork(this);
       if (response.fileData) {
-        this.data = response.fileData;
+        const resident = this.residentSheetOrder.length
+          ? this.residentSheetOrder
+          : [useEditorSelectionStore().currentSheetIndex];
+        this.data = createDocumentProjection(response.fileData, undefined, resident);
       } else if (this.data && response.identity) {
         this.data = {
           ...this.data,
@@ -158,10 +173,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
-      if (response.fileData) {
-        this.sheetExtents = projectionExtents(response.fileData);
-        this.loadedSheetIndexes = response.fileData.sheets.map((_, index) => index);
-      }
+      this.enforceResidentSheetBudget();
       clampSelectionToCurrentSheet(this);
       resetSearchSession();
       applyEditorSessionStatus(response.editorSession);
@@ -199,8 +211,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = ZERO_U64;
       resetSessionEditorCommands(this);
       this.projectionStale = false;
-      this.sheetExtents = [];
-      this.loadedSheetIndexes = [];
+      this.residentSheetOrder = [];
       resetSessionLifecycle(this);
       resetSessionUi();
       resetDocumentStatus();
@@ -244,15 +255,18 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       applyResponseStatus(response);
       this.revision = response.revision;
       try {
-        const result = applyDocumentPatches(this.data, response.patches);
-        this.data = result.data;
-        this.loadedSheetIndexes = updateLoadedSheetIndexes(
-          this.loadedSheetIndexes,
-          response.patches
+        const result = applyProjectionPatches(
+          this.data,
+          response.patches,
+          response.sheetExtents
         );
-        if (response.sheetExtents) {
-          this.sheetExtents = response.sheetExtents;
+        this.data = result.data;
+        this.residentSheetOrder = this.residentSheetOrder
+          .filter((index) => this.isSheetLoaded(index));
+        for (const index of this.loadedSheetIndexes) {
+          if (!this.residentSheetOrder.includes(index)) this.residentSheetOrder.push(index);
         }
+        this.enforceResidentSheetBudget();
         applySelectionPatches(response.patches);
         if (mutationInvalidatesSearch(response.patches)) {
           clearSearchSession();
@@ -274,7 +288,41 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       }
     },
     isSheetLoaded(sheetIndex: number): boolean {
-      return this.loadedSheetIndexes.includes(sheetIndex);
+      return this.data?.sheets[sheetIndex]?.state === 'loaded';
+    },
+    touchResidentSheet(sheetIndex: number) {
+      this.residentSheetOrder = [
+        ...this.residentSheetOrder.filter((index) => index !== sheetIndex),
+        sheetIndex,
+      ];
+      this.enforceResidentSheetBudget();
+    },
+    enforceResidentSheetBudget() {
+      const maximumResidentSheets = 4;
+      if (!this.data) return;
+      const protectedSheet = useEditorSelectionStore().currentSheetIndex;
+      const sheets = [...this.data.sheets];
+      while (this.residentSheetOrder.length > maximumResidentSheets) {
+        const candidatePosition = this.residentSheetOrder.findIndex(
+          (index) => index !== protectedSheet
+        );
+        if (candidatePosition < 0) break;
+        const [evicted] = this.residentSheetOrder.splice(candidatePosition, 1);
+        const slot = sheets[evicted];
+        if (slot?.state === 'loaded') {
+          sheets[evicted] = {
+            state: 'unloaded',
+            name: slot.name,
+            extent: slot.extent,
+          };
+        }
+      }
+      this.residentSheetOrder = [...this.residentSheetOrder];
+      this.data = { ...this.data, sheets };
+    },
+    loadedSheet(sheetIndex: number): SheetData | null {
+      const slot = this.data?.sheets[sheetIndex];
+      return slot?.state === 'loaded' ? slot.data : null;
     },
     async ensureSheetLoaded(
       sheetIndex: number,
@@ -283,7 +331,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         sheetIndex: number
       ) => Promise<SheetProjectionResponse>
     ): Promise<boolean> {
-      if (this.isSheetLoaded(sheetIndex)) return true;
+      if (this.isSheetLoaded(sheetIndex)) {
+        this.touchResidentSheet(sheetIndex);
+        return true;
+      }
       const context = this.currentCommandContext();
       if (!context || !this.data?.sheets[sheetIndex]) return false;
       const response = await fetchProjection(context, sheetIndex);
@@ -296,13 +347,50 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         return false;
       }
       const sheets = [...this.data.sheets];
-      sheets[sheetIndex] = response.sheet;
+      sheets[sheetIndex] = {
+        state: 'loaded',
+        name: response.sheet.name,
+        extent: response.extent,
+        data: response.sheet,
+        regions: [response.loadedRegion],
+      };
       this.data = { ...this.data, sheets };
-      this.sheetExtents[sheetIndex] = response.extent;
-      this.sheetExtents = [...this.sheetExtents];
-      this.loadedSheetIndexes = Array.from(
-        new Set([...this.loadedSheetIndexes, sheetIndex])
-      ).sort((left, right) => left - right);
+      this.touchResidentSheet(sheetIndex);
+      return true;
+    },
+    async ensureSheetRegionLoaded(
+      region: SheetRegion,
+      fetchProjection: (
+        context: EditorCommandContext,
+        region: SheetRegion
+      ) => Promise<SheetRegionProjectionResponse>
+    ): Promise<boolean> {
+      const slot = this.data?.sheets[region.sheetIndex];
+      if (!slot || slot.state !== 'loaded') return false;
+      if (slot.regions.some((loaded) => containsRegion(loaded, region))) return true;
+      const context = this.currentCommandContext();
+      if (!context) return false;
+      const response = await fetchProjection(context, region);
+      if (
+        !this.matchesCommandContext(context)
+        || response.documentId !== context.documentId
+        || response.revision !== context.baseRevision
+        || response.region.sheetIndex !== region.sheetIndex
+      ) {
+        return false;
+      }
+      const data = this.data;
+      const current = data?.sheets[region.sheetIndex];
+      if (!current || current.state !== 'loaded') return false;
+      const rows = mergeRegionCells(current.data.rows, response.cells);
+      const sheets = [...data.sheets];
+      sheets[region.sheetIndex] = {
+        ...current,
+        data: { ...current.data, rows },
+        regions: [...current.regions, response.region],
+      };
+      this.data = { ...data, sheets };
+      this.touchResidentSheet(region.sheetIndex);
       return true;
     },
     markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
@@ -443,3 +531,26 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     },
   },
 });
+
+function containsRegion(loaded: SheetRegion, requested: SheetRegion): boolean {
+  return loaded.sheetIndex === requested.sheetIndex
+    && loaded.rowStart <= requested.rowStart
+    && loaded.rowEnd >= requested.rowEnd
+    && loaded.colStart <= requested.colStart
+    && loaded.colEnd >= requested.colEnd;
+}
+
+function mergeRegionCells(
+  currentRows: CellValue[][],
+  cells: SheetRegionProjectionResponse['cells']
+): CellValue[][] {
+  const rows = [...currentRows];
+  for (const cell of cells) {
+    while (rows.length <= cell.row) rows.push([]);
+    const row = [...(rows[cell.row] ?? [])];
+    while (row.length < cell.col) row.push(blankCell());
+    row[cell.col] = cell.value;
+    rows[cell.row] = row;
+  }
+  return rows;
+}

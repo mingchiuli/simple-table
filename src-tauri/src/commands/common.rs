@@ -11,7 +11,7 @@ use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
-    SheetProjectionResponse, SpreadsheetFormatOptions,
+    SheetProjectionResponse, SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -136,6 +136,15 @@ pub fn get_sheet_projection(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn get_sheet_region_projection(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+    region: SheetRegion,
+) -> Result<SheetRegionProjectionResponse, AppError> {
+    document::sheet_region_projection_for_command(document_id.get(), base_revision.get(), region)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn close_current_document(document_id: CommandU64) -> Result<(), AppError> {
     document::close_current_document(document_id.get())
 }
@@ -144,15 +153,8 @@ pub fn close_current_document(document_id: CommandU64) -> Result<(), AppError> {
 pub fn get_document_capabilities(
     document_id: CommandU64,
     base_revision: CommandU64,
-    file_name: String,
-    current_path: Option<String>,
 ) -> Result<DocumentCapabilities, AppError> {
-    document::document_capabilities_for_command(
-        document_id.get(),
-        base_revision.get(),
-        &file_name,
-        current_path.as_deref(),
-    )
+    document::document_capabilities_for_command(document_id.get(), base_revision.get())
 }
 
 #[tauri::command(rename_all = "camelCase")]

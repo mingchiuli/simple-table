@@ -88,7 +88,7 @@ function openedResponse(fileName = "book.xlsx", documentId: number | string = '1
       ],
     },
     editorSession: {
-      documentId: String(documentId),
+      documentId: String(documentId) as `${bigint}`,
       revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),

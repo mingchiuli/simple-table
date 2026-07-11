@@ -4,6 +4,7 @@ import { useDocumentStatus } from '@/composables/useDocumentStatus';
 import { useEditorCommands } from '@/composables/useEditorCommands';
 import { useFileActions } from '@/composables/useFileActions';
 import { useCellEditController } from '@/composables/useCellEditController';
+import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import { useSearchSessionStore } from '@/stores/searchSession';
@@ -11,20 +12,18 @@ import { Toolbar, StatusBar } from '@/components/layout';
 import TableEditor from '@/components/TableEditor.vue';
 import { FormulaBar } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
-import * as api from '@/api';
 import { getCellKey } from '@/utils/cellKey';
 import { cellToEditorString } from '@/utils/cellValue';
 import { colToLetter } from '@/utils/excel';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
-import { workbookSheetCapabilities } from '@/types';
-import type { EditorMutationResponse } from '@/types';
-import type { MutationApplyResult } from '@/stores/documentSession';
+import { loadedSheetData, workbookSheetCapabilities } from '@/types';
 import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
 import { useApplicationExitGuard } from '@/composables/useApplicationExit';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
 const searchSessionStore = useSearchSessionStore();
+const commandBus = useDocumentCommandBus();
 
 const {
   currentSheetIndex,
@@ -42,7 +41,7 @@ const fileData = computed(() => documentSessionStore.data);
 
 const currentSheet = computed(() => {
   if (!fileData.value || !fileData.value.sheets.length) return null;
-  return fileData.value.sheets[currentSheetIndex.value];
+  return loadedSheetData(fileData.value.sheets[currentSheetIndex.value]);
 });
 
 const tableData = computed(() => {
@@ -54,7 +53,7 @@ const currentSheetExtent = computed(() => {
   if (!currentSheet.value) {
     return { rowCount: 0, columnCount: 0 };
   }
-  const backendExtent = documentSessionStore.sheetExtents[currentSheetIndex.value];
+  const backendExtent = fileData.value?.sheets[currentSheetIndex.value]?.extent;
   if (backendExtent) return backendExtent;
   return calculateSheetExtent(
     tableData.value,
@@ -101,23 +100,9 @@ const canResizeRowsColumns = computed(
   () => currentSheetCapabilities.value.canResizeRowsColumns && canInteractWithDocument.value
 );
 
-async function applyMutationResponse(
-  response: EditorMutationResponse
-): Promise<MutationApplyResult> {
-  const result = await documentSessionStore.applyMutationResponseWithResync(
-    response,
-    api.getCurrentFileData
-  );
-  if (result.applied) {
-    refreshSelectedEditorValue();
-  }
-  return result;
-}
-
 const {
   draftCellValues,
   flushPendingCellChanges,
-  refreshSelectedEditorValue,
   handleCellChange,
   handleCellEditing,
   handleCellEditCancel,
@@ -130,7 +115,6 @@ const {
   selectedCell,
   cellEditorValue,
   canEditCells,
-  applyMutationResponse,
 });
 
 const {
@@ -173,7 +157,23 @@ function getEditorValue(sheetIndex: number, row: number, col: number): string {
   const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));
   if (draftValue !== undefined) return draftValue;
   const sheet = fileData.value?.sheets[sheetIndex];
-  return cellToEditorString(sheet?.rows[row]?.[col]);
+  return cellToEditorString(sheet?.state === 'loaded' ? sheet.data.rows[row]?.[col] : undefined);
+}
+
+function handleViewportChange(
+  rowStart: number,
+  rowEnd: number,
+  colStart: number,
+  colEnd: number
+) {
+  const extent = currentSheetExtent.value;
+  void commandBus.ensureSheetRegionLoaded({
+    sheetIndex: currentSheetIndex.value,
+    rowStart: Math.max(0, rowStart),
+    rowEnd: Math.min(extent.rowCount, rowEnd),
+    colStart: Math.max(0, colStart),
+    colEnd: Math.min(extent.columnCount, colEnd),
+  });
 }
 
 const {
@@ -199,7 +199,6 @@ const {
   selectedCell,
   flushPendingCellChanges,
   editorValueForCell: getEditorValue,
-  applyMutationResponse,
 });
 
 // ========== Lifecycle ==========
@@ -279,6 +278,7 @@ watch(() => route.query.file, () => {
               @delete-row="handleDeleteRow"
               @delete-column="handleDeleteColumn"
               @select-cell="handleSelectCell"
+              @viewport-change="handleViewportChange"
             />
           </div>
         </template>

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use quote::ToTokens;
+use syn::{FnArg, GenericArgument, Item, PathArguments, ReturnType, Type};
 use ts_rs::{Config, TS};
 
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
@@ -14,9 +16,10 @@ use crate::types::{
     RichProjectionPatchScope, RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity,
     SavedDocumentResponse, ScalarCellValue, SearchResult, SearchScope, SetCellRequest,
     SheetCapabilities, SheetData, SheetDeletedPatch, SheetExtent, SheetInsertedPatch,
-    SheetProjectionResponse, SheetShapePatch, SheetStructureMetadataPatch, SheetUpdatedPatch,
-    SheetsReplacedPatch, SpreadsheetFormatOptions, WorkbookCapabilities, WorkbookRichCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    SheetProjectionResponse, SheetRegion, SheetRegionProjectionResponse, SheetShapePatch,
+    SheetStructureMetadataPatch, SheetUpdatedPatch, SheetsReplacedPatch, SpreadsheetFormatOptions,
+    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -24,7 +27,7 @@ pub fn generated_typescript_contract() -> String {
     let cfg = Config::default();
     let mut output =
         String::from("// Generated from Rust editor contract by ts-rs. Do not edit by hand.\n\n");
-    output.push_str("export type U64String = string;\n\n");
+    output.push_str("export type U64String = `${bigint}`;\n\n");
 
     push_decl::<ScalarCellValue>(&mut output, &cfg);
     push_decl::<CellKind>(&mut output, &cfg);
@@ -83,6 +86,8 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);
     push_decl::<SheetProjectionResponse>(&mut output, &cfg);
+    push_decl::<SheetRegion>(&mut output, &cfg);
+    push_decl::<SheetRegionProjectionResponse>(&mut output, &cfg);
     push_decl::<PreparedOpenDocument>(&mut output, &cfg);
     push_decl::<SavedDocumentIdentity>(&mut output, &cfg);
     push_decl::<SavedDocumentResponse>(&mut output, &cfg);
@@ -92,62 +97,135 @@ pub fn generated_typescript_contract() -> String {
 }
 
 fn push_tauri_command_map(output: &mut String) {
-    output.push_str(
-        r#"export type TauriCommandMap = {
-  "pick_open_file_desktop": { args: Record<string, never>, result: { path: string, fileName: string } | null },
-  "discard_open_file_selection_desktop": { args: { path: string }, result: void },
-  "prepare_open_file_desktop": { args: { path: string }, result: PreparedOpenDocument },
-  "prepare_recent_file_desktop": { args: { id: string }, result: PreparedOpenDocument },
-  "pick_save_location_desktop": { args: { defaultName: string }, result: string | null },
-  "discard_save_location_desktop": { args: { path: string }, result: void },
-  "save_file_desktop": { args: { path: string } & EditorCommandContext, result: SavedDocumentResponse },
-  "export_file_desktop": { args: { defaultName: string } & EditorCommandContext, result: string | null },
-  "pick_open_file_android": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
-  "discard_open_file_selection_android": { args: { path: string }, result: void },
-  "prepare_open_file_android": { args: { path: string }, result: PreparedOpenDocument },
-  "pick_save_location_android": { args: { defaultName: string }, result: string | null },
-  "discard_save_location_android": { args: { path: string }, result: void },
-  "save_file_android": { args: { path: string } & EditorCommandContext, result: SavedDocumentResponse },
-  "export_file_android": { args: { defaultName: string } & EditorCommandContext, result: string | null },
-  "pick_open_file_ios": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
-  "discard_open_file_selection_ios": { args: { path: string }, result: void },
-  "prepare_open_file_ios": { args: { path: string }, result: PreparedOpenDocument },
-  "pick_save_location_ios": { args: { defaultName: string }, result: string | null },
-  "discard_save_location_ios": { args: { path: string }, result: void },
-  "save_file_ios": { args: { path: string } & EditorCommandContext, result: SavedDocumentResponse },
-  "export_file_ios": { args: { defaultName: string } & EditorCommandContext, result: string | null },
-  "prepare_new_file": { args: { fileData: FileData }, result: PreparedOpenDocument },
-  "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
-  "abort_prepared_document": { args: { token: string }, result: void },
-  "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },
-  "get_current_file_data": { args: EditorCommandContext, result: FileData },
-  "get_sheet_projection": { args: EditorCommandContext & { sheetIndex: number }, result: SheetProjectionResponse },
-  "close_current_document": { args: { documentId: U64String }, result: void },
-  "get_document_capabilities": { args: EditorCommandContext & { fileName: string, currentPath: string | null }, result: DocumentCapabilities },
-  "get_native_save_plan": { args: EditorCommandContext & { targetPathOrName: string }, result: NativeSavePlan },
-  "get_spreadsheet_format_options": { args: Record<string, never>, result: SpreadsheetFormatOptions },
-  "get_editor_state": { args: { documentId: U64String | null, baseRevision: U64String | null }, result: EditorSessionInfo | null },
-  "undo": { args: EditorCommandContext, result: EditorMutationResponse },
-  "redo": { args: EditorCommandContext, result: EditorMutationResponse },
-  "set_cell": { args: EditorCommandContext & { sheetIndex: number, row: number, col: number, text: string }, result: EditorMutationResponse },
-  "set_cells": { args: EditorCommandContext & { changes: Array<SetCellRequest> }, result: EditorMutationResponse },
-  "add_row": { args: EditorCommandContext & { sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
-  "delete_row": { args: EditorCommandContext & { sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
-  "add_column": { args: EditorCommandContext & { sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
-  "delete_column": { args: EditorCommandContext & { sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
-  "set_column_width": { args: EditorCommandContext & { sheetIndex: number, colIndex: number, width: number | null }, result: EditorMutationResponse },
-  "set_row_height": { args: EditorCommandContext & { sheetIndex: number, rowIndex: number, height: number | null }, result: EditorMutationResponse },
-  "add_sheet": { args: EditorCommandContext, result: EditorMutationResponse },
-  "delete_sheet": { args: EditorCommandContext & { sheetIndex: number }, result: EditorMutationResponse },
-  "search": { args: EditorCommandContext & { query: string, scope: SearchScope, currentSheetIndex: number | null }, result: Array<SearchResult> },
-  "get_recent_files": { args: Record<string, never>, result: Array<RecentFile> },
-  "add_recent_file_with_thumbnail": { args: { request: AddRecentFileRequest }, result: RecentFile },
-  "remove_recent_file": { args: { id: string }, result: void },
-  "check_update_mobile": { args: { currentVersion: string }, result: { version: string, tag_name: string, release_url: string, apk_url: string | null } | null },
+    output.push_str("export type TauriCommandMap = {\n");
+    for source in [
+        include_str!("../commands/common.rs"),
+        include_str!("../commands/android.rs"),
+        include_str!("../commands/ios.rs"),
+        include_str!("../commands/mobile.rs"),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse Tauri command source");
+        for item in syntax.items {
+            let Item::Fn(function) = item else { continue };
+            if !function.attrs.iter().any(is_tauri_command_attribute) {
+                continue;
+            }
+            let camel_case = !function.attrs.iter().any(command_uses_snake_case);
+            let arguments = function
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|argument| command_argument(argument, camel_case))
+                .collect::<Vec<_>>();
+            let arguments = if arguments.is_empty() {
+                "Record<string, never>".to_string()
+            } else {
+                format!("{{ {} }}", arguments.join(", "))
+            };
+            let result = match &function.sig.output {
+                ReturnType::Default => "void".to_string(),
+                ReturnType::Type(_, ty) => command_type(ty),
+            };
+            output.push_str(&format!(
+                "  \"{}\": {{ args: {}, result: {} }},\n",
+                function.sig.ident, arguments, result
+            ));
+        }
+    }
+    output.push_str("}\n\n");
 }
 
-"#,
-    );
+fn is_tauri_command_attribute(attribute: &syn::Attribute) -> bool {
+    let segments = &attribute.path().segments;
+    segments.len() == 2 && segments[0].ident == "tauri" && segments[1].ident == "command"
+}
+
+fn command_uses_snake_case(attribute: &syn::Attribute) -> bool {
+    is_tauri_command_attribute(attribute)
+        && attribute
+            .meta
+            .to_token_stream()
+            .to_string()
+            .contains("snake_case")
+}
+
+fn command_argument(argument: &FnArg, camel_case: bool) -> Option<String> {
+    let FnArg::Typed(argument) = argument else {
+        return None;
+    };
+    let syn::Pat::Ident(name) = argument.pat.as_ref() else {
+        return None;
+    };
+    if type_name(&argument.ty).as_deref() == Some("AppHandle") {
+        return None;
+    }
+    let name = if camel_case {
+        snake_to_camel(&name.ident.to_string())
+    } else {
+        name.ident.to_string()
+    };
+    Some(format!("{name}: {}", command_type(&argument.ty)))
+}
+
+fn command_type(ty: &Type) -> String {
+    match ty {
+        Type::Reference(reference) => command_type(&reference.elem),
+        Type::Tuple(tuple) if tuple.elems.is_empty() => "void".to_string(),
+        Type::Path(path) => {
+            let Some(segment) = path.path.segments.last() else {
+                return "unknown".to_string();
+            };
+            let name = segment.ident.to_string();
+            if matches!(name.as_str(), "Option" | "Vec" | "Result") {
+                let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+                    return "unknown".to_string();
+                };
+                let mut types = arguments.args.iter().filter_map(|argument| match argument {
+                    GenericArgument::Type(ty) => Some(command_type(ty)),
+                    _ => None,
+                });
+                let first = types.next().unwrap_or_else(|| "unknown".to_string());
+                return match name.as_str() {
+                    "Option" => format!("{first} | null"),
+                    "Vec" => format!("Array<{first}>"),
+                    "Result" => first,
+                    _ => unreachable!(),
+                };
+            }
+            match name.as_str() {
+                "String" | "str" => "string".to_string(),
+                "usize" | "u8" | "u16" | "u32" | "i32" | "f32" | "f64" => "number".to_string(),
+                "bool" => "boolean".to_string(),
+                "CommandU64" => "U64String".to_string(),
+                "DesktopOpenFileInfo" => "{ path: string, fileName: string }".to_string(),
+                "PickedFileInfo" => "{ path: string, originalPath: string, fileName: string }".to_string(),
+                "UpdateInfo" => "{ version: string, tag_name: string, release_url: string, apk_url: string | null }".to_string(),
+                _ => name,
+            }
+        }
+        _ => "unknown".to_string(),
+    }
+}
+
+fn type_name(ty: &Type) -> Option<String> {
+    let Type::Path(path) = ty else { return None };
+    path.path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+}
+
+fn snake_to_camel(value: &str) -> String {
+    let mut parts = value.split('_');
+    let mut output = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            output.extend(first.to_uppercase());
+            output.extend(chars);
+        }
+    }
+    output
 }
 
 fn push_decl<T: TS + 'static>(output: &mut String, cfg: &Config) {
@@ -176,5 +254,29 @@ mod tests {
         let committed = fs::read_to_string(path).expect("read generated types");
 
         assert_eq!(committed, generated);
+    }
+
+    #[test]
+    fn generated_commands_are_registered_and_have_known_types() {
+        let generated = generated_typescript_contract();
+        assert!(!generated.contains("unknown"));
+        let lib = include_str!("../lib.rs");
+        let handler = lib
+            .split("tauri::generate_handler![")
+            .nth(1)
+            .and_then(|tail| tail.split("])\n        .run").next())
+            .expect("registered Tauri handler");
+
+        for line in generated.lines().filter(|line| line.starts_with("  \"")) {
+            let command = line
+                .trim_start()
+                .split('"')
+                .nth(1)
+                .expect("generated command name");
+            assert!(
+                handler.contains(command),
+                "generated command {command} is not registered"
+            );
+        }
     }
 }

@@ -16,13 +16,18 @@ use crate::state::{
 };
 use crate::types::{
     DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
-    SavedDocumentIdentity, SavedDocumentResponse, SheetData, SheetProjectionResponse,
-    SpreadsheetFormatOptions, WorkbookCapabilities,
+    SavedDocumentIdentity, SavedDocumentResponse, SheetData, SheetProjectionResponse, SheetRegion,
+    SheetRegionProjectionResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
 
 const LOSSY_CSV_SAVE_REASON: &str = "Saving a non-CSV document as CSV would discard sheets, formulas, or formatting; use Export instead.";
+const INITIAL_REGION_ROWS: usize = 256;
+const INITIAL_REGION_COLUMNS: usize = 128;
+const MAX_REGION_CELLS: usize = 65_536;
+const MAX_REGION_ROWS: usize = 1_024;
+const MAX_REGION_COLUMNS: usize = 512;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
 pub fn prepare_open_from_bytes(
@@ -357,19 +362,56 @@ pub fn sheet_projection_for_command(
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-    let sheet = editor_state
+    let source_sheet = editor_state
         .file_data()
         .sheets
         .get(sheet_index)
-        .cloned()
         .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
-    let extent = sheet.extent();
+    let extent = editor_state
+        .sheet_extent(sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+    let loaded_region = initial_sheet_region(sheet_index, &extent);
+    let sheet = project_sheet_with_region(source_sheet, &loaded_region);
     Ok(SheetProjectionResponse {
         document_id,
         revision: base_revision,
         sheet_index,
         sheet,
         extent,
+        loaded_region,
+    })
+}
+
+pub fn sheet_region_projection_for_command(
+    document_id: u64,
+    base_revision: u64,
+    region: SheetRegion,
+) -> Result<SheetRegionProjectionResponse, AppError> {
+    validate_sheet_region(&region)?;
+    let registry = active_document_store();
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+    let sheet = editor_state
+        .file_data()
+        .sheets
+        .get(region.sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
+    let extent = editor_state
+        .sheet_extent(region.sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
+    if region.row_end > extent.row_count || region.col_end > extent.column_count {
+        return Err(AppError::DocumentStateInvalid(
+            "sheet region exceeds the current sheet extent".to_string(),
+        ));
+    }
+    let cells = project_region_cells(sheet, &region);
+    Ok(SheetRegionProjectionResponse {
+        document_id,
+        revision: base_revision,
+        region,
+        cells,
     })
 }
 
@@ -428,9 +470,16 @@ pub fn document_capabilities(file_name: &str, current_path: Option<&str>) -> Doc
 pub fn document_capabilities_for_command(
     document_id: u64,
     base_revision: u64,
-    file_name: &str,
-    current_path: Option<&str>,
 ) -> Result<DocumentCapabilities, AppError> {
+    let (file_name, current_path) =
+        inspect_current_file_for_command(document_id, base_revision, |file_data| {
+            (
+                file_data.file_name.clone(),
+                (!file_data.path.is_empty()).then(|| file_data.path.clone()),
+            )
+        })?;
+    let current_path = current_path.as_deref();
+    let file_name = file_name.as_str();
     let source_name = current_path.unwrap_or(file_name);
     let source_format = document_format(source_name)
         .or_else(|| document_format(file_name))
@@ -674,18 +723,22 @@ fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
 
 fn open_document_response(editor_state: &EditorState) -> OpenDocumentResponse {
     let source = editor_state.file_data();
-    let sheet_extents = source.sheets.iter().map(SheetData::extent).collect();
+    let sheet_extents = editor_state.sheet_extents();
     let loaded_sheet_indexes = (!source.sheets.is_empty())
         .then_some(0)
         .into_iter()
         .collect();
+    let loaded_sheet_regions = (!source.sheets.is_empty())
+        .then(|| initial_sheet_region(0, &sheet_extents[0]))
+        .into_iter()
+        .collect::<Vec<_>>();
     let sheets = source
         .sheets
         .iter()
         .enumerate()
         .map(|(sheet_index, sheet)| {
             if sheet_index == 0 {
-                sheet.clone()
+                project_sheet_with_region(sheet, &loaded_sheet_regions[0])
             } else {
                 SheetData {
                     name: sheet.name.clone(),
@@ -703,7 +756,103 @@ fn open_document_response(editor_state: &EditorState) -> OpenDocumentResponse {
         editor_session: editor_session_info(editor_state),
         sheet_extents: Some(sheet_extents),
         loaded_sheet_indexes: Some(loaded_sheet_indexes),
+        loaded_sheet_regions: Some(loaded_sheet_regions),
     }
+}
+
+fn initial_sheet_region(sheet_index: usize, extent: &crate::types::SheetExtent) -> SheetRegion {
+    SheetRegion {
+        sheet_index,
+        row_start: 0,
+        row_end: extent.row_count.min(INITIAL_REGION_ROWS),
+        col_start: 0,
+        col_end: extent.column_count.min(INITIAL_REGION_COLUMNS),
+    }
+}
+
+fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError> {
+    if region.row_start > region.row_end || region.col_start > region.col_end {
+        return Err(AppError::DocumentStateInvalid(
+            "invalid sheet region bounds".to_string(),
+        ));
+    }
+    let cells = region
+        .row_end
+        .saturating_sub(region.row_start)
+        .saturating_mul(region.col_end.saturating_sub(region.col_start));
+    let row_count = region.row_end.saturating_sub(region.row_start);
+    let column_count = region.col_end.saturating_sub(region.col_start);
+    if row_count > MAX_REGION_ROWS || column_count > MAX_REGION_COLUMNS {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "sheet region dimensions are {row_count}x{column_count}, maximum is {MAX_REGION_ROWS}x{MAX_REGION_COLUMNS}"
+        )));
+    }
+    if cells > MAX_REGION_CELLS {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "sheet region contains {cells} cells, maximum is {MAX_REGION_CELLS}"
+        )));
+    }
+    if region.row_end > crate::io::projection_limits::MAX_ROWS_PER_SHEET
+        || region.col_end > crate::io::projection_limits::MAX_COLUMNS_PER_ROW
+    {
+        return Err(AppError::ResourceLimitExceeded(
+            "sheet region exceeds row or column limits".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn project_sheet_with_region(sheet: &SheetData, region: &SheetRegion) -> SheetData {
+    let mut projected = sheet.clone();
+    projected.rows = project_region_rows(sheet, region);
+    projected
+}
+
+fn project_region_rows(
+    sheet: &SheetData,
+    region: &SheetRegion,
+) -> Vec<Vec<crate::types::CellValue>> {
+    (region.row_start..region.row_end)
+        .map(|row_index| {
+            let row = sheet
+                .rows
+                .get(row_index)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let start = region.col_start.min(row.len());
+            let end = region.col_end.min(row.len());
+            row[start..end].to_vec()
+        })
+        .collect()
+}
+
+fn project_region_cells(
+    sheet: &SheetData,
+    region: &SheetRegion,
+) -> Vec<crate::types::SheetCellChange> {
+    let mut cells = Vec::new();
+    for row_index in region.row_start..region.row_end {
+        let Some(row) = sheet.rows.get(row_index) else {
+            continue;
+        };
+        for (col_index, value) in row
+            .iter()
+            .enumerate()
+            .take(region.col_end.min(row.len()))
+            .skip(region.col_start)
+        {
+            let value = value.clone();
+            cells.push(
+                crate::types::SheetCellChange::new(region.sheet_index, row_index, col_index, value)
+                    .with_display_projection(
+                        sheet.cell_display_text(row_index, col_index),
+                        sheet.cell_format_at(row_index, col_index),
+                        sheet.cell_style_at(row_index, col_index),
+                    ),
+            );
+        }
+    }
+    cells
 }
 
 fn native_save_extension(file_name: &str) -> Option<String> {
@@ -836,6 +985,52 @@ mod tests {
                 },
             ])
         );
+    }
+
+    #[test]
+    fn region_projection_keeps_absolute_cell_coordinates() {
+        let sheet = SheetData {
+            rows: vec![
+                vec![
+                    CellValue::String("A1".into()),
+                    CellValue::String("B1".into()),
+                ],
+                vec![
+                    CellValue::String("A2".into()),
+                    CellValue::String("B2".into()),
+                ],
+            ],
+            ..Default::default()
+        };
+        let region = SheetRegion {
+            sheet_index: 0,
+            row_start: 1,
+            row_end: 2,
+            col_start: 1,
+            col_end: 2,
+        };
+
+        let cells = project_region_cells(&sheet, &region);
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!((cells[0].row, cells[0].col), (1, 1));
+        assert_eq!(cells[0].display.as_deref(), Some("B2"));
+    }
+
+    #[test]
+    fn region_projection_rejects_degenerate_oversized_dimensions() {
+        let region = SheetRegion {
+            sheet_index: 0,
+            row_start: 0,
+            row_end: MAX_REGION_ROWS + 1,
+            col_start: 0,
+            col_end: 0,
+        };
+
+        assert!(matches!(
+            validate_sheet_region(&region),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
     }
 
     #[test]

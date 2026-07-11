@@ -7,12 +7,12 @@ import {
   type QueueDraftResult,
 } from '@/stores/pendingCellSaves';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
-import type { CellValue, FileData } from '@/types';
+import type { CellValue, DocumentProjection } from '@/types';
 import { blankCell, cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
 
 type UseCellEditTransactionsOptions = {
-  fileData: ComputedRef<FileData | null>;
+  fileData: ComputedRef<DocumentProjection | null>;
   commitBatch: (changes: CellSaveRequest[]) => Promise<void>;
   onBatchCommitted?: () => void;
   onCommitFailed?: (error: unknown) => Promise<void> | void;
@@ -51,7 +51,8 @@ export function useCellEditTransactions({
   }
 
   function committedCellValue(sheetIndex: number, row: number, col: number): CellValue {
-    return fileData.value?.sheets[sheetIndex]?.rows[row]?.[col] ?? blankCell();
+    const slot = fileData.value?.sheets[sheetIndex];
+    return slot?.state === 'loaded' ? slot.data.rows[row]?.[col] ?? blankCell() : blankCell();
   }
 
   function visibleBaseEditorString(sheetIndex: number, row: number, col: number): string {

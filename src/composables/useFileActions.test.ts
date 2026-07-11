@@ -104,7 +104,7 @@ function openedResponse(fileName: string, documentId: number | string): OpenDocu
   return {
     fileData: fileData(fileName, "opened"),
     editorSession: {
-      documentId: String(documentId),
+      documentId: String(documentId) as `${bigint}`,
       revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
@@ -923,7 +923,7 @@ describe("useFileActions", () => {
       baseRevision: '3',
     });
     expect(documentSessionStore.projectionStale).toBe(false);
-    expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("saved"));
+    expect(documentSessionStore.loadedSheet(0)?.rows[0][0]).toEqual(text("saved"));
     expect(elementPlus.ElMessage.success).toHaveBeenCalledWith("File saved successfully");
   });
 

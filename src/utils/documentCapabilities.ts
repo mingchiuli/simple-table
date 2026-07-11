@@ -2,11 +2,9 @@ import * as api from "@/api";
 import type { DocumentCapabilities, EditorCommandContext, NativeSavePlan } from "@/types";
 
 export async function documentCapabilities(
-  context: EditorCommandContext,
-  fileName: string,
-  currentPath: string | null
+  context: EditorCommandContext
 ): Promise<DocumentCapabilities> {
-  return api.getDocumentCapabilities(context, fileName, currentPath);
+  return api.getDocumentCapabilities(context);
 }
 
 export async function nativeSavePlan(

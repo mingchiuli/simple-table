@@ -38,7 +38,7 @@ function openTestDocument(documentId: number | string = '1') {
       sheets: [{ name: "Sheet1", rows: [[text("old")]], merges: [], rich: defaultRichProjection() }],
     },
     editorSession: {
-        documentId: String(documentId),
+        documentId: String(documentId) as `${bigint}`,
       revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),

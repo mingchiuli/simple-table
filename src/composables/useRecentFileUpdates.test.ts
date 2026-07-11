@@ -56,8 +56,8 @@ function openRecentTestDocument(
   useDocumentSessionStore().openDocumentResponse({
     fileData: fileData(fileName),
     editorSession: {
-      documentId: String(documentId),
-      revision: String(revision),
+      documentId: String(documentId) as `${bigint}`,
+      revision: String(revision) as `${bigint}`,
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {

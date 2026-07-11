@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FileData, SearchScope } from '@/types';
+import type { DocumentProjection, SearchScope } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
 import { isMobile as isMobileOS } from '@/utils/platform';
 import {
@@ -23,7 +23,7 @@ const searchPopoverVisible = ref(false);
 const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 
 const props = defineProps<{
-  fileData: FileData | null;
+  fileData: DocumentProjection | null;
   sheetNames: string[];
   currentSheetIndex: number;
   canUndo: boolean;

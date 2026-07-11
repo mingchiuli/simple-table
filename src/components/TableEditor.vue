@@ -45,6 +45,7 @@ const emit = defineEmits<{
   (e: 'select-cell', rowIndex: number, colIndex: number): void;
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
   (e: 'cell-edit-cancel', rowIndex: number, colIndex: number): void;
+  (e: 'viewport-change', rowStart: number, rowEnd: number, colStart: number, colEnd: number): void;
 }>();
 
 const {
@@ -111,6 +112,28 @@ const {
   overscanPx: OVERSCAN_PX,
   getDraftValue,
 });
+
+watch(
+  [visibleRows, visibleColumns],
+  ([rows, columns]) => {
+    const firstRow = rows[0]?.index;
+    const lastRow = rows.at(-1)?.index;
+    const firstColumn = columns[0]?.index;
+    const lastColumn = columns.at(-1)?.index;
+    if (
+      firstRow === undefined || lastRow === undefined
+      || firstColumn === undefined || lastColumn === undefined
+    ) return;
+    emit(
+      'viewport-change',
+      firstRow,
+      lastRow + 1,
+      firstColumn,
+      lastColumn + 1
+    );
+  },
+  { immediate: true }
+);
 
 const {
   editingValue,

@@ -4,6 +4,7 @@ use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 #[cfg(test)]
 use crate::io::file_format::is_xlsx_extension;
 use crate::io::history_restore_transaction::{HistoryRestoreDirection, HistoryRestoreTransaction};
+use crate::io::projection_limits::ResourceLedger;
 use crate::ops::EditorCommand;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
@@ -51,6 +52,7 @@ pub struct EditorState {
     history: HistoryStore,
     dirty: DirtyTracker,
     search: SearchSession,
+    resources: ResourceLedger,
     save_commit: Option<SaveCommitLease>,
 }
 
@@ -59,12 +61,14 @@ impl EditorState {
         let document = SpreadsheetDocument::new(file_data, workbook);
         let search = SearchSession::from_file_data(document.projection(), 0);
         let dirty = DirtyTracker::new(document.projection());
+        let resources = ResourceLedger::from_file_data(document.projection());
         Self {
             session: EditorSession::new(),
             document,
             history: HistoryStore::default(),
             dirty,
             search,
+            resources,
             save_commit: None,
         }
     }
@@ -86,15 +90,17 @@ impl EditorState {
         file_data: FileData,
         workbook: Option<Workbook>,
         clear_history: bool,
-    ) {
+    ) -> Result<(), AppError> {
         self.document = SpreadsheetDocument::new(file_data, workbook);
         if clear_history {
             self.history.clear_all();
         }
-        self.bump_revision();
+        self.bump_revision()?;
         self.search
             .replace_snapshots(self.document.projection(), self.revision());
         self.dirty.replace_current(self.document.projection());
+        self.resources.replace_all(self.document.projection());
+        Ok(())
     }
 
     pub fn has_save_commit_in_progress(&self) -> bool {
@@ -148,7 +154,7 @@ impl EditorState {
         }
 
         self.save_commit = None;
-        self.rebind_saved_document(file_data, workbook, clear_history);
+        self.rebind_saved_document(file_data, workbook, clear_history)?;
         self.mark_saved();
         self.mark_search_index_stale();
         Ok(())
@@ -194,7 +200,7 @@ impl EditorState {
         if clear_history {
             self.history.clear_all();
         }
-        self.bump_revision();
+        self.bump_revision()?;
         self.mark_saved();
         Ok(())
     }
@@ -230,6 +236,14 @@ impl EditorState {
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
         self.document.capabilities()
+    }
+
+    pub fn sheet_extents(&self) -> Vec<crate::types::SheetExtent> {
+        self.resources.sheet_extents()
+    }
+
+    pub fn sheet_extent(&self, sheet_index: usize) -> Option<crate::types::SheetExtent> {
+        self.resources.sheet_extent(sheet_index)
     }
 
     pub fn transaction_failure(&self) -> Option<&str> {
@@ -278,11 +292,20 @@ impl EditorState {
     }
 
     pub fn search_sheet_source(&self, sheet_index: usize) -> Option<SearchSheetSource> {
-        self.search.sheet_source(sheet_index)
+        self.search.sheet_source(sheet_index).or_else(|| {
+            self.file_data().sheets.get(sheet_index).map(|sheet| {
+                SearchSheetSource::Snapshot(SearchSheetSnapshot::from_sheet(sheet, self.revision()))
+            })
+        })
     }
 
     pub fn search_sheet_snapshot(&self, sheet_index: usize) -> Option<Arc<SearchSheetSnapshot>> {
-        self.search.sheet_snapshot(sheet_index)
+        self.search.sheet_snapshot(sheet_index).or_else(|| {
+            self.file_data()
+                .sheets
+                .get(sheet_index)
+                .map(|sheet| SearchSheetSnapshot::from_sheet(sheet, self.revision()))
+        })
     }
 
     pub fn compact_search_sheet_snapshot(
@@ -325,7 +348,7 @@ impl EditorState {
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
-        let operation = command.resolve(self.file_data())?;
+        let operation = command.resolve_with_resources(self.file_data(), &self.resources)?;
         if operation.impact().is_noop() {
             return Ok(ExecutedOperation {
                 operation: None,
@@ -345,6 +368,9 @@ impl EditorState {
             .then(|| search_snapshot_changes(self.file_data(), &operation, &result.cell_changes));
         let operation_result = result.operation;
         let cell_changes = result.cell_changes;
+        let resource_sheets = operation_resource_sheets(&operation, &cell_changes);
+        self.resources
+            .refresh_sheets(self.document.projection(), resource_sheets);
         self.dirty
             .apply_operation(&operation, &cell_changes, self.document.projection());
 
@@ -357,7 +383,7 @@ impl EditorState {
             self.history.record(entry);
         }
 
-        self.bump_revision();
+        self.bump_revision()?;
         if should_mark_search_stale {
             self.search
                 .replace_snapshots(self.document.projection(), self.revision());
@@ -395,7 +421,8 @@ impl EditorState {
         )
         .commit()?
         {
-            self.bump_revision();
+            self.resources.replace_all(self.document.projection());
+            self.bump_revision()?;
             self.search
                 .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
@@ -422,7 +449,8 @@ impl EditorState {
         )
         .commit()?
         {
-            self.bump_revision();
+            self.resources.replace_all(self.document.projection());
+            self.bump_revision()?;
             self.search
                 .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
@@ -442,8 +470,11 @@ impl EditorState {
         self.dirty.replace_current(self.document.projection());
     }
 
-    fn bump_revision(&mut self) {
-        self.session.bump_revision();
+    fn bump_revision(&mut self) -> Result<(), AppError> {
+        self.session.bump_revision().ok_or_else(|| {
+            AppError::DocumentStateInvalid("document revision space exhausted".to_string())
+        })?;
+        Ok(())
     }
 
     fn ensure_operation_supported(
@@ -490,6 +521,33 @@ impl EditorState {
         }
         Ok(())
     }
+}
+
+fn operation_resource_sheets(
+    operation: &crate::ops::AppliedOperation,
+    formula_changes: &[SheetCellChange],
+) -> Vec<usize> {
+    let mut sheets = HashSet::new();
+    match operation {
+        crate::ops::AppliedOperation::SetCell { sheet_index, .. }
+        | crate::ops::AppliedOperation::SetColumnWidth { sheet_index, .. }
+        | crate::ops::AppliedOperation::SetRowHeight { sheet_index, .. }
+        | crate::ops::AppliedOperation::AddRow { sheet_index, .. }
+        | crate::ops::AppliedOperation::DeleteRow { sheet_index, .. }
+        | crate::ops::AppliedOperation::AddColumn { sheet_index, .. }
+        | crate::ops::AppliedOperation::DeleteColumn { sheet_index, .. }
+        | crate::ops::AppliedOperation::DeleteSheet { sheet_index } => {
+            sheets.insert(*sheet_index);
+        }
+        crate::ops::AppliedOperation::SetCells { changes } => {
+            sheets.extend(changes.iter().map(|change| change.sheet_index));
+        }
+        crate::ops::AppliedOperation::AddSheet { sheet_index, .. } => {
+            sheets.insert(*sheet_index);
+        }
+    }
+    sheets.extend(formula_changes.iter().map(|change| change.sheet_index));
+    sheets.into_iter().collect()
 }
 
 fn search_snapshot_changes(
@@ -2344,7 +2402,9 @@ mod tests {
         )
         .expect("read saved xlsx");
 
-        state.rebind_saved_document(parsed.file_data, parsed.workbook, true);
+        state
+            .rebind_saved_document(parsed.file_data, parsed.workbook, true)
+            .expect("rebind saved document");
         state.mark_saved();
 
         assert!(state.capabilities().sheets[0].can_resize_rows_columns);

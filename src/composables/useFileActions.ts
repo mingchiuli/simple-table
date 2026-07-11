@@ -9,19 +9,20 @@ import {
 } from '@/platform';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
+import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import { useOpenFileSelection } from '@/composables/useOpenFileSelection';
 import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
 import { commitPreparedDocumentOrAbort } from '@/composables/preparedDocument';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import type { FileData } from '@/types';
+import type { DocumentProjection } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 import { appErrorMessage } from '@/utils/appError';
 
 type UseFileActionsOptions = {
-  fileData: ComputedRef<FileData | null>;
+  fileData: ComputedRef<DocumentProjection | null>;
   flushPendingCellChanges: () => Promise<boolean>;
 };
 
@@ -51,6 +52,7 @@ export function useFileActions({
   });
   const { withReservedSaveLocation } = useSaveLocation();
   const { runDocumentLifecycle } = useDocumentLifecycle();
+  const commandBus = useDocumentCommandBus();
   const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
 
   async function loadFileFromPath(
@@ -125,9 +127,8 @@ export function useFileActions({
     await runDocumentLifecycle('saving', 'Failed to save file', async () => {
       const data = fileData.value;
       if (!data) return;
-      if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.waitForMutations();
-      const context = documentSessionStore.requireCommandContext();
+      const context = await commandBus.prepareConsistentContext(flushPendingCellChanges);
+      if (!context) return;
 
       const isNewFile = isUntitledSpreadsheet(data.fileName);
       const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
@@ -179,17 +180,12 @@ export function useFileActions({
     await runDocumentLifecycle('saving', 'Failed to export file', async () => {
       const data = fileData.value;
       if (!data) return;
-      if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.waitForMutations();
-      const context = documentSessionStore.requireCommandContext();
+      const context = await commandBus.prepareConsistentContext(flushPendingCellChanges);
+      if (!context) return;
 
       const isNewFile = isUntitledSpreadsheet(data.fileName);
       const defaultName = isNewFile ? 'untitled' : baseNameWithoutExtension(data.fileName);
-      const capabilities = await documentCapabilities(
-        context,
-        data.fileName,
-        documentSessionStore.currentFilePath
-      );
+      const capabilities = await documentCapabilities(context);
       const extension = isNewFile
         ? await defaultSpreadsheetExtension()
         : capabilities.exportExtension;

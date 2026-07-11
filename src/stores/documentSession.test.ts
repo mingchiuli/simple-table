@@ -120,7 +120,7 @@ describe("documentSession store", () => {
     expect(result.resyncRequired).toBe(false);
     expect(result.applied).toBe(true);
     expect(store.revision).toBe('1');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("new"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("new"));
   });
 
   it("loads a deferred sheet projection for the current document revision", async () => {
@@ -151,12 +151,64 @@ describe("documentSession store", () => {
       sheetIndex,
       sheet: sheet("Second", [[text("deferred")]]),
       extent: { rowCount: 1, columnCount: 1 },
+      loadedRegion: {
+        sheetIndex,
+        rowStart: 0,
+        rowEnd: 1,
+        colStart: 0,
+        colEnd: 1,
+      },
     }));
 
     expect(loaded).toBe(true);
     expect(store.isSheetLoaded(1)).toBe(true);
-    expect(store.data?.sheets[1].rows[0][0]).toEqual(text("deferred"));
+    expect(store.loadedSheet(1)?.rows[0][0]).toEqual(text("deferred"));
     expect(store.sheetExtents[1]).toEqual({ rowCount: 1, columnCount: 1 });
+  });
+
+  it("merges viewport regions into a resident sheet", async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse({
+      fileData: {
+        path: "/tmp/book.xlsx",
+        fileName: "book.xlsx",
+        sheets: [sheet("Sheet1", [[text("A1")]])],
+      },
+      editorSession: {
+        documentId: '1',
+        revision: '0',
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+      sheetExtents: [{ rowCount: 20, columnCount: 20 }],
+      loadedSheetIndexes: [0],
+      loadedSheetRegions: [{ sheetIndex: 0, rowStart: 0, rowEnd: 1, colStart: 0, colEnd: 1 }],
+    });
+    const region = { sheetIndex: 0, rowStart: 10, rowEnd: 11, colStart: 5, colEnd: 6 };
+
+    const loaded = await store.ensureSheetRegionLoaded(region, async (context) => ({
+      documentId: context.documentId,
+      revision: context.baseRevision,
+      region,
+      cells: [{ sheetIndex: 0, row: 10, col: 5, value: text("F11") }],
+    }));
+
+    expect(loaded).toBe(true);
+    expect(store.loadedSheet(0)?.rows[10][5]).toEqual(text("F11"));
+  });
+
+  it("evicts least-recently-used resident sheets beyond the cache budget", () => {
+    const store = useDocumentSessionStore();
+    openTestDocument(store, {
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      sheets: Array.from({ length: 5 }, (_, index) => sheet(`Sheet${index + 1}`, [])),
+    });
+
+    expect(store.loadedSheetIndexes).toHaveLength(4);
+    expect(store.isSheetLoaded(0)).toBe(true);
+    expect(store.isSheetLoaded(1)).toBe(false);
   });
 
   it("reports mutation responses from another document as ignored", () => {
@@ -180,13 +232,13 @@ describe("documentSession store", () => {
     }));
 
     expect(result).toEqual({
-      data,
+      data: store.data,
       resyncRequired: false,
       applied: false,
     });
     expect(store.documentId).toBe('1');
     expect(store.revision).toBe('0');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
   });
 
   it("requests resync when a mutation response skips revisions", () => {
@@ -306,7 +358,7 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(true);
     expect(store.revision).toBe('1');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("current"));
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
     expect(searchStore.searchQuery).toBe("");
@@ -346,7 +398,7 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(true);
     expect(store.revision).toBe('3');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("fresh"));
     expect(store.projectionStale).toBe(false);
     expect(store.isInteractionLocked).toBe(false);
     expect(store.isEditorInteractionLocked).toBe(false);
@@ -386,7 +438,7 @@ describe("documentSession store", () => {
     await Promise.resolve();
 
     expect(store.revision).toBe('1');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
 
@@ -394,7 +446,7 @@ describe("documentSession store", () => {
     const result = await pending;
 
     expect(result.resyncRequired).toBe(true);
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("fresh"));
     expect(store.projectionStale).toBe(false);
     expect(store.isEditorInteractionLocked).toBe(false);
   });
@@ -433,7 +485,7 @@ describe("documentSession store", () => {
 
     expect(store.documentId).toBe('1');
     expect(store.revision).toBe('3');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
     expect(store.isInteractionLocked).toBe(false);
@@ -470,7 +522,7 @@ describe("documentSession store", () => {
     expect(marked).toBe(true);
     expect(store.documentId).toBe('1');
     expect(store.revision).toBe('3');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
     expect(store.isInteractionLocked).toBe(false);
@@ -509,7 +561,7 @@ describe("documentSession store", () => {
 
     expect(store.documentId).toBe('1');
     expect(store.revision).toBe('1');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
     expect(store.isInteractionLocked).toBe(false);
@@ -563,7 +615,7 @@ describe("documentSession store", () => {
     expect(store.documentId).toBe('2');
     expect(store.revision).toBe('0');
     expect(store.data?.fileName).toBe("next.xlsx");
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("next"));
   });
 
   it("reports a resync response as ignored if the active session changes before projection replacement", async () => {
@@ -607,7 +659,7 @@ describe("documentSession store", () => {
     expect(store.documentId).toBe('2');
     expect(store.revision).toBe('0');
     expect(store.data?.fileName).toBe("next.xlsx");
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("next"));
   });
 
   it("does not apply mutation failure session refresh when projection refresh fails", async () => {
@@ -650,7 +702,7 @@ describe("documentSession store", () => {
 
     expect(store.documentId).toBe('1');
     expect(store.revision).toBe('0');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(false);
   });
 
@@ -691,7 +743,7 @@ describe("documentSession store", () => {
       async () => fresh
     );
 
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("fresh"));
     expect(searchStore.searchQuery).toBe("");
     expect(searchStore.searchResults).toEqual([]);
     expect(searchStore.isSearching).toBe(false);
@@ -713,7 +765,7 @@ describe("documentSession store", () => {
     }));
 
     expect(result.resyncRequired).toBe(false);
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("current"));
   });
 
   it("moves the current selection with row and column structure patches", () => {
@@ -852,7 +904,7 @@ describe("documentSession store", () => {
     }));
 
     expect(result.resyncRequired).toBe(false);
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("current"));
   });
 
   it("ignores mutation responses after the document has been cleared", () => {
@@ -908,7 +960,7 @@ describe("documentSession store", () => {
     expect(store.documentId).toBe('42');
     expect(store.revision).toBe('7');
     expect(store.currentFilePath).toBe(data.path);
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("A1"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("A1"));
   });
 
   it("returns command context only for the active document id", () => {
@@ -1120,7 +1172,7 @@ describe("documentSession store", () => {
     expect(applied).toBe(false);
     expect(store.documentId).toBe('2');
     expect(store.currentFilePath).toBe(nextData.path);
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("next"));
   });
 
   it("rejects saved responses that would rewind the active document revision", () => {
@@ -1162,7 +1214,7 @@ describe("documentSession store", () => {
 
     expect(applied).toBe(false);
     expect(store.revision).toBe('3');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("current"));
   });
 
   it("saved document responses clear stale search UI state", () => {
@@ -1248,8 +1300,10 @@ describe("documentSession store", () => {
 
     expect(store.data?.path).toBe("/tmp/book.xlsx");
     expect(store.data?.fileName).toBe("book.xlsx");
-    expect(store.data?.sheets).toStrictEqual(data.sheets);
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
+    expect(store.data?.sheets.map((slot) =>
+      slot.state === "loaded" ? slot.data : null
+    )).toStrictEqual(data.sheets);
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("current"));
     expect(store.currentFilePath).toBe("/tmp/book.xlsx");
     expect(store.revision).toBe('3');
   });
@@ -1482,7 +1536,7 @@ describe("documentSession store", () => {
     });
 
     expect(store.revision).toBe('2');
-    expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(store.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
     expect(searchStore.searchQuery).toBe("");

@@ -6,8 +6,37 @@ import type {
   HistoryStatus,
   ReadOnlyRichProjection,
   SheetCapabilities,
+  SheetData,
+  SheetExtent,
+  SheetRegion,
   WorkbookCapabilities,
 } from './generated';
+
+export type LoadedSheetSlot = {
+  state: 'loaded';
+  name: string;
+  extent: SheetExtent;
+  data: SheetData;
+  regions: SheetRegion[];
+};
+
+export type UnloadedSheetSlot = {
+  state: 'unloaded';
+  name: string;
+  extent: SheetExtent;
+};
+
+export type SheetSlot = LoadedSheetSlot | UnloadedSheetSlot;
+
+export type DocumentProjection = {
+  path: string;
+  fileName: string;
+  sheets: SheetSlot[];
+};
+
+export function loadedSheetData(slot: SheetSlot | undefined): SheetData | null {
+  return slot?.state === 'loaded' ? slot.data : null;
+}
 
 export function defaultSheetCapabilities(): SheetCapabilities {
   return {

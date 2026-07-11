@@ -489,6 +489,20 @@ pub struct OpenDocumentResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub loaded_sheet_indexes: Option<Vec<usize>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub loaded_sheet_regions: Option<Vec<SheetRegion>>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetRegion {
+    pub sheet_index: usize,
+    pub row_start: usize,
+    pub row_end: usize,
+    pub col_start: usize,
+    pub col_end: usize,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -504,6 +518,21 @@ pub struct SheetProjectionResponse {
     pub sheet_index: usize,
     pub sheet: SheetData,
     pub extent: SheetExtent,
+    pub loaded_region: SheetRegion,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetRegionProjectionResponse {
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
+    pub document_id: u64,
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
+    pub revision: u64,
+    pub region: SheetRegion,
+    pub cells: Vec<SheetCellChange>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -1181,6 +1210,7 @@ impl SearchIndexUpdatePlan {
     }
 }
 
+#[cfg(test)]
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

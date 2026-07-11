@@ -4,11 +4,13 @@ pub mod formula;
 pub mod projection;
 pub mod search;
 pub mod types;
+#[cfg(test)]
 pub mod typescript;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub mod update;
 
 pub use formula::*;
+#[cfg(test)]
 pub use projection::*;
 pub use search::*;
 pub use types::*;

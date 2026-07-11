@@ -4,15 +4,14 @@ import * as api from "@/api";
 import { useDocumentCommandBus } from "@/composables/useDocumentCommandBus";
 import {
   useDocumentSessionStore,
-  type MutationApplyResult,
 } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import type {
   EditorCommandContext,
+  DocumentProjection,
   EditorMutationResponse,
-  FileData,
   SearchResult,
   SearchScope,
   SheetData,
@@ -22,13 +21,12 @@ import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
 import { appErrorMessage } from "@/utils/appError";
 
 type UseEditorCommandsOptions = {
-  fileData: ComputedRef<FileData | null>;
+  fileData: ComputedRef<DocumentProjection | null>;
   currentSheet: ComputedRef<SheetData | null>;
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<{ row: number; col: number } | null>;
   flushPendingCellChanges: () => Promise<boolean>;
   editorValueForCell: (sheetIndex: number, row: number, col: number) => string;
-  applyMutationResponse: (response: EditorMutationResponse) => Promise<MutationApplyResult>;
 };
 
 export function useEditorCommands({
@@ -38,13 +36,12 @@ export function useEditorCommands({
   selectedCell,
   flushPendingCellChanges,
   editorValueForCell,
-  applyMutationResponse,
 }: UseEditorCommandsOptions) {
   const documentSessionStore = useDocumentSessionStore();
   const documentStatusStore = useDocumentStatusStore();
   const editorSelectionStore = useEditorSelectionStore();
   const searchSessionStore = useSearchSessionStore();
-  const commandBus = useDocumentCommandBus({ applyMutationResponse });
+  const commandBus = useDocumentCommandBus();
 
   function runEditorMutation(
     action: (context: EditorCommandContext) => Promise<EditorMutationResponse>,
@@ -148,30 +145,22 @@ export function useEditorCommands({
 
   async function handleSearch(query: string, scope: SearchScope) {
     if (!fileData.value || isEditorCommandBlocked()) return;
-    const initialContext = documentSessionStore.currentCommandContext();
-    if (!initialContext) return;
-
     const requestId = searchSessionStore.beginSearch(query);
-    let context: EditorCommandContext | null = null;
     try {
-      if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.waitForMutations();
-      context = documentSessionStore.commandContextForDocument(initialContext.documentId);
-      if (!context) return;
-
-      const results = await api.search(
-        context,
-        query,
-        scope,
-        scope === "currentSheet" ? currentSheetIndex.value : null
-      );
-      if (documentSessionStore.matchesCommandContext(context)) {
+      const results = await commandBus.runConsistentRead({
+        flushPendingChanges: flushPendingCellChanges,
+        lockInteraction: true,
+        action: (context) => api.search(
+          context,
+          query,
+          scope,
+          scope === "currentSheet" ? currentSheetIndex.value : null
+        ),
+      });
+      if (results) {
         searchSessionStore.applySearchResults(requestId, results);
       }
     } catch (error) {
-      if (context && !documentSessionStore.matchesCommandContext(context)) {
-        return;
-      }
       ElMessage.error(`Search failed: ${appErrorMessage(error)}`);
     } finally {
       searchSessionStore.finishSearch(requestId);

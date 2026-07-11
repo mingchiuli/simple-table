@@ -14,7 +14,7 @@
 - Undo/Redo support
 - Preserve merged cells
 - Column resizing with persistence
-- Large integer precision preservation (up to 2^53)
+- Exact unsigned 64-bit document and revision identifiers across the IPC boundary
 
 ### Platform Support
 - **Desktop**: macOS, Linux, Windows

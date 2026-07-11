@@ -2,8 +2,8 @@ import type {
   EditorMutationResponse,
   EditorSessionInfo,
   EditorPatch,
+  DocumentProjection,
   FileData,
-  SheetExtent,
   U64String,
 } from "@/types";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
@@ -12,7 +12,7 @@ import { useDocumentStatusStore } from "@/stores/documentStatus";
 import type { DocumentStatusSnapshot } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import type { EditorSelectionSnapshot } from "@/stores/editorSelection";
-import { calculateSheetExtent } from "@/table-geometry/sheetExtent";
+import { createDocumentProjection } from "@/stores/documentProjection";
 
 export type DocumentSessionLifecycle = "idle" | "loading" | "saving" | "closing";
 
@@ -23,27 +23,25 @@ type DocumentSessionRuntime = {
 };
 
 export type DocumentSessionStateTarget = {
-  data: FileData | null;
+  data: DocumentProjection | null;
   currentFilePath: string | null;
   documentId: U64String | null;
   revision: U64String;
   lifecycle: DocumentSessionLifecycle;
   editorCommandDepth: number;
   projectionStale: boolean;
-  sheetExtents: SheetExtent[];
-  loadedSheetIndexes: number[];
+  residentSheetOrder: number[];
 };
 
 export type DocumentSessionSnapshot = {
-  data: FileData | null;
+  data: DocumentProjection | null;
   currentFilePath: string | null;
   documentId: U64String | null;
   revision: U64String;
   lifecycle: DocumentSessionLifecycle;
   editorCommandDepth: number;
   projectionStale: boolean;
-  sheetExtents: SheetExtent[];
-  loadedSheetIndexes: number[];
+  residentSheetOrder: number[];
   status: DocumentStatusSnapshot;
   selection: EditorSelectionSnapshot;
 };
@@ -162,14 +160,16 @@ export function applySelectionPatches(patches: EditorPatch[] | undefined) {
 
 export function replaceProjection(store: DocumentSessionStateTarget, data: FileData) {
   const currentFileName = store.data?.fileName;
-  store.data = {
+  const resident = store.data?.sheets
+    .map((slot, index) => slot.state === 'loaded' ? index : -1)
+    .filter((index) => index >= 0) ?? [0];
+  store.data = createDocumentProjection({
     ...data,
     path: store.currentFilePath ?? data.path,
     fileName: currentFileName ?? data.fileName,
-  };
+  }, undefined, resident);
+  store.residentSheetOrder = resident;
   store.projectionStale = false;
-  store.sheetExtents = projectionExtents(data);
-  store.loadedSheetIndexes = data.sheets.map((_, index) => index);
   clampSelectionToCurrentSheet(store);
   useSearchSessionStore().clearSearch();
 }
@@ -193,8 +193,7 @@ export function captureMutationSnapshot(
     lifecycle: store.lifecycle,
     editorCommandDepth: store.editorCommandDepth,
     projectionStale: store.projectionStale,
-    sheetExtents: [...store.sheetExtents],
-    loadedSheetIndexes: [...store.loadedSheetIndexes],
+    residentSheetOrder: [...store.residentSheetOrder],
     status: statusStore.captureSnapshot(),
     selection: selectionStore.captureSnapshot(),
   };
@@ -211,8 +210,7 @@ export function restoreMutationSnapshot(
   store.lifecycle = snapshot.lifecycle;
   store.editorCommandDepth = snapshot.editorCommandDepth;
   store.projectionStale = snapshot.projectionStale;
-  store.sheetExtents = [...snapshot.sheetExtents];
-  store.loadedSheetIndexes = [...snapshot.loadedSheetIndexes];
+  store.residentSheetOrder = [...snapshot.residentSheetOrder];
 
   useDocumentStatusStore().restoreSnapshot(snapshot.status);
   useEditorSelectionStore().restoreSnapshot(snapshot.selection);
@@ -228,65 +226,13 @@ export function clampSelectionToCurrentSheet(store: DocumentSessionStateTarget) 
   selectionStore.clampToSheetData(store.data.sheets.length, (sheetIndex, row, col) => {
     const sheet = store.data?.sheets[sheetIndex];
     if (!sheet) return false;
-    const extent = calculateSheetExtent(
-      sheet.rows,
-      sheet.merges,
-      sheet.columnWidths,
-      sheet.rowHeights,
-      sheet.rich
-    );
+    const extent = sheet.extent;
     return row >= 0 && col >= 0 && row < extent.rowCount && col < extent.columnCount;
   });
 }
 
 export function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): boolean {
   return (patches ?? []).some((patch) => patch.type !== "Layout");
-}
-
-export function projectionExtents(data: FileData): SheetExtent[] {
-  return data.sheets.map((sheet) => calculateSheetExtent(
-    sheet.rows,
-    sheet.merges,
-    sheet.columnWidths,
-    sheet.rowHeights,
-    sheet.rich
-  ));
-}
-
-export function updateLoadedSheetIndexes(
-  loadedSheetIndexes: number[],
-  patches: EditorPatch[] | undefined
-): number[] {
-  let loaded = new Set(loadedSheetIndexes);
-  for (const patch of patches ?? []) {
-    switch (patch.type) {
-      case 'SheetInserted': {
-        const inserted = patch.data.patch.sheetIndex;
-        loaded = new Set(Array.from(loaded, (index) => index >= inserted ? index + 1 : index));
-        loaded.add(inserted);
-        break;
-      }
-      case 'SheetDeleted': {
-        const deleted = patch.data.patch.sheetIndex;
-        loaded = new Set(
-          Array.from(loaded)
-            .filter((index) => index !== deleted)
-            .map((index) => index > deleted ? index - 1 : index)
-        );
-        break;
-      }
-      case 'SheetUpdated':
-        loaded.add(patch.data.patch.sheetIndex);
-        break;
-      case 'SheetsReplaced': {
-        const { startIndex, sheets } = patch.data.patch;
-        loaded = new Set(Array.from(loaded).filter((index) => index < startIndex));
-        sheets.forEach((_, offset) => loaded.add(startIndex + offset));
-        break;
-      }
-    }
-  }
-  return Array.from(loaded).sort((left, right) => left - right);
 }
 
 function resetMutationQueue(store: object) {

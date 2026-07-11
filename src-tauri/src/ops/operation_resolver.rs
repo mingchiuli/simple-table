@@ -1,15 +1,23 @@
 use std::collections::HashMap;
 
 use crate::error::AppError;
-use crate::io::projection_limits::{
-    validate_added_column, validate_added_row, validate_added_sheet, validate_cell_changes,
-};
+use crate::io::projection_limits::{ResourceLedger, validate_added_sheet};
 use crate::io::rich_projection::parse_cell_key;
 use crate::ops::core_ops::{AppliedOperation, EditorCommand, ResolvedCellEdit};
 use crate::types::{CellValue, FileData, ReadOnlyRichProjection, SheetData, parse_cell_text};
 
 impl EditorCommand {
+    #[cfg(test)]
     pub fn resolve(self, file_data: &FileData) -> Result<AppliedOperation, AppError> {
+        let resources = ResourceLedger::from_file_data(file_data);
+        self.resolve_with_resources(file_data, &resources)
+    }
+
+    pub fn resolve_with_resources(
+        self,
+        file_data: &FileData,
+        resources: &ResourceLedger,
+    ) -> Result<AppliedOperation, AppError> {
         match self {
             EditorCommand::SetCell {
                 sheet_index,
@@ -26,7 +34,7 @@ impl EditorCommand {
                     .unwrap_or(CellValue::Null);
                 let new_value = parse_cell_text(&text);
                 if old_value != new_value {
-                    validate_cell_changes(
+                    resources.validate_cell_changes(
                         file_data,
                         [(sheet_index, row, col, &old_value, &new_value)],
                     )?;
@@ -72,7 +80,7 @@ impl EditorCommand {
                 }
                 resolved.retain(|change| change.old_value != change.new_value);
                 if !resolved.is_empty() {
-                    validate_cell_changes(
+                    resources.validate_cell_changes(
                         file_data,
                         resolved.iter().map(|change| {
                             (
@@ -96,8 +104,7 @@ impl EditorCommand {
                 if row_index > extent.rows {
                     return Err(AppError::RowNotFound(row_index));
                 }
-                validate_added_row(
-                    file_data,
+                resources.validate_added_row(
                     sheet,
                     sheet.rows.len().max(row_index).saturating_add(1),
                     extent.columns,
@@ -135,7 +142,7 @@ impl EditorCommand {
                         col: col_index,
                     });
                 }
-                validate_added_column(file_data, sheet, extent.rows, col_index)?;
+                resources.validate_added_column(sheet, extent.rows, col_index)?;
                 Ok(AppliedOperation::AddColumn {
                     sheet_index,
                     col_index,

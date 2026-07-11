@@ -3,7 +3,7 @@ use std::io::Read;
 
 use crate::error::AppError;
 use crate::io::rich_projection::parse_cell_key;
-use crate::types::{CellValue, FileData, SheetData};
+use crate::types::{CellValue, FileData, SheetData, SheetExtent};
 
 pub const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_XLSX_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
@@ -17,6 +17,95 @@ pub const MAX_RICH_METADATA_ENTRIES: usize = 1_000_000;
 pub const MAX_CELL_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATION_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PROJECTED_TEXT_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Clone)]
+pub struct ResourceLedger {
+    sheets: Vec<SheetResourceUsage>,
+    total: ProjectionUsage,
+}
+
+#[derive(Clone)]
+struct SheetResourceUsage {
+    usage: ProjectionUsage,
+    extent: SheetExtent,
+}
+
+impl ResourceLedger {
+    pub fn from_file_data(file_data: &FileData) -> Self {
+        let sheets: Vec<_> = file_data.sheets.iter().map(sheet_resource_usage).collect();
+        let total = sheets
+            .iter()
+            .fold(ProjectionUsage::default(), |total, sheet| {
+                total + sheet.usage
+            });
+        Self { sheets, total }
+    }
+
+    pub fn sheet_extents(&self) -> Vec<SheetExtent> {
+        self.sheets.iter().map(|sheet| sheet.extent).collect()
+    }
+
+    pub fn sheet_extent(&self, sheet_index: usize) -> Option<SheetExtent> {
+        self.sheets.get(sheet_index).map(|sheet| sheet.extent)
+    }
+
+    pub fn refresh_sheets(
+        &mut self,
+        file_data: &FileData,
+        sheet_indexes: impl IntoIterator<Item = usize>,
+    ) {
+        if self.sheets.len() != file_data.sheets.len() {
+            *self = Self::from_file_data(file_data);
+            return;
+        }
+
+        let mut refreshed = std::collections::BTreeSet::new();
+        for sheet_index in sheet_indexes {
+            if !refreshed.insert(sheet_index) {
+                continue;
+            }
+            let (Some(sheet), Some(previous)) = (
+                file_data.sheets.get(sheet_index),
+                self.sheets.get_mut(sheet_index),
+            ) else {
+                continue;
+            };
+            let next = sheet_resource_usage(sheet);
+            self.total = self.total - previous.usage + next.usage;
+            *previous = next;
+        }
+    }
+
+    pub fn replace_all(&mut self, file_data: &FileData) {
+        *self = Self::from_file_data(file_data);
+    }
+
+    pub fn validate_cell_changes<'a>(
+        &self,
+        file_data: &FileData,
+        changes: impl IntoIterator<Item = (usize, usize, usize, &'a CellValue, &'a CellValue)>,
+    ) -> Result<(), AppError> {
+        validate_cell_changes_with_usage(file_data, self.total, changes)
+    }
+
+    pub fn validate_added_row(
+        &self,
+        sheet: &SheetData,
+        projected_sheet_rows: usize,
+        row_width: usize,
+    ) -> Result<(), AppError> {
+        validate_added_row_with_usage(self.total, sheet, projected_sheet_rows, row_width)
+    }
+
+    pub fn validate_added_column(
+        &self,
+        sheet: &SheetData,
+        projected_row_count: usize,
+        col_index: usize,
+    ) -> Result<(), AppError> {
+        validate_added_column_with_usage(self.total, sheet, projected_row_count, col_index)
+    }
+}
 
 pub fn validate_input_size(byte_count: usize) -> Result<(), AppError> {
     ensure_limit("file bytes", byte_count, MAX_INPUT_BYTES)
@@ -61,11 +150,20 @@ pub fn validate_file_data(file_data: &FileData) -> Result<(), AppError> {
     validate_usage(usage)
 }
 
+#[cfg(test)]
 pub fn validate_cell_changes<'a>(
     file_data: &FileData,
     changes: impl IntoIterator<Item = (usize, usize, usize, &'a CellValue, &'a CellValue)>,
 ) -> Result<(), AppError> {
     let usage = projection_usage(file_data)?;
+    validate_cell_changes_with_usage(file_data, usage, changes)
+}
+
+fn validate_cell_changes_with_usage<'a>(
+    file_data: &FileData,
+    usage: ProjectionUsage,
+    changes: impl IntoIterator<Item = (usize, usize, usize, &'a CellValue, &'a CellValue)>,
+) -> Result<(), AppError> {
     let mut projected_row_lengths = HashMap::<(usize, usize), usize>::new();
     let mut projected_sheet_rows: Vec<usize> = file_data
         .sheets
@@ -122,15 +220,14 @@ pub fn validate_cell_changes<'a>(
     })
 }
 
-pub fn validate_added_row(
-    file_data: &FileData,
+fn validate_added_row_with_usage(
+    usage: ProjectionUsage,
     sheet: &SheetData,
     projected_sheet_rows: usize,
     row_width: usize,
 ) -> Result<(), AppError> {
     ensure_limit("rows per sheet", projected_sheet_rows, MAX_ROWS_PER_SHEET)?;
     ensure_limit("columns per row", row_width, MAX_COLUMNS_PER_ROW)?;
-    let usage = projection_usage(file_data)?;
     let added_rows = projected_sheet_rows.saturating_sub(sheet.rows.len());
     validate_usage(ProjectionUsage {
         dense_slots: checked_add(usage.dense_slots, row_width, "cell slots")?,
@@ -140,14 +237,13 @@ pub fn validate_added_row(
     })
 }
 
-pub fn validate_added_column(
-    file_data: &FileData,
+fn validate_added_column_with_usage(
+    usage: ProjectionUsage,
     sheet: &SheetData,
     projected_row_count: usize,
     col_index: usize,
 ) -> Result<(), AppError> {
     validate_position(projected_row_count.saturating_sub(1), col_index)?;
-    let usage = projection_usage(file_data)?;
     let mut additional_slots = 0usize;
     for row_index in 0..projected_row_count {
         let current_length = sheet.rows.get(row_index).map(Vec::len).unwrap_or_default();
@@ -193,12 +289,38 @@ pub fn validate_position(row: usize, col: usize) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct ProjectionUsage {
     dense_slots: usize,
     total_rows: usize,
     rich_entries: usize,
     text_bytes: usize,
+}
+
+impl std::ops::Add for ProjectionUsage {
+    type Output = Self;
+
+    fn add(self, right: Self) -> Self::Output {
+        Self {
+            dense_slots: self.dense_slots.saturating_add(right.dense_slots),
+            total_rows: self.total_rows.saturating_add(right.total_rows),
+            rich_entries: self.rich_entries.saturating_add(right.rich_entries),
+            text_bytes: self.text_bytes.saturating_add(right.text_bytes),
+        }
+    }
+}
+
+impl std::ops::Sub for ProjectionUsage {
+    type Output = Self;
+
+    fn sub(self, right: Self) -> Self::Output {
+        Self {
+            dense_slots: self.dense_slots.saturating_sub(right.dense_slots),
+            total_rows: self.total_rows.saturating_sub(right.total_rows),
+            rich_entries: self.rich_entries.saturating_sub(right.rich_entries),
+            text_bytes: self.text_bytes.saturating_sub(right.text_bytes),
+        }
+    }
 }
 
 fn projection_usage(file_data: &FileData) -> Result<ProjectionUsage, AppError> {
@@ -223,6 +345,29 @@ fn projection_usage(file_data: &FileData) -> Result<ProjectionUsage, AppError> {
         validate_sheet_metadata(sheet, &mut usage)?;
     }
     Ok(usage)
+}
+
+fn sheet_resource_usage(sheet: &SheetData) -> SheetResourceUsage {
+    let dense_slots = sheet.rows.iter().map(Vec::len).sum();
+    let text_bytes = sheet.rows.iter().flatten().map(cell_text_bytes).sum();
+    let rich_entries = sheet.merges.len()
+        + sheet.column_widths.as_ref().map_or(0, HashMap::len)
+        + sheet.row_heights.as_ref().map_or(0, HashMap::len)
+        + sheet.rich.cell_formats.len()
+        + sheet.rich.cell_styles.len()
+        + sheet.rich.hyperlinks.len()
+        + sheet.rich.hidden_rows.len()
+        + sheet.rich.hidden_columns.len()
+        + sheet.rich.drawings.len();
+    SheetResourceUsage {
+        usage: ProjectionUsage {
+            dense_slots,
+            total_rows: sheet.rows.len(),
+            rich_entries,
+            text_bytes,
+        },
+        extent: sheet.extent(),
+    }
 }
 
 fn validate_sheet_metadata(sheet: &SheetData, usage: &mut ProjectionUsage) -> Result<(), AppError> {
@@ -413,5 +558,27 @@ mod tests {
         .expect_err("projected text budget");
 
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn resource_ledger_refreshes_only_the_changed_sheet_extent() {
+        let mut file_data = FileData {
+            path: String::new(),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![SheetData::default(), SheetData::default()],
+        };
+        let mut ledger = ResourceLedger::from_file_data(&file_data);
+        file_data.sheets[1].rows = vec![vec![CellValue::String("value".to_string())]];
+
+        ledger.refresh_sheets(&file_data, [1]);
+
+        assert_eq!(ledger.sheet_extent(0), Some(SheetExtent::default()));
+        assert_eq!(
+            ledger.sheet_extent(1),
+            Some(SheetExtent {
+                row_count: 1,
+                column_count: 1,
+            })
+        );
     }
 }

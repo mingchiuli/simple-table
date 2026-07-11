@@ -9,6 +9,7 @@ import {
   defaultHistoryStatus,
   defaultRichProjection,
   defaultWorkbookCapabilities,
+  loadedSheetData,
   readyFormulaStatus,
   type CellValue,
   type EditorMutationResponse,
@@ -48,7 +49,7 @@ function fileData(value: string): FileData {
 function editorSession(revision: number | string): EditorSessionInfo {
   return {
     documentId: '1',
-    revision: String(revision),
+    revision: String(revision) as `${bigint}`,
     formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
     editorState: {
@@ -103,7 +104,7 @@ describe("useCellEditController", () => {
     const scope = effectScope();
     const controller = scope.run(() => {
       const file = computed(() => documentSessionStore.data);
-      const currentSheet = computed(() => file.value?.sheets[0] ?? null);
+      const currentSheet = computed(() => loadedSheetData(file.value?.sheets[0]));
       const selectedCell = ref({ row: 0, col: 0 });
       return useCellEditController({
         fileData: file,
@@ -112,11 +113,6 @@ describe("useCellEditController", () => {
         selectedCell,
         cellEditorValue: ref(""),
         canEditCells: computed(() => true),
-        applyMutationResponse: (response) =>
-          documentSessionStore.applyMutationResponseWithResync(
-            response,
-            api.getCurrentFileData
-          ),
       });
     });
 
@@ -133,7 +129,7 @@ describe("useCellEditController", () => {
     expect(api.getCurrentFileData).toHaveBeenCalledTimes(2);
     expect(documentSessionStore.revision).toBe('3');
     expect(documentSessionStore.projectionStale).toBe(false);
-    expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("draft"));
+    expect(documentSessionStore.loadedSheet(0)?.rows[0][0]).toEqual(text("draft"));
     expect(usePendingCellSavesStore().phase).toBe("idle");
     expect(usePendingCellSavesStore().draftCellValues.size).toBe(0);
     expect(statusStore.hasPendingContentChange).toBe(false);
@@ -155,11 +151,13 @@ describe("useCellEditController", () => {
     vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
     const applyMutationResponse = vi.fn().mockRejectedValue(new Error("frontend apply failed"));
+    vi.spyOn(documentSessionStore, "applyMutationResponseWithResync")
+      .mockImplementation(applyMutationResponse);
 
     const scope = effectScope();
     const controller = scope.run(() => {
       const file = computed(() => documentSessionStore.data);
-      const currentSheet = computed(() => file.value?.sheets[0] ?? null);
+      const currentSheet = computed(() => loadedSheetData(file.value?.sheets[0]));
       const selectedCell = ref({ row: 0, col: 0 });
       return useCellEditController({
         fileData: file,
@@ -168,7 +166,6 @@ describe("useCellEditController", () => {
         selectedCell,
         cellEditorValue: ref(""),
         canEditCells: computed(() => true),
-        applyMutationResponse,
       });
     });
 
@@ -187,7 +184,7 @@ describe("useCellEditController", () => {
     expect(documentSessionStore.revision).toBe('3');
     expect(documentSessionStore.projectionStale).toBe(true);
     expect(documentSessionStore.isEditorInteractionLocked).toBe(true);
-    expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("old"));
+    expect(documentSessionStore.loadedSheet(0)?.rows[0][0]).toEqual(text("old"));
     expect(usePendingCellSavesStore().phase).toBe("idle");
     expect(usePendingCellSavesStore().draftCellValues.size).toBe(0);
     expect(statusStore.hasPendingContentChange).toBe(false);

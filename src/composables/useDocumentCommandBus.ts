@@ -1,15 +1,8 @@
 import { ElMessage } from 'element-plus';
 import * as api from '@/api';
-import {
-  useDocumentSessionStore,
-  type MutationApplyResult,
-} from '@/stores/documentSession';
-import type { EditorCommandContext, EditorMutationResponse, U64String } from '@/types';
+import { useDocumentSessionStore } from '@/stores/documentSession';
+import type { EditorCommandContext, EditorMutationResponse, SheetRegion, U64String } from '@/types';
 import { appErrorMessage } from '@/utils/appError';
-
-type DocumentCommandBusOptions = {
-  applyMutationResponse: (response: EditorMutationResponse) => Promise<MutationApplyResult>;
-};
 
 type InteractiveMutationOptions = {
   action: (context: EditorCommandContext) => Promise<EditorMutationResponse>;
@@ -25,9 +18,13 @@ type BackgroundMutationOptions = {
   onRefreshFailed?: (error: unknown) => void;
 };
 
-export function useDocumentCommandBus({
-  applyMutationResponse,
-}: DocumentCommandBusOptions) {
+type ConsistentReadOptions<T> = {
+  flushPendingChanges: () => Promise<boolean>;
+  action: (context: EditorCommandContext) => Promise<T>;
+  lockInteraction?: boolean;
+};
+
+export function useDocumentCommandBus() {
   const documentSessionStore = useDocumentSessionStore();
 
   async function runInteractiveMutation({
@@ -105,6 +102,49 @@ export function useDocumentCommandBus({
     }
   }
 
+  async function runConsistentRead<T>({
+    flushPendingChanges,
+    action,
+    lockInteraction = false,
+  }: ConsistentReadOptions<T>): Promise<T | undefined> {
+    const releaseEditorCommand = lockInteraction
+      ? documentSessionStore.beginEditorCommand()
+      : () => undefined;
+    if (!releaseEditorCommand) return undefined;
+    const initialContext = documentSessionStore.currentCommandContext();
+    if (!initialContext) {
+      releaseEditorCommand();
+      return undefined;
+    }
+    try {
+      if (!(await flushPendingChanges())) return undefined;
+      await documentSessionStore.waitForMutations();
+      const context = documentSessionStore.commandContextForDocument(initialContext.documentId);
+      if (!context) return undefined;
+      const result = await action(context);
+      return documentSessionStore.matchesCommandContext(context) ? result : undefined;
+    } finally {
+      releaseEditorCommand();
+    }
+  }
+
+  async function prepareConsistentContext(
+    flushPendingChanges: () => Promise<boolean>
+  ): Promise<EditorCommandContext | undefined> {
+    const initialContext = documentSessionStore.currentCommandContext();
+    if (!initialContext) return undefined;
+    if (!(await flushPendingChanges())) return undefined;
+    await documentSessionStore.waitForMutations();
+    return documentSessionStore.commandContextForDocument(initialContext.documentId) ?? undefined;
+  }
+
+  function applyMutationResponse(response: EditorMutationResponse) {
+    return documentSessionStore.applyMutationResponseWithResync(
+      response,
+      api.getCurrentFileData
+    );
+  }
+
   async function ensureSheetLoaded(
     sheetIndex: number,
     flushPendingChanges: () => Promise<boolean>
@@ -124,6 +164,19 @@ export function useDocumentCommandBus({
     }
   }
 
+  async function ensureSheetRegionLoaded(region: SheetRegion): Promise<boolean> {
+    try {
+      await documentSessionStore.waitForMutations();
+      return await documentSessionStore.ensureSheetRegionLoaded(
+        region,
+        api.getSheetRegionProjection
+      );
+    } catch (error) {
+      console.error('Failed to load sheet viewport:', error);
+      return false;
+    }
+  }
+
   function runAfterApplied(afterApplied: (() => void) | undefined) {
     try {
       afterApplied?.();
@@ -140,5 +193,8 @@ export function useDocumentCommandBus({
     runBackgroundMutation,
     refreshAfterMutationError,
     ensureSheetLoaded,
+    ensureSheetRegionLoaded,
+    runConsistentRead,
+    prepareConsistentContext,
   };
 }

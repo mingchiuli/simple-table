@@ -15,6 +15,8 @@ import type {
   SearchScope,
   AddRecentFileRequest,
   SheetProjectionResponse,
+  SheetRegion,
+  SheetRegionProjectionResponse,
   U64String,
 } from "@/types";
 
@@ -52,20 +54,21 @@ export async function getSheetProjection(
   return invokeCommand("get_sheet_projection", { ...context, sheetIndex });
 }
 
+export async function getSheetRegionProjection(
+  context: EditorCommandContext,
+  region: SheetRegion
+): Promise<SheetRegionProjectionResponse> {
+  return invokeCommand("get_sheet_region_projection", { ...context, region });
+}
+
 export async function closeCurrentDocument(documentId: U64String): Promise<void> {
   return invokeCommand("close_current_document", { documentId });
 }
 
 export async function getDocumentCapabilities(
-  context: EditorCommandContext,
-  fileName: string,
-  currentPath: string | null
+  context: EditorCommandContext
 ): Promise<DocumentCapabilities> {
-  return invokeCommand("get_document_capabilities", {
-    ...context,
-    fileName,
-    currentPath,
-  });
+  return invokeCommand("get_document_capabilities", context);
 }
 
 export async function getNativeSavePlan(

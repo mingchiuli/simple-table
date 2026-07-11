@@ -1,6 +1,6 @@
 use crate::state::search_index::{
-    SearchCellSnapshotChange, SearchCellText, SearchIndexStamp, SearchIndexStore, SearchSheetIndex,
-    SearchSheetSnapshot, SearchSheetSource, SearchWriterHandle,
+    MAX_RESIDENT_SEARCH_INDEXES, SearchCellSnapshotChange, SearchCellText, SearchIndexStamp,
+    SearchIndexStore, SearchSheetIndex, SearchSheetSnapshot, SearchSheetSource, SearchWriterHandle,
 };
 use crate::types::FileData;
 use std::sync::Arc;
@@ -22,6 +22,7 @@ impl SearchSession {
         self.snapshots = file_data
             .sheets
             .iter()
+            .take(MAX_RESIDENT_SEARCH_INDEXES)
             .map(|sheet| SearchSheetSnapshot::from_sheet(sheet, revision))
             .collect();
     }

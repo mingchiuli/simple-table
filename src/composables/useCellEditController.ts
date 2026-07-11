@@ -5,12 +5,11 @@ import { useCellEditTransactions } from '@/composables/useCellEditTransactions';
 import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import {
   useDocumentSessionStore,
-  type MutationApplyResult,
 } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { CellSaveRequest } from '@/stores/pendingCellSaves';
 import type { ComputedRef, Ref } from 'vue';
-import type { EditorMutationResponse, FileData, SetCellRequest, SheetData } from '@/types';
+import type { DocumentProjection, SetCellRequest, SheetData } from '@/types';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
 import { appErrorMessage } from '@/utils/appError';
@@ -18,13 +17,12 @@ import { appErrorMessage } from '@/utils/appError';
 type CellPosition = { row: number; col: number };
 
 type UseCellEditControllerOptions = {
-  fileData: ComputedRef<FileData | null>;
+  fileData: ComputedRef<DocumentProjection | null>;
   currentSheet: ComputedRef<SheetData | null>;
   currentSheetIndex: Ref<number>;
   selectedCell: Ref<CellPosition | null>;
   cellEditorValue: Ref<string>;
   canEditCells: ComputedRef<boolean>;
-  applyMutationResponse: (response: EditorMutationResponse) => Promise<MutationApplyResult>;
 };
 
 export function useCellEditController({
@@ -34,11 +32,10 @@ export function useCellEditController({
   selectedCell,
   cellEditorValue,
   canEditCells,
-  applyMutationResponse,
 }: UseCellEditControllerOptions) {
   const documentSessionStore = useDocumentSessionStore();
   const editorSelectionStore = useEditorSelectionStore();
-  const commandBus = useDocumentCommandBus({ applyMutationResponse });
+  const commandBus = useDocumentCommandBus();
 
   const transactions = useCellEditTransactions({
     fileData,
@@ -81,7 +78,9 @@ export function useCellEditController({
 
     const payload: SetCellRequest[] = changes.map((change) => {
       const sheet = currentFileData.sheets[change.sheetIndex];
-      if (!sheet) throw new Error(`Sheet ${change.sheetIndex} does not exist`);
+      if (!sheet || sheet.state !== 'loaded') {
+        throw new Error(`Sheet ${change.sheetIndex} is not loaded`);
+      }
       return {
         sheetIndex: change.sheetIndex,
         row: change.row,

@@ -9,8 +9,13 @@ pub struct EditorSession {
 
 impl EditorSession {
     pub fn new() -> Self {
+        let document_id = NEXT_DOCUMENT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .unwrap_or_else(|_| panic!("document id space exhausted"));
         Self {
-            document_id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
+            document_id,
             revision: 0,
         }
     }
@@ -23,7 +28,24 @@ impl EditorSession {
         self.revision
     }
 
-    pub fn bump_revision(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
+    pub fn bump_revision(&mut self) -> Option<u64> {
+        self.revision = self.revision.checked_add(1)?;
+        Some(self.revision)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revision_never_wraps() {
+        let mut session = EditorSession {
+            document_id: 1,
+            revision: u64::MAX,
+        };
+
+        assert_eq!(session.bump_revision(), None);
+        assert_eq!(session.revision(), u64::MAX);
     }
 }
