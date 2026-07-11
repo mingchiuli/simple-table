@@ -557,6 +557,8 @@ mod tests {
         let json = serde_json::to_value(response).expect("serialize response");
 
         assert!(json.get("searchIndexUpdate").is_none());
+        assert_eq!(json["documentId"], document_id.to_string());
+        assert_eq!(json["revision"], (revision + 1).to_string());
         assert_eq!(
             json["patches"][0]["data"]["changes"][0]["value"]["display"],
             "50%"

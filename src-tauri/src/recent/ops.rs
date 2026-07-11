@@ -99,8 +99,8 @@ mod tests {
     #[test]
     fn add_recent_request_uses_generated_storage_type_contract() {
         let request: AddRecentFileRequest = serde_json::from_value(json!({
-            "documentId": 7,
-            "baseRevision": 3,
+            "documentId": "7",
+            "baseRevision": "3",
             "originalPath": "/original/book.xlsx"
         }))
         .expect("recent request");

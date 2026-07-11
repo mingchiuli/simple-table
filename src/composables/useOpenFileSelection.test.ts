@@ -49,8 +49,8 @@ function openedResponse(): OpenDocumentResponse {
       ],
     },
     editorSession: {
-      documentId: 1,
-      revision: 0,
+      documentId: '1',
+      revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -124,8 +124,8 @@ describe("useOpenFileSelection", () => {
     await expect(openSelectedFileOrDiscard(selection)).rejects.toThrow("context changed");
 
     expect(api.commitPreparedDocument).toHaveBeenCalledWith("prepared-selection", {
-      documentId: 1,
-      baseRevision: 0,
+      documentId: '1',
+      baseRevision: '0',
     });
     expect(api.abortPreparedDocument).toHaveBeenCalledWith("prepared-selection");
     expect(replacement.commit).not.toHaveBeenCalled();

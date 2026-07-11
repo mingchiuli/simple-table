@@ -100,12 +100,12 @@ function fileData(fileName: string, value: string): FileData {
   };
 }
 
-function openedResponse(fileName: string, documentId: number): OpenDocumentResponse {
+function openedResponse(fileName: string, documentId: number | string): OpenDocumentResponse {
   return {
     fileData: fileData(fileName, "opened"),
     editorSession: {
-      documentId,
-      revision: 0,
+      documentId: String(documentId),
+      revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -328,7 +328,7 @@ describe("useFileActions", () => {
     pendingCommit.resolve(openedResponse("committing.xlsx", 2));
 
     await expect(loadPromise).resolves.toBe(false);
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith(2);
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith('2');
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
@@ -361,8 +361,8 @@ describe("useFileActions", () => {
     await waitForCondition(() => vi.mocked(api.commitPreparedDocument).mock.calls.length > 0);
 
     expect(api.commitPreparedDocument).toHaveBeenCalledWith("replacement-token", {
-      documentId: 1,
-      baseRevision: 0,
+      documentId: '1',
+      baseRevision: '0',
     });
     shouldContinue = false;
     for (const handler of cancelHandlers) {
@@ -371,7 +371,7 @@ describe("useFileActions", () => {
     pendingCommit.resolve(openedResponse("replacement.xlsx", 2));
 
     await expect(loadPromise).resolves.toBe(false);
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith(2);
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith('2');
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.currentFilePath).toBeNull();
@@ -469,7 +469,7 @@ describe("useFileActions", () => {
 
     expect(documentSessionStore.currentFilePath).toBe("/tmp/fast.xlsx");
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: 2, baseRevision: 0 },
+      { documentId: '2', baseRevision: '0' },
       undefined
     );
 
@@ -499,10 +499,10 @@ describe("useFileActions", () => {
       await expect(actions.loadFileFromPath("/tmp/nameless.xlsx")).resolves.toBe(true);
       await flushPromises();
 
-      expect(documentSessionStore.documentId).toBe(2);
+      expect(documentSessionStore.documentId).toBe('2');
       expect(documentSessionStore.currentFilePath).toBe("/tmp/nameless.xlsx");
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: 2, baseRevision: 0 },
+        { documentId: '2', baseRevision: '0' },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -573,7 +573,7 @@ describe("useFileActions", () => {
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
     expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/next.xlsx");
-    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.documentId).toBe('2');
   });
 
   it("discards newly dirty pending work before opening the selected file", async () => {
@@ -605,7 +605,7 @@ describe("useFileActions", () => {
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
     expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/next.xlsx");
-    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.documentId).toBe('2');
     expect(documentSessionStore.currentFilePath).toBe("/tmp/next.xlsx");
   });
 
@@ -665,7 +665,7 @@ describe("useFileActions", () => {
 
     await expect(actions.closeCurrentDocument()).resolves.toBe(true);
 
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith(1);
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith('1');
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
@@ -714,7 +714,7 @@ describe("useFileActions", () => {
     documentSessionStore.endLifecycle("saving");
 
     await expect(closePromise).resolves.toBe(true);
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith(1);
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith('1');
     expect(documentSessionStore.data).toBeNull();
   });
 
@@ -736,7 +736,7 @@ describe("useFileActions", () => {
 
     expect(api.closeCurrentDocument).not.toHaveBeenCalled();
     expect(routerMocks.push).toHaveBeenCalledWith({ name: "home" });
-    expect(documentSessionStore.documentId).toBe(1);
+    expect(documentSessionStore.documentId).toBe('1');
     expect(backResolved).toBe(false);
 
     pendingNavigation.resolve();
@@ -759,7 +759,7 @@ describe("useFileActions", () => {
 
     expect(api.closeCurrentDocument).not.toHaveBeenCalled();
     expect(routerMocks.push).toHaveBeenCalledWith({ name: "home" });
-    expect(documentSessionStore.documentId).toBe(1);
+    expect(documentSessionStore.documentId).toBe('1');
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
       "Failed to return home: Error: navigation failed"
     );
@@ -807,8 +807,8 @@ describe("useFileActions", () => {
     await actions.handleSaveFile();
 
     expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
-      documentId: 1,
-      baseRevision: 0,
+      documentId: '1',
+      baseRevision: '0',
     });
     expect(platform.discardSaveLocation).not.toHaveBeenCalled();
     expect(documentSessionStore.currentFilePath).toBe(savePath);
@@ -839,13 +839,13 @@ describe("useFileActions", () => {
       await flushPromises();
 
       expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
-        documentId: 1,
-        baseRevision: 0,
+        documentId: '1',
+        baseRevision: '0',
       });
       expect(platform.discardSaveLocation).not.toHaveBeenCalled();
       expect(documentSessionStore.currentFilePath).toBe(savePath);
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: 1, baseRevision: 0 },
+        { documentId: '1', baseRevision: '0' },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -878,12 +878,12 @@ describe("useFileActions", () => {
       await flushPromises();
 
       expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
-        documentId: 1,
-        baseRevision: 0,
+        documentId: '1',
+        baseRevision: '0',
       });
       expect(documentSessionStore.currentFilePath).toBe(existingPath);
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: 1, baseRevision: 0 },
+        { documentId: '1', baseRevision: '0' },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -902,7 +902,7 @@ describe("useFileActions", () => {
     const existingPath = "/tmp/current.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), existingPath);
-    documentSessionStore.revision = 3;
+    documentSessionStore.revision = '3';
     documentSessionStore.projectionStale = true;
     vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
     const saved = savedResponse("current.xlsx", existingPath, 1);
@@ -910,7 +910,7 @@ describe("useFileActions", () => {
       ...saved,
       editorSession: {
         ...saved.editorSession,
-        revision: 3,
+        revision: '3',
       },
     });
 
@@ -919,8 +919,8 @@ describe("useFileActions", () => {
     await actions.handleSaveFile();
 
     expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
-      documentId: 1,
-      baseRevision: 3,
+      documentId: '1',
+      baseRevision: '3',
     });
     expect(documentSessionStore.projectionStale).toBe(false);
     expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("saved"));
@@ -946,8 +946,8 @@ describe("useFileActions", () => {
     await actions.handleSaveFile();
 
     expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
-      documentId: 1,
-      baseRevision: 0,
+      documentId: '1',
+      baseRevision: '0',
     });
     expect(platform.discardSaveLocation).not.toHaveBeenCalled();
     expect(elementPlus.ElMessage.warning).toHaveBeenCalledWith(
@@ -955,7 +955,7 @@ describe("useFileActions", () => {
     );
     expect(elementPlus.ElMessage.success).not.toHaveBeenCalled();
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
-    expect(documentSessionStore.documentId).toBe(1);
+    expect(documentSessionStore.documentId).toBe('1');
     expect(documentSessionStore.currentFilePath).toBeNull();
   });
 
@@ -975,8 +975,8 @@ describe("useFileActions", () => {
     await actions.handleSaveFile();
 
     expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
-      documentId: 1,
-      baseRevision: 0,
+      documentId: '1',
+      baseRevision: '0',
     });
     expect(elementPlus.ElMessage.warning).toHaveBeenCalledWith(
       "File was saved, but the active document changed before the editor could refresh."
@@ -1004,8 +1004,8 @@ describe("useFileActions", () => {
     await actions.handleSaveFile();
 
     expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
-      documentId: 1,
-      baseRevision: 0,
+      documentId: '1',
+      baseRevision: '0',
     });
     expect(platform.discardSaveLocation).toHaveBeenCalledWith(savePath);
     expect(documentSessionStore.currentFilePath).toBeNull();

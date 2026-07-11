@@ -45,9 +45,11 @@ pub struct AddRecentFileRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub original_path: Option<String>,
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub document_id: u64,
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub base_revision: u64,
 }
 

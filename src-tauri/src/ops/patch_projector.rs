@@ -45,6 +45,14 @@ pub fn mutation_response_with_search_index_update(
         capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
         patches,
+        sheet_extents: Some(
+            editor_state
+                .file_data()
+                .sheets
+                .iter()
+                .map(crate::types::SheetData::extent)
+                .collect(),
+        ),
         search_index_update,
     }
 }

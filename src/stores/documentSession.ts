@@ -5,8 +5,12 @@ import type {
   OpenDocumentResponse,
   SavedDocumentResponse,
   EditorCommandContext,
+  SheetExtent,
+  SheetProjectionResponse,
+  U64String,
 } from "@/types";
 import { applyDocumentPatches } from "@/stores/documentPatches";
+import { compareU64, isNextU64, maxU64, ZERO_U64 } from "@/utils/u64";
 import {
   applyEditorSessionStatus,
   applyResponseStatus,
@@ -27,6 +31,8 @@ import {
   resetSessionUi,
   resetTransientDocumentWork,
   restoreMutationSnapshot,
+  projectionExtents,
+  updateLoadedSheetIndexes,
   waitForIdleSessionInteraction,
   waitForQueuedMutations,
   type DocumentSessionLifecycle,
@@ -44,11 +50,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
   state: () => ({
     data: null as FileData | null,
     currentFilePath: null as string | null,
-    documentId: null as number | null,
-    revision: 0,
+    documentId: null as U64String | null,
+    revision: ZERO_U64,
     lifecycle: "idle" as DocumentSessionLifecycle,
     editorCommandDepth: 0,
     projectionStale: false,
+    sheetExtents: [] as SheetExtent[],
+    loadedSheetIndexes: [] as number[],
   }),
   getters: {
     isInteractionLocked: (state) => state.lifecycle !== "idle" || state.editorCommandDepth > 0,
@@ -66,7 +74,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       return waitForIdleSessionInteraction(this);
     },
     enqueueDocumentMutation<T>(
-      documentId: number,
+      documentId: U64String,
       task: (context: EditorCommandContext) => Promise<T>
     ): Promise<T | undefined> {
       return enqueueMutation(this, async () => {
@@ -93,7 +101,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         baseRevision: this.revision,
       };
     },
-    commandContextForDocument(documentId: number): EditorCommandContext | null {
+    commandContextForDocument(documentId: U64String): EditorCommandContext | null {
       const context = this.currentCommandContext();
       if (!context || context.documentId !== documentId) {
         return null;
@@ -121,6 +129,12 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.revision = response.editorSession.revision;
       resetSessionEditorCommands(this);
       this.projectionStale = false;
+      this.sheetExtents = response.sheetExtents
+        ? response.sheetExtents
+        : projectionExtents(response.fileData);
+      this.loadedSheetIndexes = response.loadedSheetIndexes
+        ? [...response.loadedSheetIndexes]
+        : response.fileData.sheets.map((_, index) => index);
       resetSessionUi();
       resetDocumentStatus();
       applyEditorSessionStatus(response.editorSession);
@@ -144,6 +158,10 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
+      if (response.fileData) {
+        this.sheetExtents = projectionExtents(response.fileData);
+        this.loadedSheetIndexes = response.fileData.sheets.map((_, index) => index);
+      }
       clampSelectionToCurrentSheet(this);
       resetSearchSession();
       applyEditorSessionStatus(response.editorSession);
@@ -155,7 +173,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
     ): boolean {
       if (
         response.editorSession.documentId !== context.documentId
-        || response.editorSession.revision < context.baseRevision
+        || compareU64(response.editorSession.revision, context.baseRevision) < 0
         || !this.matchesCommandContext(context)
       ) {
         return false;
@@ -178,9 +196,11 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       this.data = null;
       this.currentFilePath = null;
       this.documentId = null;
-      this.revision = 0;
+      this.revision = ZERO_U64;
       resetSessionEditorCommands(this);
       this.projectionStale = false;
+      this.sheetExtents = [];
+      this.loadedSheetIndexes = [];
       resetSessionLifecycle(this);
       resetSessionUi();
       resetDocumentStatus();
@@ -198,10 +218,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (this.documentId === null) {
         this.documentId = response.documentId;
       }
-      if (response.revision < this.revision) {
+      if (compareU64(response.revision, this.revision) < 0) {
         return { data: this.data, resyncRequired: false, applied: false };
       }
-      if (response.revision > this.revision + 1) {
+      if (
+        compareU64(response.revision, this.revision) > 0
+        && !isNextU64(response.revision, this.revision)
+      ) {
         this.revision = response.revision;
         applyResponseStatus(response);
         this.projectionStale = true;
@@ -223,6 +246,13 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       try {
         const result = applyDocumentPatches(this.data, response.patches);
         this.data = result.data;
+        this.loadedSheetIndexes = updateLoadedSheetIndexes(
+          this.loadedSheetIndexes,
+          response.patches
+        );
+        if (response.sheetExtents) {
+          this.sheetExtents = response.sheetExtents;
+        }
         applySelectionPatches(response.patches);
         if (mutationInvalidatesSearch(response.patches)) {
           clearSearchSession();
@@ -243,6 +273,38 @@ export const useDocumentSessionStore = defineStore("documentSession", {
         throw error;
       }
     },
+    isSheetLoaded(sheetIndex: number): boolean {
+      return this.loadedSheetIndexes.includes(sheetIndex);
+    },
+    async ensureSheetLoaded(
+      sheetIndex: number,
+      fetchProjection: (
+        context: EditorCommandContext,
+        sheetIndex: number
+      ) => Promise<SheetProjectionResponse>
+    ): Promise<boolean> {
+      if (this.isSheetLoaded(sheetIndex)) return true;
+      const context = this.currentCommandContext();
+      if (!context || !this.data?.sheets[sheetIndex]) return false;
+      const response = await fetchProjection(context, sheetIndex);
+      if (
+        !this.matchesCommandContext(context)
+        || response.documentId !== context.documentId
+        || response.revision !== context.baseRevision
+        || response.sheetIndex !== sheetIndex
+      ) {
+        return false;
+      }
+      const sheets = [...this.data.sheets];
+      sheets[sheetIndex] = response.sheet;
+      this.data = { ...this.data, sheets };
+      this.sheetExtents[sheetIndex] = response.extent;
+      this.sheetExtents = [...this.sheetExtents];
+      this.loadedSheetIndexes = Array.from(
+        new Set([...this.loadedSheetIndexes, sheetIndex])
+      ).sort((left, right) => left - right);
+      return true;
+    },
     markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
       if (this.documentId !== null && response.documentId !== this.documentId) {
         return false;
@@ -250,7 +312,7 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (this.documentId === null && this.data === null) {
         return false;
       }
-      if (response.revision < this.revision) {
+      if (compareU64(response.revision, this.revision) < 0) {
         return false;
       }
       if (this.documentId === null) {
@@ -370,9 +432,9 @@ export const useDocumentSessionStore = defineStore("documentSession", {
       if (this.documentId !== null && info.documentId !== this.documentId) {
         return;
       }
-      const revisionAdvancedWithoutProjection = info.revision > this.revision;
+      const revisionAdvancedWithoutProjection = compareU64(info.revision, this.revision) > 0;
       this.documentId = info.documentId;
-      this.revision = Math.max(this.revision, info.revision);
+      this.revision = maxU64(this.revision, info.revision);
       applyEditorSessionStatus(info);
       if (revisionAdvancedWithoutProjection) {
         this.projectionStale = true;

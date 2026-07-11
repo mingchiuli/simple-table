@@ -1,6 +1,7 @@
 import type { ComputedRef, Ref } from "vue";
 import { ElMessage } from "element-plus";
 import * as api from "@/api";
+import { useDocumentCommandBus } from "@/composables/useDocumentCommandBus";
 import {
   useDocumentSessionStore,
   type MutationApplyResult,
@@ -43,65 +44,22 @@ export function useEditorCommands({
   const documentStatusStore = useDocumentStatusStore();
   const editorSelectionStore = useEditorSelectionStore();
   const searchSessionStore = useSearchSessionStore();
+  const commandBus = useDocumentCommandBus({ applyMutationResponse });
 
-  async function runEditorMutation(
+  function runEditorMutation(
     action: (context: EditorCommandContext) => Promise<EditorMutationResponse>,
-    message: string,
+    errorMessage: string,
     options: {
       refreshProjectionOnError?: boolean;
       afterApplied?: () => void;
     } = {}
   ) {
-    const releaseEditorCommand = documentSessionStore.beginEditorCommand();
-    if (!releaseEditorCommand) return;
-    const initialContext = documentSessionStore.currentCommandContext();
-    if (!initialContext) {
-      releaseEditorCommand();
-      return;
-    }
-    try {
-      if (!(await flushPendingCellChanges())) return;
-      await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
-        const response = await action(context);
-        let applied = false;
-        try {
-          applied = (await applyMutationResponse(response)).applied;
-        } catch (error) {
-          if (!documentSessionStore.markProjectionStaleFromMutationResponse(response)) {
-            return;
-          }
-          const refreshed = await refreshAfterMutationError({ refreshProjection: true });
-          if (refreshed) {
-            runAfterApplied(options.afterApplied);
-          } else {
-            ElMessage.error(
-              `Change was applied, but the editor could not refresh: ${appErrorMessage(error)}`
-            );
-          }
-          return;
-        }
-        if (!applied) return;
-        runAfterApplied(options.afterApplied);
-      });
-    } catch (error) {
-      await refreshAfterMutationError({
-        refreshProjection: options.refreshProjectionOnError || documentSessionStore.projectionStale,
-      });
-      ElMessage.error(`${message}: ${appErrorMessage(error)}`);
-    } finally {
-      releaseEditorCommand();
-    }
-  }
-
-  function runAfterApplied(afterApplied: (() => void) | undefined) {
-    try {
-      afterApplied?.();
-    } catch (error) {
-      console.error("Post-mutation UI update failed:", error);
-      ElMessage.error(
-        `Change was applied, but the editor UI could not update: ${appErrorMessage(error)}`
-      );
-    }
+    return commandBus.runInteractiveMutation({
+      action,
+      flushPendingChanges: flushPendingCellChanges,
+      errorMessage,
+      ...options,
+    });
   }
 
   async function handleAddRow() {
@@ -170,8 +128,9 @@ export function useEditorCommands({
     );
   }
 
-  function handleSheetChange(index: number) {
+  async function handleSheetChange(index: number) {
     if (isEditorCommandBlocked()) return;
+    if (!(await commandBus.ensureSheetLoaded(index, flushPendingCellChanges))) return;
     editorSelectionStore.switchSheet(index, (cell) =>
       editorValueForCell(index, cell.row, cell.col)
     );
@@ -219,8 +178,9 @@ export function useEditorCommands({
     }
   }
 
-  function handleSearchResultClick(result: SearchResult) {
+  async function handleSearchResultClick(result: SearchResult) {
     if (isEditorCommandBlocked()) return;
+    if (!(await commandBus.ensureSheetLoaded(result.sheetIndex, flushPendingCellChanges))) return;
     editorSelectionStore.focusSearchResult(
       result.sheetIndex,
       result.row,
@@ -316,21 +276,6 @@ export function useEditorCommands({
 
   function isEditorCommandBlocked(): boolean {
     return documentSessionStore.isEditorInteractionLocked;
-  }
-
-  async function refreshAfterMutationError(
-    options: { refreshProjection?: boolean } = {}
-  ): Promise<boolean> {
-    try {
-      await documentSessionStore.refreshAfterMutationFailure(
-        api.getEditorState,
-        options.refreshProjection && fileData.value ? api.getCurrentFileData : undefined
-      );
-      return true;
-    } catch (error) {
-      console.error("Failed to refresh editor state after mutation error:", error);
-      return false;
-    }
   }
 
   return {

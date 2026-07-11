@@ -3,6 +3,8 @@ import type {
   EditorSessionInfo,
   EditorPatch,
   FileData,
+  SheetExtent,
+  U64String,
 } from "@/types";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useSearchSessionStore } from "@/stores/searchSession";
@@ -23,21 +25,25 @@ type DocumentSessionRuntime = {
 export type DocumentSessionStateTarget = {
   data: FileData | null;
   currentFilePath: string | null;
-  documentId: number | null;
-  revision: number;
+  documentId: U64String | null;
+  revision: U64String;
   lifecycle: DocumentSessionLifecycle;
   editorCommandDepth: number;
   projectionStale: boolean;
+  sheetExtents: SheetExtent[];
+  loadedSheetIndexes: number[];
 };
 
 export type DocumentSessionSnapshot = {
   data: FileData | null;
   currentFilePath: string | null;
-  documentId: number | null;
-  revision: number;
+  documentId: U64String | null;
+  revision: U64String;
   lifecycle: DocumentSessionLifecycle;
   editorCommandDepth: number;
   projectionStale: boolean;
+  sheetExtents: SheetExtent[];
+  loadedSheetIndexes: number[];
   status: DocumentStatusSnapshot;
   selection: EditorSelectionSnapshot;
 };
@@ -162,6 +168,8 @@ export function replaceProjection(store: DocumentSessionStateTarget, data: FileD
     fileName: currentFileName ?? data.fileName,
   };
   store.projectionStale = false;
+  store.sheetExtents = projectionExtents(data);
+  store.loadedSheetIndexes = data.sheets.map((_, index) => index);
   clampSelectionToCurrentSheet(store);
   useSearchSessionStore().clearSearch();
 }
@@ -185,6 +193,8 @@ export function captureMutationSnapshot(
     lifecycle: store.lifecycle,
     editorCommandDepth: store.editorCommandDepth,
     projectionStale: store.projectionStale,
+    sheetExtents: [...store.sheetExtents],
+    loadedSheetIndexes: [...store.loadedSheetIndexes],
     status: statusStore.captureSnapshot(),
     selection: selectionStore.captureSnapshot(),
   };
@@ -201,6 +211,8 @@ export function restoreMutationSnapshot(
   store.lifecycle = snapshot.lifecycle;
   store.editorCommandDepth = snapshot.editorCommandDepth;
   store.projectionStale = snapshot.projectionStale;
+  store.sheetExtents = [...snapshot.sheetExtents];
+  store.loadedSheetIndexes = [...snapshot.loadedSheetIndexes];
 
   useDocumentStatusStore().restoreSnapshot(snapshot.status);
   useEditorSelectionStore().restoreSnapshot(snapshot.selection);
@@ -229,6 +241,52 @@ export function clampSelectionToCurrentSheet(store: DocumentSessionStateTarget) 
 
 export function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): boolean {
   return (patches ?? []).some((patch) => patch.type !== "Layout");
+}
+
+export function projectionExtents(data: FileData): SheetExtent[] {
+  return data.sheets.map((sheet) => calculateSheetExtent(
+    sheet.rows,
+    sheet.merges,
+    sheet.columnWidths,
+    sheet.rowHeights,
+    sheet.rich
+  ));
+}
+
+export function updateLoadedSheetIndexes(
+  loadedSheetIndexes: number[],
+  patches: EditorPatch[] | undefined
+): number[] {
+  let loaded = new Set(loadedSheetIndexes);
+  for (const patch of patches ?? []) {
+    switch (patch.type) {
+      case 'SheetInserted': {
+        const inserted = patch.data.patch.sheetIndex;
+        loaded = new Set(Array.from(loaded, (index) => index >= inserted ? index + 1 : index));
+        loaded.add(inserted);
+        break;
+      }
+      case 'SheetDeleted': {
+        const deleted = patch.data.patch.sheetIndex;
+        loaded = new Set(
+          Array.from(loaded)
+            .filter((index) => index !== deleted)
+            .map((index) => index > deleted ? index - 1 : index)
+        );
+        break;
+      }
+      case 'SheetUpdated':
+        loaded.add(patch.data.patch.sheetIndex);
+        break;
+      case 'SheetsReplaced': {
+        const { startIndex, sheets } = patch.data.patch;
+        loaded = new Set(Array.from(loaded).filter((index) => index < startIndex));
+        sheets.forEach((_, offset) => loaded.add(startIndex + offset));
+        break;
+      }
+    }
+  }
+  return Array.from(loaded).sort((left, right) => left - right);
 }
 
 function resetMutationQueue(store: object) {

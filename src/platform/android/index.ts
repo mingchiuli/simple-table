@@ -1,19 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from '@/tauriInvoke';
 import type { OpenFileSelection, PlatformAPI } from '../types';
-import type { EditorCommandContext, PreparedOpenDocument, SavedDocumentResponse } from "@/types";
-
-interface PickFileAndroidResult {
-  info: {
-    path: string;
-    originalPath: string;
-    fileName: string;
-  };
-}
+import type { EditorCommandContext, PreparedOpenDocument } from "@/types";
 
 export const androidFileOps = {
   /** Android: 后端用官方 dialog/fs 导入到 App 沙盒，不解析、不替换后端活动文档 */
   pickOpenFile: async (): Promise<OpenFileSelection | null> => {
-    const info = await invoke<PickFileAndroidResult["info"] | null>("pick_open_file_android");
+    const info = await invokeCommand("pick_open_file_android", {});
     if (!info) return null;
 
     return {
@@ -24,26 +16,26 @@ export const androidFileOps = {
   },
 
   discardOpenFileSelection: (selection: OpenFileSelection): Promise<void> => {
-    return invoke<void>("discard_open_file_selection_android", { path: selection.path });
+    return invokeCommand("discard_open_file_selection_android", { path: selection.path });
   },
 
   /** Android: 从 App 沙盒路径读取并解析（用于最近文件列表） */
   prepareOpenFile: (path: string): Promise<PreparedOpenDocument> => {
-    return invoke<PreparedOpenDocument>("prepare_open_file_android", { path });
+    return invokeCommand("prepare_open_file_android", { path });
   },
 
   /** Android: 生成文件字节并写入 App 沙盒路径 */
   saveFile: (path: string, context: EditorCommandContext) =>
-    invoke<SavedDocumentResponse>("save_file_android", { path, ...context }),
+    invokeCommand("save_file_android", { path, ...context }),
 
   exportFile: (defaultName: string, context: EditorCommandContext) =>
-    invoke<string | null>("export_file_android", { defaultName, ...context }),
+    invokeCommand("export_file_android", { defaultName, ...context }),
 
   pickSaveLocation: (defaultName: string) =>
-    invoke<string | null>("pick_save_location_android", { defaultName }),
+    invokeCommand("pick_save_location_android", { defaultName }),
 
   discardSaveLocation: (path: string): Promise<void> => {
-    return invoke<void>("discard_save_location_android", { path });
+    return invokeCommand("discard_save_location_android", { path });
   },
 };
 

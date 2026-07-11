@@ -1,10 +1,7 @@
-import type { CellValue, MergeRange, ReadOnlyRichProjection } from "@/types";
+import type { CellValue, MergeRange, ReadOnlyRichProjection, SheetExtent } from "@/types";
 import { parseCellKey } from "@/utils/cellAddress";
 
-export type SheetExtent = {
-  rowCount: number;
-  columnCount: number;
-};
+export type { SheetExtent } from "@/types";
 
 export function calculateSheetExtent(
   rows: CellValue[][],

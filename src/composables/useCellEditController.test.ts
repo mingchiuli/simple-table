@@ -45,10 +45,10 @@ function fileData(value: string): FileData {
   };
 }
 
-function editorSession(revision: number): EditorSessionInfo {
+function editorSession(revision: number | string): EditorSessionInfo {
   return {
-    documentId: 1,
-    revision,
+    documentId: '1',
+    revision: String(revision),
     formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
     editorState: {
@@ -63,8 +63,8 @@ function editorSession(revision: number): EditorSessionInfo {
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
     protocolVersion: 1,
-    documentId: 1,
-    revision: 3,
+    documentId: '1',
+    revision: '3',
     formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
     editorState: {
@@ -94,7 +94,7 @@ describe("useCellEditController", () => {
       editorSession: editorSession(0),
     }, "/tmp/book.xlsx");
     const fresh = fileData("draft");
-    vi.mocked(api.setCells).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.setCells).mockResolvedValue(mutationResponse({ revision: '3' }));
     vi.mocked(api.getCurrentFileData)
       .mockRejectedValueOnce(new Error("projection unavailable"))
       .mockResolvedValueOnce(fresh);
@@ -127,11 +127,11 @@ describe("useCellEditController", () => {
     await expect(controller.flushPendingCellChanges()).resolves.toBe(true);
 
     expect(api.setCells).toHaveBeenCalledWith(
-      { documentId: 1, baseRevision: 0 },
+      { documentId: '1', baseRevision: '0' },
       [{ sheetIndex: 0, row: 0, col: 0, text: "draft" }]
     );
     expect(api.getCurrentFileData).toHaveBeenCalledTimes(2);
-    expect(documentSessionStore.revision).toBe(3);
+    expect(documentSessionStore.revision).toBe('3');
     expect(documentSessionStore.projectionStale).toBe(false);
     expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("draft"));
     expect(usePendingCellSavesStore().phase).toBe("idle");
@@ -151,7 +151,7 @@ describe("useCellEditController", () => {
       fileData: fileData("old"),
       editorSession: editorSession(0),
     }, "/tmp/book.xlsx");
-    vi.mocked(api.setCells).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.setCells).mockResolvedValue(mutationResponse({ revision: '3' }));
     vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
     const applyMutationResponse = vi.fn().mockRejectedValue(new Error("frontend apply failed"));
@@ -179,12 +179,12 @@ describe("useCellEditController", () => {
     await expect(controller.flushPendingCellChanges()).resolves.toBe(true);
 
     expect(api.setCells).toHaveBeenCalledWith(
-      { documentId: 1, baseRevision: 0 },
+      { documentId: '1', baseRevision: '0' },
       [{ sheetIndex: 0, row: 0, col: 0, text: "draft" }]
     );
-    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
-    expect(api.getEditorState).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
-    expect(documentSessionStore.revision).toBe(3);
+    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
+    expect(api.getEditorState).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
+    expect(documentSessionStore.revision).toBe('3');
     expect(documentSessionStore.projectionStale).toBe(true);
     expect(documentSessionStore.isEditorInteractionLocked).toBe(true);
     expect(documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("old"));

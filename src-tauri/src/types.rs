@@ -14,3 +14,22 @@ pub use search::*;
 pub use types::*;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub use update::*;
+
+pub(crate) mod u64_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}

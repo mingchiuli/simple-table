@@ -2,6 +2,7 @@ import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as api from '@/api';
 import { useCellEditTransactions } from '@/composables/useCellEditTransactions';
+import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import {
   useDocumentSessionStore,
   type MutationApplyResult,
@@ -37,6 +38,7 @@ export function useCellEditController({
 }: UseCellEditControllerOptions) {
   const documentSessionStore = useDocumentSessionStore();
   const editorSelectionStore = useEditorSelectionStore();
+  const commandBus = useDocumentCommandBus({ applyMutationResponse });
 
   const transactions = useCellEditTransactions({
     fileData,
@@ -88,41 +90,18 @@ export function useCellEditController({
       };
     });
 
-    await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
-      const response = await api.setCells(context, payload);
-      try {
-        const result = await applyMutationResponse(response);
-        if (!result.applied && documentSessionStore.documentId === documentId) {
-          throw new Error("Cell save response was not applied to the active document");
-        }
-      } catch (error) {
-        if (!documentSessionStore.markProjectionStaleFromMutationResponse(response)) {
-          return;
-        }
-        const refreshed = await refreshSessionAfterMutationError();
-        if (!refreshed) {
-          ElMessage.error(`保存已提交，但刷新失败: ${appErrorMessage(error)}`);
-        }
-      }
+    await commandBus.runBackgroundMutation({
+      documentId,
+      action: (context) => api.setCells(context, payload),
+      onRefreshFailed: (error) => {
+        ElMessage.error(`保存已提交，但刷新失败: ${appErrorMessage(error)}`);
+      },
     });
   }
 
   async function handleCommitFailed(error: unknown) {
-    await refreshSessionAfterMutationError();
+    await commandBus.refreshAfterMutationError(true);
     ElMessage.error(`保存失败: ${appErrorMessage(error)}，已恢复所有更改`);
-  }
-
-  async function refreshSessionAfterMutationError(): Promise<boolean> {
-    try {
-      await documentSessionStore.refreshAfterMutationFailure(
-        api.getEditorState,
-        api.getCurrentFileData
-      );
-      return true;
-    } catch (error) {
-      console.error('Failed to refresh editor state after cell save error:', error);
-      return false;
-    }
   }
 
   function selectedCellKey() {

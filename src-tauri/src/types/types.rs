@@ -283,6 +283,14 @@ pub struct SheetData {
     pub rich: ReadOnlyRichProjection,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetExtent {
+    pub row_count: usize,
+    pub column_count: usize,
+}
+
 impl Serialize for SheetData {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -304,6 +312,45 @@ impl Serialize for SheetData {
 }
 
 impl SheetData {
+    pub fn extent(&self) -> SheetExtent {
+        let value_row_count = self.rows.len();
+        let value_column_count = self.rows.iter().map(Vec::len).max().unwrap_or(0);
+        let merge_row_count = self
+            .merges
+            .iter()
+            .map(|merge| merge.end_row as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let merge_column_count = self
+            .merges
+            .iter()
+            .map(|merge| merge.end_col as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let layout_row_count = self
+            .row_heights
+            .as_ref()
+            .and_then(|values| values.keys().max().map(|index| index + 1))
+            .unwrap_or(0);
+        let layout_column_count = self
+            .column_widths
+            .as_ref()
+            .and_then(|values| values.keys().max().map(|index| index + 1))
+            .unwrap_or(0);
+        let rich_extent = rich_projection_extent(&self.rich);
+
+        SheetExtent {
+            row_count: value_row_count
+                .max(merge_row_count)
+                .max(layout_row_count)
+                .max(rich_extent.row_count),
+            column_count: value_column_count
+                .max(merge_column_count)
+                .max(layout_column_count)
+                .max(rich_extent.column_count),
+        }
+    }
+
     pub fn cell_format_at(&self, row: usize, col: usize) -> Option<CellFormatProjection> {
         let key = excel_cell_key(row, col);
         let explicit = self.rich.cell_formats.get(&key);
@@ -364,6 +411,63 @@ fn excel_cell_key(row_index: usize, col_index: usize) -> String {
     format!("{letters}{}", row_index + 1)
 }
 
+fn rich_projection_extent(rich: &ReadOnlyRichProjection) -> SheetExtent {
+    let mut extent = SheetExtent::default();
+    for key in rich
+        .cell_formats
+        .keys()
+        .chain(rich.cell_styles.keys())
+        .chain(rich.hyperlinks.keys())
+    {
+        if let Some((row, col)) = parse_cell_address(key) {
+            extent.row_count = extent.row_count.max(row + 1);
+            extent.column_count = extent.column_count.max(col + 1);
+        }
+    }
+    for row in &rich.hidden_rows {
+        extent.row_count = extent.row_count.max(row + 1);
+    }
+    for col in &rich.hidden_columns {
+        extent.column_count = extent.column_count.max(col + 1);
+    }
+    for drawing in &rich.drawings {
+        extent.row_count = extent.row_count.max(
+            drawing
+                .to_row
+                .unwrap_or(drawing.from_row)
+                .max(drawing.from_row) as usize
+                + 1,
+        );
+        extent.column_count = extent.column_count.max(
+            drawing
+                .to_col
+                .unwrap_or(drawing.from_col)
+                .max(drawing.from_col) as usize
+                + 1,
+        );
+    }
+    extent
+}
+
+fn parse_cell_address(key: &str) -> Option<(usize, usize)> {
+    let mut col = 0usize;
+    let mut row = 0usize;
+    let mut saw_digit = false;
+    for byte in key.bytes() {
+        if byte.is_ascii_alphabetic() && !saw_digit {
+            col = col
+                .checked_mul(26)?
+                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
+        } else if byte.is_ascii_digit() {
+            saw_digit = true;
+            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
+        } else {
+            return None;
+        }
+    }
+    (col > 0 && row > 0).then_some((row - 1, col - 1))
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -379,6 +483,27 @@ pub struct FileData {
 pub struct OpenDocumentResponse {
     pub file_data: FileData,
     pub editor_session: EditorSessionInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sheet_extents: Option<Vec<SheetExtent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub loaded_sheet_indexes: Option<Vec<usize>>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetProjectionResponse {
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
+    pub document_id: u64,
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
+    pub revision: u64,
+    pub sheet_index: usize,
+    pub sheet: SheetData,
+    pub extent: SheetExtent,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -1060,9 +1185,11 @@ impl SearchIndexUpdatePlan {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct EditorCommandContext {
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub document_id: u64,
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub base_revision: u64,
 }
 
@@ -1072,9 +1199,11 @@ pub struct EditorCommandContext {
 pub struct EditorMutationResponse {
     #[ts(type = "1")]
     pub protocol_version: u16,
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub document_id: u64,
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub revision: u64,
     pub formula_status: FormulaStatus,
     #[serde(default)]
@@ -1082,6 +1211,9 @@ pub struct EditorMutationResponse {
     pub editor_state: EditorStateInfo,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sheet_extents: Option<Vec<SheetExtent>>,
     #[serde(skip)]
     #[ts(skip)]
     pub search_index_update: SearchIndexUpdatePlan,

@@ -1,5 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
+use super::CommandU64;
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -10,7 +11,7 @@ use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
-    SpreadsheetFormatOptions,
+    SheetProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -71,10 +72,10 @@ pub fn discard_save_location_desktop(path: String) {
 #[tauri::command(rename_all = "camelCase")]
 pub fn save_file_desktop(
     path: String,
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    desktop::save_file(&path, document_id, base_revision)
+    desktop::save_file(&path, document_id.get(), base_revision.get())
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
@@ -83,10 +84,10 @@ pub fn save_file_desktop(
 pub fn export_file_desktop(
     app: AppHandle,
     default_name: String,
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
-    desktop::export_file(&app, &default_name, document_id, base_revision)
+    desktop::export_file(&app, &default_name, document_id.get(), base_revision.get())
 }
 
 #[tauri::command]
@@ -97,10 +98,14 @@ pub fn prepare_new_file(file_data: FileData) -> Result<PreparedOpenDocument, App
 #[tauri::command(rename_all = "camelCase")]
 pub fn commit_prepared_document(
     token: String,
-    expected_document_id: Option<u64>,
-    expected_revision: Option<u64>,
+    expected_document_id: Option<CommandU64>,
+    expected_revision: Option<CommandU64>,
 ) -> Result<OpenDocumentResponse, AppError> {
-    document::commit_prepared_document(&token, expected_document_id, expected_revision)
+    document::commit_prepared_document(
+        &token,
+        expected_document_id.map(CommandU64::get),
+        expected_revision.map(CommandU64::get),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -114,25 +119,37 @@ pub fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_current_file_data(document_id: u64, base_revision: u64) -> Result<FileData, AppError> {
-    document::current_file_data_for_command(document_id, base_revision)
+pub fn get_current_file_data(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+) -> Result<FileData, AppError> {
+    document::current_file_data_for_command(document_id.get(), base_revision.get())
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
-    document::close_current_document(document_id)
+pub fn get_sheet_projection(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+    sheet_index: usize,
+) -> Result<SheetProjectionResponse, AppError> {
+    document::sheet_projection_for_command(document_id.get(), base_revision.get(), sheet_index)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn close_current_document(document_id: CommandU64) -> Result<(), AppError> {
+    document::close_current_document(document_id.get())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_document_capabilities(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     file_name: String,
     current_path: Option<String>,
 ) -> Result<DocumentCapabilities, AppError> {
     document::document_capabilities_for_command(
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         &file_name,
         current_path.as_deref(),
     )
@@ -140,11 +157,15 @@ pub fn get_document_capabilities(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_native_save_plan(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     target_path_or_name: String,
 ) -> Result<NativeSavePlan, AppError> {
-    document::native_save_plan_for_command(document_id, base_revision, &target_path_or_name)
+    document::native_save_plan_for_command(
+        document_id.get(),
+        base_revision.get(),
+        &target_path_or_name,
+    )
 }
 
 #[tauri::command]
@@ -156,31 +177,41 @@ pub fn get_spreadsheet_format_options() -> SpreadsheetFormatOptions {
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_editor_state(
-    document_id: Option<u64>,
-    base_revision: Option<u64>,
+    document_id: Option<CommandU64>,
+    base_revision: Option<CommandU64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
     let registry = active_document_store();
-    editor_ops::do_get_editor_state(&registry, document_id, base_revision)
+    editor_ops::do_get_editor_state(
+        &registry,
+        document_id.map(CommandU64::get),
+        base_revision.map(CommandU64::get),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn undo(document_id: u64, base_revision: u64) -> Result<EditorMutationResponse, AppError> {
+pub fn undo(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    editor_ops::do_undo(&registry, document_id, base_revision)
+    editor_ops::do_undo(&registry, document_id.get(), base_revision.get())
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn redo(document_id: u64, base_revision: u64) -> Result<EditorMutationResponse, AppError> {
+pub fn redo(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    editor_ops::do_redo(&registry, document_id, base_revision)
+    editor_ops::do_redo(&registry, document_id.get(), base_revision.get())
 }
 
 // ==================== Cell Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_cell(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     row: usize,
     col: usize,
@@ -189,8 +220,8 @@ pub fn set_cell(
     let registry = active_document_store();
     cell_ops::do_set_cell(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         row,
         col,
@@ -200,26 +231,26 @@ pub fn set_cell(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_cells(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     changes: Vec<SetCellRequest>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_cells(&registry, document_id, base_revision, changes)
+    cell_ops::do_set_cells(&registry, document_id.get(), base_revision.get(), changes)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_row(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
     cell_ops::do_add_row(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         row_index,
     )
@@ -227,16 +258,16 @@ pub fn add_row(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_row(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
     cell_ops::do_delete_row(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         row_index,
     )
@@ -244,16 +275,16 @@ pub fn delete_row(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_column(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
     cell_ops::do_add_column(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         col_index,
     )
@@ -261,16 +292,16 @@ pub fn add_column(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_column(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
     cell_ops::do_delete_column(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         col_index,
     )
@@ -278,8 +309,8 @@ pub fn delete_column(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_column_width(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
@@ -287,8 +318,8 @@ pub fn set_column_width(
     let registry = active_document_store();
     cell_ops::do_set_column_width(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         col_index,
         width,
@@ -297,8 +328,8 @@ pub fn set_column_width(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_row_height(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
@@ -306,8 +337,8 @@ pub fn set_row_height(
     let registry = active_document_store();
     cell_ops::do_set_row_height(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         sheet_index,
         row_index,
         height,
@@ -317,27 +348,35 @@ pub fn set_row_height(
 // ==================== Sheet Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_sheet(document_id: u64, base_revision: u64) -> Result<EditorMutationResponse, AppError> {
+pub fn add_sheet(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_sheet(&registry, document_id, base_revision)
+    cell_ops::do_add_sheet(&registry, document_id.get(), base_revision.get())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_sheet(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_sheet(&registry, document_id, base_revision, sheet_index)
+    cell_ops::do_delete_sheet(
+        &registry,
+        document_id.get(),
+        base_revision.get(),
+        sheet_index,
+    )
 }
 
 // ==================== Search Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn search(
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
     query: String,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
@@ -345,8 +384,8 @@ pub fn search(
     let registry = active_document_store();
     search_ops::do_search(
         &registry,
-        document_id,
-        base_revision,
+        document_id.get(),
+        base_revision.get(),
         &query,
         scope,
         current_sheet_index,

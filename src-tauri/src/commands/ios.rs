@@ -1,4 +1,6 @@
 #[cfg(target_os = "ios")]
+use super::CommandU64;
+#[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
 use crate::io::platform::mobile::PickedFileInfo;
@@ -58,10 +60,10 @@ pub async fn pick_save_location_ios(
 pub async fn save_file_ios(
     app: AppHandle,
     path: String,
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    mobile::save_file(&app, &path, document_id, base_revision)
+    mobile::save_file(&app, &path, document_id.get(), base_revision.get())
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.
@@ -70,8 +72,8 @@ pub async fn save_file_ios(
 pub async fn export_file_ios(
     app: AppHandle,
     default_name: String,
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
-    ios::export_file(&app, &default_name, document_id, base_revision)
+    ios::export_file(&app, &default_name, document_id.get(), base_revision.get())
 }

@@ -18,8 +18,8 @@ function activeDocument(): OpenDocumentResponse {
       sheets: [{ name: "Sheet1", rows: [], merges: [], rich: { hasMoreDrawings: false, hasStyleMetadata: false, hasHyperlinks: false, hasFreezePane: false } }],
     },
     editorSession: {
-      documentId: 9,
-      revision: 4,
+      documentId: '9',
+      revision: '4',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -52,8 +52,8 @@ describe("restoreActiveDocument", () => {
     await expect(restoreActiveDocument()).resolves.toBe(true);
 
     const store = useDocumentSessionStore();
-    expect(store.documentId).toBe(9);
-    expect(store.revision).toBe(4);
+    expect(store.documentId).toBe('9');
+    expect(store.revision).toBe('4');
     expect(store.currentFilePath).toBe("/tmp/recovered.xlsx");
   });
 

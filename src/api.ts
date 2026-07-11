@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "@/tauriInvoke";
 import type {
   FileData,
   RecentFile,
@@ -14,17 +14,19 @@ import type {
   EditorCommandContext,
   SearchScope,
   AddRecentFileRequest,
+  SheetProjectionResponse,
+  U64String,
 } from "@/types";
 
 export async function prepareNewFile(fileData: FileData): Promise<PreparedOpenDocument> {
-  return invoke<PreparedOpenDocument>("prepare_new_file", { fileData });
+  return invokeCommand("prepare_new_file", { fileData });
 }
 
 export async function commitPreparedDocument(
   token: string,
   expectedContext: EditorCommandContext | null
 ): Promise<OpenDocumentResponse> {
-  return invoke<OpenDocumentResponse>("commit_prepared_document", {
+  return invokeCommand("commit_prepared_document", {
     token,
     expectedDocumentId: expectedContext?.documentId ?? null,
     expectedRevision: expectedContext?.baseRevision ?? null,
@@ -32,19 +34,26 @@ export async function commitPreparedDocument(
 }
 
 export async function abortPreparedDocument(token: string): Promise<void> {
-  return invoke<void>("abort_prepared_document", { token });
+  return invokeCommand("abort_prepared_document", { token });
 }
 
 export async function getActiveDocument(): Promise<OpenDocumentResponse | null> {
-  return invoke<OpenDocumentResponse | null>("get_active_document");
+  return invokeCommand("get_active_document", {});
 }
 
 export async function getCurrentFileData(context: EditorCommandContext): Promise<FileData> {
-  return invoke<FileData>("get_current_file_data", context);
+  return invokeCommand("get_current_file_data", context);
 }
 
-export async function closeCurrentDocument(documentId: number): Promise<void> {
-  return invoke<void>("close_current_document", { documentId });
+export async function getSheetProjection(
+  context: EditorCommandContext,
+  sheetIndex: number
+): Promise<SheetProjectionResponse> {
+  return invokeCommand("get_sheet_projection", { ...context, sheetIndex });
+}
+
+export async function closeCurrentDocument(documentId: U64String): Promise<void> {
+  return invokeCommand("close_current_document", { documentId });
 }
 
 export async function getDocumentCapabilities(
@@ -52,7 +61,7 @@ export async function getDocumentCapabilities(
   fileName: string,
   currentPath: string | null
 ): Promise<DocumentCapabilities> {
-  return invoke<DocumentCapabilities>("get_document_capabilities", {
+  return invokeCommand("get_document_capabilities", {
     ...context,
     fileName,
     currentPath,
@@ -63,11 +72,11 @@ export async function getNativeSavePlan(
   context: EditorCommandContext,
   targetPathOrName: string
 ): Promise<NativeSavePlan> {
-  return invoke<NativeSavePlan>("get_native_save_plan", { ...context, targetPathOrName });
+  return invokeCommand("get_native_save_plan", { ...context, targetPathOrName });
 }
 
 export async function getSpreadsheetFormatOptions(): Promise<SpreadsheetFormatOptions> {
-  return invoke<SpreadsheetFormatOptions>("get_spreadsheet_format_options");
+  return invokeCommand("get_spreadsheet_format_options", {});
 }
 
 // ==================== Editor Operations ====================
@@ -75,18 +84,18 @@ export async function getSpreadsheetFormatOptions(): Promise<SpreadsheetFormatOp
 export async function getEditorState(
   context: EditorCommandContext | null = null
 ): Promise<EditorSessionInfo | null> {
-  return invoke<EditorSessionInfo | null>("get_editor_state", {
+  return invokeCommand("get_editor_state", {
     documentId: context?.documentId ?? null,
     baseRevision: context?.baseRevision ?? null,
   });
 }
 
 export async function undo(context: EditorCommandContext): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("undo", context);
+  return invokeCommand("undo", context);
 }
 
 export async function redo(context: EditorCommandContext): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("redo", context);
+  return invokeCommand("redo", context);
 }
 
 // ==================== Cell Operations ====================
@@ -98,14 +107,14 @@ export async function setCell(
   col: number,
   text: string
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("set_cell", { ...context, sheetIndex, row, col, text });
+  return invokeCommand("set_cell", { ...context, sheetIndex, row, col, text });
 }
 
 export async function setCells(
   context: EditorCommandContext,
   changes: SetCellRequest[]
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("set_cells", { ...context, changes });
+  return invokeCommand("set_cells", { ...context, changes });
 }
 
 export async function addRow(
@@ -113,7 +122,7 @@ export async function addRow(
   sheetIndex: number,
   rowIndex: number
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("add_row", { ...context, sheetIndex, rowIndex });
+  return invokeCommand("add_row", { ...context, sheetIndex, rowIndex });
 }
 
 export async function deleteRow(
@@ -121,7 +130,7 @@ export async function deleteRow(
   sheetIndex: number,
   rowIndex: number
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("delete_row", { ...context, sheetIndex, rowIndex });
+  return invokeCommand("delete_row", { ...context, sheetIndex, rowIndex });
 }
 
 export async function addColumn(
@@ -129,7 +138,7 @@ export async function addColumn(
   sheetIndex: number,
   colIndex: number
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("add_column", { ...context, sheetIndex, colIndex });
+  return invokeCommand("add_column", { ...context, sheetIndex, colIndex });
 }
 
 export async function deleteColumn(
@@ -137,7 +146,7 @@ export async function deleteColumn(
   sheetIndex: number,
   colIndex: number
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("delete_column", { ...context, sheetIndex, colIndex });
+  return invokeCommand("delete_column", { ...context, sheetIndex, colIndex });
 }
 
 export async function setColumnWidth(
@@ -146,7 +155,7 @@ export async function setColumnWidth(
   colIndex: number,
   width: number | null
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("set_column_width", {
+  return invokeCommand("set_column_width", {
     ...context,
     sheetIndex,
     colIndex,
@@ -160,7 +169,7 @@ export async function setRowHeight(
   rowIndex: number,
   height: number | null
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("set_row_height", {
+  return invokeCommand("set_row_height", {
     ...context,
     sheetIndex,
     rowIndex,
@@ -171,14 +180,14 @@ export async function setRowHeight(
 // ==================== Sheet Operations ====================
 
 export async function addSheet(context: EditorCommandContext): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("add_sheet", context);
+  return invokeCommand("add_sheet", context);
 }
 
 export async function deleteSheet(
   context: EditorCommandContext,
   sheetIndex: number
 ): Promise<EditorMutationResponse> {
-  return invoke<EditorMutationResponse>("delete_sheet", { ...context, sheetIndex });
+  return invokeCommand("delete_sheet", { ...context, sheetIndex });
 }
 
 // ==================== Search Operations ====================
@@ -189,13 +198,13 @@ export async function search(
   scope: SearchScope,
   currentSheetIndex: number | null
 ): Promise<SearchResult[]> {
-  return invoke<SearchResult[]>("search", { ...context, query, scope, currentSheetIndex });
+  return invokeCommand("search", { ...context, query, scope, currentSheetIndex });
 }
 
 // ==================== Recent Files Operations ====================
 
 export async function getRecentFiles(): Promise<RecentFile[]> {
-  return invoke<RecentFile[]>("get_recent_files");
+  return invokeCommand("get_recent_files", {});
 }
 
 export async function addRecentFileWithThumbnail(
@@ -208,11 +217,11 @@ export async function addRecentFileWithThumbnail(
     baseRevision: context.baseRevision,
   };
 
-  return invoke<RecentFile>("add_recent_file_with_thumbnail", {
+  return invokeCommand("add_recent_file_with_thumbnail", {
     request,
   });
 }
 
 export async function removeRecentFile(id: string): Promise<void> {
-  return invoke<void>("remove_recent_file", { id });
+  return invokeCommand("remove_recent_file", { id });
 }

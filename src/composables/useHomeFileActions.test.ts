@@ -73,7 +73,7 @@ function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
 }
 
-function openedResponse(fileName = "book.xlsx", documentId = 1): OpenDocumentResponse {
+function openedResponse(fileName = "book.xlsx", documentId: number | string = '1'): OpenDocumentResponse {
   return {
     fileData: {
       path: `/tmp/${fileName}`,
@@ -88,8 +88,8 @@ function openedResponse(fileName = "book.xlsx", documentId = 1): OpenDocumentRes
       ],
     },
     editorSession: {
-      documentId,
-      revision: 0,
+      documentId: String(documentId),
+      revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -154,7 +154,7 @@ describe("useHomeFileActions", () => {
 
     expect(api.prepareNewFile).toHaveBeenCalledTimes(1);
     expect(api.commitPreparedDocument).toHaveBeenCalledWith("prepared-new", null);
-    expect(documentSessionStore.documentId).toBe(1);
+    expect(documentSessionStore.documentId).toBe('1');
     expect(documentSessionStore.data?.fileName).toBe("untitled.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
   });
@@ -169,7 +169,7 @@ describe("useHomeFileActions", () => {
 
     await actions.handleNewFile();
 
-    expect(documentSessionStore.documentId).toBe(1);
+    expect(documentSessionStore.documentId).toBe('1');
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
     expect(documentSessionStore.data?.fileName).toBe("current.xlsx");
   });
@@ -240,7 +240,7 @@ describe("useHomeFileActions", () => {
     await flushPromises();
 
     expect(platform.prepareRecentFile).toHaveBeenCalledWith(recentFile());
-    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.documentId).toBe('2');
     expect(documentSessionStore.currentFilePath).toBe("/tmp/recent.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
   });
@@ -271,7 +271,7 @@ describe("useHomeFileActions", () => {
     expect(platform.prepareRecentFile).toHaveBeenCalledWith(stale);
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(api.removeRecentFile).toHaveBeenCalledWith("stale");
-    expect(documentSessionStore.documentId).toBe(3);
+    expect(documentSessionStore.documentId).toBe('3');
     expect(documentSessionStore.currentFilePath).toBe("/tmp/relocated.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
   });

@@ -41,8 +41,8 @@ function editorState(partial: Partial<EditorStateInfo> = {}): EditorStateInfo {
 function response(partial: Partial<EditorMutationResponse>): EditorMutationResponse {
   return {
     protocolVersion: 1,
-    documentId: 1,
-    revision: 1,
+    documentId: '1',
+    revision: '1',
     formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
     editorState: editorState(),
@@ -60,8 +60,8 @@ function openTestDocument(
   store.openDocumentResponse({
     fileData,
     editorSession: {
-      documentId: 1,
-      revision: 0,
+      documentId: '1',
+      revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: editorState(),
@@ -108,7 +108,7 @@ describe("documentSession store", () => {
     openTestDocument(store, data, data.path);
 
     const result = store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [
         {
           type: "SheetUpdated",
@@ -119,8 +119,44 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(false);
     expect(result.applied).toBe(true);
-    expect(store.revision).toBe(1);
+    expect(store.revision).toBe('1');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("new"));
+  });
+
+  it("loads a deferred sheet projection for the current document revision", async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse({
+      fileData: {
+        path: "/tmp/book.xlsx",
+        fileName: "book.xlsx",
+        sheets: [sheet("First", [[text("loaded")]]), sheet("Second", [])],
+      },
+      editorSession: {
+        documentId: '9007199254740993',
+        revision: '9007199254740994',
+        formulaStatus: readyFormulaStatus(),
+        capabilities: defaultWorkbookCapabilities(),
+        editorState: editorState(),
+      },
+      sheetExtents: [
+        { rowCount: 1, columnCount: 1 },
+        { rowCount: 2, columnCount: 2 },
+      ],
+      loadedSheetIndexes: [0],
+    });
+
+    const loaded = await store.ensureSheetLoaded(1, async (context, sheetIndex) => ({
+      documentId: context.documentId,
+      revision: context.baseRevision,
+      sheetIndex,
+      sheet: sheet("Second", [[text("deferred")]]),
+      extent: { rowCount: 1, columnCount: 1 },
+    }));
+
+    expect(loaded).toBe(true);
+    expect(store.isSheetLoaded(1)).toBe(true);
+    expect(store.data?.sheets[1].rows[0][0]).toEqual(text("deferred"));
+    expect(store.sheetExtents[1]).toEqual({ rowCount: 1, columnCount: 1 });
   });
 
   it("reports mutation responses from another document as ignored", () => {
@@ -133,8 +169,8 @@ describe("documentSession store", () => {
     openTestDocument(store, data, data.path);
 
     const result = store.applyMutationResponse(response({
-      documentId: 2,
-      revision: 1,
+      documentId: '2',
+      revision: '1',
       patches: [
         {
           type: "SheetUpdated",
@@ -148,8 +184,8 @@ describe("documentSession store", () => {
       resyncRequired: false,
       applied: false,
     });
-    expect(store.documentId).toBe(1);
-    expect(store.revision).toBe(0);
+    expect(store.documentId).toBe('1');
+    expect(store.revision).toBe('0');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
   });
 
@@ -161,11 +197,11 @@ describe("documentSession store", () => {
       sheets: [sheet("Sheet1", [[text("old")]])],
     });
 
-    const result = store.applyMutationResponse(response({ revision: 3 }));
+    const result = store.applyMutationResponse(response({ revision: '3' }));
 
     expect(result.resyncRequired).toBe(true);
     expect(result.applied).toBe(true);
-    expect(store.revision).toBe(3);
+    expect(store.revision).toBe('3');
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
   });
@@ -182,7 +218,7 @@ describe("documentSession store", () => {
     searchStore.applySearchResults(requestId, [searchResult()]);
 
     store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [{
         type: "Cells",
         data: {
@@ -208,7 +244,7 @@ describe("documentSession store", () => {
     searchStore.applySearchResults(requestId, [searchResult()]);
 
     store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [{
         type: "Layout",
         data: {
@@ -236,7 +272,7 @@ describe("documentSession store", () => {
     const requestId = searchStore.beginSearch("old");
     searchStore.applySearchResults(requestId, [searchResult()]);
 
-    store.applyMutationResponse(response({ revision: 3 }));
+    store.applyMutationResponse(response({ revision: '3' }));
 
     expect(searchStore.searchQuery).toBe("");
     expect(searchStore.searchResults).toEqual([]);
@@ -252,12 +288,12 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("current")]])],
     });
-    store.applyMutationResponse(response({ revision: 1 }));
+    store.applyMutationResponse(response({ revision: '1' }));
     const requestId = searchStore.beginSearch("current");
     searchStore.applySearchResults(requestId, [searchResult("current")]);
 
     const result = store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [
         {
           type: "Cells",
@@ -269,7 +305,7 @@ describe("documentSession store", () => {
     }));
 
     expect(result.resyncRequired).toBe(true);
-    expect(store.revision).toBe(1);
+    expect(store.revision).toBe('1');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
@@ -292,8 +328,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: current,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -301,15 +337,15 @@ describe("documentSession store", () => {
     }, current.path);
 
     const result = await store.applyMutationResponseWithResync(
-      response({ revision: 3 }),
+      response({ revision: '3' }),
       async (context) => {
-        expect(context).toEqual({ documentId: 1, baseRevision: 3 });
+        expect(context).toEqual({ documentId: '1', baseRevision: '3' });
         return fresh;
       }
     );
 
     expect(result.resyncRequired).toBe(true);
-    expect(store.revision).toBe(3);
+    expect(store.revision).toBe('3');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
     expect(store.projectionStale).toBe(false);
     expect(store.isInteractionLocked).toBe(false);
@@ -336,7 +372,7 @@ describe("documentSession store", () => {
     });
     const pending = store.applyMutationResponseWithResync(
       response({
-        revision: 1,
+        revision: '1',
         patches: [
           {
             type: "ResyncRequired",
@@ -349,7 +385,7 @@ describe("documentSession store", () => {
 
     await Promise.resolve();
 
-    expect(store.revision).toBe(1);
+    expect(store.revision).toBe('1');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);
@@ -374,8 +410,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: current,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -385,18 +421,18 @@ describe("documentSession store", () => {
     await expect(
       store.applyMutationResponseWithResync(
         response({
-          revision: 3,
+          revision: '3',
           editorState: editorState({ isDirty: true }),
         }),
         async (context) => {
-          expect(context).toEqual({ documentId: 1, baseRevision: 3 });
+          expect(context).toEqual({ documentId: '1', baseRevision: '3' });
           throw new Error("projection unavailable");
         }
       )
     ).rejects.toThrow("projection unavailable");
 
-    expect(store.documentId).toBe(1);
-    expect(store.revision).toBe(3);
+    expect(store.documentId).toBe('1');
+    expect(store.revision).toBe('3');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
@@ -416,8 +452,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: current,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -427,13 +463,13 @@ describe("documentSession store", () => {
     searchStore.applySearchResults(requestId, [searchResult()]);
 
     const marked = store.markProjectionStaleFromMutationResponse(response({
-      revision: 3,
+      revision: '3',
       editorState: editorState({ isDirty: true }),
     }));
 
     expect(marked).toBe(true);
-    expect(store.documentId).toBe(1);
-    expect(store.revision).toBe(3);
+    expect(store.documentId).toBe('1');
+    expect(store.revision).toBe('3');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
@@ -455,8 +491,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: current,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -466,13 +502,13 @@ describe("documentSession store", () => {
     searchStore.applySearchResults(requestId, [searchResult()]);
 
     expect(() => store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       editorState: editorState({ isDirty: true }),
       patches: [{ type: "UnknownPatch", data: {} } as unknown as EditorPatch],
     }))).toThrow("Unhandled editor patch");
 
-    expect(store.documentId).toBe(1);
-    expect(store.revision).toBe(1);
+    expect(store.documentId).toBe('1');
+    expect(store.revision).toBe('1');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(true);
     expect(store.projectionStale).toBe(true);
@@ -497,8 +533,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: oldData,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -507,13 +543,13 @@ describe("documentSession store", () => {
 
     await expect(
       store.applyMutationResponseWithResync(
-        response({ revision: 3 }),
+        response({ revision: '3' }),
         async () => {
           store.openDocumentResponse({
             fileData: nextData,
             editorSession: {
-              documentId: 2,
-              revision: 0,
+              documentId: '2',
+              revision: '0',
               formulaStatus: readyFormulaStatus(),
               capabilities: defaultWorkbookCapabilities(),
               editorState: editorState(),
@@ -524,8 +560,8 @@ describe("documentSession store", () => {
       )
     ).rejects.toThrow("projection unavailable");
 
-    expect(store.documentId).toBe(2);
-    expect(store.revision).toBe(0);
+    expect(store.documentId).toBe('2');
+    expect(store.revision).toBe('0');
     expect(store.data?.fileName).toBe("next.xlsx");
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
   });
@@ -550,13 +586,13 @@ describe("documentSession store", () => {
     openTestDocument(store, oldData, oldData.path);
 
     const result = await store.applyMutationResponseWithResync(
-      response({ revision: 3 }),
+      response({ revision: '3' }),
       async () => {
         store.openDocumentResponse({
           fileData: nextData,
           editorSession: {
-            documentId: 2,
-            revision: 0,
+            documentId: '2',
+            revision: '0',
             formulaStatus: readyFormulaStatus(),
             capabilities: defaultWorkbookCapabilities(),
             editorState: editorState(),
@@ -568,8 +604,8 @@ describe("documentSession store", () => {
 
     expect(result.applied).toBe(false);
     expect(result.resyncRequired).toBe(true);
-    expect(store.documentId).toBe(2);
-    expect(store.revision).toBe(0);
+    expect(store.documentId).toBe('2');
+    expect(store.revision).toBe('0');
     expect(store.data?.fileName).toBe("next.xlsx");
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
   });
@@ -585,8 +621,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: current,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -596,24 +632,24 @@ describe("documentSession store", () => {
     await expect(
       store.refreshAfterMutationFailure(
         async (context) => {
-          expect(context).toEqual({ documentId: 1, baseRevision: 0 });
+          expect(context).toEqual({ documentId: '1', baseRevision: '0' });
           return {
-            documentId: 1,
-            revision: 3,
+            documentId: '1',
+            revision: '3',
             formulaStatus: readyFormulaStatus(),
             capabilities: defaultWorkbookCapabilities(),
             editorState: editorState({ isDirty: true }),
           };
         },
         async (context) => {
-          expect(context).toEqual({ documentId: 1, baseRevision: 0 });
+          expect(context).toEqual({ documentId: '1', baseRevision: '0' });
           throw new Error("projection unavailable");
         }
       )
     ).rejects.toThrow("projection unavailable");
 
-    expect(store.documentId).toBe(1);
-    expect(store.revision).toBe(0);
+    expect(store.documentId).toBe('1');
+    expect(store.revision).toBe('0');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(statusStore.isContentDirty).toBe(false);
   });
@@ -634,8 +670,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: current,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -646,8 +682,8 @@ describe("documentSession store", () => {
 
     await store.refreshAfterMutationFailure(
       async () => ({
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -668,10 +704,10 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("current")]])],
     });
-    store.applyMutationResponse(response({ revision: 1 }));
+    store.applyMutationResponse(response({ revision: '1' }));
 
     const result = store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [],
       editorState: editorState({ isDirty: true }),
     }));
@@ -695,7 +731,7 @@ describe("documentSession store", () => {
     selectionStore.selectCell(2, 2);
 
     store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [{
         type: "RowDeleted",
         data: {
@@ -715,7 +751,7 @@ describe("documentSession store", () => {
     expect(selectionStore.selectedCell).toEqual({ row: 1, col: 2 });
 
     store.applyMutationResponse(response({
-      revision: 2,
+      revision: '2',
       patches: [{
         type: "ColumnInserted",
         data: {
@@ -746,7 +782,7 @@ describe("documentSession store", () => {
     selectionStore.selectCell(0, 1);
 
     store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [{
         type: "ColumnDeleted",
         data: {
@@ -781,7 +817,7 @@ describe("documentSession store", () => {
     selectionStore.selectCell(3, 3);
 
     store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [{
         type: "Layout",
         data: {
@@ -803,10 +839,10 @@ describe("documentSession store", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("current")]])],
     });
-    store.applyMutationResponse(response({ revision: 2 }));
+    store.applyMutationResponse(response({ revision: '2' }));
 
     const result = store.applyMutationResponse(response({
-      revision: 1,
+      revision: '1',
       patches: [
         {
           type: "SheetUpdated",
@@ -823,8 +859,8 @@ describe("documentSession store", () => {
     const store = useDocumentSessionStore();
 
     const result = store.applyMutationResponse(response({
-      documentId: 99,
-      revision: 1,
+      documentId: '99',
+      revision: '1',
       patches: [
         {
           type: "SheetUpdated",
@@ -835,7 +871,7 @@ describe("documentSession store", () => {
 
     expect(result.resyncRequired).toBe(false);
     expect(store.documentId).toBeNull();
-    expect(store.revision).toBe(0);
+    expect(store.revision).toBe('0');
     expect(store.data).toBeNull();
   });
 
@@ -861,16 +897,16 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 42,
-        revision: 7,
+        documentId: '42',
+        revision: '7',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState({ canUndo: true, isDirty: true }),
       },
     }, data.path);
 
-    expect(store.documentId).toBe(42);
-    expect(store.revision).toBe(7);
+    expect(store.documentId).toBe('42');
+    expect(store.revision).toBe('7');
     expect(store.currentFilePath).toBe(data.path);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("A1"));
   });
@@ -886,19 +922,19 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 42,
-        revision: 7,
+        documentId: '42',
+        revision: '7',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
       },
     }, data.path);
 
-    expect(store.commandContextForDocument(42)).toEqual({
-      documentId: 42,
-      baseRevision: 7,
+    expect(store.commandContextForDocument('42')).toEqual({
+      documentId: '42',
+      baseRevision: '7',
     });
-    expect(store.commandContextForDocument(99)).toBeNull();
+    expect(store.commandContextForDocument('99')).toBeNull();
   });
 
   it("skips queued document mutations after the active document changes", async () => {
@@ -916,8 +952,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: oldData,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -926,7 +962,7 @@ describe("documentSession store", () => {
 
     let releaseFirstMutation!: () => void;
     const firstMutationStarted = new Promise<void>((resolve) => {
-      void store.enqueueDocumentMutation(1, async () => {
+      void store.enqueueDocumentMutation('1', async () => {
         resolve();
         await new Promise<void>((release) => {
           releaseFirstMutation = release;
@@ -936,15 +972,15 @@ describe("documentSession store", () => {
     await firstMutationStarted;
 
     let staleMutationRan = false;
-    const staleMutation = store.enqueueDocumentMutation(1, async () => {
+    const staleMutation = store.enqueueDocumentMutation('1', async () => {
       staleMutationRan = true;
     });
 
     store.openDocumentResponse({
       fileData: nextData,
       editorSession: {
-        documentId: 2,
-        revision: 0,
+        documentId: '2',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -955,7 +991,7 @@ describe("documentSession store", () => {
     await staleMutation;
 
     expect(staleMutationRan).toBe(false);
-    expect(store.documentId).toBe(2);
+    expect(store.documentId).toBe('2');
     expect(store.data?.fileName).toBe("next.xlsx");
   });
 
@@ -970,7 +1006,7 @@ describe("documentSession store", () => {
 
     let releaseFirstMutation!: () => void;
     const firstMutationStarted = new Promise<void>((resolve) => {
-      void store.enqueueDocumentMutation(1, async () => {
+      void store.enqueueDocumentMutation('1', async () => {
         resolve();
         await new Promise<void>((release) => {
           releaseFirstMutation = release;
@@ -980,7 +1016,7 @@ describe("documentSession store", () => {
     await firstMutationStarted;
 
     let staleMutationRan = false;
-    const staleMutation = store.enqueueDocumentMutation(1, async () => {
+    const staleMutation = store.enqueueDocumentMutation('1', async () => {
       staleMutationRan = true;
     });
 
@@ -989,7 +1025,7 @@ describe("documentSession store", () => {
     await staleMutation;
 
     expect(staleMutationRan).toBe(false);
-    expect(store.documentId).toBe(1);
+    expect(store.documentId).toBe('1');
     expect(store.data?.fileName).toBe("book.xlsx");
   });
 
@@ -1003,8 +1039,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1012,11 +1048,11 @@ describe("documentSession store", () => {
     }, data.path);
 
     let secondMutationRan = false;
-    const firstMutation = store.enqueueDocumentMutation(1, async () => {
+    const firstMutation = store.enqueueDocumentMutation('1', async () => {
       store.projectionStale = true;
-      store.revision = 1;
+      store.revision = '1';
     });
-    const secondMutation = store.enqueueDocumentMutation(1, async () => {
+    const secondMutation = store.enqueueDocumentMutation('1', async () => {
       secondMutationRan = true;
     });
 
@@ -1025,7 +1061,7 @@ describe("documentSession store", () => {
 
     expect(secondMutationRan).toBe(false);
     expect(store.projectionStale).toBe(true);
-    expect(store.revision).toBe(1);
+    expect(store.revision).toBe('1');
   });
 
   it("ignores saved responses for a stale document context", () => {
@@ -1043,8 +1079,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: oldData,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1055,8 +1091,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: nextData,
       editorSession: {
-        documentId: 2,
-        revision: 0,
+        documentId: '2',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1071,8 +1107,8 @@ describe("documentSession store", () => {
           sheets: [sheet("Sheet1", [[text("saved-old")]])],
         },
         editorSession: {
-          documentId: 1,
-          revision: 0,
+          documentId: '1',
+          revision: '0',
           formulaStatus: readyFormulaStatus(),
           capabilities: defaultWorkbookCapabilities(),
           editorState: editorState(),
@@ -1082,7 +1118,7 @@ describe("documentSession store", () => {
     );
 
     expect(applied).toBe(false);
-    expect(store.documentId).toBe(2);
+    expect(store.documentId).toBe('2');
     expect(store.currentFilePath).toBe(nextData.path);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("next"));
   });
@@ -1097,8 +1133,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 1,
-        revision: 3,
+        documentId: '1',
+        revision: '3',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1114,8 +1150,8 @@ describe("documentSession store", () => {
           sheets: [sheet("Sheet1", [[text("older saved")]])],
         },
         editorSession: {
-          documentId: 1,
-          revision: 2,
+          documentId: '1',
+          revision: '2',
           formulaStatus: readyFormulaStatus(),
           capabilities: defaultWorkbookCapabilities(),
           editorState: editorState(),
@@ -1125,7 +1161,7 @@ describe("documentSession store", () => {
     );
 
     expect(applied).toBe(false);
-    expect(store.revision).toBe(3);
+    expect(store.revision).toBe('3');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
   });
 
@@ -1140,8 +1176,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1164,8 +1200,8 @@ describe("documentSession store", () => {
         sheets: [sheet("Sheet1", [[text("saved")]])],
       },
       editorSession: {
-        documentId: 1,
-        revision: 1,
+        documentId: '1',
+        revision: '1',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1188,8 +1224,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 1,
-        revision: 2,
+        documentId: '1',
+        revision: '2',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1202,8 +1238,8 @@ describe("documentSession store", () => {
         fileName: "book.xlsx",
       },
       editorSession: {
-        documentId: 1,
-        revision: 3,
+        documentId: '1',
+        revision: '3',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1215,7 +1251,7 @@ describe("documentSession store", () => {
     expect(store.data?.sheets).toStrictEqual(data.sheets);
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("current"));
     expect(store.currentFilePath).toBe("/tmp/book.xlsx");
-    expect(store.revision).toBe(3);
+    expect(store.revision).toBe('3');
   });
 
   it("discardPendingLocalWork clears queued drafts and pending dirty state", () => {
@@ -1244,8 +1280,8 @@ describe("documentSession store", () => {
         sheets: [sheet("Sheet1", [[text("old")]])],
       },
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1260,15 +1296,15 @@ describe("documentSession store", () => {
         sheets: [sheet("Sheet1", [[text("next")]])],
       },
       editorSession: {
-        documentId: 2,
-        revision: 0,
+        documentId: '2',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
       },
     }, "/tmp/next.xlsx");
 
-    expect(store.documentId).toBe(2);
+    expect(store.documentId).toBe('2');
     expect(store.data?.fileName).toBe("next.xlsx");
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(pendingStore.hasPendingWork()).toBe(false);
@@ -1285,8 +1321,8 @@ describe("documentSession store", () => {
         sheets: [sheet("Sheet1", [[text("old")]])],
       },
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1298,9 +1334,9 @@ describe("documentSession store", () => {
       path: "",
       fileName: "untitled.xlsx",
       sheets: [sheet("Sheet1", [[text("blank")]])],
-    }, null, { documentId: 2 });
+    }, null, { documentId: '2' });
 
-    expect(store.documentId).toBe(2);
+    expect(store.documentId).toBe('2');
     expect(store.data?.fileName).toBe("untitled.xlsx");
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(pendingStore.hasPendingWork()).toBe(false);
@@ -1338,8 +1374,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 42,
-        revision: 7,
+        documentId: '42',
+        revision: '7',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState({ canUndo: true, isDirty: true }),
@@ -1352,7 +1388,7 @@ describe("documentSession store", () => {
     expect(store.data).toBeNull();
     expect(store.currentFilePath).toBeNull();
     expect(store.documentId).toBeNull();
-    expect(store.revision).toBe(0);
+    expect(store.revision).toBe('0');
     expect(statusStore.canUndo).toBe(false);
     expect(statusStore.isContentDirty).toBe(false);
     expect(statusStore.hasPendingContentChange).toBe(false);
@@ -1375,8 +1411,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: oldData,
       editorSession: {
-        documentId: 1,
-        revision: 0,
+        documentId: '1',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1387,8 +1423,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: nextData,
       editorSession: {
-        documentId: 2,
-        revision: 0,
+        documentId: '2',
+        revision: '0',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1396,7 +1432,7 @@ describe("documentSession store", () => {
     }, nextData.path);
     store.applyEditorSessionForContext(staleContext, null);
 
-    expect(store.documentId).toBe(2);
+    expect(store.documentId).toBe('2');
     expect(store.data?.fileName).toBe("next.xlsx");
   });
 
@@ -1404,8 +1440,8 @@ describe("documentSession store", () => {
     const store = useDocumentSessionStore();
 
     store.applyEditorSessionForContext(null, {
-      documentId: 42,
-      revision: 7,
+      documentId: '42',
+      revision: '7',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: editorState({ canUndo: true, isDirty: true }),
@@ -1413,7 +1449,7 @@ describe("documentSession store", () => {
 
     expect(store.data).toBeNull();
     expect(store.documentId).toBeNull();
-    expect(store.revision).toBe(0);
+    expect(store.revision).toBe('0');
   });
 
   it("marks projection stale when a session-only refresh advances the revision", () => {
@@ -1427,8 +1463,8 @@ describe("documentSession store", () => {
     store.openDocumentResponse({
       fileData: data,
       editorSession: {
-        documentId: 1,
-        revision: 1,
+        documentId: '1',
+        revision: '1',
         formulaStatus: readyFormulaStatus(),
         capabilities: defaultWorkbookCapabilities(),
         editorState: editorState(),
@@ -1438,14 +1474,14 @@ describe("documentSession store", () => {
     searchStore.applySearchResults(requestId, [searchResult()]);
 
     store.applyEditorSession({
-      documentId: 1,
-      revision: 2,
+      documentId: '1',
+      revision: '2',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: editorState({ isDirty: true }),
     });
 
-    expect(store.revision).toBe(2);
+    expect(store.revision).toBe('2');
     expect(store.data?.sheets[0].rows[0][0]).toEqual(text("old"));
     expect(store.projectionStale).toBe(true);
     expect(store.isEditorInteractionLocked).toBe(true);

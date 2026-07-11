@@ -40,7 +40,7 @@ function sheet(name: string, rows: CellValue[][]): SheetData {
   return { name, rows, merges: [], rich: defaultRichProjection() };
 }
 
-function openedResponse(documentId = 1, fileName = "book.xlsx"): OpenDocumentResponse {
+function openedResponse(documentId: number | string = '1', fileName = "book.xlsx"): OpenDocumentResponse {
   const fileData: FileData = {
     path: `/tmp/${fileName}`,
     fileName,
@@ -52,8 +52,8 @@ function openedResponse(documentId = 1, fileName = "book.xlsx"): OpenDocumentRes
   return {
     fileData,
     editorSession: {
-      documentId,
-      revision: 0,
+      documentId: String(documentId),
+      revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -69,8 +69,8 @@ function openedResponse(documentId = 1, fileName = "book.xlsx"): OpenDocumentRes
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
     protocolVersion: 1,
-    documentId: 1,
-    revision: 1,
+    documentId: '1',
+    revision: '1',
     formulaStatus: readyFormulaStatus(),
     capabilities: defaultWorkbookCapabilities(),
     editorState: {
@@ -199,7 +199,7 @@ describe("useEditorCommands", () => {
 
     expect(api.addRow).not.toHaveBeenCalled();
     expect(setup.applyMutationResponse).not.toHaveBeenCalled();
-    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.documentId).toBe('2');
   });
 
   it("skips search when the document changes while flushing edits", async () => {
@@ -215,7 +215,7 @@ describe("useEditorCommands", () => {
     await setup.commands.handleSearch("A1", "allSheets");
 
     expect(api.search).not.toHaveBeenCalled();
-    expect(documentSessionStore.documentId).toBe(2);
+    expect(documentSessionStore.documentId).toBe('2');
   });
 
   it("switches to a newly added sheet only after the mutation is applied", async () => {
@@ -239,7 +239,7 @@ describe("useEditorCommands", () => {
   it("does not run post-apply sheet selection when a mutation response is ignored", async () => {
     const api = await import("@/api");
     const setup = setupCommands();
-    vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ documentId: 2 }));
+    vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ documentId: '2' }));
     setup.applyMutationResponse.mockResolvedValue({
       data: setup.documentSessionStore.data,
       resyncRequired: false,
@@ -256,7 +256,7 @@ describe("useEditorCommands", () => {
     const api = await import("@/api");
     let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
     const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
-      documentSessionStore.revision = 4;
+      documentSessionStore.revision = '4';
       return true;
     });
     const setup = setupCommands(flushPendingCellChanges);
@@ -265,7 +265,7 @@ describe("useEditorCommands", () => {
     await setup.commands.handleAddRow();
 
     expect(api.addRow).toHaveBeenCalledWith(
-      { documentId: 1, baseRevision: 4 },
+      { documentId: '1', baseRevision: '4' },
       0,
       1
     );
@@ -280,10 +280,10 @@ describe("useEditorCommands", () => {
       fileName: "book.xlsx",
       sheets: [sheet("Sheet1", [[text("fresh")]])],
     };
-    vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: '3' }));
     vi.mocked(api.getEditorState).mockResolvedValue({
-      documentId: 1,
-      revision: 3,
+      documentId: '1',
+      revision: '3',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -298,8 +298,8 @@ describe("useEditorCommands", () => {
 
     await setup.commands.handleAddRow();
 
-    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
-    expect(api.getEditorState).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
+    expect(api.getEditorState).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
     expect(setup.documentSessionStore.data?.sheets[0].rows[0][0]).toEqual(text("fresh"));
     expect(setup.documentSessionStore.projectionStale).toBe(false);
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
@@ -309,7 +309,7 @@ describe("useEditorCommands", () => {
     const api = await import("@/api");
     const elementPlus = await import("element-plus");
     const setup = setupCommands();
-    vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: 3 }));
+    vi.mocked(api.addRow).mockResolvedValue(mutationResponse({ revision: '3' }));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
     vi.mocked(api.getCurrentFileData).mockRejectedValue(new Error("projection unavailable"));
     setup.applyMutationResponse.mockRejectedValue(new Error("projection unavailable"));
@@ -317,7 +317,7 @@ describe("useEditorCommands", () => {
     await setup.commands.handleAddRow();
 
     expect(api.addRow).toHaveBeenCalled();
-    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: 1, baseRevision: 3 });
+    expect(api.getCurrentFileData).toHaveBeenCalledWith({ documentId: '1', baseRevision: '3' });
     expect(setup.documentSessionStore.projectionStale).toBe(true);
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
       "Change was applied, but the editor could not refresh: Error: projection unavailable"
@@ -332,7 +332,7 @@ describe("useEditorCommands", () => {
       .mockImplementation(() => {
         throw new Error("sheet switch failed");
       });
-    vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: 1 }));
+    vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: '1' }));
     setup.applyMutationResponse.mockImplementation(async (response) => {
       return setup.documentSessionStore.applyMutationResponse(response);
     });

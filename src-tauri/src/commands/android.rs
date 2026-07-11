@@ -1,4 +1,6 @@
 #[cfg(target_os = "android")]
+use super::CommandU64;
+#[cfg(target_os = "android")]
 use crate::error::AppError;
 #[cfg(target_os = "android")]
 use crate::io::platform::mobile::PickedFileInfo;
@@ -51,10 +53,10 @@ pub async fn prepare_open_file_android(
 pub async fn save_file_android(
     app: AppHandle,
     path: String,
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    mobile::save_file(&app, &path, document_id, base_revision)
+    mobile::save_file(&app, &path, document_id.get(), base_revision.get())
 }
 
 /// Android: export a sandboxed file to a user-selected destination.
@@ -63,10 +65,10 @@ pub async fn save_file_android(
 pub async fn export_file_android(
     app: AppHandle,
     default_name: String,
-    document_id: u64,
-    base_revision: u64,
+    document_id: CommandU64,
+    base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
-    mobile::export_file(&app, &default_name, document_id, base_revision)
+    mobile::export_file(&app, &default_name, document_id.get(), base_revision.get())
 }
 
 /// Android: create a new sandbox path for a file that will be written by save_file_android.

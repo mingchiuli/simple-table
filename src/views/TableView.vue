@@ -54,6 +54,8 @@ const currentSheetExtent = computed(() => {
   if (!currentSheet.value) {
     return { rowCount: 0, columnCount: 0 };
   }
+  const backendExtent = documentSessionStore.sheetExtents[currentSheetIndex.value];
+  if (backendExtent) return backendExtent;
   return calculateSheetExtent(
     tableData.value,
     currentSheet.value.merges,

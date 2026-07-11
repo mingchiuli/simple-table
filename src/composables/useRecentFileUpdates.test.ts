@@ -48,12 +48,16 @@ function fileData(fileName: string): FileData {
   };
 }
 
-function openRecentTestDocument(fileName: string, documentId: number, revision: number) {
+function openRecentTestDocument(
+  fileName: string,
+  documentId: number | string,
+  revision: number | string
+) {
   useDocumentSessionStore().openDocumentResponse({
     fileData: fileData(fileName),
     editorSession: {
-      documentId,
-      revision,
+      documentId: String(documentId),
+      revision: String(revision),
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -83,7 +87,7 @@ describe("useRecentFileUpdates", () => {
     await flushPromises();
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: 1, baseRevision: 3 },
+      { documentId: '1', baseRevision: '3' },
       "/original/old.xlsx"
     );
   });

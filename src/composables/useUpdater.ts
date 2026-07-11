@@ -1,7 +1,7 @@
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeCommand } from '@/tauriInvoke'
 import { platform } from '@tauri-apps/plugin-os'
 import { getVersion } from '@tauri-apps/api/app'
 import { requestApplicationExit } from '@/composables/useApplicationExit'
@@ -73,7 +73,7 @@ export function useUpdater() {
         }
       } else {
         // 移动端：调用 Rust command
-        const info = await invoke<UpdateInfo | null>('check_update_mobile', {
+        const info = await invokeCommand('check_update_mobile', {
           currentVersion: appVersion
         })
         if (!isCurrentOperation(token)) return

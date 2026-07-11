@@ -27,12 +27,12 @@ describe("recentFileTracking", () => {
 
     await expect(
       tryAddRecentFileWithThumbnail({
-        context: { documentId: 7, baseRevision: 3 },
+        context: { documentId: '7', baseRevision: '3' },
       })
     ).resolves.toBe(true);
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: 7, baseRevision: 3 },
+      { documentId: '7', baseRevision: '3' },
       undefined
     );
   });
@@ -52,12 +52,12 @@ describe("recentFileTracking", () => {
     await expect(
       tryAddRecentFileWithThumbnail({
         originalPath: "/original/book.xlsx",
-        context: { documentId: 8, baseRevision: 4 },
+        context: { documentId: '8', baseRevision: '4' },
       })
     ).resolves.toBe(true);
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: 8, baseRevision: 4 },
+      { documentId: '8', baseRevision: '4' },
       "/original/book.xlsx"
     );
   });
@@ -72,7 +72,7 @@ describe("recentFileTracking", () => {
 
     await expect(
       tryAddRecentFileWithThumbnail({
-        context: { documentId: 7, baseRevision: 3 },
+        context: { documentId: '7', baseRevision: '3' },
       })
     ).resolves.toBe(false);
 

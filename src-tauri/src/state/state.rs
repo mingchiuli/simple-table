@@ -37,9 +37,11 @@ pub struct HistoryStatus {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct EditorSessionInfo {
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub document_id: u64,
-    #[ts(type = "number")]
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
     pub revision: u64,
     pub formula_status: FormulaStatus,
     pub capabilities: WorkbookCapabilities,

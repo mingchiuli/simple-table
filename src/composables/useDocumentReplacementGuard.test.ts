@@ -30,7 +30,7 @@ function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
 }
 
-function openTestDocument(documentId = 1) {
+function openTestDocument(documentId: number | string = '1') {
   useDocumentSessionStore().openDocumentResponse({
     fileData: {
       path: "/tmp/book.xlsx",
@@ -38,8 +38,8 @@ function openTestDocument(documentId = 1) {
       sheets: [{ name: "Sheet1", rows: [[text("old")]], merges: [], rich: defaultRichProjection() }],
     },
     editorSession: {
-      documentId,
-      revision: 0,
+        documentId: String(documentId),
+      revision: '0',
       formulaStatus: readyFormulaStatus(),
       capabilities: defaultWorkbookCapabilities(),
       editorState: {
@@ -184,7 +184,7 @@ describe("useDocumentReplacementGuard", () => {
     unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
     let releaseMutation!: () => void;
     let replacementResolved = false;
-    void documentSessionStore.enqueueDocumentMutation(1, async () => {
+    void documentSessionStore.enqueueDocumentMutation('1', async () => {
       await new Promise<void>((resolve) => {
         releaseMutation = resolve;
       });
@@ -230,7 +230,7 @@ describe("useDocumentReplacementGuard", () => {
       commitBatch: async () => {
         saveStarted = true;
         await enqueueGate.promise;
-        await documentSessionStore.enqueueDocumentMutation(1, async () => {
+        await documentSessionStore.enqueueDocumentMutation('1', async () => {
           await mutationGate.promise;
         });
       },

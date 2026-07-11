@@ -16,7 +16,8 @@ use crate::state::{
 };
 use crate::types::{
     DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
-    SavedDocumentIdentity, SavedDocumentResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
+    SavedDocumentIdentity, SavedDocumentResponse, SheetData, SheetProjectionResponse,
+    SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
@@ -69,10 +70,7 @@ pub fn commit_prepared_document(
                 Ok((prepared.editor_state, prepared.source_path))
             })?;
         let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
-        response = OpenDocumentResponse {
-            file_data: editor_state.file_data().clone(),
-            editor_session: editor_session_info(editor_state),
-        };
+        response = open_document_response(editor_state);
     }
 
     if let Some(previous_document_id) = previous_document_id
@@ -95,12 +93,7 @@ pub fn active_document_response() -> Result<Option<OpenDocumentResponse>, AppErr
     let registry_guard = registry
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    Ok(registry_guard
-        .active()
-        .map(|editor_state| OpenDocumentResponse {
-            file_data: editor_state.file_data().clone(),
-            editor_session: editor_session_info(editor_state),
-        }))
+    Ok(registry_guard.active().map(open_document_response))
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -352,6 +345,32 @@ pub fn current_file_data_for_command(
     base_revision: u64,
 ) -> Result<FileData, AppError> {
     inspect_current_file_for_command(document_id, base_revision, Clone::clone)
+}
+
+pub fn sheet_projection_for_command(
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+) -> Result<SheetProjectionResponse, AppError> {
+    let registry = active_document_store();
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+    let sheet = editor_state
+        .file_data()
+        .sheets
+        .get(sheet_index)
+        .cloned()
+        .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+    let extent = sheet.extent();
+    Ok(SheetProjectionResponse {
+        document_id,
+        revision: base_revision,
+        sheet_index,
+        sheet,
+        extent,
+    })
 }
 
 pub(crate) fn inspect_current_file_for_command<T>(
@@ -653,6 +672,40 @@ fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
     }
 }
 
+fn open_document_response(editor_state: &EditorState) -> OpenDocumentResponse {
+    let source = editor_state.file_data();
+    let sheet_extents = source.sheets.iter().map(SheetData::extent).collect();
+    let loaded_sheet_indexes = (!source.sheets.is_empty())
+        .then_some(0)
+        .into_iter()
+        .collect();
+    let sheets = source
+        .sheets
+        .iter()
+        .enumerate()
+        .map(|(sheet_index, sheet)| {
+            if sheet_index == 0 {
+                sheet.clone()
+            } else {
+                SheetData {
+                    name: sheet.name.clone(),
+                    ..Default::default()
+                }
+            }
+        })
+        .collect();
+    OpenDocumentResponse {
+        file_data: FileData {
+            path: source.path.clone(),
+            file_name: source.file_name.clone(),
+            sheets,
+        },
+        editor_session: editor_session_info(editor_state),
+        sheet_extents: Some(sheet_extents),
+        loaded_sheet_indexes: Some(loaded_sheet_indexes),
+    }
+}
+
 fn native_save_extension(file_name: &str) -> Option<String> {
     if extension_of(file_name).is_none() {
         Some(default_extension_string())
@@ -741,6 +794,48 @@ mod tests {
 
         assert_eq!(response.editor_state.file_data().path, "");
         assert_eq!(response.editor_state.file_data().file_name, "untitled.xlsx");
+    }
+
+    #[test]
+    fn open_document_response_only_projects_the_initial_sheet() {
+        let first_sheet = SheetData {
+            name: "First".to_string(),
+            rows: vec![vec![CellValue::String("loaded".to_string())]],
+            ..Default::default()
+        };
+        let second_sheet = SheetData {
+            name: "Second".to_string(),
+            rows: vec![vec![CellValue::String("deferred".to_string())]],
+            ..Default::default()
+        };
+        let state = EditorState::with_workbook(
+            FileData {
+                path: "/tmp/book.xlsx".to_string(),
+                file_name: "book.xlsx".to_string(),
+                sheets: vec![first_sheet, second_sheet],
+            },
+            None,
+        );
+
+        let response = open_document_response(&state);
+
+        assert_eq!(response.file_data.sheets[0].rows.len(), 1);
+        assert!(response.file_data.sheets[1].rows.is_empty());
+        assert_eq!(response.file_data.sheets[1].name, "Second");
+        assert_eq!(response.loaded_sheet_indexes, Some(vec![0]));
+        assert_eq!(
+            response.sheet_extents,
+            Some(vec![
+                crate::types::SheetExtent {
+                    row_count: 1,
+                    column_count: 1,
+                },
+                crate::types::SheetExtent {
+                    row_count: 1,
+                    column_count: 1,
+                },
+            ])
+        );
     }
 
     #[test]
