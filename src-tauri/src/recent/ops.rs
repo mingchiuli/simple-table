@@ -45,11 +45,35 @@ pub fn do_add_recent_file_with_thumbnail(
 
     recent_file.thumbnail = thumbnail.and_then(generate_thumbnail);
 
-    RecentStore::add(app, recent_file)
+    let update = RecentStore::add(app, recent_file)?;
+    cleanup_removed_mobile_files(app, &update.removed);
+    Ok(update.updated)
 }
 
 pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> {
-    RecentStore::remove(app, id)
+    let removed = RecentStore::remove(app, id)?;
+    cleanup_removed_mobile_files(app, &removed);
+    Ok(())
+}
+
+fn cleanup_removed_mobile_files(app: &AppHandle, removed: &[RecentFile]) {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    for file in removed {
+        if file.storage_type != StorageType::MobileSandboxPath {
+            continue;
+        }
+        if let Err(error) =
+            crate::io::platform::mobile::remove_managed_file_if_inactive(app, &file.path)
+        {
+            eprintln!(
+                "Failed to clean up removed mobile document {}: {error}",
+                file.path
+            );
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let _ = (app, removed);
 }
 
 fn recent_file_size(path: &str) -> i64 {

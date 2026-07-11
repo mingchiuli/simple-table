@@ -6,6 +6,7 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, default_spreadsheet_file_name, file_name_from_path_like,
     import_extension_from_name_or_bytes, normalized_import_file_name,
 };
+use crate::io::transient_files::TransientFilePurpose;
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -63,7 +64,11 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
     let file_name = normalized_import_file_name(&raw_file_name, &extension);
     let sandbox_path = unique_import_path(app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
-    mobile::register_created_transient_path(app, &sandbox_path)?;
+    mobile::register_created_transient_path(
+        app,
+        &sandbox_path,
+        TransientFilePurpose::OpenSelection,
+    )?;
 
     let path = sandbox_path.to_string_lossy().to_string();
 

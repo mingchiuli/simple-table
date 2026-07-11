@@ -4,6 +4,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os'
 import { getVersion } from '@tauri-apps/api/app'
+import { requestApplicationExit } from '@/composables/useApplicationExit'
 
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'no-update'
 
@@ -97,6 +98,10 @@ export function useUpdater() {
     if (!update) return
 
     const token = beginOperation()
+    if (status.value === 'ready') {
+      await relaunchWhenReady(token)
+      return
+    }
     status.value = 'downloading'
     downloadProgress.value = { downloaded: 0, total: 0, percentage: 0 }
 
@@ -122,14 +127,18 @@ export function useUpdater() {
       })
       if (!isCurrentOperation(token)) return
 
-      // 自动重启
-      await relaunch()
+      await relaunchWhenReady(token)
     } catch (e) {
       if (!isCurrentOperation(token)) return
 
       status.value = 'error'
       errorMessage.value = String(e)
     }
+  }
+
+  async function relaunchWhenReady(token: number) {
+    if (!isCurrentOperation(token)) return
+    await requestApplicationExit(relaunch)
   }
 
   async function handleMobileUpdate() {

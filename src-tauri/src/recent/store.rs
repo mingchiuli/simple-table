@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
@@ -12,6 +13,11 @@ const MAX_RECENT: usize = 10;
 static RECENT_STORE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub struct RecentStore;
+
+pub struct RecentStoreUpdate {
+    pub updated: RecentFile,
+    pub removed: Vec<RecentFile>,
+}
 
 impl RecentStore {
     pub fn get_all(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
@@ -44,19 +50,23 @@ impl RecentStore {
         Ok(())
     }
 
-    pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentFile, AppError> {
+    pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentStoreUpdate, AppError> {
         with_store_transaction(|| {
-            let (files, updated) = upsert_recent_file(Self::get_all_unlocked(app)?, file);
+            let previous = Self::get_all_unlocked(app)?;
+            let (files, updated) = upsert_recent_file(previous.clone(), file);
+            let removed = removed_recent_files(previous, &files);
             Self::save_unlocked(app, &files)?;
-            Ok(updated)
+            Ok(RecentStoreUpdate { updated, removed })
         })
     }
 
-    pub fn remove(app: &AppHandle, id: &str) -> Result<(), AppError> {
+    pub fn remove(app: &AppHandle, id: &str) -> Result<Vec<RecentFile>, AppError> {
         with_store_transaction(|| {
             let mut files = Self::get_all_unlocked(app)?;
+            let removed = files.iter().filter(|file| file.id == id).cloned().collect();
             files.retain(|f| f.id != id);
-            Self::save_unlocked(app, &files)
+            Self::save_unlocked(app, &files)?;
+            Ok(removed)
         })
     }
 }
@@ -97,15 +107,38 @@ fn upsert_recent_file(
     files.push(merged);
 
     files.sort_by_key(|file| Reverse(file.last_opened));
-    truncate_preserving_path(&mut files, &path);
+    limit_desktop_recents(&mut files, &path);
 
     if !files.iter().any(|file| file.path == path) {
         files.push(updated.clone());
         files.sort_by_key(|file| Reverse(file.last_opened));
-        truncate_preserving_path(&mut files, &path);
+        limit_desktop_recents(&mut files, &path);
     }
 
     (files, updated)
+}
+
+fn limit_desktop_recents(files: &mut Vec<RecentFile>, path: &str) {
+    let mut managed = Vec::new();
+    let mut desktop = Vec::new();
+    for file in files.drain(..) {
+        match file.storage_type {
+            super::types::StorageType::MobileSandboxPath => managed.push(file),
+            super::types::StorageType::DesktopPath => desktop.push(file),
+        }
+    }
+    truncate_preserving_path(&mut desktop, path);
+    managed.extend(desktop);
+    managed.sort_by_key(|file| Reverse(file.last_opened));
+    *files = managed;
+}
+
+fn removed_recent_files(previous: Vec<RecentFile>, current: &[RecentFile]) -> Vec<RecentFile> {
+    let retained_paths: HashSet<&str> = current.iter().map(|file| file.path.as_str()).collect();
+    previous
+        .into_iter()
+        .filter(|file| !retained_paths.contains(file.path.as_str()))
+        .collect()
 }
 
 fn truncate_preserving_path(files: &mut Vec<RecentFile>, path: &str) {
@@ -252,6 +285,47 @@ mod tests {
                 .any(|file| file.path == "/tmp/new.xlsx")
         );
         assert_eq!(updated_files.len(), MAX_RECENT);
+    }
+
+    #[test]
+    fn removed_recent_files_reports_evicted_paths_but_not_updated_duplicates() {
+        let evicted = recent("evicted", "/tmp/evicted.xlsx", "evicted.xlsx", 0);
+        let retained = recent("retained", "/tmp/retained.xlsx", "retained.xlsx", 1);
+        let updated = recent("updated", "/tmp/retained.xlsx", "renamed.xlsx", 2);
+
+        let removed = removed_recent_files(
+            vec![evicted.clone(), retained],
+            std::slice::from_ref(&updated),
+        );
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].path, evicted.path);
+    }
+
+    #[test]
+    fn mobile_managed_documents_are_not_evicted_by_the_desktop_recent_limit() {
+        let mut files = (0..=MAX_RECENT)
+            .map(|index| {
+                let mut file = recent(
+                    &format!("mobile-{index}"),
+                    &format!("/mobile/{index}.xlsx"),
+                    &format!("{index}.xlsx"),
+                    index as i64,
+                );
+                file.storage_type = StorageType::MobileSandboxPath;
+                file
+            })
+            .collect::<Vec<_>>();
+        let newest = files.pop().expect("newest managed document");
+
+        let (updated_files, _) = upsert_recent_file(files, newest);
+
+        assert_eq!(updated_files.len(), MAX_RECENT + 1);
+        assert!(
+            updated_files
+                .iter()
+                .all(|file| file.storage_type == StorageType::MobileSandboxPath)
+        );
     }
 
     #[test]

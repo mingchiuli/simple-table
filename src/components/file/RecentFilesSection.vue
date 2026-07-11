@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Document, Delete } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import type { RecentFile } from "@/types";
 import { useRecentFilesStore } from "@/stores/recentFiles";
 import { appErrorMessage } from "@/utils/appError";
@@ -20,12 +20,24 @@ function handleOpenRecent(file: RecentFile) {
   emit("open", file);
 }
 
-async function handleDeleteRecent(id: string, event: Event) {
+async function handleDeleteRecent(file: RecentFile, event: Event) {
   event.stopPropagation();
   if (props.disabled) return;
   try {
-    await recentFilesStore.remove(id);
+    if (file.storageType === "mobileSandboxPath") {
+      await ElMessageBox.confirm(
+        `Delete ${file.fileName}? This removes the saved copy from this device.`,
+        "Delete document",
+        {
+          confirmButtonText: "Delete",
+          cancelButtonText: "Cancel",
+          type: "warning",
+        }
+      );
+    }
+    await recentFilesStore.remove(file.id);
   } catch (error) {
+    if (error === "cancel" || error === "close") return;
     ElMessage.error(`Failed to remove recent file: ${appErrorMessage(error)}`);
   }
 }
@@ -82,7 +94,7 @@ function formatDate(timestamp: number): string {
             {{ formatFileSize(file.fileSize) }} · {{ formatDate(file.lastOpened) }}
           </div>
         </div>
-        <el-icon class="delete-btn" @click="handleDeleteRecent(file.id, $event)">
+        <el-icon class="delete-btn" @click="handleDeleteRecent(file, $event)">
           <Delete />
         </el-icon>
       </div>

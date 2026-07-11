@@ -5,6 +5,8 @@ use crate::io::platform::mobile::PickedFileInfo;
 #[cfg(target_os = "android")]
 use crate::io::platform::{android, mobile};
 #[cfg(target_os = "android")]
+use crate::io::transient_files::TransientFilePurpose;
+#[cfg(target_os = "android")]
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "android")]
 use tauri::AppHandle;
@@ -23,14 +25,14 @@ pub async fn discard_open_file_selection_android(
     app: AppHandle,
     path: String,
 ) -> Result<(), AppError> {
-    mobile::discard_transient_file(&app, &path)
+    mobile::discard_transient_file(&app, &path, TransientFilePurpose::OpenSelection)
 }
 
 /// Android: remove a save-as target that was reserved but never adopted.
 #[cfg(target_os = "android")]
 #[tauri::command]
 pub async fn discard_save_location_android(app: AppHandle, path: String) -> Result<(), AppError> {
-    mobile::discard_transient_file(&app, &path)
+    mobile::discard_transient_file(&app, &path, TransientFilePurpose::SaveLocation)
 }
 
 /// Android: read and parse a sandboxed file path saved in recent files.

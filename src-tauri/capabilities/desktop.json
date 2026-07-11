@@ -6,6 +6,7 @@
   "platforms": ["macOS", "windows", "linux"],
   "permissions": [
     "core:default",
+    "core:window:allow-destroy",
     "opener:default",
     "deep-link:default",
     "updater:default",

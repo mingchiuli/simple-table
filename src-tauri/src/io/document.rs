@@ -103,6 +103,18 @@ pub fn active_document_response() -> Result<Option<OpenDocumentResponse>, AppErr
         }))
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn active_document_path() -> Result<Option<String>, AppError> {
+    let registry = active_document_store();
+    let registry_guard = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    Ok(registry_guard
+        .active()
+        .map(|editor_state| editor_state.file_data().path.clone())
+        .filter(|path| !path.is_empty()))
+}
+
 pub fn generate_current_file_bytes_for_target(
     document_id: u64,
     base_revision: u64,

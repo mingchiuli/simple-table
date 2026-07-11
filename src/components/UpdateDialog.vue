@@ -146,7 +146,7 @@ defineExpose({ show, checkForUpdate })
           Check for Updates
         </ElButton>
         <ElButton
-          v-if="status === 'available'"
+          v-if="status === 'available' || status === 'ready'"
           type="primary"
           @click="handleAction"
         >

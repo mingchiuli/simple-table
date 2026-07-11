@@ -25,6 +25,10 @@ type UseFileActionsOptions = {
   flushPendingCellChanges: () => Promise<boolean>;
 };
 
+type CloseCurrentDocumentOptions = {
+  waitForIdle?: boolean;
+};
+
 type ContinuationGuard = (() => boolean) & {
   onCancel?: (handler: () => void) => () => void;
 };
@@ -195,7 +199,9 @@ export function useFileActions({
     });
   }
 
-  async function closeCurrentDocument(): Promise<boolean> {
+  async function closeCurrentDocument(
+    options: CloseCurrentDocumentOptions = {}
+  ): Promise<boolean> {
     let closed = false;
     const lifecycleStatus = await runDocumentLifecycle('closing', 'Failed to close file', async () => {
       const replacement = await beginDocumentReplacement();
@@ -218,6 +224,8 @@ export function useFileActions({
       replacement.commit();
       documentSessionStore.clearDocument();
       closed = true;
+    }, {
+      waitForIdle: options.waitForIdle,
     });
     return lifecycleStatus !== 'skipped' && closed;
   }

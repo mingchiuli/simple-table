@@ -654,6 +654,26 @@ describe("useFileActions", () => {
     expect(documentSessionStore.data).toBeNull();
   });
 
+  it("waits for an active lifecycle before closing for application exit", async () => {
+    const api = await import("@/api");
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    expect(documentSessionStore.beginLifecycle("saving")).toBe(true);
+
+    const actions = mountActions(flushPendingCellChanges);
+    const closePromise = actions.closeCurrentDocument({ waitForIdle: true });
+
+    await flushPromises();
+    expect(api.closeCurrentDocument).not.toHaveBeenCalled();
+
+    documentSessionStore.endLifecycle("saving");
+
+    await expect(closePromise).resolves.toBe(true);
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(1);
+    expect(documentSessionStore.data).toBeNull();
+  });
+
   it("delegates document closing to the route-leave guard when returning home", async () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();

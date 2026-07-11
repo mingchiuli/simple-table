@@ -20,6 +20,7 @@ import { workbookSheetCapabilities } from '@/types';
 import type { EditorMutationResponse } from '@/types';
 import type { MutationApplyResult } from '@/stores/documentSession';
 import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
+import { useApplicationExitGuard } from '@/composables/useApplicationExit';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
@@ -141,6 +142,8 @@ const {
   fileData,
   flushPendingCellChanges,
 });
+
+useApplicationExitGuard(() => closeCurrentDocument({ waitForIdle: true }));
 
 function routeFilePath(): string | null {
   const value = route.query.file;

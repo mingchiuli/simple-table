@@ -8,7 +8,7 @@ use crate::io::file_format::{
     supported_extension_or_default,
 };
 use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
-use crate::io::transient_files::transient_file_registry;
+use crate::io::transient_files::{TransientFilePurpose, transient_file_registry};
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -48,16 +48,21 @@ pub(super) fn unique_import_path(app: &AppHandle, file_name: &str) -> Result<Pat
     )))
 }
 
-pub(super) fn register_transient_path(app: &AppHandle, path: &Path) -> Result<(), AppError> {
+pub(super) fn register_transient_path(
+    app: &AppHandle,
+    path: &Path,
+    purpose: TransientFilePurpose,
+) -> Result<(), AppError> {
     let target = validated_mobile_files_path(app, path)?;
-    register_transient_target(target)
+    register_transient_target(target, purpose)
 }
 
 pub(super) fn register_created_transient_path(
     app: &AppHandle,
     path: &Path,
+    purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    if let Err(error) = register_transient_path(app, path) {
+    if let Err(error) = register_transient_path(app, path, purpose) {
         let _ = fs::remove_file(path);
         return Err(error);
     }
@@ -126,7 +131,7 @@ fn selected_file_name(path: &FilePath) -> Option<String> {
 }
 
 pub fn prepare_file(app: &AppHandle, path: &str) -> Result<PreparedOpenDocument, AppError> {
-    use tauri_plugin_fs::FsExt;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
 
     let target = validated_mobile_files_path(app, Path::new(path))?;
     if !target.exists() {
@@ -141,24 +146,54 @@ pub fn prepare_file(app: &AppHandle, path: &str) -> Result<PreparedOpenDocument,
         .and_then(|name| name.to_str())
         .unwrap_or("unknown")
         .to_string();
-    let bytes = app
+    let mut options = OpenOptions::new();
+    options.read(true);
+    let file = app
         .fs()
-        .read(FilePath::from(target.clone()))
-        .map_err(|e| AppError::ReadError(format!("Failed to read file: {}", e)))?;
+        .open(FilePath::from(target.clone()), options)
+        .map_err(|e| AppError::ReadError(format!("Failed to open file: {}", e)))?;
+    let bytes = read_input_bytes(file)?;
 
     document::prepare_open_from_bytes(target.to_string_lossy().to_string(), bytes, Some(file_name))
 }
 
-pub fn discard_transient_file(app: &AppHandle, path: &str) -> Result<(), AppError> {
-    let target = take_registered_transient_path(app, Path::new(path))?;
+pub fn discard_transient_file(
+    app: &AppHandle,
+    path: &str,
+    purpose: TransientFilePurpose,
+) -> Result<(), AppError> {
+    let target = take_registered_transient_path(app, Path::new(path), purpose)?;
     match fs::remove_file(&target) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => {
             let message = format!("Failed to remove unused transient file: {}", error);
-            let _ = register_transient_target(target);
+            let _ = register_transient_target(target, purpose);
             Err(AppError::WriteError(message))
         }
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn remove_managed_file_if_inactive(
+    app: &AppHandle,
+    path: &str,
+) -> Result<bool, AppError> {
+    let target = validated_mobile_files_path(app, Path::new(path))?;
+    if document::active_document_path()?
+        .as_deref()
+        .is_some_and(|active| Path::new(active) == target)
+        || transient_file_registry().contains(&target)?
+    {
+        return Ok(false);
+    }
+
+    match fs::remove_file(&target) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(AppError::WriteError(format!(
+            "Failed to remove managed mobile document: {error}"
+        ))),
     }
 }
 
@@ -212,13 +247,20 @@ fn validated_mobile_files_path_in_dir(files_dir: &Path, path: &Path) -> Result<P
     }
 }
 
-fn register_transient_target(target: PathBuf) -> Result<(), AppError> {
-    transient_file_registry().register(target)
+fn register_transient_target(
+    target: PathBuf,
+    purpose: TransientFilePurpose,
+) -> Result<(), AppError> {
+    transient_file_registry().register(target, purpose)
 }
 
-fn take_registered_transient_path(app: &AppHandle, path: &Path) -> Result<PathBuf, AppError> {
+fn take_registered_transient_path(
+    app: &AppHandle,
+    path: &Path,
+    purpose: TransientFilePurpose,
+) -> Result<PathBuf, AppError> {
     let target = validated_mobile_files_path(app, path)?;
-    transient_file_registry().take(&target)
+    transient_file_registry().take(&target, purpose)
 }
 
 fn adopt_transient_path_if_registered(app: &AppHandle, path: &Path) {
@@ -235,6 +277,7 @@ pub fn save_file(
     base_revision: u64,
 ) -> Result<SavedDocumentResponse, AppError> {
     let target = validated_mobile_files_path(app, Path::new(path))?;
+    ensure_save_target_authorized(&target, document_id, base_revision)?;
     let target_path = target.to_string_lossy().to_string();
     let prepared = document::prepare_current_file_save(document_id, base_revision, &target_path)?;
     let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
@@ -256,6 +299,30 @@ pub fn save_file(
     result
 }
 
+fn ensure_save_target_authorized(
+    target: &Path,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<(), AppError> {
+    let current_path =
+        document::inspect_current_file_for_command(document_id, base_revision, |file_data| {
+            file_data.path.clone()
+        })?;
+    let is_reserved =
+        transient_file_registry().contains_for(target, TransientFilePurpose::SaveLocation)?;
+    if is_save_target_authorized(&current_path, target, is_reserved) {
+        return Ok(());
+    }
+    Err(AppError::DocumentStateInvalid(
+        "mobile save target is neither the current document nor a reserved save location"
+            .to_string(),
+    ))
+}
+
+fn is_save_target_authorized(current_path: &str, target: &Path, is_reserved: bool) -> bool {
+    is_reserved || (!current_path.is_empty() && Path::new(current_path) == target)
+}
+
 pub fn reserve_save_location(app: &AppHandle, file_name: &str) -> Result<String, AppError> {
     let path = mobile_dir(app)?.join(format!(
         "{}.{}",
@@ -263,7 +330,7 @@ pub fn reserve_save_location(app: &AppHandle, file_name: &str) -> Result<String,
         extension_from_name(file_name)
     ));
     write_path_with_official_fs(app, path.clone(), &[])?;
-    register_created_transient_path(app, &path)?;
+    register_created_transient_path(app, &path, TransientFilePurpose::SaveLocation)?;
 
     Ok(path.to_string_lossy().to_string())
 }
@@ -305,7 +372,9 @@ pub fn export_file(
 
 #[cfg(test)]
 mod tests {
-    use super::{extension_from_name, validated_mobile_files_path_in_dir};
+    use super::{
+        extension_from_name, is_save_target_authorized, validated_mobile_files_path_in_dir,
+    };
     use crate::error::AppError;
     use std::fs;
     use std::path::PathBuf;
@@ -316,6 +385,25 @@ mod tests {
         assert_eq!(extension_from_name("data.CSV"), "csv");
         assert_eq!(extension_from_name("untitled"), "xlsx");
         assert_eq!(extension_from_name("unsupported.bin"), "xlsx");
+    }
+
+    #[test]
+    fn save_target_authorization_accepts_only_current_or_reserved_paths() {
+        let current = PathBuf::from("/files/current.xlsx");
+        let reserved = PathBuf::from("/files/reserved.xlsx");
+        let unrelated = PathBuf::from("/files/unrelated.xlsx");
+
+        assert!(is_save_target_authorized(
+            current.to_str().unwrap(),
+            &current,
+            false
+        ));
+        assert!(is_save_target_authorized("", &reserved, true));
+        assert!(!is_save_target_authorized(
+            current.to_str().unwrap(),
+            &unrelated,
+            false
+        ));
     }
 
     #[test]

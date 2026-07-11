@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Update } from "@tauri-apps/plugin-updater";
+import { effectScope } from "vue";
 import { useUpdater, type UpdateInfo } from "@/composables/useUpdater";
+import { useApplicationExitGuard } from "@/composables/useApplicationExit";
 
 const tauriMocks = vi.hoisted(() => ({
   check: vi.fn(),
@@ -166,6 +168,49 @@ describe("useUpdater", () => {
       percentage: 0,
     });
     expect(tauriMocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("keeps an installed update ready when application exit is cancelled", async () => {
+    tauriMocks.platform.mockReturnValue("macos");
+    const update = {
+      version: "0.12.0",
+      downloadAndInstall: vi.fn(async (onEvent) => {
+        onEvent({ event: "Finished", data: {} });
+      }),
+    } as unknown as Update;
+    const scope = effectScope();
+    scope.run(() => {
+      useApplicationExitGuard(vi.fn().mockResolvedValue(false));
+    });
+    const updater = useUpdater();
+    updater.updateInfo.value = update;
+    updater.status.value = "available";
+
+    try {
+      await updater.downloadAndInstall();
+
+      expect(update.downloadAndInstall).toHaveBeenCalledTimes(1);
+      expect(updater.status.value).toBe("ready");
+      expect(tauriMocks.relaunch).not.toHaveBeenCalled();
+    } finally {
+      scope.stop();
+    }
+  });
+
+  it("retries a ready relaunch without downloading the update again", async () => {
+    tauriMocks.platform.mockReturnValue("macos");
+    const update = {
+      version: "0.12.0",
+      downloadAndInstall: vi.fn(),
+    } as unknown as Update;
+    const updater = useUpdater();
+    updater.updateInfo.value = update;
+    updater.status.value = "ready";
+
+    await updater.downloadAndInstall();
+
+    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(tauriMocks.relaunch).toHaveBeenCalledTimes(1);
   });
 
   it("ignores mobile update launch failures after reset", async () => {
