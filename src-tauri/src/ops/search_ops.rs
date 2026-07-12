@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::state::search_index::{SearchCellText, SearchQueryPlan, SearchSheetSource};
+use crate::state::search_index::{SearchCellText, SearchQueryPlan, collect_sheet_search_text};
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{SearchResult, SearchScope};
 
@@ -65,18 +65,21 @@ pub fn do_search(
             let Some(sheet_name) = editor_state.sheet_name(sheet_index) else {
                 continue;
             };
-            let Some(source) = editor_state.search_sheet_source(sheet_index) else {
-                continue;
-            };
+            let index = editor_state.indexed_search_sheet(sheet_index);
+            let sheet = index
+                .is_none()
+                .then(|| editor_state.search_sheet_data(sheet_index))
+                .flatten();
             SearchInput {
                 sheet_index,
                 sheet_name,
-                source,
+                index,
+                sheet,
             }
         };
         let remaining = SEARCH_RESULT_LIMIT - results.len();
-        match input.source {
-            SearchSheetSource::Indexed(index) => {
+        match input.index {
+            Some(index) => {
                 let cells = index.search(&plan, remaining);
                 for cell in cells.into_iter().take(remaining) {
                     results.push(SearchResult {
@@ -89,9 +92,10 @@ pub fn do_search(
                     });
                 }
             }
-            SearchSheetSource::Snapshot(snapshot) => {
+            None => {
+                let Some(sheet) = input.sheet else { continue };
                 used_scan_fallback = true;
-                let cells = snapshot.materialize();
+                let cells = collect_sheet_search_text(&sheet);
                 for cell in scan_sheet(&cells, &plan, remaining) {
                     results.push(SearchResult {
                         sheet_index: input.sheet_index,
@@ -116,7 +120,8 @@ pub fn do_search(
 struct SearchInput {
     sheet_index: usize,
     sheet_name: String,
-    source: SearchSheetSource,
+    index: Option<std::sync::Arc<crate::state::search_index::SearchSheetIndex>>,
+    sheet: Option<crate::types::SheetData>,
 }
 
 fn scan_sheet(

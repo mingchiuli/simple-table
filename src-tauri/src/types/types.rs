@@ -483,6 +483,25 @@ pub struct FileData {
 pub struct SheetManifest {
     pub name: String,
     pub extent: SheetExtent,
+    pub layout: SheetLayoutProjection,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetLayoutProjection {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub column_widths: HashMap<usize, u32>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub row_heights: HashMap<usize, u32>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SheetLayoutUpdate {
+    pub sheet_index: usize,
+    pub layout: SheetLayoutProjection,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -523,10 +542,9 @@ pub struct SheetRegionMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merges: Vec<MergeRange>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub column_widths: HashMap<usize, u32>,
+    pub cell_formats: HashMap<String, CellFormatProjection>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub row_heights: HashMap<usize, u32>,
-    pub rich: ReadOnlyRichProjection,
+    pub cell_styles: HashMap<String, CellStyleProjection>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -541,6 +559,8 @@ pub struct SheetRegionProjectionResponse {
     pub revision: u64,
     pub region: SheetRegion,
     pub cells: Vec<SheetCellChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merge_anchor_cells: Vec<SheetCellChange>,
     pub metadata: SheetRegionMetadata,
 }
 
@@ -1189,7 +1209,7 @@ pub struct EditorCommandContext {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
-    #[ts(type = "2")]
+    #[ts(type = "3")]
     pub protocol_version: u16,
     #[serde(with = "crate::types::u64_string")]
     #[ts(type = "U64String")]
@@ -1206,6 +1226,9 @@ pub struct EditorMutationResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sheet_extents: Option<Vec<SheetExtent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sheet_layouts: Option<Vec<SheetLayoutUpdate>>,
     #[serde(skip)]
     #[ts(skip)]
     pub search_index_update: SearchIndexUpdatePlan,

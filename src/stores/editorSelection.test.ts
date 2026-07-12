@@ -25,6 +25,7 @@ function sheetInserted(sheetIndex: number): EditorPatch {
         sheet: {
           name: "Inserted",
           extent: { rowCount: 0, columnCount: 0 },
+          layout: { columnWidths: {}, rowHeights: {} },
         },
       },
     },
@@ -40,6 +41,7 @@ function sheetsReplaced(startIndex: number): EditorPatch {
         sheets: [{
           name: "Replacement",
           extent: { rowCount: 0, columnCount: 0 },
+          layout: { columnWidths: {}, rowHeights: {} },
         }],
       },
     },

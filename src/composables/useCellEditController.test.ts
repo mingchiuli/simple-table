@@ -29,6 +29,8 @@ vi.mock("@/api", () => ({
   setCells: vi.fn(),
   getCurrentDocumentProjection: vi.fn(),
   getEditorState: vi.fn(),
+  getActiveDocument: vi.fn(),
+  getMutationResult: vi.fn().mockResolvedValue(null),
 }));
 
 function text(value: string): CellValue {
@@ -64,7 +66,7 @@ function editorSession(revision: number | string): EditorSessionInfo {
 
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
-    protocolVersion: 2,
+    protocolVersion: 3,
     documentId: '1',
     revision: '3',
     formulaStatus: readyFormulaStatus(),
@@ -124,7 +126,9 @@ describe("useCellEditController", () => {
     await expect(controller.flushPendingCellChanges()).resolves.toBe(true);
 
     expect(api.setCells).toHaveBeenCalledWith(
-      { documentId: '1', baseRevision: '0' },
+      expect.objectContaining({
+        documentId: '1', baseRevision: '0', commandId: expect.any(String),
+      }),
       [{ sheetIndex: 0, row: 0, col: 0, text: "draft" }]
     );
     expect(api.getCurrentDocumentProjection).toHaveBeenCalledTimes(2);
@@ -178,7 +182,9 @@ describe("useCellEditController", () => {
     await expect(controller.flushPendingCellChanges()).resolves.toBe(true);
 
     expect(api.setCells).toHaveBeenCalledWith(
-      { documentId: '1', baseRevision: '0' },
+      expect.objectContaining({
+        documentId: '1', baseRevision: '0', commandId: expect.any(String),
+      }),
       [{ sheetIndex: 0, row: 0, col: 0, text: "draft" }]
     );
     expect(api.getCurrentDocumentProjection).toHaveBeenCalledWith(

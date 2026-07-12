@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use tantivy::{Term, doc};
 
 use crate::display::DisplayProjection;
+#[cfg(test)]
+use crate::state::search_index::SearchQueryPlan;
 use crate::state::search_index::{
     MAX_RESIDENT_SEARCH_INDEXES, SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel,
-    search_position,
+    collect_sheet_search_text, search_position,
 };
-#[cfg(test)]
-use crate::state::search_index::{SearchQueryPlan, SearchSheetSource};
 use crate::state::search_scheduler::{
     CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, RebuildIndexUpdate,
     SearchSchedulerStats, SheetPending,
@@ -506,7 +506,6 @@ fn run_rebuild(
         && let Some(editor_state) = guard.get_mut(document_id)
     {
         editor_state.install_search_index(sheet_index, stamp, built_index);
-        editor_state.compact_search_sheet_snapshot(sheet_index, stamp, search_text);
     }
 }
 
@@ -533,16 +532,16 @@ fn snapshot_sheet_search_text(
     stamp: SearchIndexStamp,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) -> Option<Arc<[SearchCellText]>> {
-    let snapshot = match registry.read() {
+    let sheet = match registry.read() {
         Ok(guard) => guard.get(document_id).and_then(|editor| {
             if editor.search_sheet_index_stamp(sheet_index) != stamp {
                 return None;
             }
-            editor.search_sheet_snapshot(sheet_index)
+            editor.search_sheet_data(sheet_index)
         }),
         Err(_) => None,
     }?;
-    Some(snapshot.materialize())
+    Some(Arc::from(collect_sheet_search_text(&sheet)))
 }
 
 fn run_incremental(
@@ -597,21 +596,9 @@ fn run_incremental(
     }
     drop(writer);
 
-    let compacted_snapshot = registry.read().ok().and_then(|guard| {
-        let editor = guard.get(document_id)?;
-        if editor.search_sheet_index_stamp(sheet_index) != latest_stamp {
-            return None;
-        }
-        editor.search_sheet_snapshot(sheet_index)
-    });
-    let compacted_snapshot = compacted_snapshot.map(|snapshot| snapshot.materialize());
-
     if let Ok(mut guard) = registry.write()
         && let Some(editor_state) = guard.get_mut(document_id)
     {
-        if let Some(cells) = compacted_snapshot {
-            editor_state.compact_search_sheet_snapshot(sheet_index, latest_stamp, cells);
-        }
         editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp);
     }
 
@@ -700,15 +687,14 @@ mod tests {
         let guard = registry.read().unwrap();
         let editor = guard.get(document_id).unwrap();
         let plan = SearchQueryPlan::new(query).expect("query plan");
-        let cells = match editor.search_sheet_source(0).expect("search source") {
-            SearchSheetSource::Indexed(index) => index.search(&plan, 10),
-            SearchSheetSource::Snapshot(snapshot) => snapshot
-                .materialize()
-                .iter()
+        let cells = if let Some(index) = editor.indexed_search_sheet(0) {
+            index.search(&plan, 10)
+        } else {
+            collect_sheet_search_text(&editor.search_sheet_data(0).expect("search sheet"))
+                .into_iter()
                 .filter(|cell| plan.matches(&cell.search_text))
                 .take(10)
-                .cloned()
-                .collect(),
+                .collect()
         };
         let mut rows: Vec<_> = cells
             .into_iter()
@@ -837,16 +823,13 @@ mod tests {
             guard
                 .get(document_id)
                 .unwrap()
-                .search_sheet_source(0)
-                .expect("snapshot source")
+                .search_sheet_data(0)
+                .expect("search sheet")
         };
         let write_guard = registry
             .try_write()
             .expect("snapshot does not retain registry lock");
-        let snapshot_cells = match snapshot {
-            SearchSheetSource::Snapshot(snapshot) => snapshot.materialize(),
-            SearchSheetSource::Indexed(_) => panic!("index should not exist before rebuild"),
-        };
+        let snapshot_cells = collect_sheet_search_text(&snapshot);
         assert_eq!(snapshot_cells[0].search_text, "alpha beta");
         drop(write_guard);
 
@@ -856,17 +839,14 @@ mod tests {
             guard
                 .get(document_id)
                 .unwrap()
-                .search_sheet_source(0)
+                .indexed_search_sheet(0)
                 .expect("indexed source")
         };
         let _write_guard = registry
             .try_write()
             .expect("index does not retain registry lock");
         let plan = SearchQueryPlan::new("alpha beta").expect("query plan");
-        let cells = match indexed {
-            SearchSheetSource::Indexed(index) => index.search(&plan, 10),
-            SearchSheetSource::Snapshot(_) => panic!("rebuilt index should be fresh"),
-        };
+        let cells = indexed.search(&plan, 10);
         assert_eq!(cells.len(), 1);
     }
 

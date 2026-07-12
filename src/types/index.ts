@@ -4,19 +4,26 @@ import type {
   FormulaDiagnostics,
   FormulaStatus,
   HistoryStatus,
+  EditorCommandContext,
   CellValue,
   ReadOnlyRichProjection,
   SheetRegionMetadata,
+  SheetLayoutProjection,
   SheetCapabilities,
   SheetExtent,
   SheetRegion,
   WorkbookCapabilities,
 } from './generated';
 
+export type MutationCommandContext = EditorCommandContext & {
+  commandId: string;
+};
+
 export type LoadedSheetSlot = {
   state: 'loaded';
   name: string;
   extent: SheetExtent;
+  layout: SheetLayoutProjection;
   blocks: SheetRegionBlock[];
 };
 
@@ -24,13 +31,16 @@ export type SheetRegionBlock = {
   key: string;
   region: SheetRegion;
   cells: Map<string, CellValue>;
+  mergeAnchorCells: Map<string, CellValue>;
   metadata: SheetRegionMetadata;
+  estimatedBytes: number;
 };
 
 export type UnloadedSheetSlot = {
   state: 'unloaded';
   name: string;
   extent: SheetExtent;
+  layout: SheetLayoutProjection;
 };
 
 export type SheetSlot = LoadedSheetSlot | UnloadedSheetSlot;

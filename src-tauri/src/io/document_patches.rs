@@ -1,6 +1,8 @@
 use crate::io::document_memento::FileStructureMemento;
 use crate::ops::patch_projector::sheet_invalidated_patch;
-use crate::types::{EditorPatch, FileData, SheetManifest, SheetsReplacedPatch};
+use crate::types::{
+    EditorPatch, FileData, SheetLayoutProjection, SheetManifest, SheetsReplacedPatch,
+};
 
 pub(crate) enum CurrentStructureShape {
     Empty,
@@ -41,6 +43,10 @@ pub(crate) fn restore_structure_patches(
                         .map(|sheet| SheetManifest {
                             name: sheet.name.clone(),
                             extent: sheet.extent(),
+                            layout: SheetLayoutProjection {
+                                column_widths: sheet.column_widths.clone().unwrap_or_default(),
+                                row_heights: sheet.row_heights.clone().unwrap_or_default(),
+                            },
                         })
                         .collect(),
                 },

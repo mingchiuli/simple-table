@@ -1,7 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
-
 pub struct EditorSession {
     document_id: u64,
     revision: u64,
@@ -9,11 +5,7 @@ pub struct EditorSession {
 
 impl EditorSession {
     pub fn new() -> Self {
-        let document_id = NEXT_DOCUMENT_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .unwrap_or_else(|_| panic!("document id space exhausted"));
+        let document_id = nonzero_random_u64();
         Self {
             document_id,
             revision: 0,
@@ -31,6 +23,24 @@ impl EditorSession {
     pub fn bump_revision(&mut self) -> Option<u64> {
         self.revision = self.revision.checked_add(1)?;
         Some(self.revision)
+    }
+
+    pub fn can_bump_revision(&self) -> bool {
+        self.revision < u64::MAX
+    }
+
+    #[cfg(test)]
+    pub fn set_revision_for_test(&mut self, revision: u64) {
+        self.revision = revision;
+    }
+}
+
+fn nonzero_random_u64() -> u64 {
+    loop {
+        let value = uuid::Uuid::new_v4().as_u128() as u64;
+        if value != 0 {
+            return value;
+        }
     }
 }
 

@@ -14,6 +14,7 @@ pub const MAX_TOTAL_ROWS: usize = 500_000;
 pub const MAX_COLUMNS_PER_ROW: usize = 16_384;
 pub const MAX_DENSE_CELL_SLOTS: usize = 2_000_000;
 pub const MAX_RICH_METADATA_ENTRIES: usize = 1_000_000;
+pub const MAX_LAYOUT_OVERRIDES: usize = 100_000;
 pub const MAX_CELL_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATION_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PROJECTED_TEXT_BYTES: usize = 64 * 1024 * 1024;
@@ -104,6 +105,26 @@ impl ResourceLedger {
         col_index: usize,
     ) -> Result<(), AppError> {
         validate_added_column_with_usage(self.total, sheet, projected_row_count, col_index)
+    }
+
+    pub fn validate_layout_change(
+        &self,
+        had_override: bool,
+        has_override: bool,
+    ) -> Result<(), AppError> {
+        let layout_entries = match (had_override, has_override) {
+            (false, true) => checked_add(self.total.layout_entries, 1, "layout overrides")?,
+            (true, false) => self.total.layout_entries.saturating_sub(1),
+            _ => self.total.layout_entries,
+        };
+        validate_usage(ProjectionUsage {
+            layout_entries,
+            ..self.total
+        })
+    }
+
+    pub fn estimated_bytes(&self) -> usize {
+        self.total.estimated_bytes()
     }
 }
 
@@ -216,6 +237,7 @@ fn validate_cell_changes_with_usage<'a>(
         dense_slots,
         total_rows,
         rich_entries: usage.rich_entries,
+        layout_entries: usage.layout_entries,
         text_bytes,
     })
 }
@@ -233,6 +255,7 @@ fn validate_added_row_with_usage(
         dense_slots: checked_add(usage.dense_slots, row_width, "cell slots")?,
         total_rows: checked_add(usage.total_rows, added_rows, "rows")?,
         rich_entries: usage.rich_entries,
+        layout_entries: usage.layout_entries,
         text_bytes: usage.text_bytes,
     })
 }
@@ -264,6 +287,7 @@ fn validate_added_column_with_usage(
         dense_slots: checked_add(usage.dense_slots, additional_slots, "cell slots")?,
         total_rows: checked_add(usage.total_rows, added_rows, "rows")?,
         rich_entries: usage.rich_entries,
+        layout_entries: usage.layout_entries,
         text_bytes: usage.text_bytes,
     })
 }
@@ -294,6 +318,7 @@ struct ProjectionUsage {
     dense_slots: usize,
     total_rows: usize,
     rich_entries: usize,
+    layout_entries: usize,
     text_bytes: usize,
 }
 
@@ -305,6 +330,7 @@ impl std::ops::Add for ProjectionUsage {
             dense_slots: self.dense_slots.saturating_add(right.dense_slots),
             total_rows: self.total_rows.saturating_add(right.total_rows),
             rich_entries: self.rich_entries.saturating_add(right.rich_entries),
+            layout_entries: self.layout_entries.saturating_add(right.layout_entries),
             text_bytes: self.text_bytes.saturating_add(right.text_bytes),
         }
     }
@@ -318,6 +344,7 @@ impl std::ops::Sub for ProjectionUsage {
             dense_slots: self.dense_slots.saturating_sub(right.dense_slots),
             total_rows: self.total_rows.saturating_sub(right.total_rows),
             rich_entries: self.rich_entries.saturating_sub(right.rich_entries),
+            layout_entries: self.layout_entries.saturating_sub(right.layout_entries),
             text_bytes: self.text_bytes.saturating_sub(right.text_bytes),
         }
     }
@@ -328,6 +355,7 @@ fn projection_usage(file_data: &FileData) -> Result<ProjectionUsage, AppError> {
         dense_slots: 0,
         total_rows: 0,
         rich_entries: 0,
+        layout_entries: 0,
         text_bytes: 0,
     };
     for sheet in &file_data.sheets {
@@ -364,6 +392,8 @@ fn sheet_resource_usage(sheet: &SheetData) -> SheetResourceUsage {
             dense_slots,
             total_rows: sheet.rows.len(),
             rich_entries,
+            layout_entries: sheet.column_widths.as_ref().map_or(0, HashMap::len)
+                + sheet.row_heights.as_ref().map_or(0, HashMap::len),
             text_bytes,
         },
         extent: sheet.extent(),
@@ -423,6 +453,9 @@ fn validate_sheet_metadata(sheet: &SheetData, usage: &mut ProjectionUsage) -> Re
         + sheet.rich.hidden_columns.len()
         + sheet.rich.drawings.len();
     usage.rich_entries = checked_add(usage.rich_entries, rich_entries, "rich metadata entries")?;
+    let layout_entries = sheet.column_widths.as_ref().map_or(0, HashMap::len)
+        + sheet.row_heights.as_ref().map_or(0, HashMap::len);
+    usage.layout_entries = checked_add(usage.layout_entries, layout_entries, "layout overrides")?;
     Ok(())
 }
 
@@ -434,7 +467,27 @@ fn validate_usage(usage: ProjectionUsage) -> Result<(), AppError> {
         usage.rich_entries,
         MAX_RICH_METADATA_ENTRIES,
     )?;
+    ensure_limit(
+        "layout overrides",
+        usage.layout_entries,
+        MAX_LAYOUT_OVERRIDES,
+    )?;
     ensure_limit("text bytes", usage.text_bytes, MAX_PROJECTED_TEXT_BYTES)
+}
+
+impl ProjectionUsage {
+    fn estimated_bytes(self) -> usize {
+        self.text_bytes
+            .saturating_add(
+                self.dense_slots
+                    .saturating_mul(std::mem::size_of::<CellValue>()),
+            )
+            .saturating_add(
+                self.total_rows
+                    .saturating_mul(std::mem::size_of::<Vec<CellValue>>()),
+            )
+            .saturating_add(self.rich_entries.saturating_mul(96))
+    }
 }
 
 fn cell_text_bytes(cell: &CellValue) -> usize {
@@ -553,6 +606,7 @@ mod tests {
             dense_slots: 0,
             total_rows: 0,
             rich_entries: 0,
+            layout_entries: 0,
             text_bytes: MAX_PROJECTED_TEXT_BYTES + 1,
         })
         .expect_err("projected text budget");

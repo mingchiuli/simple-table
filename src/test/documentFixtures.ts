@@ -17,7 +17,11 @@ export function openResponseFromFileData(
     document: {
       path: fileData.path,
       fileName: fileData.fileName,
-      sheets: fileData.sheets.map((sheet) => ({ name: sheet.name, extent: extentOf(sheet) })),
+      sheets: fileData.sheets.map((sheet) => ({
+        name: sheet.name,
+        extent: extentOf(sheet),
+        layout: layoutOf(sheet),
+      })),
     },
     editorSession,
     initialRegion: fileData.sheets[initialSheetIndex]
@@ -34,7 +38,11 @@ export function savedResponseFromFileData(
     document: {
       path: fileData.path,
       fileName: fileData.fileName,
-      sheets: fileData.sheets.map((sheet) => ({ name: sheet.name, extent: extentOf(sheet) })),
+      sheets: fileData.sheets.map((sheet) => ({
+        name: sheet.name,
+        extent: extentOf(sheet),
+        layout: layoutOf(sheet),
+      })),
     },
     editorSession,
   };
@@ -59,12 +67,19 @@ function regionFromSheet(
     cells: sheet.rows.flatMap((row, rowIndex) =>
       row.map((value, col) => ({ sheetIndex, row: rowIndex, col, value }))
     ),
+    mergeAnchorCells: [],
     metadata: {
       merges: sheet.merges,
-      columnWidths: sheet.columnWidths ?? {},
-      rowHeights: sheet.rowHeights ?? {},
-      rich: sheet.rich,
+      cellFormats: sheet.rich.cellFormats ?? {},
+      cellStyles: sheet.rich.cellStyles ?? {},
     },
+  };
+}
+
+function layoutOf(sheet: SheetData) {
+  return {
+    columnWidths: sheet.columnWidths ?? {},
+    rowHeights: sheet.rowHeights ?? {},
   };
 }
 

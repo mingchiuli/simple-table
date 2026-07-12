@@ -67,7 +67,8 @@ impl PreparedDocumentStore {
     }
 }
 
-const MAX_PREPARED_DOCUMENTS: usize = 2;
+const MAX_PREPARED_DOCUMENTS: usize = 1;
+const MAX_PREPARED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
 
 static PREPARED_DOCUMENTS: OnceLock<Mutex<PreparedDocumentStore>> = OnceLock::new();
@@ -80,6 +81,12 @@ pub(crate) fn replace(
     editor_state: EditorState,
     source_path: Option<PathBuf>,
 ) -> Result<String, AppError> {
+    let estimated_bytes = editor_state.estimated_resource_bytes();
+    if estimated_bytes > MAX_PREPARED_DOCUMENT_BYTES {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "prepared document requires an estimated {estimated_bytes} bytes, maximum is {MAX_PREPARED_DOCUMENT_BYTES}"
+        )));
+    }
     let token = uuid::Uuid::new_v4().to_string();
     let prepared = PreparedDocument {
         editor_state,

@@ -1,6 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use super::CommandU64;
+use super::{CommandU64, mutation_replay};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -119,6 +119,14 @@ pub fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn get_mutation_result(
+    document_id: CommandU64,
+    command_id: String,
+) -> Result<Option<EditorMutationResponse>, AppError> {
+    mutation_replay::get(document_id.get(), &command_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn get_current_document_projection(
     document_id: CommandU64,
     base_revision: CommandU64,
@@ -190,18 +198,34 @@ pub fn get_editor_state(
 pub fn undo(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    editor_ops::do_undo(&registry, document_id.get(), base_revision.get())
+    mutation_replay::run(
+        document_id.get(),
+        base_revision.get(),
+        &command_id,
+        "undo",
+        &(),
+        || editor_ops::do_undo(&registry, document_id.get(), base_revision.get()),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn redo(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    editor_ops::do_redo(&registry, document_id.get(), base_revision.get())
+    mutation_replay::run(
+        document_id.get(),
+        base_revision.get(),
+        &command_id,
+        "redo",
+        &(),
+        || editor_ops::do_redo(&registry, document_id.get(), base_revision.get()),
+    )
 }
 
 // ==================== Cell Operations ====================
@@ -210,20 +234,30 @@ pub fn redo(
 pub fn set_cell(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     row: usize,
     col: usize,
     text: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_cell(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        row,
-        col,
-        text,
+        &command_id,
+        "set_cell",
+        &(sheet_index, row, col, &text),
+        || {
+            cell_ops::do_set_cell(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                row,
+                col,
+                text.clone(),
+            )
+        },
     )
 }
 
@@ -231,26 +265,51 @@ pub fn set_cell(
 pub fn set_cells(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     changes: Vec<SetCellRequest>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_cells(&registry, document_id.get(), base_revision.get(), changes)
+    mutation_replay::run(
+        document_id.get(),
+        base_revision.get(),
+        &command_id,
+        "set_cells",
+        &changes,
+        || {
+            cell_ops::do_set_cells(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                changes.clone(),
+            )
+        },
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn add_row(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_row(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        row_index,
+        &command_id,
+        "add_row",
+        &(sheet_index, row_index),
+        || {
+            cell_ops::do_add_row(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                row_index,
+            )
+        },
     )
 }
 
@@ -258,16 +317,26 @@ pub fn add_row(
 pub fn delete_row(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_row(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        row_index,
+        &command_id,
+        "delete_row",
+        &(sheet_index, row_index),
+        || {
+            cell_ops::do_delete_row(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                row_index,
+            )
+        },
     )
 }
 
@@ -275,16 +344,26 @@ pub fn delete_row(
 pub fn add_column(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_column(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        col_index,
+        &command_id,
+        "add_column",
+        &(sheet_index, col_index),
+        || {
+            cell_ops::do_add_column(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                col_index,
+            )
+        },
     )
 }
 
@@ -292,16 +371,26 @@ pub fn add_column(
 pub fn delete_column(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_column(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        col_index,
+        &command_id,
+        "delete_column",
+        &(sheet_index, col_index),
+        || {
+            cell_ops::do_delete_column(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                col_index,
+            )
+        },
     )
 }
 
@@ -309,18 +398,28 @@ pub fn delete_column(
 pub fn set_column_width(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_column_width(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        col_index,
-        width,
+        &command_id,
+        "set_column_width",
+        &(sheet_index, col_index, width),
+        || {
+            cell_ops::do_set_column_width(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                col_index,
+                width,
+            )
+        },
     )
 }
 
@@ -328,18 +427,28 @@ pub fn set_column_width(
 pub fn set_row_height(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_set_row_height(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
-        row_index,
-        height,
+        &command_id,
+        "set_row_height",
+        &(sheet_index, row_index, height),
+        || {
+            cell_ops::do_set_row_height(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+                row_index,
+                height,
+            )
+        },
     )
 }
 
@@ -349,23 +458,41 @@ pub fn set_row_height(
 pub fn add_sheet(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_add_sheet(&registry, document_id.get(), base_revision.get())
+    mutation_replay::run(
+        document_id.get(),
+        base_revision.get(),
+        &command_id,
+        "add_sheet",
+        &(),
+        || cell_ops::do_add_sheet(&registry, document_id.get(), base_revision.get()),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_sheet(
     document_id: CommandU64,
     base_revision: CommandU64,
+    command_id: String,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    cell_ops::do_delete_sheet(
-        &registry,
+    mutation_replay::run(
         document_id.get(),
         base_revision.get(),
-        sheet_index,
+        &command_id,
+        "delete_sheet",
+        &sheet_index,
+        || {
+            cell_ops::do_delete_sheet(
+                &registry,
+                document_id.get(),
+                base_revision.get(),
+                sheet_index,
+            )
+        },
     )
 }
 

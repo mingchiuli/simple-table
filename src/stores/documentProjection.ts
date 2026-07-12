@@ -4,8 +4,8 @@ import type {
   DocumentProjection,
   EditorPatch,
   LoadedSheetSlot,
-  ReadOnlyRichProjection,
   SheetExtent,
+  SheetLayoutUpdate,
   SheetRegion,
   SheetRegionBlock,
   SheetRegionMetadata,
@@ -29,10 +29,11 @@ export function createDocumentProjection(
         state: 'loaded',
         name: sheet.name,
         extent: sheet.extent,
+        layout: sheet.layout,
         blocks: [regionBlock(initialRegion)],
       };
     }
-    return { state: 'unloaded', name: sheet.name, extent: sheet.extent };
+    return { state: 'unloaded', name: sheet.name, extent: sheet.extent, layout: sheet.layout };
   });
   return { path: manifest.path, fileName: manifest.fileName, sheets };
 }
@@ -40,7 +41,8 @@ export function createDocumentProjection(
 export function applyProjectionPatches(
   data: DocumentProjection | null,
   patches: EditorPatch[] | undefined,
-  responseExtents?: SheetExtent[]
+  responseExtents?: SheetExtent[],
+  responseLayouts?: SheetLayoutUpdate[]
 ): ProjectionPatchResult {
   if (!data) return { data, resyncRequired: false };
   let sheets = [...data.sheets];
@@ -60,6 +62,7 @@ export function applyProjectionPatches(
           state: 'loaded',
           name: sheet.name,
           extent: sheet.extent,
+          layout: sheet.layout,
           blocks: [],
         });
         break;
@@ -75,6 +78,7 @@ export function applyProjectionPatches(
             state: 'unloaded',
             name: sheet.name,
             extent: sheet.extent,
+            layout: sheet.layout,
           })),
         ];
         break;
@@ -103,6 +107,10 @@ export function applyProjectionPatches(
       extent: responseExtents[index] ?? sheet.extent,
     }));
   }
+  for (const update of responseLayouts ?? []) {
+    const sheet = sheets[update.sheetIndex];
+    if (sheet) sheets[update.sheetIndex] = { ...sheet, layout: update.layout };
+  }
   sheets = reindexSheetBlocks(sheets);
   return { data: { ...data, sheets }, resyncRequired };
 }
@@ -112,8 +120,20 @@ export function regionBlock(response: SheetRegionProjectionResponse): SheetRegio
     key: regionKey(response.region),
     region: response.region,
     cells: new Map(response.cells.map((cell) => [cellKey(cell.row, cell.col), cell.value])),
+    mergeAnchorCells: new Map(
+      (response.mergeAnchorCells ?? []).map((cell) => [cellKey(cell.row, cell.col), cell.value])
+    ),
     metadata: normalizeMetadata(response.metadata),
+    estimatedBytes: estimateRegionBytes(response),
   };
+}
+
+function estimateRegionBytes(response: SheetRegionProjectionResponse): number {
+  try {
+    return JSON.stringify(response).length * 2;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
 }
 
 export function sheetCell(
@@ -126,13 +146,17 @@ export function sheetCell(
   for (let index = slot.blocks.length - 1; index >= 0; index -= 1) {
     const block = slot.blocks[index];
     if (containsCell(block.region, row, col)) return block.cells.get(key);
+    const anchor = block.mergeAnchorCells.get(key);
+    if (anchor !== undefined) return anchor;
   }
   return undefined;
 }
 
 export function isCellLoaded(slot: SheetSlot | null | undefined, row: number, col: number): boolean {
   return slot?.state === 'loaded'
-    && slot.blocks.some((block) => containsCell(block.region, row, col));
+    && slot.blocks.some((block) =>
+      containsCell(block.region, row, col) || block.mergeAnchorCells.has(cellKey(row, col))
+    );
 }
 
 export function isRegionLoaded(slot: SheetSlot | null | undefined, region: SheetRegion): boolean {
@@ -140,24 +164,25 @@ export function isRegionLoaded(slot: SheetSlot | null | undefined, region: Sheet
     && slot.blocks.some((block) => containsRegion(block.region, region));
 }
 
-export function loadedSheetMetadata(slot: LoadedSheetSlot): SheetRegionMetadata {
-  const rich = defaultRichProjection();
+export function loadedSheetMetadata(slot: LoadedSheetSlot) {
+  const rich = {
+    ...defaultRichProjection(),
+    cellFormats: {},
+    cellStyles: {},
+  };
   const merges = new Map<string, NonNullable<SheetRegionMetadata['merges']>[number]>();
-  const columnWidths: Record<number, number> = {};
-  const rowHeights: Record<number, number> = {};
 
   for (const block of slot.blocks) {
     for (const merge of block.metadata.merges ?? []) {
       merges.set(`${merge.startRow}:${merge.startCol}:${merge.endRow}:${merge.endCol}`, merge);
     }
-    Object.assign(columnWidths, block.metadata.columnWidths ?? {});
-    Object.assign(rowHeights, block.metadata.rowHeights ?? {});
-    mergeRichProjection(rich, block.metadata.rich);
+    Object.assign(rich.cellFormats, block.metadata.cellFormats ?? {});
+    Object.assign(rich.cellStyles, block.metadata.cellStyles ?? {});
   }
   return {
     merges: [...merges.values()],
-    columnWidths,
-    rowHeights,
+    columnWidths: slot.layout.columnWidths,
+    rowHeights: slot.layout.rowHeights,
     rich,
   };
 }
@@ -176,11 +201,15 @@ function applyCellChanges(
     if (!slot || slot.state !== 'loaded') continue;
     let changed = false;
     const blocks = slot.blocks.map((block) => {
-      if (!containsCell(block.region, change.row, change.col)) return block;
+      if (!containsCell(block.region, change.row, change.col)
+          && !block.mergeAnchorCells.has(cellKey(change.row, change.col))) return block;
       changed = true;
       const cells = new Map(block.cells);
-      cells.set(cellKey(change.row, change.col), change.value);
-      return { ...block, cells };
+      const mergeAnchorCells = new Map(block.mergeAnchorCells);
+      const key = cellKey(change.row, change.col);
+      if (containsCell(block.region, change.row, change.col)) cells.set(key, change.value);
+      if (mergeAnchorCells.has(key)) mergeAnchorCells.set(key, change.value);
+      return { ...block, cells, mergeAnchorCells };
     });
     if (changed) next[change.sheetIndex] = { ...slot, blocks };
   }
@@ -192,26 +221,13 @@ function applyLayoutPatch(
   patch: Extract<EditorPatch, { type: 'Layout' }>['data']['patch']
 ): SheetSlot[] {
   const slot = sheets[patch.sheetIndex];
-  if (!slot || slot.state !== 'loaded') return sheets;
-  const blocks = slot.blocks.map((block) => {
-    const columnWidths = { ...(block.metadata.columnWidths ?? {}) };
-    const rowHeights = { ...(block.metadata.rowHeights ?? {}) };
-    for (const [key, value] of Object.entries(patch.columnWidths ?? {})) {
-      const index = Number(key);
-      if (index < block.region.colStart || index >= block.region.colEnd) continue;
-      if (value == null) delete columnWidths[index];
-      else columnWidths[index] = value;
-    }
-    for (const [key, value] of Object.entries(patch.rowHeights ?? {})) {
-      const index = Number(key);
-      if (index < block.region.rowStart || index >= block.region.rowEnd) continue;
-      if (value == null) delete rowHeights[index];
-      else rowHeights[index] = value;
-    }
-    return { ...block, metadata: { ...block.metadata, columnWidths, rowHeights } };
-  });
+  if (!slot) return sheets;
+  const columnWidths = { ...slot.layout.columnWidths };
+  const rowHeights = { ...slot.layout.rowHeights };
+  applyLayoutValues(columnWidths, patch.columnWidths);
+  applyLayoutValues(rowHeights, patch.rowHeights);
   const next = [...sheets];
-  next[patch.sheetIndex] = { ...slot, blocks };
+  next[patch.sheetIndex] = { ...slot, layout: { columnWidths, rowHeights } };
   return next;
 }
 
@@ -235,42 +251,20 @@ function reindexSheetBlocks(sheets: SheetSlot[]): SheetSlot[] {
 function normalizeMetadata(metadata: SheetRegionMetadata): SheetRegionMetadata {
   return {
     merges: metadata.merges ?? [],
-    columnWidths: metadata.columnWidths ?? {},
-    rowHeights: metadata.rowHeights ?? {},
-    rich: {
-      ...defaultRichProjection(),
-      ...metadata.rich,
-      cellFormats: metadata.rich.cellFormats ?? {},
-      cellStyles: metadata.rich.cellStyles ?? {},
-      hiddenRows: metadata.rich.hiddenRows ?? [],
-      hiddenColumns: metadata.rich.hiddenColumns ?? [],
-      hyperlinks: metadata.rich.hyperlinks ?? {},
-      drawings: metadata.rich.drawings ?? [],
-    },
+    cellFormats: metadata.cellFormats ?? {},
+    cellStyles: metadata.cellStyles ?? {},
   };
 }
 
-function mergeRichProjection(target: ReadOnlyRichProjection, source: ReadOnlyRichProjection) {
-  target.cellFormats = { ...(target.cellFormats ?? {}), ...(source.cellFormats ?? {}) };
-  target.cellStyles = { ...(target.cellStyles ?? {}), ...(source.cellStyles ?? {}) };
-  target.hyperlinks = { ...(target.hyperlinks ?? {}), ...(source.hyperlinks ?? {}) };
-  target.hiddenRows = [...new Set([...(target.hiddenRows ?? []), ...(source.hiddenRows ?? [])])];
-  target.hiddenColumns = [
-    ...new Set([...(target.hiddenColumns ?? []), ...(source.hiddenColumns ?? [])]),
-  ];
-  const drawings = new Map<string, NonNullable<ReadOnlyRichProjection['drawings']>[number]>();
-  for (const drawing of [...(target.drawings ?? []), ...(source.drawings ?? [])]) {
-    drawings.set(
-      `${drawing.kind}:${drawing.fromRow}:${drawing.fromCol}:${drawing.toRow}:${drawing.toCol}`,
-      drawing
-    );
+function applyLayoutValues(
+  target: Record<number, number>,
+  updates: Record<number, number | null> | undefined
+) {
+  for (const [key, value] of Object.entries(updates ?? {})) {
+    const index = Number(key);
+    if (value == null) delete target[index];
+    else target[index] = value;
   }
-  target.drawings = [...drawings.values()];
-  target.freezePane ??= source.freezePane;
-  target.hasMoreDrawings ||= source.hasMoreDrawings;
-  target.hasStyleMetadata ||= source.hasStyleMetadata;
-  target.hasHyperlinks ||= source.hasHyperlinks;
-  target.hasFreezePane ||= source.hasFreezePane;
 }
 
 function containsCell(region: SheetRegion, row: number, col: number): boolean {

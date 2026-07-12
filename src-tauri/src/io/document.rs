@@ -7,7 +7,7 @@ use crate::io::file_format::{
 };
 use crate::io::prepared_documents;
 use crate::io::projection_limits::validate_file_data;
-use crate::io::rich_projection::filter_rich_projection_region;
+use crate::io::rich_projection::parse_cell_key;
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -17,9 +17,9 @@ use crate::state::{
 };
 use crate::types::{
     DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
-    PreparedOpenDocument, SavedDocumentIdentity, SavedDocumentResponse, SheetData, SheetManifest,
-    SheetRegion, SheetRegionMetadata, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
-    WorkbookCapabilities,
+    PreparedOpenDocument, SavedDocumentIdentity, SavedDocumentResponse, SheetData,
+    SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionMetadata,
+    SheetRegionProjectionResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
@@ -84,6 +84,7 @@ pub fn commit_prepared_document(
         && previous_document_id != document_id
     {
         cancel_index_jobs_for_document(previous_document_id);
+        crate::commands::mutation_replay::clear_document(previous_document_id);
     }
     adopt_source_path_if_transient(source_path.as_deref());
     spawn_rebuild_all_sheets_index(&registry, document_id);
@@ -402,6 +403,7 @@ pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
     };
     if let Some(document_id) = closed_document_id {
         cancel_index_jobs_for_document(document_id);
+        crate::commands::mutation_replay::clear_document(document_id);
     }
     Ok(())
 }
@@ -715,6 +717,7 @@ fn document_manifest(editor_state: &EditorState) -> DocumentManifest {
             .map(|(sheet, extent)| SheetManifest {
                 name: sheet.name.clone(),
                 extent,
+                layout: sheet_layout_projection(sheet),
             })
             .collect(),
     }
@@ -739,11 +742,13 @@ fn project_sheet_region(
     }
     let metadata = project_region_metadata(sheet, &region);
     let cells = project_region_cells(sheet, &region);
+    let merge_anchor_cells = project_merge_anchor_cells(sheet, &region, &metadata.merges);
     Ok(SheetRegionProjectionResponse {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
         region,
         cells,
+        merge_anchor_cells,
         metadata,
     })
 }
@@ -806,22 +811,75 @@ fn project_region_metadata(
             })
             .cloned()
             .collect(),
-        column_widths: sheet
-            .column_widths
+        cell_formats: sheet
+            .rich
+            .cell_formats
             .iter()
-            .flat_map(|widths| widths.iter())
-            .filter(|(col, _)| **col >= region.col_start && **col < region.col_end)
-            .map(|(col, width)| (*col, *width))
+            .filter(|(key, _)| cell_key_in_region(key, region))
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        row_heights: sheet
-            .row_heights
+        cell_styles: sheet
+            .rich
+            .cell_styles
             .iter()
-            .flat_map(|heights| heights.iter())
-            .filter(|(row, _)| **row >= region.row_start && **row < region.row_end)
-            .map(|(row, height)| (*row, *height))
+            .filter(|(key, _)| cell_key_in_region(key, region))
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        rich: filter_rich_projection_region(&sheet.rich, region),
     }
+}
+
+fn cell_key_in_region(key: &str, region: &SheetRegion) -> bool {
+    parse_cell_key(key).is_some_and(|(row, col)| {
+        row >= region.row_start
+            && row < region.row_end
+            && col >= region.col_start
+            && col < region.col_end
+    })
+}
+
+fn sheet_layout_projection(sheet: &crate::types::SheetData) -> SheetLayoutProjection {
+    SheetLayoutProjection {
+        column_widths: sheet.column_widths.clone().unwrap_or_default(),
+        row_heights: sheet.row_heights.clone().unwrap_or_default(),
+    }
+}
+
+fn project_merge_anchor_cells(
+    sheet: &crate::types::SheetData,
+    region: &SheetRegion,
+    merges: &[crate::types::MergeRange],
+) -> Vec<crate::types::SheetCellChange> {
+    let mut anchors = std::collections::BTreeSet::new();
+    for merge in merges {
+        let row = merge.start_row as usize;
+        let col = merge.start_col as usize;
+        if row >= region.row_start
+            && row < region.row_end
+            && col >= region.col_start
+            && col < region.col_end
+        {
+            continue;
+        }
+        anchors.insert((row, col));
+    }
+
+    anchors
+        .into_iter()
+        .map(|(row, col)| {
+            let value = sheet
+                .rows
+                .get(row)
+                .and_then(|row_data| row_data.get(col))
+                .cloned()
+                .unwrap_or(crate::types::CellValue::Null);
+            crate::types::SheetCellChange::new(region.sheet_index, row, col, value)
+                .with_display_projection(
+                    sheet.cell_display_text(row, col),
+                    sheet.cell_format_at(row, col),
+                    sheet.cell_style_at(row, col),
+                )
+        })
+        .collect()
 }
 
 fn project_region_cells(
@@ -1019,6 +1077,34 @@ mod tests {
         assert_eq!(cells.len(), 1);
         assert_eq!((cells[0].row, cells[0].col), (1, 1));
         assert_eq!(cells[0].display.as_deref(), Some("B2"));
+    }
+
+    #[test]
+    fn region_projection_includes_merge_anchor_outside_region() {
+        let sheet = SheetData {
+            rows: vec![vec![CellValue::String("anchor".to_string())]],
+            merges: vec![crate::types::MergeRange {
+                start_row: 0,
+                start_col: 0,
+                end_row: 140,
+                end_col: 0,
+            }],
+            ..Default::default()
+        };
+        let region = SheetRegion {
+            sheet_index: 0,
+            row_start: 128,
+            row_end: 141,
+            col_start: 0,
+            col_end: 1,
+        };
+        let metadata = project_region_metadata(&sheet, &region);
+        let anchors = project_merge_anchor_cells(&sheet, &region, &metadata.merges);
+
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].row, 0);
+        assert_eq!(anchors[0].col, 0);
+        assert_eq!(anchors[0].value, CellValue::String("anchor".to_string()));
     }
 
     #[test]

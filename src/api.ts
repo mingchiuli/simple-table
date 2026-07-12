@@ -17,6 +17,7 @@ import type {
   SheetRegion,
   SheetRegionProjectionResponse,
   U64String,
+  MutationCommandContext,
 } from "@/types";
 
 export async function prepareNewFile(fileData: FileData): Promise<PreparedOpenDocument> {
@@ -40,6 +41,13 @@ export async function abortPreparedDocument(token: string): Promise<void> {
 
 export async function getActiveDocument(): Promise<OpenDocumentResponse | null> {
   return invokeCommand("get_active_document", {});
+}
+
+export async function getMutationResult(
+  documentId: U64String,
+  commandId: string
+): Promise<EditorMutationResponse | null> {
+  return invokeCommand("get_mutation_result", { documentId, commandId });
 }
 
 export async function getCurrentDocumentProjection(
@@ -88,18 +96,18 @@ export async function getEditorState(
   });
 }
 
-export async function undo(context: EditorCommandContext): Promise<EditorMutationResponse> {
+export async function undo(context: MutationCommandContext): Promise<EditorMutationResponse> {
   return invokeCommand("undo", context);
 }
 
-export async function redo(context: EditorCommandContext): Promise<EditorMutationResponse> {
+export async function redo(context: MutationCommandContext): Promise<EditorMutationResponse> {
   return invokeCommand("redo", context);
 }
 
 // ==================== Cell Operations ====================
 
 export async function setCell(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   row: number,
   col: number,
@@ -109,14 +117,14 @@ export async function setCell(
 }
 
 export async function setCells(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   changes: SetCellRequest[]
 ): Promise<EditorMutationResponse> {
   return invokeCommand("set_cells", { ...context, changes });
 }
 
 export async function addRow(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   rowIndex: number
 ): Promise<EditorMutationResponse> {
@@ -124,7 +132,7 @@ export async function addRow(
 }
 
 export async function deleteRow(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   rowIndex: number
 ): Promise<EditorMutationResponse> {
@@ -132,7 +140,7 @@ export async function deleteRow(
 }
 
 export async function addColumn(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   colIndex: number
 ): Promise<EditorMutationResponse> {
@@ -140,7 +148,7 @@ export async function addColumn(
 }
 
 export async function deleteColumn(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   colIndex: number
 ): Promise<EditorMutationResponse> {
@@ -148,7 +156,7 @@ export async function deleteColumn(
 }
 
 export async function setColumnWidth(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   colIndex: number,
   width: number | null
@@ -162,7 +170,7 @@ export async function setColumnWidth(
 }
 
 export async function setRowHeight(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number,
   rowIndex: number,
   height: number | null
@@ -177,12 +185,12 @@ export async function setRowHeight(
 
 // ==================== Sheet Operations ====================
 
-export async function addSheet(context: EditorCommandContext): Promise<EditorMutationResponse> {
+export async function addSheet(context: MutationCommandContext): Promise<EditorMutationResponse> {
   return invokeCommand("add_sheet", context);
 }
 
 export async function deleteSheet(
-  context: EditorCommandContext,
+  context: MutationCommandContext,
   sheetIndex: number
 ): Promise<EditorMutationResponse> {
   return invokeCommand("delete_sheet", { ...context, sheetIndex });

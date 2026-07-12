@@ -32,6 +32,8 @@ vi.mock("@/api", () => ({
   getCurrentDocumentProjection: vi.fn(),
   getSheetRegionProjection: vi.fn(),
   getEditorState: vi.fn(),
+  getActiveDocument: vi.fn(),
+  getMutationResult: vi.fn().mockResolvedValue(null),
   search: vi.fn().mockResolvedValue([]),
 }));
 
@@ -69,7 +71,7 @@ function openedResponse(documentId: number | string = '1', fileName = "book.xlsx
 
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
-    protocolVersion: 2,
+    protocolVersion: 3,
     documentId: '1',
     revision: '1',
     formulaStatus: readyFormulaStatus(),
@@ -268,7 +270,9 @@ describe("useEditorCommands", () => {
     await setup.commands.handleAddRow();
 
     expect(api.addRow).toHaveBeenCalledWith(
-      { documentId: '1', baseRevision: '4' },
+      expect.objectContaining({
+        documentId: '1', baseRevision: '4', commandId: expect.any(String),
+      }),
       0,
       1
     );
@@ -289,7 +293,9 @@ describe("useEditorCommands", () => {
     await setup.commands.handleAddRow();
 
     expect(api.addRow).toHaveBeenCalledWith(
-      { documentId: '1', baseRevision: '0' },
+      expect.objectContaining({
+        documentId: '1', baseRevision: '0', commandId: expect.any(String),
+      }),
       0,
       10_000
     );
@@ -358,6 +364,44 @@ describe("useEditorCommands", () => {
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
       "Change was applied, but the editor could not refresh: Error: projection unavailable"
     );
+  });
+
+  it("recovers an applied mutation when both command responses are lost", async () => {
+    const api = await import("@/api");
+    const elementPlus = await import("element-plus");
+    const setup = setupCommands();
+    const recovered = openedResponse();
+    recovered.editorSession.revision = '1';
+    recovered.document.sheets[0].name = 'Recovered';
+    vi.mocked(api.addRow).mockRejectedValue(new Error("response channel closed"));
+    vi.mocked(api.getActiveDocument).mockResolvedValue(recovered);
+    vi.mocked(api.getCurrentDocumentProjection).mockResolvedValue(recovered);
+
+    await setup.commands.handleAddRow();
+
+    expect(api.addRow).toHaveBeenCalledTimes(2);
+    const firstContext = vi.mocked(api.addRow).mock.calls[0][0];
+    const retryContext = vi.mocked(api.addRow).mock.calls[1][0];
+    expect(retryContext.commandId).toBe(firstContext.commandId);
+    expect(setup.documentSessionStore.revision).toBe('1');
+    expect(setup.documentSessionStore.data?.sheets[0].name).toBe('Recovered');
+    expect(setup.documentSessionStore.projectionStale).toBe(false);
+    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+  });
+
+  it("recovers an ambiguous mutation from the command replay endpoint", async () => {
+    const api = await import("@/api");
+    const setup = setupCommands();
+    const replay = mutationResponse({ revision: '1' });
+    vi.mocked(api.addRow).mockRejectedValue(new Error("response channel closed"));
+    vi.mocked(api.getMutationResult).mockResolvedValue(replay);
+
+    await setup.commands.handleAddRow();
+
+    expect(api.addRow).toHaveBeenCalledTimes(2);
+    expect(api.getMutationResult).toHaveBeenCalledWith('1', expect.any(String));
+    expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function));
+    expect(api.getActiveDocument).not.toHaveBeenCalled();
   });
 
   it("does not mark projection stale when only the post-apply UI callback fails", async () => {

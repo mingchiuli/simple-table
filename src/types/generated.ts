@@ -39,7 +39,11 @@ export type SheetExtent = { rowCount: number, columnCount: number, };
 
 export type FileData = { path: string, fileName: string, sheets: Array<SheetData>, };
 
-export type SheetManifest = { name: string, extent: SheetExtent, };
+export type SheetLayoutProjection = { columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, };
+
+export type SheetLayoutUpdate = { sheetIndex: number, layout: SheetLayoutProjection, };
+
+export type SheetManifest = { name: string, extent: SheetExtent, layout: SheetLayoutProjection, };
 
 export type DocumentManifest = { path: string, fileName: string, sheets: Array<SheetManifest>, };
 
@@ -129,7 +133,7 @@ export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellC
 
 export type EditorCommandContext = { documentId: U64String, baseRevision: U64String, };
 
-export type EditorMutationResponse = { protocolVersion: 2, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
+export type EditorMutationResponse = { protocolVersion: 3, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, sheetLayouts?: Array<SheetLayoutUpdate>, };
 
 export type EditorSessionInfo = { documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, };
 
@@ -137,9 +141,9 @@ export type OpenDocumentResponse = { document: DocumentManifest, editorSession: 
 
 export type SheetRegion = { sheetIndex: number, rowStart: number, rowEnd: number, colStart: number, colEnd: number, };
 
-export type SheetRegionMetadata = { merges?: Array<MergeRange>, columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, rich: ReadOnlyRichProjection, };
+export type SheetRegionMetadata = { merges?: Array<MergeRange>, cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, };
 
-export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, metadata: SheetRegionMetadata, };
+export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, mergeAnchorCells?: Array<SheetCellChange>, metadata: SheetRegionMetadata, };
 
 export type PreparedOpenDocument = { token: string, };
 
@@ -160,6 +164,7 @@ export type TauriCommandMap = {
   "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
   "abort_prepared_document": { args: { token: string }, result: void },
   "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },
+  "get_mutation_result": { args: { documentId: U64String, commandId: string }, result: EditorMutationResponse | null },
   "get_current_document_projection": { args: { documentId: U64String, baseRevision: U64String, preferredSheetIndex: number }, result: OpenDocumentResponse },
   "get_sheet_region_projection": { args: { documentId: U64String, baseRevision: U64String, region: SheetRegion }, result: SheetRegionProjectionResponse },
   "close_current_document": { args: { documentId: U64String }, result: void },
@@ -167,18 +172,18 @@ export type TauriCommandMap = {
   "get_native_save_plan": { args: { documentId: U64String, baseRevision: U64String, targetPathOrName: string }, result: NativeSavePlan },
   "get_spreadsheet_format_options": { args: Record<string, never>, result: SpreadsheetFormatOptions },
   "get_editor_state": { args: { documentId: U64String | null, baseRevision: U64String | null }, result: EditorSessionInfo | null },
-  "undo": { args: { documentId: U64String, baseRevision: U64String }, result: EditorMutationResponse },
-  "redo": { args: { documentId: U64String, baseRevision: U64String }, result: EditorMutationResponse },
-  "set_cell": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, row: number, col: number, text: string }, result: EditorMutationResponse },
-  "set_cells": { args: { documentId: U64String, baseRevision: U64String, changes: Array<SetCellRequest> }, result: EditorMutationResponse },
-  "add_row": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
-  "delete_row": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
-  "add_column": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
-  "delete_column": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
-  "set_column_width": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, colIndex: number, width: number | null }, result: EditorMutationResponse },
-  "set_row_height": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, rowIndex: number, height: number | null }, result: EditorMutationResponse },
-  "add_sheet": { args: { documentId: U64String, baseRevision: U64String }, result: EditorMutationResponse },
-  "delete_sheet": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number }, result: EditorMutationResponse },
+  "undo": { args: { documentId: U64String, baseRevision: U64String, commandId: string }, result: EditorMutationResponse },
+  "redo": { args: { documentId: U64String, baseRevision: U64String, commandId: string }, result: EditorMutationResponse },
+  "set_cell": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, row: number, col: number, text: string }, result: EditorMutationResponse },
+  "set_cells": { args: { documentId: U64String, baseRevision: U64String, commandId: string, changes: Array<SetCellRequest> }, result: EditorMutationResponse },
+  "add_row": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
+  "delete_row": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, rowIndex: number }, result: EditorMutationResponse },
+  "add_column": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
+  "delete_column": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, colIndex: number }, result: EditorMutationResponse },
+  "set_column_width": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, colIndex: number, width: number | null }, result: EditorMutationResponse },
+  "set_row_height": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, rowIndex: number, height: number | null }, result: EditorMutationResponse },
+  "add_sheet": { args: { documentId: U64String, baseRevision: U64String, commandId: string }, result: EditorMutationResponse },
+  "delete_sheet": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number }, result: EditorMutationResponse },
   "search": { args: { documentId: U64String, baseRevision: U64String, query: string, scope: SearchScope, currentSheetIndex: number | null }, result: Array<SearchResult> },
   "get_recent_files": { args: Record<string, never>, result: Array<RecentFile> },
   "remove_recent_file": { args: { id: string }, result: void },

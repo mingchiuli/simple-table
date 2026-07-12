@@ -15,10 +15,11 @@ use crate::types::{
     OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch,
     RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse,
     ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetCapabilities, SheetData,
-    SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch, SheetManifest,
-    SheetRegion, SheetRegionMetadata, SheetRegionProjectionResponse, SheetsReplacedPatch,
-    SpreadsheetFormatOptions, WorkbookCapabilities, WorkbookRichCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
+    SheetLayoutProjection, SheetLayoutUpdate, SheetManifest, SheetRegion, SheetRegionMetadata,
+    SheetRegionProjectionResponse, SheetsReplacedPatch, SpreadsheetFormatOptions,
+    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -38,6 +39,8 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetData>(&mut output, &cfg);
     push_decl::<SheetExtent>(&mut output, &cfg);
     push_decl::<FileData>(&mut output, &cfg);
+    push_decl::<SheetLayoutProjection>(&mut output, &cfg);
+    push_decl::<SheetLayoutUpdate>(&mut output, &cfg);
     push_decl::<SheetManifest>(&mut output, &cfg);
     push_decl::<DocumentManifest>(&mut output, &cfg);
     push_decl::<CellStyleProjection>(&mut output, &cfg);

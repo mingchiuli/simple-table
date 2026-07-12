@@ -1,11 +1,19 @@
 import { ElMessage } from 'element-plus';
 import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import type { EditorCommandContext, EditorMutationResponse, SheetRegion, U64String } from '@/types';
+import { useEditorSelectionStore } from '@/stores/editorSelection';
+import type {
+  EditorCommandContext,
+  EditorMutationResponse,
+  MutationCommandContext,
+  SheetRegion,
+  U64String,
+} from '@/types';
+import { compareU64 } from '@/utils/u64';
 import { appErrorMessage } from '@/utils/appError';
 
 type InteractiveMutationOptions = {
-  action: (context: EditorCommandContext) => Promise<EditorMutationResponse>;
+  action: (context: MutationCommandContext) => Promise<EditorMutationResponse>;
   flushPendingChanges: () => Promise<boolean>;
   errorMessage: string;
   refreshProjectionOnError?: boolean;
@@ -14,7 +22,7 @@ type InteractiveMutationOptions = {
 
 type BackgroundMutationOptions = {
   documentId: U64String;
-  action: (context: EditorCommandContext) => Promise<EditorMutationResponse>;
+  action: (context: MutationCommandContext) => Promise<EditorMutationResponse>;
   onRefreshFailed?: (error: unknown) => void;
 };
 
@@ -26,6 +34,7 @@ type ConsistentReadOptions<T> = {
 
 export function useDocumentCommandBus() {
   const documentSessionStore = useDocumentSessionStore();
+  const editorSelectionStore = useEditorSelectionStore();
 
   async function runInteractiveMutation({
     action,
@@ -45,7 +54,11 @@ export function useDocumentCommandBus() {
     try {
       if (!(await flushPendingChanges())) return;
       await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
-        const response = await action(context);
+        const response = await executeMutation(action, context);
+        if (!response) {
+          runAfterApplied(afterApplied);
+          return;
+        }
         try {
           const result = await applyMutationResponse(response);
           if (result.applied) runAfterApplied(afterApplied);
@@ -76,7 +89,8 @@ export function useDocumentCommandBus() {
     onRefreshFailed,
   }: BackgroundMutationOptions): Promise<void> {
     await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
-      const response = await action(context);
+      const response = await executeMutation(action, context);
+      if (!response) return;
       try {
         const result = await applyMutationResponse(response);
         if (!result.applied && documentSessionStore.documentId === documentId) {
@@ -101,6 +115,49 @@ export function useDocumentCommandBus() {
     } catch (error) {
       console.error('Failed to refresh document session after mutation error:', error);
       return false;
+    }
+  }
+
+  async function executeMutation(
+    action: (context: MutationCommandContext) => Promise<EditorMutationResponse>,
+    context: EditorCommandContext
+  ): Promise<EditorMutationResponse | null> {
+    const mutationContext = { ...context, commandId: createCommandId() };
+    let firstError: unknown;
+    try {
+      return await action(mutationContext);
+    } catch (error) {
+      firstError = error;
+    }
+
+    try {
+      return await action(mutationContext);
+    } catch (retryError) {
+      try {
+        const replay = await api.getMutationResult(context.documentId, mutationContext.commandId);
+        if (replay) return replay;
+      } catch (replayError) {
+        console.error('Failed to query an ambiguous mutation result:', replayError);
+      }
+      try {
+        const active = await api.getActiveDocument();
+        if (
+          active?.editorSession.documentId === context.documentId
+          && compareU64(active.editorSession.revision, context.baseRevision) > 0
+        ) {
+          const recovered = await api.getCurrentDocumentProjection(
+            {
+              documentId: active.editorSession.documentId,
+              baseRevision: active.editorSession.revision,
+            },
+            editorSelectionStore.currentSheetIndex
+          );
+          if (documentSessionStore.recoverActiveDocumentResponse(recovered)) return null;
+        }
+      } catch (recoveryError) {
+        console.error('Failed to recover an ambiguous mutation result:', recoveryError);
+      }
+      throw retryError ?? firstError;
     }
   }
 
@@ -198,4 +255,14 @@ export function useDocumentCommandBus() {
     runConsistentRead,
     prepareConsistentContext,
   };
+}
+
+let fallbackCommandId = 0;
+
+function createCommandId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  fallbackCommandId += 1;
+  return `mutation-${Date.now()}-${fallbackCommandId}`;
 }

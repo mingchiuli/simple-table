@@ -184,6 +184,7 @@ impl EditorCommand {
                     .column_widths
                     .as_ref()
                     .and_then(|widths| widths.get(&col_index).copied());
+                resources.validate_layout_change(old_width.is_some(), width.is_some())?;
                 Ok(AppliedOperation::SetColumnWidth {
                     sheet_index,
                     col_index,
@@ -205,6 +206,7 @@ impl EditorCommand {
                     .row_heights
                     .as_ref()
                     .and_then(|heights| heights.get(&row_index).copied());
+                resources.validate_layout_change(old_height.is_some(), height.is_some())?;
                 Ok(AppliedOperation::SetRowHeight {
                     sheet_index,
                     row_index,

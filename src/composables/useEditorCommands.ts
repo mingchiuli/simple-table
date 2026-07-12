@@ -9,9 +9,9 @@ import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import type {
-  EditorCommandContext,
-  DocumentProjection,
-  EditorMutationResponse,
+    DocumentProjection,
+    EditorMutationResponse,
+    MutationCommandContext,
   SearchResult,
   SearchScope,
   LoadedSheetSlot,
@@ -43,7 +43,7 @@ export function useEditorCommands({
   const commandBus = useDocumentCommandBus();
 
   function runEditorMutation(
-    action: (context: EditorCommandContext) => Promise<EditorMutationResponse>,
+    action: (context: MutationCommandContext) => Promise<EditorMutationResponse>,
     errorMessage: string,
     options: {
       refreshProjectionOnError?: boolean;

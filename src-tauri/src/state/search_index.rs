@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
@@ -17,7 +16,6 @@ use crate::types::SheetData;
 
 const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
-const MAX_SNAPSHOT_DELTA_DEPTH: usize = 64;
 
 struct SchemaFields {
     text: Field,
@@ -79,110 +77,6 @@ pub struct SearchCellText {
     pub display_text: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct SearchCellSnapshotChange {
-    pub sheet_index: usize,
-    pub row: usize,
-    pub col: usize,
-    pub cell: Option<SearchCellText>,
-}
-
-#[derive(Debug)]
-pub struct SearchSheetSnapshot {
-    revision: u64,
-    delta_depth: usize,
-    data: SearchSheetSnapshotData,
-}
-
-#[derive(Debug)]
-enum SearchSheetSnapshotData {
-    Full(Arc<[SearchCellText]>),
-    Delta {
-        parent: Arc<SearchSheetSnapshot>,
-        changes: Arc<[SearchCellSnapshotChange]>,
-    },
-}
-
-impl SearchSheetSnapshot {
-    pub fn from_sheet(sheet: &SheetData, revision: u64) -> Arc<Self> {
-        Self::from_cells(Arc::from(collect_sheet_search_text(sheet)), revision)
-    }
-
-    pub fn from_cells(cells: Arc<[SearchCellText]>, revision: u64) -> Arc<Self> {
-        Arc::new(Self {
-            revision,
-            delta_depth: 0,
-            data: SearchSheetSnapshotData::Full(cells),
-        })
-    }
-
-    pub fn with_changes(
-        mut parent: Arc<Self>,
-        changes: Vec<SearchCellSnapshotChange>,
-        revision: u64,
-    ) -> Arc<Self> {
-        if parent.delta_depth >= MAX_SNAPSHOT_DELTA_DEPTH {
-            parent = Self::from_cells(parent.materialize(), parent.revision);
-        }
-        let delta_depth = parent.delta_depth + 1;
-        Arc::new(Self {
-            revision,
-            delta_depth,
-            data: SearchSheetSnapshotData::Delta {
-                parent,
-                changes: Arc::from(changes),
-            },
-        })
-    }
-
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    pub fn materialize(&self) -> Arc<[SearchCellText]> {
-        let mut layers = Vec::new();
-        let mut current = self;
-        let base = loop {
-            match &current.data {
-                SearchSheetSnapshotData::Full(cells) => break Arc::clone(cells),
-                SearchSheetSnapshotData::Delta { parent, changes } => {
-                    layers.push(Arc::clone(changes));
-                    current = parent;
-                }
-            }
-        };
-        if layers.is_empty() {
-            return base;
-        }
-
-        let mut cells: BTreeMap<(usize, usize), SearchCellText> = base
-            .iter()
-            .cloned()
-            .map(|cell| ((cell.row, cell.col), cell))
-            .collect();
-        for changes in layers.into_iter().rev() {
-            for change in changes.iter() {
-                match &change.cell {
-                    Some(cell) => {
-                        cells.insert((change.row, change.col), cell.clone());
-                    }
-                    None => {
-                        cells.remove(&(change.row, change.col));
-                    }
-                }
-            }
-        }
-        Arc::from(cells.into_values().collect::<Vec<_>>())
-    }
-}
-
-pub enum SearchSheetSource {
-    Indexed(Arc<SearchSheetIndex>),
-    Snapshot(Arc<SearchSheetSnapshot>),
-}
-
-static NEXT_SEARCH_INDEX_GENERATION: AtomicU64 = AtomicU64::new(1);
-
 pub struct SearchIndexStore {
     generation: u64,
     revision: u64,
@@ -194,7 +88,7 @@ pub struct SearchIndexStore {
 impl Default for SearchIndexStore {
     fn default() -> Self {
         Self {
-            generation: NEXT_SEARCH_INDEX_GENERATION.fetch_add(1, Ordering::Relaxed),
+            generation: nonzero_random_u64(),
             revision: 0,
             sheet_revisions: Vec::new(),
             sheets: Vec::new(),
@@ -221,11 +115,17 @@ impl SearchIndexStore {
     }
 
     pub fn mark_stale(&mut self, document_id: u64) -> SearchIndexStamp {
-        self.revision = self.revision.wrapping_add(1);
+        if let Some(revision) = self.revision.checked_add(1) {
+            self.revision = revision;
+        } else {
+            self.rotate_generation();
+        }
         self.sheet_revisions
             .resize(self.sheets.len(), self.revision.saturating_sub(1));
         for (sheet_index, slot) in self.sheets.iter_mut().enumerate() {
-            self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index].wrapping_add(1);
+            self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index]
+                .checked_add(1)
+                .unwrap_or(0);
             let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
             *slot = match previous {
                 SearchSheetSlot::Fresh(entry)
@@ -248,7 +148,12 @@ impl SearchIndexStore {
 
     pub fn mark_sheet_stale(&mut self, sheet_index: usize) {
         self.ensure_sheet_slot(sheet_index);
-        self.sheet_revisions[sheet_index] = self.sheet_revisions[sheet_index].wrapping_add(1);
+        let Some(next_revision) = self.sheet_revisions[sheet_index].checked_add(1) else {
+            self.rotate_generation();
+            self.ensure_sheet_slot(sheet_index);
+            return self.mark_sheet_stale(sheet_index);
+        };
+        self.sheet_revisions[sheet_index] = next_revision;
         let previous = std::mem::replace(&mut self.sheets[sheet_index], SearchSheetSlot::Missing);
         self.sheets[sheet_index] = match previous {
             SearchSheetSlot::Fresh(entry) => SearchSheetSlot::Stale {
@@ -410,6 +315,30 @@ impl SearchIndexStore {
             .unwrap_or(self.revision)
     }
 
+    fn rotate_generation(&mut self) {
+        self.generation = nonzero_random_u64();
+        self.revision = 0;
+        self.sheet_revisions.fill(0);
+        for slot in &mut self.sheets {
+            let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
+            *slot = match previous {
+                SearchSheetSlot::Fresh(entry)
+                | SearchSheetSlot::Stale {
+                    entry: Some(entry), ..
+                } => SearchSheetSlot::Stale {
+                    entry: Some(entry),
+                    incremental_allowed: false,
+                },
+                SearchSheetSlot::Stale { entry: None, .. } | SearchSheetSlot::Missing => {
+                    SearchSheetSlot::Stale {
+                        entry: None,
+                        incremental_allowed: false,
+                    }
+                }
+            };
+        }
+    }
+
     fn remove_resident(&mut self, sheet_index: usize) {
         self.resident_order
             .retain(|resident_sheet| *resident_sheet != sheet_index);
@@ -429,6 +358,15 @@ impl SearchIndexStore {
     #[cfg(test)]
     fn resident_index_count(&self) -> usize {
         self.resident_order.len()
+    }
+}
+
+fn nonzero_random_u64() -> u64 {
+    loop {
+        let value = uuid::Uuid::new_v4().as_u128() as u64;
+        if value != 0 {
+            return value;
+        }
     }
 }
 
@@ -497,27 +435,6 @@ pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
             })
         })
         .collect()
-}
-
-pub fn sheet_cell_search_text(
-    sheet: &SheetData,
-    sheet_index: usize,
-    row: usize,
-    col: usize,
-) -> SearchCellSnapshotChange {
-    let search_text = sheet.cell_search_text(row, col);
-    let cell = (!search_text.is_empty()).then(|| SearchCellText {
-        row,
-        col,
-        search_text,
-        display_text: sheet.cell_display_text(row, col),
-    });
-    SearchCellSnapshotChange {
-        sheet_index,
-        row,
-        col,
-        cell,
-    }
 }
 
 #[cfg(test)]
@@ -1016,75 +933,6 @@ mod tests {
 
         assert_eq!(indexed, scanned);
         assert_eq!(indexed, vec![(0, 0), (0, 1)]);
-    }
-
-    #[test]
-    fn snapshot_deltas_materialize_latest_cells_in_sheet_order() {
-        let base = SearchSheetSnapshot::from_cells(
-            Arc::from([
-                SearchCellText {
-                    row: 0,
-                    col: 0,
-                    search_text: "old".to_string(),
-                    display_text: "old".to_string(),
-                },
-                SearchCellText {
-                    row: 2,
-                    col: 0,
-                    search_text: "tail".to_string(),
-                    display_text: "tail".to_string(),
-                },
-            ]),
-            0,
-        );
-        let first = SearchSheetSnapshot::with_changes(
-            base,
-            vec![SearchCellSnapshotChange {
-                sheet_index: 0,
-                row: 0,
-                col: 0,
-                cell: Some(SearchCellText {
-                    row: 0,
-                    col: 0,
-                    search_text: "new".to_string(),
-                    display_text: "new".to_string(),
-                }),
-            }],
-            1,
-        );
-        let latest = SearchSheetSnapshot::with_changes(
-            first,
-            vec![
-                SearchCellSnapshotChange {
-                    sheet_index: 0,
-                    row: 2,
-                    col: 0,
-                    cell: None,
-                },
-                SearchCellSnapshotChange {
-                    sheet_index: 0,
-                    row: 1,
-                    col: 1,
-                    cell: Some(SearchCellText {
-                        row: 1,
-                        col: 1,
-                        search_text: "middle".to_string(),
-                        display_text: "middle".to_string(),
-                    }),
-                },
-            ],
-            2,
-        );
-
-        let cells = latest.materialize();
-
-        assert_eq!(
-            cells
-                .iter()
-                .map(|cell| (cell.row, cell.col, cell.search_text.as_str()))
-                .collect::<Vec<_>>(),
-            vec![(0, 0, "new"), (1, 1, "middle")]
-        );
     }
 
     #[test]

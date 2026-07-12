@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::types::{DrawingProjection, ReadOnlyRichProjection, SheetRegion};
+#[cfg(test)]
+use crate::types::SheetRegion;
+use crate::types::{DrawingProjection, ReadOnlyRichProjection};
 
 #[derive(Clone, Copy)]
 pub(crate) enum RichProjectionScope {
@@ -83,6 +85,7 @@ pub(crate) fn filter_rich_projection(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn filter_rich_projection_region(
     source: &ReadOnlyRichProjection,
     region: &SheetRegion,

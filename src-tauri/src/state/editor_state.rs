@@ -13,10 +13,7 @@ use crate::state::editor_session::EditorSession;
 use crate::state::history_store::{HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES};
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
-use crate::state::search_index::{
-    SearchCellText, SearchIndexStamp, SearchSheetIndex, SearchSheetSnapshot, SearchSheetSource,
-    SearchWriterHandle, sheet_cell_search_text,
-};
+use crate::state::search_index::{SearchIndexStamp, SearchSheetIndex, SearchWriterHandle};
 use crate::state::search_session::SearchSession;
 use crate::state::state::HistoryStatus;
 use crate::types::{
@@ -25,10 +22,7 @@ use crate::types::{
 };
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use umya_spreadsheet::Workbook;
-
-static NEXT_SAVE_COMMIT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct ExecutedOperation {
@@ -91,13 +85,12 @@ impl EditorState {
         workbook: Option<Workbook>,
         clear_history: bool,
     ) -> Result<(), AppError> {
+        self.ensure_revision_available()?;
         self.document = SpreadsheetDocument::new(file_data, workbook);
         if clear_history {
             self.history.clear_all();
         }
         self.bump_revision()?;
-        self.search
-            .replace_snapshots(self.document.projection(), self.revision());
         self.dirty.replace_current(self.document.projection());
         self.resources.replace_all(self.document.projection());
         Ok(())
@@ -113,6 +106,7 @@ impl EditorState {
         revision: u64,
     ) -> Result<SaveCommitLease, AppError> {
         self.ensure_not_saving()?;
+        self.ensure_revision_available()?;
         if self.document_id() != document_id || self.revision() != revision {
             return Err(AppError::DocumentStateInvalid(
                 "document changed while save was in progress; please save again".to_string(),
@@ -122,7 +116,7 @@ impl EditorState {
         let lease = SaveCommitLease {
             document_id,
             revision,
-            token: NEXT_SAVE_COMMIT_ID.fetch_add(1, Ordering::Relaxed),
+            token: nonzero_random_u64(),
         };
         self.save_commit = Some(lease);
         Ok(lease)
@@ -194,6 +188,7 @@ impl EditorState {
                 "document changed while save was in progress; please save again".to_string(),
             ));
         }
+        self.ensure_revision_available()?;
 
         self.save_commit = None;
         self.document.update_identity(path, file_name);
@@ -246,6 +241,10 @@ impl EditorState {
         self.resources.sheet_extent(sheet_index)
     }
 
+    pub fn estimated_resource_bytes(&self) -> usize {
+        self.resources.estimated_bytes()
+    }
+
     pub fn transaction_failure(&self) -> Option<&str> {
         self.document.transaction_failure()
     }
@@ -291,33 +290,12 @@ impl EditorState {
             .writer_handle(self.document_id(), sheet_index, stamp)
     }
 
-    pub fn search_sheet_source(&self, sheet_index: usize) -> Option<SearchSheetSource> {
-        self.search.sheet_source(sheet_index).or_else(|| {
-            self.file_data().sheets.get(sheet_index).map(|sheet| {
-                SearchSheetSource::Snapshot(SearchSheetSnapshot::from_sheet(sheet, self.revision()))
-            })
-        })
+    pub fn indexed_search_sheet(&self, sheet_index: usize) -> Option<Arc<SearchSheetIndex>> {
+        self.search.sheet_index(sheet_index)
     }
 
-    pub fn search_sheet_snapshot(&self, sheet_index: usize) -> Option<Arc<SearchSheetSnapshot>> {
-        self.search.sheet_snapshot(sheet_index).or_else(|| {
-            self.file_data()
-                .sheets
-                .get(sheet_index)
-                .map(|sheet| SearchSheetSnapshot::from_sheet(sheet, self.revision()))
-        })
-    }
-
-    pub fn compact_search_sheet_snapshot(
-        &mut self,
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        cells: Arc<[SearchCellText]>,
-    ) {
-        if self.search_sheet_index_stamp(sheet_index) == stamp {
-            self.search
-                .compact_snapshot(sheet_index, self.revision(), cells);
-        }
+    pub fn search_sheet_data(&self, sheet_index: usize) -> Option<crate::types::SheetData> {
+        self.file_data().sheets.get(sheet_index).cloned()
     }
 
     pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
@@ -359,13 +337,12 @@ impl EditorState {
         }
         self.ensure_operation_supported(&operation)?;
         self.ensure_memento_budget(&operation)?;
+        self.ensure_revision_available()?;
         let should_mark_search_stale = operation.impact().requires_search_rebuild();
         let before = self.document.capture_memento_side(&operation);
 
         let result = self.document.execute_operation(&operation, &before)?;
         let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
-        let snapshot_changes = (!should_mark_search_stale)
-            .then(|| search_snapshot_changes(self.file_data(), &operation, &result.cell_changes));
         let operation_result = result.operation;
         let cell_changes = result.cell_changes;
         let resource_sheets = operation_resource_sheets(&operation, &cell_changes);
@@ -385,8 +362,6 @@ impl EditorState {
 
         self.bump_revision()?;
         if should_mark_search_stale {
-            self.search
-                .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
             let search_index_update = SearchIndexUpdatePlan::rebuild_all();
             return Ok(ExecutedOperation {
@@ -396,9 +371,6 @@ impl EditorState {
                 search_index_update,
             });
         } else {
-            if let Some(changes) = snapshot_changes {
-                self.search.update_snapshots(self.revision(), changes);
-            }
             self.mark_search_sheets_stale(stale_sheets);
         }
         Ok(ExecutedOperation {
@@ -413,6 +385,7 @@ impl EditorState {
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
+        self.ensure_revision_available()?;
         if let Some(restore) = HistoryRestoreTransaction::new(
             &mut self.document,
             &mut self.history,
@@ -423,8 +396,6 @@ impl EditorState {
         {
             self.resources.replace_all(self.document.projection());
             self.bump_revision()?;
-            self.search
-                .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
             Ok(Some(ExecutedOperation {
                 operation: None,
@@ -441,6 +412,7 @@ impl EditorState {
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
+        self.ensure_revision_available()?;
         if let Some(restore) = HistoryRestoreTransaction::new(
             &mut self.document,
             &mut self.history,
@@ -451,8 +423,6 @@ impl EditorState {
         {
             self.resources.replace_all(self.document.projection());
             self.bump_revision()?;
-            self.search
-                .replace_snapshots(self.document.projection(), self.revision());
             self.mark_search_index_stale();
             Ok(Some(ExecutedOperation {
                 operation: None,
@@ -475,6 +445,15 @@ impl EditorState {
             AppError::DocumentStateInvalid("document revision space exhausted".to_string())
         })?;
         Ok(())
+    }
+
+    fn ensure_revision_available(&self) -> Result<(), AppError> {
+        if self.session.can_bump_revision() {
+            return Ok(());
+        }
+        Err(AppError::DocumentStateInvalid(
+            "document revision space exhausted".to_string(),
+        ))
     }
 
     fn ensure_operation_supported(
@@ -523,6 +502,15 @@ impl EditorState {
     }
 }
 
+fn nonzero_random_u64() -> u64 {
+    loop {
+        let value = uuid::Uuid::new_v4().as_u128() as u64;
+        if value != 0 {
+            return value;
+        }
+    }
+}
+
 fn operation_resource_sheets(
     operation: &crate::ops::AppliedOperation,
     formula_changes: &[SheetCellChange],
@@ -548,54 +536,6 @@ fn operation_resource_sheets(
     }
     sheets.extend(formula_changes.iter().map(|change| change.sheet_index));
     sheets.into_iter().collect()
-}
-
-fn search_snapshot_changes(
-    file_data: &FileData,
-    operation: &crate::ops::AppliedOperation,
-    formula_changes: &[SheetCellChange],
-) -> Vec<crate::state::search_index::SearchCellSnapshotChange> {
-    let mut positions = HashSet::new();
-    match operation {
-        crate::ops::AppliedOperation::SetCell {
-            sheet_index,
-            row,
-            col,
-            ..
-        } => {
-            positions.insert((*sheet_index, *row, *col));
-        }
-        crate::ops::AppliedOperation::SetCells { changes } => {
-            positions.extend(
-                changes
-                    .iter()
-                    .map(|change| (change.sheet_index, change.row, change.col)),
-            );
-        }
-        crate::ops::AppliedOperation::SetColumnWidth { .. }
-        | crate::ops::AppliedOperation::SetRowHeight { .. }
-        | crate::ops::AppliedOperation::AddRow { .. }
-        | crate::ops::AppliedOperation::DeleteRow { .. }
-        | crate::ops::AppliedOperation::AddColumn { .. }
-        | crate::ops::AppliedOperation::DeleteColumn { .. }
-        | crate::ops::AppliedOperation::AddSheet { .. }
-        | crate::ops::AppliedOperation::DeleteSheet { .. } => {}
-    }
-    positions.extend(
-        formula_changes
-            .iter()
-            .map(|change| (change.sheet_index, change.row, change.col)),
-    );
-
-    positions
-        .into_iter()
-        .filter_map(|(sheet_index, row, col)| {
-            file_data
-                .sheets
-                .get(sheet_index)
-                .map(|sheet| sheet_cell_search_text(sheet, sheet_index, row, col))
-        })
-        .collect()
 }
 
 trait SearchInvalidation {
@@ -746,6 +686,40 @@ mod tests {
             .expect("restore saved value");
 
         assert_incremental_content_hash_is_current(&state);
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn revision_exhaustion_rejects_mutation_before_state_changes() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "revision-limit.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::String("saved".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        state.session.set_revision_for_test(u64::MAX);
+
+        let error = state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "changed".to_string(),
+            })
+            .expect_err("revision exhaustion must reject the mutation");
+
+        assert!(matches!(error, AppError::DocumentStateInvalid(_)));
+        assert_eq!(
+            state.file_data().sheets[0].rows[0][0],
+            CellValue::String("saved".to_string())
+        );
+        assert!(!state.can_undo());
         assert!(!state.is_dirty());
     }
 

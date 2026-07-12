@@ -4,11 +4,11 @@ use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
     EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
     SearchIndexUpdatePlan, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
-    SheetInvalidatedPatch, SheetManifest,
+    SheetInvalidatedPatch, SheetLayoutProjection, SheetLayoutUpdate, SheetManifest,
 };
 use std::collections::BTreeSet;
 
-const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 2;
+const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 3;
 const MAX_CELL_CHANGES_PER_RESPONSE: usize = 4_096;
 const MAX_CELL_PATCH_BYTES_PER_RESPONSE: usize = 2 * 1024 * 1024;
 
@@ -41,6 +41,22 @@ pub fn mutation_response_with_search_index_update(
         editor_state.file_data(),
         project_patch_display_formats(editor_state.file_data(), patches),
     );
+    let sheet_layouts = affected_layout_sheets(&patches)
+        .into_iter()
+        .filter_map(|sheet_index| {
+            editor_state
+                .file_data()
+                .sheets
+                .get(sheet_index)
+                .map(|sheet| SheetLayoutUpdate {
+                    sheet_index,
+                    layout: SheetLayoutProjection {
+                        column_widths: sheet.column_widths.clone().unwrap_or_default(),
+                        row_heights: sheet.row_heights.clone().unwrap_or_default(),
+                    },
+                })
+        })
+        .collect::<Vec<_>>();
     EditorMutationResponse {
         protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         document_id: editor_state.document_id(),
@@ -50,8 +66,28 @@ pub fn mutation_response_with_search_index_update(
         editor_state: editor_state_info(editor_state),
         patches,
         sheet_extents: Some(editor_state.sheet_extents()),
+        sheet_layouts: (!sheet_layouts.is_empty()).then_some(sheet_layouts),
         search_index_update,
     }
+}
+
+fn affected_layout_sheets(patches: &[EditorPatch]) -> BTreeSet<usize> {
+    patches
+        .iter()
+        .filter_map(|patch| match patch {
+            EditorPatch::SheetInvalidated { patch } => Some(patch.sheet_index),
+            EditorPatch::RowInserted { patch } => Some(patch.sheet_index),
+            EditorPatch::RowDeleted { patch } => Some(patch.sheet_index),
+            EditorPatch::ColumnInserted { patch } => Some(patch.sheet_index),
+            EditorPatch::ColumnDeleted { patch } => Some(patch.sheet_index),
+            EditorPatch::Layout { .. }
+            | EditorPatch::SheetInserted { .. }
+            | EditorPatch::SheetsReplaced { .. }
+            | EditorPatch::SheetDeleted { .. }
+            | EditorPatch::Cells { .. }
+            | EditorPatch::ResyncRequired { .. } => None,
+        })
+        .collect()
 }
 
 pub fn resync_required_mutation_response(
@@ -196,6 +232,10 @@ pub fn structural_patches(
                 sheet: SheetManifest {
                     name: sheet_data.name.clone(),
                     extent: sheet_data.extent(),
+                    layout: SheetLayoutProjection {
+                        column_widths: sheet_data.column_widths.clone().unwrap_or_default(),
+                        row_heights: sheet_data.row_heights.clone().unwrap_or_default(),
+                    },
                 },
             },
         }],
