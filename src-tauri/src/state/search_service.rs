@@ -14,8 +14,9 @@ use crate::state::search_index::{
     collect_sheet_search_text, search_position,
 };
 use crate::state::search_scheduler::{
-    CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, RebuildIndexUpdate,
-    SearchSchedulerStats, SheetPending,
+    CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, MAX_PENDING_INDEX_BYTES,
+    MAX_PENDING_INDEX_BYTES_PER_SHEET, MAX_PENDING_INDEX_SHEETS,
+    MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate, SearchSchedulerStats, SheetPending,
 };
 use crate::state::state::ActiveDocumentStore;
 #[cfg(test)]
@@ -225,14 +226,28 @@ impl SearchService {
 
     pub fn cancel_document_jobs(&self, document_id: u64) {
         if let Ok(mut state) = self.scheduler.state.lock() {
-            let before = state.pending.len();
-            state
+            let removed: Vec<_> = state
                 .pending
-                .retain(|(pending_document_id, _), _| *pending_document_id != document_id);
-            let canceled = before.saturating_sub(state.pending.len());
+                .extract_if(|(pending_document_id, _), _| *pending_document_id == document_id)
+                .map(|(_, pending)| pending)
+                .collect();
+            let canceled = removed.len();
             if canceled > 0 {
+                state.pending_updates = state.pending_updates.saturating_sub(
+                    removed
+                        .iter()
+                        .map(|pending| pending.incremental.len())
+                        .sum(),
+                );
+                state.pending_bytes = state.pending_bytes.saturating_sub(
+                    removed
+                        .iter()
+                        .map(|pending| pending.incremental_bytes)
+                        .sum(),
+                );
                 state.stats.canceled_batches =
                     state.stats.canceled_batches.saturating_add(canceled as u64);
+                update_pending_stats(&mut state);
                 self.scheduler.wake.notify_all();
             }
         }
@@ -246,7 +261,7 @@ impl SearchService {
                 return;
             }
             state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
-            merge_job(&mut state.pending, job);
+            merge_job(&mut state, job);
             self.scheduler.wake.notify_one();
         }
     }
@@ -289,72 +304,164 @@ fn index_scheduler() -> &'static Arc<IndexScheduler> {
     })
 }
 
-fn merge_job(pending: &mut HashMap<(u64, usize), SheetPending>, job: IndexJob) {
+fn merge_job(state: &mut IndexSchedulerState, job: IndexJob) {
     let document_id = job.document_id();
     let sheet_index = job.sheet_index();
     let registry = Arc::clone(job.registry());
-    let entry = pending
-        .entry((document_id, sheet_index))
-        .or_insert_with(|| SheetPending {
+    let key = (document_id, sheet_index);
+    if !state.pending.contains_key(&key) && state.pending.len() >= MAX_PENDING_INDEX_SHEETS {
+        state.stats.dropped_jobs_at_capacity =
+            state.stats.dropped_jobs_at_capacity.saturating_add(1);
+        update_pending_stats(state);
+        return;
+    }
+
+    let total_bytes_before = state.pending_bytes;
+    let total_updates_before = state.pending_updates;
+    let mut coalesced_to_rebuild = false;
+    let (previous_entry_bytes, next_entry_bytes, previous_entry_updates, next_entry_updates) = {
+        let entry = state.pending.entry(key).or_insert_with(|| SheetPending {
             document_id,
             rebuild: None,
             incremental: HashMap::new(),
+            incremental_bytes: 0,
             registry: Arc::clone(&registry),
         });
-    match job {
-        IndexJob::Rebuild { stamp, .. } => {
-            let latest_seen = entry
-                .rebuild
-                .as_ref()
-                .map(|rebuild| rebuild.stamp)
-                .into_iter()
-                .chain(entry.incremental.values().map(|update| update.stamp).max())
-                .max();
-            if latest_seen.is_none_or(|latest| stamp >= latest) {
-                entry.registry = registry;
-                entry.rebuild = Some(RebuildIndexUpdate { stamp });
-                entry.incremental.retain(|_, update| update.stamp > stamp);
-            } else if entry.rebuild.is_none() {
-                entry.registry = registry;
-                entry.rebuild = Some(RebuildIndexUpdate { stamp });
-                entry.incremental.retain(|_, update| update.stamp > stamp);
+        let previous_entry_bytes = entry.incremental_bytes;
+        let previous_entry_updates = entry.incremental.len();
+
+        match job {
+            IndexJob::Rebuild { stamp, .. } => {
+                let latest_seen = latest_pending_stamp(entry);
+                if latest_seen.is_none_or(|latest| stamp >= latest) {
+                    entry.registry = registry;
+                    entry.rebuild = Some(RebuildIndexUpdate { stamp });
+                    retain_updates_after(entry, stamp);
+                } else if entry.rebuild.is_none() {
+                    entry.registry = registry;
+                    entry.rebuild = Some(RebuildIndexUpdate { stamp });
+                    retain_updates_after(entry, stamp);
+                }
             }
-        }
-        IndexJob::UpdateCell {
-            stamp,
-            row,
-            col,
-            search_text,
-            display_text,
-            ..
-        } => {
-            if entry
-                .rebuild
-                .as_ref()
-                .is_some_and(|rebuild| stamp <= rebuild.stamp)
-            {
-                return;
-            }
-            if entry
-                .incremental
-                .get(&(row, col))
-                .is_some_and(|existing| stamp < existing.stamp)
-            {
-                return;
-            }
-            entry.registry = registry;
-            entry.incremental.insert(
-                (row, col),
-                CellIndexUpdate {
+            IndexJob::UpdateCell {
+                stamp,
+                row,
+                col,
+                search_text,
+                display_text,
+                ..
+            } => {
+                if entry
+                    .rebuild
+                    .as_ref()
+                    .is_some_and(|rebuild| stamp <= rebuild.stamp)
+                {
+                    return;
+                }
+                if entry
+                    .incremental
+                    .get(&(row, col))
+                    .is_some_and(|existing| stamp < existing.stamp)
+                {
+                    return;
+                }
+
+                let update = CellIndexUpdate {
                     stamp,
                     row,
                     col,
                     search_text,
                     display_text,
-                },
-            );
+                };
+                let previous_update_bytes = entry
+                    .incremental
+                    .get(&(row, col))
+                    .map(cell_index_update_bytes)
+                    .unwrap_or(0);
+                let next_update_bytes = cell_index_update_bytes(&update);
+                let next_sheet_updates = entry.incremental.len()
+                    + usize::from(!entry.incremental.contains_key(&(row, col)));
+                let next_sheet_bytes = entry
+                    .incremental_bytes
+                    .saturating_sub(previous_update_bytes)
+                    .saturating_add(next_update_bytes);
+                let next_total_bytes = total_bytes_before
+                    .saturating_sub(previous_entry_bytes)
+                    .saturating_add(next_sheet_bytes);
+
+                if next_sheet_updates > MAX_PENDING_INDEX_UPDATES_PER_SHEET
+                    || next_sheet_bytes > MAX_PENDING_INDEX_BYTES_PER_SHEET
+                    || next_total_bytes > MAX_PENDING_INDEX_BYTES
+                {
+                    let latest_stamp = latest_pending_stamp(entry)
+                        .into_iter()
+                        .chain(std::iter::once(stamp))
+                        .max()
+                        .unwrap_or(stamp);
+                    entry.registry = registry;
+                    entry.rebuild = Some(RebuildIndexUpdate {
+                        stamp: latest_stamp,
+                    });
+                    entry.incremental.clear();
+                    entry.incremental_bytes = 0;
+                    coalesced_to_rebuild = true;
+                } else {
+                    entry.registry = registry;
+                    entry.incremental.insert((row, col), update);
+                    entry.incremental_bytes = next_sheet_bytes;
+                }
+            }
         }
+
+        (
+            previous_entry_bytes,
+            entry.incremental_bytes,
+            previous_entry_updates,
+            entry.incremental.len(),
+        )
+    };
+
+    state.pending_bytes = total_bytes_before
+        .saturating_sub(previous_entry_bytes)
+        .saturating_add(next_entry_bytes);
+    state.pending_updates = total_updates_before
+        .saturating_sub(previous_entry_updates)
+        .saturating_add(next_entry_updates);
+    if coalesced_to_rebuild {
+        state.stats.coalesced_to_rebuilds = state.stats.coalesced_to_rebuilds.saturating_add(1);
     }
+    update_pending_stats(state);
+}
+
+fn latest_pending_stamp(entry: &SheetPending) -> Option<SearchIndexStamp> {
+    entry
+        .rebuild
+        .as_ref()
+        .map(|rebuild| rebuild.stamp)
+        .into_iter()
+        .chain(entry.incremental.values().map(|update| update.stamp).max())
+        .max()
+}
+
+fn retain_updates_after(entry: &mut SheetPending, stamp: SearchIndexStamp) {
+    entry.incremental.retain(|_, update| update.stamp > stamp);
+    entry.incremental_bytes = entry
+        .incremental
+        .values()
+        .map(cell_index_update_bytes)
+        .sum();
+}
+
+fn cell_index_update_bytes(update: &CellIndexUpdate) -> usize {
+    std::mem::size_of::<((usize, usize), CellIndexUpdate)>()
+        .saturating_add(update.search_text.capacity())
+        .saturating_add(update.display_text.capacity())
+}
+
+fn update_pending_stats(state: &mut IndexSchedulerState) {
+    state.stats.pending_sheets = state.pending.len();
+    state.stats.pending_updates = state.pending_updates;
+    state.stats.pending_bytes = state.pending_bytes;
 }
 
 fn index_worker(scheduler: &Arc<IndexScheduler>) {
@@ -477,6 +584,13 @@ fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> ((u64, usize), SheetPen
         let Some(pending) = state.pending.remove(&key) else {
             continue;
         };
+        state.pending_updates = state
+            .pending_updates
+            .saturating_sub(pending.incremental.len());
+        state.pending_bytes = state
+            .pending_bytes
+            .saturating_sub(pending.incremental_bytes);
+        update_pending_stats(&mut state);
         if !state.pending.is_empty() {
             scheduler.wake.notify_one();
         }
@@ -878,10 +992,10 @@ mod tests {
     fn pending_index_jobs_coalesce_same_cell_update() {
         let (registry, document_id) = make_registry(vec![vec![s("old")]]);
         let stamp = current_stamp(&registry, document_id);
-        let mut pending = HashMap::new();
+        let mut state = IndexSchedulerState::default();
 
         merge_job(
-            &mut pending,
+            &mut state,
             IndexJob::UpdateCell {
                 document_id,
                 sheet_index: 0,
@@ -894,7 +1008,7 @@ mod tests {
             },
         );
         merge_job(
-            &mut pending,
+            &mut state,
             IndexJob::UpdateCell {
                 document_id,
                 sheet_index: 0,
@@ -907,8 +1021,10 @@ mod tests {
             },
         );
 
-        let sheet = pending.get(&(document_id, 0)).expect("pending sheet");
+        let sheet = state.pending.get(&(document_id, 0)).expect("pending sheet");
         assert_eq!(sheet.incremental.len(), 1);
+        assert_eq!(state.pending_updates, 1);
+        assert_eq!(state.pending_bytes, sheet.incremental_bytes);
         assert_eq!(
             sheet
                 .incremental
@@ -922,10 +1038,10 @@ mod tests {
     fn pending_rebuild_supersedes_cell_updates() {
         let (registry, document_id) = make_registry(vec![vec![s("old")]]);
         let stamp = current_stamp(&registry, document_id);
-        let mut pending = HashMap::new();
+        let mut state = IndexSchedulerState::default();
 
         merge_job(
-            &mut pending,
+            &mut state,
             IndexJob::UpdateCell {
                 document_id,
                 sheet_index: 0,
@@ -938,7 +1054,7 @@ mod tests {
             },
         );
         merge_job(
-            &mut pending,
+            &mut state,
             IndexJob::Rebuild {
                 document_id,
                 sheet_index: 0,
@@ -947,12 +1063,76 @@ mod tests {
             },
         );
 
-        let sheet = pending.get(&(document_id, 0)).expect("pending sheet");
+        let sheet = state.pending.get(&(document_id, 0)).expect("pending sheet");
         assert_eq!(
             sheet.rebuild.as_ref().map(|rebuild| rebuild.stamp),
             Some(stamp)
         );
         assert!(sheet.incremental.is_empty());
+        assert_eq!(state.pending_updates, 0);
+        assert_eq!(state.pending_bytes, 0);
+    }
+
+    #[test]
+    fn pending_updates_collapse_to_rebuild_at_the_sheet_entry_limit() {
+        let (registry, document_id) = make_registry(vec![vec![s("old")]]);
+        let stamp = current_stamp(&registry, document_id);
+        let mut state = IndexSchedulerState::default();
+
+        for row in 0..=MAX_PENDING_INDEX_UPDATES_PER_SHEET {
+            merge_job(
+                &mut state,
+                IndexJob::UpdateCell {
+                    document_id,
+                    sheet_index: 0,
+                    stamp,
+                    row,
+                    col: 0,
+                    search_text: "value".to_string(),
+                    display_text: "value".to_string(),
+                    registry: Arc::clone(&registry),
+                },
+            );
+        }
+
+        let sheet = state.pending.get(&(document_id, 0)).expect("pending sheet");
+        assert_eq!(
+            sheet.rebuild.as_ref().map(|rebuild| rebuild.stamp),
+            Some(stamp)
+        );
+        assert!(sheet.incremental.is_empty());
+        assert_eq!(state.pending_updates, 0);
+        assert_eq!(state.pending_bytes, 0);
+        assert_eq!(state.stats.coalesced_to_rebuilds, 1);
+    }
+
+    #[test]
+    fn a_large_pending_update_collapses_to_rebuild_at_the_byte_limit() {
+        let (registry, document_id) = make_registry(vec![vec![s("old")]]);
+        let stamp = current_stamp(&registry, document_id);
+        let mut state = IndexSchedulerState::default();
+        let oversized = "x".repeat(MAX_PENDING_INDEX_BYTES_PER_SHEET);
+
+        merge_job(
+            &mut state,
+            IndexJob::UpdateCell {
+                document_id,
+                sheet_index: 0,
+                stamp,
+                row: 0,
+                col: 0,
+                search_text: oversized,
+                display_text: String::new(),
+                registry,
+            },
+        );
+
+        let sheet = state.pending.get(&(document_id, 0)).expect("pending sheet");
+        assert!(sheet.rebuild.is_some());
+        assert!(sheet.incremental.is_empty());
+        assert_eq!(state.stats.pending_updates, 0);
+        assert_eq!(state.stats.pending_bytes, 0);
+        assert_eq!(state.stats.coalesced_to_rebuilds, 1);
     }
 
     #[test]

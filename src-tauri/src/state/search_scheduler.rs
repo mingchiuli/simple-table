@@ -5,6 +5,11 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use crate::state::search_index::SearchIndexStamp;
 use crate::state::state::ActiveDocumentStore;
 
+pub(crate) const MAX_PENDING_INDEX_SHEETS: usize = 256;
+pub(crate) const MAX_PENDING_INDEX_UPDATES_PER_SHEET: usize = 4_096;
+pub(crate) const MAX_PENDING_INDEX_BYTES_PER_SHEET: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_PENDING_INDEX_BYTES: usize = 16 * 1024 * 1024;
+
 pub(crate) enum IndexJob {
     Rebuild {
         document_id: u64,
@@ -64,6 +69,7 @@ pub(crate) struct SheetPending {
     pub(crate) document_id: u64,
     pub(crate) rebuild: Option<RebuildIndexUpdate>,
     pub(crate) incremental: HashMap<(usize, usize), CellIndexUpdate>,
+    pub(crate) incremental_bytes: usize,
     pub(crate) registry: Arc<RwLock<ActiveDocumentStore>>,
 }
 
@@ -76,6 +82,8 @@ pub(crate) struct IndexScheduler {
 #[derive(Default)]
 pub(crate) struct IndexSchedulerState {
     pub(crate) pending: HashMap<(u64, usize), SheetPending>,
+    pub(crate) pending_updates: usize,
+    pub(crate) pending_bytes: usize,
     pub(crate) stats: SearchSchedulerStats,
 }
 
@@ -88,4 +96,9 @@ pub struct SearchSchedulerStats {
     pub rebuild_jobs: u64,
     pub incremental_jobs: u64,
     pub incremental_fallback_rebuilds: u64,
+    pub coalesced_to_rebuilds: u64,
+    pub dropped_jobs_at_capacity: u64,
+    pub pending_sheets: usize,
+    pub pending_updates: usize,
+    pub pending_bytes: usize,
 }

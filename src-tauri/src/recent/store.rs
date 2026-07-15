@@ -10,6 +10,7 @@ use crate::error::AppError;
 const STORE_FILE: &str = "recent-files.json";
 const STORE_KEY: &str = "recent_files";
 const MAX_RECENT: usize = 10;
+const MAX_RECENT_THUMBNAILS: usize = 10;
 static RECENT_STORE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub struct RecentStore;
@@ -69,6 +70,17 @@ impl RecentStore {
             Ok(removed)
         })
     }
+
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn replace_all(app: &AppHandle, mut files: Vec<RecentFile>) -> Result<(), AppError> {
+        with_store_transaction(|| {
+            files.sort_by_key(|file| Reverse(file.last_opened));
+            limit_desktop_recents(&mut files, "");
+            limit_managed_thumbnails(&mut files);
+            Self::save_unlocked(app, &files)
+        })
+    }
 }
 
 fn decode_recent_files(value: Option<serde_json::Value>) -> Result<Vec<RecentFile>, AppError> {
@@ -108,14 +120,29 @@ fn upsert_recent_file(
 
     files.sort_by_key(|file| Reverse(file.last_opened));
     limit_desktop_recents(&mut files, &path);
+    limit_managed_thumbnails(&mut files);
 
     if !files.iter().any(|file| file.path == path) {
         files.push(updated.clone());
         files.sort_by_key(|file| Reverse(file.last_opened));
         limit_desktop_recents(&mut files, &path);
+        limit_managed_thumbnails(&mut files);
     }
 
     (files, updated)
+}
+
+fn limit_managed_thumbnails(files: &mut [RecentFile]) {
+    let mut retained = 0;
+    for file in files {
+        if file.storage_type != super::types::StorageType::MobileSandboxPath {
+            continue;
+        }
+        retained += 1;
+        if retained > MAX_RECENT_THUMBNAILS {
+            file.thumbnail = None;
+        }
+    }
 }
 
 fn limit_desktop_recents(files: &mut Vec<RecentFile>, path: &str) {
@@ -325,6 +352,32 @@ mod tests {
             updated_files
                 .iter()
                 .all(|file| file.storage_type == StorageType::MobileSandboxPath)
+        );
+    }
+
+    #[test]
+    fn mobile_thumbnail_metadata_is_bounded_without_evicting_documents() {
+        let mut files = (0..=MAX_RECENT_THUMBNAILS)
+            .map(|index| {
+                let mut file = recent(
+                    &format!("mobile-{index}"),
+                    &format!("/mobile/{index}.xlsx"),
+                    &format!("{index}.xlsx"),
+                    index as i64,
+                );
+                file.storage_type = StorageType::MobileSandboxPath;
+                file.thumbnail = Some(format!("thumbnail-{index}"));
+                file
+            })
+            .collect::<Vec<_>>();
+        files.sort_by_key(|file| Reverse(file.last_opened));
+
+        limit_managed_thumbnails(&mut files);
+
+        assert_eq!(files.len(), MAX_RECENT_THUMBNAILS + 1);
+        assert_eq!(
+            files.iter().filter(|file| file.thumbnail.is_some()).count(),
+            MAX_RECENT_THUMBNAILS
         );
     }
 

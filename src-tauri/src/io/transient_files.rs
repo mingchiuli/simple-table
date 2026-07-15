@@ -266,6 +266,44 @@ pub(crate) fn reconcile_persisted_transient_files(directory: &Path) -> Result<()
     Ok(())
 }
 
+pub(crate) fn completed_persisted_save_locations(
+    directory: &Path,
+) -> Result<Vec<PathBuf>, AppError> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(AppError::ReadError(format!(
+                "Failed to inspect transient file directory: {error}"
+            )));
+        }
+    };
+    let mut completed = Vec::new();
+    for entry in entries.flatten() {
+        let marker_path = entry.path();
+        let Some(name) = marker_path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(MARKER_PREFIX) || !name.ends_with(MARKER_SUFFIX) {
+            continue;
+        }
+        let Some(marker) = fs::read(&marker_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<PersistentTransientMarker>(&bytes).ok())
+        else {
+            continue;
+        };
+        if marker.purpose != TransientFilePurpose::SaveLocation {
+            continue;
+        }
+        let target = directory.join(marker.target_file_name);
+        if fs::metadata(&target).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0) {
+            completed.push(target);
+        }
+    }
+    Ok(completed)
+}
+
 fn prune_expired(paths: &mut HashMap<PathBuf, TransientFileEntry>, now: Instant) -> Vec<PathBuf> {
     let mut expired = Vec::new();
     paths.retain(|path, entry| {
@@ -505,6 +543,35 @@ mod tests {
 
         assert!(path.exists());
         assert!(marker_path(&path).unwrap().exists());
+    }
+
+    #[test]
+    fn completed_save_locations_are_recoverable_before_transient_expiry() {
+        let directory = TestDir::new("completed-save");
+        let path = directory.path.join("saved.xlsx");
+        fs::write(&path, b"completed workbook").unwrap();
+        write_persistent_marker_at(&path, TransientFilePurpose::SaveLocation, SystemTime::now())
+            .unwrap();
+
+        assert_eq!(
+            completed_persisted_save_locations(&directory.path).unwrap(),
+            vec![path]
+        );
+    }
+
+    #[test]
+    fn empty_reserved_save_location_is_not_treated_as_completed() {
+        let directory = TestDir::new("empty-save");
+        let path = directory.path.join("reserved.xlsx");
+        fs::write(&path, b"").unwrap();
+        write_persistent_marker_at(&path, TransientFilePurpose::SaveLocation, SystemTime::now())
+            .unwrap();
+
+        assert!(
+            completed_persisted_save_locations(&directory.path)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -152,6 +152,15 @@ byte budget. Rust caps each serialized region response at 16 MiB and reports
 its measured size; the frontend subdivides only the dedicated oversized-region
 error and treats multiple child blocks as combined coverage.
 
+Region commands capture detached cells, metadata, manifest values, document ID,
+and revision while holding the document read lock, then release the lock before
+exact JSON size counting. Size counting uses a non-allocating writer and runs on
+a dedicated blocking executor with two execution slots and eight total admission
+slots. Region loading therefore cannot retain the global document lock while
+serializing a response or create an unbounded IPC work queue. Prepared-document
+commit is serialized with document mutations; its initial projection is likewise
+finalized only after the registry write lock is released.
+
 Formats and styles are indexed into the same 128 x 32 tile geometry, while
 merges use a row interval tree. Region projection therefore examines only
 intersecting buckets and intervals. Structural commits and history restores
@@ -163,6 +172,15 @@ format/style metadata, then scans outside the document lock. A fallback queues
 one missing Sheet index per search so repeated searches converge to indexed
 execution without flooding the four-slot index cache. Layout overrides are
 limited to 100,000 entries per document.
+
+Pending search-index work has a separate scheduler budget because it lives
+outside `EditorState`: at most 256 pending Sheets, 4,096 incremental updates or
+8 MiB per Sheet, and 16 MiB across the scheduler. Each pending Sheet and the
+global scheduler maintain constant-time byte counters. Crossing an update or
+byte limit discards that Sheet's queued text copies and replaces them with one
+full rebuild at the latest search-index stamp. Dropping a new Sheet at the
+global Sheet limit remains correct because search uses the current projection
+scan until an on-demand rebuild can be admitted.
 
 Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
 recent-file store transactions, file metadata reads, and thumbnail encoding run
@@ -180,11 +198,23 @@ canceling the picker flow revokes it explicitly.
 Mobile imported selections and reserved save locations are likewise one-shot.
 Their registries are independently limited to 64 entries per purpose and expire
 after 30 minutes. Registration writes a small hashed sidecar marker beside the
-managed file. Adoption or discard removes the marker; expiry removes both the
-marker and transient file outside the registry lock. Startup and subsequent
-mobile file operations reconcile persisted markers, so interrupted picker flows
-remain reclaimable across process restarts without treating ordinary managed
-documents as temporary files.
+managed file. Successful document adoption atomically creates a separate managed
+document sidecar before removing the transient marker. The managed sidecar is the
+durable ownership catalog; recent-file metadata and thumbnail generation are
+rebuildable secondary data and are not required to retain a mobile document.
+Startup removes stale transient markers for cataloged documents before applying
+transient expiry, and promotes non-empty interrupted save-location files into the
+managed catalog. Discard and transient expiry remove only files that have not
+been promoted.
+
+New mobile adoptions are limited to 64 managed documents and 1 GiB of managed
+file bytes. Existing documents from older versions are migrated without silent
+deletion, after which the quota blocks additional adoption until the user removes
+documents. The home file list is reconciled from managed sidecars when recent
+metadata is missing or corrupt. Only the ten most recent managed entries retain
+embedded thumbnail data. Deleting a mobile entry removes the file and managed
+sidecar before removing its rebuildable recent metadata, and an active document
+cannot be deleted through this path.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,

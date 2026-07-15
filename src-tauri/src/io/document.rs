@@ -20,6 +20,7 @@ use crate::types::{
     SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionProjectionResponse,
     SpreadsheetFormatOptions, WorkbookCapabilities,
 };
+use std::io::Write;
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
 
@@ -72,20 +73,28 @@ pub fn commit_prepared_document(
     let registry = active_document_store();
     let previous_document_id;
     let document_id;
-    let source_path;
     let response;
     {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        (document_id, previous_document_id, source_path) = registry_guard
-            .replace_active_for_context(expected_document_id, expected_revision, || {
+        (document_id, previous_document_id, ()) = registry_guard.replace_active_for_context(
+            expected_document_id,
+            expected_revision,
+            || {
                 let prepared = prepared_documents::take(token)?;
-                Ok((prepared.editor_state, prepared.source_path))
-            })?;
+                adopt_source_path_if_transient(
+                    prepared.source_path.as_deref(),
+                    &prepared.editor_state.file_data().file_name,
+                )?;
+                Ok((prepared.editor_state, ()))
+            },
+        )?;
         let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
-        response = open_document_response(editor_state);
+        response = open_document_response_snapshot(editor_state);
     }
+
+    let response = finalize_open_document_response(response);
 
     if let Some(previous_document_id) = previous_document_id
         && previous_document_id != document_id
@@ -93,7 +102,6 @@ pub fn commit_prepared_document(
         cancel_index_jobs_for_document(previous_document_id);
         crate::commands::mutation_replay::clear_document(previous_document_id);
     }
-    adopt_source_path_if_transient(source_path.as_deref());
     spawn_rebuild_all_sheets_index(&registry, document_id);
     Ok(response)
 }
@@ -105,10 +113,13 @@ pub fn abort_prepared_document(token: &str) -> Result<(), AppError> {
 /// Restores the frontend after its runtime state was lost while the Rust process stayed alive.
 pub fn active_document_response() -> Result<Option<OpenDocumentResponse>, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    Ok(registry_guard.active().map(open_document_response))
+    let response = {
+        let registry_guard = registry
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        registry_guard.active().map(open_document_response_snapshot)
+    };
+    Ok(response.map(finalize_open_document_response))
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -361,14 +372,14 @@ pub fn current_document_projection_for_command(
     preferred_sheet_index: usize,
 ) -> Result<OpenDocumentResponse, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-    Ok(open_document_response_for_sheet(
-        editor_state,
-        preferred_sheet_index,
-    ))
+    let response = {
+        let registry_guard = registry
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+        open_document_response_snapshot_for_sheet(editor_state, preferred_sheet_index)
+    };
+    Ok(finalize_open_document_response(response))
 }
 
 pub fn sheet_region_projection_for_command(
@@ -377,12 +388,30 @@ pub fn sheet_region_projection_for_command(
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
     validate_sheet_region(&region)?;
+    let response = sheet_region_snapshot_for_command(document_id, base_revision, region)?;
+    finalize_region_response(response, MAX_REGION_RESPONSE_BYTES)
+}
+
+fn sheet_region_snapshot_for_command(
+    document_id: u64,
+    base_revision: u64,
+    region: SheetRegion,
+) -> Result<SheetRegionProjectionResponse, AppError> {
     let registry = active_document_store();
+    sheet_region_snapshot_from_registry(&registry, document_id, base_revision, region)
+}
+
+fn sheet_region_snapshot_from_registry(
+    registry: &std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
+    document_id: u64,
+    base_revision: u64,
+    region: SheetRegion,
+) -> Result<SheetRegionProjectionResponse, AppError> {
     let registry_guard = registry
         .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
     let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-    project_sheet_region(editor_state, region)
+    snapshot_sheet_region(editor_state, region)
 }
 
 pub(crate) fn inspect_current_file_for_command<T>(
@@ -672,15 +701,19 @@ fn prepare_editor_state(
     Ok(PreparedOpenDocument { token })
 }
 
-fn adopt_source_path_if_transient(source_path: Option<&std::path::Path>) {
+fn adopt_source_path_if_transient(
+    source_path: Option<&std::path::Path>,
+    file_name: &str,
+) -> Result<(), AppError> {
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     if let Some(source_path) = source_path {
-        let _ =
-            crate::io::transient_files::transient_file_registry().adopt_if_registered(source_path);
+        crate::io::managed_documents::adopt_transient_document(source_path, file_name)?;
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-    let _ = source_path;
+    let _ = (source_path, file_name);
+
+    Ok(())
 }
 
 fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
@@ -693,18 +726,18 @@ fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
     }
 }
 
-fn open_document_response(editor_state: &EditorState) -> OpenDocumentResponse {
-    open_document_response_for_sheet(editor_state, 0)
+fn open_document_response_snapshot(editor_state: &EditorState) -> OpenDocumentResponse {
+    open_document_response_snapshot_for_sheet(editor_state, 0)
 }
 
-fn open_document_response_for_sheet(
+fn open_document_response_snapshot_for_sheet(
     editor_state: &EditorState,
     preferred_sheet_index: usize,
 ) -> OpenDocumentResponse {
     let initial_region = editor_state
         .sheet_extent(preferred_sheet_index)
         .map(|extent| initial_sheet_region(preferred_sheet_index, &extent))
-        .and_then(|region| project_sheet_region(editor_state, region).ok());
+        .and_then(|region| snapshot_sheet_region(editor_state, region).ok());
     OpenDocumentResponse {
         document: document_manifest(editor_state),
         editor_session: editor_session_info(editor_state),
@@ -731,7 +764,7 @@ fn document_manifest(editor_state: &EditorState) -> DocumentManifest {
     }
 }
 
-fn project_sheet_region(
+fn snapshot_sheet_region(
     editor_state: &EditorState,
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
@@ -751,43 +784,70 @@ fn project_sheet_region(
     let metadata = editor_state.region_metadata(&region);
     let cells = project_region_cells(sheet, &region);
     let merge_anchor_cells = project_merge_anchor_cells(sheet, &region, &metadata.merges);
-    finalize_region_response(
-        SheetRegionProjectionResponse {
-            document_id: editor_state.document_id(),
-            revision: editor_state.revision(),
-            region,
-            cells,
-            merge_anchor_cells,
-            metadata,
-            estimated_bytes: None,
-        },
-        MAX_REGION_RESPONSE_BYTES,
-    )
+    Ok(SheetRegionProjectionResponse {
+        document_id: editor_state.document_id(),
+        revision: editor_state.revision(),
+        region,
+        cells,
+        merge_anchor_cells,
+        metadata,
+        estimated_bytes: None,
+    })
+}
+
+fn finalize_open_document_response(mut response: OpenDocumentResponse) -> OpenDocumentResponse {
+    response.initial_region = response
+        .initial_region
+        .and_then(|region| finalize_region_response(region, MAX_REGION_RESPONSE_BYTES).ok());
+    response
 }
 
 fn finalize_region_response(
     mut response: SheetRegionProjectionResponse,
     maximum_bytes: usize,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
-    let base_bytes = serde_json::to_vec(&response)
-        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?
-        .len();
-    response.estimated_bytes = Some(base_bytes);
-    let serialized_bytes = serde_json::to_vec(&response)
-        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?
-        .len();
-    response.estimated_bytes = Some(serialized_bytes);
-    let serialized_bytes = serde_json::to_vec(&response)
-        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?
-        .len();
-    if serialized_bytes > maximum_bytes {
-        return Err(AppError::RegionResponseTooLarge {
-            estimated_bytes: serialized_bytes,
-            maximum_bytes,
-        });
+    response.estimated_bytes = None;
+    let mut estimate = serialized_json_bytes(&response)?;
+    for _ in 0..8 {
+        response.estimated_bytes = Some(estimate);
+        let actual = serialized_json_bytes(&response)?;
+        if actual == estimate {
+            if actual > maximum_bytes {
+                return Err(AppError::RegionResponseTooLarge {
+                    estimated_bytes: actual,
+                    maximum_bytes,
+                });
+            }
+            return Ok(response);
+        }
+        estimate = actual;
     }
-    response.estimated_bytes = Some(serialized_bytes);
-    Ok(response)
+    Err(AppError::Internal(
+        "failed to converge while sizing region response".to_string(),
+    ))
+}
+
+fn serialized_json_bytes(value: &impl serde::Serialize) -> Result<usize, AppError> {
+    let mut counter = CountingWriter::default();
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?;
+    Ok(counter.bytes)
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn initial_sheet_region(sheet_index: usize, extent: &crate::types::SheetExtent) -> SheetRegion {
@@ -932,7 +992,7 @@ fn default_extension_string() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 
     use super::*;
     use crate::types::{CellValue, SheetData};
@@ -1028,7 +1088,7 @@ mod tests {
             None,
         );
 
-        let response = open_document_response(&state);
+        let response = finalize_open_document_response(open_document_response_snapshot(&state));
 
         assert_eq!(response.document.sheets[0].name, "First");
         assert_eq!(response.document.sheets[1].name, "Second");
@@ -1098,15 +1158,19 @@ mod tests {
             },
             None,
         );
-        let response = project_sheet_region(
-            &state,
-            SheetRegion {
-                sheet_index: 0,
-                row_start: 0,
-                row_end: 1,
-                col_start: 0,
-                col_end: 1,
-            },
+        let response = finalize_region_response(
+            snapshot_sheet_region(
+                &state,
+                SheetRegion {
+                    sheet_index: 0,
+                    row_start: 0,
+                    row_end: 1,
+                    col_start: 0,
+                    col_end: 1,
+                },
+            )
+            .expect("region snapshot"),
+            MAX_REGION_RESPONSE_BYTES,
         )
         .expect("region response");
         let serialized_bytes = serde_json::to_vec(&response)
@@ -1123,6 +1187,48 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn region_snapshot_releases_document_lock_before_response_sizing() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "region.xlsx".to_string(),
+                sheets: vec![SheetData {
+                    rows: vec![vec![CellValue::String("value".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let document_id = state.document_id();
+        let revision = state.revision();
+        let mut store = crate::state::state::ActiveDocumentStore::new_for_test();
+        store.replace_active_for_test(state);
+        let registry = Arc::new(RwLock::new(store));
+
+        let snapshot = sheet_region_snapshot_from_registry(
+            &registry,
+            document_id,
+            revision,
+            SheetRegion {
+                sheet_index: 0,
+                row_start: 0,
+                row_end: 1,
+                col_start: 0,
+                col_end: 1,
+            },
+        )
+        .expect("region snapshot");
+        let write_guard = registry
+            .try_write()
+            .expect("region snapshot must not retain the document lock");
+
+        let response =
+            finalize_region_response(snapshot, MAX_REGION_RESPONSE_BYTES).expect("sized response");
+        assert!(response.estimated_bytes.is_some());
+        drop(write_guard);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use super::{CommandU64, blocking, mutation_executor, mutation_replay};
+use super::{CommandU64, blocking, mutation_executor, mutation_replay, projection_executor};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -8,10 +8,12 @@ use crate::io::platform::desktop;
 use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
 use crate::state::{active_document_store, state::EditorSessionInfo};
+#[cfg(desktop)]
+use crate::types::SavedDocumentResponse;
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
-    PreparedOpenDocument, SavedDocumentResponse, SearchResult, SearchScope, SetCellRequest,
-    SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+    PreparedOpenDocument, SearchResult, SearchScope, SetCellRequest, SheetRegion,
+    SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -153,16 +155,19 @@ pub async fn prepare_new_file(file_data: FileData) -> Result<PreparedOpenDocumen
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn commit_prepared_document(
+pub async fn commit_prepared_document(
     token: String,
     expected_document_id: Option<CommandU64>,
     expected_revision: Option<CommandU64>,
 ) -> Result<OpenDocumentResponse, AppError> {
-    document::commit_prepared_document(
-        &token,
-        expected_document_id.map(CommandU64::get),
-        expected_revision.map(CommandU64::get),
-    )
+    mutation_executor::run(move || {
+        document::commit_prepared_document(
+            &token,
+            expected_document_id.map(CommandU64::get),
+            expected_revision.map(CommandU64::get),
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -171,8 +176,8 @@ pub fn abort_prepared_document(token: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-pub fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
-    document::active_document_response()
+pub async fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
+    projection_executor::run(document::active_document_response).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -184,25 +189,35 @@ pub fn get_mutation_result(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_current_document_projection(
+pub async fn get_current_document_projection(
     document_id: CommandU64,
     base_revision: CommandU64,
     preferred_sheet_index: usize,
 ) -> Result<OpenDocumentResponse, AppError> {
-    document::current_document_projection_for_command(
-        document_id.get(),
-        base_revision.get(),
-        preferred_sheet_index,
-    )
+    projection_executor::run(move || {
+        document::current_document_projection_for_command(
+            document_id.get(),
+            base_revision.get(),
+            preferred_sheet_index,
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_sheet_region_projection(
+pub async fn get_sheet_region_projection(
     document_id: CommandU64,
     base_revision: CommandU64,
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
-    document::sheet_region_projection_for_command(document_id.get(), base_revision.get(), region)
+    projection_executor::run(move || {
+        document::sheet_region_projection_for_command(
+            document_id.get(),
+            base_revision.get(),
+            region,
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]

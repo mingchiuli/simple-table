@@ -9,9 +9,10 @@ use crate::io::file_format::{
 };
 use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::transient_files::{
-    TransientFilePurpose, clear_persistent_marker, reconcile_persisted_transient_files,
-    transient_file_registry, write_persistent_marker,
+    TransientFilePurpose, clear_persistent_marker, completed_persisted_save_locations,
+    reconcile_persisted_transient_files, transient_file_registry, write_persistent_marker,
 };
+use crate::io::{managed_documents, managed_documents::ManagedDocumentRecord};
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -40,6 +41,17 @@ pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
         .join("files");
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::WriteError(format!("Failed to create app file dir: {}", e)))?;
+    for managed in managed_documents::managed_documents(&dir)? {
+        clear_persistent_marker(&managed.path);
+    }
+    for target in completed_persisted_save_locations(&dir)? {
+        if let Err(error) = managed_documents::recover_completed_save(&target) {
+            eprintln!(
+                "Failed to recover completed mobile save {}: {error}",
+                target.display()
+            );
+        }
+    }
     reconcile_persisted_transient_files(&dir)?;
     Ok(dir)
 }
@@ -199,8 +211,14 @@ pub(crate) fn remove_managed_file_if_inactive(
     }
 
     match fs::remove_file(&target) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Ok(()) => {
+            managed_documents::clear_managed_document(&target)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            managed_documents::clear_managed_document(&target)?;
+            Ok(true)
+        }
         Err(error) => Err(AppError::WriteError(format!(
             "Failed to remove managed mobile document: {error}"
         ))),
@@ -278,15 +296,25 @@ fn take_registered_transient_path(
     transient_file_registry().take(&target, purpose)
 }
 
-fn adopt_transient_path_if_registered(app: &AppHandle, path: &Path) {
-    let Ok(target) = validated_mobile_files_path(app, path) else {
-        return;
-    };
-    let _ = transient_file_registry().adopt_if_registered(&target);
-}
-
 pub(crate) fn reconcile_transient_files(app: &AppHandle) -> Result<(), AppError> {
     mobile_dir(app).map(|_| ())
+}
+
+pub(crate) fn managed_document_records(
+    app: &AppHandle,
+) -> Result<Vec<ManagedDocumentRecord>, AppError> {
+    managed_documents::managed_documents(&mobile_dir(app)?)
+}
+
+pub(crate) fn migrate_managed_document(
+    app: &AppHandle,
+    path: &str,
+    file_name: &str,
+    id: &str,
+    adopted_at_millis: i64,
+) -> Result<(), AppError> {
+    let target = validated_mobile_files_path(app, Path::new(path))?;
+    managed_documents::migrate_existing_document(&target, file_name, id, adopted_at_millis)
 }
 
 pub fn save_file(
@@ -299,6 +327,7 @@ pub fn save_file(
     ensure_save_target_authorized(&target, document_id, base_revision)?;
     let target_path = target.to_string_lossy().to_string();
     let prepared = document::prepare_current_file_save(document_id, base_revision, &target_path)?;
+    managed_documents::validate_managed_save(&target, prepared.bytes.len() as u64)?;
     let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
         Err(error) => {
@@ -307,13 +336,13 @@ pub fn save_file(
         }
     };
 
+    let managed_file_name = prepared.output_name.clone();
     let result = document::commit_current_file_save(target_path, prepared, || {
-        replace_temp_file(&temp_path, &target)
+        replace_temp_file(&temp_path, &target)?;
+        managed_documents::adopt_completed_save(&target, &managed_file_name)
     });
     if result.is_err() {
         cleanup_temp_file(&temp_path);
-    } else {
-        adopt_transient_path_if_registered(app, &target);
     }
     result
 }

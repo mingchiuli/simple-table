@@ -8,6 +8,21 @@ use super::thumbnail::{capture_thumbnail, generate_thumbnail};
 use super::types::{AddRecentFileRequest, RecentFile, StorageType};
 
 pub fn do_get_recent_files(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let stored = match RecentStore::get_all(app) {
+            Ok(files) => files,
+            Err(error) => {
+                eprintln!(
+                    "Failed to read recent metadata; rebuilding from managed catalog: {error}"
+                );
+                Vec::new()
+            }
+        };
+        return reconcile_mobile_recent_files(app, stored);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     RecentStore::get_all(app)
 }
 
@@ -39,6 +54,14 @@ pub fn do_add_recent_file_with_thumbnail(
     let mut recent_file = RecentFile::new(path, file_name, file_size);
     recent_file.storage_type = current_platform_storage_type();
 
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if let Some(managed) = crate::io::platform::mobile::managed_document_records(app)?
+        .into_iter()
+        .find(|managed| managed.path.to_string_lossy() == recent_file.path)
+    {
+        recent_file.id = managed.id;
+    }
+
     if let Some(op) = original_path {
         recent_file.original_path = Some(op);
     }
@@ -51,9 +74,99 @@ pub fn do_add_recent_file_with_thumbnail(
 }
 
 pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> {
-    let removed = RecentStore::remove(app, id)?;
-    cleanup_removed_mobile_files(app, &removed);
-    Ok(())
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        if let Some(file) = do_get_recent_files(app)?
+            .into_iter()
+            .find(|file| file.id == id)
+            && file.storage_type == StorageType::MobileSandboxPath
+        {
+            if !crate::io::platform::mobile::remove_managed_file_if_inactive(app, &file.path)? {
+                return Err(AppError::DocumentStateInvalid(
+                    "cannot delete the active mobile document".to_string(),
+                ));
+            }
+        }
+        RecentStore::remove(app, id)?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let removed = RecentStore::remove(app, id)?;
+        cleanup_removed_mobile_files(app, &removed);
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn reconcile_mobile_recent_files(
+    app: &AppHandle,
+    stored: Vec<RecentFile>,
+) -> Result<Vec<RecentFile>, AppError> {
+    use std::collections::HashMap;
+
+    for file in stored
+        .iter()
+        .filter(|file| file.storage_type == StorageType::MobileSandboxPath)
+    {
+        if let Err(error) = crate::io::platform::mobile::migrate_managed_document(
+            app,
+            &file.path,
+            &file.file_name,
+            &file.id,
+            file.last_opened,
+        ) {
+            eprintln!(
+                "Failed to migrate managed mobile document {}: {error}",
+                file.path
+            );
+        }
+    }
+
+    let mut stored_mobile: HashMap<_, _> = stored
+        .iter()
+        .filter(|file| file.storage_type == StorageType::MobileSandboxPath)
+        .cloned()
+        .map(|file| (file.path.clone(), file))
+        .collect();
+    let mut reconciled: Vec<_> = stored
+        .into_iter()
+        .filter(|file| file.storage_type != StorageType::MobileSandboxPath)
+        .collect();
+
+    for managed in crate::io::platform::mobile::managed_document_records(app)? {
+        let path = managed.path.to_string_lossy().to_string();
+        let existing = stored_mobile.remove(&path);
+        reconciled.push(RecentFile {
+            id: managed.id,
+            path,
+            file_name: managed.file_name,
+            last_opened: existing
+                .as_ref()
+                .map(|file| file.last_opened)
+                .unwrap_or(managed.adopted_at_millis),
+            file_size: managed.file_size.min(i64::MAX as u64) as i64,
+            thumbnail: existing.as_ref().and_then(|file| file.thumbnail.clone()),
+            storage_type: StorageType::MobileSandboxPath,
+            original_path: existing.and_then(|file| file.original_path),
+        });
+    }
+    reconciled.sort_by_key(|file| std::cmp::Reverse(file.last_opened));
+    let mut retained_thumbnails = 0;
+    for file in &mut reconciled {
+        if file.storage_type != StorageType::MobileSandboxPath {
+            continue;
+        }
+        retained_thumbnails += 1;
+        if retained_thumbnails > 10 {
+            file.thumbnail = None;
+        }
+    }
+    if let Err(error) = RecentStore::replace_all(app, reconciled.clone()) {
+        eprintln!("Failed to persist reconciled recent metadata: {error}");
+    }
+    Ok(reconciled)
 }
 
 fn cleanup_removed_mobile_files(app: &AppHandle, removed: &[RecentFile]) {
