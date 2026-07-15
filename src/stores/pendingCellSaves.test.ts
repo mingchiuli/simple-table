@@ -54,6 +54,31 @@ describe("pendingCellSaves store", () => {
     expect(store.draftCellValues.has("0,0,0")).toBe(false);
   });
 
+  it("commits oversized pending changes as consecutive bounded batches", async () => {
+    const store = usePendingCellSavesStore();
+    const committedBatchSizes: number[] = [];
+    for (let row = 0; row <= 4_096; row += 1) {
+      store.queueSave(`0,${row},0`, {
+        sheetIndex: 0,
+        row,
+        col: 0,
+        value: String(row),
+        oldValue: text(""),
+      });
+    }
+
+    const flushed = await store.flushPendingCellChanges({
+      commitBatch: async (changes) => {
+        committedBatchSizes.push(changes.length);
+      },
+      clearPendingContentChange: () => undefined,
+    });
+
+    expect(flushed).toBe(true);
+    expect(committedBatchSizes).toEqual([4_096, 1]);
+    expect(store.isIdle()).toBe(true);
+  });
+
   it("owns the debounce scheduler at store scope", async () => {
     vi.useFakeTimers();
     const store = usePendingCellSavesStore();

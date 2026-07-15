@@ -8,7 +8,10 @@ use crate::io::file_format::{
     supported_extension_or_default,
 };
 use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
-use crate::io::transient_files::{TransientFilePurpose, transient_file_registry};
+use crate::io::transient_files::{
+    TransientFilePurpose, clear_persistent_marker, reconcile_persisted_transient_files,
+    transient_file_registry, write_persistent_marker,
+};
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -37,6 +40,7 @@ pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
         .join("files");
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::WriteError(format!("Failed to create app file dir: {}", e)))?;
+    reconcile_persisted_transient_files(&dir)?;
     Ok(dir)
 }
 
@@ -164,8 +168,14 @@ pub fn discard_transient_file(
 ) -> Result<(), AppError> {
     let target = take_registered_transient_path(app, Path::new(path), purpose)?;
     match fs::remove_file(&target) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Ok(()) => {
+            clear_persistent_marker(&target);
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            clear_persistent_marker(&target);
+            Ok(())
+        }
         Err(error) => {
             let message = format!("Failed to remove unused transient file: {}", error);
             let _ = register_transient_target(target, purpose);
@@ -251,7 +261,12 @@ fn register_transient_target(
     target: PathBuf,
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    transient_file_registry().register(target, purpose)
+    transient_file_registry().register(target.clone(), purpose)?;
+    if let Err(error) = write_persistent_marker(&target, purpose) {
+        let _ = transient_file_registry().adopt_if_registered(&target);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn take_registered_transient_path(
@@ -268,6 +283,10 @@ fn adopt_transient_path_if_registered(app: &AppHandle, path: &Path) {
         return;
     };
     let _ = transient_file_registry().adopt_if_registered(&target);
+}
+
+pub(crate) fn reconcile_transient_files(app: &AppHandle) -> Result<(), AppError> {
+    mobile_dir(app).map(|_| ())
 }
 
 pub fn save_file(

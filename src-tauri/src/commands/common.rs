@@ -1,6 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use super::{CommandU64, blocking, mutation_replay};
+use super::{CommandU64, blocking, mutation_executor, mutation_replay};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -14,6 +14,60 @@ use crate::types::{
     SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
+
+const MAX_SET_CELL_CHANGES: usize = 4_096;
+
+#[derive(Debug)]
+pub(crate) struct SetCellBatch(Vec<SetCellRequest>);
+
+impl SetCellBatch {
+    fn into_inner(self) -> Vec<SetCellRequest> {
+        self.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SetCellBatch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BatchVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BatchVisitor {
+            type Value = SetCellBatch;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(
+                    formatter,
+                    "an array containing at most {MAX_SET_CELL_CHANGES} cell changes"
+                )
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut changes = Vec::with_capacity(
+                    sequence
+                        .size_hint()
+                        .unwrap_or_default()
+                        .min(MAX_SET_CELL_CHANGES),
+                );
+                while let Some(change) = sequence.next_element()? {
+                    if changes.len() == MAX_SET_CELL_CHANGES {
+                        return Err(serde::de::Error::custom(format!(
+                            "set_cells accepts at most {MAX_SET_CELL_CHANGES} changes"
+                        )));
+                    }
+                    changes.push(change);
+                }
+                Ok(SetCellBatch(changes))
+            }
+        }
+
+        deserializer.deserialize_seq(BatchVisitor)
+    }
+}
 
 // ==================== File Operations ====================
 
@@ -198,43 +252,49 @@ pub fn get_editor_state(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn undo(
+pub async fn undo(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "undo",
-        &(),
-        || editor_ops::do_undo(&registry, document_id.get(), base_revision.get()),
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "undo",
+            &(),
+            || editor_ops::do_undo(&registry, document_id.get(), base_revision.get()),
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn redo(
+pub async fn redo(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "redo",
-        &(),
-        || editor_ops::do_redo(&registry, document_id.get(), base_revision.get()),
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "redo",
+            &(),
+            || editor_ops::do_redo(&registry, document_id.get(), base_revision.get()),
+        )
+    })
+    .await
 }
 
 // ==================== Cell Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn set_cell(
+pub async fn set_cell(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -244,80 +304,60 @@ pub fn set_cell(
     text: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "set_cell",
-        &(sheet_index, row, col, &text),
-        || {
-            cell_ops::do_set_cell(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                row,
-                col,
-                text.clone(),
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "set_cell",
+            &(sheet_index, row, col, &text),
+            || {
+                cell_ops::do_set_cell(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    row,
+                    col,
+                    text.clone(),
+                )
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn set_cells(
+pub async fn set_cells(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
-    changes: Vec<SetCellRequest>,
+    changes: SetCellBatch,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "set_cells",
-        &changes,
-        || {
-            cell_ops::do_set_cells(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                changes.clone(),
-            )
-        },
-    )
+    let changes = changes.into_inner();
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "set_cells",
+            &changes,
+            || {
+                cell_ops::do_set_cells(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    changes.clone(),
+                )
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_row(
-    document_id: CommandU64,
-    base_revision: CommandU64,
-    command_id: String,
-    sheet_index: usize,
-    row_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "add_row",
-        &(sheet_index, row_index),
-        || {
-            cell_ops::do_add_row(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                row_index,
-            )
-        },
-    )
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn delete_row(
+pub async fn add_row(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -325,26 +365,59 @@ pub fn delete_row(
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "delete_row",
-        &(sheet_index, row_index),
-        || {
-            cell_ops::do_delete_row(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                row_index,
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "add_row",
+            &(sheet_index, row_index),
+            || {
+                cell_ops::do_add_row(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    row_index,
+                )
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_column(
+pub async fn delete_row(
+    document_id: CommandU64,
+    base_revision: CommandU64,
+    command_id: String,
+    sheet_index: usize,
+    row_index: usize,
+) -> Result<EditorMutationResponse, AppError> {
+    let registry = active_document_store();
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "delete_row",
+            &(sheet_index, row_index),
+            || {
+                cell_ops::do_delete_row(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    row_index,
+                )
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn add_column(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -352,26 +425,29 @@ pub fn add_column(
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "add_column",
-        &(sheet_index, col_index),
-        || {
-            cell_ops::do_add_column(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                col_index,
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "add_column",
+            &(sheet_index, col_index),
+            || {
+                cell_ops::do_add_column(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    col_index,
+                )
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn delete_column(
+pub async fn delete_column(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -379,26 +455,29 @@ pub fn delete_column(
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "delete_column",
-        &(sheet_index, col_index),
-        || {
-            cell_ops::do_delete_column(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                col_index,
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "delete_column",
+            &(sheet_index, col_index),
+            || {
+                cell_ops::do_delete_column(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    col_index,
+                )
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn set_column_width(
+pub async fn set_column_width(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -407,27 +486,30 @@ pub fn set_column_width(
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "set_column_width",
-        &(sheet_index, col_index, width),
-        || {
-            cell_ops::do_set_column_width(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                col_index,
-                width,
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "set_column_width",
+            &(sheet_index, col_index, width),
+            || {
+                cell_ops::do_set_column_width(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    col_index,
+                    width,
+                )
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn set_row_height(
+pub async fn set_row_height(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -436,67 +518,76 @@ pub fn set_row_height(
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "set_row_height",
-        &(sheet_index, row_index, height),
-        || {
-            cell_ops::do_set_row_height(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-                row_index,
-                height,
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "set_row_height",
+            &(sheet_index, row_index, height),
+            || {
+                cell_ops::do_set_row_height(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                    row_index,
+                    height,
+                )
+            },
+        )
+    })
+    .await
 }
 
 // ==================== Sheet Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_sheet(
+pub async fn add_sheet(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "add_sheet",
-        &(),
-        || cell_ops::do_add_sheet(&registry, document_id.get(), base_revision.get()),
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "add_sheet",
+            &(),
+            || cell_ops::do_add_sheet(&registry, document_id.get(), base_revision.get()),
+        )
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn delete_sheet(
+pub async fn delete_sheet(
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let registry = active_document_store();
-    mutation_replay::run(
-        document_id.get(),
-        base_revision.get(),
-        &command_id,
-        "delete_sheet",
-        &sheet_index,
-        || {
-            cell_ops::do_delete_sheet(
-                &registry,
-                document_id.get(),
-                base_revision.get(),
-                sheet_index,
-            )
-        },
-    )
+    mutation_executor::run(move || {
+        mutation_replay::run(
+            document_id.get(),
+            base_revision.get(),
+            &command_id,
+            "delete_sheet",
+            &sheet_index,
+            || {
+                cell_ops::do_delete_sheet(
+                    &registry,
+                    document_id.get(),
+                    base_revision.get(),
+                    sheet_index,
+                )
+            },
+        )
+    })
+    .await
 }
 
 // ==================== Search Operations ====================
@@ -541,4 +632,37 @@ pub async fn add_recent_file_with_thumbnail(
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
     blocking::run(move || recent::do_add_recent_file_with_thumbnail(&app, request)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_SET_CELL_CHANGES, SetCellBatch};
+    use serde_json::{Value, json};
+
+    fn cell_change(index: usize) -> Value {
+        json!({
+            "sheetIndex": 0,
+            "row": index,
+            "col": 0,
+            "text": ""
+        })
+    }
+
+    #[test]
+    fn set_cell_batch_accepts_the_maximum_number_of_changes() {
+        let changes = (0..MAX_SET_CELL_CHANGES).map(cell_change).collect();
+        let batch: SetCellBatch =
+            serde_json::from_value(Value::Array(changes)).expect("bounded cell batch");
+
+        assert_eq!(batch.0.len(), MAX_SET_CELL_CHANGES);
+    }
+
+    #[test]
+    fn set_cell_batch_rejects_an_oversized_sequence_during_deserialization() {
+        let changes = (0..=MAX_SET_CELL_CHANGES).map(cell_change).collect();
+        let error = serde_json::from_value::<SetCellBatch>(Value::Array(changes))
+            .expect_err("oversized batch must be rejected");
+
+        assert!(error.to_string().contains("at most 4096 changes"));
+    }
 }

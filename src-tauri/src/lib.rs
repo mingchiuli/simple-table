@@ -90,6 +90,15 @@ pub fn run() {
     #[cfg(mobile)]
     {
         builder = builder.plugin(tauri_plugin_fs::init());
+        builder = builder.setup(|app| {
+            let app_handle = app.handle().clone();
+            drop(tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = io::platform::mobile::reconcile_transient_files(&app_handle) {
+                    eprintln!("Failed to reconcile transient mobile files: {error}");
+                }
+            }));
+            Ok(())
+        });
     }
 
     builder

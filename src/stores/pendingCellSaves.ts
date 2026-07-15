@@ -41,6 +41,7 @@ type PendingCellSaveSchedulerState = {
 };
 
 const pendingSaveSchedulers = new WeakMap<object, PendingCellSaveSchedulerState>();
+const MAX_CELL_CHANGES_PER_BATCH = 4_096;
 
 export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   state: () => ({
@@ -136,10 +137,11 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       this.queuedCellSaves.delete(key);
     },
     takeQueuedBatch(): CellSaveRequest[] {
-      const batch = Array.from(this.queuedCellSaves.values());
-      this.queuedCellSaves.clear();
+      const batch = Array.from(this.queuedCellSaves.values()).slice(0, MAX_CELL_CHANGES_PER_BATCH);
       for (const request of batch) {
-        this.activeCellSaves.set(cellKey(request), request);
+        const key = cellKey(request);
+        this.queuedCellSaves.delete(key);
+        this.activeCellSaves.set(key, request);
       }
       return batch;
     },

@@ -79,7 +79,12 @@ serialization, and response cloning happen outside it. A concurrent retry waits
 only for the same `{ documentId, commandId }`, and result lookup or document
 cleanup waits only for relevant in-flight work. At most 64 distinct mutation
 commands may be in flight, preventing the coordinator queue from becoming an
-unbounded admission path ahead of the document lock.
+unbounded admission path ahead of the document lock. Tauri mutation commands
+run on a dedicated blocking executor with one execution slot and eight total
+admission slots. Saturated admission fails immediately instead of retaining an
+unbounded set of IPC requests. `set_cells` accepts at most 4,096 changes and
+enforces that limit while deserializing the sequence. The frontend drains pending
+cell saves in matching bounded batches.
 
 Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`.
@@ -161,14 +166,25 @@ limited to 100,000 entries per document.
 
 Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
 recent-file store transactions, file metadata reads, and thumbnail encoding run
-through a two-permit blocking command executor. Tauri async runtime threads do
-not perform those synchronous workloads directly.
+through a blocking command executor with two execution permits and eight total
+admission permits. Tauri async runtime threads do not perform those synchronous
+workloads directly, and saturation cannot create an unbounded semaphore wait
+queue.
 
 Desktop open and save selections are one-shot path capabilities, not permanent
 process permissions. Open and save registries are independently limited to 64
 entries, authorizations expire after 30 minutes, and repeated authorization
 refreshes the eviction order. Preparing or saving consumes the capability;
 canceling the picker flow revokes it explicitly.
+
+Mobile imported selections and reserved save locations are likewise one-shot.
+Their registries are independently limited to 64 entries per purpose and expire
+after 30 minutes. Registration writes a small hashed sidecar marker beside the
+managed file. Adoption or discard removes the marker; expiry removes both the
+marker and transient file outside the registry lock. Startup and subsequent
+mobile file operations reconcile persisted markers, so interrupted picker flows
+remain reclaimable across process restarts without treating ordinary managed
+documents as temporary files.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,

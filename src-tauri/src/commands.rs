@@ -4,6 +4,7 @@ pub mod common;
 pub mod ios;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub mod mobile;
+mod mutation_executor;
 pub(crate) mod mutation_replay;
 
 pub use common::*;
