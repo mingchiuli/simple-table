@@ -526,19 +526,19 @@ pub async fn search(
 // ==================== Recent Files Operations ====================
 
 #[tauri::command]
-pub fn get_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, AppError> {
-    recent::do_get_recent_files(&app)
+pub async fn get_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, AppError> {
+    blocking::run(move || recent::do_get_recent_files(&app)).await
 }
 
 #[tauri::command]
-pub fn remove_recent_file(app: AppHandle, id: String) -> Result<(), AppError> {
-    recent::do_remove_recent_file(&app, &id)
+pub async fn remove_recent_file(app: AppHandle, id: String) -> Result<(), AppError> {
+    blocking::run(move || recent::do_remove_recent_file(&app, &id)).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn add_recent_file_with_thumbnail(
+pub async fn add_recent_file_with_thumbnail(
     app: AppHandle,
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
-    recent::do_add_recent_file_with_thumbnail(&app, request)
+    blocking::run(move || recent::do_add_recent_file_with_thumbnail(&app, request)).await
 }

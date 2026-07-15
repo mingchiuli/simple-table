@@ -11,11 +11,12 @@ use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::recent::store::RecentStore;
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -26,8 +27,62 @@ pub struct DesktopOpenFileInfo {
     pub file_name: String,
 }
 
-static AUTHORIZED_OPEN_PATHS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-static AUTHORIZED_SAVE_PATHS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+const MAX_AUTHORIZED_PATHS: usize = 64;
+const PATH_AUTHORIZATION_TTL: Duration = Duration::from_secs(30 * 60);
+
+static AUTHORIZED_OPEN_PATHS: OnceLock<Mutex<PathAuthorizationRegistry>> = OnceLock::new();
+static AUTHORIZED_SAVE_PATHS: OnceLock<Mutex<PathAuthorizationRegistry>> = OnceLock::new();
+
+#[derive(Default)]
+struct PathAuthorizationRegistry {
+    entries: HashMap<PathBuf, Instant>,
+    order: VecDeque<PathBuf>,
+}
+
+impl PathAuthorizationRegistry {
+    fn authorize(&mut self, path: PathBuf) {
+        self.authorize_at(path, Instant::now());
+    }
+
+    fn authorize_at(&mut self, path: PathBuf, now: Instant) {
+        self.prune_expired(now);
+        if self.entries.insert(path.clone(), now).is_some() {
+            self.order.retain(|entry| entry != &path);
+        }
+        self.order.push_back(path);
+        while self.entries.len() > MAX_AUTHORIZED_PATHS {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&expired);
+        }
+    }
+
+    fn consume(&mut self, path: &Path) -> bool {
+        self.consume_at(path, Instant::now())
+    }
+
+    fn consume_at(&mut self, path: &Path, now: Instant) -> bool {
+        self.prune_expired(now);
+        let removed = self.entries.remove(path).is_some();
+        if removed {
+            self.order.retain(|entry| entry != path);
+        }
+        removed
+    }
+
+    fn revoke(&mut self, path: &Path) {
+        self.entries.remove(path);
+        self.order.retain(|entry| entry != path);
+    }
+
+    fn prune_expired(&mut self, now: Instant) {
+        self.entries.retain(|_, authorized_at| {
+            now.saturating_duration_since(*authorized_at) < PATH_AUTHORIZATION_TTL
+        });
+        self.order.retain(|path| self.entries.contains_key(path));
+    }
+}
 
 pub fn authorize_open_path(path: impl AsRef<Path>) {
     authorize_path(open_paths(), normalize_existing_path(path.as_ref()));
@@ -218,30 +273,30 @@ fn is_current_document_path(
     Ok(normalize_target_path(Path::new(&current_path)) == target)
 }
 
-fn open_paths() -> &'static Mutex<HashSet<PathBuf>> {
-    AUTHORIZED_OPEN_PATHS.get_or_init(|| Mutex::new(HashSet::new()))
+fn open_paths() -> &'static Mutex<PathAuthorizationRegistry> {
+    AUTHORIZED_OPEN_PATHS.get_or_init(|| Mutex::new(PathAuthorizationRegistry::default()))
 }
 
-fn save_paths() -> &'static Mutex<HashSet<PathBuf>> {
-    AUTHORIZED_SAVE_PATHS.get_or_init(|| Mutex::new(HashSet::new()))
+fn save_paths() -> &'static Mutex<PathAuthorizationRegistry> {
+    AUTHORIZED_SAVE_PATHS.get_or_init(|| Mutex::new(PathAuthorizationRegistry::default()))
 }
 
-fn authorize_path(paths: &'static Mutex<HashSet<PathBuf>>, path: PathBuf) {
+fn authorize_path(paths: &Mutex<PathAuthorizationRegistry>, path: PathBuf) {
     if let Ok(mut paths) = paths.lock() {
-        paths.insert(path);
+        paths.authorize(path);
     }
 }
 
-fn consume_path(paths: &'static Mutex<HashSet<PathBuf>>, path: &Path) -> bool {
+fn consume_path(paths: &Mutex<PathAuthorizationRegistry>, path: &Path) -> bool {
     paths
         .lock()
-        .map(|mut paths| paths.remove(path))
+        .map(|mut paths| paths.consume(path))
         .unwrap_or(false)
 }
 
-fn revoke_path(paths: &'static Mutex<HashSet<PathBuf>>, path: &Path) {
+fn revoke_path(paths: &Mutex<PathAuthorizationRegistry>, path: &Path) {
     if let Ok(mut paths) = paths.lock() {
-        paths.remove(path);
+        paths.revoke(path);
     }
 }
 
@@ -360,5 +415,48 @@ mod tests {
 
         assert!(consume_path(open_paths(), &normalize_existing_path(&path)));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn path_authorizations_are_capacity_bounded() {
+        let mut registry = PathAuthorizationRegistry::default();
+        let now = Instant::now();
+        for index in 0..=MAX_AUTHORIZED_PATHS {
+            registry.authorize_at(PathBuf::from(format!("/tmp/book-{index}.xlsx")), now);
+        }
+
+        assert_eq!(registry.entries.len(), MAX_AUTHORIZED_PATHS);
+        assert!(!registry.consume_at(Path::new("/tmp/book-0.xlsx"), now));
+        assert!(registry.consume_at(
+            Path::new(&format!("/tmp/book-{MAX_AUTHORIZED_PATHS}.xlsx")),
+            now
+        ));
+    }
+
+    #[test]
+    fn path_authorizations_expire() {
+        let mut registry = PathAuthorizationRegistry::default();
+        let now = Instant::now();
+        let path = PathBuf::from("/tmp/expiring.xlsx");
+        registry.authorize_at(path.clone(), now);
+
+        assert!(!registry.consume_at(&path, now + PATH_AUTHORIZATION_TTL));
+        assert!(registry.entries.is_empty());
+    }
+
+    #[test]
+    fn repeated_authorization_refreshes_the_eviction_order() {
+        let mut registry = PathAuthorizationRegistry::default();
+        let now = Instant::now();
+        let refreshed = PathBuf::from("/tmp/refreshed.xlsx");
+        registry.authorize_at(refreshed.clone(), now);
+        for index in 0..MAX_AUTHORIZED_PATHS - 1 {
+            registry.authorize_at(PathBuf::from(format!("/tmp/book-{index}.xlsx")), now);
+        }
+        registry.authorize_at(refreshed.clone(), now);
+        registry.authorize_at(PathBuf::from("/tmp/newest.xlsx"), now);
+
+        assert!(registry.consume_at(&refreshed, now));
+        assert!(!registry.consume_at(Path::new("/tmp/book-0.xlsx"), now));
     }
 }

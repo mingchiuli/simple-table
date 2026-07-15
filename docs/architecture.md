@@ -72,6 +72,14 @@ exposes complete counts but at most 100 diagnostic samples per response.
 
 Oversized replay responses are stored as compact `ResyncRequired` results at the
 committed revision, preserving idempotency without retaining a second large body.
+Request fingerprints are streamed into fixed-size SHA-256 digests, so replay
+entries never retain serialized mutation payloads. The replay coordinator lock
+protects only reservation and queue accounting; mutation execution, response
+serialization, and response cloning happen outside it. A concurrent retry waits
+only for the same `{ documentId, commandId }`, and result lookup or document
+cleanup waits only for relevant in-flight work. At most 64 distinct mutation
+commands may be in flight, preventing the coordinator queue from becoming an
+unbounded admission path ahead of the document lock.
 
 Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`.
@@ -151,9 +159,16 @@ one missing Sheet index per search so repeated searches converge to indexed
 execution without flooding the four-slot index cache. Layout overrides are
 limited to 100,000 entries per document.
 
-Parsing, file dialogs, save/export generation and I/O, mobile file work, and
-search run through a two-permit blocking command executor. Tauri async runtime
-threads do not perform those synchronous workloads directly.
+Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
+recent-file store transactions, file metadata reads, and thumbnail encoding run
+through a two-permit blocking command executor. Tauri async runtime threads do
+not perform those synchronous workloads directly.
+
+Desktop open and save selections are one-shot path capabilities, not permanent
+process permissions. Open and save registries are independently limited to 64
+entries, authorizations expire after 30 minutes, and repeated authorization
+refreshes the eviction order. Preparing or saving consumes the capability;
+canceling the picker flow revokes it explicitly.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,
