@@ -1,5 +1,5 @@
 #[cfg(target_os = "ios")]
-use super::CommandU64;
+use super::{CommandU64, blocking};
 #[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
@@ -17,21 +17,27 @@ use tauri::AppHandle;
 #[cfg(target_os = "ios")]
 #[tauri::command]
 pub async fn pick_open_file_ios(app: AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
-    ios::pick_file_info(&app)
+    blocking::run(move || ios::pick_file_info(&app)).await
 }
 
 /// iOS: remove a picked file that was imported but never opened as the active document.
 #[cfg(target_os = "ios")]
 #[tauri::command]
 pub async fn discard_open_file_selection_ios(app: AppHandle, path: String) -> Result<(), AppError> {
-    mobile::discard_transient_file(&app, &path, TransientFilePurpose::OpenSelection)
+    blocking::run(move || {
+        mobile::discard_transient_file(&app, &path, TransientFilePurpose::OpenSelection)
+    })
+    .await
 }
 
 /// iOS: remove a save-as target that was reserved but never adopted.
 #[cfg(target_os = "ios")]
 #[tauri::command]
 pub async fn discard_save_location_ios(app: AppHandle, path: String) -> Result<(), AppError> {
-    mobile::discard_transient_file(&app, &path, TransientFilePurpose::SaveLocation)
+    blocking::run(move || {
+        mobile::discard_transient_file(&app, &path, TransientFilePurpose::SaveLocation)
+    })
+    .await
 }
 
 /// iOS: read and parse a sandboxed file path saved in recent files.
@@ -41,7 +47,7 @@ pub async fn prepare_open_file_ios(
     app: AppHandle,
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
-    mobile::prepare_file(&app, &path)
+    blocking::run(move || mobile::prepare_file(&app, &path)).await
 }
 
 /// iOS: create a new sandbox save target that must be adopted by save_file_ios or discarded.
@@ -51,7 +57,7 @@ pub async fn pick_save_location_ios(
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    Ok(Some(mobile::reserve_save_location(&app, &default_name)?))
+    blocking::run(move || Ok(Some(mobile::reserve_save_location(&app, &default_name)?))).await
 }
 
 /// iOS: generate file bytes and write them to the sandbox path.
@@ -63,7 +69,8 @@ pub async fn save_file_ios(
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    mobile::save_file(&app, &path, document_id.get(), base_revision.get())
+    blocking::run(move || mobile::save_file(&app, &path, document_id.get(), base_revision.get()))
+        .await
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.
@@ -75,5 +82,8 @@ pub async fn export_file_ios(
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
-    ios::export_file(&app, &default_name, document_id.get(), base_revision.get())
+    blocking::run(move || {
+        ios::export_file(&app, &default_name, document_id.get(), base_revision.get())
+    })
+    .await
 }

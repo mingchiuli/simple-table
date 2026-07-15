@@ -61,6 +61,14 @@ export function pinRegionBlocks(owner: object, keys: string[]) {
   for (const key of keys) touchRegionBlock(owner, key);
 }
 
+export function replacePinnedRegionBlock(owner: object, key: string, replacements: string[]) {
+  const runtime = runtimeFor(owner);
+  const pinned = [...runtime.pinned].filter((entry) => entry !== key);
+  runtime.pinned = new Set([...pinned, ...replacements].slice(-MAX_PINNED_REGION_BLOCKS));
+  runtime.lru = runtime.lru.filter((entry) => entry !== key);
+  for (const replacement of replacements) touchRegionBlock(owner, replacement);
+}
+
 export function touchRegionBlock(owner: object, key: string) {
   const runtime = runtimeFor(owner);
   runtime.lru = [...runtime.lru.filter((entry) => entry !== key), key];

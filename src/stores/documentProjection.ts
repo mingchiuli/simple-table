@@ -124,16 +124,18 @@ export function regionBlock(response: SheetRegionProjectionResponse): SheetRegio
       (response.mergeAnchorCells ?? []).map((cell) => [cellKey(cell.row, cell.col), cell.value])
     ),
     metadata: normalizeMetadata(response.metadata),
-    estimatedBytes: estimateRegionBytes(response),
+    estimatedBytes: response.estimatedBytes ?? estimateRegionBytes(response),
   };
 }
 
 function estimateRegionBytes(response: SheetRegionProjectionResponse): number {
-  try {
-    return JSON.stringify(response).length * 2;
-  } catch {
-    return Number.MAX_SAFE_INTEGER;
-  }
+  const metadata = response.metadata;
+  return 512
+    + response.cells.length * 256
+    + (response.mergeAnchorCells?.length ?? 0) * 256
+    + (metadata.merges?.length ?? 0) * 64
+    + Object.keys(metadata.cellFormats ?? {}).length * 256
+    + Object.keys(metadata.cellStyles ?? {}).length * 512;
 }
 
 export function sheetCell(
@@ -160,8 +162,51 @@ export function isCellLoaded(slot: SheetSlot | null | undefined, row: number, co
 }
 
 export function isRegionLoaded(slot: SheetSlot | null | undefined, region: SheetRegion): boolean {
-  return slot?.state === 'loaded'
-    && slot.blocks.some((block) => containsRegion(block.region, region));
+  return regionCoveringBlockKeys(slot, region) !== null;
+}
+
+export function regionCoveringBlockKeys(
+  slot: SheetSlot | null | undefined,
+  region: SheetRegion
+): string[] | null {
+  if (!slot || slot.state !== 'loaded') return null;
+  if (region.rowStart >= region.rowEnd || region.colStart >= region.colEnd) return [];
+  const blocks = slot.blocks.filter((block) => block.region.sheetIndex === region.sheetIndex
+    && block.region.rowStart < region.rowEnd
+    && block.region.rowEnd > region.rowStart
+    && block.region.colStart < region.colEnd
+    && block.region.colEnd > region.colStart);
+  const rowBoundaries = new Set([region.rowStart, region.rowEnd]);
+  for (const block of blocks) {
+    rowBoundaries.add(Math.max(region.rowStart, block.region.rowStart));
+    rowBoundaries.add(Math.min(region.rowEnd, block.region.rowEnd));
+  }
+  const rows = [...rowBoundaries].sort((left, right) => left - right);
+  const used = new Set<string>();
+  for (let index = 0; index + 1 < rows.length; index += 1) {
+    const rowStart = rows[index];
+    const rowEnd = rows[index + 1];
+    if (rowStart === rowEnd) continue;
+    const intervals = blocks
+      .filter((block) => block.region.rowStart <= rowStart && block.region.rowEnd >= rowEnd)
+      .map((block) => ({
+        start: Math.max(region.colStart, block.region.colStart),
+        end: Math.min(region.colEnd, block.region.colEnd),
+        key: block.key,
+      }))
+      .filter((interval) => interval.start < interval.end)
+      .sort((left, right) => left.start - right.start || right.end - left.end);
+    let coveredUntil = region.colStart;
+    for (const interval of intervals) {
+      if (interval.start > coveredUntil) break;
+      if (interval.end <= coveredUntil) continue;
+      coveredUntil = interval.end;
+      used.add(interval.key);
+      if (coveredUntil >= region.colEnd) break;
+    }
+    if (coveredUntil < region.colEnd) return null;
+  }
+  return [...used];
 }
 
 export function loadedSheetMetadata(slot: LoadedSheetSlot) {
@@ -270,14 +315,6 @@ function applyLayoutValues(
 function containsCell(region: SheetRegion, row: number, col: number): boolean {
   return row >= region.rowStart && row < region.rowEnd
     && col >= region.colStart && col < region.colEnd;
-}
-
-function containsRegion(loaded: SheetRegion, requested: SheetRegion): boolean {
-  return loaded.sheetIndex === requested.sheetIndex
-    && loaded.rowStart <= requested.rowStart
-    && loaded.rowEnd >= requested.rowEnd
-    && loaded.colStart <= requested.colStart
-    && loaded.colEnd >= requested.colEnd;
 }
 
 function cellKey(row: number, col: number): string {

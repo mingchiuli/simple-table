@@ -83,6 +83,19 @@ impl SpreadsheetDocumentBody {
         }
     }
 
+    pub fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Excel(body) => {
+                std::mem::size_of::<Workbook>()
+                    + (0..excel_workbook(body).sheet_count())
+                        .filter_map(|sheet_index| excel_workbook(body).sheet(sheet_index).ok())
+                        .map(estimate_worksheet_bytes)
+                        .sum::<usize>()
+            }
+            Self::Csv | Self::GeneratedWorkbook => std::mem::size_of::<Self>(),
+        }
+    }
+
     pub fn capture_structure_memento(
         &self,
         operation: &AppliedOperation,

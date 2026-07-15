@@ -15,9 +15,11 @@ import {
   applyProjectionPatches,
   createDocumentProjection,
   isRegionLoaded,
+  regionCoveringBlockKeys,
   regionBlock,
   regionKey,
 } from '@/stores/documentProjection';
+import { isAppErrorCode } from '@/utils/appError';
 import { compareU64, isNextU64, maxU64, ZERO_U64 } from '@/utils/u64';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import {
@@ -26,6 +28,7 @@ import {
   pinRegionBlocks,
   reconcileRegionBlocks,
   removeRegionBlocks,
+  replacePinnedRegionBlock,
   resetRegionCache,
   scheduleRegionLoad,
   touchRegionBlock,
@@ -141,6 +144,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       resetTransientDocumentWork(this);
       resetRegionCache(this);
       this.data = createDocumentProjection(response.document, response.initialRegion);
+      reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
       this.residentSheetOrder = this.loadedSheetIndexes;
       this.currentFilePath = path !== null ? path : response.document.path || null;
       this.documentId = response.editorSession.documentId;
@@ -149,6 +153,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.projectionStale = false;
       resetSessionUi();
       this.enforceResidentSheetBudget();
+      this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
       resetDocumentStatus();
       applyEditorSessionStatus(response.editorSession);
     },
@@ -159,10 +164,12 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       ) return false;
       resetRegionCache(this);
       replaceProjection(this, response);
+      reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
       this.revision = response.editorSession.revision;
       this.currentFilePath = response.document.path || this.currentFilePath;
       this.residentSheetOrder = this.loadedSheetIndexes;
       this.enforceResidentSheetBudget();
+      this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
       applyEditorSessionStatus(response.editorSession);
       return true;
     },
@@ -428,7 +435,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (!tiles.length) return true;
       pinRegionBlocks(this, tiles.map(regionKey));
       const results = await Promise.all(tiles.map((tile) => this.loadRegionBlock(tile, fetchProjection)));
-      return results.every(Boolean);
+      return results.every(Boolean) && isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
     },
     async loadRegionBlock(
       region: SheetRegion,
@@ -438,31 +445,40 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       ) => Promise<SheetRegionProjectionResponse>
     ): Promise<boolean> {
       const slot = this.data?.sheets[region.sheetIndex];
-      if (isRegionLoaded(slot, region)) {
-        touchRegionBlock(this, regionKey(region));
+      const coveringKeys = regionCoveringBlockKeys(slot, region);
+      if (coveringKeys !== null) {
+        for (const blockKey of coveringKeys) touchRegionBlock(this, blockKey);
         return true;
       }
       const context = this.currentCommandContext();
       if (!context) return false;
       const key = `${context.documentId}:${context.baseRevision}:${regionKey(region)}`;
       return scheduleRegionLoad(this, key, async () => {
-        const response = await fetchProjection(context, region);
-        if (!this.matchesCommandContext(context)
-          || response.documentId !== context.documentId
+        const responses = await fetchRegionResponses(context, region, fetchProjection);
+        if (!this.matchesCommandContext(context) || responses.some((response) =>
+          response.documentId !== context.documentId
           || response.revision !== context.baseRevision
-          || regionKey(response.region) !== regionKey(region)) return false;
+        )) return false;
         const data = this.data;
         const current = data?.sheets[region.sheetIndex];
         if (!data || !current || current.state !== 'loaded') return false;
-        const block = regionBlock(response);
-        const blocks = [...current.blocks.filter((entry) => entry.key !== block.key), block];
+        const newBlocks = responses.map(regionBlock);
+        const newKeys = new Set(newBlocks.map((block) => block.key));
+        const blocks = [
+          ...current.blocks.filter((entry) => !newKeys.has(entry.key)),
+          ...newBlocks,
+        ];
         const sheets = [...data.sheets];
         sheets[region.sheetIndex] = { ...current, blocks };
         this.data = { ...data, sheets };
-        touchRegionBlock(this, block.key);
+        replacePinnedRegionBlock(
+          this,
+          regionKey(region),
+          newBlocks.map((block) => block.key)
+        );
         this.touchResidentSheet(region.sheetIndex);
         this.enforceRegionBlockBudget(region.sheetIndex);
-        return true;
+        return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
       });
     },
     markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
@@ -589,4 +605,50 @@ function tileRegions(region: SheetRegion, extent: SheetExtent): SheetRegion[] {
     }
   }
   return tiles;
+}
+
+async function fetchRegionResponses(
+  context: EditorCommandContext,
+  region: SheetRegion,
+  fetchProjection: (
+    context: EditorCommandContext,
+    region: SheetRegion
+  ) => Promise<SheetRegionProjectionResponse>
+): Promise<SheetRegionProjectionResponse[]> {
+  try {
+    const response = await fetchProjection(context, region);
+    if (regionKey(response.region) !== regionKey(region)) return [];
+    return [response];
+  } catch (error) {
+    if (!isAppErrorCode(error, 'region_response_too_large')) throw error;
+    const split = splitRegion(region);
+    if (!split) throw error;
+    const first = await fetchRegionResponses(context, split[0], fetchProjection);
+    const second = await fetchRegionResponses(context, split[1], fetchProjection);
+    return [...first, ...second];
+  }
+}
+
+function splitRegion(region: SheetRegion): [SheetRegion, SheetRegion] | null {
+  const rows = region.rowEnd - region.rowStart;
+  const columns = region.colEnd - region.colStart;
+  if (rows <= 1 && columns <= 1) return null;
+  if (rows >= columns && rows > 1) {
+    const middle = region.rowStart + Math.floor(rows / 2);
+    return [
+      { ...region, rowEnd: middle },
+      { ...region, rowStart: middle },
+    ];
+  }
+  const middle = region.colStart + Math.floor(columns / 2);
+  return [
+    { ...region, colEnd: middle },
+    { ...region, colStart: middle },
+  ];
+}
+
+function currentRegionBlockKeys(data: DocumentProjection | null): string[] {
+  return data?.sheets.flatMap((slot) => slot.state === 'loaded'
+    ? slot.blocks.map((block) => block.key)
+    : []) ?? [];
 }

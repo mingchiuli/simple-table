@@ -13,6 +13,7 @@ use crate::io::document_patches::{CurrentStructureShape, restore_structure_patch
 use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::io::document_transaction::DocumentTransaction;
 use crate::io::formula_coordinator::FormulaCoordinator;
+use crate::io::region_metadata_index::RegionMetadataIndex;
 use crate::ops::AppliedOperation;
 use crate::types::FormulaStatus;
 use crate::types::{
@@ -50,6 +51,7 @@ pub struct SpreadsheetDocument {
     body: SpreadsheetDocumentBody,
     cached_capabilities: WorkbookCapabilities,
     formulas: FormulaCoordinator,
+    region_metadata: RegionMetadataIndex,
     transaction_failure: Option<String>,
     #[cfg(test)]
     injected_restore_failures: usize,
@@ -63,12 +65,14 @@ impl SpreadsheetDocument {
         let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
         let formula_structure_limitations = formulas.structure_formula_limitations();
         let cached_capabilities = body.capabilities(&formula_structure_limitations);
+        let region_metadata = RegionMetadataIndex::from_file_data(&projection);
 
         Self {
             projection,
             body,
             cached_capabilities,
             formulas,
+            region_metadata,
             transaction_failure: None,
             #[cfg(test)]
             injected_restore_failures: 0,
@@ -92,6 +96,25 @@ impl SpreadsheetDocument {
 
     pub fn formula_status(&self) -> FormulaStatus {
         self.formulas.status()
+    }
+
+    pub fn estimated_runtime_bytes(&self) -> usize {
+        self.body
+            .estimated_bytes()
+            .saturating_add(self.formulas.estimated_bytes(&self.projection))
+            .saturating_add(self.region_metadata.estimated_bytes())
+            .saturating_add(
+                self.transaction_failure
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            )
+    }
+
+    pub fn region_metadata(
+        &self,
+        region: &crate::types::SheetRegion,
+    ) -> crate::types::SheetRegionMetadata {
+        self.region_metadata.project(&self.projection, region)
     }
 
     pub fn capabilities(&self) -> WorkbookCapabilities {
@@ -651,6 +674,7 @@ impl SpreadsheetDocument {
                 changes: formula_changes,
             });
         }
+        self.refresh_region_metadata_index();
         Ok(DocumentRestoreResult { patches })
     }
 
@@ -769,11 +793,16 @@ impl SpreadsheetDocument {
             .validate_persisted_projection_consistency(&self.projection)
     }
 
+    pub(in crate::io) fn refresh_region_metadata_index(&mut self) {
+        self.region_metadata.rebuild(&self.projection);
+    }
+
     pub fn transaction_failure(&self) -> Option<&str> {
         self.transaction_failure.as_deref()
     }
 
     pub(in crate::io) fn mark_transaction_failed(&mut self, reason: String) {
+        self.refresh_region_metadata_index();
         self.refresh_capabilities();
         self.transaction_failure = Some(reason.clone());
         self.formulas.mark_degraded(reason);

@@ -14,6 +14,10 @@ impl SearchSession {
         Self::default()
     }
 
+    pub fn estimated_bytes(&self) -> usize {
+        self.index.estimated_bytes()
+    }
+
     pub fn sheet_index(&self, sheet_index: usize) -> Option<Arc<SearchSheetIndex>> {
         self.index.fresh_sheet_index(sheet_index)
     }

@@ -17,6 +17,13 @@ pub enum AppError {
     UnsupportedFormat,
     #[error("Document exceeds the supported resource limits: {0}")]
     ResourceLimitExceeded(String),
+    #[error("Sheet region response is {estimated_bytes} bytes, maximum is {maximum_bytes} bytes")]
+    RegionResponseTooLarge {
+        estimated_bytes: usize,
+        maximum_bytes: usize,
+    },
+    #[error("Another prepared document is still active")]
+    PreparedDocumentConflict,
 
     // 状态操作
     #[error("No file loaded")]
@@ -74,6 +81,8 @@ impl AppError {
             Self::FileNotFound(_) => "file_not_found",
             Self::UnsupportedFormat => "unsupported_format",
             Self::ResourceLimitExceeded(_) => "resource_limit_exceeded",
+            Self::RegionResponseTooLarge { .. } => "region_response_too_large",
+            Self::PreparedDocumentConflict => "prepared_document_conflict",
             Self::NoFileLoaded => "no_file_loaded",
             Self::InvalidSheetIndex(_) => "invalid_sheet_index",
             Self::InvalidCellPosition { .. } => "invalid_cell_position",
@@ -107,6 +116,21 @@ mod tests {
             json!({
                 "code": "file_not_found",
                 "message": "File not found: /tmp/missing.xlsx",
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_region_response_limit_with_a_distinct_code() {
+        assert_eq!(
+            serde_json::to_value(AppError::RegionResponseTooLarge {
+                estimated_bytes: 20,
+                maximum_bytes: 10,
+            })
+            .expect("serialize error"),
+            json!({
+                "code": "region_response_too_large",
+                "message": "Sheet region response is 20 bytes, maximum is 10 bytes",
             })
         );
     }

@@ -60,14 +60,10 @@ export function useFileActions({
     shouldContinue: ContinuationGuard = keepGoing
   ): Promise<boolean> {
     let loaded = false;
-    let removeCancelHandler: (() => void) | undefined;
     await runDocumentLifecycle(
       'loading',
       'Failed to open file',
-      async ({ release }) => {
-        removeCancelHandler = shouldContinue.onCancel?.(() => {
-          release();
-        });
+      async () => {
         if (!shouldContinue()) return;
         const replacement = await beginDocumentReplacement();
         if (!replacement) return;
@@ -80,8 +76,6 @@ export function useFileActions({
             abortPreparedDocumentQuietly
           );
           if (!preparedResult) return;
-          removeCancelHandler?.();
-          removeCancelHandler = undefined;
           const opened = await commitPreparedDocumentOrAbort(preparedResult, expectedContext);
           if (!shouldContinue()) {
             try {
@@ -108,7 +102,6 @@ export function useFileActions({
       },
       { waitForIdle: true, shouldContinue }
     );
-    removeCancelHandler?.();
     return loaded;
   }
 

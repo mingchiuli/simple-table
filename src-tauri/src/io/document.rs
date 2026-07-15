@@ -7,7 +7,6 @@ use crate::io::file_format::{
 };
 use crate::io::prepared_documents;
 use crate::io::projection_limits::validate_file_data;
-use crate::io::rich_projection::parse_cell_key;
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -18,18 +17,19 @@ use crate::state::{
 use crate::types::{
     DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, SavedDocumentIdentity, SavedDocumentResponse, SheetData,
-    SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionMetadata,
-    SheetRegionProjectionResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
+    SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionProjectionResponse,
+    SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Workbook;
 
 const LOSSY_CSV_SAVE_REASON: &str = "Saving a non-CSV document as CSV would discard sheets, formulas, or formatting; use Export instead.";
-const INITIAL_REGION_ROWS: usize = 256;
-const INITIAL_REGION_COLUMNS: usize = 128;
+const INITIAL_REGION_ROWS: usize = 128;
+const INITIAL_REGION_COLUMNS: usize = 32;
 const MAX_REGION_CELLS: usize = 65_536;
 const MAX_REGION_ROWS: usize = 1_024;
 const MAX_REGION_COLUMNS: usize = 512;
+const MAX_REGION_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// 从已读取的文件字节打开文档，并初始化编辑器状态
 pub fn prepare_open_from_bytes(
@@ -37,6 +37,7 @@ pub fn prepare_open_from_bytes(
     bytes: Vec<u8>,
     file_name: Option<String>,
 ) -> Result<PreparedOpenDocument, AppError> {
+    let reservation = prepared_documents::reserve_for_input_bytes(bytes.len())?;
     let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
 
     // 如果调用方已经解析出文件名，优先使用；否则从路径解析
@@ -47,14 +48,20 @@ pub fn prepare_open_from_bytes(
     let source_path = PathBuf::from(&path);
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path, resolved_file_name)?;
 
-    prepare_editor_state(result.file_data, result.workbook, Some(source_path))
+    prepare_editor_state(
+        result.file_data,
+        result.workbook,
+        Some(source_path),
+        reservation,
+    )
 }
 
 /// 准备新文档。只有 commit_prepared_document 才会替换当前活动文档。
 pub fn prepare_new_file(mut file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
     file_data.path.clear();
     validate_file_data(&file_data)?;
-    prepare_editor_state(file_data, None, None)
+    let reservation = prepared_documents::reserve_for_file_data(&file_data)?;
+    prepare_editor_state(file_data, None, None, reservation)
 }
 
 pub fn commit_prepared_document(
@@ -658,9 +665,10 @@ fn prepare_editor_state(
     file_data: FileData,
     workbook: Option<Workbook>,
     source_path: Option<PathBuf>,
+    reservation: prepared_documents::PrepareReservation,
 ) -> Result<PreparedOpenDocument, AppError> {
     let editor_state = EditorState::with_workbook(file_data, workbook);
-    let token = prepared_documents::replace(editor_state, source_path)?;
+    let token = prepared_documents::replace(editor_state, source_path, reservation)?;
     Ok(PreparedOpenDocument { token })
 }
 
@@ -740,17 +748,46 @@ fn project_sheet_region(
             "sheet region exceeds the current sheet extent".to_string(),
         ));
     }
-    let metadata = project_region_metadata(sheet, &region);
+    let metadata = editor_state.region_metadata(&region);
     let cells = project_region_cells(sheet, &region);
     let merge_anchor_cells = project_merge_anchor_cells(sheet, &region, &metadata.merges);
-    Ok(SheetRegionProjectionResponse {
-        document_id: editor_state.document_id(),
-        revision: editor_state.revision(),
-        region,
-        cells,
-        merge_anchor_cells,
-        metadata,
-    })
+    finalize_region_response(
+        SheetRegionProjectionResponse {
+            document_id: editor_state.document_id(),
+            revision: editor_state.revision(),
+            region,
+            cells,
+            merge_anchor_cells,
+            metadata,
+            estimated_bytes: None,
+        },
+        MAX_REGION_RESPONSE_BYTES,
+    )
+}
+
+fn finalize_region_response(
+    mut response: SheetRegionProjectionResponse,
+    maximum_bytes: usize,
+) -> Result<SheetRegionProjectionResponse, AppError> {
+    let base_bytes = serde_json::to_vec(&response)
+        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?
+        .len();
+    response.estimated_bytes = Some(base_bytes);
+    let serialized_bytes = serde_json::to_vec(&response)
+        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?
+        .len();
+    response.estimated_bytes = Some(serialized_bytes);
+    let serialized_bytes = serde_json::to_vec(&response)
+        .map_err(|error| AppError::Internal(format!("failed to size region response: {error}")))?
+        .len();
+    if serialized_bytes > maximum_bytes {
+        return Err(AppError::RegionResponseTooLarge {
+            estimated_bytes: serialized_bytes,
+            maximum_bytes,
+        });
+    }
+    response.estimated_bytes = Some(serialized_bytes);
+    Ok(response)
 }
 
 fn initial_sheet_region(sheet_index: usize, extent: &crate::types::SheetExtent) -> SheetRegion {
@@ -793,48 +830,6 @@ fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError> {
         ));
     }
     Ok(())
-}
-
-fn project_region_metadata(
-    sheet: &crate::types::SheetData,
-    region: &SheetRegion,
-) -> SheetRegionMetadata {
-    SheetRegionMetadata {
-        merges: sheet
-            .merges
-            .iter()
-            .filter(|merge| {
-                (merge.start_row as usize) < region.row_end
-                    && (merge.end_row as usize) >= region.row_start
-                    && (merge.start_col as usize) < region.col_end
-                    && (merge.end_col as usize) >= region.col_start
-            })
-            .cloned()
-            .collect(),
-        cell_formats: sheet
-            .rich
-            .cell_formats
-            .iter()
-            .filter(|(key, _)| cell_key_in_region(key, region))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
-        cell_styles: sheet
-            .rich
-            .cell_styles
-            .iter()
-            .filter(|(key, _)| cell_key_in_region(key, region))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
-    }
-}
-
-fn cell_key_in_region(key: &str, region: &SheetRegion) -> bool {
-    parse_cell_key(key).is_some_and(|(row, col)| {
-        row >= region.row_start
-            && row < region.row_end
-            && col >= region.col_start
-            && col < region.col_end
-    })
 }
 
 fn sheet_layout_projection(sheet: &crate::types::SheetData) -> SheetLayoutProjection {
@@ -937,8 +932,17 @@ fn default_extension_string() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
     use super::*;
     use crate::types::{CellValue, SheetData};
+
+    fn prepared_protocol_test_guard() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
@@ -972,6 +976,7 @@ mod tests {
 
     #[test]
     fn open_from_bytes_detects_extensionless_csv_content() {
+        let _guard = prepared_protocol_test_guard();
         let prepared = prepare_open_from_bytes(
             "/tmp/imported".to_string(),
             b"name,score\nalice,42".to_vec(),
@@ -989,6 +994,7 @@ mod tests {
 
     #[test]
     fn init_file_does_not_trust_frontend_path() {
+        let _guard = prepared_protocol_test_guard();
         let prepared = prepare_new_file(FileData {
             path: "/tmp/should-not-be-trusted.xlsx".to_string(),
             file_name: "untitled.xlsx".to_string(),
@@ -1080,6 +1086,46 @@ mod tests {
     }
 
     #[test]
+    fn region_projection_reports_and_enforces_final_serialized_size() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "region.xlsx".to_string(),
+                sheets: vec![SheetData {
+                    rows: vec![vec![CellValue::String("value".to_string())]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let response = project_sheet_region(
+            &state,
+            SheetRegion {
+                sheet_index: 0,
+                row_start: 0,
+                row_end: 1,
+                col_start: 0,
+                col_end: 1,
+            },
+        )
+        .expect("region response");
+        let serialized_bytes = serde_json::to_vec(&response)
+            .expect("serialize response")
+            .len();
+
+        assert_eq!(response.estimated_bytes, Some(serialized_bytes));
+        let mut unbounded = response;
+        unbounded.estimated_bytes = None;
+        assert!(matches!(
+            finalize_region_response(unbounded, 1),
+            Err(AppError::RegionResponseTooLarge {
+                maximum_bytes: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn region_projection_includes_merge_anchor_outside_region() {
         let sheet = SheetData {
             rows: vec![vec![CellValue::String("anchor".to_string())]],
@@ -1098,7 +1144,14 @@ mod tests {
             col_start: 0,
             col_end: 1,
         };
-        let metadata = project_region_metadata(&sheet, &region);
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "merge.xlsx".to_string(),
+            sheets: vec![sheet.clone()],
+        };
+        let metadata =
+            crate::io::region_metadata_index::RegionMetadataIndex::from_file_data(&file_data)
+                .project(&file_data, &region);
         let anchors = project_merge_anchor_cells(&sheet, &region, &metadata.merges);
 
         assert_eq!(anchors.len(), 1);

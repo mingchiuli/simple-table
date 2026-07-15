@@ -75,7 +75,7 @@ export type NativeSavePlan = { canSave: boolean, requiresSaveAs: boolean, native
 
 export type SpreadsheetFormatOptions = { defaultExtension: string, supportedExtensions: Array<string>, };
 
-export type SheetCellChange = { sheetIndex: number, row: number, col: number, value: CellValue, display?: string, format?: CellFormatProjection, style?: CellStyleProjection, };
+export type SheetCellChange = { sheetIndex: number, row: number, col: number, value: CellValue, };
 
 export type SetCellRequest = { sheetIndex: number, row: number, col: number, text: string, };
 
@@ -143,7 +143,7 @@ export type SheetRegion = { sheetIndex: number, rowStart: number, rowEnd: number
 
 export type SheetRegionMetadata = { merges?: Array<MergeRange>, cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, };
 
-export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, mergeAnchorCells?: Array<SheetCellChange>, metadata: SheetRegionMetadata, };
+export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, mergeAnchorCells?: Array<SheetCellChange>, metadata: SheetRegionMetadata, estimatedBytes?: number, };
 
 export type PreparedOpenDocument = { token: string, };
 

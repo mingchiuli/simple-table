@@ -4,7 +4,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::error::AppError;
+use crate::io::projection_limits::ResourceLedger;
 use crate::state::editor_state::EditorState;
+use crate::types::FileData;
 
 pub(crate) struct PreparedDocument {
     pub(crate) editor_state: EditorState,
@@ -15,6 +17,7 @@ pub(crate) struct PreparedDocument {
 struct PreparedDocumentStore {
     pending: HashMap<String, PreparedDocumentEntry>,
     order: VecDeque<String>,
+    prepare_in_progress: bool,
 }
 
 struct PreparedDocumentEntry {
@@ -23,17 +26,32 @@ struct PreparedDocumentEntry {
 }
 
 impl PreparedDocumentStore {
-    fn insert(&mut self, token: String, prepared: PreparedDocument) {
-        self.insert_at(token, prepared, Instant::now());
+    fn begin_prepare(&mut self, now: Instant) -> Result<(), AppError> {
+        self.prune_expired(now);
+        if self.prepare_in_progress || self.pending.len() >= MAX_PREPARED_DOCUMENTS {
+            return Err(AppError::PreparedDocumentConflict);
+        }
+        self.prepare_in_progress = true;
+        Ok(())
     }
 
-    fn insert_at(&mut self, token: String, prepared: PreparedDocument, now: Instant) {
+    fn finish_prepare(&mut self) {
+        self.prepare_in_progress = false;
+    }
+
+    fn insert(&mut self, token: String, prepared: PreparedDocument) -> Result<(), AppError> {
+        self.insert_at(token, prepared, Instant::now())
+    }
+
+    fn insert_at(
+        &mut self,
+        token: String,
+        prepared: PreparedDocument,
+        now: Instant,
+    ) -> Result<(), AppError> {
         self.prune_expired(now);
-        while self.pending.len() >= MAX_PREPARED_DOCUMENTS {
-            let Some(expired) = self.order.pop_front() else {
-                break;
-            };
-            self.pending.remove(&expired);
+        if self.pending.len() >= MAX_PREPARED_DOCUMENTS {
+            return Err(AppError::PreparedDocumentConflict);
         }
         self.order.push_back(token.clone());
         self.pending.insert(
@@ -43,6 +61,7 @@ impl PreparedDocumentStore {
                 created_at: now,
             },
         );
+        Ok(())
     }
 
     fn take(&mut self, token: &str) -> Option<PreparedDocument> {
@@ -69,17 +88,70 @@ impl PreparedDocumentStore {
 
 const MAX_PREPARED_DOCUMENTS: usize = 1;
 const MAX_PREPARED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
+const MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
 
 static PREPARED_DOCUMENTS: OnceLock<Mutex<PreparedDocumentStore>> = OnceLock::new();
+
+pub(crate) struct PrepareReservation {
+    active: bool,
+}
+
+impl Drop for PrepareReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Ok(mut store) = store().lock() {
+            store.finish_prepare();
+        }
+    }
+}
 
 fn store() -> &'static Mutex<PreparedDocumentStore> {
     PREPARED_DOCUMENTS.get_or_init(|| Mutex::new(PreparedDocumentStore::default()))
 }
 
+pub(crate) fn reserve_for_input_bytes(byte_count: usize) -> Result<PrepareReservation, AppError> {
+    reserve_prepare(
+        byte_count
+            .saturating_mul(2)
+            .min(MAX_PREPARED_DOCUMENT_BYTES),
+    )
+}
+
+pub(crate) fn reserve_for_file_data(file_data: &FileData) -> Result<PrepareReservation, AppError> {
+    reserve_prepare(
+        ResourceLedger::from_file_data(file_data)
+            .estimated_bytes()
+            .saturating_mul(2)
+            .min(MAX_PREPARED_DOCUMENT_BYTES),
+    )
+}
+
+fn reserve_prepare(estimated_bytes: usize) -> Result<PrepareReservation, AppError> {
+    let active_registry = crate::state::active_document_store();
+    let active_guard = active_registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    validate_combined_document_bytes_for_active(
+        active_guard
+            .active()
+            .map(EditorState::estimated_resource_bytes)
+            .unwrap_or_default(),
+        estimated_bytes,
+    )?;
+    let mut store = store()
+        .lock()
+        .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+    store.begin_prepare(Instant::now())?;
+    Ok(PrepareReservation { active: true })
+}
+
 pub(crate) fn replace(
     editor_state: EditorState,
     source_path: Option<PathBuf>,
+    mut reservation: PrepareReservation,
 ) -> Result<String, AppError> {
     let estimated_bytes = editor_state.estimated_resource_bytes();
     if estimated_bytes > MAX_PREPARED_DOCUMENT_BYTES {
@@ -92,11 +164,37 @@ pub(crate) fn replace(
         editor_state,
         source_path,
     };
+    let active_registry = crate::state::active_document_store();
+    let active_guard = active_registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?;
+    validate_combined_document_bytes_for_active(
+        active_guard
+            .active()
+            .map(EditorState::estimated_resource_bytes)
+            .unwrap_or_default(),
+        estimated_bytes,
+    )?;
     let mut store = store()
         .lock()
         .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-    store.insert(token.clone(), prepared);
+    store.finish_prepare();
+    reservation.active = false;
+    store.insert(token.clone(), prepared)?;
     Ok(token)
+}
+
+fn validate_combined_document_bytes_for_active(
+    active_bytes: usize,
+    prepared_bytes: usize,
+) -> Result<(), AppError> {
+    let peak_bytes = active_bytes.saturating_add(prepared_bytes);
+    if peak_bytes > MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "active and prepared documents require an estimated {peak_bytes} bytes, maximum is {MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn take(token: &str) -> Result<PreparedDocument, AppError> {
@@ -138,7 +236,9 @@ mod tests {
     #[test]
     fn taking_a_token_consumes_it() {
         let mut store = PreparedDocumentStore::default();
-        store.insert("token".to_string(), prepared("book.xlsx"));
+        store
+            .insert("token".to_string(), prepared("book.xlsx"))
+            .expect("insert token");
 
         let document = store.take("token").expect("prepared document");
 
@@ -150,7 +250,9 @@ mod tests {
     #[test]
     fn abort_is_idempotent() {
         let mut store = PreparedDocumentStore::default();
-        store.insert("token".to_string(), prepared("book.xlsx"));
+        store
+            .insert("token".to_string(), prepared("book.xlsx"))
+            .expect("insert token");
 
         store.abort("token");
         store.abort("token");
@@ -160,31 +262,51 @@ mod tests {
     }
 
     #[test]
-    fn insertion_evicts_the_oldest_token_at_the_limit() {
+    fn insertion_rejects_a_second_live_token_at_the_limit() {
         let mut store = PreparedDocumentStore::default();
-        for index in 0..=MAX_PREPARED_DOCUMENTS {
-            store.insert(
-                format!("token-{index}"),
-                prepared(&format!("book-{index}.xlsx")),
-            );
-        }
+        store
+            .insert("token-0".to_string(), prepared("book-0.xlsx"))
+            .expect("insert first token");
 
-        assert!(store.take("token-0").is_none());
-        assert!(store.take("token-1").is_some());
-        assert_eq!(store.pending.len(), MAX_PREPARED_DOCUMENTS - 1);
+        assert!(matches!(
+            store.insert("token-1".to_string(), prepared("book-1.xlsx")),
+            Err(AppError::PreparedDocumentConflict)
+        ));
+        assert!(store.take("token-0").is_some());
+        assert!(store.take("token-1").is_none());
+    }
+
+    #[test]
+    fn preparation_reservation_rejects_concurrent_parse_before_insertion() {
+        let mut store = PreparedDocumentStore::default();
+
+        store
+            .begin_prepare(Instant::now())
+            .expect("reserve prepare");
+
+        assert!(matches!(
+            store.begin_prepare(Instant::now()),
+            Err(AppError::PreparedDocumentConflict)
+        ));
+        store.finish_prepare();
+        assert!(store.begin_prepare(Instant::now()).is_ok());
     }
 
     #[test]
     fn insertion_prunes_expired_documents_before_enforcing_capacity() {
         let mut store = PreparedDocumentStore::default();
         let now = Instant::now();
-        store.insert_at(
-            "expired".to_string(),
-            prepared("expired.xlsx"),
-            now - PREPARED_DOCUMENT_TTL,
-        );
+        store
+            .insert_at(
+                "expired".to_string(),
+                prepared("expired.xlsx"),
+                now - PREPARED_DOCUMENT_TTL,
+            )
+            .expect("insert expired token");
 
-        store.insert_at("current".to_string(), prepared("current.xlsx"), now);
+        store
+            .insert_at("current".to_string(), prepared("current.xlsx"), now)
+            .expect("insert current token");
 
         assert!(!store.pending.contains_key("expired"));
         assert!(store.pending.contains_key("current"));
@@ -194,11 +316,13 @@ mod tests {
     #[test]
     fn taking_an_expired_token_removes_it() {
         let mut store = PreparedDocumentStore::default();
-        store.insert_at(
-            "expired".to_string(),
-            prepared("expired.xlsx"),
-            Instant::now() - PREPARED_DOCUMENT_TTL,
-        );
+        store
+            .insert_at(
+                "expired".to_string(),
+                prepared("expired.xlsx"),
+                Instant::now() - PREPARED_DOCUMENT_TTL,
+            )
+            .expect("insert expired token");
 
         assert!(store.take("expired").is_none());
         assert!(store.pending.is_empty());

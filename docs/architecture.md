@@ -100,8 +100,15 @@ Opening uses a prepare/commit/abort protocol. Preparing parses into a temporary
 expected active document and revision before replacement.
 
 Prepared documents are process-local, limited to one entry and an estimated
-128 MiB, and expire after five minutes. Callers should still abort unused tokens
-promptly.
+128 MiB, and expire after five minutes. A second prepare is rejected while a
+live token exists; it never evicts the first token. The active and prepared
+documents are also limited to an estimated 256 MiB combined. The estimate
+includes the UI projection, retained XLSX workbook, formula runtime, metadata
+index, search indexes, and history. Callers should still abort unused tokens
+promptly. A prepare reserves the single parse slot and a conservative share of
+the combined budget before parsing, then rechecks the completed document's
+resident estimate. Route cancellation must keep the loading lifecycle reserved
+until the in-flight prepare settles.
 
 Saving follows this order:
 
@@ -126,11 +133,27 @@ the visible region plus overscan and refuses to edit an unloaded cell.
 The frontend retains at most four resident Sheet slots, eight blocks per Sheet,
 24 blocks overall, and approximately 16 MiB of block payload. `RegionCache`
 uses access LRU, pins visible tiles, shares in-flight promises, rejects previous
-generations, and runs at most four projection requests concurrently.
+generations, and runs at most four projection requests concurrently. The
+initial region is a normal 128 x 32 tile and participates in the same LRU and
+byte budget. Rust caps each serialized region response at 16 MiB and reports
+its measured size; the frontend subdivides only the dedicated oversized-region
+error and treats multiple child blocks as combined coverage.
+
+Formats and styles are indexed into the same 128 x 32 tile geometry, while
+merges use a row interval tree. Region projection therefore examines only
+intersecting buckets and intervals. Structural commits and history restores
+rebuild the index at the transaction boundary.
 
 Rust retains at most four Tantivy indexes and no duplicate persistent search
-text snapshots. Search text and indexes are built outside the document lock.
-Layout overrides are limited to 100,000 entries per document.
+text snapshots. Search fallback clones only cell values and display-affecting
+format/style metadata, then scans outside the document lock. A fallback queues
+one missing Sheet index per search so repeated searches converge to indexed
+execution without flooding the four-slot index cache. Layout overrides are
+limited to 100,000 entries per document.
+
+Parsing, file dialogs, save/export generation and I/O, mobile file work, and
+search run through a two-permit blocking command executor. Tauri async runtime
+threads do not perform those synchronous workloads directly.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,

@@ -57,6 +57,9 @@ impl<'a> DocumentTransaction<'a> {
             self.rollback_after_failure(&error)?;
             return Err(error);
         }
+        if self.operation.impact().is_structure_change() {
+            self.document.refresh_region_metadata_index();
+        }
 
         Ok(DocumentOperationResult {
             operation: result,

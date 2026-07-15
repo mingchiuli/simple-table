@@ -50,6 +50,21 @@ impl FormulaAstService {
         }
     }
 
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .parsed_cache
+                .iter()
+                .map(|(formula, entry)| {
+                    formula.capacity()
+                        + match entry {
+                            FormulaParseEntry::Parsed(_) => 512,
+                            FormulaParseEntry::Error(error) => error.capacity(),
+                        }
+                })
+                .sum::<usize>()
+    }
+
     pub(crate) fn parse(&mut self, formula: &str) -> Result<ParsedFormula, String> {
         let source = FormulaSource::new(formula);
         let ast = self.parse_ast(source.parsed())?;

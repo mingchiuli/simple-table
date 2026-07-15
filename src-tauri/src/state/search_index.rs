@@ -98,6 +98,14 @@ impl Default for SearchIndexStore {
 }
 
 impl SearchIndexStore {
+    pub fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.sheets.capacity() * std::mem::size_of::<SearchSheetSlot>()
+            + self.sheet_revisions.capacity() * std::mem::size_of::<u64>()
+            + self.resident_order.capacity() * std::mem::size_of::<usize>()
+            + self.resident_order.len().saturating_mul(WRITER_ARENA_BYTES)
+    }
+
     pub fn stamp(&self, document_id: u64) -> SearchIndexStamp {
         SearchIndexStamp {
             document_id,

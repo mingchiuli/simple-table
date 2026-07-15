@@ -261,6 +261,64 @@ impl SheetRangeDependencyIndex {
 }
 
 impl FormulaDependencyIndex {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let direct_dependents = self
+            .dependents_by_source
+            .values()
+            .map(|dependents| {
+                std::mem::size_of::<HashSet<FormulaCellRef>>()
+                    + dependents.capacity() * std::mem::size_of::<FormulaCellRef>()
+            })
+            .sum::<usize>();
+        let range_dependents = self
+            .range_dependents
+            .sheets
+            .values()
+            .map(|sheet| {
+                sheet.dependencies.capacity()
+                    * std::mem::size_of::<(FormulaRangeRef, FormulaCellRef)>()
+                    + sheet
+                        .buckets
+                        .values()
+                        .map(|entries| entries.capacity() * std::mem::size_of::<usize>())
+                        .sum::<usize>()
+                    + sheet.buckets.capacity() * 32
+            })
+            .sum::<usize>();
+        let large_range_dependents = self
+            .large_range_dependents
+            .sheets
+            .values()
+            .map(|sheet| {
+                sheet.dependencies.capacity()
+                    * std::mem::size_of::<(FormulaRangeRef, FormulaCellRef)>()
+                    + sheet
+                        .row_buckets
+                        .values()
+                        .chain(sheet.column_buckets.values())
+                        .map(|entries| entries.capacity() * std::mem::size_of::<usize>())
+                        .sum::<usize>()
+                    + (sheet.row_buckets.capacity() + sheet.column_buckets.capacity()) * 32
+            })
+            .sum::<usize>();
+        let diagnostic_bytes = self
+            .formula_diagnostics
+            .values()
+            .flat_map(|diagnostics| diagnostics.issues.iter())
+            .map(|issue| std::mem::size_of_val(issue) + issue.message.capacity())
+            .sum::<usize>();
+
+        std::mem::size_of::<Self>()
+            + self.formulas.capacity() * std::mem::size_of::<FormulaCellRef>()
+            + self.dependents_by_source.capacity() * 64
+            + direct_dependents
+            + range_dependents
+            + large_range_dependents
+            + self.always_recalculate.capacity() * std::mem::size_of::<FormulaCellRef>()
+            + self.formula_diagnostics.capacity() * 64
+            + diagnostic_bytes
+    }
+
     pub(crate) fn update_formula_dependencies(
         &mut self,
         file_data: &FileData,

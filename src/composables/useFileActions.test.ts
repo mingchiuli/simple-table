@@ -252,7 +252,7 @@ describe("useFileActions", () => {
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
-  it("releases the loading lifecycle when an in-flight path load is cancelled", async () => {
+  it("holds the loading lifecycle until a cancelled in-flight prepare settles", async () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
@@ -281,11 +281,13 @@ describe("useFileActions", () => {
       handler();
     }
 
-    expect(documentSessionStore.lifecycle).toBe("idle");
-    expect(documentSessionStore.isInteractionLocked).toBe(false);
+    expect(documentSessionStore.lifecycle).toBe("loading");
+    expect(documentSessionStore.isInteractionLocked).toBe(true);
 
     pendingPrepare.resolve(preparedOpen("slow-token"));
     await expect(loadPromise).resolves.toBe(false);
+    expect(documentSessionStore.lifecycle).toBe("idle");
+    expect(documentSessionStore.isInteractionLocked).toBe(false);
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.currentFilePath).toBeNull();
     expect(api.commitPreparedDocument).not.toHaveBeenCalled();

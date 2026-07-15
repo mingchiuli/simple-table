@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   oldestEvictableRegionBlock,
   pinRegionBlocks,
+  replacePinnedRegionBlock,
   scheduleRegionLoad,
   touchRegionBlock,
 } from '@/stores/documentRegionCache';
@@ -42,6 +43,18 @@ describe('documentRegionCache', () => {
     expect(oldestEvictableRegionBlock(owner, new Set(['old', 'visible', 'recent']))).toBe('old');
     touchRegionBlock(owner, 'old');
     expect(oldestEvictableRegionBlock(owner, new Set(['old', 'visible', 'recent']))).toBe('recent');
+  });
+
+  it('replaces one parent pin without dropping other visible blocks', () => {
+    const owner = {};
+    pinRegionBlocks(owner, ['parent', 'other']);
+
+    replacePinnedRegionBlock(owner, 'parent', ['child-a', 'child-b']);
+
+    expect(oldestEvictableRegionBlock(
+      owner,
+      new Set(['other', 'child-a', 'child-b'])
+    )).toBeUndefined();
   });
 });
 

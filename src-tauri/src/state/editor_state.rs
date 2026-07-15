@@ -241,8 +241,19 @@ impl EditorState {
         self.resources.sheet_extent(sheet_index)
     }
 
+    pub fn region_metadata(
+        &self,
+        region: &crate::types::SheetRegion,
+    ) -> crate::types::SheetRegionMetadata {
+        self.document.region_metadata(region)
+    }
+
     pub fn estimated_resource_bytes(&self) -> usize {
-        self.resources.estimated_bytes()
+        self.resources
+            .estimated_bytes()
+            .saturating_add(self.document.estimated_runtime_bytes())
+            .saturating_add(self.history.estimated_bytes())
+            .saturating_add(self.search.estimated_bytes())
     }
 
     pub fn transaction_failure(&self) -> Option<&str> {
@@ -295,7 +306,10 @@ impl EditorState {
     }
 
     pub fn search_sheet_data(&self, sheet_index: usize) -> Option<crate::types::SheetData> {
-        self.file_data().sheets.get(sheet_index).cloned()
+        self.file_data()
+            .sheets
+            .get(sheet_index)
+            .map(crate::types::SheetData::search_snapshot)
     }
 
     pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
@@ -565,12 +579,15 @@ impl SearchInvalidation for crate::ops::AppliedOperation {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::Cursor;
 
     use super::*;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
     use crate::ops::EditorCommand;
-    use crate::types::{CellValue, SetCellRequest};
+    use crate::types::{
+        CellFormatProjection, CellValue, ReadOnlyRichProjection, SetCellRequest, SheetRegion,
+    };
     use serde_json::Value;
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
@@ -759,6 +776,58 @@ mod tests {
             state.redo().expect("redo structure").expect("redo result");
             assert_incremental_content_hash_is_current(&state);
         }
+    }
+
+    #[test]
+    fn structure_edits_refresh_region_metadata_index_for_undo_and_redo() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "metadata.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::Null], vec![CellValue::Null]],
+                    rich: ReadOnlyRichProjection {
+                        cell_formats: HashMap::from([(
+                            "A2".to_string(),
+                            CellFormatProjection {
+                                number_format: Some("0%".to_string()),
+                                style_id: None,
+                            },
+                        )]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+
+        state
+            .execute(EditorCommand::AddRow {
+                sheet_index: 0,
+                row_index: 0,
+            })
+            .expect("add row");
+        assert!(region_formats(&state, 2).contains_key("A3"));
+
+        state.undo().expect("undo").expect("undo result");
+        assert!(region_formats(&state, 1).contains_key("A2"));
+
+        state.redo().expect("redo").expect("redo result");
+        assert!(region_formats(&state, 2).contains_key("A3"));
+    }
+
+    fn region_formats(state: &EditorState, row: usize) -> HashMap<String, CellFormatProjection> {
+        state
+            .region_metadata(&SheetRegion {
+                sheet_index: 0,
+                row_start: row,
+                row_end: row + 1,
+                col_start: 0,
+                col_end: 1,
+            })
+            .cell_formats
     }
 
     #[test]

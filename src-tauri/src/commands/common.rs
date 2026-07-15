@@ -1,6 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use super::{CommandU64, mutation_replay};
+use super::{CommandU64, blocking, mutation_replay};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -20,10 +20,10 @@ use tauri::AppHandle;
 /// Desktop: 后端选择文件路径并授权随后读取。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn pick_open_file_desktop(
+pub async fn pick_open_file_desktop(
     app: AppHandle,
 ) -> Result<Option<desktop::DesktopOpenFileInfo>, AppError> {
-    desktop::pick_open_file(&app)
+    blocking::run(move || desktop::pick_open_file(&app)).await
 }
 
 /// Desktop: 释放已选择但没有被读取的文件路径授权。
@@ -36,28 +36,28 @@ pub fn discard_open_file_selection_desktop(path: String) {
 /// Desktop: 从后端已授权路径读取并解析文件。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn prepare_open_file_desktop(path: String) -> Result<PreparedOpenDocument, AppError> {
-    desktop::prepare_file(&path)
+pub async fn prepare_open_file_desktop(path: String) -> Result<PreparedOpenDocument, AppError> {
+    blocking::run(move || desktop::prepare_file(&path)).await
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn prepare_recent_file_desktop(
+pub async fn prepare_recent_file_desktop(
     app: AppHandle,
     id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
-    desktop::prepare_recent_file(&app, &id)
+    blocking::run(move || desktop::prepare_recent_file(&app, &id)).await
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn pick_save_location_desktop(
+pub async fn pick_save_location_desktop(
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    desktop::pick_save_location(&app, &default_name)
+    blocking::run(move || desktop::pick_save_location(&app, &default_name)).await
 }
 
 /// Desktop: 释放未使用的保存路径授权。
@@ -70,29 +70,32 @@ pub fn discard_save_location_desktop(path: String) {
 /// Desktop: 生成文件字节并写入路径
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn save_file_desktop(
+pub async fn save_file_desktop(
     path: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    desktop::save_file(&path, document_id.get(), base_revision.get())
+    blocking::run(move || desktop::save_file(&path, document_id.get(), base_revision.get())).await
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn export_file_desktop(
+pub async fn export_file_desktop(
     app: AppHandle,
     default_name: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
-    desktop::export_file(&app, &default_name, document_id.get(), base_revision.get())
+    blocking::run(move || {
+        desktop::export_file(&app, &default_name, document_id.get(), base_revision.get())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn prepare_new_file(file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
-    document::prepare_new_file(file_data)
+pub async fn prepare_new_file(file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
+    blocking::run(move || document::prepare_new_file(file_data)).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -499,7 +502,7 @@ pub fn delete_sheet(
 // ==================== Search Operations ====================
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn search(
+pub async fn search(
     document_id: CommandU64,
     base_revision: CommandU64,
     query: String,
@@ -507,14 +510,17 @@ pub fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
     let registry = active_document_store();
-    search_ops::do_search(
-        &registry,
-        document_id.get(),
-        base_revision.get(),
-        &query,
-        scope,
-        current_sheet_index,
-    )
+    blocking::run(move || {
+        search_ops::do_search(
+            &registry,
+            document_id.get(),
+            base_revision.get(),
+            &query,
+            scope,
+            current_sheet_index,
+        )
+    })
+    .await
 }
 
 // ==================== Recent Files Operations ====================

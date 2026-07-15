@@ -81,6 +81,18 @@ impl SearchService {
         }
     }
 
+    pub fn rebuild_sheet_index(
+        &self,
+        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        document_id: u64,
+        sheet_index: usize,
+    ) {
+        let Some(stamp) = current_search_stamp(registry, document_id, sheet_index) else {
+            return;
+        };
+        self.enqueue_rebuild(document_id, sheet_index, stamp, registry);
+    }
+
     fn enqueue_cell_update(
         &self,
         document_id: u64,
@@ -677,6 +689,18 @@ mod tests {
                 workers_available: AtomicBool::new(false),
             }),
         }
+    }
+
+    #[test]
+    fn on_demand_rebuild_enqueues_only_the_requested_sheet() {
+        let (registry, document_id) = make_registry(vec![vec![s("needle")]]);
+        let service = isolated_search_service();
+
+        service.rebuild_sheet_index(&registry, document_id, 0);
+
+        let state = service.scheduler.state.lock().expect("scheduler state");
+        assert_eq!(state.stats.queued_jobs, 1);
+        assert!(state.pending.contains_key(&(document_id, 0)));
     }
 
     fn rows_of(

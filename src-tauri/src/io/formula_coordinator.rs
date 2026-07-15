@@ -43,6 +43,13 @@ impl FormulaCoordinator {
         }
     }
 
+    pub(crate) fn estimated_bytes(&self, projection: &FileData) -> usize {
+        std::mem::size_of::<Self>()
+            + self.runtime.estimated_bytes(projection)
+            + self.ast_service.estimated_bytes()
+            + formula_status_estimated_bytes(&self.status)
+    }
+
     pub(crate) fn status(&self) -> FormulaStatus {
         self.status.clone()
     }
@@ -280,6 +287,22 @@ impl FormulaCoordinator {
             .skipped_formula_reference_rewrites;
         self.pending_structure_diagnostics = StructurePatchDiagnostics::default();
     }
+}
+
+fn formula_status_estimated_bytes(status: &FormulaStatus) -> usize {
+    let (message_bytes, diagnostics) = match status {
+        FormulaStatus::Ready { diagnostics } => (0, diagnostics),
+        FormulaStatus::Degraded {
+            message,
+            diagnostics,
+        } => (message.capacity(), diagnostics),
+    };
+    message_bytes
+        + diagnostics
+            .issues
+            .iter()
+            .map(|issue| std::mem::size_of_val(issue) + issue.message.capacity())
+            .sum::<usize>()
 }
 
 struct FormulaStructureTarget<'a> {

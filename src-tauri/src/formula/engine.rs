@@ -49,6 +49,26 @@ impl FormulaRuntime {
         }
     }
 
+    pub fn estimated_bytes(&self, file_data: &FileData) -> usize {
+        let workbook_cells = file_data
+            .sheets
+            .iter()
+            .map(|sheet| {
+                sheet.name.capacity()
+                    + sheet
+                        .rows
+                        .iter()
+                        .flat_map(|row| row.iter())
+                        .map(estimated_formula_cell_bytes)
+                        .sum::<usize>()
+            })
+            .sum::<usize>();
+        std::mem::size_of::<Self>()
+            + workbook_cells
+            + self.registered_formulas.capacity() * std::mem::size_of::<FormulaCellRef>()
+            + self.dependency_index.estimated_bytes()
+    }
+
     pub fn rebuild(
         &mut self,
         file_data: &mut FileData,
@@ -382,6 +402,23 @@ impl FormulaRuntime {
         }
 
         Ok(changes)
+    }
+}
+
+fn estimated_formula_cell_bytes(cell: &CellValue) -> usize {
+    96 + match cell {
+        CellValue::Null | CellValue::Boolean(_) => 0,
+        CellValue::String(value) => value.capacity(),
+        CellValue::Number(value) => value.to_string().len(),
+        CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } => {
+            formula.capacity()
+                + estimated_formula_cell_bytes(cached_value)
+                + error.as_ref().map_or(0, String::capacity)
+        }
     }
 }
 

@@ -2,10 +2,12 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
 use crate::state::search_index::{SearchCellText, SearchQueryPlan, collect_sheet_search_text};
+use crate::state::search_service::SearchService;
 use crate::state::state::ActiveDocumentStore;
 use crate::types::{SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
+const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -52,6 +54,7 @@ pub fn do_search(
 
     let mut results = Vec::new();
     let mut used_scan_fallback = false;
+    let mut on_demand_rebuilds = Vec::new();
 
     for sheet_index in sheet_indexes {
         if results.len() >= SEARCH_RESULT_LIMIT {
@@ -95,6 +98,9 @@ pub fn do_search(
             None => {
                 let Some(sheet) = input.sheet else { continue };
                 used_scan_fallback = true;
+                if on_demand_rebuilds.len() < MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH {
+                    on_demand_rebuilds.push(input.sheet_index);
+                }
                 let cells = collect_sheet_search_text(&sheet);
                 for cell in scan_sheet(&cells, &plan, remaining) {
                     results.push(SearchResult {
@@ -112,6 +118,10 @@ pub fn do_search(
 
     if used_scan_fallback {
         eprintln!("Search used synchronous scan fallback while index was stale or unavailable");
+    }
+    let search_service = SearchService::global();
+    for sheet_index in on_demand_rebuilds {
+        search_service.rebuild_sheet_index(registry, document_id, sheet_index);
     }
 
     Ok(results)

@@ -122,6 +122,13 @@ impl HistoryStore {
         }
     }
 
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.undo_estimated_bytes)
+            .saturating_add(self.redo_estimated_bytes)
+            .saturating_add(self.truncated_reason.as_ref().map_or(0, String::capacity))
+    }
+
     #[cfg(test)]
     pub(crate) fn undo_len(&self) -> usize {
         self.undo_stack.len()

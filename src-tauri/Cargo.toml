@@ -34,6 +34,7 @@ formualizer-workbook = { version = "0.7.0", default-features = false, features =
 formualizer-parse = "2.0.0"
 csv = "1.4"
 thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
 tantivy = "0.26.1"
 tantivy-jieba = "0.20.0"
 image = "0.25"

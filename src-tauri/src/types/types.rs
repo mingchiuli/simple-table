@@ -312,6 +312,21 @@ impl Serialize for SheetData {
 }
 
 impl SheetData {
+    pub(crate) fn search_snapshot(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            rows: self.rows.clone(),
+            merges: Vec::new(),
+            column_widths: None,
+            row_heights: None,
+            rich: ReadOnlyRichProjection {
+                cell_formats: self.rich.cell_formats.clone(),
+                cell_styles: self.rich.cell_styles.clone(),
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn extent(&self) -> SheetExtent {
         let value_row_count = self.rows.len();
         let value_column_count = self.rows.iter().map(Vec::len).max().unwrap_or(0);
@@ -562,6 +577,9 @@ pub struct SheetRegionProjectionResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merge_anchor_cells: Vec<SheetCellChange>,
     pub metadata: SheetRegionMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub estimated_bytes: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -843,17 +861,14 @@ pub struct SheetCellChange {
     pub row: usize,
     pub col: usize,
     pub value: CellValue,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[serde(default, skip)]
+    #[ts(skip)]
     pub display: Option<String>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[serde(default, skip)]
+    #[ts(skip)]
     pub format: Option<CellFormatProjection>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[serde(default, skip)]
+    #[ts(skip)]
     pub style: Option<CellStyleProjection>,
     #[serde(default)]
     #[ts(skip)]
@@ -893,18 +908,7 @@ impl Serialize for SheetCellChange {
     where
         S: serde::Serializer,
     {
-        let mut len = 4;
-        if self.display.is_some() {
-            len += 1;
-        }
-        if self.format.is_some() {
-            len += 1;
-        }
-        if self.style.is_some() {
-            len += 1;
-        }
-
-        let mut state = serializer.serialize_struct("SheetCellChange", len)?;
+        let mut state = serializer.serialize_struct("SheetCellChange", 4)?;
         state.serialize_field("sheetIndex", &self.sheet_index)?;
         state.serialize_field("row", &self.row)?;
         state.serialize_field("col", &self.col)?;
@@ -912,15 +916,6 @@ impl Serialize for SheetCellChange {
             "value",
             &CellValueProjection::new(&self.value, self.display_format.clone()),
         )?;
-        if let Some(display) = &self.display {
-            state.serialize_field("display", display)?;
-        }
-        if let Some(format) = &self.format {
-            state.serialize_field("format", format)?;
-        }
-        if let Some(style) = &self.style {
-            state.serialize_field("style", style)?;
-        }
         state.end()
     }
 }
@@ -1274,5 +1269,47 @@ mod tests {
         assert_eq!(json["rows"][0][0]["display"], "40%");
         assert_eq!(json["rows"][0][0]["raw"], 0.4);
         assert_eq!(json["rows"][0][0]["format"]["numberFormat"], "0%");
+    }
+
+    #[test]
+    fn search_snapshot_retains_display_metadata_but_drops_unrelated_rich_state() {
+        let sheet = SheetData {
+            name: "Sheet1".to_string(),
+            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
+            merges: vec![MergeRange {
+                start_row: 0,
+                start_col: 0,
+                end_row: 1,
+                end_col: 1,
+            }],
+            column_widths: Some(HashMap::from([(0, 120)])),
+            rich: ReadOnlyRichProjection {
+                cell_formats: HashMap::from([(
+                    "A1".to_string(),
+                    CellFormatProjection {
+                        number_format: Some("0%".to_string()),
+                        style_id: None,
+                    },
+                )]),
+                hyperlinks: HashMap::from([(
+                    "A1".to_string(),
+                    HyperlinkProjection {
+                        url: "https://example.com".to_string(),
+                        tooltip: None,
+                        location: false,
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let snapshot = sheet.search_snapshot();
+
+        assert_eq!(snapshot.cell_display_text(0, 0), "40%");
+        assert!(snapshot.merges.is_empty());
+        assert!(snapshot.column_widths.is_none());
+        assert!(snapshot.rich.hyperlinks.is_empty());
+        assert!(snapshot.rich.cell_formats.contains_key("A1"));
     }
 }
