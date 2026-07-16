@@ -146,7 +146,7 @@ export function useEditorCommands({
     if (!fileData.value || isEditorCommandBlocked()) return;
     const requestId = searchSessionStore.beginSearch(query);
     try {
-      const results = await commandBus.runConsistentRead({
+      const response = await commandBus.runConsistentRead({
         flushPendingChanges: flushPendingCellChanges,
         lockInteraction: true,
         action: (context) => api.search(
@@ -156,8 +156,8 @@ export function useEditorCommands({
           scope === "currentSheet" ? currentSheetIndex.value : null
         ),
       });
-      if (results) {
-        searchSessionStore.applySearchResults(requestId, results);
+      if (response) {
+        searchSessionStore.applySearchResults(requestId, response);
       }
     } catch (error) {
       ElMessage.error(`Search failed: ${appErrorMessage(error)}`);

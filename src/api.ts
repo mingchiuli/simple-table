@@ -2,7 +2,7 @@ import { invokeCommand } from "@/tauriInvoke";
 import type {
   RecentFile,
   SetCellRequest,
-  SearchResult,
+  SearchResponse,
   EditorMutationResponse,
   EditorSessionInfo,
   DocumentCapabilities,
@@ -202,7 +202,7 @@ export async function search(
   query: string,
   scope: SearchScope,
   currentSheetIndex: number | null
-): Promise<SearchResult[]> {
+): Promise<SearchResponse> {
   return invokeCommand("search", { ...context, query, scope, currentSheetIndex });
 }
 

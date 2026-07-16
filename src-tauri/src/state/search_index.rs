@@ -483,6 +483,15 @@ impl SearchQueryPlan {
             .all(|query_term| text_terms.contains(query_term))
     }
 
+    pub(crate) fn first_match_byte(&self, text: &str) -> Option<usize> {
+        let lowercase = text.to_lowercase();
+        std::iter::once(&self.literal)
+            .chain(self.terms.iter())
+            .filter_map(|term| lowercase.find(term))
+            .filter(|index| *index <= text.len() && text.is_char_boundary(*index))
+            .min()
+    }
+
     fn terms(&self) -> &[String] {
         &self.terms
     }

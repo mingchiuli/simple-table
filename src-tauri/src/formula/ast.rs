@@ -2,7 +2,14 @@ use std::collections::HashMap;
 
 use formualizer_parse::parser::{ASTNode, ASTNodeType, BatchParser, CollectPolicy, ReferenceType};
 
-const MAX_AST_CACHE_ENTRIES: usize = 4096;
+pub(crate) const MAX_FORMULA_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_FORMULA_NESTING_DEPTH: usize = 128;
+pub(crate) const MAX_FORMULA_AST_NODES: usize = 4_096;
+pub(crate) const MAX_FORMULA_REFERENCES: usize = 1_024;
+const MAX_AST_CACHE_ENTRIES: usize = 4_096;
+const MAX_AST_CACHE_BYTES: usize = 8 * 1024 * 1024;
+const AST_NODE_ESTIMATED_BYTES: usize = 128;
+const MAX_FORMULA_ERROR_BYTES: usize = 1_024;
 
 #[derive(Clone)]
 enum FormulaParseEntry {
@@ -10,14 +17,29 @@ enum FormulaParseEntry {
     Error(String),
 }
 
+struct CachedFormulaParse {
+    value: FormulaParseEntry,
+    estimated_bytes: usize,
+    last_used: u64,
+}
+
 pub(crate) struct FormulaAstService {
     parser: BatchParser,
-    parsed_cache: HashMap<String, FormulaParseEntry>,
+    parsed_cache: HashMap<String, CachedFormulaParse>,
+    cache_estimated_bytes: usize,
+    cache_clock: u64,
 }
 
 pub(crate) struct ParsedFormula {
     source: FormulaSource,
     ast: ASTNode,
+    reference_count: usize,
+}
+
+#[derive(Clone, Copy)]
+struct AstMetrics {
+    node_count: usize,
+    reference_count: usize,
 }
 
 #[derive(Clone)]
@@ -47,55 +69,111 @@ impl FormulaAstService {
                 .with_volatility_classifier(is_volatile_function)
                 .build(),
             parsed_cache: HashMap::new(),
+            cache_estimated_bytes: 0,
+            cache_clock: 0,
         }
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self
-                .parsed_cache
-                .iter()
-                .map(|(formula, entry)| {
-                    formula.capacity()
-                        + match entry {
-                            FormulaParseEntry::Parsed(_) => 512,
-                            FormulaParseEntry::Error(error) => error.capacity(),
-                        }
-                })
-                .sum::<usize>()
+        std::mem::size_of::<Self>().saturating_add(self.cache_estimated_bytes)
     }
 
     pub(crate) fn parse(&mut self, formula: &str) -> Result<ParsedFormula, String> {
+        validate_formula_source(formula)?;
         let source = FormulaSource::new(formula);
         let ast = self.parse_ast(source.parsed())?;
-        Ok(ParsedFormula { source, ast })
+        let metrics = ast_metrics(&ast)?;
+        Ok(ParsedFormula {
+            source,
+            ast,
+            reference_count: metrics.reference_count,
+        })
     }
 
     fn parse_ast(&mut self, formula: &str) -> Result<ASTNode, String> {
-        if let Some(entry) = self.parsed_cache.get(formula) {
-            return match entry {
+        let clock = self.next_cache_clock();
+        if let Some(entry) = self.parsed_cache.get_mut(formula) {
+            entry.last_used = clock;
+            return match &entry.value {
                 FormulaParseEntry::Parsed(ast) => Ok(ast.clone()),
                 FormulaParseEntry::Error(error) => Err(error.clone()),
             };
         }
 
-        if self.parsed_cache.len() >= MAX_AST_CACHE_ENTRIES {
-            self.parsed_cache.clear();
-        }
-
         match self.parser.parse(formula) {
             Ok(ast) => {
-                self.parsed_cache
-                    .insert(formula.to_string(), FormulaParseEntry::Parsed(ast.clone()));
+                let metrics = ast_metrics(&ast)?;
+                self.cache_parse_result(
+                    formula,
+                    FormulaParseEntry::Parsed(ast.clone()),
+                    formula.len().saturating_mul(2).saturating_add(
+                        metrics.node_count.saturating_mul(AST_NODE_ESTIMATED_BYTES),
+                    ),
+                    clock,
+                );
                 Ok(ast)
             }
             Err(error) => {
-                let error = error.to_string();
-                self.parsed_cache
-                    .insert(formula.to_string(), FormulaParseEntry::Error(error.clone()));
+                let error = truncate_utf8(&error.to_string(), MAX_FORMULA_ERROR_BYTES);
+                self.cache_parse_result(
+                    formula,
+                    FormulaParseEntry::Error(error.clone()),
+                    formula.len().saturating_mul(2).saturating_add(error.len()),
+                    clock,
+                );
                 Err(error)
             }
         }
+    }
+
+    fn cache_parse_result(
+        &mut self,
+        formula: &str,
+        value: FormulaParseEntry,
+        estimated_bytes: usize,
+        last_used: u64,
+    ) {
+        let estimated_bytes = estimated_bytes.max(1);
+        if estimated_bytes > MAX_AST_CACHE_BYTES {
+            return;
+        }
+        while self.parsed_cache.len() >= MAX_AST_CACHE_ENTRIES
+            || self.cache_estimated_bytes.saturating_add(estimated_bytes) > MAX_AST_CACHE_BYTES
+        {
+            let Some(oldest) = self
+                .parsed_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(formula, _)| formula.clone())
+            else {
+                break;
+            };
+            if let Some(removed) = self.parsed_cache.remove(&oldest) {
+                self.cache_estimated_bytes = self
+                    .cache_estimated_bytes
+                    .saturating_sub(removed.estimated_bytes);
+            }
+        }
+        self.parsed_cache.insert(
+            formula.to_string(),
+            CachedFormulaParse {
+                value,
+                estimated_bytes,
+                last_used,
+            },
+        );
+        self.cache_estimated_bytes = self.cache_estimated_bytes.saturating_add(estimated_bytes);
+    }
+
+    fn next_cache_clock(&mut self) -> u64 {
+        let Some(next) = self.cache_clock.checked_add(1) else {
+            self.parsed_cache.clear();
+            self.cache_estimated_bytes = 0;
+            self.cache_clock = 1;
+            return self.cache_clock;
+        };
+        self.cache_clock = next;
+        next
     }
 }
 
@@ -115,9 +193,104 @@ impl ParsedFormula {
             .collect()
     }
 
+    pub(crate) fn reference_count(&self) -> usize {
+        self.reference_count
+    }
+
     pub(crate) fn collect_reference_nodes<'a>(&'a self, nodes: &mut Vec<&'a ASTNode>) {
         collect_reference_nodes(&self.ast, nodes);
     }
+}
+
+fn validate_formula_source(formula: &str) -> Result<(), String> {
+    if formula.len() > MAX_FORMULA_BYTES {
+        return Err(format!(
+            "formula requires {} bytes; the maximum is {MAX_FORMULA_BYTES} bytes",
+            formula.len()
+        ));
+    }
+
+    let mut nesting_depth = 0usize;
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut chars = formula.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '"' if !in_single_quote => {
+                if in_double_quote && chars.peek() == Some(&'"') {
+                    chars.next();
+                } else {
+                    in_double_quote = !in_double_quote;
+                }
+            }
+            '\'' if !in_double_quote => {
+                if in_single_quote && chars.peek() == Some(&'\'') {
+                    chars.next();
+                } else {
+                    in_single_quote = !in_single_quote;
+                }
+            }
+            '(' | '{' if !in_double_quote && !in_single_quote => {
+                nesting_depth = nesting_depth.saturating_add(1);
+                if nesting_depth > MAX_FORMULA_NESTING_DEPTH {
+                    return Err(format!(
+                        "formula nesting exceeds the maximum depth of {MAX_FORMULA_NESTING_DEPTH}"
+                    ));
+                }
+            }
+            ')' | '}' if !in_double_quote && !in_single_quote => {
+                nesting_depth = nesting_depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn ast_metrics(ast: &ASTNode) -> Result<AstMetrics, String> {
+    let mut node_count = 0usize;
+    let mut reference_count = 0usize;
+    let mut pending = vec![ast];
+    while let Some(node) = pending.pop() {
+        node_count = node_count.saturating_add(1);
+        if node_count > MAX_FORMULA_AST_NODES {
+            return Err(format!(
+                "formula contains more than {MAX_FORMULA_AST_NODES} syntax nodes"
+            ));
+        }
+        match &node.node_type {
+            ASTNodeType::Reference { .. } => {
+                reference_count = reference_count.saturating_add(1);
+            }
+            ASTNodeType::UnaryOp { expr, .. } => pending.push(expr),
+            ASTNodeType::BinaryOp { left, right, .. } => {
+                pending.push(left);
+                pending.push(right);
+            }
+            ASTNodeType::Function { args, .. } => pending.extend(args.iter()),
+            ASTNodeType::Call { callee, args } => {
+                pending.push(callee);
+                pending.extend(args.iter());
+            }
+            ASTNodeType::Array(rows) => pending.extend(rows.iter().flat_map(|row| row.iter())),
+            ASTNodeType::Literal(_) => {}
+        }
+    }
+    Ok(AstMetrics {
+        node_count,
+        reference_count,
+    })
+}
+
+fn truncate_utf8(value: &str, maximum_bytes: usize) -> String {
+    if value.len() <= maximum_bytes {
+        return value.to_string();
+    }
+    let mut end = maximum_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
 }
 
 impl FormulaSource {
@@ -275,5 +448,40 @@ mod tests {
                 .expect("parse formula")
                 .contains_volatile()
         );
+    }
+
+    #[test]
+    fn rejects_formula_bytes_and_nesting_before_parsing() {
+        let mut service = FormulaAstService::new();
+
+        let byte_error = match service.parse(&format!("={}", "x".repeat(MAX_FORMULA_BYTES))) {
+            Ok(_) => panic!("oversized formula must fail"),
+            Err(error) => error,
+        };
+        assert!(byte_error.contains("maximum"));
+
+        let nested = format!(
+            "={}1{}",
+            "(".repeat(MAX_FORMULA_NESTING_DEPTH + 1),
+            ")".repeat(MAX_FORMULA_NESTING_DEPTH + 1)
+        );
+        let depth_error = match service.parse(&nested) {
+            Ok(_) => panic!("deeply nested formula must fail"),
+            Err(error) => error,
+        };
+        assert!(depth_error.contains("nesting"));
+        assert!(service.parsed_cache.is_empty());
+    }
+
+    #[test]
+    fn ast_cache_remains_within_its_byte_budget() {
+        let mut service = FormulaAstService::new();
+        let payload = "x".repeat(MAX_FORMULA_BYTES / 2);
+        for index in 0..(MAX_AST_CACHE_BYTES / payload.len() + 16) {
+            let _ = service.parse(&format!("=\"{index}-{payload}\""));
+        }
+
+        assert!(service.cache_estimated_bytes <= MAX_AST_CACHE_BYTES);
+        assert!(service.parsed_cache.len() < MAX_AST_CACHE_ENTRIES);
     }
 }

@@ -6,13 +6,16 @@ use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::index::{
-    FormulaDependencyIndex, build_dependency_index, unregistered_formula_issues,
+    FormulaDependencyIndex, build_dependency_index, unregistered_formula_diagnostics,
 };
 use crate::formula::registry::{
     FormulaCellRegistration, apply_cell_changes, register_workbook_cells, set_workbook_cell,
 };
 use crate::formula::value_codec::{literal_to_cell, to_formula_index};
 use crate::types::{CellValue, FileData, FormulaDiagnostics, SheetCellChange};
+
+const MAX_FORMULA_RUNTIME_SOURCE_BYTES: usize = 64 * 1024 * 1024;
+const FORMULA_RUNTIME_ENTRY_ESTIMATED_BYTES: usize = 512;
 
 pub struct FormulaRuntime {
     workbook: Workbook,
@@ -109,6 +112,7 @@ impl FormulaRuntime {
         ast_service: &mut FormulaAstService,
         policy: FormulaRebuildPolicy,
     ) -> Result<FormulaRebuildResult, AppError> {
+        validate_formula_runtime_source(file_data)?;
         let mut workbook = Workbook::new_with_mode(WorkbookMode::Ephemeral);
         for sheet in &file_data.sheets {
             workbook
@@ -298,16 +302,18 @@ impl FormulaRuntime {
     }
 
     fn refresh_formula_diagnostics(&mut self, file_data: &FileData) {
-        let invalid_issues = unregistered_formula_issues(file_data, &self.registered_formulas);
-        self.dependency_index.diagnostics.invalid_formula_count = invalid_issues.len();
+        let (invalid_formula_count, invalid_issues) =
+            unregistered_formula_diagnostics(file_data, &self.registered_formulas);
+        self.dependency_index.diagnostics.invalid_formula_count = invalid_formula_count;
         self.dependency_index
             .diagnostics
             .issues
             .retain(|issue| !matches!(issue.kind, crate::types::FormulaIssueKind::InvalidFormula));
+        let remaining = 100usize.saturating_sub(self.dependency_index.diagnostics.issues.len());
         self.dependency_index
             .diagnostics
             .issues
-            .extend(invalid_issues);
+            .extend(invalid_issues.into_iter().take(remaining));
     }
 
     fn impacted_formula_cells(&self, changed_cell: &FormulaCellRef) -> HashSet<FormulaCellRef> {
@@ -422,6 +428,36 @@ fn estimated_formula_cell_bytes(cell: &CellValue) -> usize {
     }
 }
 
+fn validate_formula_runtime_source(file_data: &FileData) -> Result<(), AppError> {
+    validate_formula_runtime_source_with_limit(file_data, MAX_FORMULA_RUNTIME_SOURCE_BYTES)
+}
+
+fn validate_formula_runtime_source_with_limit(
+    file_data: &FileData,
+    maximum_bytes: usize,
+) -> Result<(), AppError> {
+    let estimated_bytes = file_data
+        .sheets
+        .iter()
+        .flat_map(|sheet| sheet.rows.iter())
+        .flat_map(|row| row.iter())
+        .filter_map(|cell| match cell {
+            CellValue::Formula { formula, .. } => Some(
+                formula
+                    .len()
+                    .saturating_add(FORMULA_RUNTIME_ENTRY_ESTIMATED_BYTES),
+            ),
+            _ => None,
+        })
+        .fold(0usize, usize::saturating_add);
+    if estimated_bytes > maximum_bytes {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "formula runtime source requires an estimated {estimated_bytes} bytes; the maximum is {maximum_bytes} bytes"
+        )));
+    }
+    Ok(())
+}
+
 fn formula_sheet_names(file_data: &FileData) -> Vec<String> {
     file_data
         .sheets
@@ -441,6 +477,24 @@ mod tests {
         let mut ast_service = FormulaAstService::new();
         let runtime = FormulaRuntime::new(file_data, &mut ast_service).expect("formula runtime");
         (runtime, ast_service)
+    }
+
+    #[test]
+    fn formula_runtime_source_is_rejected_before_workbook_construction() {
+        let file_data = FileData {
+            path: String::new(),
+            file_name: "formula.xlsx".to_string(),
+            sheets: vec![SheetData {
+                name: "Sheet1".to_string(),
+                rows: vec![vec![CellValue::formula("=A1+1", CellValue::Null)]],
+                ..Default::default()
+            }],
+        };
+
+        let error = validate_formula_runtime_source_with_limit(&file_data, 1)
+            .expect_err("formula source budget");
+
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
     }
 
     #[test]

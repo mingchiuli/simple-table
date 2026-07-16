@@ -14,6 +14,14 @@ pub struct SearchResult {
     pub cell_position: String,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+    pub truncated: bool,
+}
+
 /// 搜索范围
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]

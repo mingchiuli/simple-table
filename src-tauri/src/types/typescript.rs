@@ -14,8 +14,8 @@ use crate::types::{
     FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan,
     OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch,
     RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse,
-    ScalarCellValue, SearchResult, SearchScope, SetCellRequest, SheetCapabilities, SheetData,
-    SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
+    ScalarCellValue, SearchResponse, SearchResult, SearchScope, SetCellRequest, SheetCapabilities,
+    SheetData, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
     SheetLayoutProjection, SheetLayoutUpdate, SheetManifest, SheetRegion, SheetRegionMetadata,
     SheetRegionProjectionResponse, SheetsReplacedPatch, SpreadsheetFormatOptions,
     WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
@@ -60,6 +60,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<crate::types::SheetCellChange>(&mut output, &cfg);
     push_decl::<SetCellRequest>(&mut output, &cfg);
     push_decl::<SearchResult>(&mut output, &cfg);
+    push_decl::<SearchResponse>(&mut output, &cfg);
     push_decl::<SearchScope>(&mut output, &cfg);
     push_decl::<StorageType>(&mut output, &cfg);
     push_decl::<RecentFile>(&mut output, &cfg);

@@ -81,6 +81,8 @@ export type SetCellRequest = { sheetIndex: number, row: number, col: number, tex
 
 export type SearchResult = { sheetIndex: number, sheetName: string, row: number, col: number, value: string, cellPosition: string, };
 
+export type SearchResponse = { results: Array<SearchResult>, truncated: boolean, };
+
 export type SearchScope = "currentSheet" | "allSheets";
 
 export type StorageType = "mobileSandboxPath" | "desktopPath";
@@ -184,7 +186,7 @@ export type TauriCommandMap = {
   "set_row_height": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, rowIndex: number, height: number | null }, result: EditorMutationResponse },
   "add_sheet": { args: { documentId: U64String, baseRevision: U64String, commandId: string }, result: EditorMutationResponse },
   "delete_sheet": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number }, result: EditorMutationResponse },
-  "search": { args: { documentId: U64String, baseRevision: U64String, query: string, scope: SearchScope, currentSheetIndex: number | null }, result: Array<SearchResult> },
+  "search": { args: { documentId: U64String, baseRevision: U64String, query: string, scope: SearchScope, currentSheetIndex: number | null }, result: SearchResponse },
   "get_recent_files": { args: Record<string, never>, result: Array<RecentFile> },
   "remove_recent_file": { args: { id: string }, result: void },
   "add_recent_file_with_thumbnail": { args: { request: AddRecentFileRequest }, result: RecentFile },

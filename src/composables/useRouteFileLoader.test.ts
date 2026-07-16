@@ -127,6 +127,37 @@ describe("createRouteFileLoader", () => {
     expect(loadFileFromPath).toHaveBeenCalledTimes(1);
   });
 
+  it("retains only the latest route while a load is in flight", async () => {
+    let routeFilePath: string | null = "/tmp/first.xlsx";
+    const releaseFirst = deferred<boolean>();
+    const loadFileFromPath = vi.fn()
+      .mockImplementationOnce(() => releaseFirst.promise)
+      .mockResolvedValue(true);
+    const loader = createRouteFileLoader({
+      getRouteFilePath: () => routeFilePath,
+      getCurrentFilePath: () => null,
+      loadFileFromPath,
+      refreshEditorState: vi.fn(),
+      reportError: vi.fn(),
+    });
+
+    loader.enqueue(routeFilePath);
+    await flushPromises();
+    for (let index = 0; index < 10_000; index += 1) {
+      routeFilePath = `/tmp/queued-${index}.xlsx`;
+      loader.enqueue(routeFilePath);
+    }
+    await flushPromises();
+
+    expect(loadFileFromPath).toHaveBeenCalledTimes(1);
+
+    releaseFirst.resolve(false);
+    await flushPromises();
+
+    expect(loadFileFromPath).toHaveBeenCalledTimes(2);
+    expect(loadFileFromPath.mock.calls[1]?.[0]).toBe("/tmp/queued-9999.xlsx");
+  });
+
   it("does not cancel route file loading when route leave is rejected", async () => {
     const routeFileLoader = { cancel: vi.fn() };
     const closeCurrentDocument = vi.fn().mockResolvedValue(false);

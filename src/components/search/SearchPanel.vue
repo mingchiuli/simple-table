@@ -5,6 +5,7 @@ import type { SearchResult } from "@/types";
 const props = defineProps<{
   results: SearchResult[];
   query: string;
+  truncated?: boolean;
   disabled?: boolean;
 }>();
 
@@ -68,7 +69,7 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
 <template>
   <div v-if="props.results.length > 0" class="search-panel">
     <div class="search-panel-header">
-      <span>Found {{ props.results.length }} result(s)</span>
+      <span>Found {{ props.results.length }}{{ props.truncated ? "+" : "" }} result(s)</span>
       <el-button text @click="handleClear">
         <el-icon><Close /></el-icon>
       </el-button>

@@ -93,6 +93,17 @@ before it can replace an accepted draft.
 Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`.
 
+Formula parsing has a separate complexity boundary from ordinary cell text.
+Formula source is limited to 64 KiB, delimiter nesting to 128 levels, parsed
+syntax to 4,096 nodes, and precise dependency tracking to 1,024 references per
+formula. The AST cache has an 8 MiB byte budget, formula runtime source work is
+rejected before third-party workbook construction above an estimated 64 MiB,
+and the precise dependency index has a 32 MiB logical budget. Formulas whose
+dependencies exceed the precise-tracking limits remain registered but fall
+back to recalculation after every edit. Dependency removal uses reverse edges
+and batches range-bucket rebuilds once per mutation batch. Diagnostic counts
+remain complete while only 100 issue samples are retained internally.
+
 `DocumentCommandBus` owns interactive and background mutation sequencing,
 pending-edit flushes, response application, stale-projection recovery, and
 post-mutation callbacks. Components and feature composables should call it
@@ -198,6 +209,10 @@ entries per document.
 Search queries are limited to 4 KiB of UTF-8 text and 64 unique normalized
 terms before document access. Query construction uses set-based deduplication,
 and scan matching uses set membership rather than nested term comparisons.
+Search results contain at most 512 bytes of UTF-8 text around the match, and the
+complete serialized response is limited to 2 MiB as well as 1,000 results. The
+response reports whether either limit truncated the result set, so full cell
+text is never copied through IPC solely for list rendering.
 
 Pending search-index work has a separate scheduler budget because it lives
 outside `EditorState`: at most 256 pending Sheets, 4,096 incremental updates or
@@ -227,6 +242,11 @@ process permissions. Open and save registries are independently limited to 64
 entries, authorizations expire after 30 minutes, and repeated authorization
 refreshes the eviction order. Preparing or saving consumes the capability;
 canceling the picker flow revokes it explicitly.
+
+Frontend route-driven opening is a latest-only worker. At most one file load is
+active and one pending route is retained; a newer route cancels the active
+continuation and replaces the pending route instead of extending a Promise
+chain.
 
 Mobile imported selections and reserved save locations are likewise one-shot.
 Their registries are independently limited to 64 entries per purpose and expire

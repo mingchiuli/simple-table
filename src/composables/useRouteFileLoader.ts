@@ -17,6 +17,11 @@ type RouteFileLoaderCancellation = {
   cancel: () => void;
 };
 
+type PendingRouteLoad = {
+  filePath: string | null;
+  generation: number;
+};
+
 type RouteLeaveHandlerOptions = {
   routeFileLoader: RouteFileLoaderCancellation;
   hasActiveDocument: () => boolean;
@@ -32,50 +37,70 @@ export function createRouteFileLoader({
     console.error("Failed to handle route file load:", error);
   },
 }: RouteFileLoaderOptions) {
-  let routeLoadQueue = Promise.resolve();
   let lastLoadedRouteFilePath: string | null = null;
   let routeLoadGeneration = 0;
-  const cancelHandlersByGeneration = new Map<number, Set<() => void>>();
+  let pendingLoad: PendingRouteLoad | null = null;
+  let workerRunning = false;
+  let activeCancellation: { generation: number; handlers: Set<() => void> } | null = null;
 
   function enqueue(filePath: string | null) {
     cancelActiveLoads();
     const generation = ++routeLoadGeneration;
-    routeLoadQueue = routeLoadQueue
-      .catch(() => undefined)
-      .then(async () => {
-        if (!isCurrentRouteFileLoad(filePath, generation)) return;
-        if (!filePath) {
-          lastLoadedRouteFilePath = null;
-          await refreshEditorState();
-          return;
-        }
-        if (filePath === lastLoadedRouteFilePath && getCurrentFilePath() === filePath) {
-          return;
-        }
-        const guard = createContinuationGuard(filePath, generation);
-        try {
-          if (await loadFileFromPath(filePath, guard)) {
-            lastLoadedRouteFilePath = filePath;
-          }
-        } finally {
-          cancelHandlersByGeneration.delete(generation);
-        }
-      })
-      .catch(reportError);
+    pendingLoad = { filePath, generation };
+    void runWorker();
   }
 
   function cancel() {
     cancelActiveLoads();
     routeLoadGeneration += 1;
+    pendingLoad = null;
   }
 
   function cancelActiveLoads() {
-    const generations = Array.from(cancelHandlersByGeneration.keys());
-    for (const generation of generations) {
-      const handlers = cancelHandlersByGeneration.get(generation);
-      cancelHandlersByGeneration.delete(generation);
-      for (const handler of handlers ?? []) {
-        handler();
+    const cancellation = activeCancellation;
+    activeCancellation = null;
+    for (const handler of cancellation?.handlers ?? []) {
+      handler();
+    }
+  }
+
+  async function runWorker() {
+    if (workerRunning) return;
+    workerRunning = true;
+    try {
+      while (pendingLoad) {
+        const load = pendingLoad;
+        pendingLoad = null;
+        try {
+          await runLoad(load);
+        } catch (error) {
+          reportError(error);
+        }
+      }
+    } finally {
+      workerRunning = false;
+      if (pendingLoad) void runWorker();
+    }
+  }
+
+  async function runLoad({ filePath, generation }: PendingRouteLoad) {
+    if (!isCurrentRouteFileLoad(filePath, generation)) return;
+    if (!filePath) {
+      lastLoadedRouteFilePath = null;
+      await refreshEditorState();
+      return;
+    }
+    if (filePath === lastLoadedRouteFilePath && getCurrentFilePath() === filePath) {
+      return;
+    }
+    const guard = createContinuationGuard(filePath, generation);
+    try {
+      if ((await loadFileFromPath(filePath, guard)) && guard()) {
+        lastLoadedRouteFilePath = filePath;
+      }
+    } finally {
+      if (activeCancellation?.generation === generation) {
+        activeCancellation = null;
       }
     }
   }
@@ -90,7 +115,7 @@ export function createRouteFileLoader({
   ): RouteContinuationGuard {
     const guard = (() => isCurrentRouteFileLoad(filePath, generation)) as RouteContinuationGuard;
     const handlers = new Set<() => void>();
-    cancelHandlersByGeneration.set(generation, handlers);
+    activeCancellation = { generation, handlers };
     guard.onCancel = (handler) => {
       if (!guard()) {
         handler();

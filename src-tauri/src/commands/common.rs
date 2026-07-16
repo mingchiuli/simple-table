@@ -13,7 +13,7 @@ use crate::state::{active_document_store, state::EditorSessionInfo};
 use crate::types::SavedDocumentResponse;
 use crate::types::{
     DocumentCapabilities, EditorMutationResponse, NativeSavePlan, OpenDocumentResponse,
-    PreparedOpenDocument, SearchResult, SearchScope, SetCellRequest, SheetRegion,
+    PreparedOpenDocument, SearchResponse, SearchScope, SetCellRequest, SheetRegion,
     SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
@@ -712,7 +712,7 @@ pub async fn search(
     query: String,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
-) -> Result<Vec<SearchResult>, AppError> {
+) -> Result<SearchResponse, AppError> {
     let registry = active_document_store();
     blocking::run(move || {
         search_ops::do_search(

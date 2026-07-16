@@ -34,7 +34,7 @@ vi.mock("@/api", () => ({
   getEditorState: vi.fn(),
   getActiveDocument: vi.fn(),
   getMutationResult: vi.fn().mockResolvedValue(null),
-  search: vi.fn().mockResolvedValue([]),
+  search: vi.fn().mockResolvedValue({ results: [], truncated: false }),
 }));
 
 function text(value: string): CellValue {

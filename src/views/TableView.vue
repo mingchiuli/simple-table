@@ -37,6 +37,7 @@ const {
 } = storeToRefs(editorSelectionStore);
 const {
   searchResults,
+  searchResultsTruncated,
   searchQuery,
   isSearching,
 } = storeToRefs(searchSessionStore);
@@ -287,6 +288,7 @@ watch(() => route.query.file, () => {
       <SearchPanel
         class="search-panel-host"
         :results="searchResults"
+        :truncated="searchResultsTruncated"
         :query="searchQuery"
         :disabled="isEditorLocked"
         @result-click="handleSearchResultClick"

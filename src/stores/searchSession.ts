@@ -1,4 +1,4 @@
-import type { SearchResult } from "@/types";
+import type { SearchResponse, SearchResult } from "@/types";
 
 type SearchSessionRuntime = {
   requestId: number;
@@ -9,6 +9,7 @@ const searchSessionRuntimes = new WeakMap<object, SearchSessionRuntime>();
 export const useSearchSessionStore = defineStore("searchSession", {
   state: () => ({
     searchResults: [] as SearchResult[],
+    searchResultsTruncated: false,
     searchQuery: "",
     isSearching: false,
   }),
@@ -18,14 +19,16 @@ export const useSearchSessionStore = defineStore("searchSession", {
       runtime.requestId += 1;
       this.searchQuery = query;
       this.searchResults = [];
+      this.searchResultsTruncated = false;
       this.isSearching = true;
       return runtime.requestId;
     },
-    applySearchResults(requestId: number, results: SearchResult[]): boolean {
+    applySearchResults(requestId: number, response: SearchResponse): boolean {
       if (requestId !== runtimeFor(this).requestId) {
         return false;
       }
-      this.searchResults = results;
+      this.searchResults = response.results;
+      this.searchResultsTruncated = response.truncated;
       this.isSearching = false;
       return true;
     },
@@ -37,6 +40,7 @@ export const useSearchSessionStore = defineStore("searchSession", {
     clearSearch() {
       runtimeFor(this).requestId += 1;
       this.searchResults = [];
+      this.searchResultsTruncated = false;
       this.searchQuery = "";
       this.isSearching = false;
     },

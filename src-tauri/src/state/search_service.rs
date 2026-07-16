@@ -968,6 +968,7 @@ mod tests {
             Some(0),
         )
         .unwrap()
+        .results
         .into_iter()
         .map(|result| (result.row, result.col))
         .collect();
@@ -989,6 +990,7 @@ mod tests {
             Some(0),
         )
         .unwrap()
+        .results
         .into_iter()
         .map(|result| result.value)
         .collect()

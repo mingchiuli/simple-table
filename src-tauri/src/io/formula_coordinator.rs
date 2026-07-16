@@ -76,6 +76,9 @@ impl FormulaCoordinator {
             }
         };
         let mut limitations = Vec::new();
+        if matches!(&self.status, FormulaStatus::Degraded { .. }) {
+            limitations.push("degraded formula runtime".to_string());
+        }
         if diagnostics.invalid_formula_count > 0 {
             limitations.push("unparseable formulas".to_string());
         }
@@ -514,6 +517,24 @@ mod tests {
                 },
             ),
             vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn degraded_formula_runtime_blocks_formula_dependent_structure_edits() {
+        let mut projection = FileData {
+            path: String::new(),
+            file_name: "formulas.xlsx".to_string(),
+            sheets: vec![sheet("Sheet1", Vec::new())],
+        };
+        let mut coordinator = FormulaCoordinator::new(&mut projection);
+
+        coordinator.mark_degraded("formula budget exceeded".to_string());
+
+        assert!(
+            coordinator
+                .structure_formula_limitations()
+                .contains(&"degraded formula runtime".to_string())
         );
     }
 }

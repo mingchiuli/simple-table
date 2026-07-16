@@ -1,12 +1,15 @@
+use std::io::Write;
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
 use crate::state::search_index::{SearchCellText, SearchQueryPlan, collect_sheet_search_text};
 use crate::state::search_service::SearchService;
 use crate::state::state::ActiveDocumentStore;
-use crate::types::{SearchResult, SearchScope};
+use crate::types::{SearchResponse, SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
+pub(crate) const MAX_SEARCH_RESULT_SNIPPET_BYTES: usize = 512;
+pub(crate) const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
@@ -29,9 +32,9 @@ pub fn do_search(
     query: &str,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
-) -> Result<Vec<SearchResult>, AppError> {
+) -> Result<SearchResponse, AppError> {
     let Some(plan) = SearchQueryPlan::try_new(query)? else {
-        return Ok(vec![]);
+        return Ok(SearchResponse::default());
     };
 
     let sheet_indexes = {
@@ -52,12 +55,16 @@ pub fn do_search(
         }
     };
 
-    let mut results = Vec::new();
+    let mut results = SearchResultCollector::new()?;
     let mut used_scan_fallback = false;
     let mut on_demand_rebuilds = Vec::new();
 
     for sheet_index in sheet_indexes {
+        if results.is_truncated() {
+            break;
+        }
         if results.len() >= SEARCH_RESULT_LIMIT {
+            results.mark_truncated();
             break;
         }
         let input = {
@@ -85,14 +92,20 @@ pub fn do_search(
             Some(index) => {
                 let cells = index.search(&plan, remaining);
                 for cell in cells.into_iter().take(remaining) {
-                    results.push(SearchResult {
+                    if !results.try_push(SearchResult {
                         sheet_index: input.sheet_index,
                         sheet_name: input.sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
-                        value: cell.display_text,
+                        value: bounded_search_snippet(
+                            &cell.display_text,
+                            &plan,
+                            MAX_SEARCH_RESULT_SNIPPET_BYTES,
+                        ),
                         cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
-                    });
+                    })? {
+                        break;
+                    }
                 }
             }
             None => {
@@ -103,14 +116,20 @@ pub fn do_search(
                 }
                 let cells = collect_sheet_search_text(&sheet);
                 for cell in scan_sheet(&cells, &plan, remaining) {
-                    results.push(SearchResult {
+                    if !results.try_push(SearchResult {
                         sheet_index: input.sheet_index,
                         sheet_name: input.sheet_name.clone(),
                         row: cell.row,
                         col: cell.col,
-                        value: cell.display_text,
+                        value: bounded_search_snippet(
+                            &cell.display_text,
+                            &plan,
+                            MAX_SEARCH_RESULT_SNIPPET_BYTES,
+                        ),
                         cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
-                    });
+                    })? {
+                        break;
+                    }
                 }
             }
         }
@@ -124,7 +143,7 @@ pub fn do_search(
         search_service.rebuild_sheet_index(registry, document_id, sheet_index);
     }
 
-    Ok(results)
+    results.finish()
 }
 
 struct SearchInput {
@@ -132,6 +151,136 @@ struct SearchInput {
     sheet_name: String,
     index: Option<std::sync::Arc<crate::state::search_index::SearchSheetIndex>>,
     sheet: Option<crate::types::SheetData>,
+}
+
+struct SearchResultCollector {
+    results: Vec<SearchResult>,
+    serialized_bytes: usize,
+    truncated: bool,
+}
+
+impl SearchResultCollector {
+    fn new() -> Result<Self, AppError> {
+        Ok(Self {
+            results: Vec::new(),
+            serialized_bytes: serialized_json_bytes(&SearchResponse::default())?,
+            truncated: false,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.results.len()
+    }
+
+    fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+
+    fn mark_truncated(&mut self) {
+        self.truncated = true;
+    }
+
+    fn try_push(&mut self, result: SearchResult) -> Result<bool, AppError> {
+        if self.results.len() >= SEARCH_RESULT_LIMIT {
+            self.truncated = true;
+            return Ok(false);
+        }
+        let separator_bytes = usize::from(!self.results.is_empty());
+        let result_bytes = serialized_json_bytes(&result)?;
+        let projected_bytes = self
+            .serialized_bytes
+            .saturating_add(separator_bytes)
+            .saturating_add(result_bytes);
+        if projected_bytes > MAX_SEARCH_RESPONSE_BYTES {
+            self.truncated = true;
+            return Ok(false);
+        }
+        self.results.push(result);
+        self.serialized_bytes = projected_bytes;
+        Ok(true)
+    }
+
+    fn finish(mut self) -> Result<SearchResponse, AppError> {
+        if self.results.len() >= SEARCH_RESULT_LIMIT {
+            self.truncated = true;
+        }
+        let response = SearchResponse {
+            results: self.results,
+            truncated: self.truncated,
+        };
+        let actual_bytes = serialized_json_bytes(&response)?;
+        if actual_bytes > MAX_SEARCH_RESPONSE_BYTES {
+            return Err(AppError::Internal(format!(
+                "bounded search response requires {actual_bytes} bytes"
+            )));
+        }
+        Ok(response)
+    }
+}
+
+fn bounded_search_snippet(value: &str, plan: &SearchQueryPlan, maximum_bytes: usize) -> String {
+    if value.len() <= maximum_bytes {
+        return value.to_string();
+    }
+    if maximum_bytes <= 6 {
+        return truncate_utf8(value, maximum_bytes).to_string();
+    }
+
+    let content_bytes = maximum_bytes - 6;
+    let anchor = plan.first_match_byte(value).unwrap_or(0);
+    let mut start = anchor.saturating_sub(content_bytes / 3);
+    start = start.min(value.len().saturating_sub(content_bytes));
+    while start < value.len() && !value.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = start.saturating_add(content_bytes).min(value.len());
+    while end > start && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut snippet = String::with_capacity(maximum_bytes);
+    if start > 0 {
+        snippet.push_str("...");
+    }
+    snippet.push_str(&value[start..end]);
+    if end < value.len() {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
+fn truncate_utf8(value: &str, maximum_bytes: usize) -> &str {
+    if value.len() <= maximum_bytes {
+        return value;
+    }
+    let mut end = maximum_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn serialized_json_bytes(value: &impl serde::Serialize) -> Result<usize, AppError> {
+    let mut counter = CountingWriter::default();
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|error| AppError::Internal(format!("failed to size search response: {error}")))?;
+    Ok(counter.bytes)
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn scan_sheet(
@@ -182,5 +331,44 @@ mod query_limit_tests {
         let error = SearchQueryPlan::try_new(&query).expect_err("too many terms");
 
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn search_snippet_is_utf8_bounded_and_keeps_the_match_visible() {
+        let plan = SearchQueryPlan::try_new("needle")
+            .expect("query plan")
+            .expect("nonempty query");
+        let value = format!("{}needle{}", "前".repeat(300), "后".repeat(300));
+
+        let snippet = bounded_search_snippet(&value, &plan, MAX_SEARCH_RESULT_SNIPPET_BYTES);
+
+        assert!(snippet.len() <= MAX_SEARCH_RESULT_SNIPPET_BYTES);
+        assert!(snippet.contains("needle"));
+        assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn search_result_collector_enforces_final_serialized_byte_budget() {
+        let mut collector = SearchResultCollector::new().expect("collector");
+        for row in 0..SEARCH_RESULT_LIMIT {
+            if !collector
+                .try_push(SearchResult {
+                    sheet_index: 0,
+                    sheet_name: "Sheet1".to_string(),
+                    row,
+                    col: 0,
+                    value: "\0".repeat(MAX_SEARCH_RESULT_SNIPPET_BYTES),
+                    cell_position: format!("A{}", row + 1),
+                })
+                .expect("bounded result")
+            {
+                break;
+            }
+        }
+
+        let response = collector.finish().expect("bounded response");
+        assert!(response.truncated);
+        assert!(response.results.len() < SEARCH_RESULT_LIMIT);
+        assert!(serialized_json_bytes(&response).unwrap() <= MAX_SEARCH_RESPONSE_BYTES);
     }
 }

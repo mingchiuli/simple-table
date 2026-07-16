@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useSearchSessionStore } from "@/stores/searchSession";
-import type { SearchResult } from "@/types";
+import type { SearchResponse, SearchResult } from "@/types";
 
 function result(value: string): SearchResult {
   return {
@@ -14,6 +14,10 @@ function result(value: string): SearchResult {
   };
 }
 
+function response(value: string, truncated = false): SearchResponse {
+  return { results: [result(value)], truncated };
+}
+
 describe("searchSession store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -24,12 +28,13 @@ describe("searchSession store", () => {
     const first = store.beginSearch("old");
     const second = store.beginSearch("new");
 
-    expect(store.applySearchResults(first, [result("old")])).toBe(false);
+    expect(store.applySearchResults(first, response("old"))).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.isSearching).toBe(true);
 
-    expect(store.applySearchResults(second, [result("new")])).toBe(true);
+    expect(store.applySearchResults(second, response("new", true))).toBe(true);
     expect(store.searchResults.map((item) => item.value)).toEqual(["new"]);
+    expect(store.searchResultsTruncated).toBe(true);
     expect(store.isSearching).toBe(false);
   });
 
@@ -39,7 +44,7 @@ describe("searchSession store", () => {
 
     store.clearSearch();
 
-    expect(store.applySearchResults(requestId, [result("value")])).toBe(false);
+    expect(store.applySearchResults(requestId, response("value"))).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.searchQuery).toBe("");
     expect(store.isSearching).toBe(false);
@@ -48,12 +53,13 @@ describe("searchSession store", () => {
   it("clears old results when a new search starts", () => {
     const store = useSearchSessionStore();
     const first = store.beginSearch("old");
-    store.applySearchResults(first, [result("old")]);
+    store.applySearchResults(first, response("old", true));
 
     store.beginSearch("new");
 
     expect(store.searchQuery).toBe("new");
     expect(store.searchResults).toEqual([]);
+    expect(store.searchResultsTruncated).toBe(false);
     expect(store.isSearching).toBe(true);
   });
 
@@ -64,6 +70,7 @@ describe("searchSession store", () => {
 
     expect(Object.keys(store.$state)).toEqual([
       "searchResults",
+      "searchResultsTruncated",
       "searchQuery",
       "isSearching",
     ]);
