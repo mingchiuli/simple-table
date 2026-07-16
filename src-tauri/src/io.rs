@@ -24,6 +24,7 @@ pub mod projection_limits;
 pub mod projection_mapper;
 pub mod region_metadata_index;
 pub mod rich_projection;
+pub mod save_work;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub mod transient_files;
 pub mod workbook_state;

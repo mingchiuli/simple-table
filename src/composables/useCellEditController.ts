@@ -127,7 +127,10 @@ export function useCellEditController({
   async function handleCellChange(rowIndex: number, colIndex: number, value: string) {
     if (!canEditCells.value || !isCellLoaded(currentSheet.value, rowIndex, colIndex)) return;
 
-    transactions.updateDraftCell(currentSheetIndex.value, rowIndex, colIndex, value);
+    if (!transactions.updateDraftCell(currentSheetIndex.value, rowIndex, colIndex, value)) {
+      refreshSelectedEditorValue();
+      return;
+    }
     void transactions.flushPendingCellChanges();
   }
 
@@ -138,7 +141,9 @@ export function useCellEditController({
     }
 
     if (!isCellLoaded(currentSheet.value, row, col)) return;
-    transactions.updateDraftCell(currentSheetIndex.value, row, col, value);
+    if (!transactions.updateDraftCell(currentSheetIndex.value, row, col, value)) {
+      refreshSelectedEditorValue();
+    }
   }
 
   function handleCellEditCancel(row: number, col: number) {

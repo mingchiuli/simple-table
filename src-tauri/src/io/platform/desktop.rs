@@ -183,7 +183,7 @@ pub fn save_file(
     let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
         Err(error) => {
-            document::abort_prepared_file_save(&prepared);
+            document::abort_prepared_file_save(prepared);
             return Err(error);
         }
     };
@@ -223,12 +223,9 @@ pub fn export_file(
         .map(|name| file_name_from_path_like(name, ""));
     let target_path_or_name =
         output_name_for_selected_target(selected_name.as_deref(), default_name);
-    let (_, bytes) = document::generate_current_file_bytes_for_target(
-        document_id,
-        base_revision,
-        &target_path_or_name,
-    )?;
-    write_file_atomically(&path, &bytes)?;
+    let prepared =
+        document::prepare_current_file_export(document_id, base_revision, &target_path_or_name)?;
+    write_file_atomically(&path, &prepared.bytes)?;
     Ok(Some(path_string))
 }
 

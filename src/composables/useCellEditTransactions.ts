@@ -1,7 +1,9 @@
 import { computed, onUnmounted } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { ComputedRef } from 'vue';
 import {
   usePendingCellSavesStore,
+  PendingCellSaveLimitError,
   type CellSaveRequest,
   type PendingCellSaveCallbacks,
   type QueueDraftResult,
@@ -65,22 +67,30 @@ export function useCellEditTransactions({
     return draft ?? visibleBaseEditorString(sheetIndex, row, col);
   }
 
-  function updateDraftCell(sheetIndex: number, row: number, col: number, value: string) {
+  function updateDraftCell(sheetIndex: number, row: number, col: number, value: string): boolean {
     const { key } = saveState(sheetIndex, row, col);
     const committedValue = committedCellValue(sheetIndex, row, col);
-    const result = pendingCellSavesStore.applyDraft(
-      key,
-      {
-        sheetIndex,
-        row,
-        col,
-        value,
-        oldValue: committedValue,
-      },
-      committedValue
-    );
+    let result: QueueDraftResult;
+    try {
+      result = pendingCellSavesStore.applyDraft(
+        key,
+        {
+          sheetIndex,
+          row,
+          col,
+          value,
+          oldValue: committedValue,
+        },
+        committedValue
+      );
+    } catch (error) {
+      if (!(error instanceof PendingCellSaveLimitError)) throw error;
+      ElMessage.error(error.message);
+      return false;
+    }
 
     handleQueueResult(result);
+    return true;
   }
 
   function cancelDraftCell(sheetIndex: number, row: number, col: number) {

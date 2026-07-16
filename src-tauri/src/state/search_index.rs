@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
@@ -11,6 +11,7 @@ use tantivy::tokenizer::{LowerCaser, TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
+use crate::error::AppError;
 #[cfg(test)]
 use crate::types::CellValue;
 use crate::types::SheetData;
@@ -18,6 +19,8 @@ use crate::types::SheetData;
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEX_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_SEARCH_QUERY_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_SEARCH_QUERY_TERMS: usize = 64;
 
 struct SchemaFields {
     text: Field,
@@ -427,21 +430,39 @@ pub struct SearchQueryPlan {
 }
 
 impl SearchQueryPlan {
+    #[cfg(test)]
     pub fn new(query: &str) -> Option<Self> {
+        Self::try_new(query).ok().flatten()
+    }
+
+    pub fn try_new(query: &str) -> Result<Option<Self>, AppError> {
+        if query.len() > MAX_SEARCH_QUERY_BYTES {
+            return Err(AppError::ResourceLimitExceeded(format!(
+                "search query requires {} bytes; the maximum is {MAX_SEARCH_QUERY_BYTES} bytes",
+                query.len()
+            )));
+        }
         let query = query.trim();
         if query.is_empty() {
-            return None;
+            return Ok(None);
         }
         let mut terms = Vec::new();
+        let mut unique_terms = HashSet::new();
         for term in tokenize_search_text(query) {
-            if !terms.iter().any(|existing| existing == &term) {
-                terms.push(term);
+            if !unique_terms.insert(term.clone()) {
+                continue;
             }
+            if terms.len() >= MAX_SEARCH_QUERY_TERMS {
+                return Err(AppError::ResourceLimitExceeded(format!(
+                    "search query contains more than {MAX_SEARCH_QUERY_TERMS} terms"
+                )));
+            }
+            terms.push(term);
         }
-        Some(Self {
+        Ok(Some(Self {
             literal: query.to_lowercase(),
             terms,
-        })
+        }))
     }
 
     pub fn matches(&self, text: &str) -> bool {
@@ -456,10 +477,10 @@ impl SearchQueryPlan {
         if self.terms.is_empty() {
             return false;
         }
-        let text_terms = tokenize_search_text(text);
+        let text_terms: HashSet<_> = tokenize_search_text(text).into_iter().collect();
         self.terms
             .iter()
-            .all(|query_term| text_terms.iter().any(|text_term| text_term == query_term))
+            .all(|query_term| text_terms.contains(query_term))
     }
 
     fn terms(&self) -> &[String] {

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::str::FromStr;
 
 use crate::error::AppError;
@@ -9,6 +10,49 @@ use crate::types::{CellValue, FileData};
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
 
 const DEFAULT_SHEET_NAME: &str = "Sheet1";
+pub(crate) const MAX_GENERATED_FILE_BYTES: usize = 192 * 1024 * 1024;
+
+struct LimitedBuffer {
+    bytes: Vec<u8>,
+    maximum_bytes: usize,
+    limit_exceeded: bool,
+}
+
+impl LimitedBuffer {
+    fn new(maximum_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            maximum_bytes,
+            limit_exceeded: false,
+        }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    fn limit_error(&self) -> AppError {
+        AppError::ResourceLimitExceeded(format!(
+            "generated file exceeds the maximum of {} bytes",
+            self.maximum_bytes
+        ))
+    }
+}
+
+impl Write for LimitedBuffer {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len().saturating_add(buffer.len()) > self.maximum_bytes {
+            self.limit_exceeded = true;
+            return Err(std::io::Error::other("generated file byte limit exceeded"));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// 根据目标文件名/路径生成对应格式的字节。
 pub fn generate_file_bytes_for_target(
@@ -104,10 +148,13 @@ pub fn sync_workbook_from_file_data(
 }
 
 pub fn write_workbook_to_bytes(workbook: &Workbook) -> Result<Vec<u8>, AppError> {
-    let mut buffer = Vec::new();
-    writer::xlsx::write_writer(workbook, &mut buffer)
-        .map_err(|e| AppError::WriteError(e.to_string()))?;
-    Ok(buffer)
+    let mut buffer = LimitedBuffer::new(MAX_GENERATED_FILE_BYTES);
+    let result = writer::xlsx::write_writer(workbook, &mut buffer);
+    if buffer.limit_exceeded {
+        return Err(buffer.limit_error());
+    }
+    result.map_err(|e| AppError::WriteError(e.to_string()))?;
+    Ok(buffer.into_bytes())
 }
 
 pub fn sync_sheet_from_sheet_data(
@@ -285,24 +332,27 @@ fn normalized_sheet_name(name: &str, sheet_index: usize) -> String {
 }
 
 fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
-    let mut buffer = Vec::new();
-    {
+    let mut buffer = LimitedBuffer::new(MAX_GENERATED_FILE_BYTES);
+    let result = {
         let mut writer = csv::Writer::from_writer(&mut buffer);
-
-        if let Some(first_sheet) = file_data.sheets.first() {
-            for row in &first_sheet.rows {
-                let string_row: Vec<String> = row.iter().map(cell_to_csv_string).collect();
-                writer
-                    .write_record(&string_row)
-                    .map_err(|e| AppError::WriteError(e.to_string()))?;
+        (|| -> Result<(), String> {
+            if let Some(first_sheet) = file_data.sheets.first() {
+                for row in &first_sheet.rows {
+                    let string_row: Vec<String> = row.iter().map(cell_to_csv_string).collect();
+                    writer
+                        .write_record(&string_row)
+                        .map_err(|error| error.to_string())?;
+                }
             }
-        }
-
-        writer
-            .flush()
-            .map_err(|e: std::io::Error| AppError::WriteError(e.to_string()))?;
+            writer.flush().map_err(|error| error.to_string())?;
+            Ok(())
+        })()
+    };
+    if buffer.limit_exceeded {
+        return Err(buffer.limit_error());
     }
-    Ok(buffer)
+    result.map_err(AppError::WriteError)?;
+    Ok(buffer.into_bytes())
 }
 
 fn cell_to_csv_string(cell: &CellValue) -> String {
@@ -332,6 +382,16 @@ mod tests {
     use super::*;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
     use crate::types::{MergeRange, SheetData};
+
+    #[test]
+    fn limited_output_buffer_rejects_bytes_before_growing_past_its_limit() {
+        let mut buffer = LimitedBuffer::new(4);
+
+        buffer.write_all(b"1234").expect("within limit");
+        assert!(buffer.write_all(b"5").is_err());
+        assert_eq!(buffer.bytes, b"1234");
+        assert!(buffer.limit_exceeded);
+    }
 
     #[test]
     fn preserves_formula_in_merged_top_left_cell() {

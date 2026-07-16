@@ -83,8 +83,12 @@ unbounded admission path ahead of the document lock. Tauri mutation commands
 run on a dedicated blocking executor with one execution slot and eight total
 admission slots. Saturated admission fails immediately instead of retaining an
 unbounded set of IPC requests. `set_cells` accepts at most 4,096 changes and
-enforces that limit while deserializing the sequence. The frontend drains pending
-cell saves in matching bounded batches.
+enforces that limit while deserializing the sequence. Cell text is limited during
+command deserialization to 4 MiB per cell and 8 MiB per batch. The frontend
+drains pending cell saves with the same count and byte limits without copying its
+complete queue. Active and queued requests are limited to 8,192 changes and
+16 MiB of UTF-8 text in total; input that exceeds the hard budget is rejected
+before it can replace an accepted draft.
 
 Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`.
@@ -137,6 +141,11 @@ Saving follows this order:
    content hash as saved.
 
 Closing or replacing an active document while a save lease is held is invalid.
+Save and export snapshot generation has a process-wide RAII work reservation
+that starts before the projection can be cloned and remains held through the
+temporary write, reparse, and commit or export write. Only one such job may run
+at a time, its estimated source is capped at 256 MiB, and XLSX/CSV writers use a
+limited output buffer capped at 192 MiB.
 
 ## Resource Boundaries
 
@@ -185,6 +194,10 @@ metadata, then scans outside the document lock. A fallback queues one missing
 Sheet index per search so repeated searches converge to indexed execution
 without flooding the resident cache. Layout overrides are limited to 100,000
 entries per document.
+
+Search queries are limited to 4 KiB of UTF-8 text and 64 unique normalized
+terms before document access. Query construction uses set-based deduplication,
+and scan matching uses set membership rather than nested term comparisons.
 
 Pending search-index work has a separate scheduler budget because it lives
 outside `EditorState`: at most 256 pending Sheets, 4,096 incremental updates or

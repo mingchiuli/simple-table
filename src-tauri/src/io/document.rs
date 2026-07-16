@@ -7,6 +7,7 @@ use crate::io::file_format::{
 };
 use crate::io::prepared_documents;
 use crate::io::projection_limits::validate_file_data;
+use crate::io::save_work::{self, SaveWorkReservation};
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
@@ -146,21 +147,28 @@ pub(crate) fn active_document_path() -> Result<Option<String>, AppError> {
         .filter(|path| !path.is_empty()))
 }
 
-pub fn generate_current_file_bytes_for_target(
+pub struct PreparedDocumentExport {
+    pub bytes: Vec<u8>,
+    _work: SaveWorkReservation,
+}
+
+pub fn prepare_current_file_export(
     document_id: u64,
     base_revision: u64,
     target_path_or_name: &str,
-) -> Result<(String, Vec<u8>), AppError> {
+) -> Result<PreparedDocumentExport, AppError> {
     let registry = active_document_store();
-    let snapshot = {
+    let (snapshot, work) = {
         let registry_guard = registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        registry_guard
-            .active_for_command(document_id, base_revision)?
-            .save_snapshot_for_target(target_path_or_name)?
+        let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+        let work = save_work::reserve(document_id, editor_state.estimated_resource_bytes())?;
+        let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
+        (snapshot, work)
     };
-    snapshot.generate_file_bytes_for_target(target_path_or_name)
+    let (_, bytes) = snapshot.generate_file_bytes_for_target(target_path_or_name)?;
+    Ok(PreparedDocumentExport { bytes, _work: work })
 }
 
 pub struct PreparedDocumentSave {
@@ -169,6 +177,7 @@ pub struct PreparedDocumentSave {
     pub output_name: String,
     pub bytes: Vec<u8>,
     pub finish_without_reparse: bool,
+    _work: SaveWorkReservation,
 }
 
 pub fn prepare_current_file_save(
@@ -178,6 +187,7 @@ pub fn prepare_current_file_save(
 ) -> Result<PreparedDocumentSave, AppError> {
     let registry = active_document_store();
     let snapshot;
+    let work;
     {
         let registry_guard = registry
             .read()
@@ -189,6 +199,7 @@ pub fn prepare_current_file_save(
                 "save is already in progress".to_string(),
             ));
         }
+        work = save_work::reserve(document_id_token, editor_state.estimated_resource_bytes())?;
         snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
     }
 
@@ -202,12 +213,11 @@ pub fn prepare_current_file_save(
         output_name,
         bytes,
         finish_without_reparse: is_xlsx_extension(&target_extension) && snapshot.is_excel_backed(),
+        _work: work,
     })
 }
 
-pub fn abort_prepared_file_save(prepared: &PreparedDocumentSave) {
-    let _ = prepared;
-}
+pub fn abort_prepared_file_save(_prepared: PreparedDocumentSave) {}
 
 pub fn commit_current_file_save<F>(
     path: String,

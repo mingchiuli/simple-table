@@ -197,6 +197,7 @@ fn command_type(ty: &Type) -> String {
                 "usize" | "u8" | "u16" | "u32" | "i32" | "f32" | "f64" => "number".to_string(),
                 "bool" => "boolean".to_string(),
                 "CommandU64" => "U64String".to_string(),
+                "BoundedCellText" => "string".to_string(),
                 "SetCellBatch" => "Array<SetCellRequest>".to_string(),
                 "DesktopOpenFileInfo" => "{ path: string, fileName: string }".to_string(),
                 "PickedFileInfo" => "{ path: string, originalPath: string, fileName: string }".to_string(),

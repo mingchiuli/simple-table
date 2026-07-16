@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { Search } from '@element-plus/icons-vue';
 import type { SearchScope } from '@/types';
+import { truncateUtf8 } from '@/utils/utf8';
+
+const MAX_SEARCH_QUERY_BYTES = 4 * 1024;
+const MAX_SEARCH_QUERY_CHARACTERS = 4 * 1024;
 
 const props = defineProps<{
   isSearching: boolean;
@@ -22,6 +26,10 @@ function handleSearch() {
   }
 }
 
+function handleInput(value: string) {
+  searchQuery.value = truncateUtf8(value, MAX_SEARCH_QUERY_BYTES);
+}
+
 function clearSearch() {
   if (props.disabled) return;
   searchQuery.value = '';
@@ -33,9 +41,11 @@ function clearSearch() {
   <div class="search-box">
     <el-input
       v-model="searchQuery"
+      :maxlength="MAX_SEARCH_QUERY_CHARACTERS"
       placeholder="Search cells..."
       :disabled="props.disabled"
       @keyup.enter="handleSearch"
+      @input="handleInput"
       clearable
       @clear="clearSearch"
       class="search-input"

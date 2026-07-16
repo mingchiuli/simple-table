@@ -30,7 +30,7 @@ pub fn do_search(
     scope: SearchScope,
     current_sheet_index: Option<usize>,
 ) -> Result<Vec<SearchResult>, AppError> {
-    let Some(plan) = SearchQueryPlan::new(query) else {
+    let Some(plan) = SearchQueryPlan::try_new(query)? else {
         return Ok(vec![]);
     };
 
@@ -150,4 +150,37 @@ fn scan_sheet(
         }
     }
     cells
+}
+
+#[cfg(test)]
+mod query_limit_tests {
+    use super::*;
+    use crate::state::search_index::{MAX_SEARCH_QUERY_BYTES, MAX_SEARCH_QUERY_TERMS};
+
+    #[test]
+    fn search_query_rejects_oversized_text_before_accessing_the_document() {
+        let registry = Arc::new(RwLock::new(ActiveDocumentStore::new_for_test()));
+        let error = do_search(
+            &registry,
+            1,
+            0,
+            &"x".repeat(MAX_SEARCH_QUERY_BYTES + 1),
+            SearchScope::AllSheets,
+            None,
+        )
+        .expect_err("oversized search query");
+
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn search_query_rejects_too_many_unique_terms() {
+        let query = (0..=MAX_SEARCH_QUERY_TERMS)
+            .map(|index| format!("term{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let error = SearchQueryPlan::try_new(&query).expect_err("too many terms");
+
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
 }

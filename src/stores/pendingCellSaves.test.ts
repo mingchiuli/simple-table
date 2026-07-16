@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
+import {
+  MAX_BATCH_TEXT_BYTES,
+  MAX_PENDING_CELL_CHANGES,
+  MAX_CELL_TEXT_BYTES,
+  MAX_PENDING_TEXT_BYTES,
+  PendingCellSaveLimitError,
+  usePendingCellSavesStore,
+} from "@/stores/pendingCellSaves";
 import type { CellValue } from "@/types";
 
 function text(value: string): CellValue {
@@ -77,6 +84,112 @@ describe("pendingCellSaves store", () => {
     expect(flushed).toBe(true);
     expect(committedBatchSizes).toEqual([4_096, 1]);
     expect(store.isIdle()).toBe(true);
+  });
+
+  it("forms batches by UTF-8 bytes without copying the complete queue", () => {
+    const store = usePendingCellSavesStore();
+    const value = "x".repeat(3 * 1024 * 1024);
+    for (let row = 0; row < 3; row += 1) {
+      store.queueSave(`0,${row},0`, {
+        sheetIndex: 0,
+        row,
+        col: 0,
+        value,
+        oldValue: text(""),
+      });
+    }
+
+    const first = store.takeQueuedBatch();
+    const second = store.takeQueuedBatch();
+
+    expect(first).toHaveLength(2);
+    expect(first.reduce((bytes, change) => bytes + change.value.length, 0))
+      .toBeLessThanOrEqual(MAX_BATCH_TEXT_BYTES);
+    expect(second).toHaveLength(1);
+  });
+
+  it("rejects a cell before replacing an accepted draft when its text is too large", () => {
+    const store = usePendingCellSavesStore();
+    store.applyDraft(
+      "0,0,0",
+      { sheetIndex: 0, row: 0, col: 0, value: "accepted", oldValue: text("") },
+      text("")
+    );
+
+    expect(() => store.applyDraft(
+      "0,0,0",
+      {
+        sheetIndex: 0,
+        row: 0,
+        col: 0,
+        value: "x".repeat(MAX_CELL_TEXT_BYTES + 1),
+        oldValue: text(""),
+      },
+      text("")
+    )).toThrow(PendingCellSaveLimitError);
+    expect(store.draftCellValues.get("0,0,0")).toBe("accepted");
+    expect(store.queuedCellSaves.get("0,0,0")?.value).toBe("accepted");
+  });
+
+  it("bounds all queued and active cell text", () => {
+    const store = usePendingCellSavesStore();
+    const value = "x".repeat(MAX_CELL_TEXT_BYTES);
+    const accepted = MAX_PENDING_TEXT_BYTES / MAX_CELL_TEXT_BYTES;
+    for (let row = 0; row < accepted; row += 1) {
+      store.queueSave(`0,${row},0`, {
+        sheetIndex: 0,
+        row,
+        col: 0,
+        value,
+        oldValue: text(""),
+      });
+    }
+
+    expect(store.pendingTextBytes).toBe(MAX_PENDING_TEXT_BYTES);
+    expect(() => store.queueSave(`0,${accepted},0`, {
+      sheetIndex: 0,
+      row: accepted,
+      col: 0,
+      value: "x",
+      oldValue: text(""),
+    })).toThrow(PendingCellSaveLimitError);
+  });
+
+  it("releases pending byte accounting after a batch completes", () => {
+    const store = usePendingCellSavesStore();
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "中文",
+      oldValue: text(""),
+    });
+    const batch = store.takeQueuedBatch();
+
+    expect(store.pendingTextBytes).toBe(6);
+    store.completeBatch(batch);
+    expect(store.pendingTextBytes).toBe(0);
+  });
+
+  it("bounds the total number of queued and active changes", () => {
+    const store = usePendingCellSavesStore();
+    for (let row = 0; row < MAX_PENDING_CELL_CHANGES; row += 1) {
+      store.queueSave(`0,${row},0`, {
+        sheetIndex: 0,
+        row,
+        col: 0,
+        value: "",
+        oldValue: text(""),
+      });
+    }
+
+    expect(() => store.queueSave(`0,${MAX_PENDING_CELL_CHANGES},0`, {
+      sheetIndex: 0,
+      row: MAX_PENDING_CELL_CHANGES,
+      col: 0,
+      value: "",
+      oldValue: text(""),
+    })).toThrow(PendingCellSaveLimitError);
   });
 
   it("owns the debounce scheduler at store scope", async () => {
