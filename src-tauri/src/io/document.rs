@@ -58,11 +58,23 @@ pub fn prepare_open_from_bytes(
 }
 
 /// 准备新文档。只有 commit_prepared_document 才会替换当前活动文档。
-pub fn prepare_new_file(mut file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
-    file_data.path.clear();
+pub fn prepare_new_file() -> Result<PreparedOpenDocument, AppError> {
+    let file_data = blank_file_data();
     validate_file_data(&file_data)?;
     let reservation = prepared_documents::reserve_for_file_data(&file_data)?;
     prepare_editor_state(file_data, None, None, reservation)
+}
+
+fn blank_file_data() -> FileData {
+    FileData {
+        path: String::new(),
+        file_name: format!("untitled.{}", default_spreadsheet_extension()),
+        sheets: vec![SheetData {
+            name: "Sheet1".to_string(),
+            rows: vec![vec![crate::types::CellValue::Null; 5]; 5],
+            ..Default::default()
+        }],
+    }
 }
 
 pub fn commit_prepared_document(
@@ -1053,18 +1065,22 @@ mod tests {
     }
 
     #[test]
-    fn init_file_does_not_trust_frontend_path() {
+    fn new_file_uses_the_backend_owned_blank_template() {
         let _guard = prepared_protocol_test_guard();
-        let prepared = prepare_new_file(FileData {
-            path: "/tmp/should-not-be-trusted.xlsx".to_string(),
-            file_name: "untitled.xlsx".to_string(),
-            sheets: vec![SheetData::default()],
-        })
-        .expect("init file");
+        let prepared = prepare_new_file().expect("init file");
         let response = prepared_documents::take(&prepared.token).expect("prepared document");
 
         assert_eq!(response.editor_state.file_data().path, "");
         assert_eq!(response.editor_state.file_data().file_name, "untitled.xlsx");
+        assert_eq!(response.editor_state.file_data().sheets.len(), 1);
+        assert_eq!(response.editor_state.file_data().sheets[0].name, "Sheet1");
+        assert_eq!(response.editor_state.file_data().sheets[0].rows.len(), 5);
+        assert!(
+            response.editor_state.file_data().sheets[0]
+                .rows
+                .iter()
+                .all(|row| row.len() == 5 && row.iter().all(|cell| cell == &CellValue::Null))
+        );
     }
 
     #[test]

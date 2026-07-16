@@ -126,6 +126,12 @@ impl ResourceLedger {
     pub fn estimated_bytes(&self) -> usize {
         self.total.estimated_bytes()
     }
+
+    pub(crate) fn sheet_estimated_bytes(&self, sheet_index: usize) -> Option<usize> {
+        self.sheets
+            .get(sheet_index)
+            .map(|sheet| sheet.usage.estimated_bytes())
+    }
 }
 
 pub fn validate_input_size(byte_count: usize) -> Result<(), AppError> {

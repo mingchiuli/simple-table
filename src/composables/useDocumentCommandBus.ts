@@ -11,6 +11,7 @@ import type {
 } from '@/types';
 import { compareU64 } from '@/utils/u64';
 import { appErrorMessage } from '@/utils/appError';
+import type { RegionLoadPriority } from '@/stores/documentRegionCache';
 
 type InteractiveMutationOptions = {
   action: (context: MutationCommandContext) => Promise<EditorMutationResponse>;
@@ -222,12 +223,16 @@ export function useDocumentCommandBus() {
     }
   }
 
-  async function ensureSheetRegionLoaded(region: SheetRegion): Promise<boolean> {
+  async function ensureSheetRegionLoaded(
+    region: SheetRegion,
+    options: { priority?: RegionLoadPriority } = {}
+  ): Promise<boolean> {
     try {
       await documentSessionStore.waitForMutations();
       return await documentSessionStore.ensureSheetRegionLoaded(
         region,
-        api.getSheetRegionProjection
+        api.getSheetRegionProjection,
+        options
       );
     } catch (error) {
       console.error('Failed to load sheet viewport:', error);

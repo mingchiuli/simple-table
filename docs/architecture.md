@@ -106,6 +106,10 @@ Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary
 rejects JSON numbers. Revisions use checked increments and can never wrap.
 
+Creating a blank document is a zero-argument backend command. Rust owns the
+default file format, Sheet name, dimensions, and initial cells; the frontend
+cannot submit a complete `FileData` aggregate through the new-document RPC.
+
 ## Document Replacement And Save
 
 Opening uses a prepare/commit/abort protocol. Preparing parses into a temporary
@@ -145,12 +149,18 @@ the visible region plus overscan and refuses to edit an unloaded cell.
 
 The frontend retains at most four resident Sheet slots, eight blocks per Sheet,
 24 blocks overall, and approximately 16 MiB of block payload. `RegionCache`
-uses access LRU, pins visible tiles, shares in-flight promises, rejects previous
-generations, and runs at most four projection requests concurrently. The
-initial region is a normal 128 x 32 tile and participates in the same LRU and
-byte budget. Rust caps each serialized region response at 16 MiB and reports
-its measured size; the frontend subdivides only the dedicated oversized-region
-error and treats multiple child blocks as combined coverage.
+uses access LRU, pins at most eight visible tiles, shares in-flight promises,
+rejects previous document generations, and runs at most four projection
+requests concurrently. Active and queued loads for the current generation are
+limited to 16. A new viewport generation removes queued tiles that no longer
+cover the visible area, while explicit Sheet loads and search-result navigation
+can evict queued viewport work. The initial region is a normal 128 x 32 tile and
+participates in the same LRU and byte budget. Rust caps each serialized region
+response at 16 MiB and reports its measured size; the frontend rejects blocks
+above that contract, subdivides only the dedicated oversized-region error, and
+treats multiple child blocks as combined coverage. The ordinary cache target is
+16 MiB; pinned visible blocks form a separate hard bound of eight 16 MiB blocks
+so visibility cannot turn the cache into an unbounded exception.
 
 Region commands capture detached cells, metadata, manifest values, document ID,
 and revision while holding the document read lock, then release the lock before
@@ -166,12 +176,15 @@ merges use a row interval tree. Region projection therefore examines only
 intersecting buckets and intervals. Structural commits and history restores
 rebuild the index at the transaction boundary.
 
-Rust retains at most four Tantivy indexes and no duplicate persistent search
-text snapshots. Search fallback clones only cell values and display-affecting
-format/style metadata, then scans outside the document lock. A fallback queues
-one missing Sheet index per search so repeated searches converge to indexed
-execution without flooding the four-slot index cache. Layout overrides are
-limited to 100,000 entries per document.
+Rust retains at most four Tantivy indexes and 64 MiB of measured resident index
+memory. Each index accounts for its live RAM-directory files, writer arena, and
+index structure rather than a fixed per-index estimate. Incremental commits
+recheck the byte budget and evict the oldest resident index when necessary.
+Search fallback clones only cell values and display-affecting format/style
+metadata, then scans outside the document lock. A fallback queues one missing
+Sheet index per search so repeated searches converge to indexed execution
+without flooding the resident cache. Layout overrides are limited to 100,000
+entries per document.
 
 Pending search-index work has a separate scheduler budget because it lives
 outside `EditorState`: at most 256 pending Sheets, 4,096 incremental updates or
@@ -181,6 +194,13 @@ byte limit discards that Sheet's queued text copies and replaces them with one
 full rebuild at the latest search-index stamp. Dropping a new Sheet at the
 global Sheet limit remains correct because search uses the current projection
 scan until an on-demand rebuild can be admitted.
+
+Index builds have an independent 64 MiB reservation budget covering the writer
+arena and a conservative multiple of the source Sheet estimate. The reservation
+is acquired before cloning search text and released after installation,
+cancellation, or failure. Sheets estimated above 12 MiB are not indexed and
+continue using the correct scan fallback. Scheduler statistics expose pending
+and building bytes separately.
 
 Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
 recent-file store transactions, file metadata reads, and thumbnail encoding run

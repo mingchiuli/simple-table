@@ -11,7 +11,7 @@ use crate::state::{active_document_store, state::EditorSessionInfo};
 #[cfg(desktop)]
 use crate::types::SavedDocumentResponse;
 use crate::types::{
-    DocumentCapabilities, EditorMutationResponse, FileData, NativeSavePlan, OpenDocumentResponse,
+    DocumentCapabilities, EditorMutationResponse, NativeSavePlan, OpenDocumentResponse,
     PreparedOpenDocument, SearchResult, SearchScope, SetCellRequest, SheetRegion,
     SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
@@ -150,8 +150,8 @@ pub async fn export_file_desktop(
 }
 
 #[tauri::command]
-pub async fn prepare_new_file(file_data: FileData) -> Result<PreparedOpenDocument, AppError> {
-    blocking::run(move || document::prepare_new_file(file_data)).await
+pub async fn prepare_new_file() -> Result<PreparedOpenDocument, AppError> {
+    blocking::run(document::prepare_new_file).await
 }
 
 #[tauri::command(rename_all = "camelCase")]

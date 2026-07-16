@@ -24,6 +24,7 @@ import { compareU64, isNextU64, maxU64, ZERO_U64 } from '@/utils/u64';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import {
   deleteRegionCache,
+  beginViewportRegionLoad,
   oldestEvictableRegionBlock,
   pinRegionBlocks,
   reconcileRegionBlocks,
@@ -32,6 +33,7 @@ import {
   resetRegionCache,
   scheduleRegionLoad,
   touchRegionBlock,
+  type RegionLoadPriority,
 } from '@/stores/documentRegionCache';
 import {
   applyEditorSessionStatus,
@@ -70,6 +72,7 @@ const MAX_RESIDENT_SHEETS = 4;
 const MAX_BLOCKS_PER_SHEET = 8;
 const MAX_RESIDENT_BLOCKS = 24;
 const MAX_RESIDENT_BLOCK_BYTES = 16 * 1024 * 1024;
+const MAX_REGION_BLOCK_BYTES = 16 * 1024 * 1024;
 const TILE_ROWS = 128;
 const TILE_COLUMNS = 32;
 
@@ -426,15 +429,28 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       fetchProjection: (
         context: EditorCommandContext,
         region: SheetRegion
-      ) => Promise<SheetRegionProjectionResponse>
+      ) => Promise<SheetRegionProjectionResponse>,
+      options: { priority?: RegionLoadPriority } = {}
     ): Promise<boolean> {
       if (!this.activateResidentSheet(region.sheetIndex)) return false;
       const slot = this.data?.sheets[region.sheetIndex];
       if (!slot) return false;
       const tiles = tileRegions(region, slot.extent);
       if (!tiles.length) return true;
+      const priority = options.priority ?? 'required';
+      const context = this.currentCommandContext();
+      if (!context) return false;
+      const viewportGeneration = priority === 'viewport'
+        ? beginViewportRegionLoad(this, tiles.map((tile) =>
+          `${context.documentId}:${context.baseRevision}:${regionKey(tile)}`
+        ))
+        : undefined;
       pinRegionBlocks(this, tiles.map(regionKey));
-      const results = await Promise.all(tiles.map((tile) => this.loadRegionBlock(tile, fetchProjection)));
+      const results = await Promise.all(tiles.map((tile) => this.loadRegionBlock(
+        tile,
+        fetchProjection,
+        { priority, viewportGeneration }
+      )));
       return results.every(Boolean) && isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
     },
     async loadRegionBlock(
@@ -442,7 +458,8 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       fetchProjection: (
         context: EditorCommandContext,
         region: SheetRegion
-      ) => Promise<SheetRegionProjectionResponse>
+      ) => Promise<SheetRegionProjectionResponse>,
+      options: { priority?: RegionLoadPriority; viewportGeneration?: number } = {}
     ): Promise<boolean> {
       const slot = this.data?.sheets[region.sheetIndex];
       const coveringKeys = regionCoveringBlockKeys(slot, region);
@@ -463,6 +480,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         const current = data?.sheets[region.sheetIndex];
         if (!data || !current || current.state !== 'loaded') return false;
         const newBlocks = responses.map(regionBlock);
+        if (newBlocks.some((block) => block.estimatedBytes > MAX_REGION_BLOCK_BYTES)) return false;
         const newKeys = new Set(newBlocks.map((block) => block.key));
         const blocks = [
           ...current.blocks.filter((entry) => !newKeys.has(entry.key)),
@@ -479,7 +497,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         this.touchResidentSheet(region.sheetIndex);
         this.enforceRegionBlockBudget(region.sheetIndex);
         return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
-      });
+      }, options);
     },
     markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
       if (this.documentId !== null && response.documentId !== this.documentId) return false;

@@ -10,13 +10,14 @@ use crate::display::DisplayProjection;
 #[cfg(test)]
 use crate::state::search_index::SearchQueryPlan;
 use crate::state::search_index::{
-    MAX_RESIDENT_SEARCH_INDEXES, SearchCellText, SearchIndexStamp, build_sheet_index_with_cancel,
-    collect_sheet_search_text, search_position,
+    MAX_RESIDENT_SEARCH_INDEXES, SearchCellText, SearchIndexStamp, WRITER_ARENA_BYTES,
+    build_sheet_index_with_cancel, collect_sheet_search_text, search_position,
 };
 use crate::state::search_scheduler::{
-    CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, MAX_PENDING_INDEX_BYTES,
-    MAX_PENDING_INDEX_BYTES_PER_SHEET, MAX_PENDING_INDEX_SHEETS,
-    MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate, SearchSchedulerStats, SheetPending,
+    CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, MAX_BUILDING_INDEX_BYTES,
+    MAX_INDEXABLE_SHEET_BYTES, MAX_PENDING_INDEX_BYTES, MAX_PENDING_INDEX_BYTES_PER_SHEET,
+    MAX_PENDING_INDEX_SHEETS, MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate,
+    SearchSchedulerStats, SheetPending,
 };
 use crate::state::state::ActiveDocumentStore;
 #[cfg(test)]
@@ -487,20 +488,13 @@ fn process_pending_sheet(
             .chain(std::iter::once(rebuild.stamp))
             .max()
             .unwrap_or(rebuild.stamp);
-        if let Some(search_text) = snapshot_sheet_search_text(
+        rebuild_sheet_with_budget(
+            scheduler,
             pending.document_id,
             sheet_index,
             latest_stamp,
             &pending.registry,
-        ) {
-            run_rebuild(
-                pending.document_id,
-                sheet_index,
-                latest_stamp,
-                search_text,
-                &pending.registry,
-            );
-        }
+        );
         return;
     }
 
@@ -528,20 +522,13 @@ fn process_pending_sheet(
                     stats.incremental_fallback_rebuilds.saturating_add(1);
                 stats.rebuild_jobs = stats.rebuild_jobs.saturating_add(1);
             });
-            if let Some(search_text) = snapshot_sheet_search_text(
+            rebuild_sheet_with_budget(
+                scheduler,
                 pending.document_id,
                 sheet_index,
                 latest_stamp,
                 &pending.registry,
-            ) {
-                run_rebuild(
-                    pending.document_id,
-                    sheet_index,
-                    latest_stamp,
-                    search_text,
-                    &pending.registry,
-                );
-            }
+            );
         }
     }
 }
@@ -606,6 +593,105 @@ fn record_scheduler_event(
     if let Ok(mut state) = scheduler.state.lock() {
         update(&mut state.stats);
     }
+}
+
+struct IndexBuildReservation {
+    scheduler: Arc<IndexScheduler>,
+    bytes: usize,
+}
+
+impl Drop for IndexBuildReservation {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.scheduler.state.lock() {
+            state.building_jobs = state.building_jobs.saturating_sub(1);
+            state.building_bytes = state.building_bytes.saturating_sub(self.bytes);
+            update_building_stats(&mut state);
+            self.scheduler.wake.notify_all();
+        }
+    }
+}
+
+fn index_build_reservation_bytes(source_bytes: usize) -> Option<usize> {
+    if source_bytes > MAX_INDEXABLE_SHEET_BYTES {
+        return None;
+    }
+    Some(
+        WRITER_ARENA_BYTES
+            .saturating_add(source_bytes.saturating_mul(4))
+            .min(MAX_BUILDING_INDEX_BYTES),
+    )
+}
+
+fn reserve_index_build(
+    scheduler: &Arc<IndexScheduler>,
+    bytes: usize,
+) -> Option<IndexBuildReservation> {
+    if bytes == 0 || bytes > MAX_BUILDING_INDEX_BYTES {
+        return None;
+    }
+    let mut state = scheduler.state.lock().ok()?;
+    while state.building_bytes.saturating_add(bytes) > MAX_BUILDING_INDEX_BYTES {
+        state = scheduler
+            .wake
+            .wait(state)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    state.building_jobs = state.building_jobs.saturating_add(1);
+    state.building_bytes = state.building_bytes.saturating_add(bytes);
+    update_building_stats(&mut state);
+    Some(IndexBuildReservation {
+        scheduler: Arc::clone(scheduler),
+        bytes,
+    })
+}
+
+fn update_building_stats(state: &mut IndexSchedulerState) {
+    state.stats.building_jobs = state.building_jobs;
+    state.stats.building_bytes = state.building_bytes;
+    state.stats.peak_building_jobs = state.stats.peak_building_jobs.max(state.building_jobs);
+    state.stats.peak_building_bytes = state.stats.peak_building_bytes.max(state.building_bytes);
+}
+
+fn rebuild_sheet_with_budget(
+    scheduler: &Arc<IndexScheduler>,
+    document_id: u64,
+    sheet_index: usize,
+    stamp: SearchIndexStamp,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+) {
+    let Some(source_bytes) =
+        search_sheet_source_estimated_bytes(document_id, sheet_index, stamp, registry)
+    else {
+        return;
+    };
+    let Some(reservation_bytes) = index_build_reservation_bytes(source_bytes) else {
+        record_scheduler_event(scheduler, |stats| {
+            stats.skipped_oversized_rebuilds = stats.skipped_oversized_rebuilds.saturating_add(1);
+        });
+        return;
+    };
+    let Some(_reservation) = reserve_index_build(scheduler, reservation_bytes) else {
+        return;
+    };
+    let Some(search_text) = snapshot_sheet_search_text(document_id, sheet_index, stamp, registry)
+    else {
+        return;
+    };
+    run_rebuild(document_id, sheet_index, stamp, search_text, registry);
+}
+
+fn search_sheet_source_estimated_bytes(
+    document_id: u64,
+    sheet_index: usize,
+    stamp: SearchIndexStamp,
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+) -> Option<usize> {
+    registry.read().ok().and_then(|guard| {
+        let editor = guard.get(document_id)?;
+        (editor.search_sheet_index_stamp(sheet_index) == stamp)
+            .then(|| editor.search_sheet_snapshot_estimated_bytes(sheet_index))
+            .flatten()
+    })
 }
 
 #[allow(dead_code)]
@@ -803,6 +889,32 @@ mod tests {
                 workers_available: AtomicBool::new(false),
             }),
         }
+    }
+
+    #[test]
+    fn index_build_reservations_are_bounded_and_released() {
+        let service = isolated_search_service();
+        let reservation = reserve_index_build(&service.scheduler, MAX_BUILDING_INDEX_BYTES)
+            .expect("build reservation");
+        {
+            let state = service.scheduler.state.lock().expect("scheduler state");
+            assert_eq!(state.building_jobs, 1);
+            assert_eq!(state.building_bytes, MAX_BUILDING_INDEX_BYTES);
+            assert_eq!(state.stats.peak_building_jobs, 1);
+            assert_eq!(state.stats.peak_building_bytes, MAX_BUILDING_INDEX_BYTES);
+        }
+
+        drop(reservation);
+
+        let state = service.scheduler.state.lock().expect("scheduler state");
+        assert_eq!(state.building_jobs, 0);
+        assert_eq!(state.building_bytes, 0);
+    }
+
+    #[test]
+    fn oversized_sheet_sources_do_not_enter_the_index_builder() {
+        assert!(index_build_reservation_bytes(MAX_INDEXABLE_SHEET_BYTES).is_some());
+        assert!(index_build_reservation_bytes(MAX_INDEXABLE_SHEET_BYTES + 1).is_none());
     }
 
     #[test]

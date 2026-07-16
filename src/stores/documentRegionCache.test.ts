@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  beginViewportRegionLoad,
   oldestEvictableRegionBlock,
   pinRegionBlocks,
   replacePinnedRegionBlock,
@@ -33,6 +34,89 @@ describe('documentRegionCache', () => {
     expect(peak).toBe(4);
   });
 
+  it('bounds admitted viewport requests and rejects excess work', async () => {
+    const owner = {};
+    const keys = Array.from({ length: 20 }, (_, index) => `block-${index}`);
+    const generation = beginViewportRegionLoad(owner, keys);
+    let started = 0;
+    const releases: Array<() => void> = [];
+    const loads = keys.map((key) => scheduleRegionLoad(owner, key, async () => {
+      started += 1;
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return true;
+    }, { priority: 'viewport', viewportGeneration: generation }));
+
+    await waitFor(() => releases.length === 4);
+    await expect(Promise.all(loads.slice(16))).resolves.toEqual([false, false, false, false]);
+    while (started < 16) {
+      releases.splice(0).forEach((release) => release());
+      await waitFor(() => releases.length > 0);
+    }
+    releases.splice(0).forEach((release) => release());
+
+    const results = await Promise.all(loads);
+    expect(results.filter(Boolean)).toHaveLength(16);
+    expect(started).toBe(16);
+  });
+
+  it('drops queued tiles superseded by the latest viewport', async () => {
+    const owner = {};
+    const oldKeys = Array.from({ length: 10 }, (_, index) => `old-${index}`);
+    const oldGeneration = beginViewportRegionLoad(owner, oldKeys);
+    let started = 0;
+    const releases: Array<() => void> = [];
+    const oldLoads = oldKeys.map((key) => scheduleRegionLoad(owner, key, async () => {
+      started += 1;
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return true;
+    }, { priority: 'viewport', viewportGeneration: oldGeneration }));
+    await waitFor(() => releases.length === 4);
+
+    const currentGeneration = beginViewportRegionLoad(owner, ['current']);
+    const current = scheduleRegionLoad(owner, 'current', async () => {
+      started += 1;
+      return true;
+    }, { priority: 'viewport', viewportGeneration: currentGeneration });
+    releases.splice(0).forEach((release) => release());
+
+    expect(await current).toBe(true);
+    const oldResults = await Promise.all(oldLoads);
+    expect(oldResults.filter(Boolean)).toHaveLength(4);
+    expect(started).toBe(5);
+  });
+
+  it('admits required work ahead of queued viewport loads', async () => {
+    const owner = {};
+    const keys = Array.from({ length: 16 }, (_, index) => `viewport-${index}`);
+    const generation = beginViewportRegionLoad(owner, keys);
+    const releases: Array<() => void> = [];
+    let completed = 0;
+    const viewportLoads = keys.map((key) => scheduleRegionLoad(owner, key, async () => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      completed += 1;
+      return true;
+    }, { priority: 'viewport', viewportGeneration: generation }));
+    await waitFor(() => releases.length === 4);
+
+    let requiredStarted = false;
+    const required = scheduleRegionLoad(owner, 'required', async () => {
+      requiredStarted = true;
+      return true;
+    });
+    releases.shift()?.();
+    await waitFor(() => requiredStarted);
+
+    expect(await required).toBe(true);
+    while (completed < 15) {
+      await waitFor(() => releases.length > 0);
+      const previousCompleted = completed;
+      releases.splice(0).forEach((release) => release());
+      await waitFor(() => completed > previousCompleted);
+    }
+    const viewportResults = await Promise.all(viewportLoads);
+    expect(viewportResults.filter(Boolean)).toHaveLength(15);
+  });
+
   it('evicts the least recently used unpinned block', () => {
     const owner = {};
     touchRegionBlock(owner, 'old');
@@ -55,6 +139,18 @@ describe('documentRegionCache', () => {
       owner,
       new Set(['other', 'child-a', 'child-b'])
     )).toBeUndefined();
+  });
+
+  it('does not repin a completed tile from an obsolete viewport', () => {
+    const owner = {};
+    pinRegionBlocks(owner, ['current']);
+
+    replacePinnedRegionBlock(owner, 'obsolete', ['obsolete-child']);
+
+    expect(oldestEvictableRegionBlock(
+      owner,
+      new Set(['current', 'obsolete-child'])
+    )).toBe('obsolete-child');
   });
 });
 

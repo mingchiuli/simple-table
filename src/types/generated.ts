@@ -160,7 +160,7 @@ export type TauriCommandMap = {
   "discard_save_location_desktop": { args: { path: string }, result: void },
   "save_file_desktop": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
   "export_file_desktop": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
-  "prepare_new_file": { args: { fileData: FileData }, result: PreparedOpenDocument },
+  "prepare_new_file": { args: Record<string, never>, result: PreparedOpenDocument },
   "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
   "abort_prepared_document": { args: { token: string }, result: void },
   "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },

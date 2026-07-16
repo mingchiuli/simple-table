@@ -9,6 +9,8 @@ pub(crate) const MAX_PENDING_INDEX_SHEETS: usize = 256;
 pub(crate) const MAX_PENDING_INDEX_UPDATES_PER_SHEET: usize = 4_096;
 pub(crate) const MAX_PENDING_INDEX_BYTES_PER_SHEET: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_PENDING_INDEX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_INDEXABLE_SHEET_BYTES: usize = 12 * 1024 * 1024;
+pub(crate) const MAX_BUILDING_INDEX_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) enum IndexJob {
     Rebuild {
@@ -84,6 +86,8 @@ pub(crate) struct IndexSchedulerState {
     pub(crate) pending: HashMap<(u64, usize), SheetPending>,
     pub(crate) pending_updates: usize,
     pub(crate) pending_bytes: usize,
+    pub(crate) building_jobs: usize,
+    pub(crate) building_bytes: usize,
     pub(crate) stats: SearchSchedulerStats,
 }
 
@@ -98,7 +102,12 @@ pub struct SearchSchedulerStats {
     pub incremental_fallback_rebuilds: u64,
     pub coalesced_to_rebuilds: u64,
     pub dropped_jobs_at_capacity: u64,
+    pub skipped_oversized_rebuilds: u64,
     pub pending_sheets: usize,
     pub pending_updates: usize,
     pub pending_bytes: usize,
+    pub building_jobs: usize,
+    pub building_bytes: usize,
+    pub peak_building_jobs: usize,
+    pub peak_building_bytes: usize,
 }

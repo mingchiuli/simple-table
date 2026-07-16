@@ -312,6 +312,10 @@ impl EditorState {
             .map(crate::types::SheetData::search_snapshot)
     }
 
+    pub fn search_sheet_snapshot_estimated_bytes(&self, sheet_index: usize) -> Option<usize> {
+        self.resources.sheet_estimated_bytes(sheet_index)
+    }
+
     pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
         self.file_data()
             .sheets

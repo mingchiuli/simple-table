@@ -15,10 +15,6 @@ import {
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
 
-const spreadsheetFormats = vi.hoisted(() => ({
-  defaultSpreadsheetExtension: vi.fn(),
-}));
-
 const openProtocolMocks = vi.hoisted(() => ({
   prepareNewFile: vi.fn(),
   prepareOpenFile: vi.fn(),
@@ -67,8 +63,6 @@ vi.mock("@/utils/unsavedChanges", async () => {
     confirmDiscardUnsavedChanges: vi.fn(),
   };
 });
-
-vi.mock("@/utils/spreadsheetFormats", () => spreadsheetFormats);
 
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
@@ -139,7 +133,6 @@ describe("useHomeFileActions", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    spreadsheetFormats.defaultSpreadsheetExtension.mockResolvedValue("xlsx");
   });
 
   it("creates a new workbook through the document session boundary", async () => {
@@ -153,6 +146,7 @@ describe("useHomeFileActions", () => {
     await actions.handleNewFile();
 
     expect(api.prepareNewFile).toHaveBeenCalledTimes(1);
+    expect(api.prepareNewFile).toHaveBeenCalledWith();
     expect(api.commitPreparedDocument).toHaveBeenCalledWith("prepared-new", null);
     expect(documentSessionStore.documentId).toBe('1');
     expect(documentSessionStore.data?.fileName).toBe("untitled.xlsx");
@@ -174,7 +168,8 @@ describe("useHomeFileActions", () => {
     expect(documentSessionStore.data?.fileName).toBe("current.xlsx");
   });
 
-  it("resumes pending autosave when default format lookup fails during new workbook creation", async () => {
+  it("resumes pending autosave when backend preparation fails", async () => {
+    const api = await import("@/api");
     const unsavedChanges = await import("@/utils/unsavedChanges");
     vi.useFakeTimers();
     const statusStore = useDocumentStatusStore();
@@ -197,9 +192,7 @@ describe("useHomeFileActions", () => {
       },
       100
     );
-    spreadsheetFormats.defaultSpreadsheetExtension.mockRejectedValue(
-      new Error("format unavailable")
-    );
+    vi.mocked(api.prepareNewFile).mockRejectedValue(new Error("prepare unavailable"));
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
 
     try {
@@ -208,7 +201,7 @@ describe("useHomeFileActions", () => {
       await actions.handleNewFile();
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(spreadsheetFormats.defaultSpreadsheetExtension).toHaveBeenCalledTimes(1);
+      expect(api.prepareNewFile).toHaveBeenCalledTimes(1);
       expect(committed).toEqual(["draft"]);
     } finally {
       vi.useRealTimers();

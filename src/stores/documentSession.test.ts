@@ -61,6 +61,16 @@ describe('documentSession sparse projection', () => {
     expect(requests).toBe(1);
   });
 
+  it('rejects a region block larger than the backend response contract', async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse(openResponse());
+    const response = regionResponse(0, 128, 256, 0, 32, 'oversized');
+    response.estimatedBytes = 16 * 1024 * 1024 + 1;
+
+    expect(await store.ensureSheetRegionLoaded(response.region, async () => response)).toBe(false);
+    expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
+  });
+
   it('subdivides oversized region responses and reuses the combined coverage', async () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse(openResponse());

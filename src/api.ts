@@ -1,6 +1,5 @@
 import { invokeCommand } from "@/tauriInvoke";
 import type {
-  FileData,
   RecentFile,
   SetCellRequest,
   SearchResult,
@@ -20,8 +19,8 @@ import type {
   MutationCommandContext,
 } from "@/types";
 
-export async function prepareNewFile(fileData: FileData): Promise<PreparedOpenDocument> {
-  return invokeCommand("prepare_new_file", { fileData });
+export async function prepareNewFile(): Promise<PreparedOpenDocument> {
+  return invokeCommand("prepare_new_file", {});
 }
 
 export async function commitPreparedDocument(

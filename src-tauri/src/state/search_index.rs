@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
+use tantivy::directory::RamDirectory;
 use tantivy::query::{BooleanQuery, Occur, Query, RegexQuery, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, STRING, Schema, TextFieldIndexing, TextOptions, Value,
@@ -14,8 +15,9 @@ use tantivy_jieba::JiebaTokenizer;
 use crate::types::CellValue;
 use crate::types::SheetData;
 
-const WRITER_ARENA_BYTES: usize = 15_000_000;
+pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
+pub(crate) const MAX_RESIDENT_SEARCH_INDEX_BYTES: usize = 64 * 1024 * 1024;
 
 struct SchemaFields {
     text: Field,
@@ -29,12 +31,15 @@ struct SchemaFields {
 
 pub struct SearchSheetIndex {
     index: Index,
+    directory: RamDirectory,
     schema: Schema,
     text_field: Field,
     literal_field: Field,
     display_field: Field,
     cell_id_field: Field,
     writer: Arc<Mutex<IndexWriter>>,
+    #[cfg(test)]
+    accounted_bytes_override: Option<usize>,
 }
 
 struct SearchSheetIndexEntry {
@@ -103,7 +108,7 @@ impl SearchIndexStore {
             + self.sheets.capacity() * std::mem::size_of::<SearchSheetSlot>()
             + self.sheet_revisions.capacity() * std::mem::size_of::<u64>()
             + self.resident_order.capacity() * std::mem::size_of::<usize>()
-            + self.resident_order.len().saturating_mul(WRITER_ARENA_BYTES)
+            + self.resident_index_bytes()
     }
 
     pub fn stamp(&self, document_id: u64) -> SearchIndexStamp {
@@ -217,6 +222,7 @@ impl SearchIndexStore {
                 other => other,
             };
         }
+        self.enforce_resident_byte_budget();
     }
 
     pub fn install_sheet_index(
@@ -230,10 +236,19 @@ impl SearchIndexStore {
             return;
         }
         self.ensure_sheet_slot(sheet_index);
-        self.remove_resident(sheet_index);
+        self.remove_resident_index(sheet_index);
         self.sheets[sheet_index] = match index {
             Some(index) => {
-                self.evict_resident_if_full();
+                let estimated_bytes = index.estimated_bytes();
+                if estimated_bytes > MAX_RESIDENT_SEARCH_INDEX_BYTES {
+                    return;
+                }
+                self.evict_resident_until_bounded(estimated_bytes);
+                if self.resident_index_bytes().saturating_add(estimated_bytes)
+                    > MAX_RESIDENT_SEARCH_INDEX_BYTES
+                {
+                    return;
+                }
                 self.resident_order.push_back(sheet_index);
                 SearchSheetSlot::Fresh(SearchSheetIndexEntry {
                     revision: stamp.revision,
@@ -347,25 +362,52 @@ impl SearchIndexStore {
         }
     }
 
-    fn remove_resident(&mut self, sheet_index: usize) {
+    fn remove_resident_index(&mut self, sheet_index: usize) {
         self.resident_order
             .retain(|resident_sheet| *resident_sheet != sheet_index);
+        if let Some(slot) = self.sheets.get_mut(sheet_index) {
+            *slot = SearchSheetSlot::Missing;
+        }
     }
 
-    fn evict_resident_if_full(&mut self) {
-        while self.resident_order.len() >= MAX_RESIDENT_SEARCH_INDEXES {
+    fn evict_resident_until_bounded(&mut self, incoming_bytes: usize) {
+        while self.resident_order.len() >= MAX_RESIDENT_SEARCH_INDEXES
+            || self.resident_index_bytes().saturating_add(incoming_bytes)
+                > MAX_RESIDENT_SEARCH_INDEX_BYTES
+        {
             let Some(sheet_index) = self.resident_order.pop_front() else {
                 return;
             };
-            if let Some(slot) = self.sheets.get_mut(sheet_index) {
-                *slot = SearchSheetSlot::Missing;
-            }
+            self.remove_resident_index(sheet_index);
         }
     }
 
     #[cfg(test)]
     fn resident_index_count(&self) -> usize {
         self.resident_order.len()
+    }
+
+    fn resident_index_bytes(&self) -> usize {
+        self.sheets.iter().map(search_sheet_slot_bytes).sum()
+    }
+
+    fn enforce_resident_byte_budget(&mut self) {
+        while self.resident_index_bytes() > MAX_RESIDENT_SEARCH_INDEX_BYTES {
+            let Some(sheet_index) = self.resident_order.pop_front() else {
+                return;
+            };
+            self.remove_resident_index(sheet_index);
+        }
+    }
+}
+
+fn search_sheet_slot_bytes(slot: &SearchSheetSlot) -> usize {
+    match slot {
+        SearchSheetSlot::Fresh(entry)
+        | SearchSheetSlot::Stale {
+            entry: Some(entry), ..
+        } => entry.index.estimated_bytes(),
+        SearchSheetSlot::Stale { entry: None, .. } | SearchSheetSlot::Missing => 0,
     }
 }
 
@@ -458,7 +500,7 @@ pub fn build_sheet_index_with_cancel(
         return None;
     }
 
-    let (index, schema, fields) = match create_tantivy_index() {
+    let (index, directory, schema, fields) = match create_tantivy_index() {
         Ok(index) => index,
         Err(error) => {
             eprintln!("Failed to create tantivy index: {error:?}");
@@ -506,16 +548,20 @@ pub fn build_sheet_index_with_cancel(
 
     Some(SearchSheetIndex {
         index,
+        directory,
         schema,
         text_field: fields.text,
         literal_field: fields.literal,
         display_field: fields.display,
         cell_id_field: fields.cell_id,
         writer: Arc::new(Mutex::new(writer)),
+        #[cfg(test)]
+        accounted_bytes_override: None,
     })
 }
 
-fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::TantivyError> {
+fn create_tantivy_index()
+-> Result<(Index, RamDirectory, Schema, SchemaFields), tantivy::TantivyError> {
     let mut schema_builder = Schema::builder();
 
     let text_field = schema_builder.add_text_field(
@@ -546,7 +592,10 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
     );
 
     let schema = schema_builder.build();
-    let index = Index::create_in_ram(schema.clone());
+    let directory = RamDirectory::create();
+    let index = Index::builder()
+        .schema(schema.clone())
+        .open_or_create(directory.clone())?;
     let analyzer = TextAnalyzer::builder(JiebaTokenizer::new())
         .filter(LowerCaser)
         .build();
@@ -554,6 +603,7 @@ fn create_tantivy_index() -> Result<(Index, Schema, SchemaFields), tantivy::Tant
 
     Ok((
         index,
+        directory,
         schema,
         SchemaFields {
             text: text_field,
@@ -664,6 +714,17 @@ pub(crate) fn search_position(row: usize, col: usize) -> u64 {
 }
 
 impl SearchSheetIndex {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        #[cfg(test)]
+        if let Some(estimated_bytes) = self.accounted_bytes_override {
+            return estimated_bytes;
+        }
+        self.directory
+            .total_mem_usage()
+            .saturating_add(WRITER_ARENA_BYTES)
+            .saturating_add(std::mem::size_of::<Self>())
+    }
+
     pub fn search(&self, plan: &SearchQueryPlan, limit: usize) -> Vec<SearchCellText> {
         search_index(self, plan, limit)
     }
@@ -985,5 +1046,37 @@ mod tests {
                 .fresh_sheet_index(MAX_RESIDENT_SEARCH_INDEXES)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn resident_indexes_are_evicted_by_measured_bytes() {
+        let document_id = 7;
+        let mut store = SearchIndexStore::default();
+
+        for sheet_index in 0..3 {
+            let stamp = store.sheet_stamp(document_id, sheet_index);
+            let mut index = build_sheet_index(&[]).expect("index");
+            index.accounted_bytes_override = Some(24 * 1024 * 1024);
+            store.install_sheet_index(document_id, sheet_index, stamp, Some(index));
+        }
+
+        assert_eq!(store.resident_index_count(), 2);
+        assert!(store.resident_index_bytes() <= MAX_RESIDENT_SEARCH_INDEX_BYTES);
+        assert!(store.fresh_sheet_index(0).is_none());
+        assert!(store.fresh_sheet_index(2).is_some());
+    }
+
+    #[test]
+    fn measured_index_bytes_include_directory_and_writer_memory() {
+        let index = build_sheet_index(&[SearchCellText {
+            row: 0,
+            col: 0,
+            search_text: "searchable".to_string(),
+            display_text: "searchable".to_string(),
+        }])
+        .expect("index");
+
+        assert!(index.directory.total_mem_usage() > 0);
+        assert!(index.estimated_bytes() > WRITER_ARENA_BYTES);
     }
 }

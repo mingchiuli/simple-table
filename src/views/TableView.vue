@@ -172,7 +172,7 @@ function handleViewportChange(
     rowEnd: Math.min(extent.rowCount, rowEnd),
     colStart: Math.max(0, colStart),
     colEnd: Math.min(extent.columnCount, colEnd),
-  });
+  }, { priority: 'viewport' });
 }
 
 const {

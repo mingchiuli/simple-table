@@ -1,11 +1,9 @@
 import { computed, ref } from "vue";
-import { defaultRichProjection, type FileData, type RecentFile } from "@/types";
+import type { RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
 import { pickOpenFile, prepareRecentFile } from "@/platform";
-import { blankCell } from "@/utils/cellValue";
 import { warnRecentFileTrackingFailure } from "@/utils/recentFileTracking";
-import { defaultSpreadsheetExtension } from "@/utils/spreadsheetFormats";
 import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
@@ -60,10 +58,8 @@ export function useHomeFileActions({
       const replacement = await beginDocumentReplacement();
       if (!replacement) return;
       try {
-        const defaultExtension = await defaultSpreadsheetExtension();
-        const newFileData = newUntitledFileData(defaultExtension);
         const expectedContext = documentSessionStore.currentCommandContext();
-        const prepared = await api.prepareNewFile(newFileData);
+        const prepared = await api.prepareNewFile();
         const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
         replacement.commit();
         documentSessionStore.openDocumentResponse(opened, null);
@@ -149,21 +145,4 @@ export function useHomeFileActions({
 
 function isFileNotFoundError(error: unknown): boolean {
   return isAppErrorCode(error, "file_not_found") || String(error).includes("File not found:");
-}
-
-function newUntitledFileData(defaultExtension: string): FileData {
-  return {
-    path: "",
-    fileName: `untitled.${defaultExtension}`,
-    sheets: [
-      {
-        name: "Sheet1",
-        rows: Array.from({ length: 5 }, () =>
-          Array.from({ length: 5 }, () => blankCell())
-        ),
-        merges: [],
-        rich: defaultRichProjection(),
-      },
-    ],
-  };
 }
