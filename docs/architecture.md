@@ -153,6 +153,13 @@ available. The lease then atomically installs the prepared `EditorState`.
 Failed promotion restores the prepared token, and the checkout continues to
 reserve prepared-document capacity until replacement finishes.
 
+Closing and replacement detach the previous `EditorState` while holding the
+registry lock, then cancel its index and replay work and release the detached
+state after the lock is dropped. Save rebinding similarly returns the old
+workbook and any cleared history as retired resources for lock-external release.
+The close command runs on the mutation executor, so large document destruction
+does not run on the synchronous command path.
+
 Prepared documents are process-local, limited to one entry and an estimated
 128 MiB, and expire after five minutes. A second prepare is rejected while a
 live token exists; it never evicts the first token. The active and prepared
@@ -203,6 +210,14 @@ above that contract, subdivides only the dedicated oversized-region error, and
 treats multiple child blocks as combined coverage. The ordinary cache target is
 16 MiB; pinned visible blocks form a separate hard bound of eight 16 MiB blocks
 so visibility cannot turn the cache into an unbounded exception.
+
+An oversized logical tile may be subdivided, but subdivision has its own
+admission boundary: at most 64 fragment requests, 32 MiB of combined fragment
+payload, and ten seconds may be spent on one logical load. Every recursive step
+checks the document and viewport generation before issuing another IPC request.
+Responses are converted to cache blocks as they arrive, so the loader does not
+retain both complete response objects and their mapped blocks. Resetting the
+document generation stops further recursive requests from an obsolete load.
 
 Region commands capture detached cells, metadata, manifest values, document ID,
 and revision while holding the document read lock, then release the lock before
@@ -314,8 +329,11 @@ with a ten-second connect timeout and twenty-second total timeout. The GitHub
 release body is streamed under a 256 KiB limit, release and current versions are
 parsed as strict SemVer, and only APK links under this repository's GitHub
 release-download path are exposed. Update failures use the same serialized
-`AppError` contract as other commands. Concurrent frontend checks share one
-in-flight request, while reset only invalidates its UI continuation.
+`AppError` contract as other commands. An application-scoped Pinia update
+session owns update state, the in-flight check, and the desktop download task.
+Checks and downloads therefore remain single across route component remounts.
+Dialogs only subscribe to that session, and resetting dialog state cannot
+interrupt an active download or discard its progress.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,

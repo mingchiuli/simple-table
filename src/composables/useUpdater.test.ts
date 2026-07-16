@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { effectScope } from "vue";
+import { createPinia, setActivePinia } from "pinia";
 import { useUpdater, type UpdateInfo } from "@/composables/useUpdater";
 import { useApplicationExitGuard } from "@/composables/useApplicationExit";
 
@@ -66,6 +67,7 @@ describe("useUpdater", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
     tauriMocks.platform.mockReturnValue("android");
     tauriMocks.getVersion.mockResolvedValue("0.11.1");
@@ -95,9 +97,10 @@ describe("useUpdater", () => {
     const pendingCheck = deferred<UpdateInfo | null>();
     tauriMocks.invoke.mockReturnValue(pendingCheck.promise);
     const updater = useUpdater();
+    const remountedUpdater = useUpdater();
 
     const first = updater.checkForUpdate();
-    const second = updater.checkForUpdate();
+    const second = remountedUpdater.checkForUpdate();
     await flushPromises();
 
     expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
@@ -106,6 +109,7 @@ describe("useUpdater", () => {
     await Promise.all([first, second]);
 
     expect(updater.status.value).toBe("available");
+    expect(remountedUpdater.status.value).toBe("available");
     expect(updater.mobileUpdateInfo.value?.version).toBe("0.12.0");
   });
 
@@ -156,7 +160,7 @@ describe("useUpdater", () => {
     expect(updater.updateInfo.value).toBeNull();
   });
 
-  it("ignores desktop download progress and relaunch after reset", async () => {
+  it("keeps one desktop download active across reset and composable remounts", async () => {
     tauriMocks.platform.mockReturnValue("macos");
     const continueDownload = deferred<void>();
     const update = {
@@ -169,24 +173,28 @@ describe("useUpdater", () => {
       }),
     } as unknown as Update;
     const updater = useUpdater();
+    const remountedUpdater = useUpdater();
     updater.updateInfo.value = update;
 
     const downloadPromise = updater.downloadAndInstall();
+    const remountedDownloadPromise = remountedUpdater.downloadAndInstall();
     await flushPromises();
+    expect(update.downloadAndInstall).toHaveBeenCalledTimes(1);
     expect(updater.status.value).toBe("downloading");
     expect(updater.downloadProgress.value.total).toBe(100);
 
     updater.reset();
+    expect(remountedUpdater.status.value).toBe("downloading");
     continueDownload.resolve();
-    await downloadPromise;
+    await Promise.all([downloadPromise, remountedDownloadPromise]);
 
-    expect(updater.status.value).toBe("idle");
+    expect(updater.status.value).toBe("ready");
     expect(updater.downloadProgress.value).toEqual({
-      downloaded: 0,
-      total: 0,
-      percentage: 0,
+      downloaded: 100,
+      total: 100,
+      percentage: 100,
     });
-    expect(tauriMocks.relaunch).not.toHaveBeenCalled();
+    expect(tauriMocks.relaunch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an installed update ready when application exit is cancelled", async () => {

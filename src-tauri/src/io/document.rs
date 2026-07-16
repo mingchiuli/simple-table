@@ -97,29 +97,30 @@ pub fn commit_prepared_document(
         &checkout.document().editor_state.file_data().file_name,
     )?;
     let (prepared, _prepared_commit) = checkout.commit();
-    let (document_id, previous_document_id, response) = {
+    let (document_id, previous_document, response) = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let (document_id, previous_document_id) =
+        let (document_id, previous_document) =
             registry_guard.finish_document_replacement(replacement_lease, prepared.editor_state)?;
         replacement.finished = true;
         let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
         (
             document_id,
-            previous_document_id,
+            previous_document,
             open_document_response_snapshot(editor_state),
         )
     };
 
     let response = finalize_open_document_response(response);
 
-    if let Some(previous_document_id) = previous_document_id
+    if let Some(previous_document_id) = previous_document.as_ref().map(EditorState::document_id)
         && previous_document_id != document_id
     {
         cancel_index_jobs_for_document(previous_document_id);
         crate::commands::mutation_replay::retire_document(previous_document_id);
     }
+    drop(previous_document);
     spawn_rebuild_all_sheets_index(&registry, document_id);
     Ok(response)
 }
@@ -302,6 +303,7 @@ where
 
     let document_id;
     let response;
+    let retired;
     {
         let mut registry_guard = registry
             .write()
@@ -311,7 +313,12 @@ where
                 "active document changed while save was in progress".to_string(),
             )
         })?;
-        editor_state.finish_save_commit(lease, result.file_data, result.workbook, clear_history)?;
+        retired = editor_state.finish_save_commit(
+            lease,
+            result.file_data,
+            result.workbook,
+            clear_history,
+        )?;
         document_id = editor_state.document_id();
         response = SavedDocumentResponse {
             document: Some(document_manifest(editor_state)),
@@ -319,6 +326,7 @@ where
             editor_session: editor_session_info(editor_state),
         };
     }
+    drop(retired);
     spawn_rebuild_all_sheets_index(&registry, document_id);
     Ok(response)
 }
@@ -371,6 +379,7 @@ where
     }
 
     let response;
+    let retired;
     {
         let mut registry_guard = registry
             .write()
@@ -380,7 +389,12 @@ where
                 "active document changed while save was in progress".to_string(),
             )
         })?;
-        editor_state.finish_save_commit_without_reparse(lease, path, output_name, clear_history)?;
+        retired = editor_state.finish_save_commit_without_reparse(
+            lease,
+            path,
+            output_name,
+            clear_history,
+        )?;
         response = SavedDocumentResponse {
             document: None,
             identity: Some(SavedDocumentIdentity {
@@ -390,6 +404,7 @@ where
             editor_session: editor_session_info(editor_state),
         };
     }
+    drop(retired);
     Ok(response)
 }
 
@@ -484,16 +499,17 @@ pub(crate) fn inspect_current_file_for_command<T>(
 
 pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
     let registry = active_document_store();
-    let closed_document_id = {
+    let closed_document = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         registry_guard.close_active_document(document_id)?
     };
-    if let Some(document_id) = closed_document_id {
+    if let Some(document_id) = closed_document.as_ref().map(EditorState::document_id) {
         cancel_index_jobs_for_document(document_id);
         crate::commands::mutation_replay::retire_document(document_id);
     }
+    drop(closed_document);
     Ok(())
 }
 

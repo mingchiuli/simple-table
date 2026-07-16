@@ -5,7 +5,7 @@ type QueuedLoad = {
   viewportGeneration: number | null;
   priority: RegionLoadPriority;
   key: string;
-  run: () => Promise<boolean>;
+  run: (isCurrent: () => boolean) => Promise<boolean>;
   resolve: (value: boolean) => void;
   reject: (error: unknown) => void;
 };
@@ -65,7 +65,7 @@ export function beginViewportRegionLoad(owner: object, retainedKeys: Iterable<st
 export function scheduleRegionLoad(
   owner: object,
   key: string,
-  run: () => Promise<boolean>,
+  run: (isCurrent: () => boolean) => Promise<boolean>,
   options: { priority?: RegionLoadPriority; viewportGeneration?: number } = {}
 ): Promise<boolean> {
   const runtime = runtimeFor(owner);
@@ -201,9 +201,18 @@ function pumpQueue(owner: object, runtime: RegionCacheRuntime) {
     }
     record.state = 'active';
     runtime.activeLoads += 1;
-    void load.run().then(
+    const isCurrent = () => {
+      if (load.generation !== runtime.generation) return false;
+      if (runtime.loads.get(load.key) !== record) return false;
+      return load.priority !== 'viewport'
+        || load.viewportGeneration === runtime.viewportGeneration;
+    };
+    void load.run(isCurrent).then(
       (value) => load.resolve(load.generation === runtime.generation && value),
-      load.reject
+      (error) => {
+        if (isCurrent()) load.reject(error);
+        else load.resolve(false);
+      }
     ).finally(() => {
       runtime.activeLoads = Math.max(0, runtime.activeLoads - 1);
       pumpQueue(owner, runtime);

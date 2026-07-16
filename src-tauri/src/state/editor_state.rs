@@ -51,6 +51,11 @@ pub struct EditorState {
     save_commit: Option<SaveCommitLease>,
 }
 
+pub(crate) struct RetiredEditorResources {
+    _document: Option<SpreadsheetDocument>,
+    _history: Option<HistoryStore>,
+}
+
 impl EditorState {
     pub fn with_workbook(file_data: FileData, workbook: Option<Workbook>) -> Self {
         let document = SpreadsheetDocument::new(file_data, workbook);
@@ -80,21 +85,25 @@ impl EditorState {
         self.document.update_identity(path, file_name);
     }
 
-    pub fn rebind_saved_document(
+    pub(crate) fn rebind_saved_document(
         &mut self,
         file_data: FileData,
         workbook: Option<Workbook>,
         clear_history: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<RetiredEditorResources, AppError> {
         self.ensure_revision_available()?;
-        self.document = SpreadsheetDocument::new(file_data, workbook);
-        if clear_history {
-            self.history.clear_all();
-        }
+        let previous_document = std::mem::replace(
+            &mut self.document,
+            SpreadsheetDocument::new(file_data, workbook),
+        );
+        let previous_history = clear_history.then(|| std::mem::take(&mut self.history));
         self.bump_revision()?;
         self.dirty.replace_current(self.document.projection());
         self.resources.replace_all(self.document.projection());
-        Ok(())
+        Ok(RetiredEditorResources {
+            _document: Some(previous_document),
+            _history: previous_history,
+        })
     }
 
     pub fn has_save_commit_in_progress(&self) -> bool {
@@ -129,13 +138,13 @@ impl EditorState {
         }
     }
 
-    pub fn finish_save_commit(
+    pub(crate) fn finish_save_commit(
         &mut self,
         lease: SaveCommitLease,
         file_data: FileData,
         workbook: Option<Workbook>,
         clear_history: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<RetiredEditorResources, AppError> {
         if self.save_commit != Some(lease) {
             return Err(AppError::DocumentStateInvalid(
                 "save commit lease is no longer active".to_string(),
@@ -149,10 +158,10 @@ impl EditorState {
         }
 
         self.save_commit = None;
-        self.rebind_saved_document(file_data, workbook, clear_history)?;
+        let retired = self.rebind_saved_document(file_data, workbook, clear_history)?;
         self.mark_saved();
         self.mark_search_index_stale();
-        Ok(())
+        Ok(retired)
     }
 
     #[cfg(test)]
@@ -171,13 +180,13 @@ impl EditorState {
         self.document.is_csv_backed()
     }
 
-    pub fn finish_save_commit_without_reparse(
+    pub(crate) fn finish_save_commit_without_reparse(
         &mut self,
         lease: SaveCommitLease,
         path: String,
         file_name: String,
         clear_history: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<RetiredEditorResources, AppError> {
         if self.save_commit != Some(lease) {
             return Err(AppError::DocumentStateInvalid(
                 "save commit lease is no longer active".to_string(),
@@ -193,12 +202,13 @@ impl EditorState {
 
         self.save_commit = None;
         self.document.update_identity(path, file_name);
-        if clear_history {
-            self.history.clear_all();
-        }
+        let previous_history = clear_history.then(|| std::mem::take(&mut self.history));
         self.bump_revision()?;
         self.mark_saved();
-        Ok(())
+        Ok(RetiredEditorResources {
+            _document: None,
+            _history: previous_history,
+        })
     }
 
     pub fn document_id(&self) -> u64 {
@@ -2503,9 +2513,18 @@ mod tests {
         )
         .expect("read saved xlsx");
 
-        state
+        let retired = state
             .rebind_saved_document(parsed.file_data, parsed.workbook, true)
             .expect("rebind saved document");
+        assert_eq!(
+            retired
+                ._document
+                .as_ref()
+                .map(|document| document.projection().file_name.as_str()),
+            Some("input.csv")
+        );
+        assert!(retired._history.is_some());
+        drop(retired);
         state.mark_saved();
 
         assert!(state.capabilities().sheets[0].can_resize_rows_columns);

@@ -103,6 +103,105 @@ describe('documentSession sparse projection', () => {
     expect(requests).toBe(3);
   });
 
+  it('bounds recursive region fragment requests', async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse(openResponse());
+    const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
+    let requests = 0;
+    const fetch = async (_context: unknown, region: typeof requested) => {
+      requests += 1;
+      const cells = (region.rowEnd - region.rowStart) * (region.colEnd - region.colStart);
+      if (cells > 64) {
+        throw {
+          code: 'region_response_too_large',
+          message: 'region response exceeds byte limit',
+        };
+      }
+      return regionResponse(
+        region.sheetIndex,
+        region.rowStart,
+        region.rowEnd,
+        region.colStart,
+        region.colEnd,
+        `fragment-${requests}`
+      );
+    };
+
+    await expect(store.ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
+      'more than 64 fragment requests'
+    );
+    expect(requests).toBe(64);
+    expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
+  });
+
+  it('bounds aggregate bytes across split region responses', async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse(openResponse());
+    const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
+    const fetch = async (_context: unknown, region: typeof requested) => {
+      if (region.rowEnd - region.rowStart > 32) {
+        throw {
+          code: 'region_response_too_large',
+          message: 'region response exceeds byte limit',
+        };
+      }
+      const response = regionResponse(
+        region.sheetIndex,
+        region.rowStart,
+        region.rowEnd,
+        region.colStart,
+        region.colEnd,
+        `row-${region.rowStart}`
+      );
+      response.estimatedBytes = 9 * 1024 * 1024;
+      return response;
+    };
+
+    await expect(store.ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
+      'byte load budget'
+    );
+    expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
+  });
+
+  it('stops recursive region requests after the document generation changes', async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse(openResponse());
+    const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
+    let resolveChild!: (response: SheetRegionProjectionResponse) => void;
+    const child = new Promise<SheetRegionProjectionResponse>((resolve) => {
+      resolveChild = resolve;
+    });
+    let requests = 0;
+    let childRegion: typeof requested | null = null;
+    const fetch = async (_context: unknown, region: typeof requested) => {
+      requests += 1;
+      if (requests === 1) {
+        throw {
+          code: 'region_response_too_large',
+          message: 'region response exceeds byte limit',
+        };
+      }
+      childRegion = region;
+      return child;
+    };
+
+    const loading = store.ensureSheetRegionLoaded(requested, fetch);
+    while (requests < 2) await Promise.resolve();
+    store.clearDocument();
+    resolveChild(regionResponse(
+      childRegion!.sheetIndex,
+      childRegion!.rowStart,
+      childRegion!.rowEnd,
+      childRegion!.colStart,
+      childRegion!.colEnd,
+      'stale'
+    ));
+
+    await expect(loading).resolves.toBe(false);
+    expect(requests).toBe(2);
+    expect(store.data).toBeNull();
+  });
+
   it('evicts old region blocks at the per-sheet budget', async () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse(openResponse());

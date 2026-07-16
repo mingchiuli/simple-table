@@ -320,8 +320,8 @@ pub async fn get_sheet_region_projection(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn close_current_document(document_id: CommandU64) -> Result<(), AppError> {
-    document::close_current_document(document_id.get())
+pub async fn close_current_document(document_id: CommandU64) -> Result<(), AppError> {
+    mutation_executor::run(move || document::close_current_document(document_id.get())).await
 }
 
 #[tauri::command(rename_all = "camelCase")]

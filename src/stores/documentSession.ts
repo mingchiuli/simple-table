@@ -73,8 +73,17 @@ const MAX_BLOCKS_PER_SHEET = 8;
 const MAX_RESIDENT_BLOCKS = 24;
 const MAX_RESIDENT_BLOCK_BYTES = 16 * 1024 * 1024;
 const MAX_REGION_BLOCK_BYTES = 16 * 1024 * 1024;
+const MAX_REGION_FRAGMENT_REQUESTS = 64;
+const MAX_REGION_FRAGMENT_BYTES = 32 * 1024 * 1024;
+const MAX_REGION_LOAD_DURATION_MS = 10_000;
 const TILE_ROWS = 128;
 const TILE_COLUMNS = 32;
+
+type RegionLoadBudget = {
+  remainingRequests: number;
+  loadedBytes: number;
+  deadline: number;
+};
 
 export const useDocumentSessionStore = defineStore('documentSession', {
   state: () => ({
@@ -470,17 +479,23 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       const context = this.currentCommandContext();
       if (!context) return false;
       const key = `${context.documentId}:${context.baseRevision}:${regionKey(region)}`;
-      return scheduleRegionLoad(this, key, async () => {
-        const responses = await fetchRegionResponses(context, region, fetchProjection);
-        if (!this.matchesCommandContext(context) || responses.some((response) =>
-          response.documentId !== context.documentId
-          || response.revision !== context.baseRevision
-        )) return false;
+      return scheduleRegionLoad(this, key, async (isCurrent) => {
+        const budget: RegionLoadBudget = {
+          remainingRequests: MAX_REGION_FRAGMENT_REQUESTS,
+          loadedBytes: 0,
+          deadline: Date.now() + MAX_REGION_LOAD_DURATION_MS,
+        };
+        const newBlocks = await fetchRegionBlocks(
+          context,
+          region,
+          fetchProjection,
+          budget,
+          () => isCurrent() && this.matchesCommandContext(context)
+        );
+        if (!isCurrent() || !this.matchesCommandContext(context)) return false;
         const data = this.data;
         const current = data?.sheets[region.sheetIndex];
         if (!data || !current || current.state !== 'loaded') return false;
-        const newBlocks = responses.map(regionBlock);
-        if (newBlocks.some((block) => block.estimatedBytes > MAX_REGION_BLOCK_BYTES)) return false;
         const newKeys = new Set(newBlocks.map((block) => block.key));
         const blocks = [
           ...current.blocks.filter((entry) => !newKeys.has(entry.key)),
@@ -625,25 +640,84 @@ function tileRegions(region: SheetRegion, extent: SheetExtent): SheetRegion[] {
   return tiles;
 }
 
-async function fetchRegionResponses(
+async function fetchRegionBlocks(
   context: EditorCommandContext,
   region: SheetRegion,
   fetchProjection: (
     context: EditorCommandContext,
     region: SheetRegion
-  ) => Promise<SheetRegionProjectionResponse>
-): Promise<SheetRegionProjectionResponse[]> {
+  ) => Promise<SheetRegionProjectionResponse>,
+  budget: RegionLoadBudget,
+  isCurrent: () => boolean
+): Promise<LoadedSheetSlot['blocks']> {
+  ensureRegionLoadCanContinue(budget, isCurrent);
+  budget.remainingRequests -= 1;
   try {
     const response = await fetchProjection(context, region);
+    ensureRegionLoadCanContinue(budget, isCurrent);
     if (regionKey(response.region) !== regionKey(region)) return [];
-    return [response];
+    if (
+      response.documentId !== context.documentId
+      || response.revision !== context.baseRevision
+    ) return [];
+    const block = regionBlock(response);
+    if (block.estimatedBytes > MAX_REGION_BLOCK_BYTES) return [];
+    budget.loadedBytes += block.estimatedBytes;
+    if (budget.loadedBytes > MAX_REGION_FRAGMENT_BYTES) {
+      throw new RegionLoadLimitError(
+        `Region fragments exceed the ${MAX_REGION_FRAGMENT_BYTES} byte load budget`
+      );
+    }
+    return [block];
   } catch (error) {
     if (!isAppErrorCode(error, 'region_response_too_large')) throw error;
     const split = splitRegion(region);
     if (!split) throw error;
-    const first = await fetchRegionResponses(context, split[0], fetchProjection);
-    const second = await fetchRegionResponses(context, split[1], fetchProjection);
+    const first = await fetchRegionBlocks(
+      context,
+      split[0],
+      fetchProjection,
+      budget,
+      isCurrent
+    );
+    const second = await fetchRegionBlocks(
+      context,
+      split[1],
+      fetchProjection,
+      budget,
+      isCurrent
+    );
     return [...first, ...second];
+  }
+}
+
+function ensureRegionLoadCanContinue(budget: RegionLoadBudget, isCurrent: () => boolean) {
+  if (!isCurrent()) {
+    throw new RegionLoadCancelledError();
+  }
+  if (Date.now() > budget.deadline) {
+    throw new RegionLoadLimitError(
+      `Region load exceeded the ${MAX_REGION_LOAD_DURATION_MS} ms deadline`
+    );
+  }
+  if (budget.remainingRequests <= 0) {
+    throw new RegionLoadLimitError(
+      `Region load requires more than ${MAX_REGION_FRAGMENT_REQUESTS} fragment requests`
+    );
+  }
+}
+
+class RegionLoadLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RegionLoadLimitError';
+  }
+}
+
+class RegionLoadCancelledError extends Error {
+  constructor() {
+    super('Region load was cancelled');
+    this.name = 'RegionLoadCancelledError';
   }
 }
 

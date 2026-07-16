@@ -66,15 +66,17 @@ impl ActiveDocumentStore {
         Self::new()
     }
 
-    fn replace_active(&mut self, editor_state: EditorState) -> u64 {
+    fn replace_active(&mut self, editor_state: EditorState) -> (u64, Option<EditorState>) {
         let document_id = editor_state.document_id();
-        self.active = Some(editor_state);
-        document_id
+        let previous = self.active.replace(editor_state);
+        (document_id, previous)
     }
 
     #[cfg(test)]
     pub(crate) fn replace_active_for_test(&mut self, editor_state: EditorState) -> u64 {
-        self.replace_active(editor_state)
+        let (document_id, previous) = self.replace_active(editor_state);
+        drop(previous);
+        document_id
     }
 
     #[cfg(test)]
@@ -86,8 +88,9 @@ impl ActiveDocumentStore {
     ) -> Result<(u64, Option<u64>, T), AppError> {
         self.ensure_replacement_context(expected_document_id, expected_revision)?;
         let (editor_state, metadata) = load_prepared()?;
-        let previous_document_id = self.active.as_ref().map(EditorState::document_id);
-        let document_id = self.replace_active(editor_state);
+        let (document_id, previous) = self.replace_active(editor_state);
+        let previous_document_id = previous.as_ref().map(EditorState::document_id);
+        drop(previous);
         Ok((document_id, previous_document_id, metadata))
     }
 
@@ -130,7 +133,7 @@ impl ActiveDocumentStore {
         }
     }
 
-    fn close_active(&mut self) -> Result<Option<u64>, AppError> {
+    fn close_active(&mut self) -> Result<Option<EditorState>, AppError> {
         if self
             .active
             .as_ref()
@@ -140,16 +143,13 @@ impl ActiveDocumentStore {
                 "cannot close the active document while save is in progress".to_string(),
             ));
         }
-        Ok(self
-            .active
-            .take()
-            .map(|editor_state| editor_state.document_id()))
+        Ok(self.active.take())
     }
 
     pub(crate) fn close_active_document(
         &mut self,
         document_id: u64,
-    ) -> Result<Option<u64>, AppError> {
+    ) -> Result<Option<EditorState>, AppError> {
         self.ensure_no_replacement_in_progress()?;
         let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
         if editor_state.document_id() != document_id {
@@ -248,12 +248,11 @@ impl ActiveDocumentStore {
         &mut self,
         lease: DocumentReplacementLease,
         editor_state: EditorState,
-    ) -> Result<(u64, Option<u64>), AppError> {
+    ) -> Result<(u64, Option<EditorState>), AppError> {
         self.ensure_replacement_lease(lease)?;
-        let previous_document_id = self.active.as_ref().map(EditorState::document_id);
-        let document_id = self.replace_active(editor_state);
+        let (document_id, previous) = self.replace_active(editor_state);
         self.replacement_lease = None;
-        Ok((document_id, previous_document_id))
+        Ok((document_id, previous))
     }
 
     pub(crate) fn abort_document_replacement(&mut self, lease: DocumentReplacementLease) {
@@ -433,16 +432,44 @@ mod tests {
             .begin_document_replacement(Some(current_id), Some(current_revision))
             .expect("replacement lease");
 
-        let (document_id, previous_id) = store
+        let (document_id, previous) = store
             .finish_document_replacement(lease, replacement)
             .expect("finish replacement");
 
         assert_eq!(document_id, replacement_id);
-        assert_eq!(previous_id, Some(current_id));
+        assert_eq!(
+            previous.as_ref().map(EditorState::document_id),
+            Some(current_id)
+        );
+        assert_eq!(
+            previous
+                .as_ref()
+                .map(|state| state.file_data().file_name.as_str()),
+            Some("current.xlsx")
+        );
         assert_eq!(
             store.active().map(EditorState::document_id),
             Some(replacement_id)
         );
+        drop(previous);
+    }
+
+    #[test]
+    fn close_detaches_the_document_for_release_after_the_store_borrow() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let current = editor_state("current.xlsx");
+        let current_id = current.document_id();
+        store.replace_active_for_test(current);
+
+        let detached = store
+            .close_active_document(current_id)
+            .expect("close document")
+            .expect("detached document");
+
+        assert!(store.active().is_none());
+        assert_eq!(detached.document_id(), current_id);
+        assert_eq!(detached.file_data().file_name, "current.xlsx");
+        drop(detached);
     }
 
     #[test]
