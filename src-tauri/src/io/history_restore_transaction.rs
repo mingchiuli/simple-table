@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::io::document_memento::{DocumentMemento, DocumentMementoSide};
 use crate::io::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::state::dirty_tracker::DirtyTracker;
-use crate::state::history_store::HistoryStore;
+use crate::state::history_store::{HistoryStore, RetiredHistoryEntries};
 
 #[derive(Clone, Copy)]
 pub(crate) enum HistoryRestoreDirection {
@@ -32,7 +32,9 @@ impl<'a> HistoryRestoreTransaction<'a> {
         }
     }
 
-    pub(crate) fn commit(&mut self) -> Result<Option<DocumentRestoreResult>, AppError> {
+    pub(crate) fn commit(
+        &mut self,
+    ) -> Result<Option<(DocumentRestoreResult, RetiredHistoryEntries)>, AppError> {
         let direction = self.direction;
         let entry = match direction {
             HistoryRestoreDirection::Undo => self.history.peek_undo(),
@@ -52,25 +54,25 @@ impl<'a> HistoryRestoreTransaction<'a> {
 
         self.dirty
             .apply_history_restore(target, rollback, self.document.projection());
-        self.move_history_entry();
-        Ok(Some(restore))
+        let retired = self.move_history_entry();
+        Ok(Some((restore, retired)))
     }
 
-    fn move_history_entry(&mut self) {
+    fn move_history_entry(&mut self) -> RetiredHistoryEntries {
         match self.direction {
             HistoryRestoreDirection::Undo => {
                 let entry = self
                     .history
                     .pop_undo()
                     .expect("undo entry exists until restore transaction commits");
-                self.history.push_redo(entry);
+                self.history.push_redo(entry)
             }
             HistoryRestoreDirection::Redo => {
                 let entry = self
                     .history
                     .pop_redo()
                     .expect("redo entry exists until restore transaction commits");
-                self.history.push_undo(entry);
+                self.history.push_undo(entry)
             }
         }
     }

@@ -1,5 +1,8 @@
 use crate::error::AppError;
-use crate::io::codec::reader::read_file_with_workbook_from_bytes;
+use crate::io::codec::reader::{
+    preflight_input_file, read_file_with_workbook_from_bytes,
+    read_file_with_workbook_from_preflight,
+};
 use crate::io::file_format::{
     default_spreadsheet_extension, export_extensions, extension_of, file_name_from_path_like,
     is_xlsx_extension, open_extension_from_path_name_or_bytes, spreadsheet_format_options,
@@ -39,8 +42,10 @@ pub fn prepare_open_from_bytes(
     bytes: Vec<u8>,
     file_name: Option<String>,
 ) -> Result<PreparedOpenDocument, AppError> {
-    let reservation = prepared_documents::reserve_for_input_bytes(bytes.len())?;
     let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
+    let preflight = preflight_input_file(&extension, &bytes)?;
+    let reservation =
+        prepared_documents::reserve_for_parse_bytes(preflight.estimated_parse_bytes())?;
 
     // 如果调用方已经解析出文件名，优先使用；否则从路径解析
     let resolved_file_name =
@@ -48,7 +53,8 @@ pub fn prepare_open_from_bytes(
 
     // 传入 path 到 reader，同时保留 Excel 原始 Workbook 用于后续无损 patch 保存。
     let source_path = PathBuf::from(&path);
-    let result = read_file_with_workbook_from_bytes(&extension, bytes, path, resolved_file_name)?;
+    let result =
+        read_file_with_workbook_from_preflight(preflight, bytes, path, resolved_file_name)?;
 
     prepare_editor_state(
         result.file_data,

@@ -205,20 +205,22 @@ fn execute_cell_delta(
     base_revision: u64,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
-    let mut registry_guard = registry
-        .write()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
-    let result = editor_state.execute(command)?;
-    if let Some(operation) = result.operation {
-        Ok(cell_delta_mutation_response(
-            editor_state,
-            &operation,
-            result.cell_changes,
-        ))
-    } else {
-        Ok(status_mutation_response(editor_state))
-    }
+    let (response, retired) = {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let result = editor_state.execute(command)?;
+        let retired = result.retired;
+        let response = if let Some(operation) = result.operation {
+            cell_delta_mutation_response(editor_state, &operation, result.cell_changes)
+        } else {
+            status_mutation_response(editor_state)
+        };
+        (response, retired)
+    };
+    drop(retired);
+    Ok(response)
 }
 
 fn execute_structural_command(
@@ -227,13 +229,14 @@ fn execute_structural_command(
     base_revision: u64,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = {
+    let (response, retired) = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
-        match result.operation {
+        let retired = result.retired;
+        let response = match result.operation {
             Some(operation) => structural_delta_mutation_response(
                 editor_state,
                 &operation,
@@ -244,8 +247,10 @@ fn execute_structural_command(
                 editor_state,
                 "structure edit completed without an operation result",
             ),
-        }
+        };
+        (response, retired)
     };
+    drop(retired);
 
     schedule_index_for_response(&response, registry);
 
@@ -259,16 +264,21 @@ fn execute_layout(
     command: EditorCommand,
     patch: LayoutPatch,
 ) -> Result<EditorMutationResponse, AppError> {
-    let mut registry_guard = registry
-        .write()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
-    let result = editor_state.execute(command)?;
-    if result.operation.is_some() {
-        Ok(layout_mutation_response(editor_state, patch))
-    } else {
-        Ok(status_mutation_response(editor_state))
-    }
+    let (response, retired) = {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let result = editor_state.execute(command)?;
+        let response = if result.operation.is_some() {
+            layout_mutation_response(editor_state, patch)
+        } else {
+            status_mutation_response(editor_state)
+        };
+        (response, result.retired)
+    };
+    drop(retired);
+    Ok(response)
 }
 
 fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutPatch {

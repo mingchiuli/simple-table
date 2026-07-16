@@ -41,17 +41,20 @@ pub fn do_undo(
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = {
+    let (response, retired) = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.undo()? {
-            restore_mutation_response(editor_state, result)
+            let response =
+                restore_mutation_response(editor_state, result.restore, result.search_index_update);
+            (response, result.retired)
         } else {
             return Err(AppError::NothingToUndo);
         }
     };
+    drop(retired);
 
     schedule_index_for_response(&response, registry);
 
@@ -64,17 +67,20 @@ pub fn do_redo(
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
-    let response = {
+    let (response, retired) = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.redo()? {
-            restore_mutation_response(editor_state, result)
+            let response =
+                restore_mutation_response(editor_state, result.restore, result.search_index_update);
+            (response, result.retired)
         } else {
             return Err(AppError::NothingToRedo);
         }
     };
+    drop(retired);
 
     schedule_index_for_response(&response, registry);
 

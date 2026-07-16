@@ -45,6 +45,36 @@ pub struct SearchSheetIndex {
     accounted_bytes_override: Option<usize>,
 }
 
+#[derive(Default)]
+pub(crate) struct RetiredSearchIndexes {
+    indexes: Vec<Arc<SearchSheetIndex>>,
+}
+
+impl RetiredSearchIndexes {
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.indexes.append(&mut other.indexes);
+    }
+
+    fn push(&mut self, index: Arc<SearchSheetIndex>) {
+        self.indexes.push(index);
+    }
+
+    fn push_slot(&mut self, slot: SearchSheetSlot) {
+        match slot {
+            SearchSheetSlot::Fresh(entry)
+            | SearchSheetSlot::Stale {
+                entry: Some(entry), ..
+            } => self.push(entry.index),
+            SearchSheetSlot::Stale { entry: None, .. } | SearchSheetSlot::Missing => {}
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.indexes.len()
+    }
+}
+
 struct SearchSheetIndexEntry {
     revision: u64,
     index: Arc<SearchSheetIndex>,
@@ -195,9 +225,9 @@ impl SearchIndexStore {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-    ) {
+    ) -> RetiredSearchIndexes {
         if stamp != self.sheet_stamp(document_id, sheet_index) {
-            return;
+            return RetiredSearchIndexes::default();
         }
         if let Some(slot) = self.sheets.get_mut(sheet_index)
             && matches!(slot, SearchSheetSlot::Stale { .. })
@@ -225,7 +255,7 @@ impl SearchIndexStore {
                 other => other,
             };
         }
-        self.enforce_resident_byte_budget();
+        self.enforce_resident_byte_budget()
     }
 
     pub fn install_sheet_index(
@@ -234,39 +264,55 @@ impl SearchIndexStore {
         sheet_index: usize,
         stamp: SearchIndexStamp,
         index: Option<SearchSheetIndex>,
-    ) {
+    ) -> RetiredSearchIndexes {
+        let mut retired = RetiredSearchIndexes::default();
+        let mut incoming = index.map(Arc::new);
         if stamp != self.sheet_stamp(document_id, sheet_index) {
-            return;
+            if let Some(index) = incoming.take() {
+                retired.push(index);
+            }
+            return retired;
         }
         self.ensure_sheet_slot(sheet_index);
-        self.remove_resident_index(sheet_index);
-        self.sheets[sheet_index] = match index {
+        if let Some(previous) = self.remove_resident_index(sheet_index) {
+            retired.push(previous);
+        }
+        self.sheets[sheet_index] = match incoming.take() {
             Some(index) => {
                 let estimated_bytes = index.estimated_bytes();
                 if estimated_bytes > MAX_RESIDENT_SEARCH_INDEX_BYTES {
-                    return;
+                    retired.push(index);
+                    return retired;
                 }
-                self.evict_resident_until_bounded(estimated_bytes);
+                self.evict_resident_until_bounded(estimated_bytes, &mut retired);
                 if self.resident_index_bytes().saturating_add(estimated_bytes)
                     > MAX_RESIDENT_SEARCH_INDEX_BYTES
                 {
-                    return;
+                    retired.push(index);
+                    return retired;
                 }
                 self.resident_order.push_back(sheet_index);
                 SearchSheetSlot::Fresh(SearchSheetIndexEntry {
                     revision: stamp.revision,
-                    index: Arc::new(index),
+                    index,
                 })
             }
             None => SearchSheetSlot::Missing,
         };
+        retired
     }
 
-    pub fn truncate(&mut self, sheet_count: usize) {
-        self.sheets.truncate(sheet_count);
+    pub fn truncate(&mut self, sheet_count: usize) -> RetiredSearchIndexes {
+        let mut retired = RetiredSearchIndexes::default();
+        if sheet_count < self.sheets.len() {
+            for slot in self.sheets.drain(sheet_count..) {
+                retired.push_slot(slot);
+            }
+        }
         self.sheet_revisions.truncate(sheet_count);
         self.resident_order
             .retain(|sheet_index| *sheet_index < sheet_count);
+        retired
     }
 
     pub fn writer_handle(
@@ -365,15 +411,25 @@ impl SearchIndexStore {
         }
     }
 
-    fn remove_resident_index(&mut self, sheet_index: usize) {
+    fn remove_resident_index(&mut self, sheet_index: usize) -> Option<Arc<SearchSheetIndex>> {
         self.resident_order
             .retain(|resident_sheet| *resident_sheet != sheet_index);
-        if let Some(slot) = self.sheets.get_mut(sheet_index) {
-            *slot = SearchSheetSlot::Missing;
+        let slot = self.sheets.get_mut(sheet_index)?;
+        let previous = std::mem::replace(slot, SearchSheetSlot::Missing);
+        match previous {
+            SearchSheetSlot::Fresh(entry)
+            | SearchSheetSlot::Stale {
+                entry: Some(entry), ..
+            } => Some(entry.index),
+            SearchSheetSlot::Stale { entry: None, .. } | SearchSheetSlot::Missing => None,
         }
     }
 
-    fn evict_resident_until_bounded(&mut self, incoming_bytes: usize) {
+    fn evict_resident_until_bounded(
+        &mut self,
+        incoming_bytes: usize,
+        retired: &mut RetiredSearchIndexes,
+    ) {
         while self.resident_order.len() >= MAX_RESIDENT_SEARCH_INDEXES
             || self.resident_index_bytes().saturating_add(incoming_bytes)
                 > MAX_RESIDENT_SEARCH_INDEX_BYTES
@@ -381,7 +437,9 @@ impl SearchIndexStore {
             let Some(sheet_index) = self.resident_order.pop_front() else {
                 return;
             };
-            self.remove_resident_index(sheet_index);
+            if let Some(index) = self.remove_resident_index(sheet_index) {
+                retired.push(index);
+            }
         }
     }
 
@@ -394,13 +452,17 @@ impl SearchIndexStore {
         self.sheets.iter().map(search_sheet_slot_bytes).sum()
     }
 
-    fn enforce_resident_byte_budget(&mut self) {
+    fn enforce_resident_byte_budget(&mut self) -> RetiredSearchIndexes {
+        let mut retired = RetiredSearchIndexes::default();
         while self.resident_index_bytes() > MAX_RESIDENT_SEARCH_INDEX_BYTES {
             let Some(sheet_index) = self.resident_order.pop_front() else {
-                return;
+                return retired;
             };
-            self.remove_resident_index(sheet_index);
+            if let Some(index) = self.remove_resident_index(sheet_index) {
+                retired.push(index);
+            }
         }
+        retired
     }
 }
 
@@ -1063,12 +1125,16 @@ mod tests {
     fn resident_indexes_are_evicted_at_the_memory_limit() {
         let document_id = 7;
         let mut store = SearchIndexStore::default();
+        let mut retired_count = 0;
 
         for sheet_index in 0..=MAX_RESIDENT_SEARCH_INDEXES {
             let stamp = store.sheet_stamp(document_id, sheet_index);
-            store.install_sheet_index(document_id, sheet_index, stamp, build_sheet_index(&[]));
+            retired_count += store
+                .install_sheet_index(document_id, sheet_index, stamp, build_sheet_index(&[]))
+                .len();
         }
 
+        assert_eq!(retired_count, 1);
         assert_eq!(store.resident_index_count(), MAX_RESIDENT_SEARCH_INDEXES);
         assert!(store.fresh_sheet_index(0).is_none());
         assert!(
@@ -1094,6 +1160,20 @@ mod tests {
         assert!(store.resident_index_bytes() <= MAX_RESIDENT_SEARCH_INDEX_BYTES);
         assert!(store.fresh_sheet_index(0).is_none());
         assert!(store.fresh_sheet_index(2).is_some());
+    }
+
+    #[test]
+    fn rejected_oversized_index_is_returned_for_lock_external_drop() {
+        let document_id = 7;
+        let mut store = SearchIndexStore::default();
+        let stamp = store.sheet_stamp(document_id, 0);
+        let mut index = build_sheet_index(&[]).expect("index");
+        index.accounted_bytes_override = Some(MAX_RESIDENT_SEARCH_INDEX_BYTES + 1);
+
+        let retired = store.install_sheet_index(document_id, 0, stamp, Some(index));
+
+        assert_eq!(retired.len(), 1);
+        assert!(store.fresh_sheet_index(0).is_none());
     }
 
     #[test]

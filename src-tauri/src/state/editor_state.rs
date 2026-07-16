@@ -11,10 +11,14 @@ use crate::ops::EditorCommand;
 use crate::state::content_hash::ContentHash;
 use crate::state::dirty_tracker::DirtyTracker;
 use crate::state::editor_session::EditorSession;
-use crate::state::history_store::{HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES};
+use crate::state::history_store::{
+    HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES, RetiredHistoryEntries,
+};
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
-use crate::state::search_index::{SearchIndexStamp, SearchSheetIndex, SearchWriterHandle};
+use crate::state::search_index::{
+    RetiredSearchIndexes, SearchIndexStamp, SearchSheetIndex, SearchWriterHandle,
+};
 use crate::state::search_session::SearchSession;
 use crate::state::state::HistoryStatus;
 use crate::types::{
@@ -25,12 +29,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use umya_spreadsheet::Workbook;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ExecutedOperation {
     pub operation: Option<AppliedOperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
     pub restore: Option<DocumentRestoreResult>,
     pub search_index_update: SearchIndexUpdatePlan,
+    pub(crate) retired: RetiredEditorResources,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,9 +56,44 @@ pub struct EditorState {
     save_commit: Option<SaveCommitLease>,
 }
 
+#[derive(Default)]
 pub(crate) struct RetiredEditorResources {
     _document: Option<SpreadsheetDocument>,
     _history: Option<HistoryStore>,
+    _history_entries: RetiredHistoryEntries,
+    _search_indexes: RetiredSearchIndexes,
+}
+
+impl std::fmt::Debug for RetiredEditorResources {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RetiredEditorResources(..)")
+    }
+}
+
+impl RetiredEditorResources {
+    fn from_history_entries(history_entries: RetiredHistoryEntries) -> Self {
+        Self {
+            _history_entries: history_entries,
+            ..Self::default()
+        }
+    }
+
+    fn from_search_indexes(search_indexes: RetiredSearchIndexes) -> Self {
+        Self {
+            _search_indexes: search_indexes,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    fn retired_history_entry_count(&self) -> usize {
+        self._history_entries.len()
+    }
+
+    #[cfg(test)]
+    fn retired_search_index_count(&self) -> usize {
+        self._search_indexes.len()
+    }
 }
 
 impl EditorState {
@@ -103,6 +143,7 @@ impl EditorState {
         Ok(RetiredEditorResources {
             _document: Some(previous_document),
             _history: previous_history,
+            ..RetiredEditorResources::default()
         })
     }
 
@@ -208,6 +249,7 @@ impl EditorState {
         Ok(RetiredEditorResources {
             _document: None,
             _history: previous_history,
+            ..RetiredEditorResources::default()
         })
     }
 
@@ -280,14 +322,14 @@ impl EditorState {
         sheet_index: usize,
         stamp: SearchIndexStamp,
         index: Option<SearchSheetIndex>,
-    ) {
-        self.search.install_sheet_index(
+    ) -> RetiredEditorResources {
+        RetiredEditorResources::from_search_indexes(self.search.install_sheet_index(
             self.document_id(),
             sheet_index,
             self.file_data().sheets.len(),
             stamp,
             index,
-        );
+        ))
     }
 
     pub fn mark_search_index_stale(&mut self) -> SearchIndexStamp {
@@ -298,9 +340,16 @@ impl EditorState {
         self.search.mark_sheets_stale(sheet_indexes);
     }
 
-    pub fn mark_search_sheet_fresh(&mut self, sheet_index: usize, stamp: SearchIndexStamp) {
-        self.search
-            .mark_sheet_fresh(self.document_id(), sheet_index, stamp);
+    pub fn mark_search_sheet_fresh(
+        &mut self,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+    ) -> RetiredEditorResources {
+        RetiredEditorResources::from_search_indexes(self.search.mark_sheet_fresh(
+            self.document_id(),
+            sheet_index,
+            stamp,
+        ))
     }
 
     pub fn search_writer_handle(
@@ -370,6 +419,7 @@ impl EditorState {
                 cell_changes: Vec::new(),
                 restore: None,
                 search_index_update: SearchIndexUpdatePlan::default(),
+                retired: RetiredEditorResources::default(),
             });
         }
         self.ensure_operation_supported(&operation)?;
@@ -390,14 +440,14 @@ impl EditorState {
         self.dirty
             .apply_operation(&operation, &cell_changes, self.document.projection());
 
-        if before.estimated_bytes() > MAX_SINGLE_HISTORY_ENTRY_BYTES {
-            self.history.clear_all();
+        let retired_history = if before.estimated_bytes() > MAX_SINGLE_HISTORY_ENTRY_BYTES {
+            self.history.clear_all()
         } else {
             let after = self.document.capture_memento_side(&operation);
             let memento = SpreadsheetDocument::create_memento(before, after);
             let entry = HistoryEntry::new(memento);
-            self.history.record(entry);
-        }
+            self.history.record(entry)
+        };
 
         self.bump_revision()?;
         if should_mark_search_stale {
@@ -408,6 +458,7 @@ impl EditorState {
                 cell_changes,
                 restore: None,
                 search_index_update,
+                retired: RetiredEditorResources::from_history_entries(retired_history),
             });
         } else {
             self.mark_search_sheets_stale(stale_sheets);
@@ -417,6 +468,7 @@ impl EditorState {
             cell_changes,
             restore: None,
             search_index_update: SearchIndexUpdatePlan::default(),
+            retired: RetiredEditorResources::from_history_entries(retired_history),
         })
     }
 
@@ -425,7 +477,7 @@ impl EditorState {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
         self.ensure_revision_available()?;
-        if let Some(restore) = HistoryRestoreTransaction::new(
+        if let Some((restore, retired_history)) = HistoryRestoreTransaction::new(
             &mut self.document,
             &mut self.history,
             &mut self.dirty,
@@ -441,6 +493,7 @@ impl EditorState {
                 cell_changes: Vec::new(),
                 restore: Some(restore),
                 search_index_update: SearchIndexUpdatePlan::rebuild_all(),
+                retired: RetiredEditorResources::from_history_entries(retired_history),
             }))
         } else {
             Ok(None)
@@ -452,7 +505,7 @@ impl EditorState {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
         self.ensure_revision_available()?;
-        if let Some(restore) = HistoryRestoreTransaction::new(
+        if let Some((restore, retired_history)) = HistoryRestoreTransaction::new(
             &mut self.document,
             &mut self.history,
             &mut self.dirty,
@@ -468,6 +521,7 @@ impl EditorState {
                 cell_changes: Vec::new(),
                 restore: Some(restore),
                 search_index_update: SearchIndexUpdatePlan::rebuild_all(),
+                retired: RetiredEditorResources::from_history_entries(retired_history),
             }))
         } else {
             Ok(None)
@@ -610,6 +664,7 @@ mod tests {
     use super::*;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
     use crate::ops::EditorCommand;
+    use crate::state::search_index::build_sheet_index;
     use crate::types::{
         CellFormatProjection, CellValue, ReadOnlyRichProjection, SetCellRequest, SheetRegion,
     };
@@ -2831,6 +2886,67 @@ mod tests {
         assert_eq!(state.history.undo_len(), MAX_HISTORY_ENTRIES);
         assert!(state.history.undo_estimated_bytes() <= MAX_HISTORY_BYTES);
         assert!(state.can_undo());
+    }
+
+    #[test]
+    fn new_edit_returns_cleared_redo_history_for_external_release() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "retired-history.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::Null]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let first = state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "first".to_string(),
+            })
+            .expect("first edit");
+        assert_eq!(first.retired.retired_history_entry_count(), 0);
+        drop(first);
+        let undo = state.undo().expect("undo").expect("undo result");
+        assert_eq!(undo.retired.retired_history_entry_count(), 0);
+        drop(undo);
+
+        let second = state
+            .execute(EditorCommand::SetCell {
+                sheet_index: 0,
+                row: 0,
+                col: 0,
+                text: "second".to_string(),
+            })
+            .expect("second edit");
+
+        assert_eq!(second.retired.retired_history_entry_count(), 1);
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn search_index_replacement_returns_previous_index_for_external_release() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "retired-index.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData::default()],
+            },
+            None,
+        );
+        let stamp = state.search_sheet_index_stamp(0);
+        let first = state.install_search_index(0, stamp, build_sheet_index(&[]));
+        assert_eq!(first.retired_search_index_count(), 0);
+        drop(first);
+
+        let retired = state.install_search_index(0, stamp, build_sheet_index(&[]));
+
+        assert_eq!(retired.retired_search_index_count(), 1);
     }
 
     #[test]

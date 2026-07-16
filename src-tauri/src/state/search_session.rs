@@ -1,5 +1,5 @@
 use crate::state::search_index::{
-    SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
+    RetiredSearchIndexes, SearchIndexStamp, SearchIndexStore, SearchSheetIndex, SearchWriterHandle,
 };
 use crate::types::FileData;
 use std::sync::Arc;
@@ -33,10 +33,12 @@ impl SearchSession {
         sheet_count: usize,
         stamp: SearchIndexStamp,
         index: Option<SearchSheetIndex>,
-    ) {
-        self.index
+    ) -> RetiredSearchIndexes {
+        let mut retired = self
+            .index
             .install_sheet_index(document_id, sheet_index, stamp, index);
-        self.index.truncate(sheet_count);
+        retired.append(self.index.truncate(sheet_count));
+        retired
     }
 
     pub fn mark_all_stale(&mut self, document_id: u64) -> SearchIndexStamp {
@@ -54,8 +56,8 @@ impl SearchSession {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-    ) {
-        self.index.mark_sheet_fresh(document_id, sheet_index, stamp);
+    ) -> RetiredSearchIndexes {
+        self.index.mark_sheet_fresh(document_id, sheet_index, stamp)
     }
 
     pub fn writer_handle(

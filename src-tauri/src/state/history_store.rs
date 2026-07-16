@@ -1,5 +1,6 @@
 use crate::io::document_memento::DocumentMemento;
 use crate::state::state::HistoryStatus;
+use std::collections::VecDeque;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;
 pub(crate) const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
@@ -22,11 +23,35 @@ impl HistoryEntry {
 
 #[derive(Default)]
 pub(crate) struct HistoryStore {
-    undo_stack: Vec<HistoryEntry>,
-    redo_stack: Vec<HistoryEntry>,
+    undo_stack: VecDeque<HistoryEntry>,
+    redo_stack: VecDeque<HistoryEntry>,
     undo_estimated_bytes: usize,
     redo_estimated_bytes: usize,
     truncated_reason: Option<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct RetiredHistoryEntries {
+    entries: Vec<HistoryEntry>,
+}
+
+impl RetiredHistoryEntries {
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.entries.append(&mut other.entries);
+    }
+
+    fn push(&mut self, entry: HistoryEntry) {
+        self.entries.push(entry);
+    }
+
+    fn extend(&mut self, entries: impl IntoIterator<Item = HistoryEntry>) {
+        self.entries.extend(entries);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 impl HistoryStore {
@@ -38,37 +63,46 @@ impl HistoryStore {
         !self.redo_stack.is_empty()
     }
 
-    pub(crate) fn record(&mut self, entry: HistoryEntry) {
+    pub(crate) fn record(&mut self, entry: HistoryEntry) -> RetiredHistoryEntries {
+        let mut retired = RetiredHistoryEntries::default();
         if entry.estimated_bytes > MAX_SINGLE_HISTORY_ENTRY_BYTES {
-            self.clear_undo();
+            let entry_bytes = entry.estimated_bytes;
+            retired.append(self.clear_undo());
+            retired.push(entry);
             self.truncated_reason = Some(format!(
                 "The last operation was too large to keep in undo history ({} bytes, limit {} bytes).",
-                entry.estimated_bytes, MAX_SINGLE_HISTORY_ENTRY_BYTES
+                entry_bytes, MAX_SINGLE_HISTORY_ENTRY_BYTES
             ));
         } else {
-            self.push_undo(entry);
+            retired.append(self.push_undo(entry));
         }
-        self.clear_redo();
+        retired.append(self.clear_redo());
+        retired
     }
 
-    pub(crate) fn clear_all(&mut self) {
-        self.clear_undo();
-        self.clear_redo();
+    pub(crate) fn clear_all(&mut self) -> RetiredHistoryEntries {
+        let mut retired = self.clear_undo();
+        retired.append(self.clear_redo());
         self.truncated_reason = None;
+        retired
     }
 
-    pub(crate) fn clear_undo(&mut self) {
-        self.undo_stack.clear();
+    pub(crate) fn clear_undo(&mut self) -> RetiredHistoryEntries {
+        let mut retired = RetiredHistoryEntries::default();
+        retired.extend(std::mem::take(&mut self.undo_stack));
         self.undo_estimated_bytes = 0;
+        retired
     }
 
-    pub(crate) fn clear_redo(&mut self) {
-        self.redo_stack.clear();
+    pub(crate) fn clear_redo(&mut self) -> RetiredHistoryEntries {
+        let mut retired = RetiredHistoryEntries::default();
+        retired.extend(std::mem::take(&mut self.redo_stack));
         self.redo_estimated_bytes = 0;
+        retired
     }
 
     pub(crate) fn pop_undo(&mut self) -> Option<HistoryEntry> {
-        let entry = self.undo_stack.pop()?;
+        let entry = self.undo_stack.pop_back()?;
         self.undo_estimated_bytes = self
             .undo_estimated_bytes
             .saturating_sub(entry.estimated_bytes);
@@ -76,11 +110,11 @@ impl HistoryStore {
     }
 
     pub(crate) fn peek_undo(&self) -> Option<&HistoryEntry> {
-        self.undo_stack.last()
+        self.undo_stack.back()
     }
 
     pub(crate) fn pop_redo(&mut self) -> Option<HistoryEntry> {
-        let entry = self.redo_stack.pop()?;
+        let entry = self.redo_stack.pop_back()?;
         self.redo_estimated_bytes = self
             .redo_estimated_bytes
             .saturating_sub(entry.estimated_bytes);
@@ -88,25 +122,31 @@ impl HistoryStore {
     }
 
     pub(crate) fn peek_redo(&self) -> Option<&HistoryEntry> {
-        self.redo_stack.last()
+        self.redo_stack.back()
     }
 
-    pub(crate) fn push_redo(&mut self, entry: HistoryEntry) {
+    pub(crate) fn push_redo(&mut self, entry: HistoryEntry) -> RetiredHistoryEntries {
         self.redo_estimated_bytes += entry.estimated_bytes;
-        self.redo_stack.push(entry);
-        if evict_oldest_until_bounded(&mut self.redo_stack, &mut self.redo_estimated_bytes) > 0 {
+        self.redo_stack.push_back(entry);
+        let retired =
+            evict_oldest_until_bounded(&mut self.redo_stack, &mut self.redo_estimated_bytes);
+        if !retired.entries.is_empty() {
             self.truncated_reason =
                 Some("Old redo entries were discarded to keep history under memory budget.".into());
         }
+        retired
     }
 
-    pub(crate) fn push_undo(&mut self, entry: HistoryEntry) {
+    pub(crate) fn push_undo(&mut self, entry: HistoryEntry) -> RetiredHistoryEntries {
         self.undo_estimated_bytes += entry.estimated_bytes;
-        self.undo_stack.push(entry);
-        if evict_oldest_until_bounded(&mut self.undo_stack, &mut self.undo_estimated_bytes) > 0 {
+        self.undo_stack.push_back(entry);
+        let retired =
+            evict_oldest_until_bounded(&mut self.undo_stack, &mut self.undo_estimated_bytes);
+        if !retired.entries.is_empty() {
             self.truncated_reason =
                 Some("Old undo entries were discarded to keep history under memory budget.".into());
         }
+        retired
     }
 
     pub(crate) fn status(&self) -> HistoryStatus {
@@ -140,15 +180,59 @@ impl HistoryStore {
     }
 }
 
-fn evict_oldest_until_bounded(stack: &mut Vec<HistoryEntry>, estimated_bytes: &mut usize) -> usize {
-    let mut evicted_count = 0;
+fn evict_oldest_until_bounded(
+    stack: &mut VecDeque<HistoryEntry>,
+    estimated_bytes: &mut usize,
+) -> RetiredHistoryEntries {
+    let mut retired = RetiredHistoryEntries::default();
     while stack.len() > MAX_HISTORY_ENTRIES || *estimated_bytes > MAX_HISTORY_BYTES {
-        let evicted = stack.remove(0);
-        *estimated_bytes = estimated_bytes.saturating_sub(evicted.estimated_bytes);
-        evicted_count += 1;
-        if stack.is_empty() {
+        let Some(evicted) = stack.pop_front() else {
             break;
+        };
+        *estimated_bytes = estimated_bytes.saturating_sub(evicted.estimated_bytes);
+        retired.push(evicted);
+    }
+    retired
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::document_memento::{DocumentMementoSide, LayoutMemento};
+    use std::collections::HashMap;
+
+    fn entry(estimated_bytes: usize) -> HistoryEntry {
+        let side =
+            || DocumentMementoSide::Layout(LayoutMemento::new(0, HashMap::new(), HashMap::new()));
+        HistoryEntry {
+            memento: DocumentMemento::new(side(), side()),
+            estimated_bytes,
         }
     }
-    evicted_count
+
+    #[test]
+    fn recording_after_undo_returns_the_cleared_redo_entry() {
+        let mut history = HistoryStore::default();
+        assert_eq!(history.record(entry(1)).len(), 0);
+        let previous = history.pop_undo().expect("undo entry");
+        assert_eq!(history.push_redo(previous).len(), 0);
+
+        let retired = history.record(entry(1));
+
+        assert_eq!(retired.len(), 1);
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn capacity_eviction_returns_the_oldest_entry() {
+        let mut history = HistoryStore::default();
+        for _ in 0..MAX_HISTORY_ENTRIES {
+            assert_eq!(history.push_undo(entry(1)).len(), 0);
+        }
+
+        let retired = history.push_undo(entry(1));
+
+        assert_eq!(retired.len(), 1);
+        assert_eq!(history.undo_stack.len(), MAX_HISTORY_ENTRIES);
+    }
 }

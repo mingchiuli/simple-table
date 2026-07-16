@@ -25,6 +25,21 @@ pub struct ReadFileResult {
     pub workbook: Option<Workbook>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InputFilePreflight {
+    format: SpreadsheetFileFormat,
+    estimated_parse_bytes: usize,
+}
+
+impl InputFilePreflight {
+    pub(crate) fn estimated_parse_bytes(self) -> usize {
+        self.estimated_parse_bytes
+    }
+}
+
+const CSV_PARSE_MEMORY_MULTIPLIER: usize = 3;
+const XLSX_UNCOMPRESSED_MEMORY_MULTIPLIER: usize = 3;
+
 /// 从已读取的文件字节解析 FileData，并在 Excel 格式下保留原始 umya Workbook。
 pub fn read_file_with_workbook_from_bytes(
     extension: &str,
@@ -32,21 +47,42 @@ pub fn read_file_with_workbook_from_bytes(
     path: String,
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
-    validate_input_size(bytes.len())?;
+    let preflight = preflight_input_file(extension, &bytes)?;
+    read_file_with_workbook_from_preflight(preflight, bytes, path, file_name)
+}
 
-    match SpreadsheetFileFormat::from_extension(extension) {
-        Some(SpreadsheetFileFormat::Xlsx) => {
-            validate_xlsx_archive(&bytes)?;
-            read_xlsx_from_bytes(Cursor::new(bytes), path, file_name)
+pub(crate) fn preflight_input_file(
+    extension: &str,
+    bytes: &[u8],
+) -> Result<InputFilePreflight, AppError> {
+    validate_input_size(bytes.len())?;
+    let format =
+        SpreadsheetFileFormat::from_extension(extension).ok_or(AppError::UnsupportedFormat)?;
+    let estimated_parse_bytes = match format {
+        SpreadsheetFileFormat::Xlsx => {
+            estimate_xlsx_parse_bytes(bytes.len(), validate_xlsx_archive(bytes)?)
         }
-        Some(SpreadsheetFileFormat::Csv) => {
-            read_csv_from_bytes(Cursor::new(bytes), path, file_name)
-        }
-        None => Err(AppError::UnsupportedFormat),
+        SpreadsheetFileFormat::Csv => bytes.len().saturating_mul(CSV_PARSE_MEMORY_MULTIPLIER),
+    };
+    Ok(InputFilePreflight {
+        format,
+        estimated_parse_bytes,
+    })
+}
+
+pub(crate) fn read_file_with_workbook_from_preflight(
+    preflight: InputFilePreflight,
+    bytes: Vec<u8>,
+    path: String,
+    file_name: String,
+) -> Result<ReadFileResult, AppError> {
+    match preflight.format {
+        SpreadsheetFileFormat::Xlsx => read_xlsx_from_bytes(Cursor::new(bytes), path, file_name),
+        SpreadsheetFileFormat::Csv => read_csv_from_bytes(Cursor::new(bytes), path, file_name),
     }
 }
 
-fn validate_xlsx_archive(bytes: &[u8]) -> Result<(), AppError> {
+fn validate_xlsx_archive(bytes: &[u8]) -> Result<u64, AppError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| AppError::ReadError(error.to_string()))?;
     if archive.len() > MAX_XLSX_ARCHIVE_ENTRIES {
@@ -69,7 +105,13 @@ fn validate_xlsx_archive(bytes: &[u8]) -> Result<(), AppError> {
             )));
         }
     }
-    Ok(())
+    Ok(uncompressed_bytes)
+}
+
+fn estimate_xlsx_parse_bytes(input_bytes: usize, uncompressed_bytes: u64) -> usize {
+    let uncompressed_bytes = usize::try_from(uncompressed_bytes).unwrap_or(usize::MAX);
+    input_bytes
+        .saturating_add(uncompressed_bytes.saturating_mul(XLSX_UNCOMPRESSED_MEMORY_MULTIPLIER))
 }
 
 fn read_xlsx_from_bytes(
@@ -551,6 +593,28 @@ fn read_csv_from_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csv_preflight_reserves_projection_work_before_parsing() {
+        let bytes = b"alpha,beta\n";
+        let preflight = preflight_input_file("csv", bytes).expect("CSV preflight");
+
+        assert_eq!(
+            preflight.estimated_parse_bytes(),
+            bytes.len() * CSV_PARSE_MEMORY_MULTIPLIER
+        );
+    }
+
+    #[test]
+    fn xlsx_preflight_estimate_accounts_for_archive_expansion() {
+        let input_bytes = 1024 * 1024;
+        let uncompressed_bytes = 64 * 1024 * 1024;
+
+        assert_eq!(
+            estimate_xlsx_parse_bytes(input_bytes, uncompressed_bytes),
+            input_bytes + uncompressed_bytes as usize * XLSX_UNCOMPRESSED_MEMORY_MULTIPLIER
+        );
+    }
 
     #[test]
     fn rejects_unsupported_excel_formats() {

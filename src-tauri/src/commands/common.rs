@@ -270,8 +270,8 @@ pub async fn commit_prepared_document(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn abort_prepared_document(token: String) -> Result<(), AppError> {
-    document::abort_prepared_document(&token)
+pub async fn abort_prepared_document(token: String) -> Result<(), AppError> {
+    blocking::run(move || document::abort_prepared_document(&token)).await
 }
 
 #[tauri::command]

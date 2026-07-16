@@ -166,9 +166,14 @@ live token exists; it never evicts the first token. The active and prepared
 documents are also limited to an estimated 256 MiB combined. The estimate
 includes the UI projection, retained XLSX workbook, formula runtime, metadata
 index, search indexes, and history. Callers should still abort unused tokens
-promptly. A prepare reserves the single parse slot and a conservative share of
-the combined budget before parsing, then rechecks the completed document's
-resident estimate. Route cancellation must keep the loading lifecycle reserved
+promptly. Before third-party parsing, a format preflight validates archive
+structure and estimates parse memory from CSV input bytes or XLSX compressed
+plus expanded bytes. That estimate must fit both the prepared-document and
+combined active/prepared budgets; it is never clamped down to the budget. The
+completed document's resident estimate is checked again after parsing. Expired,
+aborted, or rejected prepared states are detached under the prepared-store lock
+and released after the lock is dropped. Explicit abort runs on the bounded
+blocking executor. Route cancellation must keep the loading lifecycle reserved
 until the in-flight prepare settles.
 
 Saving follows this order:
@@ -265,7 +270,15 @@ arena and a conservative multiple of the source Sheet estimate. The reservation
 is acquired before cloning search text and released after installation,
 cancellation, or failure. Sheets estimated above 12 MiB are not indexed and
 continue using the correct scan fallback. Scheduler statistics expose pending
-and building bytes separately.
+and building bytes separately. Index replacement, byte-budget eviction,
+truncation, and oversized-index rejection return detached indexes so Tantivy
+resources are released only after the document registry write lock is dropped.
+
+Undo and redo history uses deque storage. Clearing redo after a new edit and
+evicting old entries at the count or 64 MiB byte limit detach mementos from the
+history store and return them with the mutation result. The operation layer
+builds the consistent response under the document lock, then releases detached
+history resources after leaving the registry critical section.
 
 Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
 and file metadata reads run through a blocking command executor with two

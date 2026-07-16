@@ -1,4 +1,5 @@
-use crate::state::editor_state::{EditorState, ExecutedOperation};
+use crate::io::document_model::DocumentRestoreResult;
+use crate::state::editor_state::EditorState;
 use crate::state::state::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
@@ -163,20 +164,17 @@ pub fn structural_delta_mutation_response(
 
 pub fn restore_mutation_response(
     editor_state: &EditorState,
-    result: ExecutedOperation,
+    restore: Option<DocumentRestoreResult>,
+    search_index_update: SearchIndexUpdatePlan,
 ) -> EditorMutationResponse {
-    let Some(restore) = result.restore else {
+    let Some(restore) = restore else {
         return resync_required_mutation_response(
             editor_state,
             "restore completed without patch details",
         );
     };
 
-    mutation_response_with_search_index_update(
-        editor_state,
-        restore.patches,
-        result.search_index_update,
-    )
+    mutation_response_with_search_index_update(editor_state, restore.patches, search_index_update)
 }
 
 pub fn structural_patches(

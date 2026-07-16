@@ -714,11 +714,19 @@ fn run_rebuild(
         search_stamp_is_current(document_id, sheet_index, stamp, registry)
     });
 
-    if let Ok(mut guard) = registry.write()
-        && let Some(editor_state) = guard.get_mut(document_id)
-    {
-        editor_state.install_search_index(sheet_index, stamp, built_index);
-    }
+    let retired = {
+        let Ok(mut guard) = registry.write() else {
+            drop(built_index);
+            return;
+        };
+        let Some(editor_state) = guard.get_mut(document_id) else {
+            drop(guard);
+            drop(built_index);
+            return;
+        };
+        editor_state.install_search_index(sheet_index, stamp, built_index)
+    };
+    drop(retired);
 }
 
 fn search_stamp_is_current(
@@ -808,11 +816,12 @@ fn run_incremental(
     }
     drop(writer);
 
-    if let Ok(mut guard) = registry.write()
-        && let Some(editor_state) = guard.get_mut(document_id)
-    {
-        editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp);
-    }
+    let retired = registry.write().ok().and_then(|mut guard| {
+        guard
+            .get_mut(document_id)
+            .map(|editor_state| editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp))
+    });
+    drop(retired);
 
     true
 }
