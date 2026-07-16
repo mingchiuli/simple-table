@@ -48,16 +48,17 @@ function deferred<T>() {
 }
 
 async function flushPromises() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function mobileUpdateInfo(): UpdateInfo {
   return {
     version: "0.12.0",
-    tag_name: "v0.12.0",
-    release_url: "https://example.com/releases/v0.12.0",
-    apk_url: "https://example.com/app.apk",
+    tagName: "v0.12.0",
+    releaseUrl: "https://example.com/releases/v0.12.0",
+    apkUrl: "https://example.com/app.apk",
   };
 }
 
@@ -88,6 +89,24 @@ describe("useUpdater", () => {
       currentVersion: "0.11.1",
     });
     expect(updater.status.value).toBe("no-update");
+  });
+
+  it("coalesces concurrent update checks", async () => {
+    const pendingCheck = deferred<UpdateInfo | null>();
+    tauriMocks.invoke.mockReturnValue(pendingCheck.promise);
+    const updater = useUpdater();
+
+    const first = updater.checkForUpdate();
+    const second = updater.checkForUpdate();
+    await flushPromises();
+
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+
+    pendingCheck.resolve(mobileUpdateInfo());
+    await Promise.all([first, second]);
+
+    expect(updater.status.value).toBe("available");
+    expect(updater.mobileUpdateInfo.value?.version).toBe("0.12.0");
   });
 
   it("ignores mobile update check results after reset", async () => {
@@ -227,5 +246,14 @@ describe("useUpdater", () => {
 
     expect(updater.status.value).toBe("idle");
     expect(updater.errorMessage.value).toBeNull();
+  });
+
+  it("opens generated camelCase mobile update URLs", async () => {
+    const updater = useUpdater();
+    updater.mobileUpdateInfo.value = mobileUpdateInfo();
+
+    await updater.handleMobileUpdate();
+
+    expect(tauriMocks.openUrl).toHaveBeenCalledWith("https://example.com/app.apk");
   });
 });

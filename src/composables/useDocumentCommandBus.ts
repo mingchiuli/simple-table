@@ -33,6 +33,10 @@ type ConsistentReadOptions<T> = {
   lockInteraction?: boolean;
 };
 
+const MUTATION_RESULT_POLL_DEADLINE_MS = 3_000;
+const MUTATION_RESULT_INITIAL_POLL_INTERVAL_MS = 25;
+const MUTATION_RESULT_MAX_POLL_INTERVAL_MS = 250;
+
 export function useDocumentCommandBus() {
   const documentSessionStore = useDocumentSessionStore();
   const editorSelectionStore = useEditorSelectionStore();
@@ -135,7 +139,10 @@ export function useDocumentCommandBus() {
       return await action(mutationContext);
     } catch (retryError) {
       try {
-        const replay = await api.getMutationResult(context.documentId, mutationContext.commandId);
+        const replay = await waitForMutationResult(
+          context.documentId,
+          mutationContext.commandId
+        );
         if (replay) return replay;
       } catch (replayError) {
         console.error('Failed to query an ambiguous mutation result:', replayError);
@@ -159,6 +166,28 @@ export function useDocumentCommandBus() {
         console.error('Failed to recover an ambiguous mutation result:', recoveryError);
       }
       throw retryError ?? firstError;
+    }
+  }
+
+  async function waitForMutationResult(
+    documentId: U64String,
+    commandId: string
+  ): Promise<EditorMutationResponse | null> {
+    const deadline = Date.now() + MUTATION_RESULT_POLL_DEADLINE_MS;
+    let pollInterval = MUTATION_RESULT_INITIAL_POLL_INTERVAL_MS;
+    while (true) {
+      const lookup = await api.getMutationResult(documentId, commandId);
+      if (lookup.status === 'completed') {
+        if (!lookup.response) {
+          throw new Error('Completed mutation lookup did not include a response');
+        }
+        return lookup.response;
+      }
+      if (lookup.status === 'missing' || Date.now() >= deadline) {
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      pollInterval = Math.min(pollInterval * 2, MUTATION_RESULT_MAX_POLL_INTERVAL_MS);
     }
   }
 

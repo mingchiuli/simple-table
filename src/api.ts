@@ -17,6 +17,7 @@ import type {
   SheetRegionProjectionResponse,
   U64String,
   MutationCommandContext,
+  MutationResultLookup,
 } from "@/types";
 
 export async function prepareNewFile(): Promise<PreparedOpenDocument> {
@@ -45,7 +46,7 @@ export async function getActiveDocument(): Promise<OpenDocumentResponse | null> 
 export async function getMutationResult(
   documentId: U64String,
   commandId: string
-): Promise<EditorMutationResponse | null> {
+): Promise<MutationResultLookup> {
   return invokeCommand("get_mutation_result", { documentId, commandId });
 }
 

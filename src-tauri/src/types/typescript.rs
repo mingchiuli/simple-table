@@ -11,15 +11,15 @@ use crate::types::{
     CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DocumentManifest,
     DrawingKind, DrawingProjection, EditorCommandContext, EditorMutationResponse, EditorPatch,
     FileData, FormulaDiagnostics, FormulaIssue, FormulaIssueKind, FormulaStatus,
-    FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange, NativeSavePlan,
-    OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch,
-    RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse,
-    ScalarCellValue, SearchResponse, SearchResult, SearchScope, SetCellRequest, SheetCapabilities,
-    SheetData, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
-    SheetLayoutProjection, SheetLayoutUpdate, SheetManifest, SheetRegion, SheetRegionMetadata,
-    SheetRegionProjectionResponse, SheetsReplacedPatch, SpreadsheetFormatOptions,
-    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
+    FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange, MutationResultLookup,
+    MutationResultStatus, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
+    ReadOnlyRichProjection, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
+    SavedDocumentIdentity, SavedDocumentResponse, ScalarCellValue, SearchResponse, SearchResult,
+    SearchScope, SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch, SheetExtent,
+    SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection, SheetLayoutUpdate,
+    SheetManifest, SheetRegion, SheetRegionMetadata, SheetRegionProjectionResponse,
+    SheetsReplacedPatch, SpreadsheetFormatOptions, UpdateInfo, WorkbookCapabilities,
+    WorkbookRichCapabilities, WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -65,6 +65,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<StorageType>(&mut output, &cfg);
     push_decl::<RecentFile>(&mut output, &cfg);
     push_decl::<AddRecentFileRequest>(&mut output, &cfg);
+    push_decl::<UpdateInfo>(&mut output, &cfg);
     push_decl::<HistoryStatus>(&mut output, &cfg);
     push_decl::<EditorStateInfo>(&mut output, &cfg);
     push_decl::<FormulaIssueKind>(&mut output, &cfg);
@@ -84,6 +85,8 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<EditorPatch>(&mut output, &cfg);
     push_decl::<EditorCommandContext>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
+    push_decl::<MutationResultStatus>(&mut output, &cfg);
+    push_decl::<MutationResultLookup>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);
     push_decl::<SheetRegion>(&mut output, &cfg);
@@ -201,8 +204,9 @@ fn command_type(ty: &Type) -> String {
                 "BoundedCellText" => "string".to_string(),
                 "SetCellBatch" => "Array<SetCellRequest>".to_string(),
                 "DesktopOpenFileInfo" => "{ path: string, fileName: string }".to_string(),
-                "PickedFileInfo" => "{ path: string, originalPath: string, fileName: string }".to_string(),
-                "UpdateInfo" => "{ version: string, tag_name: string, release_url: string, apk_url: string | null }".to_string(),
+                "PickedFileInfo" => {
+                    "{ path: string, originalPath: string, fileName: string }".to_string()
+                }
                 _ => name,
             }
         }

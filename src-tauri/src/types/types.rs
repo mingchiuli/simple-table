@@ -1229,6 +1229,48 @@ pub struct EditorMutationResponse {
     pub search_index_update: SearchIndexUpdatePlan,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum MutationResultStatus {
+    Pending,
+    Completed,
+    Missing,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct MutationResultLookup {
+    pub status: MutationResultStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub response: Option<EditorMutationResponse>,
+}
+
+impl MutationResultLookup {
+    pub fn pending() -> Self {
+        Self {
+            status: MutationResultStatus::Pending,
+            response: None,
+        }
+    }
+
+    pub fn completed(response: EditorMutationResponse) -> Self {
+        Self {
+            status: MutationResultStatus::Completed,
+            response: Some(response),
+        }
+    }
+
+    pub fn missing() -> Self {
+        Self {
+            status: MutationResultStatus::Missing,
+            response: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

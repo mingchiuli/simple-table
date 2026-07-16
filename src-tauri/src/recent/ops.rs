@@ -4,6 +4,8 @@ use crate::error::AppError;
 use crate::io::document;
 
 use super::store::RecentStore;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use super::store::validate_recent_files;
 use super::thumbnail::{capture_thumbnail, generate_thumbnail};
 use super::types::{AddRecentFileRequest, RecentFile, StorageType};
 
@@ -163,6 +165,7 @@ fn reconcile_mobile_recent_files(
             file.thumbnail = None;
         }
     }
+    validate_recent_files(&reconciled).map_err(AppError::ReadError)?;
     if let Err(error) = RecentStore::replace_all(app, reconciled.clone()) {
         eprintln!("Failed to persist reconciled recent metadata: {error}");
     }

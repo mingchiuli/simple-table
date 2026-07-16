@@ -33,7 +33,7 @@ vi.mock("@/api", () => ({
   getSheetRegionProjection: vi.fn(),
   getEditorState: vi.fn(),
   getActiveDocument: vi.fn(),
-  getMutationResult: vi.fn().mockResolvedValue(null),
+  getMutationResult: vi.fn().mockResolvedValue({ status: 'missing' }),
   search: vi.fn().mockResolvedValue({ results: [], truncated: false }),
 }));
 
@@ -394,7 +394,10 @@ describe("useEditorCommands", () => {
     const setup = setupCommands();
     const replay = mutationResponse({ revision: '1' });
     vi.mocked(api.addRow).mockRejectedValue(new Error("response channel closed"));
-    vi.mocked(api.getMutationResult).mockResolvedValue(replay);
+    vi.mocked(api.getMutationResult).mockResolvedValue({
+      status: 'completed',
+      response: replay,
+    });
 
     await setup.commands.handleAddRow();
 
@@ -402,6 +405,29 @@ describe("useEditorCommands", () => {
     expect(api.getMutationResult).toHaveBeenCalledWith('1', expect.any(String));
     expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function));
     expect(api.getActiveDocument).not.toHaveBeenCalled();
+  });
+
+  it("polls a pending mutation result without blocking the command endpoint", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = await import("@/api");
+      const setup = setupCommands();
+      const replay = mutationResponse({ revision: '1' });
+      vi.mocked(api.addRow).mockRejectedValue(new Error("response channel closed"));
+      vi.mocked(api.getMutationResult)
+        .mockResolvedValueOnce({ status: 'pending' })
+        .mockResolvedValueOnce({ status: 'completed', response: replay });
+
+      const command = setup.commands.handleAddRow();
+      await vi.advanceTimersByTimeAsync(25);
+      await command;
+
+      expect(api.getMutationResult).toHaveBeenCalledTimes(2);
+      expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function));
+      expect(api.getActiveDocument).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not mark projection stale when only the post-apply UI callback fails", async () => {

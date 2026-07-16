@@ -11,6 +11,12 @@ const STORE_FILE: &str = "recent-files.json";
 const STORE_KEY: &str = "recent_files";
 const MAX_RECENT: usize = 10;
 const MAX_RECENT_THUMBNAILS: usize = 10;
+const MAX_STORED_RECENT_FILES: usize = 1_024;
+const MAX_RECENT_STORE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RECENT_ID_BYTES: usize = 256;
+const MAX_RECENT_PATH_BYTES: usize = 16 * 1024;
+const MAX_RECENT_FILE_NAME_BYTES: usize = 1_024;
+const MAX_RECENT_THUMBNAIL_BYTES: usize = 256 * 1024;
 static RECENT_STORE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub struct RecentStore;
@@ -33,6 +39,7 @@ impl RecentStore {
     }
 
     fn save_unlocked(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
+        validate_recent_files(files).map_err(AppError::WriteError)?;
         let store = app
             .store(STORE_FILE)
             .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -85,10 +92,66 @@ impl RecentStore {
 
 fn decode_recent_files(value: Option<serde_json::Value>) -> Result<Vec<RecentFile>, AppError> {
     match value {
-        Some(value) => serde_json::from_value(value)
-            .map_err(|error| AppError::ReadError(format!("Invalid recent file store: {error}"))),
+        Some(value) => {
+            let files: Vec<RecentFile> = serde_json::from_value(value).map_err(|error| {
+                AppError::ReadError(format!("Invalid recent file store: {error}"))
+            })?;
+            validate_recent_files(&files).map_err(AppError::ReadError)?;
+            Ok(files)
+        }
         None => Ok(Vec::new()),
     }
+}
+
+pub(super) fn validate_recent_files(files: &[RecentFile]) -> Result<(), String> {
+    if files.len() > MAX_STORED_RECENT_FILES {
+        return Err(format!(
+            "Invalid recent file store: {} records exceeds the limit of {MAX_STORED_RECENT_FILES}",
+            files.len()
+        ));
+    }
+
+    let mut total_bytes = 0usize;
+    for file in files {
+        validate_field("id", &file.id, MAX_RECENT_ID_BYTES)?;
+        validate_field("path", &file.path, MAX_RECENT_PATH_BYTES)?;
+        validate_field("file name", &file.file_name, MAX_RECENT_FILE_NAME_BYTES)?;
+        if let Some(original_path) = &file.original_path {
+            validate_field("original path", original_path, MAX_RECENT_PATH_BYTES)?;
+        }
+        if let Some(thumbnail) = &file.thumbnail {
+            validate_field("thumbnail", thumbnail, MAX_RECENT_THUMBNAIL_BYTES)?;
+        }
+        total_bytes = total_bytes
+            .checked_add(recent_file_text_bytes(file))
+            .ok_or_else(|| "Invalid recent file store: byte count overflowed".to_string())?;
+        if total_bytes > MAX_RECENT_STORE_BYTES {
+            return Err(format!(
+                "Invalid recent file store: {total_bytes} text bytes exceeds the limit of {MAX_RECENT_STORE_BYTES}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_field(label: &str, value: &str, maximum_bytes: usize) -> Result<(), String> {
+    if value.len() > maximum_bytes {
+        return Err(format!(
+            "Invalid recent file store: {label} requires {} bytes, maximum is {maximum_bytes}",
+            value.len()
+        ));
+    }
+    Ok(())
+}
+
+fn recent_file_text_bytes(file: &RecentFile) -> usize {
+    file.id
+        .len()
+        .saturating_add(file.path.len())
+        .saturating_add(file.file_name.len())
+        .saturating_add(file.thumbnail.as_ref().map_or(0, String::len))
+        .saturating_add(file.original_path.as_ref().map_or(0, String::len))
+        .saturating_add(std::mem::size_of::<RecentFile>())
 }
 
 fn with_store_transaction<T>(action: impl FnOnce() -> Result<T, AppError>) -> Result<T, AppError> {
@@ -109,8 +172,14 @@ fn upsert_recent_file(
         .find(|existing| existing.path == path)
         .map(|existing| existing.id.clone())
         .unwrap_or_else(|| file.id.clone());
+    let retained_original_path = files
+        .iter()
+        .find(|existing| existing.path == path)
+        .and_then(|existing| existing.original_path.clone());
+    let original_path = file.original_path.clone().or(retained_original_path);
     let merged = RecentFile {
         id: stable_id,
+        original_path,
         ..file
     };
     let updated = merged.clone();
@@ -224,6 +293,36 @@ mod tests {
     }
 
     #[test]
+    fn recent_store_rejects_excessive_records() {
+        let files = (0..=MAX_STORED_RECENT_FILES)
+            .map(|index| {
+                recent(
+                    &format!("id-{index}"),
+                    &format!("/tmp/{index}.xlsx"),
+                    &format!("{index}.xlsx"),
+                    index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let error = decode_recent_files(Some(serde_json::to_value(files).unwrap()))
+            .expect_err("oversized recent store");
+
+        assert!(matches!(error, AppError::ReadError(_)));
+    }
+
+    #[test]
+    fn recent_store_rejects_oversized_thumbnail_metadata() {
+        let mut file = recent("id", "/tmp/book.xlsx", "book.xlsx", 1);
+        file.thumbnail = Some("x".repeat(MAX_RECENT_THUMBNAIL_BYTES + 1));
+
+        let error = decode_recent_files(Some(serde_json::to_value(vec![file]).unwrap()))
+            .expect_err("oversized thumbnail");
+
+        assert!(matches!(error, AppError::ReadError(_)));
+    }
+
+    #[test]
     fn upsert_updates_existing_recent_file_metadata_without_changing_id() {
         let existing = recent("stable-id", "/tmp/book.xlsx", "old.xlsx", 1);
         let mut updated_input = recent("new-id", "/tmp/book.xlsx", "renamed.xlsx", 2);
@@ -244,6 +343,18 @@ mod tests {
         );
         assert_eq!(updated.id, "stable-id");
         assert_eq!(updated.file_name, "renamed.xlsx");
+    }
+
+    #[test]
+    fn upsert_preserves_original_path_when_a_save_omits_it() {
+        let mut existing = recent("stable-id", "/tmp/book.xlsx", "book.xlsx", 1);
+        existing.original_path = Some("/import/book.xlsx".to_string());
+        let updated_input = recent("new-id", "/tmp/book.xlsx", "book.xlsx", 2);
+
+        let (files, updated) = upsert_recent_file(vec![existing], updated_input);
+
+        assert_eq!(files[0].original_path.as_deref(), Some("/import/book.xlsx"));
+        assert_eq!(updated.original_path.as_deref(), Some("/import/book.xlsx"));
     }
 
     #[test]

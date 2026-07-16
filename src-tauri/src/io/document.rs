@@ -113,7 +113,7 @@ pub fn commit_prepared_document(
         && previous_document_id != document_id
     {
         cancel_index_jobs_for_document(previous_document_id);
-        crate::commands::mutation_replay::clear_document(previous_document_id);
+        crate::commands::mutation_replay::retire_document(previous_document_id);
     }
     spawn_rebuild_all_sheets_index(&registry, document_id);
     Ok(response)
@@ -461,7 +461,7 @@ pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
     };
     if let Some(document_id) = closed_document_id {
         cancel_index_jobs_for_document(document_id);
-        crate::commands::mutation_replay::clear_document(document_id);
+        crate::commands::mutation_replay::retire_document(document_id);
     }
     Ok(())
 }

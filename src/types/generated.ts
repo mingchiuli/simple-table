@@ -99,6 +99,8 @@ originalPath?: string, };
 
 export type AddRecentFileRequest = { originalPath?: string, documentId: U64String, baseRevision: U64String, };
 
+export type UpdateInfo = { version: string, tagName: string, releaseUrl: string, apkUrl: string | null, };
+
 export type HistoryStatus = { isTruncated: boolean, reason?: string, undoEntries: number, redoEntries: number, undoEstimatedBytes: number, redoEstimatedBytes: number, maxHistoryBytes: number, maxSingleEntryBytes: number, };
 
 export type EditorStateInfo = { canUndo: boolean, canRedo: boolean, isDirty: boolean, history: HistoryStatus, };
@@ -137,6 +139,10 @@ export type EditorCommandContext = { documentId: U64String, baseRevision: U64Str
 
 export type EditorMutationResponse = { protocolVersion: 3, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, sheetLayouts?: Array<SheetLayoutUpdate>, };
 
+export type MutationResultStatus = "pending" | "completed" | "missing";
+
+export type MutationResultLookup = { status: MutationResultStatus, response?: EditorMutationResponse, };
+
 export type EditorSessionInfo = { documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, };
 
 export type OpenDocumentResponse = { document: DocumentManifest, editorSession: EditorSessionInfo, initialRegion?: SheetRegionProjectionResponse, };
@@ -166,7 +172,7 @@ export type TauriCommandMap = {
   "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
   "abort_prepared_document": { args: { token: string }, result: void },
   "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },
-  "get_mutation_result": { args: { documentId: U64String, commandId: string }, result: EditorMutationResponse | null },
+  "get_mutation_result": { args: { documentId: U64String, commandId: string }, result: MutationResultLookup },
   "get_current_document_projection": { args: { documentId: U64String, baseRevision: U64String, preferredSheetIndex: number }, result: OpenDocumentResponse },
   "get_sheet_region_projection": { args: { documentId: U64String, baseRevision: U64String, region: SheetRegion }, result: SheetRegionProjectionResponse },
   "close_current_document": { args: { documentId: U64String }, result: void },
@@ -204,6 +210,6 @@ export type TauriCommandMap = {
   "pick_save_location_ios": { args: { defaultName: string }, result: string | null },
   "save_file_ios": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
   "export_file_ios": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
-  "check_update_mobile": { args: { currentVersion: string }, result: { version: string, tag_name: string, release_url: string, apk_url: string | null } | null },
+  "check_update_mobile": { args: { currentVersion: string }, result: UpdateInfo | null },
 }
 

@@ -30,7 +30,7 @@ vi.mock("@/api", () => ({
   getCurrentDocumentProjection: vi.fn(),
   getEditorState: vi.fn(),
   getActiveDocument: vi.fn(),
-  getMutationResult: vi.fn().mockResolvedValue(null),
+  getMutationResult: vi.fn().mockResolvedValue({ status: 'missing' }),
 }));
 
 function text(value: string): CellValue {

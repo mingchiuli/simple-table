@@ -1,6 +1,8 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use super::{CommandU64, blocking, mutation_executor, mutation_replay, projection_executor};
+use super::{
+    CommandU64, blocking, mutation_executor, mutation_replay, projection_executor, recent_executor,
+};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -12,9 +14,9 @@ use crate::state::{active_document_store, state::EditorSessionInfo};
 #[cfg(desktop)]
 use crate::types::SavedDocumentResponse;
 use crate::types::{
-    DocumentCapabilities, EditorMutationResponse, NativeSavePlan, OpenDocumentResponse,
-    PreparedOpenDocument, SearchResponse, SearchScope, SetCellRequest, SheetRegion,
-    SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+    DocumentCapabilities, EditorMutationResponse, MutationResultLookup, NativeSavePlan,
+    OpenDocumentResponse, PreparedOpenDocument, SearchResponse, SearchScope, SetCellRequest,
+    SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::AppHandle;
 
@@ -281,7 +283,7 @@ pub async fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppEr
 pub fn get_mutation_result(
     document_id: CommandU64,
     command_id: String,
-) -> Result<Option<EditorMutationResponse>, AppError> {
+) -> Result<MutationResultLookup, AppError> {
     mutation_replay::get(document_id.get(), &command_id)
 }
 
@@ -731,12 +733,12 @@ pub async fn search(
 
 #[tauri::command]
 pub async fn get_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, AppError> {
-    blocking::run(move || recent::do_get_recent_files(&app)).await
+    recent_executor::run(move || recent::do_get_recent_files(&app)).await
 }
 
 #[tauri::command]
 pub async fn remove_recent_file(app: AppHandle, id: String) -> Result<(), AppError> {
-    blocking::run(move || recent::do_remove_recent_file(&app, &id)).await
+    recent_executor::run(move || recent::do_remove_recent_file(&app, &id)).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -744,7 +746,7 @@ pub async fn add_recent_file_with_thumbnail(
     app: AppHandle,
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
-    blocking::run(move || recent::do_add_recent_file_with_thumbnail(&app, request)).await
+    recent_executor::run(move || recent::do_add_recent_file_with_thumbnail(&app, request)).await
 }
 
 #[cfg(test)]

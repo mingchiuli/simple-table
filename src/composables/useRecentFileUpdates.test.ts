@@ -30,6 +30,14 @@ async function flushPromises() {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
 }
@@ -91,6 +99,47 @@ describe("useRecentFileUpdates", () => {
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
       { documentId: '1', baseRevision: '3' },
       "/original/old.xlsx"
+    );
+  });
+
+  it("retains only the latest recent update while one is active", async () => {
+    const api = await import("@/api");
+    const firstUpdate = deferred<Awaited<ReturnType<typeof api.addRecentFileWithThumbnail>>>();
+    vi.mocked(api.addRecentFileWithThumbnail)
+      .mockReturnValueOnce(firstUpdate.promise)
+      .mockResolvedValue({
+        id: "recent",
+        path: "/tmp/book.xlsx",
+        fileName: "book.xlsx",
+        lastOpened: 1,
+        fileSize: 42,
+        storageType: "desktopPath",
+      });
+    openRecentTestDocument("book.xlsx", 1, 3);
+    const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
+
+    queueRecentFileEntryUpdate("/original/first.xlsx");
+    for (let index = 0; index < 10_000; index += 1) {
+      queueRecentFileEntryUpdate(`/original/${index}.xlsx`);
+    }
+    await flushPromises();
+
+    expect(api.addRecentFileWithThumbnail).toHaveBeenCalledTimes(1);
+
+    firstUpdate.resolve({
+      id: "first",
+      path: "/tmp/book.xlsx",
+      fileName: "book.xlsx",
+      lastOpened: 1,
+      fileSize: 42,
+      storageType: "desktopPath",
+    });
+    await flushPromises();
+
+    expect(api.addRecentFileWithThumbnail).toHaveBeenCalledTimes(2);
+    expect(api.addRecentFileWithThumbnail).toHaveBeenLastCalledWith(
+      { documentId: "1", baseRevision: "3" },
+      "/original/9999.xlsx"
     );
   });
 });

@@ -76,10 +76,14 @@ Request fingerprints are streamed into fixed-size SHA-256 digests, so replay
 entries never retain serialized mutation payloads. The replay coordinator lock
 protects only reservation and queue accounting; mutation execution, response
 serialization, and response cloning happen outside it. A concurrent retry waits
-only for the same `{ documentId, commandId }`, and result lookup or document
-cleanup waits only for relevant in-flight work. At most 64 distinct mutation
-commands may be in flight, preventing the coordinator queue from becoming an
-unbounded admission path ahead of the document lock. Tauri mutation commands
+only for the same `{ documentId, commandId }`. Result lookup returns
+`pending`, `completed`, or `missing` immediately; the frontend polls `pending`
+with exponential backoff and a three-second deadline. Closing or replacing a
+document marks its replay state retired and returns without waiting. The last
+in-flight reservation discards its late response and removes the retirement
+marker. At most 64 distinct mutation commands may be in flight, preventing the
+coordinator queue from becoming an unbounded admission path ahead of the
+document lock. Tauri mutation commands
 run on a dedicated blocking executor with one execution slot and eight total
 admission slots. Saturated admission fails immediately instead of retaining an
 unbounded set of IPC requests. `set_cells` accepts at most 4,096 changes and
@@ -231,11 +235,20 @@ continue using the correct scan fallback. Scheduler statistics expose pending
 and building bytes separately.
 
 Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
-recent-file store transactions, file metadata reads, and thumbnail encoding run
-through a blocking command executor with two execution permits and eight total
-admission permits. Tauri async runtime threads do not perform those synchronous
-workloads directly, and saturation cannot create an unbounded semaphore wait
-queue.
+and file metadata reads run through a blocking command executor with two
+execution permits and eight total admission permits. Recent-file transactions
+and thumbnail encoding use a separate executor with one execution permit and
+three total admission permits, so rebuildable metadata cannot exhaust critical
+file-command admission. Tauri async runtime threads do not perform those
+synchronous workloads directly, and saturation cannot create an unbounded
+semaphore wait queue.
+
+Frontend recent-file updates use a latest-only worker shared by all composable
+instances. At most one update is active and one latest request is pending;
+superseded updates do not regenerate thumbnails or refresh the list. Persisted
+recent metadata accepts at most 1,024 records and 4 MiB of logical text, with
+separate limits for identifiers, paths, names, and thumbnails. Both decoded
+store data and mobile catalog reconciliation are validated before IPC output.
 
 Desktop open and save selections are one-shot path capabilities, not permanent
 process permissions. Open and save registries are independently limited to 64
@@ -268,6 +281,14 @@ metadata is missing or corrupt. Only the ten most recent managed entries retain
 embedded thumbnail data. Deleting a mobile entry removes the file and managed
 sidecar before removing its rebuildable recent metadata, and an active document
 cannot be deleted through this path.
+
+Mobile update checks use one process-wide request slot and a shared HTTP client
+with a ten-second connect timeout and twenty-second total timeout. The GitHub
+release body is streamed under a 256 KiB limit, release and current versions are
+parsed as strict SemVer, and only APK links under this repository's GitHub
+release-download path are exposed. Update failures use the same serialized
+`AppError` contract as other commands. Concurrent frontend checks share one
+in-flight request, while reset only invalidates its UI continuation.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,

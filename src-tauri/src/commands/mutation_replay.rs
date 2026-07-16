@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
@@ -6,7 +6,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
-use crate::types::{EditorMutationResponse, EditorPatch, ResyncRequiredPatch};
+use crate::types::{
+    EditorMutationResponse, EditorPatch, MutationResultLookup, ResyncRequiredPatch,
+};
 
 const MAX_REPLAY_ENTRIES: usize = 128;
 const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
@@ -34,6 +36,7 @@ struct InFlightMutation {
 struct MutationReplayCache {
     entries: VecDeque<ReplayEntry>,
     in_flight: Vec<InFlightMutation>,
+    retired_documents: HashSet<u64>,
     bytes: usize,
 }
 
@@ -87,7 +90,9 @@ impl InFlightReservation {
             .ok()
             .and_then(|response| prepare_replay_response(&self.command_id, response));
         let mut cache = lock_cache(self.coordinator)?;
-        if let Some(prepared) = prepared {
+        if let Some(prepared) =
+            prepared.filter(|_| !cache.retired_documents.contains(&self.document_id))
+        {
             insert_response(
                 &mut cache,
                 self.document_id,
@@ -97,6 +102,7 @@ impl InFlightReservation {
             );
         }
         remove_in_flight(&mut cache, self.document_id, &self.command_id);
+        finish_retirement(&mut cache, self.document_id);
         self.finished = true;
         self.coordinator.completed.notify_all();
         result
@@ -114,6 +120,7 @@ impl Drop for InFlightReservation {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         remove_in_flight(&mut cache, self.document_id, &self.command_id);
+        finish_retirement(&mut cache, self.document_id);
         self.coordinator.completed.notify_all();
     }
 }
@@ -134,6 +141,11 @@ fn reserve_with_coordinator(
 ) -> Result<ReservationResult, AppError> {
     let mut cache = lock_cache(coordinator)?;
     loop {
+        if cache.retired_documents.contains(&document_id) {
+            return Err(AppError::DocumentStateInvalid(
+                "mutation command belongs to a document that is closing".to_string(),
+            ));
+        }
         if let Some(entry) = find_entry(&cache, document_id, command_id) {
             if entry.fingerprint != fingerprint {
                 return Err(reused_command_id_error());
@@ -235,45 +247,50 @@ fn compact_replay_response(response: &EditorMutationResponse) -> EditorMutationR
     compact
 }
 
-pub(crate) fn clear_document(document_id: u64) {
-    let coordinator = replay_coordinator();
-    let Ok(mut cache) = lock_cache(coordinator) else {
-        return;
-    };
-    while cache
-        .in_flight
-        .iter()
-        .any(|entry| entry.document_id == document_id)
-    {
-        let Ok(next) = wait_for_completion(coordinator, cache) else {
-            return;
-        };
-        cache = next;
-    }
+pub(crate) fn retire_document(document_id: u64) {
+    let _ = retire_document_with_coordinator(replay_coordinator(), document_id);
+}
+
+fn retire_document_with_coordinator(
+    coordinator: &MutationReplayCoordinator,
+    document_id: u64,
+) -> Result<(), AppError> {
+    let mut cache = lock_cache(coordinator)?;
     cache
         .entries
         .retain(|entry| entry.document_id != document_id);
     cache.bytes = cache.entries.iter().map(|entry| entry.bytes).sum();
+    if cache
+        .in_flight
+        .iter()
+        .any(|entry| entry.document_id == document_id)
+    {
+        cache.retired_documents.insert(document_id);
+    } else {
+        cache.retired_documents.remove(&document_id);
+    }
+    Ok(())
 }
 
-pub(crate) fn get(
-    document_id: u64,
-    command_id: &str,
-) -> Result<Option<EditorMutationResponse>, AppError> {
+pub(crate) fn get(document_id: u64, command_id: &str) -> Result<MutationResultLookup, AppError> {
     validate_command_id(command_id)?;
     let coordinator = replay_coordinator();
-    let mut cache = lock_cache(coordinator)?;
-    while cache
+    let cache = lock_cache(coordinator)?;
+    if cache
         .in_flight
         .iter()
         .any(|entry| entry.document_id == document_id && entry.command_id == command_id)
     {
-        cache = wait_for_completion(coordinator, cache)?;
+        return Ok(MutationResultLookup::pending());
     }
     let response =
         find_entry(&cache, document_id, command_id).map(|entry| Arc::clone(&entry.response));
     drop(cache);
-    Ok(response.map(|response| (*response).clone()))
+    Ok(
+        response.map_or_else(MutationResultLookup::missing, |response| {
+            MutationResultLookup::completed((*response).clone())
+        }),
+    )
 }
 
 fn find_entry<'a>(
@@ -291,6 +308,17 @@ fn remove_in_flight(cache: &mut MutationReplayCache, document_id: u64, command_i
     cache
         .in_flight
         .retain(|entry| entry.document_id != document_id || entry.command_id != command_id);
+}
+
+fn finish_retirement(cache: &mut MutationReplayCache, document_id: u64) {
+    if cache.retired_documents.contains(&document_id)
+        && !cache
+            .in_flight
+            .iter()
+            .any(|entry| entry.document_id == document_id)
+    {
+        cache.retired_documents.remove(&document_id);
+    }
 }
 
 fn request_fingerprint<P: Serialize>(
@@ -397,7 +425,7 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert_eq!(first.revision, second.revision);
-        clear_document(91);
+        retire_document(91);
     }
 
     #[test]
@@ -437,7 +465,7 @@ mod tests {
         assert!(first.join().expect("first caller").is_ok());
         assert!(second.join().expect("retry caller").is_ok());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        clear_document(document_id);
+        retire_document(document_id);
     }
 
     #[test]
@@ -464,15 +492,15 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("unrelated query should not block")
             .expect("query succeeds");
-        assert!(result.is_none());
+        assert_eq!(result.status, crate::types::MutationResultStatus::Missing);
 
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
-        clear_document(document_id);
+        retire_document(document_id);
     }
 
     #[test]
-    fn matching_result_query_waits_for_the_committed_response() {
+    fn matching_result_query_reports_pending_without_waiting() {
         let document_id = 95;
         let started = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
@@ -489,23 +517,14 @@ mod tests {
         };
         started.wait();
 
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            sender
-                .send(get(document_id, "running"))
-                .expect("query result")
-        });
-        assert!(receiver.recv_timeout(Duration::from_millis(20)).is_err());
+        let lookup = get(document_id, "running").expect("query result");
+        assert_eq!(lookup.status, crate::types::MutationResultStatus::Pending);
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
-        assert!(
-            receiver
-                .recv_timeout(Duration::from_secs(1))
-                .expect("matching query completes")
-                .expect("query succeeds")
-                .is_some()
-        );
-        clear_document(document_id);
+        let lookup = get(document_id, "running").expect("completed query result");
+        assert_eq!(lookup.status, crate::types::MutationResultStatus::Completed);
+        assert!(lookup.response.is_some());
+        retire_document(document_id);
     }
 
     #[test]
@@ -534,7 +553,7 @@ mod tests {
 
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
-        clear_document(document_id);
+        retire_document(document_id);
     }
 
     #[test]
@@ -580,5 +599,32 @@ mod tests {
                 .in_flight
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn retiring_a_document_does_not_wait_and_discards_late_results() {
+        let coordinator = Box::leak(Box::new(MutationReplayCoordinator::default()));
+        let fingerprint = request_fingerprint(0, "set_cell", &(0, 0)).expect("fingerprint");
+        let reservation = reserve_with_coordinator(coordinator, 98, "retiring", fingerprint)
+            .expect("reservation");
+        let ReservationResult::Execute(reservation) = reservation else {
+            panic!("new command must reserve execution");
+        };
+
+        retire_document_with_coordinator(coordinator, 98).expect("retire document");
+        assert!(
+            coordinator
+                .cache
+                .lock()
+                .expect("cache")
+                .retired_documents
+                .contains(&98)
+        );
+        reservation.finish(Ok(response())).expect("mutation result");
+
+        let cache = coordinator.cache.lock().expect("cache");
+        assert!(cache.entries.is_empty());
+        assert!(cache.in_flight.is_empty());
+        assert!(!cache.retired_documents.contains(&98));
     }
 }

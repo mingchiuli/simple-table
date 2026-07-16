@@ -7,6 +7,7 @@ pub mod mobile;
 mod mutation_executor;
 pub(crate) mod mutation_replay;
 mod projection_executor;
+mod recent_executor;
 
 pub use common::*;
 

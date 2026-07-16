@@ -6,7 +6,6 @@ pub mod search;
 pub mod types;
 #[cfg(test)]
 pub mod typescript;
-#[cfg(any(target_os = "android", target_os = "ios"))]
 pub mod update;
 
 pub use formula::*;
@@ -14,7 +13,6 @@ pub use formula::*;
 pub use projection::*;
 pub use search::*;
 pub use types::*;
-#[cfg(any(target_os = "android", target_os = "ios"))]
 pub use update::*;
 
 pub(crate) mod u64_string {

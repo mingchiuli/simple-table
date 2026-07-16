@@ -6,24 +6,52 @@ import {
   tryRefreshRecentFiles,
 } from "@/utils/recentFileTracking";
 
+type RecentFileUpdateRequest = {
+  originalPath: string | undefined;
+  context: EditorCommandContext;
+};
+
+type RecentFileUpdateScheduler = {
+  active: Promise<void> | null;
+  pending: RecentFileUpdateRequest | null;
+};
+
+const recentFileUpdateSchedulers = new WeakMap<object, RecentFileUpdateScheduler>();
+
 export function useRecentFileUpdates() {
   const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
 
   function queueRecentFileEntryUpdate(originalPath?: string) {
     const context = documentSessionStore.currentCommandContext();
-    void updateRecentFileEntry(originalPath, context);
+    if (!context) return;
+    const scheduler = recentFileUpdateSchedulerFor(recentFilesStore);
+    scheduler.pending = { originalPath, context };
+    startRecentFileUpdateWorker(scheduler);
   }
 
-  async function updateRecentFileEntry(
-    originalPath: string | undefined,
-    context: EditorCommandContext | null
-  ) {
-    if (!context) {
-      return;
+  function startRecentFileUpdateWorker(scheduler: RecentFileUpdateScheduler) {
+    if (scheduler.active) return;
+    scheduler.active = runRecentFileUpdateWorker(scheduler)
+      .catch((error) => {
+        console.error("Recent file update worker failed:", error);
+      })
+      .finally(() => {
+        scheduler.active = null;
+        if (scheduler.pending) startRecentFileUpdateWorker(scheduler);
+      });
+  }
+
+  async function runRecentFileUpdateWorker(scheduler: RecentFileUpdateScheduler) {
+    while (true) {
+      while (scheduler.pending) {
+        const request = scheduler.pending;
+        scheduler.pending = null;
+        await tryAddRecentFileWithThumbnail(request);
+      }
+      await refreshRecentFiles();
+      if (!scheduler.pending) return;
     }
-    await tryAddRecentFileWithThumbnail({ originalPath, context });
-    await refreshRecentFiles();
   }
 
   async function refreshRecentFiles() {
@@ -34,4 +62,13 @@ export function useRecentFileUpdates() {
     queueRecentFileEntryUpdate,
     refreshRecentFiles,
   };
+}
+
+function recentFileUpdateSchedulerFor(store: object): RecentFileUpdateScheduler {
+  let scheduler = recentFileUpdateSchedulers.get(store);
+  if (!scheduler) {
+    scheduler = { active: null, pending: null };
+    recentFileUpdateSchedulers.set(store, scheduler);
+  }
+  return scheduler;
 }

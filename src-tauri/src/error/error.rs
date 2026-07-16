@@ -24,6 +24,8 @@ pub enum AppError {
     },
     #[error("Another prepared document is still active")]
     PreparedDocumentConflict,
+    #[error("Update check failed: {0}")]
+    UpdateError(String),
 
     // 状态操作
     #[error("No file loaded")]
@@ -83,6 +85,7 @@ impl AppError {
             Self::ResourceLimitExceeded(_) => "resource_limit_exceeded",
             Self::RegionResponseTooLarge { .. } => "region_response_too_large",
             Self::PreparedDocumentConflict => "prepared_document_conflict",
+            Self::UpdateError(_) => "update_error",
             Self::NoFileLoaded => "no_file_loaded",
             Self::InvalidSheetIndex(_) => "invalid_sheet_index",
             Self::InvalidCellPosition { .. } => "invalid_cell_position",
@@ -131,6 +134,18 @@ mod tests {
             json!({
                 "code": "region_response_too_large",
                 "message": "Sheet region response is 20 bytes, maximum is 10 bytes",
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_update_failures_with_a_distinct_code() {
+        assert_eq!(
+            serde_json::to_value(AppError::UpdateError("request timed out".to_string()))
+                .expect("serialize error"),
+            json!({
+                "code": "update_error",
+                "message": "Update check failed: request timed out",
             })
         );
     }

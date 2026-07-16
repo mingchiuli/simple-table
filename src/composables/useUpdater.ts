@@ -5,15 +5,16 @@ import { invokeCommand } from '@/tauriInvoke'
 import { platform } from '@tauri-apps/plugin-os'
 import { getVersion } from '@tauri-apps/api/app'
 import { requestApplicationExit } from '@/composables/useApplicationExit'
+import type { UpdateInfo } from '@/types'
+import { appErrorMessage } from '@/utils/appError'
+
+export type { UpdateInfo } from '@/types'
 
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'no-update'
 
-export interface UpdateInfo {
-  version: string
-  tag_name: string
-  release_url: string
-  apk_url: string | null
-}
+type UpdateCheckResult =
+  | { platform: 'desktop'; appVersion: string; update: Update | null }
+  | { platform: 'mobile'; appVersion: string; update: UpdateInfo | null }
 
 export function useUpdater() {
   const status = ref<UpdateStatus>('idle')
@@ -23,6 +24,7 @@ export function useUpdater() {
   const errorMessage = ref<string | null>(null)
   const currentVersion = ref('')
   let currentVersionPromise: Promise<string> | null = null
+  let updateCheckPromise: Promise<UpdateCheckResult> | null = null
   let operationToken = 0
 
   // 初始化时获取应用版本
@@ -31,7 +33,7 @@ export function useUpdater() {
     void ensureCurrentVersion().catch((e) => {
       if (!isCurrentOperation(token)) return
 
-      errorMessage.value = String(e)
+      errorMessage.value = appErrorMessage(e)
     })
   })
 
@@ -57,29 +59,23 @@ export function useUpdater() {
     errorMessage.value = null
 
     try {
-      const appVersion = await ensureCurrentVersion()
+      updateCheckPromise ??= runUpdateCheck().finally(() => {
+        updateCheckPromise = null
+      })
+      const result = await updateCheckPromise
       if (!isCurrentOperation(token)) return
 
-      if (isDesktop.value) {
-        // 桌面端：使用 tauri-plugin-updater
-        const update = await check()
-        if (!isCurrentOperation(token)) return
-
-        if (update) {
-          updateInfo.value = update
+      currentVersion.value = result.appVersion
+      if (result.platform === 'desktop') {
+        if (result.update) {
+          updateInfo.value = result.update
           status.value = 'available'
         } else {
           status.value = 'no-update'
         }
       } else {
-        // 移动端：调用 Rust command
-        const info = await invokeCommand('check_update_mobile', {
-          currentVersion: appVersion
-        })
-        if (!isCurrentOperation(token)) return
-
-        if (info) {
-          mobileUpdateInfo.value = info
+        if (result.update) {
+          mobileUpdateInfo.value = result.update
           status.value = 'available'
         } else {
           status.value = 'no-update'
@@ -89,7 +85,19 @@ export function useUpdater() {
       if (!isCurrentOperation(token)) return
 
       status.value = 'error'
-      errorMessage.value = String(e)
+      errorMessage.value = appErrorMessage(e)
+    }
+  }
+
+  async function runUpdateCheck(): Promise<UpdateCheckResult> {
+    const appVersion = await ensureCurrentVersion()
+    if (isDesktop.value) {
+      return { platform: 'desktop', appVersion, update: await check() }
+    }
+    return {
+      platform: 'mobile',
+      appVersion,
+      update: await invokeCommand('check_update_mobile', { currentVersion: appVersion })
     }
   }
 
@@ -132,7 +140,7 @@ export function useUpdater() {
       if (!isCurrentOperation(token)) return
 
       status.value = 'error'
-      errorMessage.value = String(e)
+      errorMessage.value = appErrorMessage(e)
     }
   }
 
@@ -147,18 +155,18 @@ export function useUpdater() {
 
     const token = beginOperation()
     try {
-      if (isAndroid.value && info.apk_url) {
+      if (isAndroid.value && info.apkUrl) {
         // Android: 打开 APK 下载链接
-        await openUrl(info.apk_url)
+        await openUrl(info.apkUrl)
       } else {
         // iOS 或 Android 没有 APK: 打开 Releases 页面
-        await openUrl(info.release_url)
+        await openUrl(info.releaseUrl)
       }
     } catch (e) {
       if (!isCurrentOperation(token)) return
 
       status.value = 'error'
-      errorMessage.value = String(e)
+      errorMessage.value = appErrorMessage(e)
     }
   }
 
