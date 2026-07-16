@@ -13,7 +13,7 @@ use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
     active_document_store,
     editor_state::{EditorState, SaveCommitLease},
-    state::EditorSessionInfo,
+    state::{DocumentReplacementLease, EditorSessionInfo},
 };
 use crate::types::{
     DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
@@ -84,28 +84,33 @@ pub fn commit_prepared_document(
     expected_revision: Option<u64>,
 ) -> Result<OpenDocumentResponse, AppError> {
     let registry = active_document_store();
-    let previous_document_id;
-    let document_id;
-    let response;
-    {
+    let checkout = prepared_documents::checkout(token)?;
+    let replacement_lease = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        (document_id, previous_document_id, ()) = registry_guard.replace_active_for_context(
-            expected_document_id,
-            expected_revision,
-            || {
-                let prepared = prepared_documents::take(token)?;
-                adopt_source_path_if_transient(
-                    prepared.source_path.as_deref(),
-                    &prepared.editor_state.file_data().file_name,
-                )?;
-                Ok((prepared.editor_state, ()))
-            },
-        )?;
+        registry_guard.begin_document_replacement(expected_document_id, expected_revision)?
+    };
+    let mut replacement = ActiveDocumentReplacement::new(&registry, replacement_lease);
+    adopt_source_path_if_transient(
+        checkout.document().source_path.as_deref(),
+        &checkout.document().editor_state.file_data().file_name,
+    )?;
+    let (prepared, _prepared_commit) = checkout.commit();
+    let (document_id, previous_document_id, response) = {
+        let mut registry_guard = registry
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))?;
+        let (document_id, previous_document_id) =
+            registry_guard.finish_document_replacement(replacement_lease, prepared.editor_state)?;
+        replacement.finished = true;
         let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
-        response = open_document_response_snapshot(editor_state);
-    }
+        (
+            document_id,
+            previous_document_id,
+            open_document_response_snapshot(editor_state),
+        )
+    };
 
     let response = finalize_open_document_response(response);
 
@@ -117,6 +122,36 @@ pub fn commit_prepared_document(
     }
     spawn_rebuild_all_sheets_index(&registry, document_id);
     Ok(response)
+}
+
+struct ActiveDocumentReplacement<'a> {
+    registry: &'a std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
+    lease: DocumentReplacementLease,
+    finished: bool,
+}
+
+impl<'a> ActiveDocumentReplacement<'a> {
+    fn new(
+        registry: &'a std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
+        lease: DocumentReplacementLease,
+    ) -> Self {
+        Self {
+            registry,
+            lease,
+            finished: false,
+        }
+    }
+}
+
+impl Drop for ActiveDocumentReplacement<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Ok(mut registry) = self.registry.write() {
+            registry.abort_document_replacement(self.lease);
+        }
+    }
 }
 
 pub fn abort_prepared_document(token: &str) -> Result<(), AppError> {
@@ -300,11 +335,7 @@ where
     let mut registry_guard = registry
         .write()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.get_mut(document_id).ok_or_else(|| {
-        AppError::DocumentStateInvalid(
-            "active document changed while save was in progress".to_string(),
-        )
-    })?;
+    let editor_state = registry_guard.active_mut_for_save(document_id)?;
     ensure_editor_matches_prepared_save(editor_state, document_id, revision)?;
     let clear_history = clear_history(editor_state);
     let lease = editor_state.begin_save_commit(document_id, revision)?;

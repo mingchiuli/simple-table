@@ -1,5 +1,8 @@
 use crate::error::AppError;
 use crate::io::atomic_file::write_file_atomically;
+use crate::io::marker_store::{
+    bounded_directory_entries, read_marker_bytes, validate_marker_field,
+};
 use crate::io::transient_files::{clear_persistent_marker, transient_file_registry};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -127,6 +130,11 @@ fn persist_managed_document(
         AppError::DocumentStateInvalid("managed document path has no parent".to_string())
     })?;
     let target_file_name = direct_file_name(target)?;
+    validate_marker_field("target file name", &target_file_name)?;
+    validate_marker_field("file name", file_name)?;
+    if let Some(id) = requested_id {
+        validate_marker_field("id", id)?;
+    }
     let file_size = fs::metadata(target)
         .map_err(|error| {
             AppError::ReadError(format!("Failed to inspect managed document: {error}"))
@@ -175,17 +183,9 @@ fn scan_managed_documents(
     directory: &Path,
     remove_invalid: bool,
 ) -> Result<Vec<ManagedDocumentRecord>, AppError> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(AppError::ReadError(format!(
-                "Failed to inspect managed document directory: {error}"
-            )));
-        }
-    };
+    let entries = bounded_directory_entries(directory, "managed document")?;
     let mut records = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
         let marker_path = entry.path();
         let Some(name) = marker_path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -193,9 +193,10 @@ fn scan_managed_documents(
         if !name.starts_with(MARKER_PREFIX) || !name.ends_with(MARKER_SUFFIX) {
             continue;
         }
-        let marker = fs::read(&marker_path)
+        let marker = read_marker_bytes(&marker_path, "managed document marker")
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<PersistentManagedDocument>(&bytes).ok());
+            .and_then(|bytes| serde_json::from_slice::<PersistentManagedDocument>(&bytes).ok())
+            .filter(|marker| validate_managed_marker(marker).is_ok());
         let Some(marker) = marker else {
             if remove_invalid {
                 let _ = fs::remove_file(marker_path);
@@ -234,11 +235,18 @@ fn scan_managed_documents(
 }
 
 fn read_marker(target: &Path) -> Result<PersistentManagedDocument, AppError> {
-    let bytes = fs::read(marker_path(target)?).map_err(|error| {
-        AppError::ReadError(format!("Failed to read managed document marker: {error}"))
+    let bytes = read_marker_bytes(&marker_path(target)?, "managed document marker")?;
+    let marker: PersistentManagedDocument = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::ReadError(format!("Invalid managed document marker: {error}"))
     })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| AppError::ReadError(format!("Invalid managed document marker: {error}")))
+    validate_managed_marker(&marker)?;
+    Ok(marker)
+}
+
+fn validate_managed_marker(marker: &PersistentManagedDocument) -> Result<(), AppError> {
+    validate_marker_field("id", &marker.id)?;
+    validate_marker_field("target file name", &marker.target_file_name)?;
+    validate_marker_field("file name", &marker.file_name)
 }
 
 fn marker_path(target: &Path) -> Result<PathBuf, AppError> {

@@ -50,11 +50,15 @@ pub struct EditorSessionInfo {
 
 pub struct ActiveDocumentStore {
     active: Option<EditorState>,
+    replacement_lease: Option<u64>,
 }
 
 impl ActiveDocumentStore {
     fn new() -> Self {
-        Self { active: None }
+        Self {
+            active: None,
+            replacement_lease: None,
+        }
     }
 
     #[cfg(test)]
@@ -73,6 +77,7 @@ impl ActiveDocumentStore {
         self.replace_active(editor_state)
     }
 
+    #[cfg(test)]
     pub(crate) fn replace_active_for_context<T>(
         &mut self,
         expected_document_id: Option<u64>,
@@ -91,6 +96,11 @@ impl ActiveDocumentStore {
         document_id: Option<u64>,
         revision: Option<u64>,
     ) -> Result<(), AppError> {
+        if self.replacement_lease.is_some() {
+            return Err(AppError::DocumentStateInvalid(
+                "another document replacement is already in progress".to_string(),
+            ));
+        }
         match (document_id, revision) {
             (Some(document_id), Some(revision)) => {
                 let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
@@ -140,6 +150,7 @@ impl ActiveDocumentStore {
         &mut self,
         document_id: u64,
     ) -> Result<Option<u64>, AppError> {
+        self.ensure_no_replacement_in_progress()?;
         let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
         if editor_state.document_id() != document_id {
             return Err(AppError::DocumentStateInvalid(
@@ -162,6 +173,7 @@ impl ActiveDocumentStore {
         document_id: u64,
         base_revision: u64,
     ) -> Result<&mut EditorState, AppError> {
+        self.ensure_no_replacement_in_progress()?;
         let editor_state = self.active.as_mut().ok_or(AppError::NoFileLoaded)?;
         if editor_state.document_id() != document_id {
             return Err(AppError::DocumentStateInvalid(
@@ -207,6 +219,77 @@ impl ActiveDocumentStore {
     pub(crate) fn get_mut(&mut self, document_id: u64) -> Option<&mut EditorState> {
         self.active_mut()
             .filter(|editor_state| editor_state.document_id() == document_id)
+    }
+
+    pub(crate) fn active_mut_for_save(
+        &mut self,
+        document_id: u64,
+    ) -> Result<&mut EditorState, AppError> {
+        self.ensure_no_replacement_in_progress()?;
+        self.get_mut(document_id).ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "active document changed while save was in progress".to_string(),
+            )
+        })
+    }
+
+    pub(crate) fn begin_document_replacement(
+        &mut self,
+        expected_document_id: Option<u64>,
+        expected_revision: Option<u64>,
+    ) -> Result<DocumentReplacementLease, AppError> {
+        self.ensure_replacement_context(expected_document_id, expected_revision)?;
+        let lease = DocumentReplacementLease(nonzero_random_u64());
+        self.replacement_lease = Some(lease.0);
+        Ok(lease)
+    }
+
+    pub(crate) fn finish_document_replacement(
+        &mut self,
+        lease: DocumentReplacementLease,
+        editor_state: EditorState,
+    ) -> Result<(u64, Option<u64>), AppError> {
+        self.ensure_replacement_lease(lease)?;
+        let previous_document_id = self.active.as_ref().map(EditorState::document_id);
+        let document_id = self.replace_active(editor_state);
+        self.replacement_lease = None;
+        Ok((document_id, previous_document_id))
+    }
+
+    pub(crate) fn abort_document_replacement(&mut self, lease: DocumentReplacementLease) {
+        if self.replacement_lease == Some(lease.0) {
+            self.replacement_lease = None;
+        }
+    }
+
+    fn ensure_no_replacement_in_progress(&self) -> Result<(), AppError> {
+        if self.replacement_lease.is_none() {
+            return Ok(());
+        }
+        Err(AppError::DocumentStateInvalid(
+            "document replacement is in progress".to_string(),
+        ))
+    }
+
+    fn ensure_replacement_lease(&self, lease: DocumentReplacementLease) -> Result<(), AppError> {
+        if self.replacement_lease == Some(lease.0) {
+            return Ok(());
+        }
+        Err(AppError::DocumentStateInvalid(
+            "document replacement lease is no longer active".to_string(),
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentReplacementLease(u64);
+
+fn nonzero_random_u64() -> u64 {
+    loop {
+        let value = uuid::Uuid::new_v4().as_u128() as u64;
+        if value != 0 {
+            return value;
+        }
     }
 }
 
@@ -314,6 +397,51 @@ mod tests {
                 .active()
                 .map(|state| state.file_data().file_name.as_str()),
             Some("current.xlsx")
+        );
+    }
+
+    #[test]
+    fn replacement_lease_blocks_mutation_and_close_until_aborted() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let state = editor_state("current.xlsx");
+        let document_id = state.document_id();
+        let revision = state.revision();
+        store.replace_active_for_test(state);
+        let lease = store
+            .begin_document_replacement(Some(document_id), Some(revision))
+            .expect("replacement lease");
+
+        assert!(store.active_for_command(document_id, revision).is_ok());
+        assert!(store.active_mut_for_command(document_id, revision).is_err());
+        assert!(store.active_mut_for_save(document_id).is_err());
+        assert!(store.close_active_document(document_id).is_err());
+
+        store.abort_document_replacement(lease);
+        assert!(store.active_mut_for_command(document_id, revision).is_ok());
+    }
+
+    #[test]
+    fn replacement_lease_atomically_installs_the_prepared_document() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let current = editor_state("current.xlsx");
+        let current_id = current.document_id();
+        let current_revision = current.revision();
+        store.replace_active_for_test(current);
+        let replacement = editor_state("replacement.xlsx");
+        let replacement_id = replacement.document_id();
+        let lease = store
+            .begin_document_replacement(Some(current_id), Some(current_revision))
+            .expect("replacement lease");
+
+        let (document_id, previous_id) = store
+            .finish_document_replacement(lease, replacement)
+            .expect("finish replacement");
+
+        assert_eq!(document_id, replacement_id);
+        assert_eq!(previous_id, Some(current_id));
+        assert_eq!(
+            store.active().map(EditorState::document_id),
+            Some(replacement_id)
         );
     }
 

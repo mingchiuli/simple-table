@@ -18,6 +18,7 @@ struct PreparedDocumentStore {
     pending: HashMap<String, PreparedDocumentEntry>,
     order: VecDeque<String>,
     prepare_in_progress: bool,
+    checkout_in_progress: bool,
 }
 
 struct PreparedDocumentEntry {
@@ -28,7 +29,10 @@ struct PreparedDocumentEntry {
 impl PreparedDocumentStore {
     fn begin_prepare(&mut self, now: Instant) -> Result<(), AppError> {
         self.prune_expired(now);
-        if self.prepare_in_progress || self.pending.len() >= MAX_PREPARED_DOCUMENTS {
+        if self.prepare_in_progress
+            || self.checkout_in_progress
+            || self.pending.len() >= MAX_PREPARED_DOCUMENTS
+        {
             return Err(AppError::PreparedDocumentConflict);
         }
         self.prepare_in_progress = true;
@@ -64,11 +68,33 @@ impl PreparedDocumentStore {
         Ok(())
     }
 
+    #[cfg(test)]
     fn take(&mut self, token: &str) -> Option<PreparedDocument> {
         self.prune_expired(Instant::now());
         let prepared = self.pending.remove(token)?.document;
         self.order.retain(|pending_token| pending_token != token);
         Some(prepared)
+    }
+
+    fn checkout(&mut self, token: &str) -> Option<PreparedDocumentEntry> {
+        self.prune_expired(Instant::now());
+        if self.checkout_in_progress {
+            return None;
+        }
+        let entry = self.pending.remove(token)?;
+        self.order.retain(|pending_token| pending_token != token);
+        self.checkout_in_progress = true;
+        Some(entry)
+    }
+
+    fn restore_checkout(&mut self, token: String, entry: PreparedDocumentEntry) {
+        self.checkout_in_progress = false;
+        self.order.push_back(token.clone());
+        self.pending.insert(token, entry);
+    }
+
+    fn finish_checkout(&mut self) {
+        self.checkout_in_progress = false;
     }
 
     fn abort(&mut self, token: &str) {
@@ -95,6 +121,51 @@ static PREPARED_DOCUMENTS: OnceLock<Mutex<PreparedDocumentStore>> = OnceLock::ne
 
 pub(crate) struct PrepareReservation {
     active: bool,
+}
+
+pub(crate) struct PreparedDocumentCheckout {
+    token: String,
+    entry: Option<PreparedDocumentEntry>,
+}
+
+pub(crate) struct PreparedDocumentCommit {
+    active: bool,
+}
+
+impl PreparedDocumentCheckout {
+    pub(crate) fn document(&self) -> &PreparedDocument {
+        &self.entry.as_ref().expect("checkout entry").document
+    }
+
+    pub(crate) fn commit(mut self) -> (PreparedDocument, PreparedDocumentCommit) {
+        (
+            self.entry.take().expect("checkout entry").document,
+            PreparedDocumentCommit { active: true },
+        )
+    }
+}
+
+impl Drop for PreparedDocumentCheckout {
+    fn drop(&mut self) {
+        let Some(entry) = self.entry.take() else {
+            return;
+        };
+        if let Ok(mut store) = store().lock() {
+            store.restore_checkout(self.token.clone(), entry);
+        }
+    }
+}
+
+impl Drop for PreparedDocumentCommit {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Ok(mut store) = store().lock() {
+            store.finish_checkout();
+            self.active = false;
+        }
+    }
 }
 
 impl Drop for PrepareReservation {
@@ -197,12 +268,26 @@ fn validate_combined_document_bytes_for_active(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn take(token: &str) -> Result<PreparedDocument, AppError> {
     let mut store = store()
         .lock()
         .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
     store.take(token).ok_or_else(|| {
         AppError::DocumentStateInvalid("prepared document token is no longer active".to_string())
+    })
+}
+
+pub(crate) fn checkout(token: &str) -> Result<PreparedDocumentCheckout, AppError> {
+    let mut store = store()
+        .lock()
+        .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+    let entry = store.checkout(token).ok_or_else(|| {
+        AppError::DocumentStateInvalid("prepared document token is no longer active".to_string())
+    })?;
+    Ok(PreparedDocumentCheckout {
+        token: token.to_string(),
+        entry: Some(entry),
     })
 }
 
@@ -245,6 +330,21 @@ mod tests {
         assert_eq!(document.editor_state.file_data().file_name, "book.xlsx");
         assert!(store.take("token").is_none());
         assert!(store.order.is_empty());
+    }
+
+    #[test]
+    fn dropped_checkout_restores_the_prepared_document() {
+        let mut store = PreparedDocumentStore::default();
+        store
+            .insert("token".to_string(), prepared("book.xlsx"))
+            .expect("insert token");
+        let entry = store.checkout("token").expect("checkout");
+        assert!(store.begin_prepare(Instant::now()).is_err());
+
+        store.restore_checkout("token".to_string(), entry);
+
+        assert!(store.take("token").is_some());
+        assert!(!store.checkout_in_progress);
     }
 
     #[test]

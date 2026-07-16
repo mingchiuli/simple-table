@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FilePath;
 
@@ -33,7 +34,9 @@ pub(super) fn extension_from_name(file_name: &str) -> String {
     supported_extension_or_default(file_name)
 }
 
-pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+static MOBILE_STORAGE_DIRECTORY: OnceLock<Result<PathBuf, AppError>> = OnceLock::new();
+
+fn resolve_mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     let dir = app
         .path()
         .app_local_data_dir()
@@ -41,6 +44,11 @@ pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
         .join("files");
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::WriteError(format!("Failed to create app file dir: {}", e)))?;
+    Ok(dir)
+}
+
+fn initialize_mobile_storage(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let dir = resolve_mobile_dir(app)?;
     for managed in managed_documents::managed_documents(&dir)? {
         clear_persistent_marker(&managed.path);
     }
@@ -54,6 +62,17 @@ pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     }
     reconcile_persisted_transient_files(&dir)?;
     Ok(dir)
+}
+
+pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    cached_mobile_storage_directory(&MOBILE_STORAGE_DIRECTORY, || initialize_mobile_storage(app))
+}
+
+fn cached_mobile_storage_directory(
+    cache: &OnceLock<Result<PathBuf, AppError>>,
+    initialize: impl FnOnce() -> Result<PathBuf, AppError>,
+) -> Result<PathBuf, AppError> {
+    cache.get_or_init(initialize).clone()
 }
 
 pub(super) fn unique_import_path(app: &AppHandle, file_name: &str) -> Result<PathBuf, AppError> {
@@ -418,11 +437,15 @@ pub fn export_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        extension_from_name, is_save_target_authorized, validated_mobile_files_path_in_dir,
+        cached_mobile_storage_directory, extension_from_name, is_save_target_authorized,
+        validated_mobile_files_path_in_dir,
     };
     use crate::error::AppError;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, OnceLock};
+    use std::thread;
 
     #[test]
     fn extension_from_name_uses_supported_extension_or_xlsx_default() {
@@ -449,6 +472,47 @@ mod tests {
             &unrelated,
             false
         ));
+    }
+
+    #[test]
+    fn mobile_storage_initialization_is_shared_by_concurrent_callers() {
+        let cache = Arc::new(OnceLock::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut workers = Vec::new();
+        for _ in 0..16 {
+            let cache = Arc::clone(&cache);
+            let calls = Arc::clone(&calls);
+            workers.push(thread::spawn(move || {
+                cached_mobile_storage_directory(&cache, || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(PathBuf::from("/mobile/files"))
+                })
+            }));
+        }
+
+        for worker in workers {
+            assert_eq!(
+                worker.join().expect("worker").unwrap(),
+                PathBuf::from("/mobile/files")
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn mobile_storage_initialization_failure_is_stable() {
+        let cache = OnceLock::new();
+        let calls = AtomicUsize::new(0);
+        for _ in 0..2 {
+            assert!(matches!(
+                cached_mobile_storage_directory(&cache, || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(AppError::ReadError("failed initialization".to_string()))
+                }),
+                Err(AppError::ReadError(_))
+            ));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -1,12 +1,14 @@
 #![cfg_attr(test, allow(dead_code))]
 
 use crate::error::AppError;
+use crate::io::marker_store::{
+    bounded_directory_entries, read_marker_bytes, validate_marker_field,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -213,6 +215,7 @@ fn write_persistent_marker_at(
     created_at: SystemTime,
 ) -> Result<(), AppError> {
     let target_file_name = direct_file_name(target)?;
+    validate_marker_field("target file name", &target_file_name)?;
     let marker = PersistentTransientMarker {
         target_file_name,
         purpose,
@@ -227,19 +230,11 @@ fn write_persistent_marker_at(
 }
 
 pub(crate) fn reconcile_persisted_transient_files(directory: &Path) -> Result<(), AppError> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(AppError::ReadError(format!(
-                "Failed to inspect transient file directory: {error}"
-            )));
-        }
-    };
+    let entries = bounded_directory_entries(directory, "transient file")?;
     let now_millis = system_time_millis(SystemTime::now());
     let ttl_millis = TRANSIENT_FILE_TTL.as_millis().min(u64::MAX as u128) as u64;
 
-    for entry in entries.flatten() {
+    for entry in entries {
         let marker_path = entry.path();
         let Some(name) = marker_path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -247,13 +242,22 @@ pub(crate) fn reconcile_persisted_transient_files(directory: &Path) -> Result<()
         if !name.starts_with(MARKER_PREFIX) || !name.ends_with(MARKER_SUFFIX) {
             continue;
         }
-        let Ok(bytes) = fs::read(&marker_path) else {
-            continue;
+        let bytes = match read_marker_bytes(&marker_path, "transient file marker") {
+            Ok(bytes) => bytes,
+            Err(AppError::ResourceLimitExceeded(_)) => {
+                let _ = fs::remove_file(&marker_path);
+                continue;
+            }
+            Err(_) => continue,
         };
         let Ok(marker) = serde_json::from_slice::<PersistentTransientMarker>(&bytes) else {
             let _ = fs::remove_file(&marker_path);
             continue;
         };
+        if validate_marker_field("target file name", &marker.target_file_name).is_err() {
+            let _ = fs::remove_file(&marker_path);
+            continue;
+        }
         if now_millis.saturating_sub(marker.created_at_millis) < ttl_millis {
             continue;
         }
@@ -269,17 +273,9 @@ pub(crate) fn reconcile_persisted_transient_files(directory: &Path) -> Result<()
 pub(crate) fn completed_persisted_save_locations(
     directory: &Path,
 ) -> Result<Vec<PathBuf>, AppError> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(AppError::ReadError(format!(
-                "Failed to inspect transient file directory: {error}"
-            )));
-        }
-    };
+    let entries = bounded_directory_entries(directory, "transient file")?;
     let mut completed = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
         let marker_path = entry.path();
         let Some(name) = marker_path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -287,9 +283,12 @@ pub(crate) fn completed_persisted_save_locations(
         if !name.starts_with(MARKER_PREFIX) || !name.ends_with(MARKER_SUFFIX) {
             continue;
         }
-        let Some(marker) = fs::read(&marker_path)
+        let Some(marker) = read_marker_bytes(&marker_path, "transient file marker")
             .ok()
             .and_then(|bytes| serde_json::from_slice::<PersistentTransientMarker>(&bytes).ok())
+            .filter(|marker| {
+                validate_marker_field("target file name", &marker.target_file_name).is_ok()
+            })
         else {
             continue;
         };
@@ -365,6 +364,7 @@ fn system_time_millis(time: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::marker_store::MAX_MARKER_BYTES;
 
     #[test]
     fn registered_path_can_be_taken_once_for_its_purpose() {
@@ -543,6 +543,20 @@ mod tests {
 
         assert!(path.exists());
         assert!(marker_path(&path).unwrap().exists());
+    }
+
+    #[test]
+    fn reconciliation_removes_an_oversized_persistent_marker() {
+        let directory = TestDir::new("oversized-marker");
+        let target = directory.path.join("temporary.xlsx");
+        fs::write(&target, b"temporary").unwrap();
+        let marker = marker_path(&target).unwrap();
+        fs::write(&marker, vec![b'x'; MAX_MARKER_BYTES + 1]).unwrap();
+
+        reconcile_persisted_transient_files(&directory.path).unwrap();
+
+        assert!(!marker.exists());
+        assert!(target.exists());
     }
 
     #[test]

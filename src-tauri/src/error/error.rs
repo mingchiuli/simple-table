@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde::ser::SerializeStruct;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum AppError {
     // 文件操作
     #[error("Failed to read file: {0}")]

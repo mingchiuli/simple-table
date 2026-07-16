@@ -3,6 +3,7 @@ use crate::io::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 #[cfg(test)]
 use crate::io::file_format::is_xlsx_extension;
+use crate::io::formula_coordinator::FormulaWorkLimits;
 use crate::io::history_restore_transaction::{HistoryRestoreDirection, HistoryRestoreTransaction};
 use crate::io::projection_limits::ResourceLedger;
 use crate::ops::EditorCommand;
@@ -342,6 +343,14 @@ impl EditorState {
 
     /// 执行命令并记录到历史，返回增量结果。
     pub fn execute(&mut self, command: EditorCommand) -> Result<ExecutedOperation, AppError> {
+        self.execute_with_formula_work_limits(command, FormulaWorkLimits::default())
+    }
+
+    fn execute_with_formula_work_limits(
+        &mut self,
+        command: EditorCommand,
+        formula_work_limits: FormulaWorkLimits,
+    ) -> Result<ExecutedOperation, AppError> {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
         let operation = command.resolve_with_resources(self.file_data(), &self.resources)?;
@@ -354,6 +363,8 @@ impl EditorState {
             });
         }
         self.ensure_operation_supported(&operation)?;
+        self.document
+            .validate_formula_work(&operation, formula_work_limits)?;
         self.ensure_memento_budget(&operation)?;
         self.ensure_revision_available()?;
         let should_mark_search_stale = operation.impact().requires_search_rebuild();
@@ -708,6 +719,49 @@ mod tests {
 
         assert_incremental_content_hash_is_current(&state);
         assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn formula_work_limit_rejects_before_document_state_changes() {
+        let mut state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "formula-work-limit.xlsx".to_string(),
+                sheets: vec![crate::types::SheetData {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![
+                        CellValue::String("1".to_string()),
+                        CellValue::formula("=A1", CellValue::Null),
+                        CellValue::formula("=A1+1", CellValue::Null),
+                    ]],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let original_revision = state.revision();
+        let original_file_data = state.file_data().clone();
+
+        let error = state
+            .execute_with_formula_work_limits(
+                EditorCommand::SetCell {
+                    sheet_index: 0,
+                    row: 0,
+                    col: 0,
+                    text: "2".to_string(),
+                },
+                FormulaWorkLimits {
+                    max_evaluations: 1,
+                    max_source_bytes: usize::MAX,
+                },
+            )
+            .expect_err("formula work should exceed the test limit");
+
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+        assert_eq!(state.revision(), original_revision);
+        assert_eq!(state.file_data(), &original_file_data);
+        assert!(!state.is_dirty());
+        assert!(!state.can_undo());
     }
 
     #[test]

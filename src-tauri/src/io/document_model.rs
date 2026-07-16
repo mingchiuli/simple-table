@@ -12,7 +12,7 @@ use crate::io::document_memento_budget;
 use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
 use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::io::document_transaction::DocumentTransaction;
-use crate::io::formula_coordinator::FormulaCoordinator;
+use crate::io::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
 use crate::io::region_metadata_index::RegionMetadataIndex;
 use crate::ops::AppliedOperation;
 use crate::types::FormulaStatus;
@@ -270,6 +270,15 @@ impl SpreadsheetDocument {
             &mut self.formulas,
             operation,
         )
+    }
+
+    pub(crate) fn validate_formula_work(
+        &self,
+        operation: &AppliedOperation,
+        limits: FormulaWorkLimits,
+    ) -> Result<(), AppError> {
+        self.formulas
+            .validate_recalculation_work(operation, &self.projection, limits)
     }
 
     pub(in crate::io) fn restore_memento_side(

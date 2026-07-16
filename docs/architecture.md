@@ -108,6 +108,15 @@ back to recalculation after every edit. Dependency removal uses reverse edges
 and batches range-bucket rebuilds once per mutation batch. Diagnostic counts
 remain complete while only 100 issue samples are retained internally.
 
+Formula evaluation also has a per-mutation admission budget, separate from its
+memory budgets. Before a transaction captures rollback state or changes the
+document, Rust estimates the affected formula set, including fallback formulas,
+new formulas in the request, and all formulas rebuilt by structural edits. A
+mutation may evaluate at most 16,384 formulas and process at most 8 MiB of
+formula source. An oversized calculation is rejected atomically without
+changing revision, dirty state, or history; synchronous third-party evaluation
+is never interrupted after a transaction starts.
+
 `DocumentCommandBus` owns interactive and background mutation sequencing,
 pending-edit flushes, response application, stale-projection recovery, and
 post-mutation callbacks. Components and feature composables should call it
@@ -134,6 +143,15 @@ cannot submit a complete `FileData` aggregate through the new-document RPC.
 Opening uses a prepare/commit/abort protocol. Preparing parses into a temporary
 `EditorState` without replacing the active document. Commit validates the
 expected active document and revision before replacement.
+
+Prepared commit checks out the prepared entry and acquires a backend document
+replacement lease while holding the registry lock only briefly. The registry
+lock is released before a mobile transient file is promoted into the managed
+catalog. While the lease is active, mutation, save commit, close, and another
+replacement are rejected, but consistent reads of the old document remain
+available. The lease then atomically installs the prepared `EditorState`.
+Failed promotion restores the prepared token, and the checkout continues to
+reserve prepared-document capacity until replacement finishes.
 
 Prepared documents are process-local, limited to one entry and an estimated
 128 MiB, and expire after five minutes. A second prepare is rejected while a
@@ -272,6 +290,15 @@ Startup removes stale transient markers for cataloged documents before applying
 transient expiry, and promotes non-empty interrupted save-location files into the
 managed catalog. Discard and transient expiry remove only files that have not
 been promoted.
+
+Mobile catalog recovery is a synchronous, process-once initialization barrier.
+All mobile file commands share its cached result, so ordinary directory access
+does not repeat startup repair and no command can race ahead of reconciliation.
+Persistent sidecar reads are capped at 16 KiB per marker, fields at 1,024 bytes,
+and a storage directory scan at 1,024 entries. Invalid or oversized catalog
+markers are removed where ownership can be determined safely; exceeding the
+directory admission limit fails initialization instead of performing unbounded
+startup work.
 
 New mobile adoptions are limited to 64 managed documents and 1 GiB of managed
 file bytes. Existing documents from older versions are migrated without silent

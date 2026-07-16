@@ -1,5 +1,6 @@
 use formualizer_parse::parser::ReferenceType;
 
+use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
@@ -13,6 +14,30 @@ pub(crate) struct FormulaCoordinator {
     ast_service: FormulaAstService,
     status: FormulaStatus,
     pending_structure_diagnostics: StructurePatchDiagnostics,
+}
+
+pub(crate) const MAX_FORMULA_EVALUATIONS_PER_MUTATION: usize = 16_384;
+pub(crate) const MAX_FORMULA_EVALUATION_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+pub(crate) struct FormulaWorkLimits {
+    pub(crate) max_evaluations: usize,
+    pub(crate) max_source_bytes: usize,
+}
+
+impl Default for FormulaWorkLimits {
+    fn default() -> Self {
+        Self {
+            max_evaluations: MAX_FORMULA_EVALUATIONS_PER_MUTATION,
+            max_source_bytes: MAX_FORMULA_EVALUATION_SOURCE_BYTES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FormulaWorkEstimate {
+    evaluations: usize,
+    source_bytes: usize,
 }
 
 impl FormulaCoordinator {
@@ -117,6 +142,89 @@ impl FormulaCoordinator {
                 .runtime
                 .impacted_formula_cells_for(changed_cells.iter().copied()),
             FormulaStatus::Degraded { .. } => self.formula_cell_positions(projection),
+        }
+    }
+
+    pub(crate) fn validate_recalculation_work(
+        &self,
+        operation: &AppliedOperation,
+        projection: &FileData,
+        limits: FormulaWorkLimits,
+    ) -> Result<(), AppError> {
+        validate_formula_work_estimate(self.recalculation_work(operation, projection), limits)
+    }
+
+    fn recalculation_work(
+        &self,
+        operation: &AppliedOperation,
+        projection: &FileData,
+    ) -> FormulaWorkEstimate {
+        let mut prospective_formulas = std::collections::HashMap::new();
+        let mut positions: std::collections::HashSet<FormulaCellRef> = match operation {
+            AppliedOperation::SetCell {
+                sheet_index,
+                row,
+                col,
+                new_value,
+                ..
+            } => {
+                let changed = FormulaCellRef {
+                    sheet_index: *sheet_index,
+                    row: *row,
+                    col: *col,
+                };
+                if let CellValue::Formula { formula, .. } = new_value {
+                    prospective_formulas.insert(changed, formula.as_str());
+                }
+                self.impacted_cells_for_memento([changed], projection)
+                    .into_iter()
+                    .collect()
+            }
+            AppliedOperation::SetCells { changes } => {
+                let changed: Vec<_> = changes
+                    .iter()
+                    .map(|change| {
+                        let cell_ref = FormulaCellRef {
+                            sheet_index: change.sheet_index,
+                            row: change.row,
+                            col: change.col,
+                        };
+                        if let CellValue::Formula { formula, .. } = &change.new_value {
+                            prospective_formulas.insert(cell_ref, formula.as_str());
+                        }
+                        cell_ref
+                    })
+                    .collect();
+                self.impacted_cells_for_memento(changed, projection)
+                    .into_iter()
+                    .collect()
+            }
+            AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
+                std::collections::HashSet::new()
+            }
+            AppliedOperation::AddRow { .. }
+            | AppliedOperation::DeleteRow { .. }
+            | AppliedOperation::AddColumn { .. }
+            | AppliedOperation::DeleteColumn { .. }
+            | AppliedOperation::AddSheet { .. }
+            | AppliedOperation::DeleteSheet { .. } => self
+                .formula_cell_positions(projection)
+                .into_iter()
+                .collect(),
+        };
+        positions.extend(prospective_formulas.keys().copied());
+        let source_bytes = positions
+            .iter()
+            .map(|cell_ref| {
+                prospective_formulas.get(cell_ref).map_or_else(
+                    || formula_source_at(projection, *cell_ref).map_or(0, str::len),
+                    |formula| formula.len(),
+                )
+            })
+            .fold(0usize, usize::saturating_add);
+        FormulaWorkEstimate {
+            evaluations: positions.len(),
+            source_bytes,
         }
     }
 
@@ -290,6 +398,38 @@ impl FormulaCoordinator {
             .skipped_formula_reference_rewrites;
         self.pending_structure_diagnostics = StructurePatchDiagnostics::default();
     }
+}
+
+fn formula_source_at(file_data: &FileData, cell_ref: FormulaCellRef) -> Option<&str> {
+    match file_data
+        .sheets
+        .get(cell_ref.sheet_index)?
+        .rows
+        .get(cell_ref.row)?
+        .get(cell_ref.col)?
+    {
+        CellValue::Formula { formula, .. } => Some(formula),
+        _ => None,
+    }
+}
+
+fn validate_formula_work_estimate(
+    estimate: FormulaWorkEstimate,
+    limits: FormulaWorkLimits,
+) -> Result<(), AppError> {
+    if estimate.evaluations > limits.max_evaluations {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "formula recalculation would evaluate {} formulas; the maximum per mutation is {}",
+            estimate.evaluations, limits.max_evaluations
+        )));
+    }
+    if estimate.source_bytes > limits.max_source_bytes {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "formula recalculation would process {} source bytes; the maximum per mutation is {} bytes",
+            estimate.source_bytes, limits.max_source_bytes
+        )));
+    }
+    Ok(())
 }
 
 fn formula_status_estimated_bytes(status: &FormulaStatus) -> usize {
@@ -536,5 +676,71 @@ mod tests {
                 .structure_formula_limitations()
                 .contains(&"degraded formula runtime".to_string())
         );
+    }
+
+    #[test]
+    fn formula_work_rejects_evaluation_count_above_the_limit() {
+        assert!(matches!(
+            validate_formula_work_estimate(
+                FormulaWorkEstimate {
+                    evaluations: 3,
+                    source_bytes: 12,
+                },
+                FormulaWorkLimits {
+                    max_evaluations: 2,
+                    max_source_bytes: 100,
+                },
+            ),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn formula_work_rejects_source_bytes_above_the_limit() {
+        assert!(matches!(
+            validate_formula_work_estimate(
+                FormulaWorkEstimate {
+                    evaluations: 1,
+                    source_bytes: 101,
+                },
+                FormulaWorkLimits {
+                    max_evaluations: 2,
+                    max_source_bytes: 100,
+                },
+            ),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn formula_work_accounts_for_a_new_formula_before_it_is_registered() {
+        let mut projection = FileData {
+            path: String::new(),
+            file_name: "new-formula.xlsx".to_string(),
+            sheets: vec![sheet(
+                "Sheet1",
+                vec![vec![CellValue::String("1".to_string())]],
+            )],
+        };
+        let coordinator = FormulaCoordinator::new(&mut projection);
+        let operation = AppliedOperation::SetCell {
+            sheet_index: 0,
+            row: 0,
+            col: 0,
+            old_value: CellValue::String("1".to_string()),
+            new_value: CellValue::formula("=1+1", CellValue::Null),
+        };
+
+        assert!(matches!(
+            coordinator.validate_recalculation_work(
+                &operation,
+                &projection,
+                FormulaWorkLimits {
+                    max_evaluations: 0,
+                    max_source_bytes: usize::MAX,
+                },
+            ),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
     }
 }
