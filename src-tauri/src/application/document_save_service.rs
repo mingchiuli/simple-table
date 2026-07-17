@@ -259,6 +259,16 @@ fn document_handle_for_read(
         .active_handle_for_read(document_id)
 }
 
+fn current_document_path_for_command(
+    document_id: u64,
+    base_revision: u64,
+) -> Result<String, AppError> {
+    let registry = active_document_store();
+    let handle = document_handle_for_read(&registry, document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
+    Ok(editor_state.file_data().path.clone())
+}
+
 fn default_extension_string() -> String {
     default_spreadsheet_extension().to_string()
 }
@@ -276,7 +286,8 @@ pub fn save_file_desktop(
     };
     use crate::io::platform::desktop;
 
-    desktop::ensure_save_path_authorized(path, document_id, base_revision)?;
+    let current_path = current_document_path_for_command(document_id, base_revision)?;
+    desktop::ensure_save_path_authorized(path, &current_path)?;
     let prepared = prepare_current_file_save(document_id, base_revision, path)?;
     let target = Path::new(path);
     let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
@@ -330,7 +341,8 @@ pub fn save_file_mobile(
     use crate::io::platform::mobile;
 
     let target = mobile::validated_mobile_files_path(app, Path::new(path))?;
-    mobile::ensure_save_target_authorized(&target, document_id, base_revision)?;
+    let current_path = current_document_path_for_command(document_id, base_revision)?;
+    mobile::ensure_save_target_authorized(&target, &current_path)?;
     let target_path = target.to_string_lossy().to_string();
     let prepared = prepare_current_file_save(document_id, base_revision, &target_path)?;
     managed_documents::validate_managed_save(&target, prepared.bytes.len() as u64)?;

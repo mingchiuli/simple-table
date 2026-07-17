@@ -218,11 +218,10 @@ pub fn discard_transient_file(
 pub(crate) fn remove_managed_file_if_inactive(
     app: &AppHandle,
     path: &str,
+    active_document_path: Option<&str>,
 ) -> Result<bool, AppError> {
     let target = validated_mobile_files_path(app, Path::new(path))?;
-    if document::active_document_path()?
-        .as_deref()
-        .is_some_and(|active| Path::new(active) == target)
+    if active_document_path.is_some_and(|active| Path::new(active) == target)
         || transient_file_registry().contains(&target)?
     {
         return Ok(false);
@@ -340,16 +339,11 @@ pub(crate) fn migrate_managed_document(
 
 pub(crate) fn ensure_save_target_authorized(
     target: &Path,
-    document_id: u64,
-    base_revision: u64,
+    current_document_path: &str,
 ) -> Result<(), AppError> {
-    let current_path =
-        document::inspect_current_file_for_command(document_id, base_revision, |file_data| {
-            file_data.path.clone()
-        })?;
     let is_reserved =
         transient_file_registry().contains_for(target, TransientFilePurpose::SaveLocation)?;
-    if is_save_target_authorized(&current_path, target, is_reserved) {
+    if is_save_target_authorized(current_document_path, target, is_reserved) {
         return Ok(());
     }
     Err(AppError::DocumentStateInvalid(

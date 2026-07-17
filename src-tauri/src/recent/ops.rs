@@ -83,7 +83,12 @@ pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> 
             .find(|file| file.id == id)
             && file.storage_type == StorageType::MobileSandboxPath
         {
-            if !crate::io::platform::mobile::remove_managed_file_if_inactive(app, &file.path)? {
+            let active_path = document::active_document_path()?;
+            if !crate::io::platform::mobile::remove_managed_file_if_inactive(
+                app,
+                &file.path,
+                active_path.as_deref(),
+            )? {
                 return Err(AppError::DocumentStateInvalid(
                     "cannot delete the active mobile document".to_string(),
                 ));
@@ -174,13 +179,24 @@ fn reconcile_mobile_recent_files(
 
 fn cleanup_removed_mobile_files(app: &AppHandle, removed: &[RecentFile]) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
+    let active_path = match document::active_document_path() {
+        Ok(active_path) => active_path,
+        Err(error) => {
+            eprintln!("Failed to inspect active document during recent cleanup: {error}");
+            return;
+        }
+    };
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     for file in removed {
         if file.storage_type != StorageType::MobileSandboxPath {
             continue;
         }
-        if let Err(error) =
-            crate::io::platform::mobile::remove_managed_file_if_inactive(app, &file.path)
-        {
+        if let Err(error) = crate::io::platform::mobile::remove_managed_file_if_inactive(
+            app,
+            &file.path,
+            active_path.as_deref(),
+        ) {
             eprintln!(
                 "Failed to clean up removed mobile document {}: {error}",
                 file.path

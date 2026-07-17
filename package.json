@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test": "vitest run && node scripts/test-grid-geometry.mjs",
+    "test": "node scripts/test-architecture-boundaries.mjs && vitest run && node scripts/test-grid-geometry.mjs",
+    "test:architecture": "node scripts/test-architecture-boundaries.mjs",
     "test:geometry": "node scripts/test-grid-geometry.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

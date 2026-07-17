@@ -172,10 +172,18 @@ pub fn discard_save_location(path: &str) {
 
 pub(crate) fn ensure_save_path_authorized(
     path: &str,
-    document_id: u64,
-    base_revision: u64,
+    current_document_path: &str,
 ) -> Result<(), AppError> {
-    ensure_save_path_authorized_impl(path, document_id, base_revision)
+    let target = normalize_target_path(Path::new(path));
+    if is_current_document_path(&target, current_document_path) {
+        return Ok(());
+    }
+    if consume_path(save_paths(), &target) {
+        return Ok(());
+    }
+    Err(AppError::DocumentStateInvalid(
+        "desktop save target was not selected by the user".to_string(),
+    ))
 }
 
 pub(crate) struct DesktopExportTarget {
@@ -232,36 +240,9 @@ fn file_path_to_path_buf(path: FilePath) -> Result<PathBuf, AppError> {
     }
 }
 
-fn ensure_save_path_authorized_impl(
-    path: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<(), AppError> {
-    let target = normalize_target_path(Path::new(path));
-    if is_current_document_path(&target, document_id, base_revision)? {
-        return Ok(());
-    }
-    if consume_path(save_paths(), &target) {
-        return Ok(());
-    }
-    Err(AppError::DocumentStateInvalid(
-        "desktop save target was not selected by the user".to_string(),
-    ))
-}
-
-fn is_current_document_path(
-    target: &Path,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<bool, AppError> {
-    let current_path =
-        document::inspect_current_file_for_command(document_id, base_revision, |file_data| {
-            file_data.path.clone()
-        })?;
-    if current_path.is_empty() {
-        return Ok(false);
-    }
-    Ok(normalize_target_path(Path::new(&current_path)) == target)
+fn is_current_document_path(target: &Path, current_document_path: &str) -> bool {
+    !current_document_path.is_empty()
+        && normalize_target_path(Path::new(current_document_path)) == target
 }
 
 fn open_paths() -> &'static Mutex<PathAuthorizationRegistry> {
@@ -449,5 +430,19 @@ mod tests {
 
         assert!(registry.consume_at(&refreshed, now));
         assert!(!registry.consume_at(Path::new("/tmp/book-0.xlsx"), now));
+    }
+
+    #[test]
+    fn current_document_path_authorization_is_a_pure_path_comparison() {
+        let current = temp_path("current.xlsx");
+
+        assert!(is_current_document_path(
+            &normalize_target_path(&current),
+            &current.to_string_lossy(),
+        ));
+        assert!(!is_current_document_path(
+            &normalize_target_path(&current),
+            "",
+        ));
     }
 }

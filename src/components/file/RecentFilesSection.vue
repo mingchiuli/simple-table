@@ -3,9 +3,11 @@ import { Document, Delete } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { RecentFile } from "@/types";
 import { useRecentFilesStore } from "@/stores/recentFiles";
+import { useRecentFilesService } from "@/application/recentFilesService";
 import { appErrorMessage } from "@/utils/appError";
 
 const recentFilesStore = useRecentFilesStore();
+const recentFilesService = useRecentFilesService();
 
 const props = defineProps<{
   disabled?: boolean;
@@ -35,7 +37,7 @@ async function handleDeleteRecent(file: RecentFile, event: Event) {
         }
       );
     }
-    await recentFilesStore.remove(file.id);
+    await recentFilesService.remove(file.id);
   } catch (error) {
     if (error === "cancel" || error === "close") return;
     ElMessage.error(`Failed to remove recent file: ${appErrorMessage(error)}`);

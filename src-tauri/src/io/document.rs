@@ -38,8 +38,10 @@ pub fn prepare_open_from_bytes(
 ) -> Result<PreparedOpenDocument, AppError> {
     let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
     let preflight = preflight_input_file(&extension, &bytes)?;
-    let reservation =
-        prepared_documents::reserve_for_parse_bytes(preflight.estimated_parse_bytes())?;
+    let reservation = prepared_documents::reserve_for_parse_bytes(
+        preflight.estimated_parse_bytes(),
+        active_document_resource_bytes()?,
+    )?;
 
     // 如果调用方已经解析出文件名，优先使用；否则从路径解析
     let resolved_file_name =
@@ -62,7 +64,8 @@ pub fn prepare_open_from_bytes(
 pub fn prepare_new_file() -> Result<PreparedOpenDocument, AppError> {
     let file_data = blank_file_data();
     validate_file_data(&file_data)?;
-    let reservation = prepared_documents::reserve_for_file_data(&file_data)?;
+    let reservation =
+        prepared_documents::reserve_for_file_data(&file_data, active_document_resource_bytes()?)?;
     prepare_editor_state(file_data, None, None, reservation)
 }
 
@@ -434,8 +437,25 @@ fn prepare_editor_state(
     reservation: prepared_documents::PrepareReservation,
 ) -> Result<PreparedOpenDocument, AppError> {
     let editor_state = EditorState::with_workbook(file_data, workbook);
-    let token = prepared_documents::replace(editor_state, source_path, reservation)?;
+    let token = prepared_documents::replace(
+        editor_state,
+        source_path,
+        reservation,
+        active_document_resource_bytes()?,
+    )?;
     Ok(PreparedOpenDocument { token })
+}
+
+fn active_document_resource_bytes() -> Result<usize, AppError> {
+    let registry = active_document_store();
+    let handle = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle();
+    handle
+        .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
+        .transpose()
+        .map(|bytes| bytes.unwrap_or_default())
 }
 
 pub(crate) fn adopt_source_path_if_transient(

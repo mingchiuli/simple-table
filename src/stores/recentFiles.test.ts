@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useRecentFilesStore } from "@/stores/recentFiles";
+import { createRecentFilesService } from "@/application/recentFilesService";
 import type { RecentFile } from "@/types";
-
-vi.mock("@/api", () => ({
-  getRecentFiles: vi.fn(),
-  removeRecentFile: vi.fn(),
-}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -36,16 +32,19 @@ describe("recentFiles store", () => {
   });
 
   it("keeps the newest load result when concurrent loads resolve out of order", async () => {
-    const api = await import("@/api");
     const firstLoad = deferred<RecentFile[]>();
     const secondLoad = deferred<RecentFile[]>();
-    vi.mocked(api.getRecentFiles)
+    const getRecentFiles = vi.fn()
       .mockReturnValueOnce(firstLoad.promise)
       .mockReturnValueOnce(secondLoad.promise);
     const store = useRecentFilesStore();
+    const service = createRecentFilesService(store, {
+      getRecentFiles,
+      removeRecentFile: vi.fn(),
+    });
 
-    const first = store.load();
-    const second = store.load();
+    const first = service.load();
+    const second = service.load();
 
     expect(store.loading).toBe(true);
 
@@ -63,16 +62,19 @@ describe("recentFiles store", () => {
   });
 
   it("keeps loading true until all concurrent loads settle", async () => {
-    const api = await import("@/api");
     const firstLoad = deferred<RecentFile[]>();
     const secondLoad = deferred<RecentFile[]>();
-    vi.mocked(api.getRecentFiles)
+    const getRecentFiles = vi.fn()
       .mockReturnValueOnce(firstLoad.promise)
       .mockReturnValueOnce(secondLoad.promise);
     const store = useRecentFilesStore();
+    const service = createRecentFilesService(store, {
+      getRecentFiles,
+      removeRecentFile: vi.fn(),
+    });
 
-    const first = store.load();
-    const second = store.load();
+    const first = service.load();
+    const second = service.load();
 
     firstLoad.resolve([recentFile("old")]);
     await first;
@@ -85,5 +87,20 @@ describe("recentFiles store", () => {
 
     expect(store.loading).toBe(false);
     expect(store.files.map((file) => file.id)).toEqual(["new"]);
+  });
+
+  it("removes through the port and refreshes the projection", async () => {
+    const store = useRecentFilesStore();
+    const removeRecentFile = vi.fn().mockResolvedValue(undefined);
+    const getRecentFiles = vi.fn().mockResolvedValue([recentFile("remaining")]);
+    const service = createRecentFilesService(store, {
+      getRecentFiles,
+      removeRecentFile,
+    });
+
+    await service.remove("deleted");
+
+    expect(removeRecentFile).toHaveBeenCalledWith("deleted");
+    expect(store.files.map((file) => file.id)).toEqual(["remaining"]);
   });
 });

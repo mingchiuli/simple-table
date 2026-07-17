@@ -1,5 +1,6 @@
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
+import { useRecentFilesService } from "@/application/recentFilesService";
 import type { EditorCommandContext } from "@/types";
 import {
   tryAddRecentFileWithThumbnail,
@@ -21,6 +22,7 @@ const recentFileUpdateSchedulers = new WeakMap<object, RecentFileUpdateScheduler
 export function useRecentFileUpdates() {
   const documentSessionStore = useDocumentSessionStore();
   const recentFilesStore = useRecentFilesStore();
+  const recentFilesService = useRecentFilesService();
 
   function queueRecentFileEntryUpdate(originalPath?: string) {
     const context = documentSessionStore.currentCommandContext();
@@ -55,12 +57,13 @@ export function useRecentFileUpdates() {
   }
 
   async function refreshRecentFiles() {
-    await tryRefreshRecentFiles(() => recentFilesStore.load());
+    await tryRefreshRecentFiles(recentFilesService.load);
   }
 
   return {
     queueRecentFileEntryUpdate,
     refreshRecentFiles,
+    removeRecentFile: recentFilesService.remove,
   };
 }
 

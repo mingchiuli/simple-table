@@ -1,5 +1,6 @@
 import { storeToRefs } from 'pinia';
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
+import { useUpdateCoordinator } from '@/application/updateCoordinator';
 import { useUpdateSessionStore } from '@/stores/updateSession';
 
 export type { UpdateInfo } from '@/types';
@@ -7,14 +8,19 @@ export type { UpdateStatus } from '@/stores/updateSession';
 
 export function useUpdater() {
   const session = useUpdateSessionStore();
-  onMounted(session.initialize);
+  const coordinator = useUpdateCoordinator();
+  onMounted(coordinator.initialize);
   const state = storeToRefs(session);
+  const updateInfo = computed(() => session.desktopUpdateVersion
+    ? { version: session.desktopUpdateVersion }
+    : null);
 
   return {
     ...state,
-    checkForUpdate: session.checkForUpdate,
-    downloadAndInstall: session.downloadAndInstall,
-    handleMobileUpdate: session.handleMobileUpdate,
-    reset: session.reset,
+    updateInfo,
+    checkForUpdate: coordinator.checkForUpdate,
+    downloadAndInstall: coordinator.downloadAndInstall,
+    handleMobileUpdate: coordinator.handleMobileUpdate,
+    reset: coordinator.reset,
   };
 }

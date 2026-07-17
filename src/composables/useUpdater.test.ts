@@ -172,9 +172,10 @@ describe("useUpdater", () => {
         onEvent({ event: "Finished", data: {} });
       }),
     } as unknown as Update;
+    tauriMocks.check.mockResolvedValue(update);
     const updater = useUpdater();
     const remountedUpdater = useUpdater();
-    updater.updateInfo.value = update;
+    await updater.checkForUpdate();
 
     const downloadPromise = updater.downloadAndInstall();
     const remountedDownloadPromise = remountedUpdater.downloadAndInstall();
@@ -209,9 +210,9 @@ describe("useUpdater", () => {
     scope.run(() => {
       useApplicationExitGuard(vi.fn().mockResolvedValue(false));
     });
+    tauriMocks.check.mockResolvedValue(update);
     const updater = useUpdater();
-    updater.updateInfo.value = update;
-    updater.status.value = "available";
+    await updater.checkForUpdate();
 
     try {
       await updater.downloadAndInstall();
@@ -230,8 +231,9 @@ describe("useUpdater", () => {
       version: "0.12.0",
       downloadAndInstall: vi.fn(),
     } as unknown as Update;
+    tauriMocks.check.mockResolvedValue(update);
     const updater = useUpdater();
-    updater.updateInfo.value = update;
+    await updater.checkForUpdate();
     updater.status.value = "ready";
 
     await updater.downloadAndInstall();

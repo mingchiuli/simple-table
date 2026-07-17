@@ -76,6 +76,11 @@ the I/O layer must not call back into the application layer.
   is the backend dirty flag OR pending frontend content.
 - Selection and search result state are UI-only and must not influence document
   dirty tracking.
+- Pinia Stores expose serializable view state and synchronous state transitions.
+  They cannot import backend APIs, Tauri plugins, platform adapters, or
+  composables. Request concurrency and side effects belong to application
+  services such as `recentFilesService` and `updateCoordinator`; both expose
+  injectable ports for deterministic tests.
 
 ## Mutation Protocol
 
@@ -222,6 +227,11 @@ and released after the lock is dropped. Explicit abort runs on the bounded
 blocking executor. Route cancellation must keep the loading lifecycle reserved
 until the in-flight prepare settles.
 
+The prepared-document repository does not inspect the active-document registry.
+Its document-preparation caller supplies the active resource estimate before
+reserve and insert, so the caller owns the combined-budget policy while the
+repository owns only token capacity, TTL, checkout, and retirement.
+
 Saving follows this order:
 
 1. Flush frontend drafts and wait for queued mutations.
@@ -233,7 +243,9 @@ Saving follows this order:
 
 All five steps are coordinated by `application::document_save_service` for
 desktop and mobile. Platform modules cannot acquire document state or save
-leases; they validate or select a target and perform the requested write.
+leases; the application service supplies the validated current path, and the
+platform modules only compare paths, consume authorization, select a target,
+and perform the requested write.
 
 Closing or replacing an active document while a save lease is held is invalid.
 Save and export snapshot generation has a process-wide RAII work reservation

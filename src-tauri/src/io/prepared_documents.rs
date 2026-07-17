@@ -215,32 +215,28 @@ fn store() -> &'static Mutex<PreparedDocumentStore> {
 
 pub(crate) fn reserve_for_parse_bytes(
     estimated_parse_bytes: usize,
+    active_document_bytes: usize,
 ) -> Result<PrepareReservation, AppError> {
     validate_prepared_document_bytes(estimated_parse_bytes)?;
-    reserve_prepare(estimated_parse_bytes)
+    reserve_prepare(estimated_parse_bytes, active_document_bytes)
 }
 
-pub(crate) fn reserve_for_file_data(file_data: &FileData) -> Result<PrepareReservation, AppError> {
+pub(crate) fn reserve_for_file_data(
+    file_data: &FileData,
+    active_document_bytes: usize,
+) -> Result<PrepareReservation, AppError> {
     let estimated_bytes = ResourceLedger::from_file_data(file_data)
         .estimated_bytes()
         .saturating_mul(2);
     validate_prepared_document_bytes(estimated_bytes)?;
-    reserve_prepare(estimated_bytes)
+    reserve_prepare(estimated_bytes, active_document_bytes)
 }
 
-fn reserve_prepare(estimated_bytes: usize) -> Result<PrepareReservation, AppError> {
-    let active_registry = crate::state::active_document_store();
-    let active_handle = {
-        let active_guard = active_registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        active_guard.active_handle()
-    };
-    let active_bytes = active_handle
-        .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
-        .transpose()?
-        .unwrap_or_default();
-    validate_combined_document_bytes_for_active(active_bytes, estimated_bytes)?;
+fn reserve_prepare(
+    estimated_bytes: usize,
+    active_document_bytes: usize,
+) -> Result<PrepareReservation, AppError> {
+    validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
     let (result, retired) = {
         let mut store = store()
             .lock()
@@ -266,6 +262,7 @@ pub(crate) fn replace(
     editor_state: EditorState,
     source_path: Option<PathBuf>,
     mut reservation: PrepareReservation,
+    active_document_bytes: usize,
 ) -> Result<String, AppError> {
     let estimated_bytes = editor_state.estimated_resource_bytes();
     validate_prepared_document_bytes(estimated_bytes)?;
@@ -274,18 +271,7 @@ pub(crate) fn replace(
         editor_state,
         source_path,
     };
-    let active_registry = crate::state::active_document_store();
-    let active_handle = {
-        let active_guard = active_registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        active_guard.active_handle()
-    };
-    let active_bytes = active_handle
-        .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
-        .transpose()?
-        .unwrap_or_default();
-    validate_combined_document_bytes_for_active(active_bytes, estimated_bytes)?;
+    validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
     let (result, retired) = {
         let mut store = store()
             .lock()
@@ -496,6 +482,21 @@ mod tests {
     fn parse_reservation_rejects_an_oversized_estimate() {
         assert!(matches!(
             validate_prepared_document_bytes(MAX_PREPARED_DOCUMENT_BYTES + 1),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn combined_budget_uses_the_supplied_active_document_estimate() {
+        assert!(
+            validate_combined_document_bytes_for_active(
+                MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES - 1,
+                1,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_combined_document_bytes_for_active(MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, 1,),
             Err(AppError::ResourceLimitExceeded(_))
         ));
     }

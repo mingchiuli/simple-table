@@ -27,7 +27,11 @@ export function useHomeFileActions({
     beginDocumentReplacement,
   });
   const { runDocumentLifecycle } = useDocumentLifecycle();
-  const { queueRecentFileEntryUpdate, refreshRecentFiles } = useRecentFileUpdates();
+  const {
+    queueRecentFileEntryUpdate,
+    refreshRecentFiles,
+    removeRecentFile,
+  } = useRecentFileUpdates();
   const isHomeActionBusy = ref(false);
   const isBusy = computed(
     () => isHomeActionBusy.value || documentSessionStore.isInteractionLocked
@@ -119,12 +123,11 @@ export function useHomeFileActions({
 
     if (file.path !== selection.path) {
       try {
-        await api.removeRecentFile(file.id);
+        await removeRecentFile(file.id);
       } catch (error) {
         warnRecentFileTrackingFailure(error);
       }
     }
-    void refreshRecentFiles();
     return true;
   }
 
