@@ -14,7 +14,6 @@ import { FormulaBar } from '@/components/cell';
 import { SearchPanel } from '@/components/search';
 import { getCellKey } from '@/utils/cellKey';
 import { cellToEditorString } from '@/utils/cellValue';
-import { colToLetter } from '@/utils/excel';
 import { workbookSheetCapabilities } from '@/types';
 import {
   isCellLoaded,
@@ -56,10 +55,6 @@ const currentSheetMetadata = computed(() =>
 const currentSheetExtent = computed(() => {
   return currentSheet.value?.extent ?? { rowCount: 0, columnCount: 0 };
 });
-
-const columns = computed(() =>
-  Array.from({ length: currentSheetExtent.value.columnCount }, (_, i) => colToLetter(i))
-);
 
 const sheetNames = computed(() => {
   if (!fileData.value) return [];
@@ -259,7 +254,6 @@ watch(() => route.query.file, () => {
             <TableEditor
               :cell-at="currentCellAt"
               :is-cell-loaded="currentCellIsLoaded"
-              :columns="columns"
               :sheet-index="currentSheetIndex"
               :draft-cell-values="draftCellValues"
               :merges="currentSheetMetadata?.merges"

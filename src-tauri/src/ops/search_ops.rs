@@ -1,16 +1,19 @@
 use std::io::Write;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::error::AppError;
-use crate::state::search_index::{SearchCellText, SearchQueryPlan, collect_sheet_search_text};
+use crate::state::search_index::{SearchQueryPlan, SearchScanCursor};
 use crate::state::search_service::SearchService;
-use crate::state::state::ActiveDocumentStore;
+use crate::state::state::{ActiveDocumentStore, DocumentHandle};
 use crate::types::{SearchResponse, SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
 pub(crate) const MAX_SEARCH_RESULT_SNIPPET_BYTES: usize = 512;
 pub(crate) const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
+const MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SEARCH_SCAN_CHUNK_CELLS: usize = 32_768;
+const SEARCH_SCAN_RESERVATION_BYTES: usize = 24 * 1024 * 1024;
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -37,106 +40,79 @@ pub fn do_search(
         return Ok(SearchResponse::default());
     };
 
+    let handle = registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle_for_read(document_id)?;
     let sheet_indexes = {
-        let registry = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry.active_for_command(document_id, base_revision)?;
+        let editor_state = handle.read_for_command(document_id, base_revision)?;
 
         match scope {
             SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
-            SearchScope::AllSheets => editor_state
-                .file_data()
-                .sheets
-                .iter()
-                .enumerate()
-                .map(|(sheet_idx, _)| sheet_idx)
-                .collect(),
+            SearchScope::AllSheets => (0..editor_state.file_data().sheets.len()).collect(),
         }
     };
 
     let mut results = SearchResultCollector::new()?;
     let mut used_scan_fallback = false;
+    let mut scan_reservation = None;
     let mut on_demand_rebuilds = Vec::new();
 
     for sheet_index in sheet_indexes {
-        if results.is_truncated() {
-            break;
-        }
-        if results.len() >= SEARCH_RESULT_LIMIT {
+        if results.is_truncated() || results.len() >= SEARCH_RESULT_LIMIT {
             results.mark_truncated();
             break;
         }
         let input = {
-            let registry = registry
-                .read()
-                .map_err(|_| AppError::poisoned_lock("document registry"))?;
-            let editor_state = registry.active_for_command(document_id, base_revision)?;
+            let editor_state = handle.read_for_command(document_id, base_revision)?;
             let Some(sheet_name) = editor_state.sheet_name(sheet_index) else {
                 continue;
             };
-            let index = editor_state.indexed_search_sheet(sheet_index);
-            let sheet = index
-                .is_none()
-                .then(|| editor_state.search_sheet_data(sheet_index))
-                .flatten();
             SearchInput {
                 sheet_index,
                 sheet_name,
-                index,
-                sheet,
+                index: editor_state.indexed_search_sheet(sheet_index),
             }
         };
-        let remaining = SEARCH_RESULT_LIMIT - results.len();
-        match input.index {
+        match input.index.as_ref() {
             Some(index) => {
+                let remaining = SEARCH_RESULT_LIMIT - results.len();
                 let cells = index.search(&plan, remaining);
                 for cell in cells.into_iter().take(remaining) {
-                    if !results.try_push(SearchResult {
-                        sheet_index: input.sheet_index,
-                        sheet_name: input.sheet_name.clone(),
-                        row: cell.row,
-                        col: cell.col,
-                        value: bounded_search_snippet(
-                            &cell.display_text,
-                            &plan,
-                            MAX_SEARCH_RESULT_SNIPPET_BYTES,
-                        ),
-                        cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
-                    })? {
+                    if !results.try_push(search_result(
+                        &input,
+                        &cell.display_text,
+                        cell.row,
+                        cell.col,
+                        &plan,
+                    ))? {
                         break;
                     }
                 }
             }
             None => {
-                let Some(sheet) = input.sheet else { continue };
                 used_scan_fallback = true;
+                if scan_reservation.is_none() {
+                    scan_reservation = Some(SearchScanReservation::acquire()?);
+                }
                 if on_demand_rebuilds.len() < MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH {
                     on_demand_rebuilds.push(input.sheet_index);
                 }
-                let cells = collect_sheet_search_text(&sheet);
-                for cell in scan_sheet(&cells, &plan, remaining) {
-                    if !results.try_push(SearchResult {
-                        sheet_index: input.sheet_index,
-                        sheet_name: input.sheet_name.clone(),
-                        row: cell.row,
-                        col: cell.col,
-                        value: bounded_search_snippet(
-                            &cell.display_text,
-                            &plan,
-                            MAX_SEARCH_RESULT_SNIPPET_BYTES,
-                        ),
-                        cell_position: format!("{}{}", col_to_letter(cell.col), cell.row + 1),
-                    })? {
-                        break;
-                    }
-                }
+                scan_sheet_fallback(
+                    &handle,
+                    document_id,
+                    base_revision,
+                    &input,
+                    &plan,
+                    &mut results,
+                )?;
             }
         }
     }
 
+    drop(scan_reservation);
     if used_scan_fallback {
-        eprintln!("Search used synchronous scan fallback while index was stale or unavailable");
+        eprintln!("Search used bounded scan fallback while index was stale or unavailable");
     }
     let search_service = SearchService::global();
     for sheet_index in on_demand_rebuilds {
@@ -146,11 +122,102 @@ pub fn do_search(
     results.finish()
 }
 
+fn scan_sheet_fallback(
+    handle: &DocumentHandle,
+    document_id: u64,
+    base_revision: u64,
+    input: &SearchInput,
+    plan: &SearchQueryPlan,
+    results: &mut SearchResultCollector,
+) -> Result<(), AppError> {
+    let mut cursor = SearchScanCursor::default();
+    loop {
+        let chunk = {
+            let editor_state = handle.read_for_command(document_id, base_revision)?;
+            editor_state.search_sheet_text_chunk(
+                input.sheet_index,
+                cursor,
+                MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES,
+                MAX_SEARCH_SCAN_CHUNK_CELLS,
+            )
+        };
+        let Some(chunk) = chunk else {
+            return Ok(());
+        };
+        for cell in chunk.cells {
+            if !plan.matches(&cell.search_text) {
+                continue;
+            }
+            if !results.try_push(search_result(
+                input,
+                &cell.display_text,
+                cell.row,
+                cell.col,
+                plan,
+            ))? {
+                return Ok(());
+            }
+        }
+        let Some(next) = chunk.next else {
+            return Ok(());
+        };
+        cursor = next;
+    }
+}
+
+fn search_result(
+    input: &SearchInput,
+    display_text: &str,
+    row: usize,
+    col: usize,
+    plan: &SearchQueryPlan,
+) -> SearchResult {
+    SearchResult {
+        sheet_index: input.sheet_index,
+        sheet_name: input.sheet_name.clone(),
+        row,
+        col,
+        value: bounded_search_snippet(display_text, plan, MAX_SEARCH_RESULT_SNIPPET_BYTES),
+        cell_position: format!("{}{}", col_to_letter(col), row + 1),
+    }
+}
+
+struct SearchScanReservation;
+
+impl SearchScanReservation {
+    fn acquire() -> Result<Self, AppError> {
+        let mut active_bytes = search_scan_work()
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("search scan work"))?;
+        if active_bytes.saturating_add(SEARCH_SCAN_RESERVATION_BYTES)
+            > SEARCH_SCAN_RESERVATION_BYTES
+        {
+            return Err(AppError::ResourceLimitExceeded(
+                "another search scan is already using the fallback memory budget".to_string(),
+            ));
+        }
+        *active_bytes += SEARCH_SCAN_RESERVATION_BYTES;
+        Ok(Self)
+    }
+}
+
+impl Drop for SearchScanReservation {
+    fn drop(&mut self) {
+        if let Ok(mut active_bytes) = search_scan_work().lock() {
+            *active_bytes = active_bytes.saturating_sub(SEARCH_SCAN_RESERVATION_BYTES);
+        }
+    }
+}
+
+fn search_scan_work() -> &'static Mutex<usize> {
+    static SEARCH_SCAN_WORK: OnceLock<Mutex<usize>> = OnceLock::new();
+    SEARCH_SCAN_WORK.get_or_init(|| Mutex::new(0))
+}
+
 struct SearchInput {
     sheet_index: usize,
     sheet_name: String,
     index: Option<std::sync::Arc<crate::state::search_index::SearchSheetIndex>>,
-    sheet: Option<crate::types::SheetData>,
 }
 
 struct SearchResultCollector {
@@ -281,24 +348,6 @@ impl Write for CountingWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-}
-
-fn scan_sheet(
-    sheet_cells: &[SearchCellText],
-    plan: &SearchQueryPlan,
-    limit: usize,
-) -> Vec<SearchCellText> {
-    let mut cells = Vec::new();
-    for cell in sheet_cells {
-        if !plan.matches(&cell.search_text) {
-            continue;
-        }
-        cells.push(cell.clone());
-        if cells.len() >= limit {
-            return cells;
-        }
-    }
-    cells
 }
 
 #[cfg(test)]

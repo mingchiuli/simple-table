@@ -19,7 +19,7 @@ use crate::state::search_scheduler::{
     MAX_PENDING_INDEX_SHEETS, MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate,
     SearchSchedulerStats, SheetPending,
 };
-use crate::state::state::ActiveDocumentStore;
+use crate::state::state::{ActiveDocumentStore, DocumentHandle};
 #[cfg(test)]
 use crate::types::CellValue;
 use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
@@ -53,10 +53,9 @@ impl SearchService {
         registry: &Arc<RwLock<ActiveDocumentStore>>,
         document_id: u64,
     ) {
-        let jobs: Vec<(usize, SearchIndexStamp)> = match registry.read() {
-            Ok(guard) => guard
-                .get(document_id)
-                .map(|editor| {
+        let jobs: Vec<(usize, SearchIndexStamp)> = document_handle(registry, document_id)
+            .and_then(|handle| {
+                handle.read().ok().map(|editor| {
                     editor
                         .file_data()
                         .sheets
@@ -69,9 +68,8 @@ impl SearchService {
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+            })
+            .unwrap_or_default();
 
         for (sheet_index, stamp) in jobs {
             self.enqueue(IndexJob::Rebuild {
@@ -273,11 +271,11 @@ fn current_search_stamp(
     document_id: u64,
     sheet_index: usize,
 ) -> Option<SearchIndexStamp> {
-    registry.read().ok().and_then(|guard| {
-        guard
-            .get(document_id)
-            .map(|editor| editor.search_sheet_index_stamp(sheet_index))
-    })
+    let handle = document_handle(registry, document_id)?;
+    handle
+        .read()
+        .ok()
+        .map(|editor| editor.search_sheet_index_stamp(sheet_index))
 }
 
 fn index_scheduler() -> &'static Arc<IndexScheduler> {
@@ -686,8 +684,8 @@ fn search_sheet_source_estimated_bytes(
     stamp: SearchIndexStamp,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) -> Option<usize> {
-    registry.read().ok().and_then(|guard| {
-        let editor = guard.get(document_id)?;
+    let handle = document_handle(registry, document_id)?;
+    handle.read().ok().and_then(|editor| {
         (editor.search_sheet_index_stamp(sheet_index) == stamp)
             .then(|| editor.search_sheet_snapshot_estimated_bytes(sheet_index))
             .flatten()
@@ -715,12 +713,11 @@ fn run_rebuild(
     });
 
     let retired = {
-        let Ok(mut guard) = registry.write() else {
+        let Some(handle) = document_handle(registry, document_id) else {
             drop(built_index);
             return;
         };
-        let Some(editor_state) = guard.get_mut(document_id) else {
-            drop(guard);
+        let Ok(mut editor_state) = handle.write() else {
             drop(built_index);
             return;
         };
@@ -735,12 +732,11 @@ fn search_stamp_is_current(
     stamp: SearchIndexStamp,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) -> bool {
-    registry
-        .read()
-        .ok()
-        .and_then(|guard| {
-            guard
-                .get(document_id)
+    document_handle(registry, document_id)
+        .and_then(|handle| {
+            handle
+                .read()
+                .ok()
                 .map(|editor| editor.search_sheet_index_stamp(sheet_index) == stamp)
         })
         .unwrap_or(false)
@@ -752,15 +748,13 @@ fn snapshot_sheet_search_text(
     stamp: SearchIndexStamp,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
 ) -> Option<Arc<[SearchCellText]>> {
-    let sheet = match registry.read() {
-        Ok(guard) => guard.get(document_id).and_then(|editor| {
-            if editor.search_sheet_index_stamp(sheet_index) != stamp {
-                return None;
-            }
-            editor.search_sheet_data(sheet_index)
-        }),
-        Err(_) => None,
-    }?;
+    let handle = document_handle(registry, document_id)?;
+    let sheet = handle.read().ok().and_then(|editor| {
+        if editor.search_sheet_index_stamp(sheet_index) != stamp {
+            return None;
+        }
+        editor.search_sheet_data(sheet_index)
+    })?;
     Some(Arc::from(collect_sheet_search_text(&sheet)))
 }
 
@@ -780,29 +774,29 @@ fn run_incremental(
     }) {
         return false;
     }
-    let Some(handle) = registry.read().ok().and_then(|guard| {
-        let editor = guard.get(document_id)?;
+    let Some(writer_handle) = document_handle(registry, document_id).and_then(|handle| {
+        let editor = handle.read().ok()?;
         editor.search_writer_handle(sheet_index, latest_stamp)
     }) else {
         return false;
     };
-    let mut writer = match handle.writer.lock() {
+    let mut writer = match writer_handle.writer.lock() {
         Ok(writer) => writer,
         Err(_) => return false,
     };
 
     for op in ops {
         let cell_id = format!("{}:{}", op.row, op.col);
-        writer.delete_term(Term::from_field_text(handle.cell_id_field, &cell_id));
+        writer.delete_term(Term::from_field_text(writer_handle.cell_id_field, &cell_id));
         if !op.search_text.is_empty()
             && let Err(error) = writer.add_document(doc!(
-                handle.text_field => op.search_text.clone(),
-                handle.literal_field => op.search_text.to_lowercase(),
-                handle.display_field => op.display_text.clone(),
-                handle.row_field => op.row as u64,
-                handle.col_field => op.col as u64,
-                handle.position_field => search_position(op.row, op.col),
-                handle.cell_id_field => cell_id,
+                writer_handle.text_field => op.search_text.clone(),
+                writer_handle.literal_field => op.search_text.to_lowercase(),
+                writer_handle.display_field => op.display_text.clone(),
+                writer_handle.row_field => op.row as u64,
+                writer_handle.col_field => op.col as u64,
+                writer_handle.position_field => search_position(op.row, op.col),
+                writer_handle.cell_id_field => cell_id,
             ))
         {
             eprintln!("incremental add_document failed: {error:?}");
@@ -816,14 +810,22 @@ fn run_incremental(
     }
     drop(writer);
 
-    let retired = registry.write().ok().and_then(|mut guard| {
-        guard
-            .get_mut(document_id)
-            .map(|editor_state| editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp))
+    let retired = document_handle(registry, document_id).and_then(|handle| {
+        handle
+            .write()
+            .ok()
+            .map(|mut editor_state| editor_state.mark_search_sheet_fresh(sheet_index, latest_stamp))
     });
     drop(retired);
 
     true
+}
+
+fn document_handle(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) -> Option<Arc<DocumentHandle>> {
+    registry.read().ok()?.handle(document_id)
 }
 
 pub fn spawn_rebuild_all_sheets_index(
@@ -1050,9 +1052,9 @@ mod tests {
             guard.get(document_id).unwrap().revision()
         };
         {
-            let mut guard = registry.write().unwrap();
-            guard
-                .get_mut(document_id)
+            let handle = document_handle(&registry, document_id).unwrap();
+            handle
+                .write()
                 .unwrap()
                 .execute(EditorCommand::SetCell {
                     sheet_index: 0,
@@ -1337,8 +1339,8 @@ mod tests {
         let (registry, document_id) = make_registry(vec![vec![s("apple"), s("banana")]]);
         rebuild_current_sheet(&registry, document_id);
         {
-            let mut guard = registry.write().unwrap();
-            let editor = guard.get_mut(document_id).unwrap();
+            let handle = document_handle(&registry, document_id).unwrap();
+            let mut editor = handle.write().unwrap();
             editor
                 .execute(EditorCommand::SetCell {
                     sheet_index: 0,
@@ -1374,8 +1376,8 @@ mod tests {
         rebuild_current_sheet(&registry, document_id);
 
         let first_stamp = {
-            let mut guard = registry.write().unwrap();
-            let editor = guard.get_mut(document_id).unwrap();
+            let handle = document_handle(&registry, document_id).unwrap();
+            let mut editor = handle.write().unwrap();
             editor
                 .execute(EditorCommand::SetCell {
                     sheet_index: 0,
@@ -1387,8 +1389,8 @@ mod tests {
             editor.search_sheet_index_stamp(0)
         };
         let second_stamp = {
-            let mut guard = registry.write().unwrap();
-            let editor = guard.get_mut(document_id).unwrap();
+            let handle = document_handle(&registry, document_id).unwrap();
+            let mut editor = handle.write().unwrap();
             editor
                 .execute(EditorCommand::SetCell {
                     sheet_index: 0,
@@ -1436,8 +1438,8 @@ mod tests {
         assert_eq!(rows_of(&registry, document_id, "old"), vec![(0, 0)]);
 
         let stamp = {
-            let mut guard = registry.write().unwrap();
-            let editor = guard.get_mut(document_id).unwrap();
+            let handle = document_handle(&registry, document_id).unwrap();
+            let mut editor = handle.write().unwrap();
             editor
                 .execute(EditorCommand::SetCell {
                     sheet_index: 0,
@@ -1477,8 +1479,8 @@ mod tests {
         assert_eq!(rows_of(&registry, document_id, "apple"), vec![(0, 0)]);
 
         {
-            let mut guard = registry.write().unwrap();
-            let editor = guard.get_mut(document_id).unwrap();
+            let handle = document_handle(&registry, document_id).unwrap();
+            let mut editor = handle.write().unwrap();
             editor
                 .execute(EditorCommand::SetCell {
                     sheet_index: 0,

@@ -12,19 +12,25 @@ const { outputText } = ts.transpileModule(source, {
 
 const geometry = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(outputText)}`);
 
-const offsets = geometry.buildOffsets(3, (index) => [40, 60, 80][index]);
-assert.deepEqual(offsets, [0, 40, 100, 180]);
-assert.equal(geometry.offsetAt(offsets, 2, 0), 100);
-assert.equal(geometry.spanSize(offsets, 0, 2, 0), 180);
+function axis(sizes) {
+  return new geometry.SparseAxisGeometry(
+    sizes.length,
+    0,
+    Object.fromEntries(sizes.map((size, index) => [index, size]))
+  );
+}
+
+const rows = axis([40, 60, 80]);
+assert.equal(rows.offsetAt(2), 100);
+assert.equal(rows.totalSize(), 180);
+assert.equal(rows.offsetAt(3) - rows.offsetAt(0), 180);
 
 assert.deepEqual(
-  geometry.collectVisibleItems(offsets, 3, 45, 50, 0),
-  [
-    { index: 1, top: 40, height: 60 },
-  ]
+  geometry.collectVisibleItems(rows, 45, 50, 0),
+  [{ index: 1, top: 40, height: 60 }]
 );
 assert.deepEqual(
-  geometry.collectVisibleItems(offsets, 3, 40, 60, 0),
+  geometry.collectVisibleItems(rows, 40, 60, 0),
   [
     { index: 0, top: 0, height: 40 },
     { index: 1, top: 40, height: 60 },
@@ -33,7 +39,7 @@ assert.deepEqual(
   'visible collection keeps boundary-touching rows so grid lines do not disappear'
 );
 assert.deepEqual(
-  geometry.collectVisibleItems(offsets, 3, 45, 50, 20),
+  geometry.collectVisibleItems(rows, 45, 50, 20),
   [
     { index: 0, top: 0, height: 40 },
     { index: 1, top: 40, height: 60 },
@@ -42,13 +48,11 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
-  geometry.collectColumnResizeHandles(3, 60, 20, 180, (index) => [100, 120, 80][index]),
-  [
-    { colIndex: 0, left: 140 },
-  ]
+  geometry.collectColumnResizeHandles(axis([100, 120, 80]), 60, 20, 180),
+  [{ colIndex: 0, left: 140 }]
 );
 assert.deepEqual(
-  geometry.collectColumnResizeHandles(3, 60, 0, 260, (index) => [100, 120, 80][index]),
+  geometry.collectColumnResizeHandles(axis([100, 120, 80]), 60, 0, 260),
   [
     { colIndex: 0, left: 160 },
     { colIndex: 1, left: 280 },
@@ -56,14 +60,14 @@ assert.deepEqual(
   'column resize handles are placed on rendered column boundaries'
 );
 assert.deepEqual(
-  geometry.collectRowResizeHandles(3, 50, 10, 160, (index) => [40, 60, 80][index]),
+  geometry.collectRowResizeHandles(rows, 50, 10, 160),
   [
     { rowIndex: 0, top: 80 },
     { rowIndex: 1, top: 140 },
   ]
 );
 assert.deepEqual(
-  geometry.collectRowResizeHandles(3, 50, 0, 150, (index) => [40, 60, 80][index]),
+  geometry.collectRowResizeHandles(rows, 50, 0, 150),
   [
     { rowIndex: 0, top: 90 },
     { rowIndex: 1, top: 150 },
@@ -75,10 +79,7 @@ assert.equal(
   geometry.areNumberRecordsEqual({ 1: 120, 3: 180 }, { 3: 180, 1: 120 }),
   true
 );
-assert.equal(
-  geometry.areNumberRecordsEqual({ 1: 120 }, { 1: 121 }),
-  false
-);
+assert.equal(geometry.areNumberRecordsEqual({ 1: 120 }, { 1: 121 }), false);
 
 const mergedScenario = {
   columnWidths: [100, 150, 90, 120],
@@ -86,19 +87,13 @@ const mergedScenario = {
   rowHeaderWidth: 60,
   headerHeight: 50,
 };
-const mergedColumnOffsets = geometry.buildOffsets(
-  mergedScenario.columnWidths.length,
-  (index) => mergedScenario.columnWidths[index]
-);
-const mergedRowOffsets = geometry.buildOffsets(
-  mergedScenario.rowHeights.length,
-  (index) => mergedScenario.rowHeights[index]
-);
+const mergedColumns = axis(mergedScenario.columnWidths);
+const mergedRows = axis(mergedScenario.rowHeights);
 const mergedCell = {
-  left: geometry.offsetAt(mergedColumnOffsets, 1, 0),
-  top: geometry.offsetAt(mergedRowOffsets, 1, 0),
-  width: geometry.spanSize(mergedColumnOffsets, 1, 2, 0),
-  height: geometry.spanSize(mergedRowOffsets, 1, 2, 0),
+  left: mergedColumns.offsetAt(1),
+  top: mergedRows.offsetAt(1),
+  width: mergedColumns.offsetAt(3) - mergedColumns.offsetAt(1),
+  height: mergedRows.offsetAt(3) - mergedRows.offsetAt(1),
 };
 assert.deepEqual(
   mergedCell,
@@ -107,11 +102,10 @@ assert.deepEqual(
 );
 assert.deepEqual(
   geometry.collectColumnResizeHandles(
-    mergedScenario.columnWidths.length,
+    mergedColumns,
     mergedScenario.rowHeaderWidth,
     0,
-    420,
-    (index) => mergedScenario.columnWidths[index]
+    420
   ),
   [
     { colIndex: 0, left: 160 },
@@ -121,13 +115,7 @@ assert.deepEqual(
   'column resize handles stay on visible grid boundaries with merged cells present'
 );
 assert.deepEqual(
-  geometry.collectRowResizeHandles(
-    mergedScenario.rowHeights.length,
-    mergedScenario.headerHeight,
-    0,
-    300,
-    (index) => mergedScenario.rowHeights[index]
-  ),
+  geometry.collectRowResizeHandles(mergedRows, mergedScenario.headerHeight, 0, 300),
   [
     { rowIndex: 0, top: 98 },
     { rowIndex: 1, top: 170 },
@@ -135,5 +123,10 @@ assert.deepEqual(
   ],
   'row resize handles stay on visible grid boundaries with merged cells present'
 );
+
+const largeRows = new geometry.SparseAxisGeometry(250_000, 72, { 200_000: 144 });
+const deepVisible = geometry.collectVisibleItems(largeRows, 14_400_001, 720, 0);
+assert.equal(deepVisible[0].index, 200_000);
+assert.ok(deepVisible.length < 20);
 
 console.log('grid geometry tests passed');

@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
-use crate::state::state::{ActiveDocumentStore, EditorSessionInfo};
+use crate::state::state::{ActiveDocumentStore, DocumentHandle, EditorSessionInfo};
 use crate::types::EditorMutationResponse;
 
 /// 获取编辑器状态（包含能否撤销/重做）
@@ -12,22 +12,18 @@ pub fn do_get_editor_state(
     document_id: Option<u64>,
     base_revision: Option<u64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
-    let registry = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-
     match (document_id, base_revision) {
-        (Some(document_id), Some(base_revision)) => registry
-            .active_for_command(document_id, base_revision)
-            .map(|editor_state| {
-                Some(EditorSessionInfo {
-                    document_id: editor_state.document_id(),
-                    revision: editor_state.revision(),
-                    formula_status: editor_state.formula_status(),
-                    capabilities: editor_state.capabilities(),
-                    editor_state: editor_state_info(editor_state),
-                })
-            }),
+        (Some(document_id), Some(base_revision)) => {
+            let handle = read_handle(registry, document_id)?;
+            let editor_state = handle.read_for_command(document_id, base_revision)?;
+            Ok(Some(EditorSessionInfo {
+                document_id: editor_state.document_id(),
+                revision: editor_state.revision(),
+                formula_status: editor_state.formula_status(),
+                capabilities: editor_state.capabilities(),
+                editor_state: editor_state_info(&editor_state),
+            }))
+        }
         (None, None) => Ok(None),
         _ => Err(AppError::DocumentStateInvalid(
             "document state request must include both documentId and baseRevision".to_string(),
@@ -41,14 +37,15 @@ pub fn do_undo(
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
     let (response, retired) = {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.undo()? {
-            let response =
-                restore_mutation_response(editor_state, result.restore, result.search_index_update);
+            let response = restore_mutation_response(
+                &editor_state,
+                result.restore,
+                result.search_index_update,
+            );
             (response, result.retired)
         } else {
             return Err(AppError::NothingToUndo);
@@ -67,14 +64,15 @@ pub fn do_redo(
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
     let (response, retired) = {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.redo()? {
-            let response =
-                restore_mutation_response(editor_state, result.restore, result.search_index_update);
+            let response = restore_mutation_response(
+                &editor_state,
+                result.restore,
+                result.search_index_update,
+            );
             (response, result.retired)
         } else {
             return Err(AppError::NothingToRedo);
@@ -85,6 +83,26 @@ pub fn do_redo(
     schedule_index_for_response(&response, registry);
 
     Ok(response)
+}
+
+fn read_handle(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) -> Result<Arc<DocumentHandle>, AppError> {
+    registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle_for_read(document_id)
+}
+
+fn mutation_handle(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) -> Result<Arc<DocumentHandle>, AppError> {
+    registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle_for_mutation(document_id)
 }
 
 #[cfg(test)]
@@ -112,8 +130,12 @@ mod tests {
     }
 
     fn command_session(registry: &Arc<RwLock<ActiveDocumentStore>>) -> (u64, u64) {
-        let guard = registry.read().expect("registry");
-        let editor = guard.active().expect("active document");
+        let handle = registry
+            .read()
+            .expect("registry")
+            .active_handle()
+            .expect("active document");
+        let editor = handle.read().expect("document state");
         (editor.document_id(), editor.revision())
     }
 

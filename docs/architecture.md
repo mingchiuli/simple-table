@@ -30,6 +30,11 @@ operation layer.
 
 - `EditorState` is authoritative for content, revision, history, dirty state,
   formula state, capabilities, and search indexes.
+- The active-document registry owns only the current `Arc<DocumentHandle>` and
+  replacement lease. Each handle owns a separate `RwLock<EditorState>`, so a
+  mutation or projection releases the registry lock before accessing document
+  content. Closing and replacement retire the old handle under its content
+  lock; work that cloned it earlier is rejected before it can read or commit.
 - `SpreadsheetDocument` keeps the UI `FileData` projection consistent with the
   persistence body. XLSX documents retain the original workbook so supported
   edits preserve metadata that is only projected read-only.
@@ -216,6 +221,12 @@ treats multiple child blocks as combined coverage. The ordinary cache target is
 16 MiB; pinned visible blocks form a separate hard bound of eight 16 MiB blocks
 so visibility cannot turn the cache into an unbounded exception.
 
+Grid geometry is sparse as well as cell data. Each axis stores its default size,
+sorted explicit overrides, and prefix size deltas. Offset lookup, pixel-to-index
+lookup, visible-item discovery, merged spans, and resize handles do not allocate
+an entry per logical row or column. Resize previews are a small transient
+override layer, and column labels are generated only for visible columns.
+
 An oversized logical tile may be subdivided, but subdivision has its own
 admission boundary: at most 64 fragment requests, 32 MiB of combined fragment
 payload, and ten seconds may be spent on one logical load. Every recursive step
@@ -242,11 +253,16 @@ Rust retains at most four Tantivy indexes and 64 MiB of measured resident index
 memory. Each index accounts for its live RAM-directory files, writer arena, and
 index structure rather than a fixed per-index estimate. Incremental commits
 recheck the byte budget and evict the oldest resident index when necessary.
-Search fallback clones only cell values and display-affecting format/style
-metadata, then scans outside the document lock. A fallback queues one missing
-Sheet index per search so repeated searches converge to indexed execution
-without flooding the resident cache. Layout overrides are limited to 100,000
-entries per document.
+Search fallback scans through a cursor with chunks capped at 8 MiB of generated
+text and 32,768 visited cells. Each chunk is copied while holding only the
+document read lock and is consumed before the next chunk, so fallback never
+retains both a complete Sheet snapshot and a complete search-text snapshot. A
+process-wide 24 MiB reservation covers fallback scan memory. Search commands run
+on a dedicated blocking executor with one execution slot and two admission
+slots, so a long scan cannot consume file-open or save capacity. A fallback
+queues one missing Sheet index per search so repeated searches converge to
+indexed execution without flooding the resident cache. Layout overrides are
+limited to 100,000 entries per document.
 
 Search queries are limited to 4 KiB of UTF-8 text and 64 unique normalized
 terms before document access. Query construction uses set-based deduplication,

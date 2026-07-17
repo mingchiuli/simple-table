@@ -7,7 +7,7 @@ use crate::ops::patch_projector::{
     cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
     status_mutation_response, structural_delta_mutation_response,
 };
-use crate::state::state::ActiveDocumentStore;
+use crate::state::state::{ActiveDocumentStore, DocumentHandle};
 use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
 
 pub fn do_set_cell(
@@ -205,17 +205,15 @@ fn execute_cell_delta(
     base_revision: u64,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
     let (response, retired) = {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let retired = result.retired;
         let response = if let Some(operation) = result.operation {
-            cell_delta_mutation_response(editor_state, &operation, result.cell_changes)
+            cell_delta_mutation_response(&editor_state, &operation, result.cell_changes)
         } else {
-            status_mutation_response(editor_state)
+            status_mutation_response(&editor_state)
         };
         (response, retired)
     };
@@ -229,22 +227,20 @@ fn execute_structural_command(
     base_revision: u64,
     command: EditorCommand,
 ) -> Result<EditorMutationResponse, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
     let (response, retired) = {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let retired = result.retired;
         let response = match result.operation {
             Some(operation) => structural_delta_mutation_response(
-                editor_state,
+                &editor_state,
                 &operation,
                 result.cell_changes,
                 result.search_index_update,
             ),
             None => resync_required_mutation_response(
-                editor_state,
+                &editor_state,
                 "structure edit completed without an operation result",
             ),
         };
@@ -264,21 +260,29 @@ fn execute_layout(
     command: EditorCommand,
     patch: LayoutPatch,
 ) -> Result<EditorMutationResponse, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
     let (response, retired) = {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_mut_for_command(document_id, base_revision)?;
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let response = if result.operation.is_some() {
-            layout_mutation_response(editor_state, patch)
+            layout_mutation_response(&editor_state, patch)
         } else {
-            status_mutation_response(editor_state)
+            status_mutation_response(&editor_state)
         };
         (response, result.retired)
     };
     drop(retired);
     Ok(response)
+}
+
+fn mutation_handle(
+    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) -> Result<Arc<DocumentHandle>, AppError> {
+    registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle_for_mutation(document_id)
 }
 
 fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutPatch {
@@ -356,8 +360,12 @@ mod tests {
     }
 
     fn command_session(registry: &Arc<RwLock<ActiveDocumentStore>>) -> (u64, u64) {
-        let guard = registry.read().expect("registry");
-        let editor = guard.active().expect("active document");
+        let handle = registry
+            .read()
+            .expect("registry")
+            .active_handle()
+            .expect("active document");
+        let editor = handle.read().expect("document state");
         (editor.document_id(), editor.revision())
     }
 
@@ -461,8 +469,8 @@ mod tests {
         assert_eq!(changes[0].col, 0);
         assert_eq!(changes[0].value, CellValue::String("final".to_string()));
 
-        let guard = registry.read().expect("registry");
-        let editor = guard.active().expect("active document");
+        let handle = registry.read().unwrap().active_handle().unwrap();
+        let editor = handle.read().unwrap();
         assert_eq!(
             editor.file_data().sheets[0].rows[0][0],
             CellValue::String("final".to_string())
@@ -497,8 +505,8 @@ mod tests {
 
         assert_eq!(response.revision, revision);
         assert!(response.patches.is_empty());
-        let guard = registry.read().expect("registry");
-        let editor = guard.active().expect("active document");
+        let handle = registry.read().unwrap().active_handle().unwrap();
+        let editor = handle.read().unwrap();
         assert_eq!(
             editor.file_data().sheets[0].rows[0][0],
             CellValue::String("A1".to_string())

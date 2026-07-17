@@ -3,12 +3,10 @@ import type { CellFormatProjection, CellStyleProjection, CellValue } from "@/typ
 import type { SheetViewportModel } from "@/table-geometry/sheetViewportModel";
 import {
   areNumberRecordsEqual,
-  buildOffsets,
   collectColumnResizeHandles,
   collectRowResizeHandles,
   collectVisibleItems,
-  offsetAt,
-  spanSize,
+  SparseAxisGeometry,
   type GridItem,
 } from "@/table-geometry/gridGeometry";
 import { useMergeLookup } from "@/table-geometry/useMergeLookup";
@@ -69,7 +67,6 @@ export function useGridGeometry({
   const committedRowHeights = ref<Record<number, number>>({});
   const previewColumnWidths = ref<Record<number, number>>({});
   const previewRowHeights = ref<Record<number, number>>({});
-  const columns = computed(() => sheet.value.columns);
   const merges = computed(() => sheet.value.merges);
   const sourceColumnWidths = computed(() => sheet.value.columnWidths);
   const sourceRowHeights = computed(() => sheet.value.rowHeights);
@@ -99,38 +96,46 @@ export function useGridGeometry({
 
   const viewportWidth = computed(() => Math.max(0, tableSize.value.width - rowHeaderWidth));
   const viewportHeight = computed(() => Math.max(0, tableSize.value.height - headerHeight));
-  const effectiveColumnWidths = computed(() => ({
-    ...committedColumnWidths.value,
-    ...previewColumnWidths.value,
-  }));
-  const effectiveRowHeights = computed(() => ({
-    ...committedRowHeights.value,
-    ...previewRowHeights.value,
-  }));
   const sheetExtent = computed(() => sheet.value.extent);
 
-  const columnCount = computed(() => Math.max(columns.value.length, sheetExtent.value.columnCount));
+  const columnCount = computed(() => sheetExtent.value.columnCount);
   const rowCount = computed(() => sheetExtent.value.rowCount);
 
-  const columnOffsets = computed(() => buildOffsets(columnCount.value, getColumnWidth));
-  const rowOffsets = computed(() => buildOffsets(rowCount.value, getRowHeight));
-  const totalColumnsWidth = computed(() => columnOffsets.value.at(-1) ?? 0);
-  const totalRowsHeight = computed(() => rowOffsets.value.at(-1) ?? 0);
+  const columnGeometry = computed(() => new SparseAxisGeometry(
+    columnCount.value,
+    defaultColumnWidth,
+    committedColumnWidths.value
+  ));
+  const rowGeometry = computed(() => new SparseAxisGeometry(
+    rowCount.value,
+    defaultRowHeight,
+    committedRowHeights.value
+  ));
+  const totalColumnsWidth = computed(() =>
+    columnGeometry.value.totalSize(previewColumnWidths.value)
+  );
+  const totalRowsHeight = computed(() => rowGeometry.value.totalSize(previewRowHeights.value));
 
   const visibleRows = computed<GridItem[]>(() =>
-    collectVisibleItems(rowOffsets.value, rowCount.value, scrollTop.value, viewportHeight.value, overscanPx)
+    collectVisibleItems(
+      rowGeometry.value,
+      scrollTop.value,
+      viewportHeight.value,
+      overscanPx,
+      previewRowHeights.value
+    )
   );
 
   const visibleColumns = computed<ColumnItem[]>(() =>
     collectVisibleItems(
-      columnOffsets.value,
-      columnCount.value,
+      columnGeometry.value,
       scrollLeft.value,
       viewportWidth.value,
-      overscanPx
+      overscanPx,
+      previewColumnWidths.value
     ).map((item) => ({
       index: item.index,
-      title: columns.value[item.index] ?? "",
+      title: sheet.value.columnTitleAt(item.index),
       left: item.top,
       width: item.height,
     }))
@@ -213,38 +218,38 @@ export function useGridGeometry({
 
   const visibleColumnResizeHandles = computed(() =>
     collectColumnResizeHandles(
-      columnCount.value,
+      columnGeometry.value,
       rowHeaderWidth,
       scrollLeft.value,
       tableSize.value.width,
-      getColumnWidth
+      previewColumnWidths.value
     )
   );
 
   const visibleRowResizeHandles = computed(() =>
     collectRowResizeHandles(
-      rowCount.value,
+      rowGeometry.value,
       headerHeight,
       scrollTop.value,
       tableSize.value.height,
-      getRowHeight
+      previewRowHeights.value
     )
   );
 
   function getColumnWidth(colIndex: number): number {
-    return effectiveColumnWidths.value[colIndex] || defaultColumnWidth;
+    return columnGeometry.value.sizeAt(colIndex, previewColumnWidths.value);
   }
 
   function getRowHeight(rowIndex: number): number {
-    return effectiveRowHeights.value[rowIndex] || defaultRowHeight;
+    return rowGeometry.value.sizeAt(rowIndex, previewRowHeights.value);
   }
 
   function getRowOffset(rowIndex: number): number {
-    return offsetAt(rowOffsets.value, rowIndex, totalRowsHeight.value);
+    return rowGeometry.value.offsetAt(rowIndex, previewRowHeights.value);
   }
 
   function getDataColumnOffset(colIndex: number): number {
-    return offsetAt(columnOffsets.value, colIndex, totalColumnsWidth.value);
+    return columnGeometry.value.offsetAt(colIndex, previewColumnWidths.value);
   }
 
   function getColumnOffset(colIndex: number): number {
@@ -252,11 +257,11 @@ export function useGridGeometry({
   }
 
   function getColumnSpanWidth(startCol: number, endCol: number): number {
-    return spanSize(columnOffsets.value, startCol, endCol, totalColumnsWidth.value);
+    return Math.max(0, getDataColumnOffset(endCol + 1) - getDataColumnOffset(startCol));
   }
 
   function getRowSpanHeight(startRow: number, endRow: number): number {
-    return spanSize(rowOffsets.value, startRow, endRow, totalRowsHeight.value);
+    return Math.max(0, getRowOffset(endRow + 1) - getRowOffset(startRow));
   }
 
   function setColumnWidth(colIndex: number, width: number) {

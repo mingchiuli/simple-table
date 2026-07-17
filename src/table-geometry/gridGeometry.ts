@@ -14,112 +14,136 @@ export type RowResizeHandle = {
   top: number;
 };
 
-export function buildOffsets(count: number, sizeAt: (index: number) => number): number[] {
-  const offsets = [0];
-  for (let index = 0; index < count; index += 1) {
-    offsets.push(offsets[index] + sizeAt(index));
+export type AxisSizeOverrides = Readonly<Record<number, number>>;
+
+export class SparseAxisGeometry {
+  readonly count: number;
+  readonly defaultSize: number;
+  private readonly overrideIndexes: number[];
+  private readonly overrideSizes: number[];
+  private readonly prefixDeltas: number[];
+
+  constructor(count: number, defaultSize: number, overrides: AxisSizeOverrides = {}) {
+    this.count = Math.max(0, Math.trunc(count));
+    this.defaultSize = Math.max(0, defaultSize);
+    const entries = Object.entries(overrides)
+      .map(([index, size]) => [Number(index), size] as const)
+      .filter(([index, size]) =>
+        Number.isInteger(index)
+        && index >= 0
+        && index < this.count
+        && Number.isFinite(size)
+        && size >= 0
+        && size !== this.defaultSize
+      )
+      .sort(([left], [right]) => left - right);
+    this.overrideIndexes = entries.map(([index]) => index);
+    this.overrideSizes = entries.map(([, size]) => size);
+    this.prefixDeltas = [0];
+    for (const size of this.overrideSizes) {
+      this.prefixDeltas.push(
+        this.prefixDeltas[this.prefixDeltas.length - 1] + size - this.defaultSize
+      );
+    }
   }
-  return offsets;
+
+  sizeAt(index: number, transient: AxisSizeOverrides = {}): number {
+    const transientSize = transient[index];
+    if (transientSize !== undefined) return transientSize;
+    const position = this.overridePosition(index);
+    return position >= 0 ? this.overrideSizes[position] : this.defaultSize;
+  }
+
+  offsetAt(index: number, transient: AxisSizeOverrides = {}): number {
+    const clamped = Math.max(0, Math.min(Math.trunc(index), this.count));
+    const overrideCount = lowerBound(this.overrideIndexes, clamped);
+    return clamped * this.defaultSize
+      + this.prefixDeltas[overrideCount]
+      + transientDeltaBefore(this, transient, clamped);
+  }
+
+  totalSize(transient: AxisSizeOverrides = {}): number {
+    return this.offsetAt(this.count, transient);
+  }
+
+  indexAt(offset: number, transient: AxisSizeOverrides = {}): number {
+    if (this.count <= 0) return 0;
+    const target = Math.max(0, offset);
+    let low = 0;
+    let high = this.count;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (this.offsetAt(middle + 1, transient) < target) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return Math.min(low, this.count - 1);
+  }
+
+  private overridePosition(index: number): number {
+    const position = lowerBound(this.overrideIndexes, index);
+    return this.overrideIndexes[position] === index ? position : -1;
+  }
 }
 
 export function collectVisibleItems(
-  offsets: number[],
-  count: number,
+  geometry: SparseAxisGeometry,
   scrollStart: number,
   viewportSize: number,
-  overscanPx: number
+  overscanPx: number,
+  transient: AxisSizeOverrides = {}
 ): GridItem[] {
-  if (count <= 0) return [];
-
+  if (geometry.count <= 0) return [];
   const start = Math.max(0, scrollStart - overscanPx);
   const end = scrollStart + viewportSize + overscanPx;
-  const firstIndex = findFirstVisibleIndex(offsets, start);
+  const firstIndex = geometry.indexAt(start, transient);
   const items: GridItem[] = [];
-
-  for (let index = firstIndex; index < count; index += 1) {
-    const top = offsets[index] ?? 0;
-    const nextTop = offsets[index + 1] ?? top;
+  for (let index = firstIndex; index < geometry.count; index += 1) {
+    const top = geometry.offsetAt(index, transient);
     if (top > end) break;
-    items.push({ index, top, height: nextTop - top });
+    items.push({ index, top, height: geometry.sizeAt(index, transient) });
   }
-
   return items;
 }
 
-export function findFirstVisibleIndex(offsets: number[], start: number): number {
-  let low = 0;
-  let high = Math.max(0, offsets.length - 2);
-  let result = 0;
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    if ((offsets[mid + 1] ?? 0) < start) {
-      low = mid + 1;
-    } else {
-      result = mid;
-      high = mid - 1;
-    }
-  }
-
-  return result;
-}
-
-export function offsetAt(offsets: number[], index: number, fallback: number): number {
-  const clamped = Math.max(0, Math.min(index, offsets.length - 1));
-  return offsets[clamped] ?? fallback;
-}
-
-export function spanSize(
-  offsets: number[],
-  startIndex: number,
-  endIndex: number,
-  fallback: number
-): number {
-  const start = offsetAt(offsets, startIndex, fallback);
-  const end = offsetAt(offsets, endIndex + 1, fallback);
-  return Math.max(0, end - start);
-}
-
 export function collectColumnResizeHandles(
-  columnCount: number,
+  geometry: SparseAxisGeometry,
   rowHeaderWidth: number,
   scrollLeft: number,
   tableWidth: number,
-  widthAt: (index: number) => number
+  transient: AxisSizeOverrides = {}
 ): ColumnResizeHandle[] {
-  const handles: ColumnResizeHandle[] = [];
-  let boundary = rowHeaderWidth - scrollLeft;
-
-  for (let colIndex = 0; colIndex < columnCount; colIndex += 1) {
-    boundary += widthAt(colIndex);
-    if (boundary >= rowHeaderWidth && boundary <= tableWidth) {
-      handles.push({ colIndex, left: boundary });
-    }
-    if (boundary > tableWidth) break;
-  }
-
-  return handles;
+  return collectVisibleItems(
+    geometry,
+    scrollLeft,
+    Math.max(0, tableWidth - rowHeaderWidth),
+    0,
+    transient
+  ).map((item) => ({
+    colIndex: item.index,
+    left: rowHeaderWidth + item.top + item.height - scrollLeft,
+  })).filter((handle) => handle.left >= rowHeaderWidth && handle.left <= tableWidth);
 }
 
 export function collectRowResizeHandles(
-  rowCount: number,
+  geometry: SparseAxisGeometry,
   headerHeight: number,
   scrollTop: number,
   tableHeight: number,
-  heightAt: (index: number) => number
+  transient: AxisSizeOverrides = {}
 ): RowResizeHandle[] {
-  const handles: RowResizeHandle[] = [];
-  let boundary = headerHeight - scrollTop;
-
-  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-    boundary += heightAt(rowIndex);
-    if (boundary >= headerHeight && boundary <= tableHeight) {
-      handles.push({ rowIndex, top: boundary });
-    }
-    if (boundary > tableHeight) break;
-  }
-
-  return handles;
+  return collectVisibleItems(
+    geometry,
+    scrollTop,
+    Math.max(0, tableHeight - headerHeight),
+    0,
+    transient
+  ).map((item) => ({
+    rowIndex: item.index,
+    top: headerHeight + item.top + item.height - scrollTop,
+  })).filter((handle) => handle.top >= headerHeight && handle.top <= tableHeight);
 }
 
 export function areNumberRecordsEqual(
@@ -130,4 +154,30 @@ export function areNumberRecordsEqual(
   const nextKeys = Object.keys(next);
   if (currentKeys.length !== nextKeys.length) return false;
   return currentKeys.every((key) => current[Number(key)] === next[Number(key)]);
+}
+
+function transientDeltaBefore(
+  geometry: SparseAxisGeometry,
+  transient: AxisSizeOverrides,
+  index: number
+): number {
+  let delta = 0;
+  for (const [entry, size] of Object.entries(transient)) {
+    const overrideIndex = Number(entry);
+    if (Number.isInteger(overrideIndex) && overrideIndex >= 0 && overrideIndex < index) {
+      delta += size - geometry.sizeAt(overrideIndex);
+    }
+  }
+  return delta;
+}
+
+function lowerBound(values: number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (values[middle] < target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }

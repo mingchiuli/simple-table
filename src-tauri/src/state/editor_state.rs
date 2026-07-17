@@ -17,7 +17,8 @@ use crate::state::history_store::{
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_index::{
-    RetiredSearchIndexes, SearchIndexStamp, SearchSheetIndex, SearchWriterHandle,
+    RetiredSearchIndexes, SearchIndexStamp, SearchScanCursor, SearchSheetIndex, SearchTextChunk,
+    SearchWriterHandle, collect_sheet_search_text_chunk,
 };
 use crate::state::search_session::SearchSession;
 use crate::state::state::HistoryStatus;
@@ -370,6 +371,18 @@ impl EditorState {
             .sheets
             .get(sheet_index)
             .map(crate::types::SheetData::search_snapshot)
+    }
+
+    pub fn search_sheet_text_chunk(
+        &self,
+        sheet_index: usize,
+        cursor: SearchScanCursor,
+        maximum_text_bytes: usize,
+        maximum_cells: usize,
+    ) -> Option<SearchTextChunk> {
+        self.file_data().sheets.get(sheet_index).map(|sheet| {
+            collect_sheet_search_text_chunk(sheet, cursor, maximum_text_bytes, maximum_cells)
+        })
     }
 
     pub fn search_sheet_snapshot_estimated_bytes(&self, sheet_index: usize) -> Option<usize> {

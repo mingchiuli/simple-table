@@ -230,15 +230,16 @@ pub(crate) fn reserve_for_file_data(file_data: &FileData) -> Result<PrepareReser
 
 fn reserve_prepare(estimated_bytes: usize) -> Result<PrepareReservation, AppError> {
     let active_registry = crate::state::active_document_store();
-    let active_bytes = {
+    let active_handle = {
         let active_guard = active_registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        active_guard
-            .active()
-            .map(EditorState::estimated_resource_bytes)
-            .unwrap_or_default()
+        active_guard.active_handle()
     };
+    let active_bytes = active_handle
+        .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
+        .transpose()?
+        .unwrap_or_default();
     validate_combined_document_bytes_for_active(active_bytes, estimated_bytes)?;
     let (result, retired) = {
         let mut store = store()
@@ -274,15 +275,16 @@ pub(crate) fn replace(
         source_path,
     };
     let active_registry = crate::state::active_document_store();
-    let active_bytes = {
+    let active_handle = {
         let active_guard = active_registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        active_guard
-            .active()
-            .map(EditorState::estimated_resource_bytes)
-            .unwrap_or_default()
+        active_guard.active_handle()
     };
+    let active_bytes = active_handle
+        .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
+        .transpose()?
+        .unwrap_or_default();
     validate_combined_document_bytes_for_active(active_bytes, estimated_bytes)?;
     let (result, retired) = {
         let mut store = store()

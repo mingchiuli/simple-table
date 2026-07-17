@@ -23,7 +23,6 @@ const OVERSCAN_PX = 240;
 const props = defineProps<{
   cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
   isCellLoaded: (rowIndex: number, colIndex: number) => boolean;
-  columns: string[];
   sheetIndex: number;
   draftCellValues?: ReadonlyMap<string, string>;
   merges?: MergeRange[];
@@ -70,7 +69,6 @@ function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
 const viewportModel = computed(() =>
   createSheetViewportModel({
     cellAt: props.cellAt,
-    columns: props.columns,
     merges: props.merges ?? [],
     columnWidths: props.columnWidths,
     rowHeights: props.rowHeights,

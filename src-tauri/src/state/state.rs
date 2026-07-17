@@ -1,4 +1,5 @@
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
@@ -49,8 +50,141 @@ pub struct EditorSessionInfo {
 }
 
 pub struct ActiveDocumentStore {
-    active: Option<EditorState>,
+    active: Option<Arc<DocumentHandle>>,
     replacement_lease: Option<u64>,
+}
+
+pub struct DocumentHandle {
+    document_id: u64,
+    retired: AtomicBool,
+    state: RwLock<EditorState>,
+}
+
+impl DocumentHandle {
+    fn new(editor_state: EditorState) -> Self {
+        Self {
+            document_id: editor_state.document_id(),
+            retired: AtomicBool::new(false),
+            state: RwLock::new(editor_state),
+        }
+    }
+
+    pub(crate) fn document_id(&self) -> u64 {
+        self.document_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn revision(&self) -> u64 {
+        self.read().expect("document state").revision()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_sheet_index_stamp(
+        &self,
+        sheet_index: usize,
+    ) -> crate::state::search_index::SearchIndexStamp {
+        self.read()
+            .expect("document state")
+            .search_sheet_index_stamp(sheet_index)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn indexed_search_sheet(
+        &self,
+        sheet_index: usize,
+    ) -> Option<Arc<crate::state::search_index::SearchSheetIndex>> {
+        self.read()
+            .expect("document state")
+            .indexed_search_sheet(sheet_index)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_sheet_data(&self, sheet_index: usize) -> Option<crate::types::SheetData> {
+        self.read()
+            .expect("document state")
+            .search_sheet_data(sheet_index)
+    }
+
+    pub(crate) fn read(&self) -> Result<RwLockReadGuard<'_, EditorState>, AppError> {
+        let guard = self
+            .state
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document state"))?;
+        self.ensure_active()?;
+        Ok(guard)
+    }
+
+    pub(crate) fn read_for_command(
+        &self,
+        document_id: u64,
+        base_revision: u64,
+    ) -> Result<RwLockReadGuard<'_, EditorState>, AppError> {
+        let guard = self.read()?;
+        validate_command_context(&guard, document_id, base_revision)?;
+        Ok(guard)
+    }
+
+    pub(crate) fn write(&self) -> Result<RwLockWriteGuard<'_, EditorState>, AppError> {
+        let guard = self
+            .state
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document state"))?;
+        self.ensure_active()?;
+        Ok(guard)
+    }
+
+    pub(crate) fn write_for_command(
+        &self,
+        document_id: u64,
+        base_revision: u64,
+    ) -> Result<RwLockWriteGuard<'_, EditorState>, AppError> {
+        let guard = self.write()?;
+        validate_command_context(&guard, document_id, base_revision)?;
+        Ok(guard)
+    }
+
+    fn retire(&self) -> Result<(), AppError> {
+        let state = self
+            .state
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document state"))?;
+        if state.has_save_commit_in_progress() {
+            return Err(AppError::DocumentStateInvalid(
+                "cannot retire the active document while save is in progress".to_string(),
+            ));
+        }
+        self.retired.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn ensure_active(&self) -> Result<(), AppError> {
+        if !self.retired.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        Err(AppError::DocumentStateInvalid(
+            "document is no longer active".to_string(),
+        ))
+    }
+}
+
+fn validate_command_context(
+    editor_state: &EditorState,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<(), AppError> {
+    if editor_state.document_id() != document_id {
+        return Err(AppError::DocumentStateInvalid(
+            "active document changed before the editor command was applied".to_string(),
+        ));
+    }
+    if editor_state.revision() != base_revision {
+        return Err(AppError::DocumentStateInvalid(format!(
+            "document revision changed before the editor command was applied: expected {}, got {}",
+            base_revision,
+            editor_state.revision()
+        )));
+    }
+    Ok(())
 }
 
 impl ActiveDocumentStore {
@@ -66,15 +200,20 @@ impl ActiveDocumentStore {
         Self::new()
     }
 
-    fn replace_active(&mut self, editor_state: EditorState) -> (u64, Option<EditorState>) {
+    fn replace_active(&mut self, editor_state: EditorState) -> (u64, Option<Arc<DocumentHandle>>) {
         let document_id = editor_state.document_id();
-        let previous = self.active.replace(editor_state);
+        let previous = self
+            .active
+            .replace(Arc::new(DocumentHandle::new(editor_state)));
         (document_id, previous)
     }
 
     #[cfg(test)]
     pub(crate) fn replace_active_for_test(&mut self, editor_state: EditorState) -> u64 {
         let (document_id, previous) = self.replace_active(editor_state);
+        if let Some(previous) = &previous {
+            previous.retire().expect("retire previous test document");
+        }
         drop(previous);
         document_id
     }
@@ -89,7 +228,10 @@ impl ActiveDocumentStore {
         self.ensure_replacement_context(expected_document_id, expected_revision)?;
         let (editor_state, metadata) = load_prepared()?;
         let (document_id, previous) = self.replace_active(editor_state);
-        let previous_document_id = previous.as_ref().map(EditorState::document_id);
+        if let Some(previous) = &previous {
+            previous.retire()?;
+        }
+        let previous_document_id = previous.as_ref().map(|handle| handle.document_id());
         drop(previous);
         Ok((document_id, previous_document_id, metadata))
     }
@@ -106,7 +248,8 @@ impl ActiveDocumentStore {
         }
         match (document_id, revision) {
             (Some(document_id), Some(revision)) => {
-                let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+                let handle = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+                let editor_state = handle.read()?;
                 if editor_state.document_id() != document_id || editor_state.revision() != revision
                 {
                     return Err(AppError::DocumentStateInvalid(
@@ -133,15 +276,9 @@ impl ActiveDocumentStore {
         }
     }
 
-    fn close_active(&mut self) -> Result<Option<EditorState>, AppError> {
-        if self
-            .active
-            .as_ref()
-            .is_some_and(EditorState::has_save_commit_in_progress)
-        {
-            return Err(AppError::DocumentStateInvalid(
-                "cannot close the active document while save is in progress".to_string(),
-            ));
+    fn close_active(&mut self) -> Result<Option<Arc<DocumentHandle>>, AppError> {
+        if let Some(handle) = &self.active {
+            handle.retire()?;
         }
         Ok(self.active.take())
     }
@@ -149,10 +286,10 @@ impl ActiveDocumentStore {
     pub(crate) fn close_active_document(
         &mut self,
         document_id: u64,
-    ) -> Result<Option<EditorState>, AppError> {
+    ) -> Result<Option<Arc<DocumentHandle>>, AppError> {
         self.ensure_no_replacement_in_progress()?;
-        let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
-        if editor_state.document_id() != document_id {
+        let handle = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+        if handle.document_id() != document_id {
             return Err(AppError::DocumentStateInvalid(
                 "active document changed before it was closed".to_string(),
             ));
@@ -160,77 +297,84 @@ impl ActiveDocumentStore {
         self.close_active()
     }
 
-    pub(crate) fn active(&self) -> Option<&EditorState> {
-        self.active.as_ref()
+    pub(crate) fn active_handle(&self) -> Option<Arc<DocumentHandle>> {
+        self.active.as_ref().map(Arc::clone)
     }
 
-    fn active_mut(&mut self) -> Option<&mut EditorState> {
-        self.active.as_mut()
+    #[cfg(test)]
+    pub(crate) fn active(&self) -> Option<Arc<DocumentHandle>> {
+        self.active_handle()
     }
 
-    pub(crate) fn active_mut_for_command(
-        &mut self,
+    pub(crate) fn active_handle_for_mutation(
+        &self,
         document_id: u64,
-        base_revision: u64,
-    ) -> Result<&mut EditorState, AppError> {
+    ) -> Result<Arc<DocumentHandle>, AppError> {
         self.ensure_no_replacement_in_progress()?;
-        let editor_state = self.active.as_mut().ok_or(AppError::NoFileLoaded)?;
-        if editor_state.document_id() != document_id {
+        let handle = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+        if handle.document_id() != document_id {
             return Err(AppError::DocumentStateInvalid(
                 "active document changed before the editor command was applied".to_string(),
             ));
         }
-        if editor_state.revision() != base_revision {
-            return Err(AppError::DocumentStateInvalid(format!(
-                "document revision changed before the editor command was applied: expected {}, got {}",
-                base_revision,
-                editor_state.revision()
-            )));
-        }
-        Ok(editor_state)
+        Ok(Arc::clone(handle))
     }
 
+    pub(crate) fn active_handle_for_read(
+        &self,
+        document_id: u64,
+    ) -> Result<Arc<DocumentHandle>, AppError> {
+        let handle = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+        if handle.document_id() != document_id {
+            return Err(AppError::DocumentStateInvalid(
+                "active document changed before the editor command was applied".to_string(),
+            ));
+        }
+        Ok(Arc::clone(handle))
+    }
+
+    pub(crate) fn handle(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
+        self.active
+            .as_ref()
+            .filter(|handle| handle.document_id() == document_id)
+            .map(Arc::clone)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
+        self.handle(document_id)
+    }
+
+    #[cfg(test)]
     pub(crate) fn active_for_command(
         &self,
         document_id: u64,
         base_revision: u64,
-    ) -> Result<&EditorState, AppError> {
-        let editor_state = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
-        if editor_state.document_id() != document_id {
-            return Err(AppError::DocumentStateInvalid(
-                "active document changed before the editor command was applied".to_string(),
-            ));
-        }
-        if editor_state.revision() != base_revision {
-            return Err(AppError::DocumentStateInvalid(format!(
-                "document revision changed before the editor command was applied: expected {}, got {}",
-                base_revision,
-                editor_state.revision()
-            )));
-        }
-        Ok(editor_state)
+    ) -> Result<Arc<DocumentHandle>, AppError> {
+        let handle = self.active_handle_for_read(document_id)?;
+        drop(handle.read_for_command(document_id, base_revision)?);
+        Ok(handle)
     }
 
-    pub(crate) fn get(&self, document_id: u64) -> Option<&EditorState> {
-        self.active()
-            .filter(|editor_state| editor_state.document_id() == document_id)
-    }
-
-    pub(crate) fn get_mut(&mut self, document_id: u64) -> Option<&mut EditorState> {
-        self.active_mut()
-            .filter(|editor_state| editor_state.document_id() == document_id)
-    }
-
-    pub(crate) fn active_mut_for_save(
-        &mut self,
+    #[cfg(test)]
+    pub(crate) fn active_mut_for_command(
+        &self,
         document_id: u64,
-    ) -> Result<&mut EditorState, AppError> {
-        self.ensure_no_replacement_in_progress()?;
-        self.get_mut(document_id).ok_or_else(|| {
-            AppError::DocumentStateInvalid(
-                "active document changed while save was in progress".to_string(),
-            )
-        })
+        base_revision: u64,
+    ) -> Result<Arc<DocumentHandle>, AppError> {
+        let handle = self.active_handle_for_mutation(document_id)?;
+        drop(handle.write_for_command(document_id, base_revision)?);
+        Ok(handle)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_mut_for_save(
+        &self,
+        document_id: u64,
+    ) -> Result<Arc<DocumentHandle>, AppError> {
+        let handle = self.active_handle_for_mutation(document_id)?;
+        drop(handle.write()?);
+        Ok(handle)
     }
 
     pub(crate) fn begin_document_replacement(
@@ -248,8 +392,11 @@ impl ActiveDocumentStore {
         &mut self,
         lease: DocumentReplacementLease,
         editor_state: EditorState,
-    ) -> Result<(u64, Option<EditorState>), AppError> {
+    ) -> Result<(u64, Option<Arc<DocumentHandle>>), AppError> {
         self.ensure_replacement_lease(lease)?;
+        if let Some(previous) = &self.active {
+            previous.retire()?;
+        }
         let (document_id, previous) = self.replace_active(editor_state);
         self.replacement_lease = None;
         Ok((document_id, previous))
@@ -344,7 +491,7 @@ mod tests {
         );
         assert!(store.ensure_replacement_context(None, None).is_err());
         assert_eq!(
-            store.active().map(EditorState::document_id),
+            store.active().map(|handle| handle.document_id()),
             Some(document_id)
         );
     }
@@ -366,7 +513,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            store.active().map(EditorState::document_id),
+            store.active().map(|handle| handle.document_id()),
             Some(document_id)
         );
     }
@@ -392,10 +539,8 @@ mod tests {
         assert!(result.is_err());
         assert!(!loaded);
         assert_eq!(
-            store
-                .active()
-                .map(|state| state.file_data().file_name.as_str()),
-            Some("current.xlsx")
+            store.active().map(|handle| handle.document_id()),
+            Some(current_document_id)
         );
     }
 
@@ -438,17 +583,11 @@ mod tests {
 
         assert_eq!(document_id, replacement_id);
         assert_eq!(
-            previous.as_ref().map(EditorState::document_id),
+            previous.as_ref().map(|handle| handle.document_id()),
             Some(current_id)
         );
         assert_eq!(
-            previous
-                .as_ref()
-                .map(|state| state.file_data().file_name.as_str()),
-            Some("current.xlsx")
-        );
-        assert_eq!(
-            store.active().map(EditorState::document_id),
+            store.active().map(|handle| handle.document_id()),
             Some(replacement_id)
         );
         drop(previous);
@@ -468,8 +607,44 @@ mod tests {
 
         assert!(store.active().is_none());
         assert_eq!(detached.document_id(), current_id);
-        assert_eq!(detached.file_data().file_name, "current.xlsx");
+        assert!(detached.read().is_err());
         drop(detached);
+    }
+
+    #[test]
+    fn document_content_lock_does_not_hold_the_registry_lock() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        store.replace_active_for_test(editor_state("current.xlsx"));
+        let registry = RwLock::new(store);
+        let handle = registry
+            .read()
+            .unwrap()
+            .active_handle()
+            .expect("active document");
+
+        let _document_guard = handle.write().expect("document state");
+
+        assert!(registry.try_write().is_ok());
+    }
+
+    #[test]
+    fn replacement_retires_handles_cloned_before_the_swap() {
+        let mut store = ActiveDocumentStore::new_for_test();
+        let current = editor_state("current.xlsx");
+        let current_id = current.document_id();
+        let current_revision = current.revision();
+        store.replace_active_for_test(current);
+        let stale_handle = store.active_handle().expect("stale handle");
+        let lease = store
+            .begin_document_replacement(Some(current_id), Some(current_revision))
+            .expect("replacement lease");
+
+        store
+            .finish_document_replacement(lease, editor_state("next.xlsx"))
+            .expect("finish replacement");
+
+        assert!(stale_handle.read().is_err());
+        assert!(stale_handle.write().is_err());
     }
 
     #[test]
@@ -492,10 +667,8 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(
-            store
-                .active()
-                .map(|state| state.file_data().file_name.as_str()),
-            Some("current.xlsx")
+            store.active().map(|handle| handle.document_id()),
+            Some(current_document_id)
         );
     }
 
@@ -519,10 +692,8 @@ mod tests {
         assert_eq!(previous_document_id, Some(current_document_id));
         assert_eq!(metadata, "prepared metadata");
         assert_eq!(
-            store
-                .active()
-                .map(|state| state.file_data().file_name.as_str()),
-            Some("next.xlsx")
+            store.active().map(|handle| handle.document_id()),
+            Some(next_document_id)
         );
     }
 }

@@ -8,9 +8,10 @@ import type {
 import { defaultRichProjection } from "@/types";
 import type { SheetExtent } from "@/table-geometry/sheetExtent";
 import { cellKey } from "@/utils/cellAddress";
+import { colToLetter } from "@/utils/excel";
 
 export type SheetViewportModel = {
-  columns: string[];
+  columnTitleAt: (colIndex: number) => string;
   merges: MergeRange[];
   columnWidths: Record<number, number>;
   rowHeights: Record<number, number>;
@@ -23,7 +24,6 @@ export type SheetViewportModel = {
 
 export type SheetViewportSource = {
   cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
-  columns: string[];
   merges?: MergeRange[];
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
@@ -32,7 +32,6 @@ export type SheetViewportSource = {
 };
 
 export function createSheetViewportModel(source: SheetViewportSource): SheetViewportModel {
-  const columns = source.columns;
   const merges = source.merges ?? [];
   const columnWidths = { ...(source.columnWidths ?? {}) };
   const rowHeights = { ...(source.rowHeights ?? {}) };
@@ -40,7 +39,7 @@ export function createSheetViewportModel(source: SheetViewportSource): SheetView
   const extent = source.extent;
 
   return {
-    columns,
+    columnTitleAt: colToLetter,
     merges,
     columnWidths,
     rowHeights,

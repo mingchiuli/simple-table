@@ -115,6 +115,17 @@ pub struct SearchCellText {
     pub display_text: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchScanCursor {
+    pub row: usize,
+    pub col: usize,
+}
+
+pub struct SearchTextChunk {
+    pub cells: Vec<SearchCellText>,
+    pub next: Option<SearchScanCursor>,
+}
+
 pub struct SearchIndexStore {
     generation: u64,
     revision: u64,
@@ -577,6 +588,53 @@ pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
             })
         })
         .collect()
+}
+
+pub fn collect_sheet_search_text_chunk(
+    sheet: &SheetData,
+    mut cursor: SearchScanCursor,
+    maximum_text_bytes: usize,
+    maximum_cells: usize,
+) -> SearchTextChunk {
+    let mut cells = Vec::new();
+    let mut text_bytes = 0usize;
+    let mut visited_cells = 0usize;
+
+    while cursor.row < sheet.rows.len() {
+        let row = &sheet.rows[cursor.row];
+        while cursor.col < row.len() {
+            let search_text = sheet.cell_search_text(cursor.row, cursor.col);
+            let display_text = sheet.cell_display_text(cursor.row, cursor.col);
+            let cell_bytes = search_text.len().saturating_add(display_text.len());
+            if !cells.is_empty() && text_bytes.saturating_add(cell_bytes) > maximum_text_bytes {
+                return SearchTextChunk {
+                    cells,
+                    next: Some(cursor),
+                };
+            }
+            if !search_text.is_empty() {
+                cells.push(SearchCellText {
+                    row: cursor.row,
+                    col: cursor.col,
+                    search_text,
+                    display_text,
+                });
+                text_bytes = text_bytes.saturating_add(cell_bytes);
+            }
+            cursor.col += 1;
+            visited_cells += 1;
+            if visited_cells >= maximum_cells {
+                return SearchTextChunk {
+                    cells,
+                    next: Some(cursor),
+                };
+            }
+        }
+        cursor.row += 1;
+        cursor.col = 0;
+    }
+
+    SearchTextChunk { cells, next: None }
 }
 
 #[cfg(test)]
@@ -1119,6 +1177,51 @@ mod tests {
         assert_eq!(cells[0].display_text, "40%");
         assert!(cells[0].search_text.contains("40%"));
         assert!(cells[0].search_text.contains("0.4"));
+    }
+
+    #[test]
+    fn chunked_search_text_scan_obeys_text_and_cell_budgets() {
+        let sheet = SheetData {
+            name: "Sheet1".to_string(),
+            rows: vec![
+                vec![CellValue::String("one".to_string()), CellValue::Null],
+                vec![
+                    CellValue::String("two".to_string()),
+                    CellValue::String("three".to_string()),
+                ],
+            ],
+            ..Default::default()
+        };
+        let first =
+            collect_sheet_search_text_chunk(&sheet, SearchScanCursor::default(), usize::MAX, 2);
+
+        assert_eq!(first.cells.len(), 1);
+        assert_eq!(first.next, Some(SearchScanCursor { row: 0, col: 2 }));
+
+        let second = collect_sheet_search_text_chunk(
+            &sheet,
+            first.next.expect("next cursor"),
+            7,
+            usize::MAX,
+        );
+        assert_eq!(
+            second
+                .cells
+                .iter()
+                .map(|cell| cell.search_text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["two"]
+        );
+        assert_eq!(second.next, Some(SearchScanCursor { row: 1, col: 1 }));
+
+        let final_chunk = collect_sheet_search_text_chunk(
+            &sheet,
+            second.next.expect("final cursor"),
+            1,
+            usize::MAX,
+        );
+        assert_eq!(final_chunk.cells[0].search_text, "three");
+        assert!(final_chunk.next.is_none());
     }
 
     #[test]

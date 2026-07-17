@@ -16,7 +16,7 @@ use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
     active_document_store,
     editor_state::{EditorState, SaveCommitLease},
-    state::{DocumentReplacementLease, EditorSessionInfo},
+    state::{ActiveDocumentStore, DocumentHandle, DocumentReplacementLease, EditorSessionInfo},
 };
 use crate::types::{
     DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
@@ -103,24 +103,30 @@ pub fn commit_prepared_document(
         &checkout.document().editor_state.file_data().file_name,
     )?;
     let (prepared, _prepared_commit) = checkout.commit();
-    let (document_id, previous_document, response) = {
+    let (document_id, previous_document, active_handle) = {
         let mut registry_guard = registry
             .write()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         let (document_id, previous_document) =
             registry_guard.finish_document_replacement(replacement_lease, prepared.editor_state)?;
         replacement.finished = true;
-        let editor_state = registry_guard.active().ok_or(AppError::NoFileLoaded)?;
         (
             document_id,
             previous_document,
-            open_document_response_snapshot(editor_state),
+            registry_guard
+                .active_handle()
+                .ok_or(AppError::NoFileLoaded)?,
         )
     };
 
-    let response = finalize_open_document_response(response);
+    let response = {
+        let editor_state = active_handle.read()?;
+        finalize_open_document_response(open_document_response_snapshot(&editor_state))
+    };
 
-    if let Some(previous_document_id) = previous_document.as_ref().map(EditorState::document_id)
+    if let Some(previous_document_id) = previous_document
+        .as_ref()
+        .map(|handle| handle.document_id())
         && previous_document_id != document_id
     {
         cancel_index_jobs_for_document(previous_document_id);
@@ -168,24 +174,36 @@ pub fn abort_prepared_document(token: &str) -> Result<(), AppError> {
 /// Restores the frontend after its runtime state was lost while the Rust process stayed alive.
 pub fn active_document_response() -> Result<Option<OpenDocumentResponse>, AppError> {
     let registry = active_document_store();
-    let response = {
+    let handle = {
         let registry_guard = registry
             .read()
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        registry_guard.active().map(open_document_response_snapshot)
+        registry_guard.active_handle()
     };
-    Ok(response.map(finalize_open_document_response))
+    handle
+        .map(|handle| {
+            let editor_state = handle.read()?;
+            Ok(finalize_open_document_response(
+                open_document_response_snapshot(&editor_state),
+            ))
+        })
+        .transpose()
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn active_document_path() -> Result<Option<String>, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
+    let handle = registry
         .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    Ok(registry_guard
-        .active()
-        .map(|editor_state| editor_state.file_data().path.clone())
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle();
+    Ok(handle
+        .map(|handle| {
+            handle
+                .read()
+                .map(|editor_state| editor_state.file_data().path.clone())
+        })
+        .transpose()?
         .filter(|path| !path.is_empty()))
 }
 
@@ -200,11 +218,9 @@ pub fn prepare_current_file_export(
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentExport, AppError> {
     let registry = active_document_store();
+    let handle = document_handle_for_read(&registry, document_id)?;
     let (snapshot, work) = {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+        let editor_state = handle.read_for_command(document_id, base_revision)?;
         let work = save_work::reserve(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
         (snapshot, work)
@@ -230,12 +246,10 @@ pub fn prepare_current_file_save(
     let registry = active_document_store();
     let snapshot;
     let work;
+    let handle = document_handle_for_read(&registry, document_id_token)?;
     {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_for_command(document_id_token, revision_token)?;
-        ensure_native_save_target_allowed(editor_state, target_path_or_name)?;
+        let editor_state = handle.read_for_command(document_id_token, revision_token)?;
+        ensure_native_save_target_allowed(&editor_state, target_path_or_name)?;
         if editor_state.has_save_commit_in_progress() {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
@@ -289,7 +303,7 @@ where
     }
     let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
     let registry = active_document_store();
-    let (lease, clear_history) = begin_prepared_save_commit(
+    let (handle, lease, clear_history) = begin_prepared_save_commit(
         &registry,
         document_id_token,
         revision_token,
@@ -303,7 +317,7 @@ where
     )?;
 
     if let Err(error) = commit_write() {
-        abort_save_commit(&registry, document_id_token, lease);
+        abort_save_commit(&handle, lease);
         return Err(error);
     }
 
@@ -311,14 +325,7 @@ where
     let response;
     let retired;
     {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.get_mut(document_id_token).ok_or_else(|| {
-            AppError::DocumentStateInvalid(
-                "active document changed while save was in progress".to_string(),
-            )
-        })?;
+        let mut editor_state = handle.write()?;
         retired = editor_state.finish_save_commit(
             lease,
             result.file_data,
@@ -327,9 +334,9 @@ where
         )?;
         document_id = editor_state.document_id();
         response = SavedDocumentResponse {
-            document: Some(document_manifest(editor_state)),
+            document: Some(document_manifest(&editor_state)),
             identity: None,
-            editor_session: editor_session_info(editor_state),
+            editor_session: editor_session_info(&editor_state),
         };
     }
     drop(retired);
@@ -342,18 +349,21 @@ fn begin_prepared_save_commit<F>(
     document_id: u64,
     revision: u64,
     clear_history: F,
-) -> Result<(SaveCommitLease, bool), AppError>
+) -> Result<(std::sync::Arc<DocumentHandle>, SaveCommitLease, bool), AppError>
 where
     F: FnOnce(&EditorState) -> bool,
 {
-    let mut registry_guard = registry
-        .write()
+    let registry_guard = registry
+        .read()
         .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active_mut_for_save(document_id)?;
-    ensure_editor_matches_prepared_save(editor_state, document_id, revision)?;
-    let clear_history = clear_history(editor_state);
+    let handle = registry_guard.active_handle_for_mutation(document_id)?;
+    let mut editor_state = handle.write()?;
+    ensure_editor_matches_prepared_save(&editor_state, document_id, revision)?;
+    let clear_history = clear_history(&editor_state);
     let lease = editor_state.begin_save_commit(document_id, revision)?;
-    Ok((lease, clear_history))
+    drop(editor_state);
+    drop(registry_guard);
+    Ok((handle, lease, clear_history))
 }
 
 fn commit_current_file_save_without_reparse<F>(
@@ -368,7 +378,7 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     let registry = active_document_store();
-    let (lease, clear_history) = begin_prepared_save_commit(
+    let (handle, lease, clear_history) = begin_prepared_save_commit(
         &registry,
         document_id_token,
         revision_token,
@@ -380,21 +390,14 @@ where
     )?;
 
     if let Err(error) = commit_write() {
-        abort_save_commit(&registry, document_id_token, lease);
+        abort_save_commit(&handle, lease);
         return Err(error);
     }
 
     let response;
     let retired;
     {
-        let mut registry_guard = registry
-            .write()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.get_mut(document_id_token).ok_or_else(|| {
-            AppError::DocumentStateInvalid(
-                "active document changed while save was in progress".to_string(),
-            )
-        })?;
+        let mut editor_state = handle.write()?;
         retired = editor_state.finish_save_commit_without_reparse(
             lease,
             path,
@@ -407,7 +410,7 @@ where
                 path: editor_state.file_data().path.clone(),
                 file_name: editor_state.file_data().file_name.clone(),
             }),
-            editor_session: editor_session_info(editor_state),
+            editor_session: editor_session_info(&editor_state),
         };
     }
     drop(retired);
@@ -428,14 +431,8 @@ fn ensure_editor_matches_prepared_save(
     }
 }
 
-fn abort_save_commit(
-    registry: &std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
-    document_id: u64,
-    lease: crate::state::editor_state::SaveCommitLease,
-) {
-    if let Ok(mut registry_guard) = registry.write()
-        && let Some(editor_state) = registry_guard.get_mut(document_id)
-    {
+fn abort_save_commit(handle: &DocumentHandle, lease: crate::state::editor_state::SaveCommitLease) {
+    if let Ok(mut editor_state) = handle.write() {
         editor_state.abort_save_commit(lease);
     }
 }
@@ -446,12 +443,10 @@ pub fn current_document_projection_for_command(
     preferred_sheet_index: usize,
 ) -> Result<OpenDocumentResponse, AppError> {
     let registry = active_document_store();
+    let handle = document_handle_for_read(&registry, document_id)?;
     let response = {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-        open_document_response_snapshot_for_sheet(editor_state, preferred_sheet_index)
+        let editor_state = handle.read_for_command(document_id, base_revision)?;
+        open_document_response_snapshot_for_sheet(&editor_state, preferred_sheet_index)
     };
     Ok(finalize_open_document_response(response))
 }
@@ -481,11 +476,9 @@ fn sheet_region_snapshot_from_registry(
     base_revision: u64,
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
-    snapshot_sheet_region(editor_state, region)
+    let handle = document_handle_for_read(registry, document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
+    snapshot_sheet_region(&editor_state, region)
 }
 
 pub(crate) fn inspect_current_file_for_command<T>(
@@ -494,13 +487,9 @@ pub(crate) fn inspect_current_file_for_command<T>(
     inspect: impl FnOnce(&FileData) -> T,
 ) -> Result<T, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-
-    registry_guard
-        .active_for_command(document_id, base_revision)
-        .map(|editor_state| inspect(editor_state.file_data()))
+    let handle = document_handle_for_read(&registry, document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
+    Ok(inspect(editor_state.file_data()))
 }
 
 pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
@@ -511,7 +500,7 @@ pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
             .map_err(|_| AppError::poisoned_lock("document registry"))?;
         registry_guard.close_active_document(document_id)?
     };
-    if let Some(document_id) = closed_document.as_ref().map(EditorState::document_id) {
+    if let Some(document_id) = closed_document.as_ref().map(|handle| handle.document_id()) {
         cancel_index_jobs_for_document(document_id);
         crate::commands::mutation_replay::retire_document(document_id);
     }
@@ -635,26 +624,26 @@ fn active_workbook_capabilities(
         capabilities.save.can_native_save = native_save_allowed;
         return capabilities;
     };
-    registry_guard
-        .active()
-        .filter(|editor_state| {
-            let active_file = editor_state.file_data();
-            match current_path {
-                Some(path) if !path.is_empty() => path == active_file.path,
-                _ => active_file.file_name == file_name,
-            }
-        })
-        .map(|editor_state| {
+    let handle = registry_guard.active_handle();
+    drop(registry_guard);
+    if let Some(handle) = handle
+        && let Ok(editor_state) = handle.read()
+    {
+        let active_file = editor_state.file_data();
+        let matches = match current_path {
+            Some(path) if !path.is_empty() => path == active_file.path,
+            _ => active_file.file_name == file_name,
+        };
+        if matches {
             let mut capabilities = editor_state.capabilities();
             capabilities.save.can_native_save =
                 native_save_allowed && capabilities.save.can_native_save;
-            capabilities
-        })
-        .unwrap_or_else(|| {
-            let mut capabilities = WorkbookCapabilities::default();
-            capabilities.save.can_native_save = native_save_allowed;
-            capabilities
-        })
+            return capabilities;
+        }
+    }
+    let mut capabilities = WorkbookCapabilities::default();
+    capabilities.save.can_native_save = native_save_allowed;
+    capabilities
 }
 
 fn workbook_capabilities_for_command(
@@ -691,14 +680,12 @@ fn workbook_capabilities_for_command_and_target(
     target_path_or_name: Option<&str>,
 ) -> Result<WorkbookCapabilities, AppError> {
     let registry = active_document_store();
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let editor_state = registry_guard.active_for_command(document_id, base_revision)?;
+    let handle = document_handle_for_read(&registry, document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
     let mut capabilities = editor_state.capabilities();
     capabilities.save.can_native_save = native_save_allowed && capabilities.save.can_native_save;
-    if let Some(reason) =
-        target_path_or_name.and_then(|target| native_save_target_block_reason(editor_state, target))
+    if let Some(reason) = target_path_or_name
+        .and_then(|target| native_save_target_block_reason(&editor_state, target))
     {
         capabilities.save.can_native_save = false;
         if !capabilities
@@ -714,6 +701,16 @@ fn workbook_capabilities_for_command_and_target(
         }
     }
     Ok(capabilities)
+}
+
+fn document_handle_for_read(
+    registry: &std::sync::Arc<std::sync::RwLock<ActiveDocumentStore>>,
+    document_id: u64,
+) -> Result<std::sync::Arc<DocumentHandle>, AppError> {
+    registry
+        .read()
+        .map_err(|_| AppError::poisoned_lock("document registry"))?
+        .active_handle_for_read(document_id)
 }
 
 fn ensure_native_save_target_allowed(

@@ -2,6 +2,7 @@
 
 use super::{
     CommandU64, blocking, mutation_executor, mutation_replay, projection_executor, recent_executor,
+    search_executor,
 };
 use crate::error::AppError;
 use crate::io::document;
@@ -716,7 +717,7 @@ pub async fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
     let registry = active_document_store();
-    blocking::run(move || {
+    search_executor::run(move || {
         search_ops::do_search(
             &registry,
             document_id.get(),
