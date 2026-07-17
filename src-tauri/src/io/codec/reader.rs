@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use crate::domain::resource_limits::{
-    MAX_DENSE_CELL_SLOTS, MAX_ROWS_PER_SHEET, MAX_TOTAL_ROWS, MAX_WORKBOOK_SHEETS,
-    validate_file_data, validate_position,
-};
 use crate::error::AppError;
 use crate::io::file_format::SpreadsheetFileFormat;
 use crate::io::input_limits::{
@@ -14,6 +10,10 @@ use crate::io::layout_units::{
     DEFAULT_ROW_HEIGHT_PX, excel_column_width_to_px, is_default_column_width, points_to_px,
 };
 use crate::io::projection_codec::WorkbookProjectionCodec;
+use crate::resource_limits::{
+    MAX_DENSE_CELL_SLOTS, MAX_ROWS_PER_SHEET, MAX_TOTAL_ROWS, MAX_WORKBOOK_SHEETS,
+    validate_file_data, validate_position,
+};
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
     FreezePaneProjection, HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,

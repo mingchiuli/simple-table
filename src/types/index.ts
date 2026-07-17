@@ -1,4 +1,5 @@
 export * from './generated';
+export type * from './updateRuntime';
 
 import type {
   FormulaDiagnostics,

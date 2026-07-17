@@ -79,6 +79,7 @@ pub(crate) struct IndexScheduler {
     pub(crate) state: Mutex<IndexSchedulerState>,
     pub(crate) wake: Condvar,
     pub(crate) workers_available: AtomicBool,
+    pub(crate) shutdown: AtomicBool,
 }
 
 #[derive(Default)]

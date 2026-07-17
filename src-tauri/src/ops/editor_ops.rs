@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 
 use crate::error::AppError;
-use crate::ops::index_ops::schedule_index_for_response;
 use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
 use crate::state::state::{ActiveDocumentStore, DocumentHandle};
 use crate::types::{EditorMutationResponse, EditorSessionInfo};
@@ -53,8 +52,6 @@ pub fn do_undo(
     };
     drop(retired);
 
-    schedule_index_for_response(&response, registry);
-
     Ok(response)
 }
 
@@ -79,8 +76,6 @@ pub fn do_redo(
         }
     };
     drop(retired);
-
-    schedule_index_for_response(&response, registry);
 
     Ok(response)
 }

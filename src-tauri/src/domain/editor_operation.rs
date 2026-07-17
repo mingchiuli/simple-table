@@ -1,5 +1,13 @@
-use crate::types::{CellValue, SetCellRequest, SheetData};
+use crate::domain::CellValue;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellEditInput {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
+}
 
 /// User-facing editor command.
 ///
@@ -14,7 +22,7 @@ pub enum EditorCommand {
         text: String,
     },
     SetCells {
-        changes: Vec<SetCellRequest>,
+        changes: Vec<CellEditInput>,
     },
     AddRow {
         sheet_index: usize,
@@ -97,7 +105,9 @@ pub enum AppliedOperation {
     },
     AddSheet {
         sheet_index: usize,
-        sheet_data: Box<SheetData>,
+        name: String,
+        row_count: usize,
+        column_count: usize,
     },
     DeleteSheet {
         sheet_index: usize,

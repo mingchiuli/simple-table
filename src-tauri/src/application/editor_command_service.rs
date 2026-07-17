@@ -1,9 +1,11 @@
 use serde::Serialize;
 
 use crate::application::mutation_replay;
+use crate::application::runtime::ApplicationRuntime;
+use crate::domain::CellEditInput;
 use crate::error::AppError;
 use crate::ops::{cell_ops, editor_ops, search_ops};
-use crate::state::{active_document_store, state::ActiveDocumentStore};
+use crate::state::state::ActiveDocumentStore;
 use crate::types::{
     EditorMutationResponse, MutationResultLookup, SearchResponse, SearchScope, SetCellRequest,
 };
@@ -11,25 +13,29 @@ use crate::types::{
 pub use crate::types::EditorSessionInfo;
 
 pub fn get_editor_state(
+    runtime: &ApplicationRuntime,
     document_id: Option<u64>,
     base_revision: Option<u64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
-    editor_ops::do_get_editor_state(&active_document_store(), document_id, base_revision)
+    editor_ops::do_get_editor_state(runtime.documents(), document_id, base_revision)
 }
 
 pub fn get_mutation_result(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     command_id: &str,
 ) -> Result<MutationResultLookup, AppError> {
-    mutation_replay::get(document_id, command_id)
+    mutation_replay::get(runtime.mutation_replays(), document_id, command_id)
 }
 
 pub fn undo(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -40,11 +46,13 @@ pub fn undo(
 }
 
 pub fn redo(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -55,6 +63,7 @@ pub fn redo(
 }
 
 pub fn set_cell(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -65,6 +74,7 @@ pub fn set_cell(
 ) -> Result<EditorMutationResponse, AppError> {
     let payload = (sheet_index, row, col, &text);
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -85,22 +95,34 @@ pub fn set_cell(
 }
 
 pub fn set_cells(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
     changes: Vec<SetCellRequest>,
 ) -> Result<EditorMutationResponse, AppError> {
+    let edits: Vec<_> = changes
+        .iter()
+        .map(|change| CellEditInput {
+            sheet_index: change.sheet_index,
+            row: change.row,
+            col: change.col,
+            text: change.text.clone(),
+        })
+        .collect();
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
         "set_cells",
         &changes,
-        |registry| cell_ops::do_set_cells(registry, document_id, base_revision, changes.clone()),
+        |registry| cell_ops::do_set_cells(registry, document_id, base_revision, edits.clone()),
     )
 }
 
 pub fn add_row(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -108,6 +130,7 @@ pub fn add_row(
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -120,6 +143,7 @@ pub fn add_row(
 }
 
 pub fn delete_row(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -127,6 +151,7 @@ pub fn delete_row(
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -139,6 +164,7 @@ pub fn delete_row(
 }
 
 pub fn add_column(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -146,6 +172,7 @@ pub fn add_column(
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -158,6 +185,7 @@ pub fn add_column(
 }
 
 pub fn delete_column(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -165,6 +193,7 @@ pub fn delete_column(
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -177,6 +206,7 @@ pub fn delete_column(
 }
 
 pub fn set_column_width(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -185,6 +215,7 @@ pub fn set_column_width(
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -204,6 +235,7 @@ pub fn set_column_width(
 }
 
 pub fn set_row_height(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -212,6 +244,7 @@ pub fn set_row_height(
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -231,11 +264,13 @@ pub fn set_row_height(
 }
 
 pub fn add_sheet(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -246,12 +281,14 @@ pub fn add_sheet(
 }
 
 pub fn delete_sheet(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     run_mutation(
+        runtime,
         document_id,
         base_revision,
         command_id,
@@ -262,6 +299,7 @@ pub fn delete_sheet(
 }
 
 pub fn search(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     query: &str,
@@ -269,7 +307,8 @@ pub fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
     search_ops::do_search(
-        &active_document_store(),
+        runtime.search(),
+        runtime.documents(),
         document_id,
         base_revision,
         query,
@@ -279,6 +318,7 @@ pub fn search(
 }
 
 fn run_mutation<P: Serialize>(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -288,13 +328,19 @@ fn run_mutation<P: Serialize>(
         &std::sync::Arc<std::sync::RwLock<ActiveDocumentStore>>,
     ) -> Result<EditorMutationResponse, AppError>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_replay::run(
+        runtime.mutation_replays(),
         document_id,
         base_revision,
         command_id,
         command_name,
         payload,
-        || execute(&registry),
+        || {
+            let response = execute(runtime.documents())?;
+            runtime
+                .search()
+                .schedule_for_response(&response, runtime.documents());
+            Ok(response)
+        },
     )
 }

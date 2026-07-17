@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
-use crate::domain::resource_limits::{ResourceLedger, validate_added_sheet};
-use crate::domain::{AppliedOperation, EditorCommand, ResolvedCellEdit};
+use crate::domain::{
+    AppliedOperation, CellValue, EditorCommand, ResolvedCellEdit, parse_cell_text,
+};
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, ReadOnlyRichProjection, SheetData, parse_cell_text};
+use crate::resource_limits::{ResourceLedger, validate_added_sheet};
+use crate::types::{FileData, ReadOnlyRichProjection, SheetData};
 
 impl EditorCommand {
     #[cfg(test)]
@@ -222,7 +224,9 @@ impl EditorCommand {
                     .unwrap_or_else(|| format!("Sheet{}", sheet_index + 1));
                 Ok(AppliedOperation::AddSheet {
                     sheet_index,
-                    sheet_data: Box::new(empty_sheet(sheet_name)),
+                    name: sheet_name,
+                    row_count: 5,
+                    column_count: 5,
                 })
             }
             EditorCommand::DeleteSheet { sheet_index } => {
@@ -291,15 +295,6 @@ impl SheetMutationExtent {
 
     fn resizable_columns(&self) -> usize {
         self.columns.max(1)
-    }
-}
-
-fn empty_sheet(name: String) -> SheetData {
-    SheetData {
-        name,
-        rows: vec![vec![CellValue::Null; 5]; 5],
-        merges: vec![],
-        ..Default::default()
     }
 }
 

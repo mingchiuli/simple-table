@@ -13,7 +13,7 @@ flowchart TB
     REGION[Region repository and bounded RegionCache]
     RPC[Rust-signature generated TauriCommandMap]
     IPC[Typed invoke adapter]
-    SERVICE[Rust document and save application services]
+    SERVICE[Rust ApplicationRuntime and document services]
     OPS[Rust operation layer]
     STATE[EditorState session]
     DOMAIN[Editor command and applied-operation domain contract]
@@ -42,6 +42,13 @@ layer, which owns retirement of mutation replay and search-index work before
 releasing the old document. Neither the document model nor the I/O layer may
 depend on command modules.
 
+`ApplicationRuntime` is the backend composition root managed by Tauri. It owns
+the active-document registry, prepared-document repository, mutation replay
+coordinator, and search service. Application services receive that runtime
+explicitly; business repositories and schedulers cannot locate process-global
+`OnceLock` instances. Commands may receive `tauri::State<ApplicationRuntime>`
+but only pass the runtime to application services.
+
 Document opening is split between platform I/O and application orchestration.
 Platform modules consume authorization and return `OpenFileInput`; the
 application open service owns parse reservations, parsing, `EditorState`
@@ -51,12 +58,19 @@ layer cannot depend on `application`, `commands`, `ops`, or `state`.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
 applied operations, and their lightweight impact/projection views. Domain
-resource limits and cell-address parsing live beside that vocabulary so both
-document and I/O adapters can enforce the same rules without depending on one
-another. The state session and document model depend on this contract directly;
-they must not depend on the operation-handler layer. `ops` may depend on both
-the domain contract and state session to implement a use case, never the
-reverse.
+cell-address parsing lives beside that vocabulary. Cross-layer resource policy
+lives in the top-level `resource_limits` module so document, application, and
+I/O adapters can enforce the same rules without depending on one another. The
+state session and document model depend on the domain contract directly; they
+must not depend on the operation-handler layer. `ops` may depend on both the
+domain contract and state session to implement a use case, never the reverse.
+
+Core cell values and text parsing belong to `domain::cell_value`. Wire edit
+requests such as `SetCellRequest` belong to `types::editor_command` and are
+mapped to `CellEditInput` at the application boundary. Domain commands cannot
+depend on RPC requests, mutation responses, patches, TypeScript generation, or
+Tauri types. A new-Sheet operation carries only domain initialization data;
+projection and workbook adapters construct their own representations.
 
 The Rust `document` module is the physical aggregate boundary. It owns
 `SpreadsheetDocument`, transactions, mementos, formula coordination, save
@@ -115,6 +129,9 @@ the I/O layer must not call back into the application layer.
   recent-file workflows are port-driven application services. Composables bind
   those ports to the backend API, Pinia, platform adapters, and Element Plus;
   utility modules cannot import those dependencies.
+- Frontend application modules contain only port-driven workflows. Pinia/Tauri
+  composition, instance caching, and platform port implementations live in
+  `composables/` and `platform/`; application modules cannot import them.
 
 ## Mutation Protocol
 

@@ -1,5 +1,5 @@
 import * as api from "@/api";
-import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
+import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 
 export async function restoreActiveDocument(): Promise<boolean> {

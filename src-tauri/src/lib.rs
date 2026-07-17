@@ -7,6 +7,7 @@ mod formula;
 mod io;
 mod ops;
 mod recent;
+mod resource_limits;
 mod state;
 mod types;
 mod update;
@@ -99,6 +100,7 @@ pub fn run() {
     }
 
     builder
+        .manage(application::runtime::ApplicationRuntime::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())

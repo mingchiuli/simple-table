@@ -199,9 +199,16 @@ pub fn apply_structure_operation(
         }
         AppliedOperation::AddSheet {
             sheet_index,
-            sheet_data,
+            name,
+            row_count,
+            column_count,
         } => {
-            insert_sheet(workbook, *sheet_index, sheet_data)?;
+            let sheet_data = SheetData {
+                name: name.clone(),
+                rows: vec![vec![crate::types::CellValue::Null; *column_count]; *row_count],
+                ..Default::default()
+            };
+            insert_sheet(workbook, *sheet_index, &sheet_data)?;
         }
         AppliedOperation::DeleteSheet { sheet_index } => {
             diagnostics.skipped_formula_reference_rewrites +=

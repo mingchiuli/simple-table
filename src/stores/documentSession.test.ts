@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
 import type {
   EditorMutationResponse,

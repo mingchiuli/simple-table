@@ -1,6 +1,6 @@
 import { storeToRefs } from 'pinia';
 import { computed, onMounted } from 'vue';
-import { useUpdateCoordinator } from '@/application/updateCoordinator';
+import { useUpdateCoordinator } from '@/composables/useUpdateCoordinator';
 import { useUpdateSessionStore } from '@/stores/updateSession';
 
 export type { UpdateInfo } from '@/types';

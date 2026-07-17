@@ -1,21 +1,15 @@
-import { getVersion } from '@tauri-apps/api/app';
-import { openUrl } from '@tauri-apps/plugin-opener';
-import { platform } from '@tauri-apps/plugin-os';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { check, type Update } from '@tauri-apps/plugin-updater';
-import { requestApplicationExit } from '@/application/applicationExitCoordinator';
-import { invokeCommand } from '@/tauriInvoke';
-import {
-  useUpdateSessionStore,
-  type UpdatePlatform,
-} from '@/stores/updateSession';
-import type { UpdateInfo } from '@/types';
+import type { UpdateInfo, UpdatePlatform } from '@/types';
 import { appErrorMessage } from '@/utils/appError';
 
-type DownloadEvent = Parameters<Update['downloadAndInstall']>[0] extends
-  ((event: infer Event) => void) | undefined ? Event : never;
+export type DesktopDownloadEvent =
+  | { event: 'Started'; data: { contentLength?: number } }
+  | { event: 'Progress'; data: { chunkLength: number } }
+  | { event: 'Finished'; data: Record<string, never> };
 
-export type DesktopUpdateHandle = Pick<Update, 'version' | 'downloadAndInstall'>;
+export type DesktopUpdateHandle = {
+  version: string;
+  downloadAndInstall(onEvent?: (event: DesktopDownloadEvent) => void): Promise<void>;
+};
 
 export type UpdatePort = {
   getVersion(): Promise<string>;
@@ -39,24 +33,29 @@ type UpdateRuntime = {
   operationToken: number;
 };
 
-type UpdateSessionStore = ReturnType<typeof useUpdateSessionStore>;
+export type UpdateSessionPort = {
+  status: string;
+  currentVersion: string;
+  mobileUpdateInfo: UpdateInfo | null;
+  isDesktop: boolean;
+  isAndroid: boolean;
+  setPlatform(platform: UpdatePlatform): void;
+  setCurrentVersion(version: string): void;
+  setErrorMessage(message: string): void;
+  beginCheck(): void;
+  applyDesktopCheck(appVersion: string, updateVersion: string | null): void;
+  applyMobileCheck(appVersion: string, update: UpdateInfo | null): void;
+  beginDownload(): void;
+  setDownloadTotal(total: number): void;
+  addDownloadedBytes(bytes: number): void;
+  markReady(): void;
+  fail(message: string): void;
+  reset(): void;
+};
 
 export type UpdateCoordinator = ReturnType<typeof createUpdateCoordinator>;
 
-const coordinators = new WeakMap<object, UpdateCoordinator>();
-
-const tauriUpdatePort: UpdatePort = {
-  getVersion,
-  platform,
-  checkDesktop: check,
-  checkMobile: (currentVersion) =>
-    invokeCommand('check_update_mobile', { currentVersion }),
-  openUrl,
-  relaunch,
-  requestExit: requestApplicationExit,
-};
-
-export function createUpdateCoordinator(store: UpdateSessionStore, port: UpdatePort) {
+export function createUpdateCoordinator(store: UpdateSessionPort, port: UpdatePort) {
   const runtime: UpdateRuntime = {
     currentVersionPromise: null,
     updateCheckPromise: null,
@@ -123,7 +122,7 @@ export function createUpdateCoordinator(store: UpdateSessionStore, port: UpdateP
 
   async function runDesktopDownload(update: DesktopUpdateHandle, token: number) {
     try {
-      await update.downloadAndInstall((event: DownloadEvent) => {
+      await update.downloadAndInstall((event) => {
         if (!isCurrentOperation(token)) return;
         switch (event.event) {
           case 'Started':
@@ -210,16 +209,6 @@ export function createUpdateCoordinator(store: UpdateSessionStore, port: UpdateP
     handleMobileUpdate,
     reset,
   };
-}
-
-export function useUpdateCoordinator(): UpdateCoordinator {
-  const store = useUpdateSessionStore();
-  let coordinator = coordinators.get(store);
-  if (!coordinator) {
-    coordinator = createUpdateCoordinator(store, tauriUpdatePort);
-    coordinators.set(store, coordinator);
-  }
-  return coordinator;
 }
 
 function normalizePlatform(value: string): UpdatePlatform {

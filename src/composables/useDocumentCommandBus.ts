@@ -3,7 +3,7 @@ import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import { createDocumentMutationProtocol } from '@/application/documentMutationProtocol';
-import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import type {
   EditorCommandContext,
   EditorMutationResponse,

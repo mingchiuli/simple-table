@@ -1,6 +1,7 @@
 #![allow(clippy::module_inception)]
 
 pub(crate) mod display;
+pub mod editor_command;
 pub mod editor_session;
 pub mod formula;
 pub mod projection;
@@ -10,6 +11,7 @@ pub mod types;
 pub mod typescript;
 pub mod update;
 
+pub use editor_command::*;
 pub use editor_session::*;
 pub use formula::*;
 #[cfg(test)]

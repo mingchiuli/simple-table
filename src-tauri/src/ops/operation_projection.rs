@@ -66,15 +66,21 @@ impl OperationPatchProjector<'_> {
             },
             AppliedOperation::AddSheet {
                 sheet_index,
-                sheet_data,
+                name,
+                row_count,
+                column_count,
             } => AppliedOperationResult::AddSheet {
                 sheet_index: *sheet_index,
-                name: sheet_data.name.clone(),
+                name: name.clone(),
                 sheet_data: file_data
                     .sheets
                     .get(*sheet_index)
                     .cloned()
-                    .unwrap_or_else(|| sheet_data.as_ref().clone()),
+                    .unwrap_or_else(|| SheetData {
+                        name: name.clone(),
+                        rows: vec![vec![CellValue::Null; *column_count]; *row_count],
+                        ..Default::default()
+                    }),
             },
             AppliedOperation::DeleteSheet { sheet_index } => AppliedOperationResult::DeleteSheet {
                 sheet_index: *sheet_index,

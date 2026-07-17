@@ -159,7 +159,10 @@ fn command_argument(argument: &FnArg, camel_case: bool) -> Option<String> {
     let syn::Pat::Ident(name) = argument.pat.as_ref() else {
         return None;
     };
-    if type_name(&argument.ty).as_deref() == Some("AppHandle") {
+    if matches!(
+        type_name(&argument.ty).as_deref(),
+        Some("AppHandle" | "State")
+    ) {
         return None;
     }
     let name = if camel_case {

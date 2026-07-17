@@ -1,6 +1,8 @@
 #[cfg(target_os = "android")]
 use super::{CommandU64, blocking};
 #[cfg(target_os = "android")]
+use crate::application::runtime::ApplicationRuntime;
+#[cfg(target_os = "android")]
 use crate::application::{document_open_service, document_save_service};
 #[cfg(target_os = "android")]
 use crate::error::AppError;
@@ -13,7 +15,7 @@ use crate::io::transient_files::TransientFilePurpose;
 #[cfg(target_os = "android")]
 use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "android")]
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
 /// Android: import a picked file into the app sandbox without opening it in the editor.
 #[cfg(target_os = "android")]
@@ -49,23 +51,34 @@ pub async fn discard_save_location_android(app: AppHandle, path: String) -> Resu
 #[cfg(target_os = "android")]
 #[tauri::command]
 pub async fn prepare_open_file_android(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
-    blocking::run(move || document_open_service::prepare_open_file_mobile(&app, &path)).await
+    let runtime = runtime.inner().clone();
+    blocking::run(move || document_open_service::prepare_open_file_mobile(&runtime, &app, &path))
+        .await
 }
 
 /// Android: generate file bytes and write them to the sandbox path.
 #[cfg(target_os = "android")]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn save_file_android(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     path: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
+    let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_save_service::save_file_mobile(&app, &path, document_id.get(), base_revision.get())
+        document_save_service::save_file_mobile(
+            &runtime,
+            &app,
+            &path,
+            document_id.get(),
+            base_revision.get(),
+        )
     })
     .await
 }
@@ -74,13 +87,16 @@ pub async fn save_file_android(
 #[cfg(target_os = "android")]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn export_file_android(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     default_name: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
+    let runtime = runtime.inner().clone();
     blocking::run(move || {
         document_save_service::export_file_mobile(
+            &runtime,
             &app,
             &default_name,
             document_id.get(),

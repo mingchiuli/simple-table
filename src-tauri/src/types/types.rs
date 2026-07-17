@@ -1,3 +1,5 @@
+pub use crate::domain::CellValue;
+use crate::domain::normalize_formula_text;
 use crate::types::display::DisplayProjection;
 use crate::types::projection::{CellValueProjection, SheetRowsProjection};
 use crate::types::{EditorSessionInfo, EditorStateInfo, FormulaStatus};
@@ -11,19 +13,6 @@ use ts_rs::TS;
 const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
 const JS_MIN_SAFE_INTEGER: i64 = -9007199254740991;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum CellValue {
-    Null,
-    String(String),
-    Number(Value), // 使用 serde_json::Value 支持精确大整数
-    Boolean(bool),
-    Formula {
-        formula: String,
-        cached_value: Box<CellValue>,
-        error: Option<String>,
-    },
-}
-
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -35,40 +24,6 @@ pub struct CellFormatProjection {
 }
 
 impl CellValue {
-    /// 将单元格值转换为字符串（用于搜索索引等场景）
-    /// Null 返回空字符串，其他类型返回其字符串表示
-    pub fn to_display_string(&self) -> String {
-        match self {
-            CellValue::Null => String::new(),
-            CellValue::String(s) => s.clone(),
-            CellValue::Number(n) => n.to_string(),
-            CellValue::Boolean(b) => b.to_string(),
-            CellValue::Formula {
-                cached_value,
-                error,
-                ..
-            } => error
-                .clone()
-                .unwrap_or_else(|| cached_value.to_display_string()),
-        }
-    }
-
-    pub fn kind(&self) -> &'static str {
-        match self {
-            CellValue::Null => "blank",
-            CellValue::String(_) => "text",
-            CellValue::Number(_) => "number",
-            CellValue::Boolean(_) => "boolean",
-            CellValue::Formula { error, .. } => {
-                if error.is_some() {
-                    "error"
-                } else {
-                    "formula"
-                }
-            }
-        }
-    }
-
     pub(crate) fn raw_json_value(&self) -> Value {
         match self {
             CellValue::Null => Value::Null,
@@ -85,73 +40,6 @@ impl CellValue {
             CellValue::Formula { cached_value, .. } => cached_value.raw_json_value(),
         }
     }
-
-    pub fn formula(formula: impl Into<String>, cached_value: CellValue) -> Self {
-        CellValue::Formula {
-            formula: normalize_formula_text(formula.into()),
-            cached_value: Box::new(cached_value),
-            error: None,
-        }
-    }
-
-    pub fn with_formula_result(&self, cached_value: CellValue, error: Option<String>) -> Self {
-        match self {
-            CellValue::Formula { formula, .. } => CellValue::Formula {
-                formula: formula.clone(),
-                cached_value: Box::new(cached_value),
-                error,
-            },
-            _ => self.clone(),
-        }
-    }
-}
-
-pub fn normalize_formula_text(formula: String) -> String {
-    if formula.starts_with('=') {
-        formula
-    } else {
-        format!("={formula}")
-    }
-}
-
-pub fn parse_cell_text(text: &str) -> CellValue {
-    if text.is_empty() {
-        return CellValue::Null;
-    }
-    if text.starts_with('=') {
-        return CellValue::formula(text, CellValue::Null);
-    }
-    if has_leading_zero(text) {
-        return CellValue::String(text.to_string());
-    }
-    if let Ok(value) = text.parse::<i64>() {
-        if (JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&value) {
-            return CellValue::Number(Value::from(value));
-        }
-        return CellValue::String(text.to_string());
-    }
-    if let Ok(value) = text.parse::<f64>()
-        && value.is_finite()
-    {
-        return CellValue::Number(Value::from(value));
-    }
-    if text.eq_ignore_ascii_case("true") {
-        return CellValue::Boolean(true);
-    }
-    if text.eq_ignore_ascii_case("false") {
-        return CellValue::Boolean(false);
-    }
-    CellValue::String(text.to_string())
-}
-
-fn has_leading_zero(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let digits = if bytes.first() == Some(&b'-') || bytes.first() == Some(&b'+') {
-        &bytes[1..]
-    } else {
-        bytes
-    };
-    digits.len() > 1 && digits[0] == b'0' && digits.iter().all(|b| b.is_ascii_digit())
 }
 
 impl<'de> Deserialize<'de> for CellValue {
@@ -911,17 +799,6 @@ impl Serialize for SheetCellChange {
     }
 }
 
-/// 前端批量提交的单元格编辑请求。
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct SetCellRequest {
-    pub sheet_index: usize,
-    pub row: usize,
-    pub col: usize,
-    pub text: String,
-}
-
 /// 行变化
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1263,19 +1140,6 @@ impl MutationResultLookup {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
-    #[test]
-    fn parses_user_cell_text_on_backend() {
-        assert_eq!(parse_cell_text(""), CellValue::Null);
-        assert_eq!(parse_cell_text("007"), CellValue::String("007".to_string()));
-        assert_eq!(parse_cell_text("42"), CellValue::Number(Value::from(42)));
-        assert_eq!(parse_cell_text("3.5"), CellValue::Number(Value::from(3.5)));
-        assert_eq!(parse_cell_text("true"), CellValue::Boolean(true));
-        assert_eq!(
-            parse_cell_text("=A1+1"),
-            CellValue::formula("=A1+1", CellValue::Null)
-        );
-    }
 
     #[test]
     fn sheet_serialization_projects_formatted_cell_display() {

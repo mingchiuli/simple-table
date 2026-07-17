@@ -18,7 +18,7 @@ import {
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { sheetCell } from "@/stores/documentProjection";
-import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
+import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 
 vi.mock("element-plus", () => ({
   ElMessage: {

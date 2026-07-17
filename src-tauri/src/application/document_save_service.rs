@@ -1,14 +1,14 @@
 use std::sync::{Arc, RwLock};
 
 use crate::application::document_query_service;
+use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::io::save_work::{self, SaveWorkReservation};
-use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
 use crate::state::{
-    active_document_store,
     editor_state::{EditorState, SaveCommitLease},
+    search_service::SearchService,
     state::{ActiveDocumentStore, DocumentHandle},
 };
 use crate::types::{SavedDocumentIdentity, SavedDocumentResponse};
@@ -28,12 +28,12 @@ pub struct PreparedDocumentSave {
 }
 
 pub fn prepare_current_file_export(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentExport, AppError> {
-    let registry = active_document_store();
-    let handle = document_handle_for_read(&registry, document_id)?;
+    let handle = document_handle_for_read(runtime.documents(), document_id)?;
     let (snapshot, work) = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
         let work = save_work::reserve(document_id, editor_state.estimated_resource_bytes())?;
@@ -48,13 +48,13 @@ pub fn prepare_current_file_export(
 }
 
 pub fn prepare_current_file_save(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentSave, AppError> {
-    let registry = active_document_store();
     let (snapshot, work) = {
-        let handle = document_handle_for_read(&registry, document_id)?;
+        let handle = document_handle_for_read(runtime.documents(), document_id)?;
         let editor_state = handle.read_for_command(document_id, base_revision)?;
         document_query_service::ensure_native_save_target_allowed(
             &editor_state,
@@ -87,6 +87,7 @@ pub fn prepare_current_file_save(
 pub fn abort_prepared_file_save(_prepared: PreparedDocumentSave) {}
 
 pub fn commit_current_file_save<F>(
+    runtime: &ApplicationRuntime,
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
@@ -94,11 +95,17 @@ pub fn commit_current_file_save<F>(
 where
     F: FnOnce() -> Result<(), AppError>,
 {
-    let registry = active_document_store();
-    commit_current_file_save_with_registry(&registry, path, prepared, commit_write)
+    commit_current_file_save_with_registry(
+        runtime.search(),
+        runtime.documents(),
+        path,
+        prepared,
+        commit_write,
+    )
 }
 
 fn commit_current_file_save_with_registry<F>(
+    search: &SearchService,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     path: String,
     prepared: PreparedDocumentSave,
@@ -161,7 +168,7 @@ where
         (editor_state.document_id(), response, retired)
     };
     drop(retired);
-    spawn_rebuild_all_sheets_index(registry, document_id);
+    search.rebuild_all_sheets_index(registry, document_id);
     Ok(response)
 }
 
@@ -263,11 +270,11 @@ fn document_handle_for_read(
 }
 
 fn current_document_path_for_command(
+    runtime: &ApplicationRuntime,
     document_id: u64,
     base_revision: u64,
 ) -> Result<String, AppError> {
-    let registry = active_document_store();
-    let handle = document_handle_for_read(&registry, document_id)?;
+    let handle = document_handle_for_read(runtime.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
     Ok(editor_state.file_data().path.clone())
 }
@@ -278,6 +285,7 @@ fn default_extension_string() -> String {
 
 #[cfg(desktop)]
 pub fn save_file_desktop(
+    runtime: &ApplicationRuntime,
     path: &str,
     document_id: u64,
     base_revision: u64,
@@ -289,9 +297,9 @@ pub fn save_file_desktop(
     };
     use crate::io::platform::desktop;
 
-    let current_path = current_document_path_for_command(document_id, base_revision)?;
+    let current_path = current_document_path_for_command(runtime, document_id, base_revision)?;
     desktop::ensure_save_path_authorized(path, &current_path)?;
-    let prepared = prepare_current_file_save(document_id, base_revision, path)?;
+    let prepared = prepare_current_file_save(runtime, document_id, base_revision, path)?;
     let target = Path::new(path);
     let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
@@ -301,7 +309,7 @@ pub fn save_file_desktop(
         }
     };
 
-    let result = commit_current_file_save(path.to_string(), prepared, || {
+    let result = commit_current_file_save(runtime, path.to_string(), prepared, || {
         replace_temp_file(&temp_path, target)
     });
     if result.is_err() {
@@ -312,6 +320,7 @@ pub fn save_file_desktop(
 
 #[cfg(desktop)]
 pub fn export_file_desktop(
+    runtime: &ApplicationRuntime,
     app: &tauri::AppHandle,
     default_name: &str,
     document_id: u64,
@@ -322,14 +331,19 @@ pub fn export_file_desktop(
     let Some(target) = desktop::pick_export_target(app, default_name)? else {
         return Ok(None);
     };
-    let prepared =
-        prepare_current_file_export(document_id, base_revision, &target.target_path_or_name)?;
+    let prepared = prepare_current_file_export(
+        runtime,
+        document_id,
+        base_revision,
+        &target.target_path_or_name,
+    )?;
     desktop::write_export_target(&target, &prepared.bytes)?;
     Ok(Some(target.path_string))
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn save_file_mobile(
+    runtime: &ApplicationRuntime,
     app: &tauri::AppHandle,
     path: &str,
     document_id: u64,
@@ -344,10 +358,10 @@ pub fn save_file_mobile(
     use crate::io::platform::mobile;
 
     let target = mobile::validated_mobile_files_path(app, Path::new(path))?;
-    let current_path = current_document_path_for_command(document_id, base_revision)?;
+    let current_path = current_document_path_for_command(runtime, document_id, base_revision)?;
     mobile::ensure_save_target_authorized(&target, &current_path)?;
     let target_path = target.to_string_lossy().to_string();
-    let prepared = prepare_current_file_save(document_id, base_revision, &target_path)?;
+    let prepared = prepare_current_file_save(runtime, document_id, base_revision, &target_path)?;
     managed_documents::validate_managed_save(&target, prepared.bytes.len() as u64)?;
     let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
@@ -358,7 +372,7 @@ pub fn save_file_mobile(
     };
 
     let managed_file_name = prepared.output_name.clone();
-    let result = commit_current_file_save(target_path, prepared, || {
+    let result = commit_current_file_save(runtime, target_path, prepared, || {
         replace_temp_file(&temp_path, &target)?;
         managed_documents::adopt_completed_save(&target, &managed_file_name)
     });
@@ -370,6 +384,7 @@ pub fn save_file_mobile(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn export_file_mobile(
+    runtime: &ApplicationRuntime,
     app: &tauri::AppHandle,
     default_name: &str,
     document_id: u64,
@@ -380,8 +395,12 @@ pub fn export_file_mobile(
     let Some(target) = mobile::pick_export_target(app, default_name)? else {
         return Ok(None);
     };
-    let prepared =
-        prepare_current_file_export(document_id, base_revision, &target.target_path_or_name)?;
+    let prepared = prepare_current_file_export(
+        runtime,
+        document_id,
+        base_revision,
+        &target.target_path_or_name,
+    )?;
     mobile::write_export_target(app, &target, &prepared.bytes)?;
     Ok(Some(target.destination_string))
 }
@@ -423,8 +442,10 @@ mod tests {
     #[test]
     fn failed_write_releases_save_lease_without_changing_revision() {
         let (registry, document_id, revision) = test_registry();
+        let search = SearchService::new();
 
         let error = commit_current_file_save_with_registry(
+            &search,
             &registry,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision),
@@ -442,9 +463,11 @@ mod tests {
     #[test]
     fn successful_write_commits_identity_once() {
         let (registry, document_id, revision) = test_registry();
+        let search = SearchService::new();
         let writes = AtomicUsize::new(0);
 
         let response = commit_current_file_save_with_registry(
+            &search,
             &registry,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision),
@@ -463,9 +486,11 @@ mod tests {
     #[test]
     fn stale_prepared_save_never_calls_writer() {
         let (registry, document_id, revision) = test_registry();
+        let search = SearchService::new();
         let writes = AtomicUsize::new(0);
 
         let result = commit_current_file_save_with_registry(
+            &search,
             &registry,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision + 1),

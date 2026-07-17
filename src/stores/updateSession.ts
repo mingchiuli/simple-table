@@ -1,4 +1,4 @@
-import type { UpdateInfo } from '@/types';
+import type { UpdateInfo, UpdatePlatform } from '@/types';
 
 export type UpdateStatus =
   | 'idle'
@@ -8,8 +8,6 @@ export type UpdateStatus =
   | 'ready'
   | 'error'
   | 'no-update';
-
-export type UpdatePlatform = 'desktop' | 'android' | 'ios';
 
 export type UpdateDownloadProgress = {
   downloaded: number;

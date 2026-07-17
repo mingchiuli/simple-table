@@ -1,14 +1,13 @@
 use std::sync::{Arc, RwLock};
 
-use crate::domain::EditorCommand;
+use crate::domain::{CellEditInput, EditorCommand};
 use crate::error::AppError;
-use crate::ops::index_ops::schedule_index_for_response;
 use crate::ops::patch_projector::{
     cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
     status_mutation_response, structural_delta_mutation_response,
 };
 use crate::state::state::{ActiveDocumentStore, DocumentHandle};
-use crate::types::{EditorMutationResponse, LayoutPatch, SetCellRequest};
+use crate::types::{EditorMutationResponse, LayoutPatch};
 
 pub fn do_set_cell(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
@@ -31,10 +30,6 @@ pub fn do_set_cell(
         },
     );
 
-    if let Ok(response) = &response {
-        schedule_index_for_response(response, registry);
-    }
-
     response
 }
 
@@ -42,7 +37,7 @@ pub fn do_set_cells(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
     base_revision: u64,
-    changes: Vec<SetCellRequest>,
+    changes: Vec<CellEditInput>,
 ) -> Result<EditorMutationResponse, AppError> {
     let response = execute_cell_delta(
         registry,
@@ -50,10 +45,6 @@ pub fn do_set_cells(
         base_revision,
         EditorCommand::SetCells { changes },
     );
-
-    if let Ok(response) = &response {
-        schedule_index_for_response(response, registry);
-    }
 
     response
 }
@@ -248,8 +239,6 @@ fn execute_structural_command(
     };
     drop(retired);
 
-    schedule_index_for_response(&response, registry);
-
     Ok(response)
 }
 
@@ -307,8 +296,7 @@ mod tests {
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;
     use crate::types::{
-        CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection,
-        SetCellRequest, SheetData,
+        CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection, SheetData,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -445,13 +433,13 @@ mod tests {
             document_id,
             revision,
             vec![
-                SetCellRequest {
+                CellEditInput {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
                     text: "first".to_string(),
                 },
-                SetCellRequest {
+                CellEditInput {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
@@ -487,13 +475,13 @@ mod tests {
             document_id,
             revision,
             vec![
-                SetCellRequest {
+                CellEditInput {
                     sheet_index: 0,
                     row: 0,
                     col: 0,
                     text: "draft".to_string(),
                 },
-                SetCellRequest {
+                CellEditInput {
                     sheet_index: 0,
                     row: 0,
                     col: 0,

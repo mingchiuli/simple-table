@@ -1,25 +1,21 @@
 use std::sync::{Arc, RwLock};
 
-use crate::application::{
-    document_open_service, document_query_service, mutation_replay, prepared_document_repository,
-};
+use crate::application::runtime::ApplicationRuntime;
+use crate::application::{document_open_service, document_query_service, mutation_replay};
 use crate::error::AppError;
-use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
-use crate::state::{
-    active_document_store,
-    state::{ActiveDocumentStore, DocumentReplacementLease},
-};
+use crate::state::state::{ActiveDocumentStore, DocumentReplacementLease};
 use crate::types::OpenDocumentResponse;
 
 /// Commits a prepared document and retires every runtime resource owned by the
 /// previous document before its state is released.
 pub fn commit_prepared_document(
+    runtime: &ApplicationRuntime,
     token: &str,
     expected_document_id: Option<u64>,
     expected_revision: Option<u64>,
 ) -> Result<OpenDocumentResponse, AppError> {
-    let registry = active_document_store();
-    let checkout = prepared_document_repository::checkout(token)?;
+    let registry = runtime.documents();
+    let checkout = runtime.prepared_documents().checkout(token)?;
     let replacement_lease = {
         let mut registry_guard = registry
             .write()
@@ -60,15 +56,20 @@ pub fn commit_prepared_document(
         .map(|handle| handle.document_id())
         && previous_document_id != document_id
     {
-        retire_document_runtime(previous_document_id);
+        retire_document_runtime(runtime, previous_document_id);
     }
     drop(previous_document);
-    spawn_rebuild_all_sheets_index(&registry, document_id);
+    runtime
+        .search()
+        .rebuild_all_sheets_index(registry, document_id);
     Ok(response)
 }
 
-pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
-    let registry = active_document_store();
+pub fn close_current_document(
+    runtime: &ApplicationRuntime,
+    document_id: u64,
+) -> Result<(), AppError> {
+    let registry = runtime.documents();
     let closed_document = {
         let mut registry_guard = registry
             .write()
@@ -76,15 +77,15 @@ pub fn close_current_document(document_id: u64) -> Result<(), AppError> {
         registry_guard.close_active_document(document_id)?
     };
     if let Some(document_id) = closed_document.as_ref().map(|handle| handle.document_id()) {
-        retire_document_runtime(document_id);
+        retire_document_runtime(runtime, document_id);
     }
     drop(closed_document);
     Ok(())
 }
 
-fn retire_document_runtime(document_id: u64) {
-    cancel_index_jobs_for_document(document_id);
-    mutation_replay::retire_document(document_id);
+fn retire_document_runtime(runtime: &ApplicationRuntime, document_id: u64) {
+    runtime.search().cancel_document_jobs(document_id);
+    mutation_replay::retire_document(runtime.mutation_replays(), document_id);
 }
 
 struct ActiveDocumentReplacement<'a> {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,17 +26,37 @@ use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
 
-static INDEX_SCHEDULER: OnceLock<Arc<IndexScheduler>> = OnceLock::new();
-
 #[derive(Clone)]
 pub struct SearchService {
     scheduler: Arc<IndexScheduler>,
+    _lifecycle: Arc<SearchServiceLifecycle>,
+}
+
+struct SearchServiceLifecycle {
+    scheduler: Arc<IndexScheduler>,
+}
+
+impl Drop for SearchServiceLifecycle {
+    fn drop(&mut self) {
+        self.scheduler.shutdown.store(true, Ordering::Release);
+        self.scheduler
+            .workers_available
+            .store(false, Ordering::Release);
+        self.scheduler.wake.notify_all();
+    }
 }
 
 impl SearchService {
-    pub fn global() -> Self {
+    pub fn new() -> Self {
+        Self::from_scheduler(create_index_scheduler())
+    }
+
+    fn from_scheduler(scheduler: Arc<IndexScheduler>) -> Self {
         Self {
-            scheduler: Arc::clone(index_scheduler()),
+            _lifecycle: Arc::new(SearchServiceLifecycle {
+                scheduler: Arc::clone(&scheduler),
+            }),
+            scheduler,
         }
     }
 
@@ -266,6 +286,12 @@ impl SearchService {
     }
 }
 
+impl Default for SearchService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn current_search_stamp(
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
@@ -278,29 +304,28 @@ fn current_search_stamp(
         .map(|editor| editor.search_sheet_index_stamp(sheet_index))
 }
 
-fn index_scheduler() -> &'static Arc<IndexScheduler> {
-    INDEX_SCHEDULER.get_or_init(|| {
-        let scheduler = Arc::new(IndexScheduler {
-            state: Mutex::new(IndexSchedulerState::default()),
-            wake: Condvar::new(),
-            workers_available: AtomicBool::new(false),
-        });
-        let worker_count = thread::available_parallelism()
-            .map(usize::from)
-            .unwrap_or(2)
-            .clamp(2, 4);
-        for worker_index in 0..worker_count {
-            let worker_scheduler = Arc::clone(&scheduler);
-            match thread::Builder::new()
-                .name(format!("simple-table-indexer-{worker_index}"))
-                .spawn(move || index_worker(&worker_scheduler))
-            {
-                Ok(_) => scheduler.workers_available.store(true, Ordering::Release),
-                Err(error) => eprintln!("Failed to spawn search index worker thread: {error}"),
-            }
+fn create_index_scheduler() -> Arc<IndexScheduler> {
+    let scheduler = Arc::new(IndexScheduler {
+        state: Mutex::new(IndexSchedulerState::default()),
+        wake: Condvar::new(),
+        workers_available: AtomicBool::new(false),
+        shutdown: AtomicBool::new(false),
+    });
+    let worker_count = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(2)
+        .clamp(2, 4);
+    for worker_index in 0..worker_count {
+        let worker_scheduler = Arc::clone(&scheduler);
+        match thread::Builder::new()
+            .name(format!("simple-table-indexer-{worker_index}"))
+            .spawn(move || index_worker(&worker_scheduler))
+        {
+            Ok(_) => scheduler.workers_available.store(true, Ordering::Release),
+            Err(error) => eprintln!("Failed to spawn search index worker thread: {error}"),
         }
-        scheduler
-    })
+    }
+    scheduler
 }
 
 fn merge_job(state: &mut IndexSchedulerState, job: IndexJob) {
@@ -464,8 +489,7 @@ fn update_pending_stats(state: &mut IndexSchedulerState) {
 }
 
 fn index_worker(scheduler: &Arc<IndexScheduler>) {
-    loop {
-        let ((_, sheet_index), pending) = drain_pending_job(scheduler);
+    while let Some(((_, sheet_index), pending)) = drain_pending_job(scheduler) {
         process_pending_sheet(scheduler, sheet_index, pending);
     }
 }
@@ -531,18 +555,24 @@ fn process_pending_sheet(
     }
 }
 
-fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> ((u64, usize), SheetPending) {
+fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> Option<((u64, usize), SheetPending)> {
     let mut state = scheduler
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     loop {
+        if scheduler.shutdown.load(Ordering::Acquire) {
+            return None;
+        }
         while state.pending.is_empty() {
             state = scheduler
                 .wake
                 .wait(state)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if scheduler.shutdown.load(Ordering::Acquire) {
+                return None;
+            }
         }
 
         let deadline = Instant::now() + INDEX_DEBOUNCE;
@@ -580,7 +610,7 @@ fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> ((u64, usize), SheetPen
             scheduler.wake.notify_one();
         }
         state.stats.drained_batches = state.stats.drained_batches.saturating_add(1);
-        return (key, pending);
+        return Some((key, pending));
     }
 }
 
@@ -629,6 +659,9 @@ fn reserve_index_build(
     }
     let mut state = scheduler.state.lock().ok()?;
     while state.building_bytes.saturating_add(bytes) > MAX_BUILDING_INDEX_BYTES {
+        if scheduler.shutdown.load(Ordering::Acquire) {
+            return None;
+        }
         state = scheduler
             .wake
             .wait(state)
@@ -693,8 +726,8 @@ fn search_sheet_source_estimated_bytes(
 }
 
 #[allow(dead_code)]
-pub fn search_scheduler_stats() -> SearchSchedulerStats {
-    SearchService::global().stats()
+pub fn search_scheduler_stats(search: &SearchService) -> SearchSchedulerStats {
+    search.stats()
 }
 
 fn run_rebuild(
@@ -828,24 +861,6 @@ fn document_handle(
     registry.read().ok()?.handle(document_id)
 }
 
-pub fn spawn_rebuild_all_sheets_index(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
-    document_id: u64,
-) {
-    SearchService::global().rebuild_all_sheets_index(registry, document_id);
-}
-
-pub fn schedule_index_for_response(
-    response: &EditorMutationResponse,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
-) {
-    SearchService::global().schedule_for_response(response, registry);
-}
-
-pub fn cancel_index_jobs_for_document(document_id: u64) {
-    SearchService::global().cancel_document_jobs(document_id);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -883,23 +898,35 @@ mod tests {
     }
 
     fn isolated_search_service() -> SearchService {
-        SearchService {
-            scheduler: Arc::new(IndexScheduler {
-                state: Mutex::new(IndexSchedulerState::default()),
-                wake: Condvar::new(),
-                workers_available: AtomicBool::new(true),
-            }),
-        }
+        SearchService::from_scheduler(Arc::new(IndexScheduler {
+            state: Mutex::new(IndexSchedulerState::default()),
+            wake: Condvar::new(),
+            workers_available: AtomicBool::new(true),
+            shutdown: AtomicBool::new(false),
+        }))
     }
 
     fn isolated_search_service_without_workers() -> SearchService {
-        SearchService {
-            scheduler: Arc::new(IndexScheduler {
-                state: Mutex::new(IndexSchedulerState::default()),
-                wake: Condvar::new(),
-                workers_available: AtomicBool::new(false),
-            }),
-        }
+        SearchService::from_scheduler(Arc::new(IndexScheduler {
+            state: Mutex::new(IndexSchedulerState::default()),
+            wake: Condvar::new(),
+            workers_available: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
+        }))
+    }
+
+    #[test]
+    fn dropping_the_last_service_stops_its_scheduler() {
+        let service = isolated_search_service();
+        let scheduler = Arc::clone(&service.scheduler);
+        let clone = service.clone();
+
+        drop(service);
+        assert!(!scheduler.shutdown.load(Ordering::Acquire));
+        drop(clone);
+
+        assert!(scheduler.shutdown.load(Ordering::Acquire));
+        assert!(!scheduler.workers_available.load(Ordering::Acquire));
     }
 
     #[test]
@@ -970,7 +997,9 @@ mod tests {
         query: &str,
     ) -> Vec<(usize, usize)> {
         let (document_id, revision) = active_search_context(registry);
+        let search = isolated_search_service();
         let mut rows: Vec<_> = do_search(
+            &search,
             registry,
             document_id,
             revision,
@@ -992,7 +1021,9 @@ mod tests {
         query: &str,
     ) -> Vec<String> {
         let (document_id, revision) = active_search_context(registry);
+        let search = isolated_search_service();
         do_search(
+            &search,
             registry,
             document_id,
             revision,
@@ -1065,7 +1096,9 @@ mod tests {
                 .unwrap();
         }
 
+        let search = isolated_search_service();
         let error = do_search(
+            &search,
             &registry,
             document_id,
             revision,

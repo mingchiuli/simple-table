@@ -1,7 +1,7 @@
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
-import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
+import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 import { confirmDiscardUnsavedChanges } from "@/composables/unsavedChangesDialog";
 
 type DocumentReplacementGuardOptions = {

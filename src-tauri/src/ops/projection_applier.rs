@@ -185,14 +185,17 @@ impl ProjectionMutation<'_> {
             }
             AppliedOperation::AddSheet {
                 sheet_index,
-                sheet_data,
+                name,
+                row_count,
+                column_count,
             } => {
                 let index = (*sheet_index).min(file_data.sheets.len());
-                file_data.sheets.insert(index, sheet_data.as_ref().clone());
+                let sheet_data = new_sheet_data(name, *row_count, *column_count);
+                file_data.sheets.insert(index, sheet_data.clone());
                 AppliedOperationResult::AddSheet {
                     sheet_index: index,
-                    name: sheet_data.name.clone(),
-                    sheet_data: sheet_data.as_ref().clone(),
+                    name: name.clone(),
+                    sheet_data,
                 }
             }
             AppliedOperation::DeleteSheet { sheet_index } => {
@@ -221,6 +224,14 @@ impl ProjectionMutation<'_> {
             | AppliedOperation::AddSheet { .. }
             | AppliedOperation::DeleteSheet { .. } => None,
         }
+    }
+}
+
+fn new_sheet_data(name: &str, row_count: usize, column_count: usize) -> SheetData {
+    SheetData {
+        name: name.to_string(),
+        rows: vec![vec![CellValue::Null; column_count]; row_count],
+        ..Default::default()
     }
 }
 

@@ -1,10 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::domain::resource_limits::ResourceLedger;
 use crate::error::AppError;
+use crate::resource_limits::ResourceLedger;
 use crate::state::editor_state::EditorState;
 use crate::types::FileData;
 
@@ -139,18 +139,24 @@ const MAX_PREPARED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
 
-static PREPARED_DOCUMENTS: OnceLock<Mutex<PreparedDocumentStore>> = OnceLock::new();
+#[derive(Clone, Default)]
+pub(crate) struct PreparedDocumentRepository {
+    store: Arc<Mutex<PreparedDocumentStore>>,
+}
 
 pub(crate) struct PrepareReservation {
+    repository: PreparedDocumentRepository,
     active: bool,
 }
 
 pub(crate) struct PreparedDocumentCheckout {
+    repository: PreparedDocumentRepository,
     token: String,
     entry: Option<PreparedDocumentEntry>,
 }
 
 pub(crate) struct PreparedDocumentCommit {
+    repository: PreparedDocumentRepository,
     active: bool,
 }
 
@@ -162,7 +168,10 @@ impl PreparedDocumentCheckout {
     pub(crate) fn commit(mut self) -> (PreparedDocument, PreparedDocumentCommit) {
         (
             self.entry.take().expect("checkout entry").document,
-            PreparedDocumentCommit { active: true },
+            PreparedDocumentCommit {
+                repository: self.repository.clone(),
+                active: true,
+            },
         )
     }
 }
@@ -172,7 +181,7 @@ impl Drop for PreparedDocumentCheckout {
         let Some(entry) = self.entry.take() else {
             return;
         };
-        let retired = match store().lock() {
+        let retired = match self.repository.store.lock() {
             Ok(mut store) => {
                 store.restore_checkout(self.token.clone(), entry);
                 store.take_retired()
@@ -191,7 +200,7 @@ impl Drop for PreparedDocumentCommit {
         if !self.active {
             return;
         }
-        if let Ok(mut store) = store().lock() {
+        if let Ok(mut store) = self.repository.store.lock() {
             store.finish_checkout();
             self.active = false;
         }
@@ -203,50 +212,60 @@ impl Drop for PrepareReservation {
         if !self.active {
             return;
         }
-        if let Ok(mut store) = store().lock() {
+        if let Ok(mut store) = self.repository.store.lock() {
             store.finish_prepare();
         }
     }
 }
 
-fn store() -> &'static Mutex<PreparedDocumentStore> {
-    PREPARED_DOCUMENTS.get_or_init(|| Mutex::new(PreparedDocumentStore::default()))
-}
+impl PreparedDocumentRepository {
+    #[cfg(test)]
+    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.store, &other.store)
+    }
 
-pub(crate) fn reserve_for_parse_bytes(
-    estimated_parse_bytes: usize,
-    active_document_bytes: usize,
-) -> Result<PrepareReservation, AppError> {
-    validate_prepared_document_bytes(estimated_parse_bytes)?;
-    reserve_prepare(estimated_parse_bytes, active_document_bytes)
-}
+    pub(crate) fn reserve_for_parse_bytes(
+        &self,
+        estimated_parse_bytes: usize,
+        active_document_bytes: usize,
+    ) -> Result<PrepareReservation, AppError> {
+        validate_prepared_document_bytes(estimated_parse_bytes)?;
+        self.reserve_prepare(estimated_parse_bytes, active_document_bytes)
+    }
 
-pub(crate) fn reserve_for_file_data(
-    file_data: &FileData,
-    active_document_bytes: usize,
-) -> Result<PrepareReservation, AppError> {
-    let estimated_bytes = ResourceLedger::from_file_data(file_data)
-        .estimated_bytes()
-        .saturating_mul(2);
-    validate_prepared_document_bytes(estimated_bytes)?;
-    reserve_prepare(estimated_bytes, active_document_bytes)
-}
+    pub(crate) fn reserve_for_file_data(
+        &self,
+        file_data: &FileData,
+        active_document_bytes: usize,
+    ) -> Result<PrepareReservation, AppError> {
+        let estimated_bytes = ResourceLedger::from_file_data(file_data)
+            .estimated_bytes()
+            .saturating_mul(2);
+        validate_prepared_document_bytes(estimated_bytes)?;
+        self.reserve_prepare(estimated_bytes, active_document_bytes)
+    }
 
-fn reserve_prepare(
-    estimated_bytes: usize,
-    active_document_bytes: usize,
-) -> Result<PrepareReservation, AppError> {
-    validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
-    let (result, retired) = {
-        let mut store = store()
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-        let result = store.begin_prepare(Instant::now());
-        (result, store.take_retired())
-    };
-    drop(retired);
-    result?;
-    Ok(PrepareReservation { active: true })
+    fn reserve_prepare(
+        &self,
+        estimated_bytes: usize,
+        active_document_bytes: usize,
+    ) -> Result<PrepareReservation, AppError> {
+        validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
+        let (result, retired) = {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+            let result = store.begin_prepare(Instant::now());
+            (result, store.take_retired())
+        };
+        drop(retired);
+        result?;
+        Ok(PrepareReservation {
+            repository: self.clone(),
+            active: true,
+        })
+    }
 }
 
 fn validate_prepared_document_bytes(estimated_bytes: usize) -> Result<(), AppError> {
@@ -258,32 +277,36 @@ fn validate_prepared_document_bytes(estimated_bytes: usize) -> Result<(), AppErr
     Ok(())
 }
 
-pub(crate) fn replace(
-    editor_state: EditorState,
-    source_path: Option<PathBuf>,
-    mut reservation: PrepareReservation,
-    active_document_bytes: usize,
-) -> Result<String, AppError> {
-    let estimated_bytes = editor_state.estimated_resource_bytes();
-    validate_prepared_document_bytes(estimated_bytes)?;
-    let token = uuid::Uuid::new_v4().to_string();
-    let prepared = PreparedDocument {
-        editor_state,
-        source_path,
-    };
-    validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
-    let (result, retired) = {
-        let mut store = store()
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-        store.finish_prepare();
-        reservation.active = false;
-        let result = store.insert(token.clone(), prepared);
-        (result, store.take_retired())
-    };
-    drop(retired);
-    result?;
-    Ok(token)
+impl PreparedDocumentRepository {
+    pub(crate) fn replace(
+        &self,
+        editor_state: EditorState,
+        source_path: Option<PathBuf>,
+        mut reservation: PrepareReservation,
+        active_document_bytes: usize,
+    ) -> Result<String, AppError> {
+        let estimated_bytes = editor_state.estimated_resource_bytes();
+        validate_prepared_document_bytes(estimated_bytes)?;
+        let token = uuid::Uuid::new_v4().to_string();
+        let prepared = PreparedDocument {
+            editor_state,
+            source_path,
+        };
+        validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
+        let (result, retired) = {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+            store.finish_prepare();
+            reservation.active = false;
+            let result = store.insert(token.clone(), prepared);
+            (result, store.take_retired())
+        };
+        drop(retired);
+        result?;
+        Ok(token)
+    }
 }
 
 fn validate_combined_document_bytes_for_active(
@@ -299,49 +322,59 @@ fn validate_combined_document_bytes_for_active(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) fn take(token: &str) -> Result<PreparedDocument, AppError> {
-    let (prepared, retired) = {
-        let mut store = store()
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-        let prepared = store.take(token);
-        (prepared, store.take_retired())
-    };
-    drop(retired);
-    prepared.ok_or_else(|| {
-        AppError::DocumentStateInvalid("prepared document token is no longer active".to_string())
-    })
-}
+impl PreparedDocumentRepository {
+    #[cfg(test)]
+    pub(crate) fn take(&self, token: &str) -> Result<PreparedDocument, AppError> {
+        let (prepared, retired) = {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+            let prepared = store.take(token);
+            (prepared, store.take_retired())
+        };
+        drop(retired);
+        prepared.ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "prepared document token is no longer active".to_string(),
+            )
+        })
+    }
 
-pub(crate) fn checkout(token: &str) -> Result<PreparedDocumentCheckout, AppError> {
-    let (entry, retired) = {
-        let mut store = store()
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-        let entry = store.checkout(token);
-        (entry, store.take_retired())
-    };
-    drop(retired);
-    let entry = entry.ok_or_else(|| {
-        AppError::DocumentStateInvalid("prepared document token is no longer active".to_string())
-    })?;
-    Ok(PreparedDocumentCheckout {
-        token: token.to_string(),
-        entry: Some(entry),
-    })
-}
+    pub(crate) fn checkout(&self, token: &str) -> Result<PreparedDocumentCheckout, AppError> {
+        let (entry, retired) = {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+            let entry = store.checkout(token);
+            (entry, store.take_retired())
+        };
+        drop(retired);
+        let entry = entry.ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "prepared document token is no longer active".to_string(),
+            )
+        })?;
+        Ok(PreparedDocumentCheckout {
+            repository: self.clone(),
+            token: token.to_string(),
+            entry: Some(entry),
+        })
+    }
 
-pub(crate) fn abort(token: &str) -> Result<(), AppError> {
-    let retired = {
-        let mut store = store()
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-        store.abort(token);
-        store.take_retired()
-    };
-    drop(retired);
-    Ok(())
+    pub(crate) fn abort(&self, token: &str) -> Result<(), AppError> {
+        let retired = {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+            store.abort(token);
+            store.take_retired()
+        };
+        drop(retired);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

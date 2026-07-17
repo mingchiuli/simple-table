@@ -1,6 +1,7 @@
 use tauri::AppHandle;
 
 use crate::application::document_query_service;
+use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 
 use super::store::RecentStore;
@@ -29,6 +30,7 @@ pub fn do_get_recent_files(app: &AppHandle) -> Result<Vec<RecentFile>, AppError>
 }
 
 pub fn do_add_recent_file_with_thumbnail(
+    runtime: &ApplicationRuntime,
     app: &AppHandle,
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
@@ -38,6 +40,7 @@ pub fn do_add_recent_file_with_thumbnail(
         base_revision,
     } = request;
     let (path, file_name, thumbnail) = document_query_service::inspect_current_file_for_command(
+        runtime,
         document_id,
         base_revision,
         |file_data| {
@@ -74,11 +77,15 @@ pub fn do_add_recent_file_with_thumbnail(
     recent_file.thumbnail = thumbnail.and_then(generate_thumbnail);
 
     let update = RecentStore::add(app, recent_file)?;
-    cleanup_removed_mobile_files(app, &update.removed);
+    cleanup_removed_mobile_files(runtime, app, &update.removed);
     Ok(update.updated)
 }
 
-pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> {
+pub fn do_remove_recent_file(
+    runtime: &ApplicationRuntime,
+    app: &AppHandle,
+    id: &str,
+) -> Result<(), AppError> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         if let Some(file) = do_get_recent_files(app)?
@@ -86,7 +93,7 @@ pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> 
             .find(|file| file.id == id)
             && file.storage_type == StorageType::MobileSandboxPath
         {
-            let active_path = document_query_service::active_document_path()?;
+            let active_path = document_query_service::active_document_path(runtime)?;
             if !crate::io::platform::mobile::remove_managed_file_if_inactive(
                 app,
                 &file.path,
@@ -104,7 +111,7 @@ pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let removed = RecentStore::remove(app, id)?;
-        cleanup_removed_mobile_files(app, &removed);
+        cleanup_removed_mobile_files(runtime, app, &removed);
         Ok(())
     }
 }
@@ -180,9 +187,13 @@ fn reconcile_mobile_recent_files(
     Ok(reconciled)
 }
 
-fn cleanup_removed_mobile_files(app: &AppHandle, removed: &[RecentFile]) {
+fn cleanup_removed_mobile_files(
+    runtime: &ApplicationRuntime,
+    app: &AppHandle,
+    removed: &[RecentFile],
+) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let active_path = match document_query_service::active_document_path() {
+    let active_path = match document_query_service::active_document_path(runtime) {
         Ok(active_path) => active_path,
         Err(error) => {
             eprintln!("Failed to inspect active document during recent cleanup: {error}");
@@ -208,7 +219,7 @@ fn cleanup_removed_mobile_files(app: &AppHandle, removed: &[RecentFile]) {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let _ = (app, removed);
+    let _ = (runtime, app, removed);
 }
 
 fn recent_file_size(path: &str) -> i64 {

@@ -3,7 +3,7 @@ import type { OpenFileSelection } from "@/platform";
 import type { DocumentReplacementLease } from "@/composables/useDocumentReplacementGuard";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
-import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
+import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 
 type OpenFileSelectionLifecycleOptions = {
   beginDocumentReplacement: () => Promise<DocumentReplacementLease | null>;

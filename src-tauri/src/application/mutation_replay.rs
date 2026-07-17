@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::io::{self, Write};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -42,14 +42,13 @@ struct MutationReplayCache {
 }
 
 #[derive(Default)]
-struct MutationReplayCoordinator {
+pub(crate) struct MutationReplayCoordinator {
     cache: Mutex<MutationReplayCache>,
     completed: Condvar,
 }
 
-static MUTATION_REPLAYS: OnceLock<MutationReplayCoordinator> = OnceLock::new();
-
 pub(crate) fn run<P: Serialize>(
+    coordinator: &Arc<MutationReplayCoordinator>,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
@@ -59,7 +58,7 @@ pub(crate) fn run<P: Serialize>(
 ) -> Result<EditorMutationResponse, AppError> {
     validate_command_id(command_id)?;
     let fingerprint = request_fingerprint(base_revision, command_name, payload)?;
-    let reservation = match reserve(document_id, command_id, fingerprint)? {
+    let reservation = match reserve(coordinator, document_id, command_id, fingerprint)? {
         ReservationResult::Replay(response) => return Ok((*response).clone()),
         ReservationResult::Execute(reservation) => reservation,
     };
@@ -74,7 +73,7 @@ enum ReservationResult {
 }
 
 struct InFlightReservation {
-    coordinator: &'static MutationReplayCoordinator,
+    coordinator: Arc<MutationReplayCoordinator>,
     document_id: u64,
     command_id: String,
     fingerprint: RequestFingerprint,
@@ -90,7 +89,7 @@ impl InFlightReservation {
             .as_ref()
             .ok()
             .and_then(|response| prepare_replay_response(&self.command_id, response));
-        let mut cache = lock_cache(self.coordinator)?;
+        let mut cache = lock_cache(&self.coordinator)?;
         if let Some(prepared) =
             prepared.filter(|_| !cache.retired_documents.contains(&self.document_id))
         {
@@ -127,15 +126,16 @@ impl Drop for InFlightReservation {
 }
 
 fn reserve(
+    coordinator: &Arc<MutationReplayCoordinator>,
     document_id: u64,
     command_id: &str,
     fingerprint: RequestFingerprint,
 ) -> Result<ReservationResult, AppError> {
-    reserve_with_coordinator(replay_coordinator(), document_id, command_id, fingerprint)
+    reserve_with_coordinator(coordinator, document_id, command_id, fingerprint)
 }
 
 fn reserve_with_coordinator(
-    coordinator: &'static MutationReplayCoordinator,
+    coordinator: &Arc<MutationReplayCoordinator>,
     document_id: u64,
     command_id: &str,
     fingerprint: RequestFingerprint,
@@ -177,7 +177,7 @@ fn reserve_with_coordinator(
             fingerprint,
         });
         return Ok(ReservationResult::Execute(InFlightReservation {
-            coordinator,
+            coordinator: Arc::clone(coordinator),
             document_id,
             command_id: command_id.to_string(),
             fingerprint,
@@ -247,8 +247,8 @@ fn compact_replay_response(response: &EditorMutationResponse) -> EditorMutationR
     compact
 }
 
-pub(crate) fn retire_document(document_id: u64) {
-    let _ = retire_document_with_coordinator(replay_coordinator(), document_id);
+pub(crate) fn retire_document(coordinator: &MutationReplayCoordinator, document_id: u64) {
+    let _ = retire_document_with_coordinator(coordinator, document_id);
 }
 
 fn retire_document_with_coordinator(
@@ -272,9 +272,12 @@ fn retire_document_with_coordinator(
     Ok(())
 }
 
-pub(crate) fn get(document_id: u64, command_id: &str) -> Result<MutationResultLookup, AppError> {
+pub(crate) fn get(
+    coordinator: &MutationReplayCoordinator,
+    document_id: u64,
+    command_id: &str,
+) -> Result<MutationResultLookup, AppError> {
     validate_command_id(command_id)?;
-    let coordinator = replay_coordinator();
     let cache = lock_cache(coordinator)?;
     if cache
         .in_flight
@@ -382,10 +385,6 @@ fn wait_for_completion<'a>(
         .map_err(|_| AppError::poisoned_lock("mutation replay cache"))
 }
 
-fn replay_coordinator() -> &'static MutationReplayCoordinator {
-    MUTATION_REPLAYS.get_or_init(MutationReplayCoordinator::default)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,13 +410,14 @@ mod tests {
 
     #[test]
     fn replays_successful_mutations_once() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let calls = AtomicUsize::new(0);
-        let first = run(91, 0, "command", "set_cell", &(0, 0), || {
+        let first = run(&coordinator, 91, 0, "command", "set_cell", &(0, 0), || {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok(response())
         })
         .expect("first mutation");
-        let second = run(91, 0, "command", "set_cell", &(0, 0), || {
+        let second = run(&coordinator, 91, 0, "command", "set_cell", &(0, 0), || {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok(response())
         })
@@ -425,37 +425,56 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert_eq!(first.revision, second.revision);
-        retire_document(91);
+        retire_document(&coordinator, 91);
     }
 
     #[test]
     fn concurrent_retries_share_one_execution() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let document_id = 92;
         let started = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let calls = Arc::new(AtomicUsize::new(0));
 
         let first = {
+            let coordinator = Arc::clone(&coordinator);
             let started = Arc::clone(&started);
             let release = Arc::clone(&release);
             let calls = Arc::clone(&calls);
             thread::spawn(move || {
-                run(document_id, 0, "shared", "set_cell", &(0, 0), || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    started.wait();
-                    release.wait();
-                    Ok(response())
-                })
+                run(
+                    &coordinator,
+                    document_id,
+                    0,
+                    "shared",
+                    "set_cell",
+                    &(0, 0),
+                    || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        started.wait();
+                        release.wait();
+                        Ok(response())
+                    },
+                )
             })
         };
         started.wait();
         let second = {
+            let coordinator = Arc::clone(&coordinator);
             let calls = Arc::clone(&calls);
             thread::spawn(move || {
-                run(document_id, 0, "shared", "set_cell", &(0, 0), || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(response())
-                })
+                run(
+                    &coordinator,
+                    document_id,
+                    0,
+                    "shared",
+                    "set_cell",
+                    &(0, 0),
+                    || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(response())
+                    },
+                )
             })
         };
 
@@ -465,29 +484,44 @@ mod tests {
         assert!(first.join().expect("first caller").is_ok());
         assert!(second.join().expect("retry caller").is_ok());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        retire_document(document_id);
+        retire_document(&coordinator, document_id);
     }
 
     #[test]
     fn unrelated_result_queries_do_not_wait_for_a_running_mutation() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let document_id = 93;
         let started = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let mutation = {
+            let coordinator = Arc::clone(&coordinator);
             let started = Arc::clone(&started);
             let release = Arc::clone(&release);
             thread::spawn(move || {
-                run(document_id, 0, "running", "set_cell", &(0, 0), || {
-                    started.wait();
-                    release.wait();
-                    Ok(response())
-                })
+                run(
+                    &coordinator,
+                    document_id,
+                    0,
+                    "running",
+                    "set_cell",
+                    &(0, 0),
+                    || {
+                        started.wait();
+                        release.wait();
+                        Ok(response())
+                    },
+                )
             })
         };
         started.wait();
 
         let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || sender.send(get(94, "unrelated")).expect("query result"));
+        let query_coordinator = Arc::clone(&coordinator);
+        thread::spawn(move || {
+            sender
+                .send(get(&query_coordinator, 94, "unrelated"))
+                .expect("query result")
+        });
         let result = receiver
             .recv_timeout(Duration::from_secs(1))
             .expect("unrelated query should not block")
@@ -496,64 +530,90 @@ mod tests {
 
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
-        retire_document(document_id);
+        retire_document(&coordinator, document_id);
     }
 
     #[test]
     fn matching_result_query_reports_pending_without_waiting() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let document_id = 95;
         let started = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let mutation = {
+            let coordinator = Arc::clone(&coordinator);
             let started = Arc::clone(&started);
             let release = Arc::clone(&release);
             thread::spawn(move || {
-                run(document_id, 0, "running", "set_cell", &(0, 0), || {
-                    started.wait();
-                    release.wait();
-                    Ok(response())
-                })
+                run(
+                    &coordinator,
+                    document_id,
+                    0,
+                    "running",
+                    "set_cell",
+                    &(0, 0),
+                    || {
+                        started.wait();
+                        release.wait();
+                        Ok(response())
+                    },
+                )
             })
         };
         started.wait();
 
-        let lookup = get(document_id, "running").expect("query result");
+        let lookup = get(&coordinator, document_id, "running").expect("query result");
         assert_eq!(lookup.status, crate::types::MutationResultStatus::Pending);
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
-        let lookup = get(document_id, "running").expect("completed query result");
+        let lookup = get(&coordinator, document_id, "running").expect("completed query result");
         assert_eq!(lookup.status, crate::types::MutationResultStatus::Completed);
         assert!(lookup.response.is_some());
-        retire_document(document_id);
+        retire_document(&coordinator, document_id);
     }
 
     #[test]
     fn an_in_flight_command_id_rejects_a_different_payload() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let document_id = 96;
         let started = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let mutation = {
+            let coordinator = Arc::clone(&coordinator);
             let started = Arc::clone(&started);
             let release = Arc::clone(&release);
             thread::spawn(move || {
-                run(document_id, 0, "running", "set_cell", &(0, 0), || {
-                    started.wait();
-                    release.wait();
-                    Ok(response())
-                })
+                run(
+                    &coordinator,
+                    document_id,
+                    0,
+                    "running",
+                    "set_cell",
+                    &(0, 0),
+                    || {
+                        started.wait();
+                        release.wait();
+                        Ok(response())
+                    },
+                )
             })
         };
         started.wait();
 
-        let error = run(document_id, 0, "running", "set_cell", &(1, 0), || {
-            Ok(response())
-        })
+        let error = run(
+            &coordinator,
+            document_id,
+            0,
+            "running",
+            "set_cell",
+            &(1, 0),
+            || Ok(response()),
+        )
         .expect_err("different payload must be rejected");
         assert!(matches!(error, AppError::DocumentStateInvalid(_)));
 
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
-        retire_document(document_id);
+        retire_document(&coordinator, document_id);
     }
 
     #[test]
@@ -569,13 +629,17 @@ mod tests {
 
     #[test]
     fn distinct_in_flight_mutations_are_capacity_bounded() {
-        let coordinator = Box::leak(Box::new(MutationReplayCoordinator::default()));
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let mut reservations = Vec::new();
         for index in 0..MAX_IN_FLIGHT_MUTATIONS {
             let fingerprint = request_fingerprint(0, "set_cell", &index).expect("fingerprint");
-            let reservation =
-                reserve_with_coordinator(coordinator, 97, &format!("command-{index}"), fingerprint)
-                    .expect("reservation");
+            let reservation = reserve_with_coordinator(
+                &coordinator,
+                97,
+                &format!("command-{index}"),
+                fingerprint,
+            )
+            .expect("reservation");
             let ReservationResult::Execute(reservation) = reservation else {
                 panic!("new command must reserve execution");
             };
@@ -584,7 +648,7 @@ mod tests {
 
         let fingerprint = request_fingerprint(0, "set_cell", &999).expect("fingerprint");
         let error =
-            match reserve_with_coordinator(coordinator, 97, "one-command-too-many", fingerprint) {
+            match reserve_with_coordinator(&coordinator, 97, "one-command-too-many", fingerprint) {
                 Ok(_) => panic!("in-flight limit must be enforced"),
                 Err(error) => error,
             };
@@ -603,15 +667,15 @@ mod tests {
 
     #[test]
     fn retiring_a_document_does_not_wait_and_discards_late_results() {
-        let coordinator = Box::leak(Box::new(MutationReplayCoordinator::default()));
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
         let fingerprint = request_fingerprint(0, "set_cell", &(0, 0)).expect("fingerprint");
-        let reservation = reserve_with_coordinator(coordinator, 98, "retiring", fingerprint)
+        let reservation = reserve_with_coordinator(&coordinator, 98, "retiring", fingerprint)
             .expect("reservation");
         let ReservationResult::Execute(reservation) = reservation else {
             panic!("new command must reserve execution");
         };
 
-        retire_document_with_coordinator(coordinator, 98).expect("retire document");
+        retire_document_with_coordinator(&coordinator, 98).expect("retire document");
         assert!(
             coordinator
                 .cache

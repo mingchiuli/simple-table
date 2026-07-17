@@ -1,29 +1,90 @@
-import { useDocumentSessionStore, type MutationApplyResult } from '@/stores/documentSession';
-import { useDocumentStatusStore } from '@/stores/documentStatus';
-import { useEditorSelectionStore } from '@/stores/editorSelection';
-import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
-import { useSearchSessionStore } from '@/stores/searchSession';
 import type {
+  DocumentProjection,
   EditorCommandContext,
   EditorMutationResponse,
+  EditorPatch,
   EditorSessionInfo,
+  FormulaStatus,
   OpenDocumentResponse,
   SavedDocumentResponse,
+  U64String,
+  WorkbookCapabilities,
 } from '@/types';
 import { isNextU64 } from '@/utils/u64';
 
-type DocumentSessionStore = ReturnType<typeof useDocumentSessionStore>;
-type DocumentStatusStore = ReturnType<typeof useDocumentStatusStore>;
-type EditorSelectionStore = ReturnType<typeof useEditorSelectionStore>;
-type PendingCellSavesStore = ReturnType<typeof usePendingCellSavesStore>;
-type SearchSessionStore = ReturnType<typeof useSearchSessionStore>;
+export type MutationApplyResult = {
+  data: DocumentProjection | null;
+  resyncRequired: boolean;
+  applied: boolean;
+};
 
-export type DocumentSessionCoordinatorPorts = {
-  document: DocumentSessionStore;
-  status: DocumentStatusStore;
-  selection: EditorSelectionStore;
-  pending: PendingCellSavesStore;
-  search: SearchSessionStore;
+export type DocumentSessionCoordinatorPorts<
+  DocumentSnapshot,
+  StatusSnapshot,
+  SelectionSnapshot,
+  SearchSnapshot,
+> = {
+  document: {
+    readonly data: DocumentProjection | null;
+    readonly documentId: U64String | null;
+    readonly revision: U64String;
+    discardPendingLocalWork(): void;
+    openDocumentResponse(response: OpenDocumentResponse, path?: string | null): void;
+    recoverActiveDocumentResponse(response: OpenDocumentResponse, preferredSheetIndex?: number): boolean;
+    applySavedDocumentResponse(
+      response: SavedDocumentResponse,
+      path?: string | null,
+      preferredSheetIndex?: number,
+    ): void;
+    applySavedDocumentResponseForContext(
+      context: EditorCommandContext,
+      response: SavedDocumentResponse,
+      path?: string | null,
+      preferredSheetIndex?: number,
+    ): boolean;
+    clearDocument(): void;
+    applyMutationResponse(
+      response: EditorMutationResponse,
+      preferredSheetIndex?: number,
+    ): MutationApplyResult;
+    matchesCommandContext(context: EditorCommandContext): boolean;
+    replaceDocumentProjection(response: OpenDocumentResponse, preferredSheetIndex?: number): void;
+    markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean;
+    currentCommandContext(): EditorCommandContext | null;
+    applyEditorSessionIdentity(info: EditorSessionInfo): {
+      applied: boolean;
+      revisionAdvanced: boolean;
+    };
+    captureSessionSnapshot(): DocumentSnapshot;
+    restoreSessionSnapshot(snapshot: DocumentSnapshot): void;
+  };
+  status: {
+    clearPendingContentChange(): void;
+    reset(): void;
+    applyEditorSession(info: EditorSessionInfo | null | undefined): void;
+    applyRuntimeStatus(formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities): void;
+    applyEditorState(state: EditorMutationResponse['editorState']): void;
+    captureSnapshot(): StatusSnapshot;
+    restoreSnapshot(snapshot: StatusSnapshot): void;
+  };
+  selection: {
+    reset(): void;
+    clearSelection(): void;
+    applyEditorPatches(patches: EditorPatch[] | undefined): void;
+    clampToSheetData(
+      sheetCount: number,
+      containsCell: (sheetIndex: number, row: number, col: number) => boolean,
+    ): void;
+    captureSnapshot(): SelectionSnapshot;
+    restoreSnapshot(snapshot: SelectionSnapshot): void;
+  };
+  pending: { reset(): void };
+  search: {
+    reset(): void;
+    clearSearch(): void;
+    captureSnapshot(): SearchSnapshot;
+    restoreSnapshot(snapshot: SearchSnapshot): void;
+  };
 };
 
 type FetchProjection = (
@@ -35,13 +96,23 @@ type FetchEditorSession = (
   context: EditorCommandContext | null
 ) => Promise<EditorSessionInfo | null | undefined>;
 
-export function createDocumentSessionCoordinator({
+export function createDocumentSessionCoordinator<
+  DocumentSnapshot,
+  StatusSnapshot,
+  SelectionSnapshot,
+  SearchSnapshot,
+>({
   document,
   status,
   selection,
   pending,
   search,
-}: DocumentSessionCoordinatorPorts) {
+}: DocumentSessionCoordinatorPorts<
+  DocumentSnapshot,
+  StatusSnapshot,
+  SelectionSnapshot,
+  SearchSnapshot
+>) {
   function discardPendingLocalWork() {
     document.discardPendingLocalWork();
     pending.reset();
@@ -263,24 +334,6 @@ export function createDocumentSessionCoordinator({
     refreshAfterMutationFailure,
     applyEditorSessionForContext,
   };
-}
-
-type DocumentSessionCoordinator = ReturnType<typeof createDocumentSessionCoordinator>;
-const documentSessionCoordinators = new WeakMap<object, DocumentSessionCoordinator>();
-
-export function useDocumentSessionCoordinator() {
-  const document = useDocumentSessionStore();
-  const existing = documentSessionCoordinators.get(document);
-  if (existing) return existing;
-  const coordinator = createDocumentSessionCoordinator({
-    document,
-    status: useDocumentStatusStore(),
-    selection: useEditorSelectionStore(),
-    pending: usePendingCellSavesStore(),
-    search: useSearchSessionStore(),
-  });
-  documentSessionCoordinators.set(document, coordinator);
-  return coordinator;
 }
 
 function mutationInvalidatesSearch(response: EditorMutationResponse): boolean {

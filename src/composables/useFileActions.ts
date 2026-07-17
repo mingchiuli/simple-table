@@ -10,7 +10,7 @@ import {
   saveFile,
 } from '@/platform';
 import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
-import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';

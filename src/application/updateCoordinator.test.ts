@@ -1,0 +1,81 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createUpdateCoordinator,
+  type UpdatePort,
+  type UpdateSessionPort,
+} from '@/application/updateCoordinator';
+import type { UpdateInfo, UpdatePlatform } from '@/types';
+
+class TestUpdateSession implements UpdateSessionPort {
+  status = 'idle';
+  currentVersion = '';
+  mobileUpdateInfo: UpdateInfo | null = null;
+  updatePlatform: UpdatePlatform = 'desktop';
+  updateVersion: string | null = null;
+  downloaded = 0;
+  total = 0;
+  error: string | null = null;
+
+  get isDesktop() { return this.updatePlatform === 'desktop'; }
+  get isAndroid() { return this.updatePlatform === 'android'; }
+
+  setPlatform(platform: UpdatePlatform) { this.updatePlatform = platform; }
+  setCurrentVersion(version: string) { this.currentVersion = version; }
+  setErrorMessage(message: string) { this.error = message; }
+  beginCheck() { this.status = 'checking'; }
+  applyDesktopCheck(appVersion: string, updateVersion: string | null) {
+    this.currentVersion = appVersion;
+    this.updateVersion = updateVersion;
+    this.status = updateVersion ? 'available' : 'no-update';
+  }
+  applyMobileCheck(appVersion: string, update: UpdateInfo | null) {
+    this.currentVersion = appVersion;
+    this.mobileUpdateInfo = update;
+    this.status = update ? 'available' : 'no-update';
+  }
+  beginDownload() { this.status = 'downloading'; }
+  setDownloadTotal(total: number) { this.total = total; }
+  addDownloadedBytes(bytes: number) { this.downloaded += bytes; }
+  markReady() { this.status = 'ready'; }
+  fail(message: string) { this.status = 'error'; this.error = message; }
+  reset() { this.status = 'idle'; }
+}
+
+describe('updateCoordinator', () => {
+  it('runs desktop update work entirely through injected ports', async () => {
+    const session = new TestUpdateSession();
+    const relaunch = vi.fn(async () => undefined);
+    const requestExit = vi.fn(async (action: () => Promise<void>) => {
+      await action();
+      return true;
+    });
+    const port: UpdatePort = {
+      getVersion: async () => '1.0.0',
+      platform: () => 'macos',
+      checkDesktop: async () => ({
+        version: '1.1.0',
+        async downloadAndInstall(onEvent) {
+          onEvent?.({ event: 'Started', data: { contentLength: 8 } });
+          onEvent?.({ event: 'Progress', data: { chunkLength: 8 } });
+          onEvent?.({ event: 'Finished', data: {} });
+        },
+      }),
+      checkMobile: async () => null,
+      openUrl: async () => undefined,
+      relaunch,
+      requestExit,
+    };
+    const coordinator = createUpdateCoordinator(session, port);
+
+    await coordinator.checkForUpdate();
+    await coordinator.downloadAndInstall();
+
+    expect(session.currentVersion).toBe('1.0.0');
+    expect(session.updateVersion).toBe('1.1.0');
+    expect(session.total).toBe(8);
+    expect(session.downloaded).toBe(8);
+    expect(session.status).toBe('ready');
+    expect(requestExit).toHaveBeenCalledOnce();
+    expect(relaunch).toHaveBeenCalledOnce();
+  });
+});

@@ -11,5 +11,3 @@ pub mod search_scheduler;
 pub mod search_service;
 pub mod search_session;
 pub mod state;
-
-pub(crate) use state::active_document_store;

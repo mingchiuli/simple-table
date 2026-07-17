@@ -29,6 +29,7 @@ fn col_to_letter(col: usize) -> String {
 
 /// 搜索单元格
 pub fn do_search(
+    search_service: &SearchService,
     registry: &Arc<RwLock<ActiveDocumentStore>>,
     document_id: u64,
     base_revision: u64,
@@ -114,7 +115,6 @@ pub fn do_search(
     if used_scan_fallback {
         eprintln!("Search used bounded scan fallback while index was stale or unavailable");
     }
-    let search_service = SearchService::global();
     for sheet_index in on_demand_rebuilds {
         search_service.rebuild_sheet_index(registry, document_id, sheet_index);
     }
@@ -358,7 +358,9 @@ mod query_limit_tests {
     #[test]
     fn search_query_rejects_oversized_text_before_accessing_the_document() {
         let registry = Arc::new(RwLock::new(ActiveDocumentStore::new_for_test()));
+        let search = SearchService::new();
         let error = do_search(
+            &search,
             &registry,
             1,
             0,

@@ -9,7 +9,7 @@ import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
 import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
 import { isAppErrorCode } from "@/utils/appError";
-import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
+import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 
 type UseHomeFileActionsOptions = {
   navigateToTable?: () => Promise<void> | void;

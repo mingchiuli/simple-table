@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
@@ -143,7 +143,7 @@ fn validate_command_context(
 }
 
 impl ActiveDocumentStore {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             active: None,
             replacement_lease: None,
@@ -392,15 +392,6 @@ fn nonzero_random_u64() -> u64 {
             return value;
         }
     }
-}
-
-/// 全局活动文档状态。Simple Table 当前是单文档 UI；documentId 只用于丢弃过期异步任务。
-static ACTIVE_DOCUMENT_STORE: OnceLock<Arc<RwLock<ActiveDocumentStore>>> = OnceLock::new();
-
-pub(crate) fn active_document_store() -> Arc<RwLock<ActiveDocumentStore>> {
-    Arc::clone(
-        ACTIVE_DOCUMENT_STORE.get_or_init(|| Arc::new(RwLock::new(ActiveDocumentStore::new()))),
-    )
 }
 
 #[cfg(test)]

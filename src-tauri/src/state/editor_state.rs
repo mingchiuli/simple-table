@@ -1,9 +1,9 @@
 use crate::document::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
-use crate::domain::resource_limits::ResourceLedger;
 use crate::domain::{AppliedOperation, EditorCommand};
 use crate::error::AppError;
+use crate::resource_limits::ResourceLedger;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
 use crate::state::dirty_tracker::DirtyTracker;
@@ -672,9 +672,7 @@ mod tests {
     use crate::document::test_support::read_file_with_workbook_from_bytes;
     use crate::domain::EditorCommand;
     use crate::state::search_index::build_sheet_index;
-    use crate::types::{
-        CellFormatProjection, CellValue, ReadOnlyRichProjection, SetCellRequest, SheetRegion,
-    };
+    use crate::types::{CellFormatProjection, CellValue, ReadOnlyRichProjection, SheetRegion};
     use serde_json::Value;
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
@@ -1954,13 +1952,13 @@ mod tests {
         state
             .execute(EditorCommand::SetCells {
                 changes: vec![
-                    SetCellRequest {
+                    crate::domain::CellEditInput {
                         sheet_index: 0,
                         row: 0,
                         col: 0,
                         text: String::new(),
                     },
-                    SetCellRequest {
+                    crate::domain::CellEditInput {
                         sheet_index: 1,
                         row: 0,
                         col: 1,
@@ -2663,13 +2661,13 @@ mod tests {
         state
             .execute(EditorCommand::SetCells {
                 changes: vec![
-                    crate::types::SetCellRequest {
+                    crate::domain::CellEditInput {
                         sheet_index: 0,
                         row: 0,
                         col: 0,
                         text: "x".to_string(),
                     },
-                    crate::types::SetCellRequest {
+                    crate::domain::CellEditInput {
                         sheet_index: 0,
                         row: 0,
                         col: 1,
@@ -2775,13 +2773,13 @@ mod tests {
         let result = state
             .execute(EditorCommand::SetCells {
                 changes: vec![
-                    crate::types::SetCellRequest {
+                    crate::domain::CellEditInput {
                         sheet_index: 0,
                         row: 0,
                         col: 1,
                         text: "=SUM(".to_string(),
                     },
-                    crate::types::SetCellRequest {
+                    crate::domain::CellEditInput {
                         sheet_index: 0,
                         row: 0,
                         col: 0,

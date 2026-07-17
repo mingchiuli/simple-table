@@ -89,8 +89,52 @@ rejectMatches(
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src', 'application'), '.ts'),
-  [/['"]element-plus['"]/, /['"]vue-router['"]/, /['"]@\/composables(?:\/|['"])/],
+  [
+    /['"]element-plus['"]/,
+    /['"]vue-router['"]/,
+    /['"]@\/composables(?:\/|['"])/,
+    /['"]@\/stores(?:\/|['"])/,
+    /['"]@\/platform(?:\/|['"])/,
+    /['"]@\/api['"]/,
+    /['"]@\/tauriInvoke['"]/,
+    /['"]@tauri-apps\//,
+    /['"]pinia['"]/,
+    /['"]vue['"]/,
+  ],
   'the UI-independent frontend application boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'state', 'state.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'prepared_document_repository.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'state', 'search_service.rs'),
+  ],
+  [
+    /static\s+ACTIVE_DOCUMENT_STORE/,
+    /static\s+MUTATION_REPLAYS/,
+    /static\s+PREPARED_DOCUMENTS/,
+    /static\s+INDEX_SCHEDULER/,
+    /fn\s+active_document_store\s*\(/,
+    /fn\s+replay_coordinator\s*\(/,
+    /fn\s+index_scheduler\s*\(/,
+  ],
+  'the explicitly-owned Rust application runtime boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'domain'), '.rs'),
+  [
+    /crate::types(?:::|\b)/,
+    /SetCellRequest/,
+    /EditorMutationResponse/,
+    /EditorPatch/,
+    /AppliedOperationResult/,
+    /ts_rs/,
+    /tauri::/,
+  ],
+  'the transport-independent Rust domain model boundary',
 );
 
 rejectMatches(

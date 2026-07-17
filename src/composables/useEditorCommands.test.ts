@@ -4,7 +4,7 @@ import { createPinia, setActivePinia, storeToRefs } from "pinia";
 import { useEditorCommands } from "@/composables/useEditorCommands";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
-import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
+import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 import {
   defaultHistoryStatus,
   defaultRichProjection,

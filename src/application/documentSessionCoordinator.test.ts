@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
+import { createDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
@@ -22,7 +22,7 @@ describe('documentSessionCoordinator', () => {
   beforeEach(() => setActivePinia(createPinia()));
 
   it('commits an opened document across every session-owned store', () => {
-    const coordinator = useDocumentSessionCoordinator();
+    const coordinator = coordinatorForStores();
     const status = useDocumentStatusStore();
     const selection = useEditorSelectionStore();
     const pending = usePendingCellSavesStore();
@@ -44,7 +44,7 @@ describe('documentSessionCoordinator', () => {
   });
 
   it('does not clear local state when a saved response misses its command context', () => {
-    const coordinator = useDocumentSessionCoordinator();
+    const coordinator = coordinatorForStores();
     const document = useDocumentSessionStore();
     const status = useDocumentStatusStore();
     const pending = usePendingCellSavesStore();
@@ -65,7 +65,7 @@ describe('documentSessionCoordinator', () => {
   });
 
   it('restores UI state and locks the committed revision when resync fails', async () => {
-    const coordinator = useDocumentSessionCoordinator();
+    const coordinator = coordinatorForStores();
     const document = useDocumentSessionStore();
     const status = useDocumentStatusStore();
     const selection = useEditorSelectionStore();
@@ -98,6 +98,16 @@ describe('documentSessionCoordinator', () => {
     expect(status.isContentDirty).toBe(true);
   });
 });
+
+function coordinatorForStores() {
+  return createDocumentSessionCoordinator({
+    document: useDocumentSessionStore(),
+    status: useDocumentStatusStore(),
+    selection: useEditorSelectionStore(),
+    pending: usePendingCellSavesStore(),
+    search: useSearchSessionStore(),
+  });
+}
 
 function opened(revision: `${bigint}` = '0') {
   return openResponseFromFileData(fileData('old'), session(revision));
