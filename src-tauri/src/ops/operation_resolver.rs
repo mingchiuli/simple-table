@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use crate::domain::cell_key::parse_cell_key;
+use crate::domain::resource_limits::{ResourceLedger, validate_added_sheet};
 use crate::domain::{AppliedOperation, EditorCommand, ResolvedCellEdit};
 use crate::error::AppError;
-use crate::io::projection_limits::{ResourceLedger, validate_added_sheet};
-use crate::io::rich_projection::parse_cell_key;
 use crate::types::{CellValue, FileData, ReadOnlyRichProjection, SheetData, parse_cell_text};
 
 impl EditorCommand {

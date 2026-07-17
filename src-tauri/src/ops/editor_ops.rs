@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use crate::error::AppError;
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
-use crate::state::state::{ActiveDocumentStore, DocumentHandle, EditorSessionInfo};
-use crate::types::EditorMutationResponse;
+use crate::state::state::{ActiveDocumentStore, DocumentHandle};
+use crate::types::{EditorMutationResponse, EditorSessionInfo};
 
 /// 获取编辑器状态（包含能否撤销/重做）
 pub fn do_get_editor_state(

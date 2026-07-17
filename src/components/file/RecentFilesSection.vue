@@ -3,7 +3,7 @@ import { Document, Delete } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { RecentFile } from "@/types";
 import { useRecentFilesStore } from "@/stores/recentFiles";
-import { useRecentFilesService } from "@/application/recentFilesService";
+import { useRecentFilesService } from "@/composables/useRecentFilesService";
 import { appErrorMessage } from "@/utils/appError";
 
 const recentFilesStore = useRecentFilesStore();

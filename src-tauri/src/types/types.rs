@@ -1,7 +1,6 @@
-use crate::display::DisplayProjection;
-use crate::state::state::{EditorSessionInfo, EditorStateInfo};
-use crate::types::FormulaStatus;
+use crate::types::display::DisplayProjection;
 use crate::types::projection::{CellValueProjection, SheetRowsProjection};
+use crate::types::{EditorSessionInfo, EditorStateInfo, FormulaStatus};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

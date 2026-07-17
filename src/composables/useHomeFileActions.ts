@@ -3,7 +3,6 @@ import type { RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import * as api from "@/api";
 import { pickOpenFile, prepareRecentFile } from "@/platform";
-import { warnRecentFileTrackingFailure } from "@/utils/recentFileTracking";
 import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
@@ -125,7 +124,7 @@ export function useHomeFileActions({
       try {
         await removeRecentFile(file.id);
       } catch (error) {
-        warnRecentFileTrackingFailure(error);
+        console.warn("Failed to update recent file metadata", error);
       }
     }
     return true;

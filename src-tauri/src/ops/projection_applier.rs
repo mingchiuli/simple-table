@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::domain::{AppliedOperation, ProjectionMutation};
+use crate::domain::{AppliedOperation, ProjectionMutation, cell_key::parse_cell_key};
 use crate::types::{
     AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange,
     DrawingProjection, FileData, MergeRange, ReadOnlyRichProjection, RowChange, RowHeightChange,
@@ -502,25 +502,6 @@ fn delete_index(index: usize, deleted_index: usize) -> Option<usize> {
     } else {
         None
     }
-}
-
-fn parse_cell_key(key: &str) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    let mut row = 0usize;
-    let mut saw_digit = false;
-    for byte in key.bytes() {
-        if byte.is_ascii_alphabetic() && !saw_digit {
-            col = col
-                .checked_mul(26)?
-                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
-        } else if byte.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
-        } else {
-            return None;
-        }
-    }
-    (col > 0 && row > 0).then_some((row - 1, col - 1))
 }
 
 fn excel_cell_key(row_index: usize, col_index: usize) -> String {

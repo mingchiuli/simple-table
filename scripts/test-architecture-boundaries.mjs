@@ -49,6 +49,27 @@ rejectMatches(
 );
 
 rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
+  [
+    /crate::application(?:::|\b)/,
+    /crate::display(?:::|\b)/,
+    /crate::io(?:::|\b)/,
+    /crate::ops(?:::|\b)/,
+    /crate::state(?:::|\b)/,
+  ],
+  'the runtime-independent Rust contract boundary',
+);
+
+rejectMatches(
+  [
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'ops'), '.rs'),
+  ],
+  [/crate::io(?:::|\b)/],
+  'the Rust document aggregate boundary',
+);
+
+rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'application', 'prepared_document_repository.rs')],
   [/active_document_store/, /crate::state::active_document_store/],
   'the prepared-document repository boundary',
@@ -70,6 +91,36 @@ rejectMatches(
   sourceFiles(join(projectRoot, 'src', 'application'), '.ts'),
   [/['"]element-plus['"]/, /['"]vue-router['"]/, /['"]@\/composables(?:\/|['"])/],
   'the UI-independent frontend application boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src', 'utils'), '.ts'),
+  [
+    /['"]@\/api['"]/,
+    /['"]@\/tauriInvoke['"]/,
+    /['"]@\/platform(?:\/|['"])/,
+    /['"]@\/stores(?:\/|['"])/,
+    /['"]@\/composables(?:\/|['"])/,
+    /['"]@tauri-apps\//,
+    /['"]element-plus['"]/,
+    /['"]vue-router['"]/,
+  ],
+  'the side-effect-free frontend utility boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'application', 'recentFilesService.ts'),
+    join(projectRoot, 'src', 'application', 'spreadsheetFormatService.ts'),
+  ],
+  [
+    /['"]@\/api['"]/,
+    /['"]@\/platform(?:\/|['"])/,
+    /['"]@\/stores(?:\/|['"])/,
+    /['"]@\/composables(?:\/|['"])/,
+    /['"]@tauri-apps\//,
+  ],
+  'the port-driven frontend service boundary',
 );
 
 rejectMatches(

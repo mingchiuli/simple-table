@@ -4,13 +4,13 @@ use tauri::AppHandle;
 use umya_spreadsheet::Workbook;
 
 use crate::application::prepared_document_repository;
+use crate::domain::resource_limits::validate_file_data;
 use crate::error::AppError;
 use crate::io::codec::reader::{preflight_input_file, read_file_with_workbook_from_preflight};
 use crate::io::file_format::{
     default_spreadsheet_extension, file_name_from_path_like, open_extension_from_path_name_or_bytes,
 };
 use crate::io::open_file_input::OpenFileInput;
-use crate::io::projection_limits::validate_file_data;
 use crate::state::{active_document_store, editor_state::EditorState};
 use crate::types::{FileData, PreparedOpenDocument, SheetData};
 

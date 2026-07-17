@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 
 use tantivy::{Term, doc};
 
-use crate::display::DisplayProjection;
 #[cfg(test)]
 use crate::state::search_index::SearchQueryPlan;
 use crate::state::search_index::{
@@ -22,6 +21,7 @@ use crate::state::search_scheduler::{
 use crate::state::state::{ActiveDocumentStore, DocumentHandle};
 #[cfg(test)]
 use crate::types::CellValue;
+use crate::types::display::DisplayProjection;
 use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::domain::resource_limits::ResourceLedger;
 use crate::error::AppError;
-use crate::io::projection_limits::ResourceLedger;
 use crate::state::editor_state::EditorState;
 use crate::types::FileData;
 

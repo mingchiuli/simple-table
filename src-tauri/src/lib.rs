@@ -1,6 +1,6 @@
 mod application;
 mod commands;
-mod display;
+mod document;
 mod domain;
 mod error;
 mod formula;

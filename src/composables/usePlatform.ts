@@ -1,4 +1,4 @@
-import { isMobile as isMobileOS } from '@/utils/platform';
+import { isMobile as isMobileOS } from '@/platform/runtime';
 
 // 触摸设备检测
 const isTouchDevice = ref(

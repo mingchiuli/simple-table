@@ -8,7 +8,7 @@ use crate::types::{
     EditorMutationResponse, MutationResultLookup, SearchResponse, SearchScope, SetCellRequest,
 };
 
-pub use crate::state::state::EditorSessionInfo;
+pub use crate::types::EditorSessionInfo;
 
 pub fn get_editor_state(
     document_id: Option<u64>,

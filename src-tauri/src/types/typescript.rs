@@ -5,21 +5,21 @@ use syn::{FnArg, GenericArgument, Item, PathArguments, ReturnType, Type};
 use ts_rs::{Config, TS};
 
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
-use crate::state::state::{EditorSessionInfo, EditorStateInfo, HistoryStatus};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DocumentManifest,
     DrawingKind, DrawingProjection, EditorCommandContext, EditorMutationResponse, EditorPatch,
-    FileData, FormulaDiagnostics, FormulaIssue, FormulaIssueKind, FormulaStatus,
-    FreezePaneProjection, HyperlinkProjection, LayoutPatch, MergeRange, MutationResultLookup,
-    MutationResultStatus, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
-    ReadOnlyRichProjection, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
-    SavedDocumentIdentity, SavedDocumentResponse, ScalarCellValue, SearchResponse, SearchResult,
-    SearchScope, SetCellRequest, SheetCapabilities, SheetData, SheetDeletedPatch, SheetExtent,
-    SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest, SheetRegion,
-    SheetRegionMetadata, SheetRegionProjectionResponse, SheetsReplacedPatch,
-    SpreadsheetFormatOptions, UpdateInfo, WorkbookCapabilities, WorkbookRichCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    EditorSessionInfo, EditorStateInfo, FileData, FormulaDiagnostics, FormulaIssue,
+    FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus, HyperlinkProjection,
+    LayoutPatch, MergeRange, MutationResultLookup, MutationResultStatus, NativeSavePlan,
+    OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch,
+    RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse,
+    ScalarCellValue, SearchResponse, SearchResult, SearchScope, SetCellRequest, SheetCapabilities,
+    SheetData, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
+    SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionMetadata,
+    SheetRegionProjectionResponse, SheetsReplacedPatch, SpreadsheetFormatOptions, UpdateInfo,
+    WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.

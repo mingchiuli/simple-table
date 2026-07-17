@@ -1,4 +1,4 @@
-use crate::io::document_memento::FileStructureMemento;
+use crate::document::document_memento::FileStructureMemento;
 use crate::types::{
     ColumnDeletedPatch, ColumnInsertedPatch, EditorPatch, FileData, ResyncRequiredPatch,
     RowDeletedPatch, RowInsertedPatch, SheetLayoutProjection, SheetManifest, SheetsReplacedPatch,
@@ -99,7 +99,7 @@ pub(crate) fn restore_structure_patches(
 
 fn column_restore_patch(
     current_lengths: &[usize],
-    target: &crate::io::document_memento::ColumnStructureMemento,
+    target: &crate::document::document_memento::ColumnStructureMemento,
 ) -> Vec<EditorPatch> {
     let mut target_is_wider = false;
     let mut current_is_wider = false;

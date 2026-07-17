@@ -1,6 +1,6 @@
-use crate::io::document_model::DocumentRestoreResult;
+use crate::document::document_model::DocumentRestoreResult;
 use crate::state::editor_state::EditorState;
-use crate::state::state::EditorStateInfo;
+use crate::types::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
     EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,

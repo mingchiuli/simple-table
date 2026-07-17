@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DocumentProjection, SearchScope } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
-import { isMobile as isMobileOS } from '@/utils/platform';
+import { isMobile as isMobileOS } from '@/platform/runtime';
 import {
   CirclePlus,
   Delete,

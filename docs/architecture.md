@@ -15,9 +15,9 @@ flowchart TB
     IPC[Typed invoke adapter]
     SERVICE[Rust document and save application services]
     OPS[Rust operation layer]
-    STATE[EditorState aggregate]
+    STATE[EditorState session]
     DOMAIN[Editor command and applied-operation domain contract]
-    DOC[SpreadsheetDocument]
+    DOC[Document aggregate]
     IO[Workbook, CSV, and platform I/O]
 
     UI --> APP --> STORE
@@ -50,10 +50,25 @@ capability queries similarly live in the application query service. The I/O
 layer cannot depend on `application`, `commands`, `ops`, or `state`.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
-applied operations, and their lightweight impact/projection views. The state
-aggregate and document model depend on this contract directly; they must not
-depend on the operation-handler layer. `ops` may depend on both the domain
-contract and state aggregate to implement a use case, never the reverse.
+applied operations, and their lightweight impact/projection views. Domain
+resource limits and cell-address parsing live beside that vocabulary so both
+document and I/O adapters can enforce the same rules without depending on one
+another. The state session and document model depend on this contract directly;
+they must not depend on the operation-handler layer. `ops` may depend on both
+the domain contract and state session to implement a use case, never the
+reverse.
+
+The Rust `document` module is the physical aggregate boundary. It owns
+`SpreadsheetDocument`, transactions, mementos, formula coordination, save
+snapshots, and region metadata. `state` owns the active editor session and may
+depend on `document`, but neither `state` nor `ops` may import `io` directly.
+The `io` module owns codecs, input limits, filesystem/platform adapters, and the
+workbook-backed persistence body used behind the document aggregate.
+
+Rust `types` is a runtime-independent protocol boundary. Session DTOs such as
+`EditorSessionInfo`, `EditorStateInfo`, and `HistoryStatus` live there rather
+than in `state`. Its display projection is an internal wire serializer; the
+module cannot depend on application, state, operations, or I/O modules.
 
 Save and export orchestration live in `application::document_save_service`.
 That service owns work reservations, revision validation, save leases, optional
@@ -96,6 +111,10 @@ the I/O layer must not call back into the application layer.
   composables adapt Stores, platform APIs, lifecycle guards, router navigation,
   and user notifications to that workflow; application modules do not import
   composables or UI libraries.
+- Generic frontend utilities are pure and side-effect free. Backend format and
+  recent-file workflows are port-driven application services. Composables bind
+  those ports to the backend API, Pinia, platform adapters, and Element Plus;
+  utility modules cannot import those dependencies.
 
 ## Mutation Protocol
 

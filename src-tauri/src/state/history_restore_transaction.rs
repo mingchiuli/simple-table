@@ -1,6 +1,6 @@
+use crate::document::document_memento::{DocumentMemento, DocumentMementoSide};
+use crate::document::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::error::AppError;
-use crate::io::document_memento::{DocumentMemento, DocumentMementoSide};
-use crate::io::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::state::dirty_tracker::DirtyTracker;
 use crate::state::history_store::{HistoryStore, RetiredHistoryEntries};
 

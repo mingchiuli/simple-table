@@ -4,7 +4,7 @@ import {
 } from "@/types";
 
 function mockDesktopPlatform(fileOps: Record<string, unknown>) {
-  vi.doMock("@/utils/platform", () => ({
+  vi.doMock("@/platform/runtime", () => ({
     getPlatform: () => "macos",
   }));
   vi.doMock("@/platform/desktop", () => ({

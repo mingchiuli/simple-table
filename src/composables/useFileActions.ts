@@ -11,6 +11,7 @@ import {
 } from '@/platform';
 import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
 import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
+import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
@@ -21,8 +22,6 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { DocumentProjection } from '@/types';
 import { appErrorMessage } from '@/utils/appError';
-import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
-import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
@@ -44,6 +43,7 @@ export function useFileActions({
   const { runDocumentLifecycle } = useDocumentLifecycle();
   const commandBus = useDocumentCommandBus();
   const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
+  const spreadsheetFormats = createSpreadsheetFormatService(api);
 
   const fileCoordinator = createDocumentFileCoordinator({
     getFileData: () => fileData.value,
@@ -62,9 +62,9 @@ export function useFileActions({
     closeDocument: api.closeCurrentDocument,
     saveFile,
     exportFile,
-    nativeSavePlan,
-    documentCapabilities,
-    defaultSpreadsheetExtension,
+    nativeSavePlan: api.getNativeSavePlan,
+    documentCapabilities: api.getDocumentCapabilities,
+    defaultSpreadsheetExtension: spreadsheetFormats.defaultSpreadsheetExtension,
     withReservedSaveLocation,
     openDocumentResponse: (response, path) =>
       documentSessionCoordinator.openDocumentResponse(response, path),

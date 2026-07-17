@@ -1,10 +1,8 @@
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
-import {
-  confirmDiscardUnsavedChanges,
-  hasUnsavedDocumentChanges,
-} from "@/utils/unsavedChanges";
+import { confirmDiscardUnsavedChanges } from "@/composables/unsavedChangesDialog";
 
 type DocumentReplacementGuardOptions = {
   flushPendingCellChanges?: () => Promise<boolean>;
@@ -19,11 +17,12 @@ export function useDocumentReplacementGuard({
   flushPendingCellChanges,
 }: DocumentReplacementGuardOptions = {}) {
   const documentSessionStore = useDocumentSessionStore();
+  const documentStatusStore = useDocumentStatusStore();
   const documentSessionCoordinator = useDocumentSessionCoordinator();
   const pendingCellSavesStore = usePendingCellSavesStore();
 
   async function beginDocumentReplacement(): Promise<DocumentReplacementLease | null> {
-    if (hasUnsavedDocumentChanges()) {
+    if (documentStatusStore.hasUnsavedChanges) {
       return confirmDiscardWithAutosavePaused();
     }
     if (flushPendingCellChanges && !(await flushPendingCellChanges())) {
@@ -53,7 +52,7 @@ export function useDocumentReplacementGuard({
   }
 
   async function confirmReplacementIfUnsaved(): Promise<boolean> {
-    if (!hasUnsavedDocumentChanges()) return true;
+    if (!documentStatusStore.hasUnsavedChanges) return true;
     return confirmDiscardUnsavedChanges();
   }
 

@@ -53,6 +53,7 @@ vi.mock("@/api", () => ({
     defaultExtension: "xlsx",
     supportedExtensions: ["xlsx", "csv"],
   }),
+  getDocumentCapabilities: vi.fn(),
   getRecentFiles: vi.fn().mockResolvedValue([]),
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
     id: "recent",
@@ -78,9 +79,9 @@ vi.mock("@/platform", () => ({
   saveFile: vi.fn(),
 }));
 
-vi.mock("@/utils/unsavedChanges", async () => {
-  const actual = await vi.importActual<typeof import("@/utils/unsavedChanges")>(
-    "@/utils/unsavedChanges"
+vi.mock("@/composables/unsavedChangesDialog", async () => {
+  const actual = await vi.importActual<typeof import("@/composables/unsavedChangesDialog")>(
+    "@/composables/unsavedChangesDialog"
   );
   return {
     ...actual,
@@ -207,7 +208,7 @@ describe("useFileActions", () => {
 
   it("does not ask to discard when file picking is cancelled", async () => {
     const platform = await import("@/platform");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
@@ -510,7 +511,7 @@ describe("useFileActions", () => {
 
   it("asks before opening when pending work becomes dirty after flush", async () => {
     const platform = await import("@/platform");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
@@ -543,7 +544,7 @@ describe("useFileActions", () => {
 
   it("does not flush discarded work when the current document is already dirty", async () => {
     const platform = await import("@/platform");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
@@ -575,7 +576,7 @@ describe("useFileActions", () => {
 
   it("discards newly dirty pending work before opening the selected file", async () => {
     const platform = await import("@/platform");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
@@ -608,7 +609,7 @@ describe("useFileActions", () => {
 
   it("discards selected imported files when reading fails", async () => {
     const platform = await import("@/platform");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     const pendingCellSavesStore = usePendingCellSavesStore();
@@ -644,7 +645,7 @@ describe("useFileActions", () => {
 
   it("allows closing a stale projection after discard confirmation", async () => {
     const api = await import("@/api");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);

@@ -1,16 +1,26 @@
-import * as api from '@/api';
-import { useRecentFilesStore } from '@/stores/recentFiles';
-import type { RecentFile } from '@/types';
+import type { EditorCommandContext, RecentFile } from '@/types';
 
 export type RecentFilesPort = {
   getRecentFiles(): Promise<RecentFile[]>;
   removeRecentFile(id: string): Promise<void>;
 };
 
-type RecentFilesState = Pick<
-  ReturnType<typeof useRecentFilesStore>,
-  'replaceFiles' | 'setLoading'
->;
+export type RecentFilesState = {
+  replaceFiles(files: RecentFile[]): void;
+  setLoading(loading: boolean): void;
+};
+
+export type RecentFileTrackingPort = {
+  addRecentFileWithThumbnail(
+    context: EditorCommandContext,
+    originalPath?: string,
+  ): Promise<RecentFile>;
+};
+
+export type RecentFileTrackingRequest = {
+  originalPath?: string;
+  context: EditorCommandContext;
+};
 
 type RecentFilesRuntime = {
   loadRequestId: number;
@@ -18,8 +28,7 @@ type RecentFilesRuntime = {
 };
 
 export type RecentFilesService = ReturnType<typeof createRecentFilesService>;
-
-const services = new WeakMap<object, RecentFilesService>();
+export type RecentFileTrackingService = ReturnType<typeof createRecentFileTrackingService>;
 
 export function createRecentFilesService(
   store: RecentFilesState,
@@ -54,12 +63,32 @@ export function createRecentFilesService(
   return { load, remove };
 }
 
-export function useRecentFilesService(): RecentFilesService {
-  const store = useRecentFilesStore();
-  let service = services.get(store);
-  if (!service) {
-    service = createRecentFilesService(store, api);
-    services.set(store, service);
+export function createRecentFileTrackingService(
+  port: RecentFileTrackingPort,
+  reportFailure: (error: unknown) => void,
+) {
+  async function tryAddRecentFileWithThumbnail({
+    originalPath,
+    context,
+  }: RecentFileTrackingRequest): Promise<boolean> {
+    try {
+      await port.addRecentFileWithThumbnail(context, originalPath);
+      return true;
+    } catch (error) {
+      reportFailure(error);
+      return false;
+    }
   }
-  return service;
+
+  async function tryRefreshRecentFiles(refresh: () => Promise<void>): Promise<boolean> {
+    try {
+      await refresh();
+      return true;
+    } catch (error) {
+      reportFailure(error);
+      return false;
+    }
+  }
+
+  return { tryAddRecentFileWithThumbnail, tryRefreshRecentFiles };
 }

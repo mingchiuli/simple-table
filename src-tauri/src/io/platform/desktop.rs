@@ -4,8 +4,8 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_from_name,
 };
+use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
-use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::recent::store::RecentStore;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};

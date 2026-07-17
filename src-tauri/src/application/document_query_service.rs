@@ -7,12 +7,12 @@ use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
     active_document_store,
     editor_state::EditorState,
-    state::{ActiveDocumentStore, DocumentHandle, EditorSessionInfo},
+    state::{ActiveDocumentStore, DocumentHandle},
 };
 use crate::types::{
-    DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
-    SheetData, SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionProjectionResponse,
-    SpreadsheetFormatOptions, WorkbookCapabilities,
+    DocumentCapabilities, DocumentManifest, EditorSessionInfo, FileData, NativeSavePlan,
+    OpenDocumentResponse, SheetData, SheetLayoutProjection, SheetManifest, SheetRegion,
+    SheetRegionProjectionResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::io::Write;
 
@@ -537,8 +537,8 @@ fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError> {
             "sheet region contains {cells} cells, maximum is {MAX_REGION_CELLS}"
         )));
     }
-    if region.row_end > crate::io::projection_limits::MAX_ROWS_PER_SHEET
-        || region.col_end > crate::io::projection_limits::MAX_COLUMNS_PER_ROW
+    if region.row_end > crate::domain::resource_limits::MAX_ROWS_PER_SHEET
+        || region.col_end > crate::domain::resource_limits::MAX_COLUMNS_PER_ROW
     {
         return Err(AppError::ResourceLimitExceeded(
             "sheet region exceeds row or column limits".to_string(),
@@ -871,7 +871,7 @@ mod tests {
             sheets: vec![sheet.clone()],
         };
         let metadata =
-            crate::io::region_metadata_index::RegionMetadataIndex::from_file_data(&file_data)
+            crate::document::region_metadata_index::RegionMetadataIndex::from_file_data(&file_data)
                 .project(&file_data, &region);
         let anchors = project_merge_anchor_cells(&sheet, &region, &metadata.merges);
 

@@ -8,10 +8,10 @@ use crate::application::{
     document_open_service, document_query_service, document_save_service, document_service,
     editor_command_service,
 };
+use crate::domain::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
 use crate::error::AppError;
 #[cfg(desktop)]
 use crate::io::platform::desktop;
-use crate::io::projection_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
 #[cfg(desktop)]
 use crate::types::SavedDocumentResponse;

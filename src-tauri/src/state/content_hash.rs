@@ -2,8 +2,8 @@ use sha2::{Digest, Sha256};
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::document::document_memento::DocumentMementoSide;
 use crate::domain::AppliedOperation;
-use crate::io::document_memento::DocumentMementoSide;
 use crate::types::{CellValue, FileData, MergeRange, SheetCellChange, SheetData};
 
 pub type ContentHash = [u8; 32];

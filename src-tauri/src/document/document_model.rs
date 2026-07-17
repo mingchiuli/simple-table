@@ -1,20 +1,20 @@
-use crate::domain::{AppliedOperation, ResolvedCellEdit};
-use crate::error::AppError;
-use crate::formula::cell_ref::FormulaCellRef;
-use crate::io::document_body::BodySheetShape;
-use crate::io::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
-use crate::io::document_memento::{
+use crate::document::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
     FileStructureMemento, LayoutMemento, ProjectionSheetSnapshot, RichProjectionMemento,
     RowStructureMemento, SheetShapeMemento, SheetTailMemento, StructureMemento,
     protected_rich_cell_positions,
 };
-use crate::io::document_memento_budget;
-use crate::io::document_patches::{CurrentStructureShape, restore_structure_patches};
-use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
-use crate::io::document_transaction::DocumentTransaction;
-use crate::io::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
-use crate::io::region_metadata_index::RegionMetadataIndex;
+use crate::document::document_memento_budget;
+use crate::document::document_patches::{CurrentStructureShape, restore_structure_patches};
+use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
+use crate::document::document_transaction::DocumentTransaction;
+use crate::document::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
+use crate::document::region_metadata_index::RegionMetadataIndex;
+use crate::domain::{AppliedOperation, ResolvedCellEdit};
+use crate::error::AppError;
+use crate::formula::cell_ref::FormulaCellRef;
+use crate::io::document_body::BodySheetShape;
+use crate::io::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
 use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
@@ -85,7 +85,7 @@ impl SpreadsheetDocument {
         &self.projection
     }
 
-    pub(in crate::io) fn sheet_count(&self) -> usize {
+    pub(in crate::document) fn sheet_count(&self) -> usize {
         self.projection.sheets.len()
     }
 
@@ -687,7 +687,7 @@ impl SpreadsheetDocument {
         Ok(DocumentRestoreResult { patches })
     }
 
-    pub(in crate::io) fn recalculate_after_operation(
+    pub(in crate::document) fn recalculate_after_operation(
         &mut self,
         operation: &AppliedOperation,
     ) -> Vec<SheetCellChange> {
@@ -700,7 +700,7 @@ impl SpreadsheetDocument {
         changes
     }
 
-    pub(in crate::io) fn patch_workbook_after_operation(
+    pub(in crate::document) fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
         _result: &AppliedOperationResult,
@@ -715,7 +715,7 @@ impl SpreadsheetDocument {
         Ok(())
     }
 
-    pub(in crate::io) fn apply_operation_to_body_and_projection(
+    pub(in crate::document) fn apply_operation_to_body_and_projection(
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<AppliedOperationResult, AppError> {
@@ -741,7 +741,7 @@ impl SpreadsheetDocument {
             }))
     }
 
-    pub(in crate::io) fn patch_workbook_formula_changes(
+    pub(in crate::document) fn patch_workbook_formula_changes(
         &mut self,
         cell_changes: &[SheetCellChange],
     ) -> Result<(), AppError> {
@@ -785,11 +785,11 @@ impl SpreadsheetDocument {
             .capabilities(&self.formulas.structure_formula_limitations());
     }
 
-    pub(in crate::io) fn validate_projection_consistency(&self) -> Result<(), AppError> {
+    pub(in crate::document) fn validate_projection_consistency(&self) -> Result<(), AppError> {
         self.body.validate_projection_consistency(&self.projection)
     }
 
-    pub(in crate::io) fn validate_projection_sheets(
+    pub(in crate::document) fn validate_projection_sheets(
         &self,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) -> Result<(), AppError> {
@@ -797,12 +797,14 @@ impl SpreadsheetDocument {
             .validate_projection_sheets(&self.projection, sheet_indexes)
     }
 
-    pub(in crate::io) fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
+    pub(in crate::document) fn validate_persisted_projection_consistency(
+        &self,
+    ) -> Result<(), AppError> {
         self.body
             .validate_persisted_projection_consistency(&self.projection)
     }
 
-    pub(in crate::io) fn refresh_region_metadata_index(&mut self) {
+    pub(in crate::document) fn refresh_region_metadata_index(&mut self) {
         self.region_metadata.rebuild(&self.projection);
     }
 

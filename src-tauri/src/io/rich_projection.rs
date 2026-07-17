@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::domain::cell_key::parse_cell_key;
 #[cfg(test)]
 use crate::types::SheetRegion;
 use crate::types::{DrawingProjection, ReadOnlyRichProjection};
@@ -199,25 +200,6 @@ pub(crate) fn restore_rich_projection_scope(
     target.has_style_metadata = !target.cell_formats.is_empty() || !target.cell_styles.is_empty();
     target.has_hyperlinks = !target.hyperlinks.is_empty();
     target.has_freeze_pane = target.freeze_pane.is_some();
-}
-
-pub(crate) fn parse_cell_key(key: &str) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    let mut row = 0usize;
-    let mut saw_digit = false;
-    for byte in key.bytes() {
-        if byte.is_ascii_alphabetic() && !saw_digit {
-            col = col
-                .checked_mul(26)?
-                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
-        } else if byte.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
-        } else {
-            return None;
-        }
-    }
-    (col > 0 && row > 0).then_some((row - 1, col - 1))
 }
 
 pub(crate) fn drawing_row_scope_affected(drawing: &DrawingProjection, row_index: usize) -> bool {

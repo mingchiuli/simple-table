@@ -17,9 +17,9 @@ const unsavedChanges = vi.hoisted(() => ({
   confirmDiscardUnsavedChanges: vi.fn(),
 }));
 
-vi.mock("@/utils/unsavedChanges", async () => {
-  const actual = await vi.importActual<typeof import("@/utils/unsavedChanges")>(
-    "@/utils/unsavedChanges"
+vi.mock("@/composables/unsavedChangesDialog", async () => {
+  const actual = await vi.importActual<typeof import("@/composables/unsavedChangesDialog")>(
+    "@/composables/unsavedChangesDialog"
   );
   return {
     ...actual,

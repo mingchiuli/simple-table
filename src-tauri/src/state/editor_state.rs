@@ -1,11 +1,9 @@
+use crate::document::document_model::{DocumentRestoreResult, SpreadsheetDocument};
+use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
+use crate::document::formula_coordinator::FormulaWorkLimits;
+use crate::domain::resource_limits::ResourceLedger;
 use crate::domain::{AppliedOperation, EditorCommand};
 use crate::error::AppError;
-use crate::io::document_model::{DocumentRestoreResult, SpreadsheetDocument};
-use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
-#[cfg(test)]
-use crate::io::file_format::is_xlsx_extension;
-use crate::io::formula_coordinator::FormulaWorkLimits;
-use crate::io::projection_limits::ResourceLedger;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
 use crate::state::dirty_tracker::DirtyTracker;
@@ -23,7 +21,7 @@ use crate::state::search_index::{
     SearchWriterHandle, collect_sheet_search_text_chunk,
 };
 use crate::state::search_session::SearchSession;
-use crate::state::state::HistoryStatus;
+use crate::types::HistoryStatus;
 use crate::types::{
     AppliedOperationResult, FileData, FormulaStatus, SearchIndexUpdatePlan, SheetCellChange,
     WorkbookCapabilities,
@@ -209,8 +207,8 @@ impl EditorState {
     }
 
     #[cfg(test)]
-    pub fn can_finish_save_without_reparse(&self, target_extension: &str) -> bool {
-        is_xlsx_extension(target_extension) && self.document.is_excel_backed()
+    pub fn can_finish_save_without_reparse(&self, target_is_xlsx: bool) -> bool {
+        target_is_xlsx && self.document.is_excel_backed()
     }
 
     pub fn save_snapshot_for_target(
@@ -671,8 +669,8 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+    use crate::document::test_support::read_file_with_workbook_from_bytes;
     use crate::domain::EditorCommand;
-    use crate::io::codec::reader::read_file_with_workbook_from_bytes;
     use crate::state::search_index::build_sheet_index;
     use crate::types::{
         CellFormatProjection, CellValue, ReadOnlyRichProjection, SetCellRequest, SheetRegion,
@@ -1276,8 +1274,8 @@ mod tests {
         .expect("read source");
         let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
 
-        assert!(state.can_finish_save_without_reparse("xlsx"));
-        assert!(!state.can_finish_save_without_reparse("csv"));
+        assert!(state.can_finish_save_without_reparse(true));
+        assert!(!state.can_finish_save_without_reparse(false));
 
         state
             .execute(EditorCommand::SetCell {

@@ -1,5 +1,5 @@
-use crate::io::document_memento::DocumentMemento;
-use crate::state::state::HistoryStatus;
+use crate::document::document_memento::DocumentMemento;
+use crate::types::HistoryStatus;
 use std::collections::VecDeque;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;
@@ -198,7 +198,7 @@ fn evict_oldest_until_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::document_memento::{DocumentMementoSide, LayoutMemento};
+    use crate::document::document_memento::{DocumentMementoSide, LayoutMemento};
     use std::collections::HashMap;
 
     fn entry(estimated_bytes: usize) -> HistoryEntry {

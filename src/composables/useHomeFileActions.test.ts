@@ -54,9 +54,9 @@ vi.mock("@/platform", () => ({
   prepareRecentFile: openProtocolMocks.prepareRecentFile,
 }));
 
-vi.mock("@/utils/unsavedChanges", async () => {
-  const actual = await vi.importActual<typeof import("@/utils/unsavedChanges")>(
-    "@/utils/unsavedChanges"
+vi.mock("@/composables/unsavedChangesDialog", async () => {
+  const actual = await vi.importActual<typeof import("@/composables/unsavedChangesDialog")>(
+    "@/composables/unsavedChangesDialog"
   );
   return {
     ...actual,
@@ -170,7 +170,7 @@ describe("useHomeFileActions", () => {
 
   it("resumes pending autosave when backend preparation fails", async () => {
     const api = await import("@/api");
-    const unsavedChanges = await import("@/utils/unsavedChanges");
+    const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     vi.useFakeTimers();
     const statusStore = useDocumentStatusStore();
     const pendingStore = usePendingCellSavesStore();

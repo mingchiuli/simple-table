@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::domain::cell_key::parse_cell_key;
 use crate::io::document_body::BodyStructureMemento;
 use crate::io::rich_projection::{
-    RichProjectionScope, filter_rich_projection, parse_cell_key, restore_rich_projection_scope,
+    RichProjectionScope, filter_rich_projection, restore_rich_projection_scope,
 };
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingProjection, FreezePaneProjection,

@@ -1,11 +1,7 @@
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useRecentFilesStore } from "@/stores/recentFiles";
-import { useRecentFilesService } from "@/application/recentFilesService";
+import { useRecentFilesService } from "@/composables/useRecentFilesService";
 import type { EditorCommandContext } from "@/types";
-import {
-  tryAddRecentFileWithThumbnail,
-  tryRefreshRecentFiles,
-} from "@/utils/recentFileTracking";
 
 type RecentFileUpdateRequest = {
   originalPath: string | undefined;
@@ -49,7 +45,7 @@ export function useRecentFileUpdates() {
       while (scheduler.pending) {
         const request = scheduler.pending;
         scheduler.pending = null;
-        await tryAddRecentFileWithThumbnail(request);
+        await recentFilesService.tryAddRecentFileWithThumbnail(request);
       }
       await refreshRecentFiles();
       if (!scheduler.pending) return;
@@ -57,7 +53,7 @@ export function useRecentFileUpdates() {
   }
 
   async function refreshRecentFiles() {
-    await tryRefreshRecentFiles(recentFilesService.load);
+    await recentFilesService.tryRefreshRecentFiles(recentFilesService.load);
   }
 
   return {

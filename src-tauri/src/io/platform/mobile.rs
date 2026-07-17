@@ -5,8 +5,8 @@ use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
+use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
-use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::transient_files::{
     TransientFilePurpose, clear_persistent_marker, completed_persisted_save_locations,
     reconcile_persisted_transient_files, transient_file_registry, write_persistent_marker,

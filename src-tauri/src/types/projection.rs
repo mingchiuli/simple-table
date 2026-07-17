@@ -1,4 +1,4 @@
-use crate::display::DisplayProjection;
+use crate::types::display::DisplayProjection;
 use serde::Serialize;
 use serde::ser::{SerializeMap, SerializeSeq};
 use ts_rs::{Config, TS, TypeVisitor};

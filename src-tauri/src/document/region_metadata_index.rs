@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::io::rich_projection::parse_cell_key;
+use crate::domain::cell_key::parse_cell_key;
 use crate::types::{FileData, MergeRange, SheetData, SheetRegion, SheetRegionMetadata};
 
 const TILE_ROWS: usize = 128;

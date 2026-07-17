@@ -3,51 +3,6 @@ use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
-use crate::types::{FormulaStatus, WorkbookCapabilities};
-use ts_rs::TS;
-
-/// 获取编辑器状态信息
-#[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct EditorStateInfo {
-    pub can_undo: bool,
-    pub can_redo: bool,
-    pub is_dirty: bool,
-    #[serde(default)]
-    pub history: HistoryStatus,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct HistoryStatus {
-    pub is_truncated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub reason: Option<String>,
-    pub undo_entries: usize,
-    pub redo_entries: usize,
-    pub undo_estimated_bytes: usize,
-    pub redo_estimated_bytes: usize,
-    pub max_history_bytes: usize,
-    pub max_single_entry_bytes: usize,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct EditorSessionInfo {
-    #[serde(with = "crate::types::u64_string")]
-    #[ts(type = "U64String")]
-    pub document_id: u64,
-    #[serde(with = "crate::types::u64_string")]
-    #[ts(type = "U64String")]
-    pub revision: u64,
-    pub formula_status: FormulaStatus,
-    pub capabilities: WorkbookCapabilities,
-    pub editor_state: EditorStateInfo,
-}
 
 pub struct ActiveDocumentStore {
     active: Option<Arc<DocumentHandle>>,

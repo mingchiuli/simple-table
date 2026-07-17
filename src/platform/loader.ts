@@ -1,7 +1,7 @@
 /**
  * Platform loader - Dynamic import factory with caching
  */
-import { getPlatform } from '@/utils/platform';
+import { getPlatform } from '@/platform/runtime';
 import type { PlatformAPI, OpenFileSelection } from './types';
 import type { EditorCommandContext, PreparedOpenDocument, RecentFile } from '@/types';
 import { createAsyncCache } from '@/utils/asyncCache';
