@@ -1,3 +1,4 @@
+mod application;
 mod commands;
 mod display;
 mod error;

@@ -403,7 +403,7 @@ describe("useEditorCommands", () => {
 
     expect(api.addRow).toHaveBeenCalledTimes(2);
     expect(api.getMutationResult).toHaveBeenCalledWith('1', expect.any(String));
-    expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function));
+    expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function), 0);
     expect(api.getActiveDocument).not.toHaveBeenCalled();
   });
 
@@ -423,7 +423,7 @@ describe("useEditorCommands", () => {
       await command;
 
       expect(api.getMutationResult).toHaveBeenCalledTimes(2);
-      expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function));
+      expect(setup.applyMutationResponse).toHaveBeenCalledWith(replay, expect.any(Function), 0);
       expect(api.getActiveDocument).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

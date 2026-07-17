@@ -1,9 +1,9 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use super::{
-    CommandU64, blocking, mutation_executor, mutation_replay, projection_executor, recent_executor,
-    search_executor,
+    CommandU64, blocking, mutation_executor, projection_executor, recent_executor, search_executor,
 };
+use crate::application::{document_service, mutation_replay};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -261,7 +261,7 @@ pub async fn commit_prepared_document(
     expected_revision: Option<CommandU64>,
 ) -> Result<OpenDocumentResponse, AppError> {
     mutation_executor::run(move || {
-        document::commit_prepared_document(
+        document_service::commit_prepared_document(
             &token,
             expected_document_id.map(CommandU64::get),
             expected_revision.map(CommandU64::get),
@@ -322,7 +322,8 @@ pub async fn get_sheet_region_projection(
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn close_current_document(document_id: CommandU64) -> Result<(), AppError> {
-    mutation_executor::run(move || document::close_current_document(document_id.get())).await
+    mutation_executor::run(move || document_service::close_current_document(document_id.get()))
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]

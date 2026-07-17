@@ -5,7 +5,6 @@ pub mod ios;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub mod mobile;
 mod mutation_executor;
-pub(crate) mod mutation_replay;
 mod projection_executor;
 mod recent_executor;
 mod search_executor;

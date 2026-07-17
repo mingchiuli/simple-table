@@ -8,23 +8,31 @@ document; Vue owns a renderable projection and transient UI state.
 ```mermaid
 flowchart TB
     UI[Vue views and components]
-    APP[DocumentCommandBus and composables]
-    STORE[Pinia SheetSlot, stable layout index, and RegionCache]
+    APP[Document protocol services, command adapters, and composables]
+    STORE[Pinia SheetSlot and stable layout index]
+    REGION[Region repository and bounded RegionCache]
     RPC[Rust-signature generated TauriCommandMap]
     IPC[Typed invoke adapter]
-    OPS[Rust command and operation layer]
+    SERVICE[Rust document application service]
+    OPS[Rust operation layer]
     STATE[EditorState aggregate]
     DOC[SpreadsheetDocument]
     IO[Workbook, CSV, and platform I/O]
 
     UI --> APP --> STORE
-    APP --> RPC --> IPC --> OPS --> STATE --> DOC --> IO
+    APP --> REGION --> STORE
+    APP --> RPC --> IPC --> SERVICE --> OPS --> STATE --> DOC --> IO
     OPS -. mutation response .-> STORE
 ```
 
 Frontend platform adapters select desktop, Android, or iOS file operations.
 Business mutations remain platform-independent and go through the common Rust
 operation layer.
+
+Tauri command modules are transport adapters. Document replacement and close
+coordination live in the Rust application layer, which owns retirement of
+mutation replay and search-index work before releasing the old document.
+Neither the document model nor the I/O layer may depend on command modules.
 
 ## State Ownership
 
@@ -129,10 +137,13 @@ formula source. An oversized calculation is rejected atomically without
 changing revision, dirty state, or history; synchronous third-party evaluation
 is never interrupted after a transaction starts.
 
-`DocumentCommandBus` owns interactive and background mutation sequencing,
-pending-edit flushes, response application, stale-projection recovery, and
-post-mutation callbacks. Components and feature composables should call it
-instead of rebuilding the mutation lifecycle.
+The headless document mutation protocol owns idempotent retries, replay-result
+polling, and ambiguous-result projection recovery. Its transport, recovery
+port, clock, and command-id generator are injectable. `DocumentCommandBus` is
+the Vue adapter around that protocol: it owns interaction locks, pending-edit
+flushes, response application, post-mutation callbacks, and user-facing error
+messages. Components and feature composables should call the bus instead of
+rebuilding either lifecycle.
 
 ## RPC Contract
 
@@ -227,6 +238,11 @@ above that contract, subdivides only the dedicated oversized-region error, and
 treats multiple child blocks as combined coverage. The ordinary cache target is
 16 MiB; pinned visible blocks form a separate hard bound of eight 16 MiB blocks
 so visibility cannot turn the cache into an unbounded exception.
+
+Tile alignment, oversized-response subdivision, fragment deadlines, and
+aggregate fragment budgets live in `documentRegionRepository`. The document
+session passes the preferred or protected Sheet explicitly into projection
+replacement and eviction; cache policy must not read the selection Store.
 
 Each loaded Sheet also owns an aggregated region-metadata snapshot. It is rebuilt
 only when its resident block membership changes; cell-only patches retain the

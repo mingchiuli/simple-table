@@ -15,6 +15,7 @@ import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
 import { commitPreparedDocumentOrAbort } from '@/composables/preparedDocument';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { DocumentProjection } from '@/types';
 import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabilities';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
@@ -44,6 +45,7 @@ export function useFileActions({
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
+  const editorSelectionStore = useEditorSelectionStore();
   const { beginDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
@@ -132,7 +134,12 @@ export function useFileActions({
 
       if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
         const saved = await saveFile(existingPath, context);
-        if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, existingPath)) {
+        if (!documentSessionStore.applySavedDocumentResponseForContext(
+          context,
+          saved,
+          existingPath,
+          editorSelectionStore.currentSheetIndex
+        )) {
           notifySavedButNotApplied();
           return;
         }
@@ -159,7 +166,12 @@ export function useFileActions({
 
         const saved = await saveFile(savePath, context);
         markPersisted();
-        if (!documentSessionStore.applySavedDocumentResponseForContext(context, saved, savePath)) {
+        if (!documentSessionStore.applySavedDocumentResponseForContext(
+          context,
+          saved,
+          savePath,
+          editorSelectionStore.currentSheetIndex
+        )) {
           notifySavedButNotApplied();
           return;
         }

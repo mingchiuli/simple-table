@@ -373,6 +373,25 @@ describe('documentSession sparse projection', () => {
     expect(store.isSheetLoaded(2)).toBe(false);
   });
 
+  it('uses the explicitly protected sheet when enforcing the resident budget', () => {
+    const store = useDocumentSessionStore();
+    const opened = openResponse();
+    opened.document.sheets = Array.from({ length: 5 }, (_, index) => ({
+      name: `Sheet ${index + 1}`,
+      extent: { rowCount: 10, columnCount: 10 },
+      layout: { columnWidths: {}, rowHeights: {} },
+    }));
+    store.openDocumentResponse(opened);
+    store.activateResidentSheet(1);
+    store.activateResidentSheet(2);
+    store.activateResidentSheet(3);
+    store.touchResidentSheet(1);
+    store.activateResidentSheet(4, 2);
+
+    expect(store.isSheetLoaded(2)).toBe(true);
+    expect(store.isSheetLoaded(0)).toBe(false);
+  });
+
   it('applies layout patches to unloaded sheets', () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse(openResponse());

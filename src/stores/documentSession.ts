@@ -17,13 +17,10 @@ import {
   createDocumentProjection,
   isRegionLoaded,
   regionCoveringBlockKeys,
-  regionBlock,
   regionKey,
   replaceLoadedSheetBlocks,
 } from '@/stores/documentProjection';
-import { isAppErrorCode } from '@/utils/appError';
 import { compareU64, isNextU64, maxU64, ZERO_U64 } from '@/utils/u64';
-import { useEditorSelectionStore } from '@/stores/editorSelection';
 import {
   deleteRegionCache,
   beginViewportRegionLoad,
@@ -37,6 +34,12 @@ import {
   touchRegionBlock,
   type RegionLoadPriority,
 } from '@/stores/documentRegionCache';
+import {
+  loadRegionBlocks,
+  tileRegions,
+  TILE_COLUMNS,
+  TILE_ROWS,
+} from '@/stores/documentRegionRepository';
 import {
   applyEditorSessionStatus,
   applyResponseStatus,
@@ -74,19 +77,6 @@ const MAX_RESIDENT_SHEETS = 4;
 const MAX_BLOCKS_PER_SHEET = 8;
 const MAX_RESIDENT_BLOCKS = 24;
 const MAX_RESIDENT_BLOCK_BYTES = 16 * 1024 * 1024;
-const MAX_REGION_BLOCK_BYTES = 16 * 1024 * 1024;
-const MAX_REGION_FRAGMENT_REQUESTS = 64;
-const MAX_REGION_FRAGMENT_BYTES = 32 * 1024 * 1024;
-const MAX_REGION_LOAD_DURATION_MS = 10_000;
-const TILE_ROWS = 128;
-const TILE_COLUMNS = 32;
-
-type RegionLoadBudget = {
-  remainingRequests: number;
-  loadedBytes: number;
-  deadline: number;
-};
-
 export const useDocumentSessionStore = defineStore('documentSession', {
   state: () => ({
     data: null as DocumentProjection | null,
@@ -154,11 +144,11 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     discardPendingLocalWork() {
       resetTransientDocumentWork(this);
     },
-    replaceDocumentProjection(response: OpenDocumentResponse) {
+    replaceDocumentProjection(response: OpenDocumentResponse, protectedSheetIndex = 0) {
       resetRegionCache(this);
       replaceProjection(this, response);
       reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
-      this.enforceResidentSheetBudget();
+      this.enforceResidentSheetBudget(protectedSheetIndex);
       this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
@@ -173,28 +163,31 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       resetDocumentStatus();
       applyEditorSessionStatus(response.editorSession);
     },
-    recoverActiveDocumentResponse(response: OpenDocumentResponse): boolean {
+    recoverActiveDocumentResponse(response: OpenDocumentResponse, preferredSheetIndex = 0): boolean {
       if (
         this.documentId !== response.editorSession.documentId
         || compareU64(response.editorSession.revision, this.revision) < 0
       ) return false;
-      this.replaceDocumentProjection(response);
+      this.replaceDocumentProjection(response, preferredSheetIndex);
       this.revision = response.editorSession.revision;
       this.currentFilePath = response.document.path || this.currentFilePath;
       applyEditorSessionStatus(response.editorSession);
       return true;
     },
-    applySavedDocumentResponse(response: SavedDocumentResponse, path: string | null = null) {
+    applySavedDocumentResponse(
+      response: SavedDocumentResponse,
+      path: string | null = null,
+      preferredSheetIndex = 0
+    ) {
       if (!response.document && (!response.identity || !this.data)) {
         throw new Error('Saved document response did not include manifest or identity data');
       }
       resetTransientDocumentWork(this);
       resetRegionCache(this);
+      const selected = response.document
+        ? Math.min(preferredSheetIndex, Math.max(0, response.document.sheets.length - 1))
+        : preferredSheetIndex;
       if (response.document) {
-        const selected = Math.min(
-          useEditorSelectionStore().currentSheetIndex,
-          Math.max(0, response.document.sheets.length - 1)
-        );
         this.data = createDocumentProjection(response.document);
         this.activateResidentSheet(selected);
       } else if (this.data && response.identity) {
@@ -209,7 +202,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
-      this.enforceResidentSheetBudget();
+      this.enforceResidentSheetBudget(selected);
       clampSelectionToCurrentSheet(this);
       resetSearchSession();
       applyEditorSessionStatus(response.editorSession);
@@ -217,14 +210,15 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     applySavedDocumentResponseForContext(
       context: EditorCommandContext,
       response: SavedDocumentResponse,
-      path: string | null = null
+      path: string | null = null,
+      preferredSheetIndex = 0
     ): boolean {
       if (
         response.editorSession.documentId !== context.documentId
         || compareU64(response.editorSession.revision, context.baseRevision) < 0
         || !this.matchesCommandContext(context)
       ) return false;
-      this.applySavedDocumentResponse(response, path);
+      this.applySavedDocumentResponse(response, path, preferredSheetIndex);
       return true;
     },
     updateIdentity(path: string | null, fileName: string) {
@@ -247,7 +241,10 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       resetSessionUi();
       resetDocumentStatus();
     },
-    applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
+    applyMutationResponse(
+      response: EditorMutationResponse,
+      protectedSheetIndex = 0
+    ): MutationApplyResult {
       if (response.protocolVersion !== 4) {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
@@ -293,7 +290,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         reconcileRegionBlocks(this, this.data?.sheets.flatMap((sheet) =>
           sheet.state === 'loaded' ? sheet.blocks.map((block) => block.key) : []
         ) ?? []);
-        this.reconcileResidentSheets();
+        this.reconcileResidentSheets(protectedSheetIndex);
         applySelectionPatches(response.patches);
         if (mutationInvalidatesSearch(response.patches)) clearSearchSession();
         clampSelectionToCurrentSheet(this);
@@ -315,7 +312,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       const slot = this.data?.sheets[sheetIndex];
       return slot?.state === 'loaded' ? slot : null;
     },
-    activateResidentSheet(sheetIndex: number): boolean {
+    activateResidentSheet(sheetIndex: number, protectedSheetIndex = 0): boolean {
       const slot = this.data?.sheets[sheetIndex];
       if (!slot || !this.data) return false;
       if (slot.state === 'unloaded') {
@@ -328,26 +325,25 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         );
         this.data = { ...this.data, sheets };
       }
-      this.touchResidentSheet(sheetIndex);
+      this.touchResidentSheet(sheetIndex, protectedSheetIndex);
       return true;
     },
-    touchResidentSheet(sheetIndex: number) {
+    touchResidentSheet(sheetIndex: number, protectedSheetIndex = 0) {
       if (this.residentSheetOrder.at(-1) === sheetIndex) return;
       this.residentSheetOrder = [
         ...this.residentSheetOrder.filter((index) => index !== sheetIndex),
         sheetIndex,
       ];
-      this.enforceResidentSheetBudget();
+      this.enforceResidentSheetBudget(protectedSheetIndex);
     },
-    reconcileResidentSheets() {
+    reconcileResidentSheets(protectedSheetIndex?: number) {
       const loaded = new Set(this.loadedSheetIndexes);
       const retained = this.residentSheetOrder.filter((index) => loaded.delete(index));
       this.residentSheetOrder = [...retained, ...loaded];
-      this.enforceResidentSheetBudget();
+      this.enforceResidentSheetBudget(protectedSheetIndex ?? 0);
     },
-    enforceResidentSheetBudget() {
+    enforceResidentSheetBudget(protectedSheet: number) {
       if (!this.data) return;
-      const protectedSheet = useEditorSelectionStore().currentSheetIndex;
       const sheets = [...this.data.sheets];
       const removedBlockKeys: string[] = [];
       let evictedSheet = false;
@@ -431,7 +427,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         region: SheetRegion
       ) => Promise<SheetRegionProjectionResponse>
     ): Promise<boolean> {
-      if (!this.activateResidentSheet(sheetIndex)) return false;
+      if (!this.activateResidentSheet(sheetIndex, sheetIndex)) return false;
       const slot = this.data?.sheets[sheetIndex];
       if (!slot) return false;
       if (slot.extent.rowCount === 0 || slot.extent.columnCount === 0) return true;
@@ -451,7 +447,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       ) => Promise<SheetRegionProjectionResponse>,
       options: { priority?: RegionLoadPriority } = {}
     ): Promise<boolean> {
-      if (!this.activateResidentSheet(region.sheetIndex)) return false;
+      if (!this.activateResidentSheet(region.sheetIndex, region.sheetIndex)) return false;
       const slot = this.data?.sheets[region.sheetIndex];
       if (!slot) return false;
       const tiles = tileRegions(region, slot.extent);
@@ -490,16 +486,10 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (!context) return false;
       const key = `${context.documentId}:${context.baseRevision}:${regionKey(region)}`;
       return scheduleRegionLoad(this, key, async (isCurrent) => {
-        const budget: RegionLoadBudget = {
-          remainingRequests: MAX_REGION_FRAGMENT_REQUESTS,
-          loadedBytes: 0,
-          deadline: Date.now() + MAX_REGION_LOAD_DURATION_MS,
-        };
-        const newBlocks = await fetchRegionBlocks(
+        const newBlocks = await loadRegionBlocks(
           context,
           region,
           fetchProjection,
-          budget,
           () => isCurrent() && this.matchesCommandContext(context)
         );
         if (!isCurrent() || !this.matchesCommandContext(context)) return false;
@@ -519,7 +509,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
           regionKey(region),
           newBlocks.map((block) => block.key)
         );
-        this.touchResidentSheet(region.sheetIndex);
+        this.touchResidentSheet(region.sheetIndex, region.sheetIndex);
         this.enforceRegionBlockBudget(region.sheetIndex);
         return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
       }, options);
@@ -540,21 +530,22 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       fetchProjection: (
         context: EditorCommandContext,
         preferredSheetIndex: number
-      ) => Promise<OpenDocumentResponse>
+      ) => Promise<OpenDocumentResponse>,
+      preferredSheetIndex = 0
     ): Promise<MutationApplyResult> {
       const snapshot = captureMutationSnapshot(this);
-      const result = this.applyMutationResponse(response);
+      const result = this.applyMutationResponse(response, preferredSheetIndex);
       if (!result.applied || !result.resyncRequired) return result;
       const resyncContext = { documentId: response.documentId, baseRevision: response.revision };
       try {
         const projection = await fetchProjection(
           resyncContext,
-          useEditorSelectionStore().currentSheetIndex
+          preferredSheetIndex
         );
         if (!this.matchesCommandContext(resyncContext)) {
           return { data: this.data, resyncRequired: true, applied: false };
         }
-        this.replaceDocumentProjection(projection);
+        this.replaceDocumentProjection(projection, preferredSheetIndex);
       } catch (error) {
         if (this.matchesCommandContext(resyncContext)) {
           restoreMutationSnapshot(this, snapshot);
@@ -574,7 +565,8 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       fetchProjection?: (
         context: EditorCommandContext,
         preferredSheetIndex: number
-      ) => Promise<OpenDocumentResponse>
+      ) => Promise<OpenDocumentResponse>,
+      preferredSheetIndex = 0
     ) {
       const context = this.currentCommandContext();
       if (!fetchProjection || !context) {
@@ -584,11 +576,11 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       const snapshot = captureMutationSnapshot(this);
       try {
         const [projection, session] = await Promise.all([
-          fetchProjection(context, useEditorSelectionStore().currentSheetIndex),
+          fetchProjection(context, preferredSheetIndex),
           fetchEditorSession(context),
         ]);
         if (!this.matchesCommandContext(context)) return;
-        this.replaceDocumentProjection(projection);
+        this.replaceDocumentProjection(projection, preferredSheetIndex);
         this.applyEditorSessionForContext(context, session);
       } catch (error) {
         if (this.matchesCommandContext(context)) restoreMutationSnapshot(this, snapshot);
@@ -628,126 +620,6 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     },
   },
 });
-
-function tileRegions(region: SheetRegion, extent: SheetExtent): SheetRegion[] {
-  const rowStart = Math.max(0, Math.min(region.rowStart, extent.rowCount));
-  const rowEnd = Math.max(rowStart, Math.min(region.rowEnd, extent.rowCount));
-  const colStart = Math.max(0, Math.min(region.colStart, extent.columnCount));
-  const colEnd = Math.max(colStart, Math.min(region.colEnd, extent.columnCount));
-  if (rowStart === rowEnd || colStart === colEnd) return [];
-  const tiles: SheetRegion[] = [];
-  for (let row = Math.floor(rowStart / TILE_ROWS) * TILE_ROWS; row < rowEnd; row += TILE_ROWS) {
-    for (let col = Math.floor(colStart / TILE_COLUMNS) * TILE_COLUMNS; col < colEnd; col += TILE_COLUMNS) {
-      tiles.push({
-        sheetIndex: region.sheetIndex,
-        rowStart: row,
-        rowEnd: Math.min(row + TILE_ROWS, extent.rowCount),
-        colStart: col,
-        colEnd: Math.min(col + TILE_COLUMNS, extent.columnCount),
-      });
-    }
-  }
-  return tiles;
-}
-
-async function fetchRegionBlocks(
-  context: EditorCommandContext,
-  region: SheetRegion,
-  fetchProjection: (
-    context: EditorCommandContext,
-    region: SheetRegion
-  ) => Promise<SheetRegionProjectionResponse>,
-  budget: RegionLoadBudget,
-  isCurrent: () => boolean
-): Promise<LoadedSheetSlot['blocks']> {
-  ensureRegionLoadCanContinue(budget, isCurrent);
-  budget.remainingRequests -= 1;
-  try {
-    const response = await fetchProjection(context, region);
-    ensureRegionLoadCanContinue(budget, isCurrent);
-    if (regionKey(response.region) !== regionKey(region)) return [];
-    if (
-      response.documentId !== context.documentId
-      || response.revision !== context.baseRevision
-    ) return [];
-    const block = regionBlock(response);
-    if (block.estimatedBytes > MAX_REGION_BLOCK_BYTES) return [];
-    budget.loadedBytes += block.estimatedBytes;
-    if (budget.loadedBytes > MAX_REGION_FRAGMENT_BYTES) {
-      throw new RegionLoadLimitError(
-        `Region fragments exceed the ${MAX_REGION_FRAGMENT_BYTES} byte load budget`
-      );
-    }
-    return [block];
-  } catch (error) {
-    if (!isAppErrorCode(error, 'region_response_too_large')) throw error;
-    const split = splitRegion(region);
-    if (!split) throw error;
-    const first = await fetchRegionBlocks(
-      context,
-      split[0],
-      fetchProjection,
-      budget,
-      isCurrent
-    );
-    const second = await fetchRegionBlocks(
-      context,
-      split[1],
-      fetchProjection,
-      budget,
-      isCurrent
-    );
-    return [...first, ...second];
-  }
-}
-
-function ensureRegionLoadCanContinue(budget: RegionLoadBudget, isCurrent: () => boolean) {
-  if (!isCurrent()) {
-    throw new RegionLoadCancelledError();
-  }
-  if (Date.now() > budget.deadline) {
-    throw new RegionLoadLimitError(
-      `Region load exceeded the ${MAX_REGION_LOAD_DURATION_MS} ms deadline`
-    );
-  }
-  if (budget.remainingRequests <= 0) {
-    throw new RegionLoadLimitError(
-      `Region load requires more than ${MAX_REGION_FRAGMENT_REQUESTS} fragment requests`
-    );
-  }
-}
-
-class RegionLoadLimitError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RegionLoadLimitError';
-  }
-}
-
-class RegionLoadCancelledError extends Error {
-  constructor() {
-    super('Region load was cancelled');
-    this.name = 'RegionLoadCancelledError';
-  }
-}
-
-function splitRegion(region: SheetRegion): [SheetRegion, SheetRegion] | null {
-  const rows = region.rowEnd - region.rowStart;
-  const columns = region.colEnd - region.colStart;
-  if (rows <= 1 && columns <= 1) return null;
-  if (rows >= columns && rows > 1) {
-    const middle = region.rowStart + Math.floor(rows / 2);
-    return [
-      { ...region, rowEnd: middle },
-      { ...region, rowStart: middle },
-    ];
-  }
-  const middle = region.colStart + Math.floor(columns / 2);
-  return [
-    { ...region, colEnd: middle },
-    { ...region, colStart: middle },
-  ];
-}
 
 function currentRegionBlockKeys(data: DocumentProjection | null): string[] {
   return data?.sheets.flatMap((slot) => slot.state === 'loaded'
