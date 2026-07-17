@@ -333,6 +333,46 @@ describe('documentSession sparse projection', () => {
     expect(after.rich).toBe(before.rich);
   });
 
+  it('enforces the region byte budget after a mutation resync', async () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse(openResponse());
+    const refreshed = openResponse();
+    refreshed.editorSession = session('1');
+    refreshed.initialRegion!.revision = '1';
+    refreshed.initialRegion!.estimatedBytes = 16 * 1024 * 1024 + 1;
+
+    await store.applyMutationResponseWithResync(mutation({
+      type: 'ResyncRequired',
+      data: { patch: { reason: 'test' } },
+    }), async () => refreshed);
+
+    expect(store.loadedSheet(0)?.blocks).toHaveLength(0);
+    expect(store.projectionStale).toBe(false);
+  });
+
+  it('preserves resident sheet recency across ordinary mutations', () => {
+    const store = useDocumentSessionStore();
+    const opened = openResponse();
+    opened.document.sheets = Array.from({ length: 5 }, (_, index) => ({
+      name: `Sheet ${index + 1}`,
+      extent: { rowCount: 10, columnCount: 10 },
+      layout: { columnWidths: {}, rowHeights: {} },
+    }));
+    store.openDocumentResponse(opened);
+    store.activateResidentSheet(1);
+    store.activateResidentSheet(2);
+    store.activateResidentSheet(3);
+    store.touchResidentSheet(1);
+
+    store.applyMutationResponse(mutation(undefined, opened.document.sheets.map((sheet) => (
+      sheet.extent
+    ))));
+    store.activateResidentSheet(4);
+
+    expect(store.isSheetLoaded(1)).toBe(true);
+    expect(store.isSheetLoaded(2)).toBe(false);
+  });
+
   it('applies layout patches to unloaded sheets', () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse(openResponse());

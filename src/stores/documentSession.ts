@@ -154,20 +154,22 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     discardPendingLocalWork() {
       resetTransientDocumentWork(this);
     },
+    replaceDocumentProjection(response: OpenDocumentResponse) {
+      resetRegionCache(this);
+      replaceProjection(this, response);
+      reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
+      this.enforceResidentSheetBudget();
+      this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
+    },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
       resetTransientDocumentWork(this);
-      resetRegionCache(this);
-      this.data = createDocumentProjection(response.document, response.initialRegion);
-      reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
-      this.residentSheetOrder = this.loadedSheetIndexes;
+      this.replaceDocumentProjection(response);
       this.currentFilePath = path !== null ? path : response.document.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       resetSessionEditorCommands(this);
       this.projectionStale = false;
       resetSessionUi();
-      this.enforceResidentSheetBudget();
-      this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
       resetDocumentStatus();
       applyEditorSessionStatus(response.editorSession);
     },
@@ -176,14 +178,9 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         this.documentId !== response.editorSession.documentId
         || compareU64(response.editorSession.revision, this.revision) < 0
       ) return false;
-      resetRegionCache(this);
-      replaceProjection(this, response);
-      reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
+      this.replaceDocumentProjection(response);
       this.revision = response.editorSession.revision;
       this.currentFilePath = response.document.path || this.currentFilePath;
-      this.residentSheetOrder = this.loadedSheetIndexes;
-      this.enforceResidentSheetBudget();
-      this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
       applyEditorSessionStatus(response.editorSession);
       return true;
     },
@@ -335,6 +332,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       return true;
     },
     touchResidentSheet(sheetIndex: number) {
+      if (this.residentSheetOrder.at(-1) === sheetIndex) return;
       this.residentSheetOrder = [
         ...this.residentSheetOrder.filter((index) => index !== sheetIndex),
         sheetIndex,
@@ -342,7 +340,9 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.enforceResidentSheetBudget();
     },
     reconcileResidentSheets() {
-      this.residentSheetOrder = this.loadedSheetIndexes;
+      const loaded = new Set(this.loadedSheetIndexes);
+      const retained = this.residentSheetOrder.filter((index) => loaded.delete(index));
+      this.residentSheetOrder = [...retained, ...loaded];
       this.enforceResidentSheetBudget();
     },
     enforceResidentSheetBudget() {
@@ -350,12 +350,14 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       const protectedSheet = useEditorSelectionStore().currentSheetIndex;
       const sheets = [...this.data.sheets];
       const removedBlockKeys: string[] = [];
+      let evictedSheet = false;
       while (this.residentSheetOrder.length > MAX_RESIDENT_SHEETS) {
         const position = this.residentSheetOrder.findIndex((index) => index !== protectedSheet);
         if (position < 0) break;
         const [evicted] = this.residentSheetOrder.splice(position, 1);
         const slot = sheets[evicted];
         if (slot?.state === 'loaded') {
+          evictedSheet = true;
           removedBlockKeys.push(...slot.blocks.map((block) => block.key));
           sheets[evicted] = {
             state: 'unloaded', name: slot.name, extent: slot.extent, layout: slot.layout,
@@ -363,6 +365,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         }
       }
       this.residentSheetOrder = [...this.residentSheetOrder];
+      if (!evictedSheet) return;
       removeRegionBlocks(this, removedBlockKeys);
       this.data = { ...this.data, sheets };
     },
@@ -417,6 +420,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         );
         removedKeys.push(candidateKey);
       }
+      if (!removedKeys.length) return;
       removeRegionBlocks(this, removedKeys);
       this.data = { ...this.data, sheets };
     },
@@ -550,7 +554,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         if (!this.matchesCommandContext(resyncContext)) {
           return { data: this.data, resyncRequired: true, applied: false };
         }
-        replaceProjection(this, projection);
+        this.replaceDocumentProjection(projection);
       } catch (error) {
         if (this.matchesCommandContext(resyncContext)) {
           restoreMutationSnapshot(this, snapshot);
@@ -584,7 +588,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
           fetchEditorSession(context),
         ]);
         if (!this.matchesCommandContext(context)) return;
-        replaceProjection(this, projection);
+        this.replaceDocumentProjection(projection);
         this.applyEditorSessionForContext(context, session);
       } catch (error) {
         if (this.matchesCommandContext(context)) restoreMutationSnapshot(this, snapshot);

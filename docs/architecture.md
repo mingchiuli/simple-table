@@ -233,6 +233,19 @@ only when its resident block membership changes; cell-only patches retain the
 same merge, format, and style snapshot. Rendering therefore does not repeatedly
 copy all block metadata after ordinary edits.
 
+Frontend projection patches are reduced with structural sharing. Cell changes
+are grouped by Sheet and each affected region-block map is copied at most once
+per response; unchanged Sheets, blocks, extents, and no-op layout maps retain
+their object identity. Block keys are reindexed only after Sheet membership
+changes. This keeps a bounded mutation batch from multiplying work by the block
+cell count or invalidating the complete reactive projection.
+
+Installing a replacement projection is one `documentSession` operation. Open,
+resync, and mutation-error recovery all reset the region-load generation,
+reconcile the replacement block keys, preserve the resident-Sheet policy, and
+enforce block count and byte budgets through that operation. Callers must not
+replace projection data independently of its cache runtime.
+
 Grid geometry is sparse as well as cell data. Each axis stores its default size,
 sorted explicit overrides, and prefix size deltas. Offset lookup, pixel-to-index
 lookup, visible-item discovery, merged spans, and resize handles do not allocate
