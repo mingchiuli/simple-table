@@ -1,3 +1,4 @@
+use crate::domain::{AppliedOperation, EditorCommand};
 use crate::error::AppError;
 use crate::io::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
@@ -6,7 +7,6 @@ use crate::io::file_format::is_xlsx_extension;
 use crate::io::formula_coordinator::FormulaWorkLimits;
 use crate::io::history_restore_transaction::{HistoryRestoreDirection, HistoryRestoreTransaction};
 use crate::io::projection_limits::ResourceLedger;
-use crate::ops::EditorCommand;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
 use crate::state::dirty_tracker::DirtyTracker;
@@ -562,10 +562,7 @@ impl EditorState {
         ))
     }
 
-    fn ensure_operation_supported(
-        &mut self,
-        operation: &crate::ops::AppliedOperation,
-    ) -> Result<(), AppError> {
+    fn ensure_operation_supported(&mut self, operation: &AppliedOperation) -> Result<(), AppError> {
         if let Some(reason) = self.transaction_failure() {
             return Err(AppError::DocumentStateInvalid(reason.to_string()));
         }
@@ -594,10 +591,7 @@ impl EditorState {
         Ok(())
     }
 
-    fn ensure_memento_budget(
-        &mut self,
-        operation: &crate::ops::AppliedOperation,
-    ) -> Result<(), AppError> {
+    fn ensure_memento_budget(&mut self, operation: &AppliedOperation) -> Result<(), AppError> {
         let estimated_bytes = self.document.estimate_memento_side_bytes(operation);
         if estimated_bytes > MAX_SINGLE_HISTORY_ENTRY_BYTES {
             return Err(AppError::DocumentStateInvalid(format!(
@@ -618,25 +612,25 @@ fn nonzero_random_u64() -> u64 {
 }
 
 fn operation_resource_sheets(
-    operation: &crate::ops::AppliedOperation,
+    operation: &AppliedOperation,
     formula_changes: &[SheetCellChange],
 ) -> Vec<usize> {
     let mut sheets = HashSet::new();
     match operation {
-        crate::ops::AppliedOperation::SetCell { sheet_index, .. }
-        | crate::ops::AppliedOperation::SetColumnWidth { sheet_index, .. }
-        | crate::ops::AppliedOperation::SetRowHeight { sheet_index, .. }
-        | crate::ops::AppliedOperation::AddRow { sheet_index, .. }
-        | crate::ops::AppliedOperation::DeleteRow { sheet_index, .. }
-        | crate::ops::AppliedOperation::AddColumn { sheet_index, .. }
-        | crate::ops::AppliedOperation::DeleteColumn { sheet_index, .. }
-        | crate::ops::AppliedOperation::DeleteSheet { sheet_index } => {
+        AppliedOperation::SetCell { sheet_index, .. }
+        | AppliedOperation::SetColumnWidth { sheet_index, .. }
+        | AppliedOperation::SetRowHeight { sheet_index, .. }
+        | AppliedOperation::AddRow { sheet_index, .. }
+        | AppliedOperation::DeleteRow { sheet_index, .. }
+        | AppliedOperation::AddColumn { sheet_index, .. }
+        | AppliedOperation::DeleteColumn { sheet_index, .. }
+        | AppliedOperation::DeleteSheet { sheet_index } => {
             sheets.insert(*sheet_index);
         }
-        crate::ops::AppliedOperation::SetCells { changes } => {
+        AppliedOperation::SetCells { changes } => {
             sheets.extend(changes.iter().map(|change| change.sheet_index));
         }
-        crate::ops::AppliedOperation::AddSheet { sheet_index, .. } => {
+        AppliedOperation::AddSheet { sheet_index, .. } => {
             sheets.insert(*sheet_index);
         }
     }
@@ -648,14 +642,14 @@ trait SearchInvalidation {
     fn search_stale_sheets(&self, formula_changes: &[SheetCellChange]) -> Vec<usize>;
 }
 
-impl SearchInvalidation for crate::ops::AppliedOperation {
+impl SearchInvalidation for AppliedOperation {
     fn search_stale_sheets(&self, formula_changes: &[SheetCellChange]) -> Vec<usize> {
         let mut sheets = HashSet::new();
         match self {
-            crate::ops::AppliedOperation::SetCell { sheet_index, .. } => {
+            AppliedOperation::SetCell { sheet_index, .. } => {
                 sheets.insert(*sheet_index);
             }
-            crate::ops::AppliedOperation::SetCells { changes } => {
+            AppliedOperation::SetCells { changes } => {
                 for change in changes {
                     sheets.insert(change.sheet_index);
                 }
@@ -675,8 +669,8 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+    use crate::domain::EditorCommand;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-    use crate::ops::EditorCommand;
     use crate::state::search_index::build_sheet_index;
     use crate::types::{
         CellFormatProjection, CellValue, ReadOnlyRichProjection, SetCellRequest, SheetRegion,

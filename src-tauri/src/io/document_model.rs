@@ -1,3 +1,4 @@
+use crate::domain::{AppliedOperation, ResolvedCellEdit};
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::io::document_body::BodySheetShape;
@@ -14,7 +15,6 @@ use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::io::document_transaction::DocumentTransaction;
 use crate::io::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
 use crate::io::region_metadata_index::RegionMetadataIndex;
-use crate::ops::AppliedOperation;
 use crate::types::FormulaStatus;
 use crate::types::{
     AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
@@ -344,7 +344,7 @@ impl SpreadsheetDocument {
 
     fn cell_batch_memento(
         &self,
-        changes: &[crate::ops::core_ops::ResolvedCellEdit],
+        changes: &[ResolvedCellEdit],
         formula_capabilities_may_change: bool,
     ) -> CellMemento {
         self.cell_memento(

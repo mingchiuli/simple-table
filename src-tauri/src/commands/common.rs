@@ -3,7 +3,7 @@
 use super::{
     CommandU64, blocking, mutation_executor, projection_executor, recent_executor, search_executor,
 };
-use crate::application::{document_service, mutation_replay};
+use crate::application::{document_save_service, document_service, mutation_replay};
 use crate::error::AppError;
 use crate::io::document;
 #[cfg(desktop)]
@@ -231,7 +231,10 @@ pub async fn save_file_desktop(
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    blocking::run(move || desktop::save_file(&path, document_id.get(), base_revision.get())).await
+    blocking::run(move || {
+        document_save_service::save_file_desktop(&path, document_id.get(), base_revision.get())
+    })
+    .await
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
@@ -244,7 +247,12 @@ pub async fn export_file_desktop(
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
     blocking::run(move || {
-        desktop::export_file(&app, &default_name, document_id.get(), base_revision.get())
+        document_save_service::export_file_desktop(
+            &app,
+            &default_name,
+            document_id.get(),
+            base_revision.get(),
+        )
     })
     .await
 }

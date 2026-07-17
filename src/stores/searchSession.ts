@@ -4,6 +4,13 @@ type SearchSessionRuntime = {
   requestId: number;
 };
 
+export type SearchSessionSnapshot = {
+  searchResults: SearchResult[];
+  searchResultsTruncated: boolean;
+  searchQuery: string;
+  isSearching: boolean;
+};
+
 const searchSessionRuntimes = new WeakMap<object, SearchSessionRuntime>();
 
 export const useSearchSessionStore = defineStore("searchSession", {
@@ -46,6 +53,21 @@ export const useSearchSessionStore = defineStore("searchSession", {
     },
     reset() {
       this.clearSearch();
+    },
+    captureSnapshot(): SearchSessionSnapshot {
+      return {
+        searchResults: [...this.searchResults],
+        searchResultsTruncated: this.searchResultsTruncated,
+        searchQuery: this.searchQuery,
+        isSearching: this.isSearching,
+      };
+    },
+    restoreSnapshot(snapshot: SearchSessionSnapshot) {
+      runtimeFor(this).requestId += 1;
+      this.searchResults = [...snapshot.searchResults];
+      this.searchResultsTruncated = snapshot.searchResultsTruncated;
+      this.searchQuery = snapshot.searchQuery;
+      this.isSearching = false;
     },
   },
 });

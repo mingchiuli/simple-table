@@ -3,6 +3,7 @@ import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import { createDocumentMutationProtocol } from '@/application/documentMutationProtocol';
+import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 import type {
   EditorCommandContext,
   EditorMutationResponse,
@@ -35,6 +36,7 @@ type ConsistentReadOptions<T> = {
 
 export function useDocumentCommandBus() {
   const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
   const editorSelectionStore = useEditorSelectionStore();
   const mutationProtocol = createDocumentMutationProtocol({
     transport: {
@@ -47,7 +49,7 @@ export function useDocumentCommandBus() {
     recovery: {
       preferredSheetIndex: () => editorSelectionStore.currentSheetIndex,
       recoverProjection: (response, preferredSheetIndex) =>
-        documentSessionStore.recoverActiveDocumentResponse(response, preferredSheetIndex),
+        documentSessionCoordinator.recoverActiveDocumentResponse(response, preferredSheetIndex),
     },
     reportError: (message, error) => console.error(`${message}:`, error),
   });
@@ -80,7 +82,7 @@ export function useDocumentCommandBus() {
           const result = await applyMutationResponse(response);
           if (result.applied) runAfterApplied(afterApplied);
         } catch (error) {
-          if (!documentSessionStore.markProjectionStaleFromMutationResponse(response)) return;
+          if (!documentSessionCoordinator.markProjectionStaleFromMutationResponse(response)) return;
           if (await refreshAfterMutationError(true)) {
             runAfterApplied(afterApplied);
           } else {
@@ -115,7 +117,7 @@ export function useDocumentCommandBus() {
           throw new Error('Mutation response was not applied to the active document');
         }
       } catch (error) {
-        if (!documentSessionStore.markProjectionStaleFromMutationResponse(response)) return;
+        if (!documentSessionCoordinator.markProjectionStaleFromMutationResponse(response)) return;
         if (!(await refreshAfterMutationError(true))) onRefreshFailed?.(error);
       }
     });
@@ -123,7 +125,7 @@ export function useDocumentCommandBus() {
 
   async function refreshAfterMutationError(refreshProjection: boolean): Promise<boolean> {
     try {
-      await documentSessionStore.refreshAfterMutationFailure(
+      await documentSessionCoordinator.refreshAfterMutationFailure(
         api.getEditorState,
         refreshProjection && documentSessionStore.data
           ? api.getCurrentDocumentProjection
@@ -174,7 +176,7 @@ export function useDocumentCommandBus() {
   }
 
   function applyMutationResponse(response: EditorMutationResponse) {
-    return documentSessionStore.applyMutationResponseWithResync(
+    return documentSessionCoordinator.applyMutationResponseWithResync(
       response,
       api.getCurrentDocumentProjection,
       editorSelectionStore.currentSheetIndex

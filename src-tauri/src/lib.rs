@@ -1,6 +1,7 @@
 mod application;
 mod commands;
 mod display;
+mod domain;
 mod error;
 mod formula;
 mod io;

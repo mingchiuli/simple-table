@@ -13,15 +13,20 @@ flowchart TB
     REGION[Region repository and bounded RegionCache]
     RPC[Rust-signature generated TauriCommandMap]
     IPC[Typed invoke adapter]
-    SERVICE[Rust document application service]
+    SERVICE[Rust document and save application services]
     OPS[Rust operation layer]
     STATE[EditorState aggregate]
+    DOMAIN[Editor command and applied-operation domain contract]
     DOC[SpreadsheetDocument]
     IO[Workbook, CSV, and platform I/O]
 
     UI --> APP --> STORE
     APP --> REGION --> STORE
     APP --> RPC --> IPC --> SERVICE --> OPS --> STATE --> DOC --> IO
+    OPS --> DOMAIN
+    STATE --> DOMAIN
+    DOC --> DOMAIN
+    SERVICE --> IO
     OPS -. mutation response .-> STORE
 ```
 
@@ -33,6 +38,18 @@ Tauri command modules are transport adapters. Document replacement and close
 coordination live in the Rust application layer, which owns retirement of
 mutation replay and search-index work before releasing the old document.
 Neither the document model nor the I/O layer may depend on command modules.
+
+`domain::editor_operation` owns the editor command vocabulary, canonical
+applied operations, and their lightweight impact/projection views. The state
+aggregate and document model depend on this contract directly; they must not
+depend on the operation-handler layer. `ops` may depend on both the domain
+contract and state aggregate to implement a use case, never the reverse.
+
+Save and export orchestration live in `application::document_save_service`.
+That service owns work reservations, revision validation, save leases, optional
+reparse, state commit, and post-save index scheduling. Platform I/O modules
+provide only path authorization, destination selection, and write primitives;
+the I/O layer must not call back into the application layer.
 
 ## State Ownership
 
@@ -50,6 +67,11 @@ Neither the document model nor the I/O layer may depend on command modules.
   values. Every Sheet owns a stable sparse layout index from its manifest.
   Loaded Sheets additionally own bounded cell blocks and render-only metadata.
   Cell-block eviction cannot change row or column geometry.
+- `documentSession` owns only document projection, revision, lifecycle, mutation
+  queue, and region-cache state. `documentSessionCoordinator` is the explicit
+  application transaction boundary for document, status, selection, search,
+  and pending-edit Stores. Business Stores must not instantiate or mutate one
+  another.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
   is the backend dirty flag OR pending frontend content.
 - Selection and search result state are UI-only and must not influence document
@@ -142,8 +164,9 @@ polling, and ambiguous-result projection recovery. Its transport, recovery
 port, clock, and command-id generator are injectable. `DocumentCommandBus` is
 the Vue adapter around that protocol: it owns interaction locks, pending-edit
 flushes, response application, post-mutation callbacks, and user-facing error
-messages. Components and feature composables should call the bus instead of
-rebuilding either lifecycle.
+messages. It delegates projection/status/selection/search commits and recovery
+to `documentSessionCoordinator`. Components and feature composables should call
+the bus or coordinator instead of rebuilding either lifecycle.
 
 ## RPC Contract
 
@@ -207,6 +230,10 @@ Saving follows this order:
 4. Write the target atomically.
 5. Finish the lease, update identity if needed, advance revision, and mark the
    content hash as saved.
+
+All five steps are coordinated by `application::document_save_service` for
+desktop and mobile. Platform modules cannot acquire document state or save
+leases; they validate or select a target and perform the requested write.
 
 Closing or replacing an active document while a save lease is held is invalid.
 Save and export snapshot generation has a process-wide RAII work reservation

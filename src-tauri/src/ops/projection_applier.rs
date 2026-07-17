@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ops::core_ops::{AppliedOperation, ProjectionMutation};
+use crate::domain::{AppliedOperation, ProjectionMutation};
 use crate::types::{
     AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange,
     DrawingProjection, FileData, MergeRange, ReadOnlyRichProjection, RowChange, RowHeightChange,

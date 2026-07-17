@@ -1,9 +1,11 @@
 import * as api from '@/api';
+import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
 
 export function useDocumentStatus() {
   const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
   const documentStatusStore = useDocumentStatusStore();
   const {
     canUndo,
@@ -20,7 +22,7 @@ export function useDocumentStatus() {
     const context = documentSessionStore.currentCommandContext();
     try {
       const session = await api.getEditorState(context);
-      documentSessionStore.applyEditorSessionForContext(context, session);
+      documentSessionCoordinator.applyEditorSessionForContext(context, session);
     } catch (error) {
       if (!context || documentSessionStore.matchesCommandContext(context)) {
         console.error('Failed to get editor state:', error);

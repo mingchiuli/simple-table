@@ -78,12 +78,3 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
         file_name,
     }))
 }
-
-pub fn export_file(
-    app: &AppHandle,
-    default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
-    mobile::export_file(app, default_name, document_id, base_revision)
-}

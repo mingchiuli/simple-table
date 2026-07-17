@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useDocumentSessionStore } from '@/stores/documentSession';
+import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
 import type {
   EditorMutationResponse,
@@ -341,7 +342,7 @@ describe('documentSession sparse projection', () => {
     refreshed.initialRegion!.revision = '1';
     refreshed.initialRegion!.estimatedBytes = 16 * 1024 * 1024 + 1;
 
-    await store.applyMutationResponseWithResync(mutation({
+    await useDocumentSessionCoordinator().applyMutationResponseWithResync(mutation({
       type: 'ResyncRequired',
       data: { patch: { reason: 'test' } },
     }), async () => refreshed);

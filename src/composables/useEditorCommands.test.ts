@@ -4,6 +4,7 @@ import { createPinia, setActivePinia, storeToRefs } from "pinia";
 import { useEditorCommands } from "@/composables/useEditorCommands";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
+import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -92,14 +93,15 @@ function setupCommands(
   overrides: { currentSheetIndex?: Ref<number> } = {}
 ) {
   const documentSessionStore = useDocumentSessionStore();
-  documentSessionStore.openDocumentResponse(openedResponse(), "/tmp/book.xlsx");
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
+  documentSessionCoordinator.openDocumentResponse(openedResponse(), "/tmp/book.xlsx");
   const selectionStore = useEditorSelectionStore();
   const { currentSheetIndex, selectedCell } = storeToRefs(selectionStore);
   const activeSheetIndex = overrides.currentSheetIndex ?? currentSheetIndex;
   const fileData = computed(() => documentSessionStore.data);
   const currentSheet = computed(() => documentSessionStore.loadedSheet(activeSheetIndex.value));
   const applyMutationResponse = vi.spyOn(
-    documentSessionStore,
+    documentSessionCoordinator,
     "applyMutationResponseWithResync"
   ).mockImplementation(async (_response: EditorMutationResponse) => ({
     data: documentSessionStore.data,
@@ -119,6 +121,7 @@ function setupCommands(
   return {
     commands,
     documentSessionStore,
+    documentSessionCoordinator,
     selectionStore,
     currentSheetIndex: activeSheetIndex,
     selectedCell,

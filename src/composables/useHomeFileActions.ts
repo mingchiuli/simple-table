@@ -10,6 +10,7 @@ import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
 import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
 import { isAppErrorCode } from "@/utils/appError";
+import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
 
 type UseHomeFileActionsOptions = {
   navigateToTable?: () => Promise<void> | void;
@@ -20,6 +21,7 @@ export function useHomeFileActions({
 }: UseHomeFileActionsOptions = {}) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
   const { beginDocumentReplacement } = useDocumentReplacementGuard();
   const { openSelectedFileOrDiscard } = useOpenFileSelection({
     beginDocumentReplacement,
@@ -62,7 +64,7 @@ export function useHomeFileActions({
         const prepared = await api.prepareNewFile();
         const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
         replacement.commit();
-        documentSessionStore.openDocumentResponse(opened, null);
+        documentSessionCoordinator.openDocumentResponse(opened, null);
         await navigateToTableRoute();
       } catch (error) {
         replacement.cancel();
@@ -99,7 +101,7 @@ export function useHomeFileActions({
       const prepared = await prepareRecentFile(file);
       const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
       replacement.commit();
-      documentSessionStore.openDocumentResponse(opened, file.path);
+      documentSessionCoordinator.openDocumentResponse(opened, file.path);
       queueRecentFileEntryUpdate(file.originalPath);
       return true;
     } catch (error) {

@@ -849,8 +849,8 @@ pub fn cancel_index_jobs_for_document(document_id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::EditorCommand;
     use crate::error::AppError;
-    use crate::ops::EditorCommand;
     use crate::ops::search_ops::do_search;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentStore;

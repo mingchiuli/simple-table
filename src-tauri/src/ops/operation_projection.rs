@@ -1,4 +1,4 @@
-use crate::ops::core_ops::{AppliedOperation, OperationPatchProjector};
+use crate::domain::{AppliedOperation, OperationPatchProjector};
 use crate::types::{
     AppliedOperationResult, CellValue, ColumnChange, FileData, RowChange, SheetData,
 };

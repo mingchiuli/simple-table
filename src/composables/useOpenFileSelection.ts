@@ -3,6 +3,7 @@ import type { OpenFileSelection } from "@/platform";
 import type { DocumentReplacementLease } from "@/composables/useDocumentReplacementGuard";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
+import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
 
 type OpenFileSelectionLifecycleOptions = {
   beginDocumentReplacement: () => Promise<DocumentReplacementLease | null>;
@@ -12,6 +13,7 @@ export function useOpenFileSelection({
   beginDocumentReplacement,
 }: OpenFileSelectionLifecycleOptions) {
   const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
 
   async function openSelectedFileOrDiscard(selection: OpenFileSelection): Promise<boolean> {
     let shouldDiscard = true;
@@ -28,7 +30,7 @@ export function useOpenFileSelection({
       shouldDiscard = false;
       replacement.commit();
       replacement = null;
-      documentSessionStore.openDocumentResponse(opened, selection.path);
+      documentSessionCoordinator.openDocumentResponse(opened, selection.path);
       return true;
     } catch (error) {
       actionError = error;

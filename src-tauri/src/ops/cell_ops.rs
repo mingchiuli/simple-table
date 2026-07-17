@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
+use crate::domain::EditorCommand;
 use crate::error::AppError;
-use crate::ops::EditorCommand;
 use crate::ops::index_ops::schedule_index_for_response;
 use crate::ops::patch_projector::{
     cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,

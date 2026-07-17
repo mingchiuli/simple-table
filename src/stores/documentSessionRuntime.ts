@@ -1,18 +1,7 @@
 import type {
-  EditorMutationResponse,
-  EditorSessionInfo,
-  EditorPatch,
   DocumentProjection,
-  OpenDocumentResponse,
   U64String,
 } from "@/types";
-import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
-import { useSearchSessionStore } from "@/stores/searchSession";
-import { useDocumentStatusStore } from "@/stores/documentStatus";
-import type { DocumentStatusSnapshot } from "@/stores/documentStatus";
-import { useEditorSelectionStore } from "@/stores/editorSelection";
-import type { EditorSelectionSnapshot } from "@/stores/editorSelection";
-import { createDocumentProjection } from "@/stores/documentProjection";
 
 export type DocumentSessionLifecycle = "idle" | "loading" | "saving" | "closing";
 
@@ -42,8 +31,6 @@ export type DocumentSessionSnapshot = {
   editorCommandDepth: number;
   projectionStale: boolean;
   residentSheetOrder: number[];
-  status: DocumentStatusSnapshot;
-  selection: EditorSelectionSnapshot;
 };
 
 const documentSessionRuntimes = new WeakMap<object, DocumentSessionRuntime>();
@@ -127,61 +114,13 @@ export function waitForQueuedMutations(store: object): Promise<void> {
   return sessionRuntimeFor(store).tail ?? Promise.resolve();
 }
 
-export function resetTransientDocumentWork(store: object) {
+export function resetSessionMutationQueue(store: object) {
   resetMutationQueue(store);
-  usePendingCellSavesStore().reset();
-  useDocumentStatusStore().clearPendingContentChange();
-}
-
-export function resetSessionUi() {
-  useEditorSelectionStore().reset();
-  useSearchSessionStore().reset();
-}
-
-export function resetDocumentStatus() {
-  useDocumentStatusStore().reset();
-}
-
-export function resetSearchSession() {
-  useSearchSessionStore().reset();
-}
-
-export function clearSearchSession() {
-  useSearchSessionStore().clearSearch();
-}
-
-export function applyEditorSessionStatus(info: EditorSessionInfo) {
-  useDocumentStatusStore().applyEditorSession(info);
-}
-
-export function applySelectionPatches(patches: EditorPatch[] | undefined) {
-  useEditorSelectionStore().applyEditorPatches(patches);
-}
-
-export function replaceProjection(
-  store: DocumentSessionStateTarget,
-  response: OpenDocumentResponse
-) {
-  store.data = createDocumentProjection(response.document, response.initialRegion);
-  store.residentSheetOrder = response.initialRegion
-    ? [response.initialRegion.region.sheetIndex]
-    : [];
-  store.projectionStale = false;
-  clampSelectionToCurrentSheet(store);
-  useSearchSessionStore().clearSearch();
-}
-
-export function applyResponseStatus(response: EditorMutationResponse) {
-  const statusStore = useDocumentStatusStore();
-  statusStore.applyRuntimeStatus(response.formulaStatus, response.capabilities);
-  statusStore.applyEditorState(response.editorState);
 }
 
 export function captureMutationSnapshot(
   store: DocumentSessionStateTarget
 ): DocumentSessionSnapshot {
-  const statusStore = useDocumentStatusStore();
-  const selectionStore = useEditorSelectionStore();
   return {
     data: store.data,
     currentFilePath: store.currentFilePath,
@@ -191,8 +130,6 @@ export function captureMutationSnapshot(
     editorCommandDepth: store.editorCommandDepth,
     projectionStale: store.projectionStale,
     residentSheetOrder: [...store.residentSheetOrder],
-    status: statusStore.captureSnapshot(),
-    selection: selectionStore.captureSnapshot(),
   };
 }
 
@@ -209,27 +146,7 @@ export function restoreMutationSnapshot(
   store.projectionStale = snapshot.projectionStale;
   store.residentSheetOrder = [...snapshot.residentSheetOrder];
 
-  useDocumentStatusStore().restoreSnapshot(snapshot.status);
-  useEditorSelectionStore().restoreSnapshot(snapshot.selection);
   resolveIdleWaitersIfInteractionIdle(store);
-}
-
-export function clampSelectionToCurrentSheet(store: DocumentSessionStateTarget) {
-  const selectionStore = useEditorSelectionStore();
-  if (!store.data) {
-    selectionStore.clearSelection();
-    return;
-  }
-  selectionStore.clampToSheetData(store.data.sheets.length, (sheetIndex, row, col) => {
-    const sheet = store.data?.sheets[sheetIndex];
-    if (!sheet) return false;
-    const extent = sheet.extent;
-    return row >= 0 && col >= 0 && row < extent.rowCount && col < extent.columnCount;
-  });
-}
-
-export function mutationInvalidatesSearch(patches: EditorPatch[] | undefined): boolean {
-  return (patches ?? []).some((patch) => patch.type !== "Layout");
 }
 
 function resetMutationQueue(store: object) {

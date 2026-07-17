@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::domain::AppliedOperation;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::reference_rewrite::{
@@ -9,7 +10,6 @@ use crate::formula::reference_rewrite::{
 use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
 use crate::io::document_body::BodySheetShape;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
-use crate::ops::AppliedOperation;
 use crate::types::{
     FileData, SheetCapabilities, SheetCellChange, SheetData, WorkbookCapabilities,
     WorkbookRichCapabilities, WorkbookSaveCapabilities, WorkbookStructureCapabilities,

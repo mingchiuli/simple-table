@@ -1,7 +1,5 @@
 use crate::error::AppError;
-use crate::io::atomic_file::{
-    cleanup_temp_file, replace_temp_file, write_file_atomically, write_temp_file_for_target,
-};
+use crate::io::atomic_file::write_file_atomically;
 use crate::io::document;
 use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
@@ -9,7 +7,7 @@ use crate::io::file_format::{
 };
 use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::recent::store::RecentStore;
-use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
+use crate::types::PreparedOpenDocument;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -172,37 +170,24 @@ pub fn discard_save_location(path: &str) {
     revoke_path(save_paths(), &normalize_target_path(Path::new(path)));
 }
 
-pub fn save_file(
+pub(crate) fn ensure_save_path_authorized(
     path: &str,
     document_id: u64,
     base_revision: u64,
-) -> Result<SavedDocumentResponse, AppError> {
-    ensure_save_path_authorized(path, document_id, base_revision)?;
-    let prepared = document::prepare_current_file_save(document_id, base_revision, path)?;
-    let target = Path::new(path);
-    let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
-        Ok(temp_path) => temp_path,
-        Err(error) => {
-            document::abort_prepared_file_save(prepared);
-            return Err(error);
-        }
-    };
-
-    let result = document::commit_current_file_save(path.to_string(), prepared, || {
-        replace_temp_file(&temp_path, target)
-    });
-    if result.is_err() {
-        cleanup_temp_file(&temp_path);
-    }
-    result
+) -> Result<(), AppError> {
+    ensure_save_path_authorized_impl(path, document_id, base_revision)
 }
 
-pub fn export_file(
+pub(crate) struct DesktopExportTarget {
+    pub path: PathBuf,
+    pub path_string: String,
+    pub target_path_or_name: String,
+}
+
+pub(crate) fn pick_export_target(
     app: &AppHandle,
     default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<DesktopExportTarget>, AppError> {
     use tauri_plugin_dialog::DialogExt;
 
     let Some(path) = app
@@ -221,12 +206,21 @@ pub fn export_file(
         .file_name()
         .and_then(|name| name.to_str())
         .map(|name| file_name_from_path_like(name, ""));
-    let target_path_or_name =
-        output_name_for_selected_target(selected_name.as_deref(), default_name);
-    let prepared =
-        document::prepare_current_file_export(document_id, base_revision, &target_path_or_name)?;
-    write_file_atomically(&path, &prepared.bytes)?;
-    Ok(Some(path_string))
+    Ok(Some(DesktopExportTarget {
+        path,
+        path_string,
+        target_path_or_name: output_name_for_selected_target(
+            selected_name.as_deref(),
+            default_name,
+        ),
+    }))
+}
+
+pub(crate) fn write_export_target(
+    target: &DesktopExportTarget,
+    bytes: &[u8],
+) -> Result<(), AppError> {
+    write_file_atomically(&target.path, bytes)
 }
 
 fn file_path_to_path_buf(path: FilePath) -> Result<PathBuf, AppError> {
@@ -238,7 +232,7 @@ fn file_path_to_path_buf(path: FilePath) -> Result<PathBuf, AppError> {
     }
 }
 
-fn ensure_save_path_authorized(
+fn ensure_save_path_authorized_impl(
     path: &str,
     document_id: u64,
     base_revision: u64,

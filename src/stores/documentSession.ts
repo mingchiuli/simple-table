@@ -41,24 +41,14 @@ import {
   TILE_ROWS,
 } from '@/stores/documentRegionRepository';
 import {
-  applyEditorSessionStatus,
-  applyResponseStatus,
-  applySelectionPatches,
   beginSessionEditorCommand,
   beginSessionLifecycle,
   captureMutationSnapshot,
-  clampSelectionToCurrentSheet,
-  clearSearchSession,
   endSessionLifecycle,
   enqueueMutation,
-  mutationInvalidatesSearch,
-  replaceProjection,
-  resetDocumentStatus,
-  resetSearchSession,
   resetSessionEditorCommands,
   resetSessionLifecycle,
-  resetSessionUi,
-  resetTransientDocumentWork,
+  resetSessionMutationQueue,
   restoreMutationSnapshot,
   waitForIdleSessionInteraction,
   waitForQueuedMutations,
@@ -142,26 +132,27 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
     },
     discardPendingLocalWork() {
-      resetTransientDocumentWork(this);
+      resetSessionMutationQueue(this);
     },
     replaceDocumentProjection(response: OpenDocumentResponse, protectedSheetIndex = 0) {
       resetRegionCache(this);
-      replaceProjection(this, response);
+      this.data = createDocumentProjection(response.document, response.initialRegion);
+      this.residentSheetOrder = response.initialRegion
+        ? [response.initialRegion.region.sheetIndex]
+        : [];
+      this.projectionStale = false;
       reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
       this.enforceResidentSheetBudget(protectedSheetIndex);
       this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
-      resetTransientDocumentWork(this);
+      resetSessionMutationQueue(this);
       this.replaceDocumentProjection(response);
       this.currentFilePath = path !== null ? path : response.document.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
       resetSessionEditorCommands(this);
       this.projectionStale = false;
-      resetSessionUi();
-      resetDocumentStatus();
-      applyEditorSessionStatus(response.editorSession);
     },
     recoverActiveDocumentResponse(response: OpenDocumentResponse, preferredSheetIndex = 0): boolean {
       if (
@@ -171,7 +162,6 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.replaceDocumentProjection(response, preferredSheetIndex);
       this.revision = response.editorSession.revision;
       this.currentFilePath = response.document.path || this.currentFilePath;
-      applyEditorSessionStatus(response.editorSession);
       return true;
     },
     applySavedDocumentResponse(
@@ -182,7 +172,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (!response.document && (!response.identity || !this.data)) {
         throw new Error('Saved document response did not include manifest or identity data');
       }
-      resetTransientDocumentWork(this);
+      resetSessionMutationQueue(this);
       resetRegionCache(this);
       const selected = response.document
         ? Math.min(preferredSheetIndex, Math.max(0, response.document.sheets.length - 1))
@@ -203,9 +193,6 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.revision = response.editorSession.revision;
       this.projectionStale = false;
       this.enforceResidentSheetBudget(selected);
-      clampSelectionToCurrentSheet(this);
-      resetSearchSession();
-      applyEditorSessionStatus(response.editorSession);
     },
     applySavedDocumentResponseForContext(
       context: EditorCommandContext,
@@ -228,7 +215,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.currentFilePath = path;
     },
     clearDocument() {
-      resetTransientDocumentWork(this);
+      resetSessionMutationQueue(this);
       deleteRegionCache(this);
       this.data = null;
       this.currentFilePath = null;
@@ -238,8 +225,6 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.projectionStale = false;
       this.residentSheetOrder = [];
       resetSessionLifecycle(this);
-      resetSessionUi();
-      resetDocumentStatus();
     },
     applyMutationResponse(
       response: EditorMutationResponse,
@@ -261,23 +246,17 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (compareU64(response.revision, this.revision) > 0
           && !isNextU64(response.revision, this.revision)) {
         this.revision = response.revision;
-        applyResponseStatus(response);
         this.projectionStale = true;
-        clearSearchSession();
         return { data: this.data, resyncRequired: true, applied: true };
       }
       if (response.revision === this.revision && response.patches?.length) {
-        applyResponseStatus(response);
         this.projectionStale = true;
-        clearSearchSession();
         return { data: this.data, resyncRequired: true, applied: true };
       }
       if (response.revision === this.revision) {
-        applyResponseStatus(response);
         return { data: this.data, resyncRequired: false, applied: true };
       }
 
-      applyResponseStatus(response);
       this.revision = response.revision;
       resetRegionCache(this, true);
       try {
@@ -291,17 +270,12 @@ export const useDocumentSessionStore = defineStore('documentSession', {
           sheet.state === 'loaded' ? sheet.blocks.map((block) => block.key) : []
         ) ?? []);
         this.reconcileResidentSheets(protectedSheetIndex);
-        applySelectionPatches(response.patches);
-        if (mutationInvalidatesSearch(response.patches)) clearSearchSession();
-        clampSelectionToCurrentSheet(this);
         if (result.resyncRequired) {
           this.projectionStale = true;
-          clearSearchSession();
         }
         return { ...result, applied: true };
       } catch (error) {
         this.projectionStale = true;
-        clearSearchSession();
         throw error;
       }
     },
@@ -520,103 +494,27 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (compareU64(response.revision, this.revision) < 0) return false;
       if (this.documentId === null) this.documentId = response.documentId;
       this.revision = response.revision;
-      if (response.protocolVersion === 4) applyResponseStatus(response);
       this.projectionStale = true;
-      clearSearchSession();
       return true;
     },
-    async applyMutationResponseWithResync(
-      response: EditorMutationResponse,
-      fetchProjection: (
-        context: EditorCommandContext,
-        preferredSheetIndex: number
-      ) => Promise<OpenDocumentResponse>,
-      preferredSheetIndex = 0
-    ): Promise<MutationApplyResult> {
-      const snapshot = captureMutationSnapshot(this);
-      const result = this.applyMutationResponse(response, preferredSheetIndex);
-      if (!result.applied || !result.resyncRequired) return result;
-      const resyncContext = { documentId: response.documentId, baseRevision: response.revision };
-      try {
-        const projection = await fetchProjection(
-          resyncContext,
-          preferredSheetIndex
-        );
-        if (!this.matchesCommandContext(resyncContext)) {
-          return { data: this.data, resyncRequired: true, applied: false };
-        }
-        this.replaceDocumentProjection(projection, preferredSheetIndex);
-      } catch (error) {
-        if (this.matchesCommandContext(resyncContext)) {
-          restoreMutationSnapshot(this, snapshot);
-          this.documentId = response.documentId;
-          this.revision = response.revision;
-          applyResponseStatus(response);
-          this.projectionStale = true;
-        }
-        throw error;
+    applyEditorSessionIdentity(info: EditorSessionInfo) {
+      if (this.data === null) return { applied: false, revisionAdvanced: false };
+      if (this.documentId !== null && info.documentId !== this.documentId) {
+        return { applied: false, revisionAdvanced: false };
       }
-      return { data: this.data, resyncRequired: true, applied: true };
-    },
-    async refreshAfterMutationFailure(
-      fetchEditorSession: (
-        context: EditorCommandContext | null
-      ) => Promise<EditorSessionInfo | null | undefined>,
-      fetchProjection?: (
-        context: EditorCommandContext,
-        preferredSheetIndex: number
-      ) => Promise<OpenDocumentResponse>,
-      preferredSheetIndex = 0
-    ) {
-      const context = this.currentCommandContext();
-      if (!fetchProjection || !context) {
-        this.applyEditorSessionForContext(context, await fetchEditorSession(context));
-        return;
-      }
-      const snapshot = captureMutationSnapshot(this);
-      try {
-        const [projection, session] = await Promise.all([
-          fetchProjection(context, preferredSheetIndex),
-          fetchEditorSession(context),
-        ]);
-        if (!this.matchesCommandContext(context)) return;
-        this.replaceDocumentProjection(projection, preferredSheetIndex);
-        this.applyEditorSessionForContext(context, session);
-      } catch (error) {
-        if (this.matchesCommandContext(context)) restoreMutationSnapshot(this, snapshot);
-        throw error;
-      }
-    },
-    applyEditorSessionForContext(
-      context: EditorCommandContext | null,
-      info: EditorSessionInfo | null | undefined
-    ) {
-      if (context) {
-        if (this.matchesCommandContext(context)) this.applyEditorSession(info);
-        return;
-      }
-      if (this.documentId !== null) return;
-      if (!info) {
-        this.clearDocument();
-      } else if (this.data !== null) {
-        this.applyEditorSession(info);
-      }
-    },
-    applyEditorSession(info: EditorSessionInfo | null | undefined) {
-      if (!info) {
-        this.clearDocument();
-        return;
-      }
-      if (this.data === null) return;
-      if (this.documentId !== null && info.documentId !== this.documentId) return;
       const revisionAdvancedWithoutProjection = compareU64(info.revision, this.revision) > 0;
       this.documentId = info.documentId;
       this.revision = maxU64(this.revision, info.revision);
-      applyEditorSessionStatus(info);
       if (revisionAdvancedWithoutProjection) {
         this.projectionStale = true;
-        clearSearchSession();
       }
+      return { applied: true, revisionAdvanced: revisionAdvancedWithoutProjection };
+    },
+    captureSessionSnapshot() {
+      return captureMutationSnapshot(this);
+    },
+    restoreSessionSnapshot(snapshot: ReturnType<typeof captureMutationSnapshot>) {
+      restoreMutationSnapshot(this, snapshot);
     },
   },
 });

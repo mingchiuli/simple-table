@@ -18,6 +18,7 @@ import {
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { sheetCell } from "@/stores/documentProjection";
+import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -93,7 +94,8 @@ describe("useCellEditController", () => {
     const elementPlus = await import("element-plus");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    documentSessionStore.openDocumentResponse(
+    const documentSessionCoordinator = useDocumentSessionCoordinator();
+    documentSessionCoordinator.openDocumentResponse(
       openResponseFromFileData(fileData("old"), editorSession(0)),
       "/tmp/book.xlsx"
     );
@@ -148,7 +150,8 @@ describe("useCellEditController", () => {
     const elementPlus = await import("element-plus");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    documentSessionStore.openDocumentResponse(
+    const documentSessionCoordinator = useDocumentSessionCoordinator();
+    documentSessionCoordinator.openDocumentResponse(
       openResponseFromFileData(fileData("old"), editorSession(0)),
       "/tmp/book.xlsx"
     );
@@ -157,7 +160,7 @@ describe("useCellEditController", () => {
       .mockRejectedValue(new Error("projection unavailable"));
     vi.mocked(api.getEditorState).mockRejectedValue(new Error("state unavailable"));
     const applyMutationResponse = vi.fn().mockRejectedValue(new Error("frontend apply failed"));
-    vi.spyOn(documentSessionStore, "applyMutationResponseWithResync")
+    vi.spyOn(documentSessionCoordinator, "applyMutationResponseWithResync")
       .mockImplementation(applyMutationResponse);
 
     const scope = effectScope();

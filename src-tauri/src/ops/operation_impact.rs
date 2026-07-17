@@ -1,4 +1,4 @@
-use crate::ops::core_ops::{AppliedOperation, MutationImpact};
+use crate::domain::{AppliedOperation, MutationImpact};
 
 impl MutationImpact<'_> {
     pub fn is_noop(&self) -> bool {

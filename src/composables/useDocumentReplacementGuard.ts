@@ -1,5 +1,6 @@
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
+import { useDocumentSessionCoordinator } from "@/application/documentSessionCoordinator";
 import {
   confirmDiscardUnsavedChanges,
   hasUnsavedDocumentChanges,
@@ -18,6 +19,7 @@ export function useDocumentReplacementGuard({
   flushPendingCellChanges,
 }: DocumentReplacementGuardOptions = {}) {
   const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
   const pendingCellSavesStore = usePendingCellSavesStore();
 
   async function beginDocumentReplacement(): Promise<DocumentReplacementLease | null> {
@@ -63,7 +65,7 @@ export function useDocumentReplacementGuard({
       commit() {
         if (settled) return;
         settled = true;
-        documentSessionStore.discardPendingLocalWork();
+        documentSessionCoordinator.discardPendingLocalWork();
       },
       cancel() {
         if (settled) return;

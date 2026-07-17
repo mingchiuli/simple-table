@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::domain::AppliedOperation;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::io::document_body::SpreadsheetDocumentBody;
 use crate::io::document_memento::{
@@ -10,7 +11,6 @@ use crate::io::formula_coordinator::FormulaCoordinator;
 use crate::io::rich_projection::{
     drawing_column_scope_affected, drawing_row_scope_affected, parse_cell_key,
 };
-use crate::ops::AppliedOperation;
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, FileData, FreezePaneProjection,
     HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,

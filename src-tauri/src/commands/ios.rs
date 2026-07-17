@@ -1,6 +1,8 @@
 #[cfg(target_os = "ios")]
 use super::{CommandU64, blocking};
 #[cfg(target_os = "ios")]
+use crate::application::document_save_service;
+#[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
 use crate::io::platform::mobile::PickedFileInfo;
@@ -69,8 +71,10 @@ pub async fn save_file_ios(
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
-    blocking::run(move || mobile::save_file(&app, &path, document_id.get(), base_revision.get()))
-        .await
+    blocking::run(move || {
+        document_save_service::save_file_mobile(&app, &path, document_id.get(), base_revision.get())
+    })
+    .await
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.
@@ -83,7 +87,12 @@ pub async fn export_file_ios(
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
     blocking::run(move || {
-        ios::export_file(&app, &default_name, document_id.get(), base_revision.get())
+        document_save_service::export_file_mobile(
+            &app,
+            &default_name,
+            document_id.get(),
+            base_revision.get(),
+        )
     })
     .await
 }

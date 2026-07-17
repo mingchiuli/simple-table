@@ -1,7 +1,6 @@
 #![cfg_attr(test, allow(dead_code))]
 
 use crate::error::AppError;
-use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 use crate::io::document;
 use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
@@ -13,7 +12,7 @@ use crate::io::transient_files::{
     reconcile_persisted_transient_files, transient_file_registry, write_persistent_marker,
 };
 use crate::io::{managed_documents, managed_documents::ManagedDocumentRecord};
-use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
+use crate::types::PreparedOpenDocument;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -244,7 +243,10 @@ pub(crate) fn remove_managed_file_if_inactive(
     }
 }
 
-fn validated_mobile_files_path(app: &AppHandle, path: &Path) -> Result<PathBuf, AppError> {
+pub(crate) fn validated_mobile_files_path(
+    app: &AppHandle,
+    path: &Path,
+) -> Result<PathBuf, AppError> {
     let files_dir = mobile_dir(app)?.canonicalize().map_err(|e| {
         AppError::DocumentStateInvalid(format!("Failed to resolve app file dir: {}", e))
     })?;
@@ -336,37 +338,7 @@ pub(crate) fn migrate_managed_document(
     managed_documents::migrate_existing_document(&target, file_name, id, adopted_at_millis)
 }
 
-pub fn save_file(
-    app: &AppHandle,
-    path: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<SavedDocumentResponse, AppError> {
-    let target = validated_mobile_files_path(app, Path::new(path))?;
-    ensure_save_target_authorized(&target, document_id, base_revision)?;
-    let target_path = target.to_string_lossy().to_string();
-    let prepared = document::prepare_current_file_save(document_id, base_revision, &target_path)?;
-    managed_documents::validate_managed_save(&target, prepared.bytes.len() as u64)?;
-    let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
-        Ok(temp_path) => temp_path,
-        Err(error) => {
-            document::abort_prepared_file_save(prepared);
-            return Err(error);
-        }
-    };
-
-    let managed_file_name = prepared.output_name.clone();
-    let result = document::commit_current_file_save(target_path, prepared, || {
-        replace_temp_file(&temp_path, &target)?;
-        managed_documents::adopt_completed_save(&target, &managed_file_name)
-    });
-    if result.is_err() {
-        cleanup_temp_file(&temp_path);
-    }
-    result
-}
-
-fn ensure_save_target_authorized(
+pub(crate) fn ensure_save_target_authorized(
     target: &Path,
     document_id: u64,
     base_revision: u64,
@@ -402,12 +374,16 @@ pub fn reserve_save_location(app: &AppHandle, file_name: &str) -> Result<String,
     Ok(path.to_string_lossy().to_string())
 }
 
-pub fn export_file(
+pub(crate) struct MobileExportTarget {
+    pub destination: FilePath,
+    pub destination_string: String,
+    pub target_path_or_name: String,
+}
+
+pub(crate) fn pick_export_target(
     app: &AppHandle,
     default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<MobileExportTarget>, AppError> {
     use tauri_plugin_dialog::{DialogExt, PickerMode};
 
     let dest = match app
@@ -422,16 +398,22 @@ pub fn export_file(
         None => return Ok(None),
     };
 
-    let selected_name = selected_file_name(&dest);
-    let target_path_or_name =
-        output_name_for_selected_target(selected_name.as_deref(), default_name);
-    let prepared =
-        document::prepare_current_file_export(document_id, base_revision, &target_path_or_name)?;
+    Ok(Some(MobileExportTarget {
+        destination_string: dest.to_string(),
+        target_path_or_name: output_name_for_selected_target(
+            selected_file_name(&dest).as_deref(),
+            default_name,
+        ),
+        destination: dest,
+    }))
+}
 
-    write_with_official_fs(app, dest.clone(), &prepared.bytes)
-        .map_err(|e| AppError::WriteError(format!("Failed to export file: {}", e)))?;
-
-    Ok(Some(dest.to_string()))
+pub(crate) fn write_export_target(
+    app: &AppHandle,
+    target: &MobileExportTarget,
+    bytes: &[u8],
+) -> Result<(), AppError> {
+    write_with_official_fs(app, target.destination.clone(), bytes)
 }
 
 #[cfg(test)]

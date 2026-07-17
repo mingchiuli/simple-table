@@ -21,6 +21,7 @@ import { documentCapabilities, nativeSavePlan } from '@/utils/documentCapabiliti
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 import { defaultSpreadsheetExtension } from '@/utils/spreadsheetFormats';
 import { appErrorMessage } from '@/utils/appError';
+import { useDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 
 type UseFileActionsOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
@@ -45,6 +46,7 @@ export function useFileActions({
 }: UseFileActionsOptions) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
   const editorSelectionStore = useEditorSelectionStore();
   const { beginDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
@@ -83,16 +85,16 @@ export function useFileActions({
             try {
               await api.closeCurrentDocument(opened.editorSession.documentId);
               replacement.commit();
-              documentSessionStore.clearDocument();
+              documentSessionCoordinator.clearDocument();
             } catch (error) {
               replacement.commit();
-              documentSessionStore.openDocumentResponse(opened, filePath);
+              documentSessionCoordinator.openDocumentResponse(opened, filePath);
               throw error;
             }
             return;
           }
           replacement.commit();
-          documentSessionStore.openDocumentResponse(opened, filePath);
+          documentSessionCoordinator.openDocumentResponse(opened, filePath);
           loaded = true;
 
           queueRecentFileEntryUpdate();
@@ -134,7 +136,7 @@ export function useFileActions({
 
       if (existingPath && savePlan.canSave && !savePlan.requiresSaveAs) {
         const saved = await saveFile(existingPath, context);
-        if (!documentSessionStore.applySavedDocumentResponseForContext(
+        if (!documentSessionCoordinator.applySavedDocumentResponseForContext(
           context,
           saved,
           existingPath,
@@ -166,7 +168,7 @@ export function useFileActions({
 
         const saved = await saveFile(savePath, context);
         markPersisted();
-        if (!documentSessionStore.applySavedDocumentResponseForContext(
+        if (!documentSessionCoordinator.applySavedDocumentResponseForContext(
           context,
           saved,
           savePath,
@@ -212,7 +214,7 @@ export function useFileActions({
       const context = documentSessionStore.currentCommandContext();
       if (!context) {
         replacement.commit();
-        documentSessionStore.clearDocument();
+        documentSessionCoordinator.clearDocument();
         closed = true;
         return;
       }
@@ -224,7 +226,7 @@ export function useFileActions({
         throw error;
       }
       replacement.commit();
-      documentSessionStore.clearDocument();
+      documentSessionCoordinator.clearDocument();
       closed = true;
     }, {
       waitForIdle: options.waitForIdle,

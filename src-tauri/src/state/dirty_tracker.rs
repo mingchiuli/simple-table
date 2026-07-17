@@ -1,5 +1,5 @@
+use crate::domain::AppliedOperation;
 use crate::io::document_memento::DocumentMementoSide;
-use crate::ops::AppliedOperation;
 use crate::state::content_hash::{ContentHash, IncrementalContentFingerprint};
 use crate::types::FileData;
 

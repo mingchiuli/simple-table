@@ -47,6 +47,7 @@ pub(crate) fn adopt_transient_document(target: &Path, file_name: &str) -> Result
     Ok(true)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn adopt_completed_save(target: &Path, file_name: &str) -> Result<(), AppError> {
     persist_managed_document(target, file_name, None, None, true)?;
     transient_file_registry().adopt_if_registered(target)?;

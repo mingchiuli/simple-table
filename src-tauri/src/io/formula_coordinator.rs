@@ -1,12 +1,12 @@
 use formualizer_parse::parser::ReferenceType;
 
+use crate::domain::AppliedOperation;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
 use crate::formula::sheet_name::sheet_names_equal;
 use crate::io::workbook_state::StructurePatchDiagnostics;
-use crate::ops::AppliedOperation;
 use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus, SheetCellChange};
 
 pub(crate) struct FormulaCoordinator {

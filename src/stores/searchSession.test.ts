@@ -63,6 +63,17 @@ describe("searchSession store", () => {
     expect(store.isSearching).toBe(true);
   });
 
+  it("restores results without reviving an invalidated in-flight request", () => {
+    const store = useSearchSessionStore();
+    const requestId = store.beginSearch("value");
+    const snapshot = store.captureSnapshot();
+
+    store.restoreSnapshot(snapshot);
+
+    expect(store.isSearching).toBe(false);
+    expect(store.applySearchResults(requestId, response("late"))).toBe(false);
+  });
+
   it("keeps request tokens out of serializable UI state", () => {
     const store = useSearchSessionStore();
 
