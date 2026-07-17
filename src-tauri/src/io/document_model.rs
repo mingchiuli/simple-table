@@ -281,7 +281,7 @@ impl SpreadsheetDocument {
             .validate_recalculation_work(operation, &self.projection, limits)
     }
 
-    pub(in crate::io) fn restore_memento_side(
+    pub(crate) fn restore_memento_side(
         &mut self,
         side: &DocumentMementoSide,
     ) -> Result<DocumentRestoreResult, AppError> {
@@ -810,7 +810,7 @@ impl SpreadsheetDocument {
         self.transaction_failure.as_deref()
     }
 
-    pub(in crate::io) fn mark_transaction_failed(&mut self, reason: String) {
+    pub(crate) fn mark_transaction_failed(&mut self, reason: String) {
         self.refresh_region_metadata_index();
         self.refresh_capabilities();
         self.transaction_failure = Some(reason.clone());

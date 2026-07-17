@@ -1,12 +1,8 @@
 use crate::error::AppError;
-use crate::io::codec::reader::{preflight_input_file, read_file_with_workbook_from_preflight};
 use crate::io::file_format::{
-    default_spreadsheet_extension, export_extensions, extension_of, file_name_from_path_like,
-    open_extension_from_path_name_or_bytes, spreadsheet_format_options,
+    default_spreadsheet_extension, export_extensions, extension_of, spreadsheet_format_options,
     supported_extension_from_name,
 };
-use crate::io::prepared_documents;
-use crate::io::projection_limits::validate_file_data;
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
     active_document_store,
@@ -15,12 +11,10 @@ use crate::state::{
 };
 use crate::types::{
     DocumentCapabilities, DocumentManifest, FileData, NativeSavePlan, OpenDocumentResponse,
-    PreparedOpenDocument, SheetData, SheetLayoutProjection, SheetManifest, SheetRegion,
-    SheetRegionProjectionResponse, SpreadsheetFormatOptions, WorkbookCapabilities,
+    SheetData, SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionProjectionResponse,
+    SpreadsheetFormatOptions, WorkbookCapabilities,
 };
 use std::io::Write;
-use std::path::PathBuf;
-use umya_spreadsheet::Workbook;
 
 const LOSSY_CSV_SAVE_REASON: &str = "Saving a non-CSV document as CSV would discard sheets, formulas, or formatting; use Export instead.";
 const INITIAL_REGION_ROWS: usize = 128;
@@ -29,61 +23,6 @@ const MAX_REGION_CELLS: usize = 65_536;
 const MAX_REGION_ROWS: usize = 1_024;
 const MAX_REGION_COLUMNS: usize = 512;
 const MAX_REGION_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
-/// 从已读取的文件字节打开文档，并初始化编辑器状态
-pub fn prepare_open_from_bytes(
-    path: String,
-    bytes: Vec<u8>,
-    file_name: Option<String>,
-) -> Result<PreparedOpenDocument, AppError> {
-    let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
-    let preflight = preflight_input_file(&extension, &bytes)?;
-    let reservation = prepared_documents::reserve_for_parse_bytes(
-        preflight.estimated_parse_bytes(),
-        active_document_resource_bytes()?,
-    )?;
-
-    // 如果调用方已经解析出文件名，优先使用；否则从路径解析
-    let resolved_file_name =
-        file_name.unwrap_or_else(|| file_name_from_path_like(&path, "unknown"));
-
-    // 传入 path 到 reader，同时保留 Excel 原始 Workbook 用于后续无损 patch 保存。
-    let source_path = PathBuf::from(&path);
-    let result =
-        read_file_with_workbook_from_preflight(preflight, bytes, path, resolved_file_name)?;
-
-    prepare_editor_state(
-        result.file_data,
-        result.workbook,
-        Some(source_path),
-        reservation,
-    )
-}
-
-/// 准备新文档。只有 commit_prepared_document 才会替换当前活动文档。
-pub fn prepare_new_file() -> Result<PreparedOpenDocument, AppError> {
-    let file_data = blank_file_data();
-    validate_file_data(&file_data)?;
-    let reservation =
-        prepared_documents::reserve_for_file_data(&file_data, active_document_resource_bytes()?)?;
-    prepare_editor_state(file_data, None, None, reservation)
-}
-
-fn blank_file_data() -> FileData {
-    FileData {
-        path: String::new(),
-        file_name: format!("untitled.{}", default_spreadsheet_extension()),
-        sheets: vec![SheetData {
-            name: "Sheet1".to_string(),
-            rows: vec![vec![crate::types::CellValue::Null; 5]; 5],
-            ..Default::default()
-        }],
-    }
-}
-
-pub fn abort_prepared_document(token: &str) -> Result<(), AppError> {
-    prepared_documents::abort(token)
-}
 
 /// Restores the frontend after its runtime state was lost while the Rust process stayed alive.
 pub fn active_document_response() -> Result<Option<OpenDocumentResponse>, AppError> {
@@ -430,49 +369,6 @@ fn first_reason<const N: usize>(reason_groups: [&Vec<String>; N], fallback: &str
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn prepare_editor_state(
-    file_data: FileData,
-    workbook: Option<Workbook>,
-    source_path: Option<PathBuf>,
-    reservation: prepared_documents::PrepareReservation,
-) -> Result<PreparedOpenDocument, AppError> {
-    let editor_state = EditorState::with_workbook(file_data, workbook);
-    let token = prepared_documents::replace(
-        editor_state,
-        source_path,
-        reservation,
-        active_document_resource_bytes()?,
-    )?;
-    Ok(PreparedOpenDocument { token })
-}
-
-fn active_document_resource_bytes() -> Result<usize, AppError> {
-    let registry = active_document_store();
-    let handle = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle();
-    handle
-        .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
-        .transpose()
-        .map(|bytes| bytes.unwrap_or_default())
-}
-
-pub(crate) fn adopt_source_path_if_transient(
-    source_path: Option<&std::path::Path>,
-    file_name: &str,
-) -> Result<(), AppError> {
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
-    if let Some(source_path) = source_path {
-        crate::io::managed_documents::adopt_transient_document(source_path, file_name)?;
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-    let _ = (source_path, file_name);
-
-    Ok(())
-}
-
 pub(crate) fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
     EditorSessionInfo {
         document_id: editor_state.document_id(),
@@ -751,17 +647,10 @@ fn default_extension_string() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
+    use std::sync::{Arc, RwLock};
 
     use super::*;
     use crate::types::{CellValue, SheetData};
-
-    fn prepared_protocol_test_guard() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
@@ -790,43 +679,6 @@ mod tests {
                 requires_save_as_for_native_save: false,
                 workbook: WorkbookCapabilities::default(),
             }
-        );
-    }
-
-    #[test]
-    fn open_from_bytes_detects_extensionless_csv_content() {
-        let _guard = prepared_protocol_test_guard();
-        let prepared = prepare_open_from_bytes(
-            "/tmp/imported".to_string(),
-            b"name,score\nalice,42".to_vec(),
-            Some("imported".to_string()),
-        )
-        .expect("open extensionless csv");
-        let response = prepared_documents::take(&prepared.token).expect("prepared document");
-
-        let rows = &response.editor_state.file_data().sheets[0].rows;
-        assert_eq!(rows[0][0], CellValue::String("name".to_string()));
-        assert_eq!(rows[0][1], CellValue::String("score".to_string()));
-        assert_eq!(rows[1][0], CellValue::String("alice".to_string()));
-        assert_eq!(rows[1][1], CellValue::Number(42.into()));
-    }
-
-    #[test]
-    fn new_file_uses_the_backend_owned_blank_template() {
-        let _guard = prepared_protocol_test_guard();
-        let prepared = prepare_new_file().expect("init file");
-        let response = prepared_documents::take(&prepared.token).expect("prepared document");
-
-        assert_eq!(response.editor_state.file_data().path, "");
-        assert_eq!(response.editor_state.file_data().file_name, "untitled.xlsx");
-        assert_eq!(response.editor_state.file_data().sheets.len(), 1);
-        assert_eq!(response.editor_state.file_data().sheets[0].name, "Sheet1");
-        assert_eq!(response.editor_state.file_data().sheets[0].rows.len(), 5);
-        assert!(
-            response.editor_state.file_data().sheets[0]
-                .rows
-                .iter()
-                .all(|row| row.len() == 5 && row.iter().all(|cell| cell == &CellValue::Null))
         );
     }
 

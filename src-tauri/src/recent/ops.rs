@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 
+use crate::application::document_query_service;
 use crate::error::AppError;
-use crate::io::document;
 
 use super::store::RecentStore;
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -37,14 +37,17 @@ pub fn do_add_recent_file_with_thumbnail(
         document_id,
         base_revision,
     } = request;
-    let (path, file_name, thumbnail) =
-        document::inspect_current_file_for_command(document_id, base_revision, |file_data| {
+    let (path, file_name, thumbnail) = document_query_service::inspect_current_file_for_command(
+        document_id,
+        base_revision,
+        |file_data| {
             (
                 file_data.path.clone(),
                 file_data.file_name.clone(),
                 capture_thumbnail(file_data),
             )
-        })?;
+        },
+    )?;
 
     if path.is_empty() {
         return Err(AppError::DocumentStateInvalid(
@@ -83,7 +86,7 @@ pub fn do_remove_recent_file(app: &AppHandle, id: &str) -> Result<(), AppError> 
             .find(|file| file.id == id)
             && file.storage_type == StorageType::MobileSandboxPath
         {
-            let active_path = document::active_document_path()?;
+            let active_path = document_query_service::active_document_path()?;
             if !crate::io::platform::mobile::remove_managed_file_if_inactive(
                 app,
                 &file.path,
@@ -179,7 +182,7 @@ fn reconcile_mobile_recent_files(
 
 fn cleanup_removed_mobile_files(app: &AppHandle, removed: &[RecentFile]) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let active_path = match document::active_document_path() {
+    let active_path = match document_query_service::active_document_path() {
         Ok(active_path) => active_path,
         Err(error) => {
             eprintln!("Failed to inspect active document during recent cleanup: {error}");

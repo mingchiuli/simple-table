@@ -1,13 +1,12 @@
 use crate::error::AppError;
 use crate::io::atomic_file::write_file_atomically;
-use crate::io::document;
 use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_from_name,
 };
+use crate::io::open_file_input::OpenFileInput;
 use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::recent::store::RecentStore;
-use crate::types::PreparedOpenDocument;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -113,24 +112,24 @@ pub fn pick_open_file(app: &AppHandle) -> Result<Option<DesktopOpenFileInfo>, Ap
     Ok(Some(DesktopOpenFileInfo { path, file_name }))
 }
 
-pub fn prepare_file(path: &str) -> Result<PreparedOpenDocument, AppError> {
+pub fn read_open_file(path: &str) -> Result<OpenFileInput, AppError> {
     if !consume_path(open_paths(), &normalize_existing_path(Path::new(path))) {
         return Err(AppError::DocumentStateInvalid(
             "desktop file open path was not selected by the user".to_string(),
         ));
     }
-    prepare_file_trusted(path)
+    read_file_trusted(path)
 }
 
-pub fn prepare_recent_file(app: &AppHandle, id: &str) -> Result<PreparedOpenDocument, AppError> {
+pub fn read_recent_file(app: &AppHandle, id: &str) -> Result<OpenFileInput, AppError> {
     let recent = RecentStore::get_all(app)?
         .into_iter()
         .find(|file| file.id == id)
         .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
-    prepare_file_trusted(&recent.path)
+    read_file_trusted(&recent.path)
 }
 
-fn prepare_file_trusted(path: &str) -> Result<PreparedOpenDocument, AppError> {
+fn read_file_trusted(path: &str) -> Result<OpenFileInput, AppError> {
     let metadata = fs::metadata(path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => AppError::FileNotFound(path.to_string()),
         _ => AppError::ReadError(e.to_string()),
@@ -140,8 +139,11 @@ fn prepare_file_trusted(path: &str) -> Result<PreparedOpenDocument, AppError> {
         ErrorKind::NotFound => AppError::FileNotFound(path.to_string()),
         _ => AppError::ReadError(e.to_string()),
     })?;
-    let bytes = read_input_bytes(file)?;
-    document::prepare_open_from_bytes(path.to_string(), bytes, None)
+    Ok(OpenFileInput {
+        path: path.to_string(),
+        bytes: read_input_bytes(file)?,
+        file_name: None,
+    })
 }
 
 pub fn discard_open_file_selection(path: &str) {

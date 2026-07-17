@@ -1,8 +1,9 @@
 use std::sync::{Arc, RwLock};
 
-use crate::application::mutation_replay;
+use crate::application::{
+    document_open_service, document_query_service, mutation_replay, prepared_document_repository,
+};
 use crate::error::AppError;
-use crate::io::{document, prepared_documents};
 use crate::ops::index_ops::{cancel_index_jobs_for_document, spawn_rebuild_all_sheets_index};
 use crate::state::{
     active_document_store,
@@ -18,7 +19,7 @@ pub fn commit_prepared_document(
     expected_revision: Option<u64>,
 ) -> Result<OpenDocumentResponse, AppError> {
     let registry = active_document_store();
-    let checkout = prepared_documents::checkout(token)?;
+    let checkout = prepared_document_repository::checkout(token)?;
     let replacement_lease = {
         let mut registry_guard = registry
             .write()
@@ -26,7 +27,7 @@ pub fn commit_prepared_document(
         registry_guard.begin_document_replacement(expected_document_id, expected_revision)?
     };
     let mut replacement = ActiveDocumentReplacement::new(&registry, replacement_lease);
-    document::adopt_source_path_if_transient(
+    document_open_service::adopt_source_path_if_transient(
         checkout.document().source_path.as_deref(),
         &checkout.document().editor_state.file_data().file_name,
     )?;
@@ -49,9 +50,9 @@ pub fn commit_prepared_document(
 
     let response = {
         let editor_state = active_handle.read()?;
-        document::finalize_open_document_response(document::open_document_response_snapshot(
-            &editor_state,
-        ))
+        document_query_service::finalize_open_document_response(
+            document_query_service::open_document_response_snapshot(&editor_state),
+        )
     };
 
     if let Some(previous_document_id) = previous_document

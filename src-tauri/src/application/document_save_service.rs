@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
+use crate::application::document_query_service;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-use crate::io::document;
 use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::io::save_work::{self, SaveWorkReservation};
 use crate::ops::index_ops::spawn_rebuild_all_sheets_index;
@@ -56,7 +56,10 @@ pub fn prepare_current_file_save(
     let (snapshot, work) = {
         let handle = document_handle_for_read(&registry, document_id)?;
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        document::ensure_native_save_target_allowed(&editor_state, target_path_or_name)?;
+        document_query_service::ensure_native_save_target_allowed(
+            &editor_state,
+            target_path_or_name,
+        )?;
         if editor_state.has_save_commit_in_progress() {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
@@ -151,9 +154,9 @@ where
             clear_history,
         )?;
         let response = SavedDocumentResponse {
-            document: Some(document::document_manifest(&editor_state)),
+            document: Some(document_query_service::document_manifest(&editor_state)),
             identity: None,
-            editor_session: document::editor_session_info(&editor_state),
+            editor_session: document_query_service::editor_session_info(&editor_state),
         };
         (editor_state.document_id(), response, retired)
     };
@@ -222,7 +225,7 @@ where
                 path: editor_state.file_data().path.clone(),
                 file_name: editor_state.file_data().file_name.clone(),
             }),
-            editor_session: document::editor_session_info(&editor_state),
+            editor_session: document_query_service::editor_session_info(&editor_state),
         };
         (response, retired)
     };

@@ -3,7 +3,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { platform } from '@tauri-apps/plugin-os';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
-import { requestApplicationExit } from '@/composables/useApplicationExit';
+import { requestApplicationExit } from '@/application/applicationExitCoordinator';
 import { invokeCommand } from '@/tauriInvoke';
 import {
   useUpdateSessionStore,

@@ -1,7 +1,7 @@
 #[cfg(target_os = "android")]
 use super::{CommandU64, blocking};
 #[cfg(target_os = "android")]
-use crate::application::document_save_service;
+use crate::application::{document_open_service, document_save_service};
 #[cfg(target_os = "android")]
 use crate::error::AppError;
 #[cfg(target_os = "android")]
@@ -52,7 +52,7 @@ pub async fn prepare_open_file_android(
     app: AppHandle,
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
-    blocking::run(move || mobile::prepare_file(&app, &path)).await
+    blocking::run(move || document_open_service::prepare_open_file_mobile(&app, &path)).await
 }
 
 /// Android: generate file bytes and write them to the sandbox path.

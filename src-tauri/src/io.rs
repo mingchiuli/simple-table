@@ -4,7 +4,6 @@ pub mod codec {
 }
 
 pub mod atomic_file;
-pub mod document;
 pub mod document_body;
 pub mod document_memento;
 pub mod document_memento_budget;
@@ -14,13 +13,12 @@ pub mod document_save;
 pub mod document_transaction;
 pub mod file_format;
 pub mod formula_coordinator;
-pub mod history_restore_transaction;
 pub mod layout_units;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub mod managed_documents;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub mod marker_store;
-pub mod prepared_documents;
+pub mod open_file_input;
 pub mod projection_codec;
 pub mod projection_limits;
 pub mod projection_mapper;

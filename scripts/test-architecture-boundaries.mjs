@@ -39,20 +39,48 @@ rejectMatches(
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'io'), '.rs'),
-  [/crate::application(?:::|\b)/, /crate::commands(?:::|\b)/],
+  [
+    /crate::application(?:::|\b)/,
+    /crate::commands(?:::|\b)/,
+    /crate::ops(?:::|\b)/,
+    /crate::state(?:::|\b)/,
+  ],
   'the inward-only Rust application dependency boundary',
 );
 
 rejectMatches(
-  [join(projectRoot, 'src-tauri', 'src', 'io', 'prepared_documents.rs')],
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'prepared_document_repository.rs')],
   [/active_document_store/, /crate::state::active_document_store/],
   'the prepared-document repository boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs'),
+  [/crate::ops(?:::|\b)/, /crate::state(?:::|\b)/, /active_document_store/],
+  'the transport-only Rust command boundary',
 );
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'io', 'platform'), '.rs'),
   [/active_document_store/, /crate::state(?:::|\b)/],
   'the state-free platform I/O boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src', 'application'), '.ts'),
+  [/['"]element-plus['"]/, /['"]vue-router['"]/, /['"]@\/composables(?:\/|['"])/],
+  'the UI-independent frontend application boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'documentFileCoordinator.ts')],
+  [
+    /['"]@\/api['"]/,
+    /['"]@\/platform(?:\/|['"])/,
+    /['"]@\/stores(?:\/|['"])/,
+    /['"]@tauri-apps\//,
+  ],
+  'the port-driven document file coordinator boundary',
 );
 
 if (violations.length > 0) {

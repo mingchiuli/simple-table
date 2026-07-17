@@ -34,10 +34,20 @@ Frontend platform adapters select desktop, Android, or iOS file operations.
 Business mutations remain platform-independent and go through the common Rust
 operation layer.
 
-Tauri command modules are transport adapters. Document replacement and close
-coordination live in the Rust application layer, which owns retirement of
-mutation replay and search-index work before releasing the old document.
-Neither the document model nor the I/O layer may depend on command modules.
+Tauri command modules are transport adapters. They own bounded wire
+deserialization and executor selection, then delegate to application services.
+They cannot acquire the active-document registry or invoke `ops` directly.
+Document replacement and close coordination live in the Rust application
+layer, which owns retirement of mutation replay and search-index work before
+releasing the old document. Neither the document model nor the I/O layer may
+depend on command modules.
+
+Document opening is split between platform I/O and application orchestration.
+Platform modules consume authorization and return `OpenFileInput`; the
+application open service owns parse reservations, parsing, `EditorState`
+construction, and prepared-document insertion. Document projection and
+capability queries similarly live in the application query service. The I/O
+layer cannot depend on `application`, `commands`, `ops`, or `state`.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
 applied operations, and their lightweight impact/projection views. The state
@@ -81,6 +91,11 @@ the I/O layer must not call back into the application layer.
   composables. Request concurrency and side effects belong to application
   services such as `recentFilesService` and `updateCoordinator`; both expose
   injectable ports for deterministic tests.
+- `documentFileCoordinator` owns open, route-load cancellation, save, export,
+  and close compensation as a port-driven application workflow. Vue
+  composables adapt Stores, platform APIs, lifecycle guards, router navigation,
+  and user notifications to that workflow; application modules do not import
+  composables or UI libraries.
 
 ## Mutation Protocol
 
@@ -227,10 +242,12 @@ and released after the lock is dropped. Explicit abort runs on the bounded
 blocking executor. Route cancellation must keep the loading lifecycle reserved
 until the in-flight prepare settles.
 
-The prepared-document repository does not inspect the active-document registry.
-Its document-preparation caller supplies the active resource estimate before
-reserve and insert, so the caller owns the combined-budget policy while the
-repository owns only token capacity, TTL, checkout, and retirement.
+The prepared-document repository lives in the application layer because its
+entries own complete `EditorState` values. It does not inspect the
+active-document registry. Its document-preparation caller supplies the active
+resource estimate before reserve and insert, so the caller owns the
+combined-budget policy while the repository owns only token capacity, TTL,
+checkout, and retirement.
 
 Saving follows this order:
 

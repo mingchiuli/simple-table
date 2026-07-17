@@ -3,15 +3,16 @@
 use super::{
     CommandU64, blocking, mutation_executor, projection_executor, recent_executor, search_executor,
 };
-use crate::application::{document_save_service, document_service, mutation_replay};
+use crate::application::editor_command_service::EditorSessionInfo;
+use crate::application::{
+    document_open_service, document_query_service, document_save_service, document_service,
+    editor_command_service,
+};
 use crate::error::AppError;
-use crate::io::document;
 #[cfg(desktop)]
 use crate::io::platform::desktop;
 use crate::io::projection_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
-use crate::ops::{cell_ops, editor_ops, search_ops};
 use crate::recent::{self, AddRecentFileRequest, RecentFile};
-use crate::state::{active_document_store, state::EditorSessionInfo};
 #[cfg(desktop)]
 use crate::types::SavedDocumentResponse;
 use crate::types::{
@@ -193,7 +194,7 @@ pub fn discard_open_file_selection_desktop(path: String) {
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn prepare_open_file_desktop(path: String) -> Result<PreparedOpenDocument, AppError> {
-    blocking::run(move || desktop::prepare_file(&path)).await
+    blocking::run(move || document_open_service::prepare_open_file_desktop(&path)).await
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
@@ -203,7 +204,7 @@ pub async fn prepare_recent_file_desktop(
     app: AppHandle,
     id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
-    blocking::run(move || desktop::prepare_recent_file(&app, &id)).await
+    blocking::run(move || document_open_service::prepare_recent_file_desktop(&app, &id)).await
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -259,7 +260,7 @@ pub async fn export_file_desktop(
 
 #[tauri::command]
 pub async fn prepare_new_file() -> Result<PreparedOpenDocument, AppError> {
-    blocking::run(document::prepare_new_file).await
+    blocking::run(document_open_service::prepare_new_file).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -280,12 +281,12 @@ pub async fn commit_prepared_document(
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn abort_prepared_document(token: String) -> Result<(), AppError> {
-    blocking::run(move || document::abort_prepared_document(&token)).await
+    blocking::run(move || document_open_service::abort_prepared_document(&token)).await
 }
 
 #[tauri::command]
 pub async fn get_active_document() -> Result<Option<OpenDocumentResponse>, AppError> {
-    projection_executor::run(document::active_document_response).await
+    projection_executor::run(document_query_service::active_document_response).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -293,7 +294,7 @@ pub fn get_mutation_result(
     document_id: CommandU64,
     command_id: String,
 ) -> Result<MutationResultLookup, AppError> {
-    mutation_replay::get(document_id.get(), &command_id)
+    editor_command_service::get_mutation_result(document_id.get(), &command_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -303,7 +304,7 @@ pub async fn get_current_document_projection(
     preferred_sheet_index: usize,
 ) -> Result<OpenDocumentResponse, AppError> {
     projection_executor::run(move || {
-        document::current_document_projection_for_command(
+        document_query_service::current_document_projection_for_command(
             document_id.get(),
             base_revision.get(),
             preferred_sheet_index,
@@ -319,7 +320,7 @@ pub async fn get_sheet_region_projection(
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
     projection_executor::run(move || {
-        document::sheet_region_projection_for_command(
+        document_query_service::sheet_region_projection_for_command(
             document_id.get(),
             base_revision.get(),
             region,
@@ -339,7 +340,10 @@ pub fn get_document_capabilities(
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<DocumentCapabilities, AppError> {
-    document::document_capabilities_for_command(document_id.get(), base_revision.get())
+    document_query_service::document_capabilities_for_command(
+        document_id.get(),
+        base_revision.get(),
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -348,7 +352,7 @@ pub fn get_native_save_plan(
     base_revision: CommandU64,
     target_path_or_name: String,
 ) -> Result<NativeSavePlan, AppError> {
-    document::native_save_plan_for_command(
+    document_query_service::native_save_plan_for_command(
         document_id.get(),
         base_revision.get(),
         &target_path_or_name,
@@ -357,7 +361,7 @@ pub fn get_native_save_plan(
 
 #[tauri::command]
 pub fn get_spreadsheet_format_options() -> SpreadsheetFormatOptions {
-    document::format_options()
+    document_query_service::format_options()
 }
 
 // ==================== Editor Operations ====================
@@ -367,9 +371,7 @@ pub fn get_editor_state(
     document_id: Option<CommandU64>,
     base_revision: Option<CommandU64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
-    let registry = active_document_store();
-    editor_ops::do_get_editor_state(
-        &registry,
+    editor_command_service::get_editor_state(
         document_id.map(CommandU64::get),
         base_revision.map(CommandU64::get),
     )
@@ -381,16 +383,8 @@ pub async fn undo(
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            "undo",
-            &(),
-            || editor_ops::do_undo(&registry, document_id.get(), base_revision.get()),
-        )
+        editor_command_service::undo(document_id.get(), base_revision.get(), &command_id)
     })
     .await
 }
@@ -401,16 +395,8 @@ pub async fn redo(
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            "redo",
-            &(),
-            || editor_ops::do_redo(&registry, document_id.get(), base_revision.get()),
-        )
+        editor_command_service::redo(document_id.get(), base_revision.get(), &command_id)
     })
     .await
 }
@@ -427,26 +413,16 @@ pub async fn set_cell(
     col: usize,
     text: BoundedCellText,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     let text = text.into_inner();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::set_cell(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "set_cell",
-            &(sheet_index, row, col, &text),
-            || {
-                cell_ops::do_set_cell(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    row,
-                    col,
-                    text.clone(),
-                )
-            },
+            sheet_index,
+            row,
+            col,
+            text,
         )
     })
     .await
@@ -459,23 +435,13 @@ pub async fn set_cells(
     command_id: String,
     changes: SetCellBatch,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     let changes = changes.into_inner();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::set_cells(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "set_cells",
-            &changes,
-            || {
-                cell_ops::do_set_cells(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    changes.clone(),
-                )
-            },
+            changes,
         )
     })
     .await
@@ -489,23 +455,13 @@ pub async fn add_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::add_row(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "add_row",
-            &(sheet_index, row_index),
-            || {
-                cell_ops::do_add_row(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    row_index,
-                )
-            },
+            sheet_index,
+            row_index,
         )
     })
     .await
@@ -519,23 +475,13 @@ pub async fn delete_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::delete_row(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "delete_row",
-            &(sheet_index, row_index),
-            || {
-                cell_ops::do_delete_row(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    row_index,
-                )
-            },
+            sheet_index,
+            row_index,
         )
     })
     .await
@@ -549,23 +495,13 @@ pub async fn add_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::add_column(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "add_column",
-            &(sheet_index, col_index),
-            || {
-                cell_ops::do_add_column(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    col_index,
-                )
-            },
+            sheet_index,
+            col_index,
         )
     })
     .await
@@ -579,23 +515,13 @@ pub async fn delete_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::delete_column(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "delete_column",
-            &(sheet_index, col_index),
-            || {
-                cell_ops::do_delete_column(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    col_index,
-                )
-            },
+            sheet_index,
+            col_index,
         )
     })
     .await
@@ -610,24 +536,14 @@ pub async fn set_column_width(
     col_index: usize,
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::set_column_width(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "set_column_width",
-            &(sheet_index, col_index, width),
-            || {
-                cell_ops::do_set_column_width(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    col_index,
-                    width,
-                )
-            },
+            sheet_index,
+            col_index,
+            width,
         )
     })
     .await
@@ -642,24 +558,14 @@ pub async fn set_row_height(
     row_index: usize,
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::set_row_height(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "set_row_height",
-            &(sheet_index, row_index, height),
-            || {
-                cell_ops::do_set_row_height(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                    row_index,
-                    height,
-                )
-            },
+            sheet_index,
+            row_index,
+            height,
         )
     })
     .await
@@ -673,16 +579,8 @@ pub async fn add_sheet(
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            "add_sheet",
-            &(),
-            || cell_ops::do_add_sheet(&registry, document_id.get(), base_revision.get()),
-        )
+        editor_command_service::add_sheet(document_id.get(), base_revision.get(), &command_id)
     })
     .await
 }
@@ -694,22 +592,12 @@ pub async fn delete_sheet(
     command_id: String,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
-    let registry = active_document_store();
     mutation_executor::run(move || {
-        mutation_replay::run(
+        editor_command_service::delete_sheet(
             document_id.get(),
             base_revision.get(),
             &command_id,
-            "delete_sheet",
-            &sheet_index,
-            || {
-                cell_ops::do_delete_sheet(
-                    &registry,
-                    document_id.get(),
-                    base_revision.get(),
-                    sheet_index,
-                )
-            },
+            sheet_index,
         )
     })
     .await
@@ -725,10 +613,8 @@ pub async fn search(
     scope: SearchScope,
     current_sheet_index: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
-    let registry = active_document_store();
     search_executor::run(move || {
-        search_ops::do_search(
-            &registry,
+        editor_command_service::search(
             document_id.get(),
             base_revision.get(),
             &query,

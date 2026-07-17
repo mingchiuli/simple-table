@@ -1,18 +1,17 @@
 #![cfg_attr(test, allow(dead_code))]
 
 use crate::error::AppError;
-use crate::io::document;
 use crate::io::file_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
+use crate::io::open_file_input::OpenFileInput;
 use crate::io::projection_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::transient_files::{
     TransientFilePurpose, clear_persistent_marker, completed_persisted_save_locations,
     reconcile_persisted_transient_files, transient_file_registry, write_persistent_marker,
 };
 use crate::io::{managed_documents, managed_documents::ManagedDocumentRecord};
-use crate::types::PreparedOpenDocument;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -164,7 +163,7 @@ fn selected_file_name(path: &FilePath) -> Option<String> {
     .filter(|name| !name.is_empty())
 }
 
-pub fn prepare_file(app: &AppHandle, path: &str) -> Result<PreparedOpenDocument, AppError> {
+pub fn read_open_file(app: &AppHandle, path: &str) -> Result<OpenFileInput, AppError> {
     use tauri_plugin_fs::{FsExt, OpenOptions};
 
     let target = validated_mobile_files_path(app, Path::new(path))?;
@@ -186,9 +185,11 @@ pub fn prepare_file(app: &AppHandle, path: &str) -> Result<PreparedOpenDocument,
         .fs()
         .open(FilePath::from(target.clone()), options)
         .map_err(|e| AppError::ReadError(format!("Failed to open file: {}", e)))?;
-    let bytes = read_input_bytes(file)?;
-
-    document::prepare_open_from_bytes(target.to_string_lossy().to_string(), bytes, Some(file_name))
+    Ok(OpenFileInput {
+        path: target.to_string_lossy().to_string(),
+        bytes: read_input_bytes(file)?,
+        file_name: Some(file_name),
+    })
 }
 
 pub fn discard_transient_file(

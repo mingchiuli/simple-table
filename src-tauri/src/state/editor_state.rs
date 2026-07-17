@@ -5,12 +5,14 @@ use crate::io::document_save::SpreadsheetDocumentSaveSnapshot;
 #[cfg(test)]
 use crate::io::file_format::is_xlsx_extension;
 use crate::io::formula_coordinator::FormulaWorkLimits;
-use crate::io::history_restore_transaction::{HistoryRestoreDirection, HistoryRestoreTransaction};
 use crate::io::projection_limits::ResourceLedger;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
 use crate::state::dirty_tracker::DirtyTracker;
 use crate::state::editor_session::EditorSession;
+use crate::state::history_restore_transaction::{
+    HistoryRestoreDirection, HistoryRestoreTransaction,
+};
 use crate::state::history_store::{
     HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES, RetiredHistoryEntries,
 };
