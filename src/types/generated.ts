@@ -41,8 +41,6 @@ export type FileData = { path: string, fileName: string, sheets: Array<SheetData
 
 export type SheetLayoutProjection = { columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, };
 
-export type SheetLayoutUpdate = { sheetIndex: number, layout: SheetLayoutProjection, };
-
 export type SheetManifest = { name: string, extent: SheetExtent, layout: SheetLayoutProjection, };
 
 export type DocumentManifest = { path: string, fileName: string, sheets: Array<SheetManifest>, };
@@ -137,7 +135,7 @@ export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellC
 
 export type EditorCommandContext = { documentId: U64String, baseRevision: U64String, };
 
-export type EditorMutationResponse = { protocolVersion: 3, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, sheetLayouts?: Array<SheetLayoutUpdate>, };
+export type EditorMutationResponse = { protocolVersion: 4, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
 
 export type MutationResultStatus = "pending" | "completed" | "missing";
 

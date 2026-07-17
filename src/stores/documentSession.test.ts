@@ -215,6 +215,29 @@ describe('documentSession sparse projection', () => {
     expect(sheetCell(store.data?.sheets[0], 1_280, 0)?.display).toBe('10');
   });
 
+  it('removes evicted block metadata from the cached sheet snapshot', async () => {
+    const store = useDocumentSessionStore();
+    const opened = openResponse();
+    opened.initialRegion!.metadata.merges = [
+      { startRow: 0, startCol: 0, endRow: 1, endCol: 1 },
+    ];
+    store.openDocumentResponse(opened);
+    for (let tile = 1; tile <= 10; tile += 1) {
+      const response = regionResponse(0, tile * 128, (tile + 1) * 128, 0, 32, `${tile}`);
+      response.metadata.merges = [{
+        startRow: tile * 128,
+        startCol: 0,
+        endRow: tile * 128 + 1,
+        endCol: 1,
+      }];
+      await store.ensureSheetRegionLoaded(response.region, async () => response);
+    }
+
+    const merges = loadedSheetMetadata(store.loadedSheet(0)!).merges;
+    expect(merges.some((merge) => merge.startRow === 0)).toBe(false);
+    expect(merges.some((merge) => merge.startRow === 1_280)).toBe(true);
+  });
+
   it('keeps sheet layout stable when cell blocks are evicted', async () => {
     const store = useDocumentSessionStore();
     const opened = openResponse();
@@ -245,8 +268,6 @@ describe('documentSession sparse projection', () => {
       col: 0,
       value: { ...blankCell(), display: 'anchor' },
     }];
-    store.loadedSheet(0)!.blocks = [];
-
     expect(await store.ensureSheetRegionLoaded(response.region, async () => response)).toBe(true);
     expect(sheetCell(store.data?.sheets[0], 0, 0)?.display).toBe('anchor');
     expect(isCellLoaded(store.data?.sheets[0], 0, 0)).toBe(true);
@@ -285,6 +306,33 @@ describe('documentSession sparse projection', () => {
     });
   });
 
+  it('keeps aggregated region metadata stable across cell-only patches', () => {
+    const store = useDocumentSessionStore();
+    const opened = openResponse();
+    opened.initialRegion!.metadata.merges = [
+      { startRow: 0, startCol: 0, endRow: 1, endCol: 1 },
+    ];
+    opened.initialRegion!.metadata.cellStyles = { A1: { bold: true } };
+    store.openDocumentResponse(opened);
+    const before = loadedSheetMetadata(store.loadedSheet(0)!);
+
+    store.applyMutationResponse(mutation({
+      type: 'Cells',
+      data: {
+        changes: [{
+          sheetIndex: 0,
+          row: 0,
+          col: 0,
+          value: { ...blankCell(), display: 'changed' },
+        }],
+      },
+    }));
+
+    const after = loadedSheetMetadata(store.loadedSheet(0)!);
+    expect(after.merges).toBe(before.merges);
+    expect(after.rich).toBe(before.rich);
+  });
+
   it('applies layout patches to unloaded sheets', () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse(openResponse());
@@ -304,23 +352,34 @@ describe('documentSession sparse projection', () => {
     });
   });
 
-  it('replaces layout from the server after a structural patch', () => {
+  it('shifts sparse layout overrides from structural patches', () => {
     const store = useDocumentSessionStore();
-    store.openDocumentResponse(openResponse());
-    store.applyMutationResponse({
-      ...mutation({
-        type: 'RowInserted',
-        data: { patch: { sheetIndex: 0, rowIndex: 2, count: 1 } },
-      }),
-      sheetLayouts: [{
-        sheetIndex: 0,
-        layout: { columnWidths: { 3: 120 }, rowHeights: { 8: 36 } },
-      }],
-    });
+    const opened = openResponse();
+    opened.document.sheets[0].layout = {
+      columnWidths: { 1: 80, 3: 120, 7: 160 },
+      rowHeights: { 1: 24, 3: 36, 7: 48 },
+    };
+    store.openDocumentResponse(opened);
+    store.applyMutationResponse(mutation({
+      type: 'RowInserted',
+      data: { patch: { sheetIndex: 0, rowIndex: 3, count: 2 } },
+    }));
 
     expect(store.data?.sheets[0].layout).toEqual({
-      columnWidths: { 3: 120 },
-      rowHeights: { 8: 36 },
+      columnWidths: { 1: 80, 3: 120, 7: 160 },
+      rowHeights: { 1: 24, 5: 36, 9: 48 },
+    });
+
+    store.applyMutationResponse({
+      ...mutation({
+        type: 'ColumnDeleted',
+        data: { patch: { sheetIndex: 0, colIndex: 2, count: 3 } },
+      }),
+      revision: '2',
+    });
+    expect(store.data?.sheets[0].layout).toEqual({
+      columnWidths: { 1: 80, 4: 160 },
+      rowHeights: { 1: 24, 5: 36, 9: 48 },
     });
   });
 
@@ -374,12 +433,12 @@ describe('documentSession sparse projection', () => {
     expect(sheetCell(store.data?.sheets[1], 0, 0)?.display).toBe('A1');
   });
 
-  it('rejects mutation protocol versions other than v3', () => {
+  it('rejects mutation protocol versions other than v4', () => {
     const store = useDocumentSessionStore();
     store.openDocumentResponse(openResponse());
     expect(() => store.applyMutationResponse({
       ...mutation(),
-      protocolVersion: 1 as 3,
+      protocolVersion: 1 as 4,
     })).toThrow('Unsupported editor mutation protocol');
   });
 });
@@ -460,7 +519,7 @@ function mutation(
   ]
 ): EditorMutationResponse {
   return {
-    protocolVersion: 3,
+    protocolVersion: 4,
     documentId: '1',
     revision: '1',
     formulaStatus: readyFormulaStatus(),

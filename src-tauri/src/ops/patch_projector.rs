@@ -5,13 +5,15 @@ use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
     EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
     SearchIndexUpdatePlan, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
-    SheetInvalidatedPatch, SheetLayoutProjection, SheetLayoutUpdate, SheetManifest,
+    SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest,
 };
 use std::collections::BTreeSet;
+use std::io::Write;
 
-const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 3;
+const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 4;
 const MAX_CELL_CHANGES_PER_RESPONSE: usize = 4_096;
 const MAX_CELL_PATCH_BYTES_PER_RESPONSE: usize = 2 * 1024 * 1024;
+const MAX_MUTATION_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
 
 pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
     EditorStateInfo {
@@ -42,22 +44,6 @@ pub fn mutation_response_with_search_index_update(
         editor_state.file_data(),
         project_patch_display_formats(editor_state.file_data(), patches),
     );
-    let sheet_layouts = affected_layout_sheets(&patches)
-        .into_iter()
-        .filter_map(|sheet_index| {
-            editor_state
-                .file_data()
-                .sheets
-                .get(sheet_index)
-                .map(|sheet| SheetLayoutUpdate {
-                    sheet_index,
-                    layout: SheetLayoutProjection {
-                        column_widths: sheet.column_widths.clone().unwrap_or_default(),
-                        row_heights: sheet.row_heights.clone().unwrap_or_default(),
-                    },
-                })
-        })
-        .collect::<Vec<_>>();
     EditorMutationResponse {
         protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         document_id: editor_state.document_id(),
@@ -67,28 +53,46 @@ pub fn mutation_response_with_search_index_update(
         editor_state: editor_state_info(editor_state),
         patches,
         sheet_extents: Some(editor_state.sheet_extents()),
-        sheet_layouts: (!sheet_layouts.is_empty()).then_some(sheet_layouts),
         search_index_update,
     }
 }
 
-fn affected_layout_sheets(patches: &[EditorPatch]) -> BTreeSet<usize> {
-    patches
-        .iter()
-        .filter_map(|patch| match patch {
-            EditorPatch::SheetInvalidated { patch } => Some(patch.sheet_index),
-            EditorPatch::RowInserted { patch } => Some(patch.sheet_index),
-            EditorPatch::RowDeleted { patch } => Some(patch.sheet_index),
-            EditorPatch::ColumnInserted { patch } => Some(patch.sheet_index),
-            EditorPatch::ColumnDeleted { patch } => Some(patch.sheet_index),
-            EditorPatch::Layout { .. }
-            | EditorPatch::SheetInserted { .. }
-            | EditorPatch::SheetsReplaced { .. }
-            | EditorPatch::SheetDeleted { .. }
-            | EditorPatch::Cells { .. }
-            | EditorPatch::ResyncRequired { .. } => None,
-        })
-        .collect()
+pub(crate) fn finalize_mutation_response(
+    mut response: EditorMutationResponse,
+) -> EditorMutationResponse {
+    if serialized_response_bytes(&response)
+        .is_some_and(|bytes| bytes <= MAX_MUTATION_RESPONSE_BYTES)
+    {
+        return response;
+    }
+    response.patches = vec![EditorPatch::ResyncRequired {
+        patch: ResyncRequiredPatch {
+            reason: "mutation response exceeded the response byte limit".to_string(),
+        },
+    }];
+    response
+}
+
+fn serialized_response_bytes(response: &EditorMutationResponse) -> Option<usize> {
+    let mut writer = CountingWriter::default();
+    serde_json::to_writer(&mut writer, response).ok()?;
+    Some(writer.bytes)
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn resync_required_mutation_response(
@@ -251,12 +255,6 @@ pub fn structural_patches(
     }
 }
 
-pub(crate) fn sheet_invalidated_patch(sheet_index: usize) -> Vec<EditorPatch> {
-    vec![EditorPatch::SheetInvalidated {
-        patch: SheetInvalidatedPatch { sheet_index },
-    }]
-}
-
 fn bounded_patches(file_data: &FileData, patches: Vec<EditorPatch>) -> Vec<EditorPatch> {
     let mut cell_change_count = 0usize;
     let mut estimated_bytes = 0usize;
@@ -342,7 +340,8 @@ fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellValue, SheetData};
+    use crate::types::{CellValue, SheetData, SheetExtent, SheetManifest, SheetsReplacedPatch};
+    use std::collections::HashMap;
 
     #[test]
     fn oversized_cell_patch_becomes_sheet_invalidation() {
@@ -358,7 +357,10 @@ mod tests {
             .map(|row| SheetCellChange::new(0, row, 0, CellValue::Null))
             .collect();
 
-        let response = mutation_response(&state, vec![EditorPatch::Cells { changes }]);
+        let response = finalize_mutation_response(mutation_response(
+            &state,
+            vec![EditorPatch::Cells { changes }],
+        ));
 
         assert!(matches!(
             response.patches.as_slice(),
@@ -383,11 +385,81 @@ mod tests {
             CellValue::String("x".repeat(MAX_CELL_PATCH_BYTES_PER_RESPONSE + 1)),
         )];
 
-        let response = mutation_response(&state, vec![EditorPatch::Cells { changes }]);
+        let response = finalize_mutation_response(mutation_response(
+            &state,
+            vec![EditorPatch::Cells { changes }],
+        ));
 
         assert!(matches!(
             response.patches.as_slice(),
             [EditorPatch::SheetInvalidated { patch }] if patch.sheet_index == 0
         ));
+    }
+
+    #[test]
+    fn structural_response_does_not_clone_complete_layout_maps() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "book.xlsx".to_string(),
+                sheets: vec![SheetData {
+                    row_heights: Some(
+                        (0..100_000)
+                            .map(|index| (index, 24))
+                            .collect::<HashMap<_, _>>(),
+                    ),
+                    ..SheetData::default()
+                }],
+            },
+            None,
+        );
+
+        let response = finalize_mutation_response(mutation_response(
+            &state,
+            vec![EditorPatch::RowInserted {
+                patch: RowInsertedPatch {
+                    sheet_index: 0,
+                    row_index: 10,
+                    count: 1,
+                },
+            }],
+        ));
+
+        assert!(matches!(
+            response.patches.as_slice(),
+            [EditorPatch::RowInserted { .. }]
+        ));
+        assert!(serialized_response_bytes(&response).unwrap() < 64 * 1024);
+    }
+
+    #[test]
+    fn oversized_mutation_response_becomes_resync_required() {
+        let state = EditorState::with_workbook(
+            FileData {
+                path: String::new(),
+                file_name: "book.xlsx".to_string(),
+                sheets: vec![SheetData::default()],
+            },
+            None,
+        );
+        let response = finalize_mutation_response(mutation_response(
+            &state,
+            vec![EditorPatch::SheetsReplaced {
+                patch: SheetsReplacedPatch {
+                    start_index: 0,
+                    sheets: vec![SheetManifest {
+                        name: "x".repeat(MAX_MUTATION_RESPONSE_BYTES + 1),
+                        extent: SheetExtent::default(),
+                        layout: SheetLayoutProjection::default(),
+                    }],
+                },
+            }],
+        ));
+
+        assert!(matches!(
+            response.patches.as_slice(),
+            [EditorPatch::ResyncRequired { .. }]
+        ));
+        assert!(serialized_response_bytes(&response).unwrap() <= MAX_MUTATION_RESPONSE_BYTES);
     }
 }

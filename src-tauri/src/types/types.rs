@@ -514,14 +514,6 @@ pub struct SheetLayoutProjection {
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
-pub struct SheetLayoutUpdate {
-    pub sheet_index: usize,
-    pub layout: SheetLayoutProjection,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct DocumentManifest {
     pub path: String,
     pub file_name: String,
@@ -1204,7 +1196,7 @@ pub struct EditorCommandContext {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
-    #[ts(type = "3")]
+    #[ts(type = "4")]
     pub protocol_version: u16,
     #[serde(with = "crate::types::u64_string")]
     #[ts(type = "U64String")]
@@ -1221,9 +1213,6 @@ pub struct EditorMutationResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sheet_extents: Option<Vec<SheetExtent>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub sheet_layouts: Option<Vec<SheetLayoutUpdate>>,
     #[serde(skip)]
     #[ts(skip)]
     pub search_index_update: SearchIndexUpdatePlan,

@@ -60,8 +60,11 @@ JavaScript `number`.
 3. Rust rejects a command if the active document or revision changed.
 4. Rust applies the operation transactionally, updates history and dirty state,
    and advances the revision exactly once for a non-no-op mutation.
-5. Rust returns status plus protocol-v3 projection patches. Structural patches
-   carry coordinate changes or invalidation markers, never complete Sheets.
+5. Rust returns status plus protocol-v4 projection patches. Structural row and
+   column patches carry coordinate changes that also shift the frontend's sparse
+   layout overrides. Routine mutations never return complete layout maps or
+   complete Sheets; a history restore whose direction cannot be represented
+   safely requests a projection resync.
 6. The frontend applies only the next revision. A gap, duplicate revision with
    patches, unsupported protocol, or patch failure marks the projection stale.
 7. Successful responses are retained in a bounded replay journal. Retrying the
@@ -74,6 +77,10 @@ JavaScript `number`.
 Cell patches are capped at 4,096 changes and an estimated 2 MiB per response.
 Larger recalculations are represented as per-Sheet invalidations. Formula status
 exposes complete counts but at most 100 diagnostic samples per response.
+The complete serialized mutation response is capped at 3 MiB. Size counting and
+oversized-response replacement with `ResyncRequired` happen at the replay
+boundary after the document lock is released and before the response is stored
+or returned through IPC.
 
 Oversized replay responses are stored as compact `ResyncRequired` results at the
 committed revision, preserving idempotency without retaining a second large body.
@@ -221,11 +228,19 @@ treats multiple child blocks as combined coverage. The ordinary cache target is
 16 MiB; pinned visible blocks form a separate hard bound of eight 16 MiB blocks
 so visibility cannot turn the cache into an unbounded exception.
 
+Each loaded Sheet also owns an aggregated region-metadata snapshot. It is rebuilt
+only when its resident block membership changes; cell-only patches retain the
+same merge, format, and style snapshot. Rendering therefore does not repeatedly
+copy all block metadata after ordinary edits.
+
 Grid geometry is sparse as well as cell data. Each axis stores its default size,
 sorted explicit overrides, and prefix size deltas. Offset lookup, pixel-to-index
 lookup, visible-item discovery, merged spans, and resize handles do not allocate
 an entry per logical row or column. Resize previews are a small transient
 override layer, and column labels are generated only for visible columns.
+Loaded merge ranges use a balanced row interval index. Every range is stored a
+constant number of times regardless of its row span, and point or viewport
+queries apply column filtering only to row-intersecting candidates.
 
 An oversized logical tile may be subdivided, but subdivision has its own
 admission boundary: at most 64 fragment requests, 32 MiB of combined fragment

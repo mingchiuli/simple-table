@@ -8,12 +8,16 @@ import type {
   CellValue,
   ReadOnlyRichProjection,
   SheetRegionMetadata,
-  SheetLayoutProjection,
   SheetCapabilities,
   SheetExtent,
   SheetRegion,
   WorkbookCapabilities,
 } from './generated';
+
+export type SheetLayoutState = {
+  columnWidths: Record<number, number>;
+  rowHeights: Record<number, number>;
+};
 
 export type MutationCommandContext = EditorCommandContext & {
   commandId: string;
@@ -23,8 +27,14 @@ export type LoadedSheetSlot = {
   state: 'loaded';
   name: string;
   extent: SheetExtent;
-  layout: SheetLayoutProjection;
+  layout: SheetLayoutState;
   blocks: SheetRegionBlock[];
+  metadata: LoadedSheetRegionMetadata;
+};
+
+export type LoadedSheetRegionMetadata = {
+  merges: NonNullable<SheetRegionMetadata['merges']>;
+  rich: ReadOnlyRichProjection;
 };
 
 export type SheetRegionBlock = {
@@ -40,7 +50,7 @@ export type UnloadedSheetSlot = {
   state: 'unloaded';
   name: string;
   extent: SheetExtent;
-  layout: SheetLayoutProjection;
+  layout: SheetLayoutState;
 };
 
 export type SheetSlot = LoadedSheetSlot | UnloadedSheetSlot;

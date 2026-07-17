@@ -66,7 +66,7 @@ function editorSession(revision: number | string): EditorSessionInfo {
 
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
-    protocolVersion: 3,
+    protocolVersion: 4,
     documentId: '1',
     revision: '3',
     formulaStatus: readyFormulaStatus(),

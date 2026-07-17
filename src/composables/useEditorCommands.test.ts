@@ -71,7 +71,7 @@ function openedResponse(documentId: number | string = '1', fileName = "book.xlsx
 
 function mutationResponse(partial: Partial<EditorMutationResponse> = {}): EditorMutationResponse {
   return {
-    protocolVersion: 3,
+    protocolVersion: 4,
     documentId: '1',
     revision: '1',
     formulaStatus: readyFormulaStatus(),

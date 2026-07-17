@@ -13,11 +13,13 @@ import type {
 } from '@/types';
 import {
   applyProjectionPatches,
+  createLoadedSheetSlot,
   createDocumentProjection,
   isRegionLoaded,
   regionCoveringBlockKeys,
   regionBlock,
   regionKey,
+  replaceLoadedSheetBlocks,
 } from '@/stores/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 import { compareU64, isNextU64, maxU64, ZERO_U64 } from '@/utils/u64';
@@ -249,7 +251,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       resetDocumentStatus();
     },
     applyMutationResponse(response: EditorMutationResponse): MutationApplyResult {
-      if (response.protocolVersion !== 3) {
+      if (response.protocolVersion !== 4) {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
       if (this.documentId !== null && response.documentId !== this.documentId) {
@@ -288,8 +290,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         const result = applyProjectionPatches(
           this.data,
           response.patches,
-          response.sheetExtents,
-          response.sheetLayouts
+          response.sheetExtents
         );
         this.data = result.data;
         reconcileRegionBlocks(this, this.data?.sheets.flatMap((sheet) =>
@@ -322,7 +323,12 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (!slot || !this.data) return false;
       if (slot.state === 'unloaded') {
         const sheets = [...this.data.sheets];
-        sheets[sheetIndex] = { ...slot, state: 'loaded', blocks: [] };
+        sheets[sheetIndex] = createLoadedSheetSlot(
+          slot.name,
+          slot.extent,
+          slot.layout,
+          []
+        );
         this.data = { ...this.data, sheets };
       }
       this.touchResidentSheet(sheetIndex);
@@ -378,10 +384,10 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         }
         if (removedKeys.length) {
           const removed = new Set(removedKeys);
-          sheets[protectedSheet] = {
-            ...protectedSlot,
-            blocks: protectedSlot.blocks.filter((block) => !removed.has(block.key)),
-          };
+          sheets[protectedSheet] = replaceLoadedSheetBlocks(
+            protectedSlot,
+            protectedSlot.blocks.filter((block) => !removed.has(block.key))
+          );
         }
       }
       const totalBlocks = () => sheets.reduce(
@@ -405,10 +411,10 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         if (candidateKey === undefined || candidateSheet === undefined) break;
         const slot = sheets[candidateSheet];
         if (!slot || slot.state !== 'loaded') break;
-        sheets[candidateSheet] = {
-          ...slot,
-          blocks: slot.blocks.filter((block) => block.key !== candidateKey),
-        };
+        sheets[candidateSheet] = replaceLoadedSheetBlocks(
+          slot,
+          slot.blocks.filter((block) => block.key !== candidateKey)
+        );
         removedKeys.push(candidateKey);
       }
       removeRegionBlocks(this, removedKeys);
@@ -502,7 +508,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
           ...newBlocks,
         ];
         const sheets = [...data.sheets];
-        sheets[region.sheetIndex] = { ...current, blocks };
+        sheets[region.sheetIndex] = replaceLoadedSheetBlocks(current, blocks);
         this.data = { ...data, sheets };
         replacePinnedRegionBlock(
           this,
@@ -520,7 +526,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (compareU64(response.revision, this.revision) < 0) return false;
       if (this.documentId === null) this.documentId = response.documentId;
       this.revision = response.revision;
-      if (response.protocolVersion === 3) applyResponseStatus(response);
+      if (response.protocolVersion === 4) applyResponseStatus(response);
       this.projectionStale = true;
       clearSearchSession();
       return true;

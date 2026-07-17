@@ -6,6 +6,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
+use crate::ops::patch_projector::finalize_mutation_response;
 use crate::types::{
     EditorMutationResponse, EditorPatch, MutationResultLookup, ResyncRequiredPatch,
 };
@@ -63,7 +64,7 @@ pub(crate) fn run<P: Serialize>(
         ReservationResult::Execute(reservation) => reservation,
     };
 
-    let result = execute();
+    let result = execute().map(finalize_mutation_response);
     reservation.finish(result)
 }
 
@@ -243,7 +244,6 @@ fn compact_replay_response(response: &EditorMutationResponse) -> EditorMutationR
             reason: "mutation response exceeded replay budget".to_string(),
         },
     }];
-    compact.sheet_layouts = None;
     compact
 }
 

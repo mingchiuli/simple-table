@@ -3,9 +3,11 @@ import type {
   DocumentManifest,
   DocumentProjection,
   EditorPatch,
+  LoadedSheetRegionMetadata,
   LoadedSheetSlot,
   SheetExtent,
-  SheetLayoutUpdate,
+  SheetLayoutProjection,
+  SheetLayoutState,
   SheetRegion,
   SheetRegionBlock,
   SheetRegionMetadata,
@@ -25,15 +27,19 @@ export function createDocumentProjection(
 ): DocumentProjection {
   const sheets: SheetSlot[] = manifest.sheets.map((sheet, index) => {
     if (initialRegion?.region.sheetIndex === index) {
-      return {
-        state: 'loaded',
-        name: sheet.name,
-        extent: sheet.extent,
-        layout: sheet.layout,
-        blocks: [regionBlock(initialRegion)],
-      };
+      return createLoadedSheetSlot(
+        sheet.name,
+        sheet.extent,
+        sheet.layout,
+        [regionBlock(initialRegion)]
+      );
     }
-    return { state: 'unloaded', name: sheet.name, extent: sheet.extent, layout: sheet.layout };
+    return {
+      state: 'unloaded',
+      name: sheet.name,
+      extent: sheet.extent,
+      layout: normalizeSheetLayout(sheet.layout),
+    };
   });
   return { path: manifest.path, fileName: manifest.fileName, sheets };
 }
@@ -41,8 +47,7 @@ export function createDocumentProjection(
 export function applyProjectionPatches(
   data: DocumentProjection | null,
   patches: EditorPatch[] | undefined,
-  responseExtents?: SheetExtent[],
-  responseLayouts?: SheetLayoutUpdate[]
+  responseExtents?: SheetExtent[]
 ): ProjectionPatchResult {
   if (!data) return { data, resyncRequired: false };
   let sheets = [...data.sheets];
@@ -58,13 +63,11 @@ export function applyProjectionPatches(
         break;
       case 'SheetInserted': {
         const { sheetIndex, sheet } = patch.data.patch;
-        sheets.splice(sheetIndex, 0, {
-          state: 'loaded',
-          name: sheet.name,
-          extent: sheet.extent,
-          layout: sheet.layout,
-          blocks: [],
-        });
+        sheets.splice(
+          sheetIndex,
+          0,
+          createLoadedSheetSlot(sheet.name, sheet.extent, sheet.layout, [])
+        );
         break;
       }
       case 'SheetDeleted':
@@ -78,21 +81,57 @@ export function applyProjectionPatches(
             state: 'unloaded',
             name: sheet.name,
             extent: sheet.extent,
-            layout: sheet.layout,
+            layout: normalizeSheetLayout(sheet.layout),
           })),
         ];
         break;
       }
-      case 'SheetInvalidated':
-      case 'RowInserted':
-      case 'RowDeleted':
-      case 'ColumnInserted':
-      case 'ColumnDeleted': {
+      case 'SheetInvalidated': {
         const sheetIndex = patch.data.patch.sheetIndex;
         const current = sheets[sheetIndex];
         if (current) sheets[sheetIndex] = invalidateLoadedSheet(current);
         break;
       }
+      case 'RowInserted':
+        sheets = applyAxisStructurePatch(
+          sheets,
+          patch.data.patch.sheetIndex,
+          'row',
+          'insert',
+          patch.data.patch.rowIndex,
+          patch.data.patch.count
+        );
+        break;
+      case 'RowDeleted':
+        sheets = applyAxisStructurePatch(
+          sheets,
+          patch.data.patch.sheetIndex,
+          'row',
+          'delete',
+          patch.data.patch.rowIndex,
+          patch.data.patch.count
+        );
+        break;
+      case 'ColumnInserted':
+        sheets = applyAxisStructurePatch(
+          sheets,
+          patch.data.patch.sheetIndex,
+          'column',
+          'insert',
+          patch.data.patch.colIndex,
+          patch.data.patch.count
+        );
+        break;
+      case 'ColumnDeleted':
+        sheets = applyAxisStructurePatch(
+          sheets,
+          patch.data.patch.sheetIndex,
+          'column',
+          'delete',
+          patch.data.patch.colIndex,
+          patch.data.patch.count
+        );
+        break;
       case 'ResyncRequired':
         resyncRequired = true;
         break;
@@ -106,10 +145,6 @@ export function applyProjectionPatches(
       ...sheet,
       extent: responseExtents[index] ?? sheet.extent,
     }));
-  }
-  for (const update of responseLayouts ?? []) {
-    const sheet = sheets[update.sheetIndex];
-    if (sheet) sheets[update.sheetIndex] = { ...sheet, layout: update.layout };
   }
   sheets = reindexSheetBlocks(sheets);
   return { data: { ...data, sheets }, resyncRequired };
@@ -210,25 +245,39 @@ export function regionCoveringBlockKeys(
 }
 
 export function loadedSheetMetadata(slot: LoadedSheetSlot) {
-  const rich = {
-    ...defaultRichProjection(),
-    cellFormats: {},
-    cellStyles: {},
-  };
-  const merges = new Map<string, NonNullable<SheetRegionMetadata['merges']>[number]>();
-
-  for (const block of slot.blocks) {
-    for (const merge of block.metadata.merges ?? []) {
-      merges.set(`${merge.startRow}:${merge.startCol}:${merge.endRow}:${merge.endCol}`, merge);
-    }
-    Object.assign(rich.cellFormats, block.metadata.cellFormats ?? {});
-    Object.assign(rich.cellStyles, block.metadata.cellStyles ?? {});
-  }
   return {
-    merges: [...merges.values()],
+    merges: slot.metadata.merges,
     columnWidths: slot.layout.columnWidths,
     rowHeights: slot.layout.rowHeights,
-    rich,
+    rich: slot.metadata.rich,
+  };
+}
+
+export function createLoadedSheetSlot(
+  name: string,
+  extent: SheetExtent,
+  layout: SheetLayoutProjection | SheetLayoutState,
+  blocks: LoadedSheetSlot['blocks']
+): LoadedSheetSlot {
+  return {
+    state: 'loaded',
+    name,
+    extent,
+    layout: normalizeSheetLayout(layout),
+    blocks,
+    metadata: aggregateLoadedSheetMetadata(blocks),
+  };
+}
+
+export function replaceLoadedSheetBlocks(
+  slot: LoadedSheetSlot,
+  blocks: LoadedSheetSlot['blocks']
+): LoadedSheetSlot {
+  if (slot.blocks === blocks) return slot;
+  return {
+    ...slot,
+    blocks,
+    metadata: aggregateLoadedSheetMetadata(blocks),
   };
 }
 
@@ -277,7 +326,52 @@ function applyLayoutPatch(
 }
 
 function invalidateLoadedSheet(slot: SheetSlot): SheetSlot {
-  return slot.state === 'loaded' ? { ...slot, blocks: [] } : slot;
+  return slot.state === 'loaded' ? replaceLoadedSheetBlocks(slot, []) : slot;
+}
+
+function applyAxisStructurePatch(
+  sheets: SheetSlot[],
+  sheetIndex: number,
+  axis: 'row' | 'column',
+  direction: 'insert' | 'delete',
+  index: number,
+  count: number
+): SheetSlot[] {
+  const slot = sheets[sheetIndex];
+  if (!slot || count <= 0) return sheets;
+  const next = [...sheets];
+  const layout = {
+    columnWidths: axis === 'column'
+      ? shiftLayoutOverrides(slot.layout.columnWidths, direction, index, count)
+      : slot.layout.columnWidths,
+    rowHeights: axis === 'row'
+      ? shiftLayoutOverrides(slot.layout.rowHeights, direction, index, count)
+      : slot.layout.rowHeights,
+  };
+  const updated = { ...slot, layout };
+  next[sheetIndex] = invalidateLoadedSheet(updated);
+  return next;
+}
+
+function shiftLayoutOverrides(
+  values: Record<number, number>,
+  direction: 'insert' | 'delete',
+  index: number,
+  count: number
+): Record<number, number> {
+  const shifted: Record<number, number> = {};
+  const deletedEnd = index + count;
+  for (const [key, value] of Object.entries(values)) {
+    const current = Number(key);
+    if (direction === 'insert') {
+      shifted[current >= index ? current + count : current] = value;
+    } else if (current < index) {
+      shifted[current] = value;
+    } else if (current >= deletedEnd) {
+      shifted[current - count] = value;
+    }
+  }
+  return shifted;
 }
 
 function reindexSheetBlocks(sheets: SheetSlot[]): SheetSlot[] {
@@ -299,6 +393,35 @@ function normalizeMetadata(metadata: SheetRegionMetadata): SheetRegionMetadata {
     cellFormats: metadata.cellFormats ?? {},
     cellStyles: metadata.cellStyles ?? {},
   };
+}
+
+function normalizeSheetLayout(
+  layout: SheetLayoutProjection | SheetLayoutState
+): SheetLayoutState {
+  return {
+    columnWidths: layout.columnWidths ?? {},
+    rowHeights: layout.rowHeights ?? {},
+  };
+}
+
+function aggregateLoadedSheetMetadata(
+  blocks: LoadedSheetSlot['blocks']
+): LoadedSheetRegionMetadata {
+  const rich = {
+    ...defaultRichProjection(),
+    cellFormats: {},
+    cellStyles: {},
+  };
+  const merges = new Map<string, NonNullable<SheetRegionMetadata['merges']>[number]>();
+
+  for (const block of blocks) {
+    for (const merge of block.metadata.merges ?? []) {
+      merges.set(`${merge.startRow}:${merge.startCol}:${merge.endRow}:${merge.endCol}`, merge);
+    }
+    Object.assign(rich.cellFormats, block.metadata.cellFormats ?? {});
+    Object.assign(rich.cellStyles, block.metadata.cellStyles ?? {});
+  }
+  return { merges: [...merges.values()], rich };
 }
 
 function applyLayoutValues(
