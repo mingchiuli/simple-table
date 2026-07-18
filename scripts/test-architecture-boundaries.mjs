@@ -83,8 +83,27 @@ rejectMatches(
 
 rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs')],
-  [/\bEditorMutationResponse\b/, /\bEditorPatch\b/],
+  [
+    /\bEditorMutationResponse\b/,
+    /\bEditorPatch\b/,
+    /\btantivy\b/,
+    /std::thread/,
+    /\bCondvar\b/,
+    /\bIndexScheduler(?:State)?\b/,
+  ],
   'the transport-independent search scheduling boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'document_query_service.rs')],
+  [/crate::io(?:::|\b)/, /crate::ops(?:::|\b)/],
+  'the query-orchestration-only document service boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'document_save_service.rs')],
+  [/document_query_service/],
+  'the independent document save workflow boundary',
 );
 
 rejectMatches(
@@ -110,8 +129,20 @@ rejectMatches(
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs'),
-  [/crate::ops(?:::|\b)/, /crate::state(?:::|\b)/, /active_document_store/],
+  [
+    /crate::ops(?:::|\b)/,
+    /crate::state(?:::|\b)/,
+    /crate::io(?:::|\b)/,
+    /crate::update(?:::|\b)/,
+    /active_document_store/,
+  ],
   'the transport-only Rust command boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
+  [/\bIndexScheduler(?:State)?\b/, /\bIndexJob\b/],
+  'the infrastructure-free Rust editor state boundary',
 );
 
 rejectMatches(
@@ -171,8 +202,18 @@ rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs').filter(
     (file) => relative(projectRoot, file) !== 'src-tauri/src/application/runtime.rs',
   ),
-  [/\btauri::(?:AppHandle|State)\b/, /crate::io::platform(?:::|\b)/],
+  [
+    /\btauri::(?:AppHandle|State)\b/,
+    /crate::io::platform(?:::|\b)/,
+    /crate::adapters(?:::|\b)/,
+  ],
   'the framework-independent Rust application service boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'runtime.rs')],
+  [/fn\s+desktop_files\s*\(/, /fn\s+mobile_files\s*\(/, /fn\s+recent_store\s*\(/],
+  'the adapter-only Rust composition-root interface',
 );
 
 rejectMatches(

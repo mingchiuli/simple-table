@@ -9,6 +9,23 @@ use serde_json::Value;
 use std::collections::HashMap;
 use ts_rs::TS;
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedFileInfo {
+    pub path: String,
+    pub original_path: String,
+    pub file_name: String,
+}
+
+#[cfg(desktop)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopOpenFileInfo {
+    pub path: String,
+    pub file_name: String,
+}
+
 // JavaScript 安全整数范围: -(2^53 - 1) 到 (2^53 - 1)
 const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
 const JS_MIN_SAFE_INTEGER: i64 = -9007199254740991;

@@ -1,6 +1,5 @@
 use super::mobile::{
-    self, MobileFileRuntime, PickedFileInfo, read_with_official_fs, unique_import_path,
-    write_path_with_official_fs,
+    self, MobileFileRuntime, read_with_official_fs, unique_import_path, write_path_with_official_fs,
 };
 use crate::error::AppError;
 use crate::io::file_format::{
@@ -8,6 +7,7 @@ use crate::io::file_format::{
     import_extension_from_name_or_bytes, normalized_import_file_name,
 };
 use crate::io::transient_files::TransientFilePurpose;
+use crate::types::PickedFileInfo;
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 

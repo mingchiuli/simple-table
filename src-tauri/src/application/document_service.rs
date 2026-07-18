@@ -1,10 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::application::document_query_service;
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
 use crate::application::search_service::SearchService;
+use crate::application::{document_projection, response_budget};
 use crate::error::AppError;
 use crate::state::state::ActiveDocumentRepository;
 use crate::types::OpenDocumentResponse;
@@ -86,8 +86,8 @@ pub fn commit_prepared_document(
 
     let response = {
         let editor_state = active_handle.read()?;
-        document_query_service::finalize_open_document_response(
-            document_query_service::open_document_response_snapshot(&editor_state),
+        response_budget::finalize_open_document_response(
+            document_projection::open_document_response_snapshot(&editor_state),
         )
     };
 

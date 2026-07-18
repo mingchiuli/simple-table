@@ -1,4 +1,5 @@
 use crate::domain::{CellEditInput, EditorCommand};
+use crate::domain::{SearchCellIndexUpdate, SearchIndexWork};
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::{
@@ -6,7 +7,6 @@ use crate::ops::patch_projector::{
     resync_required_mutation_response, status_mutation_response,
     structural_delta_mutation_response,
 };
-use crate::state::search_scheduler::{SearchCellIndexUpdate, SearchIndexWork};
 use crate::state::state::ActiveDocumentRepository;
 use crate::types::display::DisplayProjection;
 use crate::types::{LayoutPatch, SheetCellChange};

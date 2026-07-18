@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::application::document_query_service;
 use crate::application::search_service::SearchService;
+use crate::application::{document_format_policy, document_projection};
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
@@ -97,7 +97,7 @@ pub fn prepare_current_file_save(
     let (snapshot, work) = {
         let handle = document_handle_for_read(service.documents(), document_id)?;
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        document_query_service::ensure_native_save_target_allowed(
+        document_format_policy::ensure_native_save_target_allowed(
             &editor_state,
             target_path_or_name,
         )?;
@@ -204,9 +204,9 @@ where
             clear_history,
         )?;
         let response = SavedDocumentResponse {
-            document: Some(document_query_service::document_manifest(&editor_state)),
+            document: Some(document_projection::document_manifest(&editor_state)),
             identity: None,
-            editor_session: document_query_service::editor_session_info(&editor_state),
+            editor_session: document_projection::editor_session_info(&editor_state),
         };
         (editor_state.document_id(), response, retired)
     };
@@ -271,7 +271,7 @@ where
                 path: editor_state.file_data().path.clone(),
                 file_name: editor_state.file_data().file_name.clone(),
             }),
-            editor_session: document_query_service::editor_session_info(&editor_state),
+            editor_session: document_projection::editor_session_info(&editor_state),
         };
         (response, retired)
     };

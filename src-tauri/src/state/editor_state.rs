@@ -1,6 +1,7 @@
 use crate::document::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
+use crate::domain::SearchIndexWork;
 use crate::domain::{AppliedOperation, EditorCommand};
 use crate::error::AppError;
 use crate::resource_limits::ResourceLedger;
@@ -20,7 +21,6 @@ use crate::state::search_index::{
     RetiredSearchIndexes, SearchIndexStamp, SearchScanCursor, SearchSheetIndex, SearchTextChunk,
     SearchWriterHandle, collect_sheet_search_text_chunk,
 };
-use crate::state::search_scheduler::SearchIndexWork;
 use crate::state::search_session::SearchSession;
 use crate::types::HistoryStatus;
 use crate::types::{

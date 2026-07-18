@@ -16,21 +16,12 @@ use crate::io::{
     managed_documents::{ManagedDocumentCatalog, ManagedDocumentRecord},
     transient_files::TransientFileRegistry,
 };
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FilePath;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PickedFileInfo {
-    pub path: String,
-    pub original_path: String,
-    pub file_name: String,
-}
 
 #[derive(Clone)]
 pub struct MobileFileRuntime {

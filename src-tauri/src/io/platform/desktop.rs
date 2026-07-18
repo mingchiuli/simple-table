@@ -7,7 +7,7 @@ use crate::io::file_format::{
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::recent::store::RecentStore;
-use serde::Serialize;
+use crate::types::DesktopOpenFileInfo;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::ErrorKind;
@@ -16,13 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopOpenFileInfo {
-    pub path: String,
-    pub file_name: String,
-}
 
 const MAX_AUTHORIZED_PATHS: usize = 64;
 const PATH_AUTHORIZATION_TTL: Duration = Duration::from_secs(30 * 60);

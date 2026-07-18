@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use crate::adapters::document_file_adapter::DocumentFileAdapter;
 use crate::adapters::recent_file_adapter::RecentFileAdapter;
+use crate::adapters::search_index_adapter::SearchIndexAdapter;
 use crate::application::document_open_service::DocumentOpenService;
 use crate::application::document_query_service::DocumentQueryService;
 use crate::application::document_save_service::DocumentSaveService;
@@ -22,14 +24,9 @@ pub struct ApplicationRuntime {
     document_queries: DocumentQueryService,
     document_opens: DocumentOpenService,
     document_lifecycle: DocumentLifecycleService,
-    document_saves: DocumentSaveService,
     editor_commands: EditorCommandService,
+    document_files: DocumentFileAdapter,
     recent_files: RecentFileAdapter,
-    recent_store: RecentStore,
-    #[cfg(desktop)]
-    desktop_files: DesktopFileRuntime,
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
-    mobile_files: MobileFileRuntime,
 }
 
 impl Default for ApplicationRuntime {
@@ -37,7 +34,7 @@ impl Default for ApplicationRuntime {
         let documents = ActiveDocumentRepository::default();
         let prepared_documents = PreparedDocumentRepository::default();
         let mutation_replays = Arc::new(MutationReplayCoordinator::default());
-        let search = SearchService::new();
+        let search = SearchService::from_port(Arc::new(SearchIndexAdapter::new()));
         let save_work = SaveWorkCoordinator::default();
         let recent_files = RecentStore::default();
         #[cfg(desktop)]
@@ -47,6 +44,7 @@ impl Default for ApplicationRuntime {
         let document_opens =
             DocumentOpenService::new(documents.clone(), prepared_documents.clone());
         let document_queries = DocumentQueryService::new(documents.clone());
+        let document_saves = DocumentSaveService::new(documents.clone(), search.clone(), save_work);
         #[cfg(any(target_os = "android", target_os = "ios", test))]
         let prepared_source_adopter = {
             let mobile_files = mobile_files.clone();
@@ -68,6 +66,16 @@ impl Default for ApplicationRuntime {
         let prepared_source_adopter =
             Arc::new(|_source_path: Option<&std::path::Path>, _file_name: &str| Ok(()))
                 as crate::application::document_service::PreparedSourceAdopter;
+        let document_files = DocumentFileAdapter::new(
+            document_opens.clone(),
+            document_saves.clone(),
+            #[cfg(desktop)]
+            recent_files.clone(),
+            #[cfg(desktop)]
+            desktop_files,
+            #[cfg(any(target_os = "android", target_os = "ios", test))]
+            mobile_files.clone(),
+        );
         Self {
             document_queries: document_queries.clone(),
             document_opens: document_opens.clone(),
@@ -78,19 +86,14 @@ impl Default for ApplicationRuntime {
                 search.clone(),
                 prepared_source_adopter,
             ),
-            document_saves: DocumentSaveService::new(documents.clone(), search.clone(), save_work),
             editor_commands: EditorCommandService::new(documents, mutation_replays, search),
+            document_files,
             recent_files: RecentFileAdapter::new(
                 document_queries,
                 recent_files.clone(),
                 #[cfg(any(target_os = "android", target_os = "ios"))]
                 mobile_files.clone(),
             ),
-            recent_store: recent_files,
-            #[cfg(desktop)]
-            desktop_files,
-            #[cfg(any(target_os = "android", target_os = "ios", test))]
-            mobile_files,
         }
     }
 }
@@ -108,10 +111,6 @@ impl ApplicationRuntime {
         &self.document_lifecycle
     }
 
-    pub(crate) fn document_saves(&self) -> &DocumentSaveService {
-        &self.document_saves
-    }
-
     pub(crate) fn editor_commands(&self) -> &EditorCommandService {
         &self.editor_commands
     }
@@ -120,18 +119,8 @@ impl ApplicationRuntime {
         &self.recent_files
     }
 
-    pub(crate) fn recent_store(&self) -> &RecentStore {
-        &self.recent_store
-    }
-
-    #[cfg(desktop)]
-    pub(crate) fn desktop_files(&self) -> &DesktopFileRuntime {
-        &self.desktop_files
-    }
-
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
-    pub(crate) fn mobile_files(&self) -> &MobileFileRuntime {
-        &self.mobile_files
+    pub(crate) fn document_files(&self) -> &DocumentFileAdapter {
+        &self.document_files
     }
 }
 
@@ -154,19 +143,11 @@ mod tests {
                 .document_opens()
                 .is_isolated_from(second.document_opens())
         );
+        assert!(first.recent_files().is_isolated_from(second.recent_files()));
         assert!(
             first
-                .document_saves()
-                .is_isolated_from(second.document_saves())
+                .document_files()
+                .is_isolated_from(second.document_files())
         );
-        assert!(first.recent_files().is_isolated_from(second.recent_files()));
-        #[cfg(desktop)]
-        assert!(
-            !first
-                .desktop_files()
-                .is_same_instance(second.desktop_files())
-        );
-        #[cfg(any(target_os = "android", target_os = "ios", test))]
-        assert!(first.mobile_files().is_isolated_from(second.mobile_files()));
     }
 }

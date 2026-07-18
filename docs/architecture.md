@@ -36,8 +36,9 @@ Business mutations remain platform-independent and go through the common Rust
 operation layer.
 
 Tauri command modules are transport adapters. They own bounded wire
-deserialization and executor selection, then delegate to application services.
-They cannot acquire the active-document registry or invoke `ops` directly.
+deserialization and executor selection, then delegate to application services
+or outer adapters. They cannot import platform I/O or update implementations,
+acquire the active-document registry, or invoke `ops` directly.
 Document replacement and close coordination live in the Rust application
 layer, which owns retirement of mutation replay and search-index work before
 releasing the old document. Neither the document model nor the I/O layer may
@@ -46,7 +47,8 @@ depend on command modules.
 `ApplicationRuntime` is the backend composition root managed by Tauri. It
 constructs narrow document-query, document-open, document-lifecycle,
 document-save, and editor-command services over shared repositories and
-coordinators. It also owns platform runtimes and outer recent/file adapters.
+coordinators. It owns outer recent, file, and search adapters; concrete platform
+runtimes are private fields of those adapters and are not exposed to commands.
 Application services declare only their actual dependencies and cannot import
 the complete runtime, `AppHandle`, or platform I/O implementations. Commands
 may receive `tauri::State<ApplicationRuntime>`, but select a narrow service and
@@ -64,9 +66,12 @@ orchestration. Platform modules consume authorization and return
 `OpenFileInput`; the adapter passes that input to the application open service,
 which owns parse reservations, parsing, `EditorState` construction, and
 prepared-document insertion. Mobile prepared-source adoption is injected as a
-semantic lifecycle port at the composition root. Document projection and
-capability queries similarly live in the application query service. The I/O
-layer cannot depend on `application`, `commands`, `ops`, or `state`.
+semantic lifecycle port at the composition root. The application query service
+only coordinates consistent repository reads. Manifest/region/session assembly
+lives in `document_projection`, serialized response limits live in
+`response_budget`, and native-save capability policy lives in
+`document_format_policy`. The I/O layer cannot depend on `application`,
+`commands`, `ops`, or `state`.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
 applied operations, and their lightweight impact/projection views. Domain
@@ -102,7 +107,8 @@ reparse, state commit, and post-save index scheduling. Platform I/O modules
 provide path authorization, destination selection, and write primitives. Outer
 file adapters compose those primitives with prepared save work and managed
 mobile-document adoption; the I/O layer must not call back into the application
-layer.
+layer. The save service depends directly on projection and format-policy
+modules, never on the query service.
 
 ## State Ownership
 
@@ -218,7 +224,10 @@ Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`. Operations return a `MutationExecution` containing a
 wire response and separate `SearchIndexWork`. The application schedules that
 work only on first execution, while mutation replay stores only the response.
-Search scheduling cannot inspect frontend `EditorPatch` DTOs.
+`SearchIndexWork` is an internal domain contract. `SearchService` depends on a
+`SearchIndexPort`; worker threads, queue coalescing, memory reservations, and
+Tantivy updates live in the outer search-index adapter. Search scheduling cannot
+inspect frontend `EditorPatch` DTOs.
 
 Formula parsing has a separate complexity boundary from ordinary cell text.
 Formula source is limited to 64 KiB, delimiter nesting to 128 levels, parsed
@@ -417,9 +426,9 @@ recheck the byte budget and evict the oldest resident index when necessary.
 Search fallback scans through a cursor with chunks capped at 8 MiB of generated
 text and 32,768 visited cells. Each chunk is copied while holding only the
 document read lock and is consumed before the next chunk, so fallback never
-retains both a complete Sheet snapshot and a complete search-text snapshot. An
-application-scoped 24 MiB reservation owned by `SearchService` covers fallback
-scan memory. Search commands run
+retains both a complete Sheet snapshot and a complete search-text snapshot. A
+24 MiB reservation owned by the application-scoped search-index adapter covers
+fallback scan memory. Search commands run
 on a dedicated blocking executor with one execution slot and two admission
 slots, so a long scan cannot consume file-open or save capacity. A fallback
 queues one missing Sheet index per search so repeated searches converge to

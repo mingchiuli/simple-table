@@ -5,23 +5,6 @@ use std::sync::{Condvar, Mutex};
 use crate::state::search_index::SearchIndexStamp;
 use crate::state::state::ActiveDocumentRepository;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum SearchIndexWork {
-    #[default]
-    None,
-    UpdateCells(Vec<SearchCellIndexUpdate>),
-    RebuildAll,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SearchCellIndexUpdate {
-    pub sheet_index: usize,
-    pub row: usize,
-    pub col: usize,
-    pub search_text: String,
-    pub display_text: String,
-}
-
 pub(crate) const MAX_PENDING_INDEX_SHEETS: usize = 256;
 pub(crate) const MAX_PENDING_INDEX_UPDATES_PER_SHEET: usize = 4_096;
 pub(crate) const MAX_PENDING_INDEX_BYTES_PER_SHEET: usize = 8 * 1024 * 1024;

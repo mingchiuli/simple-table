@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::state::search_scheduler::SearchIndexWork;
+use crate::domain::SearchIndexWork;
 use crate::types::EditorMutationResponse;
 
 #[derive(Debug)]

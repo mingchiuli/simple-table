@@ -3,8 +3,6 @@
 use super::{
     CommandU64, blocking, mutation_executor, projection_executor, recent_executor, search_executor,
 };
-#[cfg(desktop)]
-use crate::adapters::document_file_adapter;
 use crate::adapters::recent_file_adapter;
 use crate::application::editor_command_service::EditorSessionInfo;
 use crate::application::runtime::ApplicationRuntime;
@@ -12,16 +10,13 @@ use crate::application::{
     document_open_service, document_query_service, document_service, editor_command_service,
 };
 use crate::error::AppError;
-#[cfg(desktop)]
-use crate::io::platform::desktop;
 use crate::recent::{AddRecentFileRequest, RecentFile};
 use crate::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
-#[cfg(desktop)]
-use crate::types::SavedDocumentResponse;
 use crate::types::{
-    DocumentCapabilities, EditorMutationResponse, MutationResultLookup, NativeSavePlan,
-    OpenDocumentResponse, PreparedOpenDocument, SearchResponse, SearchScope, SetCellRequest,
-    SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+    DesktopOpenFileInfo, DocumentCapabilities, EditorMutationResponse, MutationResultLookup,
+    NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument, SavedDocumentResponse,
+    SearchResponse, SearchScope, SetCellRequest, SheetRegion, SheetRegionProjectionResponse,
+    SpreadsheetFormatOptions,
 };
 use tauri::{AppHandle, State};
 
@@ -183,16 +178,16 @@ impl<'de> serde::Deserialize<'de> for SetCellBatch {
 pub async fn pick_open_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
-) -> Result<Option<desktop::DesktopOpenFileInfo>, AppError> {
+) -> Result<Option<DesktopOpenFileInfo>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || desktop::pick_open_file(runtime.desktop_files(), &app)).await
+    blocking::run(move || runtime.document_files().pick_open_file(&app)).await
 }
 
 /// Desktop: 释放已选择但没有被读取的文件路径授权。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub fn discard_open_file_selection_desktop(runtime: State<'_, ApplicationRuntime>, path: String) {
-    desktop::discard_open_file_selection(runtime.desktop_files(), &path)
+    runtime.document_files().discard_open_file_selection(&path)
 }
 
 /// Desktop: 从后端已授权路径读取并解析文件。
@@ -203,14 +198,7 @@ pub async fn prepare_open_file_desktop(
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        document_file_adapter::prepare_open_file_desktop(
-            runtime.document_opens(),
-            runtime.desktop_files(),
-            &path,
-        )
-    })
-    .await
+    blocking::run(move || runtime.document_files().prepare_open_file(&path)).await
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
@@ -222,15 +210,7 @@ pub async fn prepare_recent_file_desktop(
     id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        document_file_adapter::prepare_recent_file_desktop(
-            runtime.document_opens(),
-            runtime.recent_store(),
-            &app,
-            &id,
-        )
-    })
-    .await
+    blocking::run(move || runtime.document_files().prepare_recent_file(&app, &id)).await
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -242,15 +222,19 @@ pub async fn pick_save_location_desktop(
     default_name: String,
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || desktop::pick_save_location(runtime.desktop_files(), &app, &default_name))
-        .await
+    blocking::run(move || {
+        runtime
+            .document_files()
+            .pick_save_location(&app, &default_name)
+    })
+    .await
 }
 
 /// Desktop: 释放未使用的保存路径授权。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub fn discard_save_location_desktop(runtime: State<'_, ApplicationRuntime>, path: String) {
-    desktop::discard_save_location(runtime.desktop_files(), &path)
+    runtime.document_files().discard_save_location(&path)
 }
 
 /// Desktop: 生成文件字节并写入路径
@@ -264,13 +248,9 @@ pub async fn save_file_desktop(
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_file_adapter::save_file_desktop(
-            runtime.document_saves(),
-            runtime.desktop_files(),
-            &path,
-            document_id.get(),
-            base_revision.get(),
-        )
+        runtime
+            .document_files()
+            .save_file(&path, document_id.get(), base_revision.get())
     })
     .await
 }
@@ -287,8 +267,7 @@ pub async fn export_file_desktop(
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_file_adapter::export_file_desktop(
-            runtime.document_saves(),
+        runtime.document_files().export_file(
             &app,
             &default_name,
             document_id.get(),
