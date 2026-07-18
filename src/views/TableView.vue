@@ -142,7 +142,7 @@ onBeforeRouteLeave(createRouteLeaveHandler({
 }));
 
 function getEditorValue(sheetIndex: number, row: number, col: number): string {
-  const draftValue = draftCellValues.value.get(getCellKey(sheetIndex, row, col));
+  const draftValue = draftCellValues.value[getCellKey(sheetIndex, row, col)];
   if (draftValue !== undefined) return draftValue;
   return cellToEditorString(sheetCell(fileData.value?.sheets[sheetIndex], row, col));
 }

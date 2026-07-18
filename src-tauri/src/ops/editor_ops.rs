@@ -1,7 +1,8 @@
 use crate::error::AppError;
+use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::{EditorMutationResponse, EditorSessionInfo};
+use crate::types::EditorSessionInfo;
 
 /// 获取编辑器状态（包含能否撤销/重做）
 pub fn do_get_editor_state(
@@ -33,17 +34,16 @@ pub fn do_undo(
     registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let handle = registry.mutation_handle(document_id)?;
     let (response, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.undo()? {
-            let response = restore_mutation_response(
-                &editor_state,
-                result.restore,
-                result.search_index_update,
-            );
-            (response, result.retired)
+            let response = restore_mutation_response(&editor_state, result.restore);
+            (
+                MutationExecution::new(response, result.search_index_work),
+                result.retired,
+            )
         } else {
             return Err(AppError::NothingToUndo);
         }
@@ -58,17 +58,16 @@ pub fn do_redo(
     registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let handle = registry.mutation_handle(document_id)?;
     let (response, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.redo()? {
-            let response = restore_mutation_response(
-                &editor_state,
-                result.restore,
-                result.search_index_update,
-            );
-            (response, result.retired)
+            let response = restore_mutation_response(&editor_state, result.restore);
+            (
+                MutationExecution::new(response, result.search_index_work),
+                result.retired,
+            )
         } else {
             return Err(AppError::NothingToRedo);
         }

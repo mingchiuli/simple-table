@@ -5,6 +5,7 @@ use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::search_service::SearchService;
 use crate::domain::CellEditInput;
 use crate::error::AppError;
+use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::{cell_ops, editor_ops};
 use crate::state::state::ActiveDocumentRepository;
 use crate::types::{
@@ -364,7 +365,7 @@ fn run_mutation<P: Serialize>(
     command_id: &str,
     command_name: &str,
     payload: &P,
-    execute: impl FnOnce(&ActiveDocumentRepository) -> Result<EditorMutationResponse, AppError>,
+    execute: impl FnOnce(&ActiveDocumentRepository) -> Result<MutationExecution, AppError>,
 ) -> Result<EditorMutationResponse, AppError> {
     mutation_replay::run(
         service.mutation_replays(),
@@ -374,11 +375,13 @@ fn run_mutation<P: Serialize>(
         command_name,
         payload,
         || {
-            let response = execute(service.documents())?;
-            service
-                .search_service()
-                .schedule_for_response(&response, service.documents());
-            Ok(response)
+            let execution = execute(service.documents())?;
+            service.search_service().schedule_work(
+                document_id,
+                execution.search_index_work,
+                service.documents(),
+            );
+            Ok(execution.response)
         },
     )
 }

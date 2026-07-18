@@ -13,6 +13,7 @@ flowchart TB
     REGION[Region repository and bounded RegionCache]
     RPC[Rust-signature generated TauriCommandMap]
     IPC[Typed invoke adapter]
+    ADAPTER[Rust platform adapters]
     SERVICE[Rust ApplicationRuntime and document services]
     OPS[Rust operation layer]
     STATE[EditorState session]
@@ -22,11 +23,11 @@ flowchart TB
 
     UI --> APP --> STORE
     APP --> REGION --> STORE
-    APP --> RPC --> IPC --> SERVICE --> OPS --> STATE --> DOC --> IO
+    APP --> RPC --> IPC --> ADAPTER --> SERVICE --> OPS --> STATE --> DOC --> IO
+    ADAPTER --> IO
     OPS --> DOMAIN
     STATE --> DOMAIN
     DOC --> DOMAIN
-    SERVICE --> IO
     OPS -. mutation response .-> STORE
 ```
 
@@ -44,12 +45,13 @@ depend on command modules.
 
 `ApplicationRuntime` is the backend composition root managed by Tauri. It
 constructs narrow document-query, document-open, document-lifecycle,
-document-save, editor-command, and recent-file services over shared
-repositories and coordinators. Application services declare only their actual
-dependencies and cannot import or receive the complete runtime. Commands may
-receive `tauri::State<ApplicationRuntime>`, but select one narrow service before
-delegating business work. Business repositories and schedulers cannot locate
-process-global `OnceLock` instances.
+document-save, and editor-command services over shared repositories and
+coordinators. It also owns platform runtimes and outer recent/file adapters.
+Application services declare only their actual dependencies and cannot import
+the complete runtime, `AppHandle`, or platform I/O implementations. Commands
+may receive `tauri::State<ApplicationRuntime>`, but select a narrow service and
+outer adapter before delegating work. Business repositories and schedulers
+cannot locate process-global `OnceLock` instances.
 
 The active-document registry is hidden behind `ActiveDocumentRepository`.
 Application, operation, and search modules request semantic read or mutation
@@ -57,10 +59,12 @@ handles from the repository; they cannot acquire its `RwLock` directly.
 Document replacement uses an RAII repository transaction that releases an
 unfinished replacement lease on drop.
 
-Document opening is split between platform I/O and application orchestration.
-Platform modules consume authorization and return `OpenFileInput`; the
-application open service owns parse reservations, parsing, `EditorState`
-construction, and prepared-document insertion. Document projection and
+Document opening is split between outer platform adapters and application
+orchestration. Platform modules consume authorization and return
+`OpenFileInput`; the adapter passes that input to the application open service,
+which owns parse reservations, parsing, `EditorState` construction, and
+prepared-document insertion. Mobile prepared-source adoption is injected as a
+semantic lifecycle port at the composition root. Document projection and
 capability queries similarly live in the application query service. The I/O
 layer cannot depend on `application`, `commands`, `ops`, or `state`.
 
@@ -95,8 +99,10 @@ module cannot depend on application, state, operations, or I/O modules.
 Save and export orchestration live in `application::document_save_service`.
 That service owns work reservations, revision validation, save leases, optional
 reparse, state commit, and post-save index scheduling. Platform I/O modules
-provide only path authorization, destination selection, and write primitives;
-the I/O layer must not call back into the application layer.
+provide path authorization, destination selection, and write primitives. Outer
+file adapters compose those primitives with prepared save work and managed
+mobile-document adoption; the I/O layer must not call back into the application
+layer.
 
 ## State Ownership
 
@@ -122,7 +128,9 @@ the I/O layer must not call back into the application layer.
   and pending-edit Stores. Business Stores must not instantiate or mutate one
   another.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
-  is the backend dirty flag OR pending frontend content.
+  is the backend dirty flag OR pending frontend content. Store dictionaries are
+  JSON-serializable records; large pending dictionaries remain raw and expose
+  reactive counters/versioned snapshots instead of deep-proxying every cell.
 - Selection and search result state are UI-only and must not influence document
   dirty tracking.
 - Pinia Stores expose serializable view state and synchronous state transitions.
@@ -207,7 +215,10 @@ complete queue. Active and queued requests are limited to 8,192 changes and
 before it can replace an accepted draft.
 
 Search scheduling metadata is internal to Rust and must not be serialized in
-`EditorMutationResponse`.
+`EditorMutationResponse`. Operations return a `MutationExecution` containing a
+wire response and separate `SearchIndexWork`. The application schedules that
+work only on first execution, while mutation replay stores only the response.
+Search scheduling cannot inspect frontend `EditorPatch` DTOs.
 
 Formula parsing has a separate complexity boundary from ordinary cell text.
 Formula source is limited to 64 KiB, delimiter nesting to 128 levels, parsed

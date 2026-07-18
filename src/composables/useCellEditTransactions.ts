@@ -33,8 +33,11 @@ export function useCellEditTransactions({
   const pendingCellSavesStore = usePendingCellSavesStore();
   const pendingCellSaveCoordinator = usePendingCellSaveCoordinator();
   const documentStatusStore = useDocumentStatusStore();
-  const draftCellValues = computed<ReadonlyMap<string, string>>(
-    () => pendingCellSavesStore.draftCellValues
+  const draftCellValues = computed<Readonly<Record<string, string>>>(
+    () => {
+      void pendingCellSavesStore.draftVersion;
+      return { ...pendingCellSavesStore.draftCellValues };
+    }
   );
   const schedulerCallbacks: PendingCellSaveCallbacks = {
     commitBatch,

@@ -66,7 +66,7 @@ export function useCellEditController({
 
   watch(currentCellValue, () => {
     const key = selectedCellKey();
-    if (selectedCell.value && (!key || !transactions.draftCellValues.value.has(key))) {
+    if (selectedCell.value && (!key || !(key in transactions.draftCellValues.value))) {
       refreshSelectedEditorValue();
     }
   });

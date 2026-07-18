@@ -12,14 +12,14 @@ use crate::recent::thumbnail::{capture_thumbnail, generate_thumbnail};
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 
 #[derive(Clone)]
-pub struct RecentFileService {
+pub struct RecentFileAdapter {
     document_queries: DocumentQueryService,
     recent_files: RecentStore,
     #[cfg(any(target_os = "android", target_os = "ios"))]
     mobile_files: MobileFileRuntime,
 }
 
-impl RecentFileService {
+impl RecentFileAdapter {
     pub(crate) fn new(
         document_queries: DocumentQueryService,
         recent_files: RecentStore,
@@ -53,7 +53,7 @@ impl RecentFileService {
 }
 
 pub fn do_get_recent_files(
-    service: &RecentFileService,
+    service: &RecentFileAdapter,
     app: &AppHandle,
 ) -> Result<Vec<RecentFile>, AppError> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -75,7 +75,7 @@ pub fn do_get_recent_files(
 }
 
 pub fn do_add_recent_file_with_thumbnail(
-    service: &RecentFileService,
+    service: &RecentFileAdapter,
     app: &AppHandle,
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
@@ -128,7 +128,7 @@ pub fn do_add_recent_file_with_thumbnail(
 }
 
 pub fn do_remove_recent_file(
-    service: &RecentFileService,
+    service: &RecentFileAdapter,
     app: &AppHandle,
     id: &str,
 ) -> Result<(), AppError> {
@@ -165,7 +165,7 @@ pub fn do_remove_recent_file(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn reconcile_mobile_recent_files(
-    service: &RecentFileService,
+    service: &RecentFileAdapter,
     app: &AppHandle,
     stored: Vec<RecentFile>,
 ) -> Result<Vec<RecentFile>, AppError> {
@@ -239,7 +239,7 @@ fn reconcile_mobile_recent_files(
 }
 
 fn cleanup_removed_mobile_files(
-    service: &RecentFileService,
+    service: &RecentFileAdapter,
     app: &AppHandle,
     removed: &[RecentFile],
 ) {

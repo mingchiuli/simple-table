@@ -1,11 +1,15 @@
 use crate::domain::{CellEditInput, EditorCommand};
 use crate::error::AppError;
+use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::{
-    cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
-    status_mutation_response, structural_delta_mutation_response,
+    cell_delta_mutation_response, complete_cell_changes, layout_mutation_response,
+    resync_required_mutation_response, status_mutation_response,
+    structural_delta_mutation_response,
 };
+use crate::state::search_scheduler::{SearchCellIndexUpdate, SearchIndexWork};
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::{EditorMutationResponse, LayoutPatch};
+use crate::types::display::DisplayProjection;
+use crate::types::{LayoutPatch, SheetCellChange};
 
 pub fn do_set_cell(
     registry: &ActiveDocumentRepository,
@@ -15,7 +19,7 @@ pub fn do_set_cell(
     row: usize,
     col: usize,
     text: String,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let response = execute_cell_delta(
         registry,
         document_id,
@@ -36,7 +40,7 @@ pub fn do_set_cells(
     document_id: u64,
     base_revision: u64,
     changes: Vec<CellEditInput>,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let response = execute_cell_delta(
         registry,
         document_id,
@@ -53,7 +57,7 @@ pub fn do_add_row(
     base_revision: u64,
     sheet_index: usize,
     row_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_structural_command(
         registry,
         document_id,
@@ -71,7 +75,7 @@ pub fn do_delete_row(
     base_revision: u64,
     sheet_index: usize,
     row_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_structural_command(
         registry,
         document_id,
@@ -89,7 +93,7 @@ pub fn do_add_column(
     base_revision: u64,
     sheet_index: usize,
     col_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_structural_command(
         registry,
         document_id,
@@ -107,7 +111,7 @@ pub fn do_delete_column(
     base_revision: u64,
     sheet_index: usize,
     col_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_structural_command(
         registry,
         document_id,
@@ -126,7 +130,7 @@ pub fn do_set_column_width(
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_layout(
         registry,
         document_id,
@@ -147,7 +151,7 @@ pub fn do_set_row_height(
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_layout(
         registry,
         document_id,
@@ -165,7 +169,7 @@ pub fn do_add_sheet(
     registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_structural_command(
         registry,
         document_id,
@@ -179,7 +183,7 @@ pub fn do_delete_sheet(
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     execute_structural_command(
         registry,
         document_id,
@@ -193,21 +197,29 @@ fn execute_cell_delta(
     document_id: u64,
     base_revision: u64,
     command: EditorCommand,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let handle = mutation_handle(registry, document_id)?;
-    let (response, retired) = {
+    let (execution, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let retired = result.retired;
-        let response = if let Some(operation) = result.operation {
-            cell_delta_mutation_response(&editor_state, &operation, result.cell_changes)
+        let execution = if let Some(operation) = result.operation {
+            let changes = complete_cell_changes(&operation, result.cell_changes);
+            let search_index_work = search_index_work_for_changes(&editor_state, &changes);
+            MutationExecution::new(
+                cell_delta_mutation_response(&editor_state, changes),
+                search_index_work,
+            )
         } else {
-            status_mutation_response(&editor_state)
+            MutationExecution::new(
+                status_mutation_response(&editor_state),
+                SearchIndexWork::None,
+            )
         };
-        (response, retired)
+        (execution, retired)
     };
     drop(retired);
-    Ok(response)
+    Ok(execution)
 }
 
 fn execute_structural_command(
@@ -215,29 +227,30 @@ fn execute_structural_command(
     document_id: u64,
     base_revision: u64,
     command: EditorCommand,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let handle = mutation_handle(registry, document_id)?;
-    let (response, retired) = {
+    let (execution, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let retired = result.retired;
-        let response = match result.operation {
-            Some(operation) => structural_delta_mutation_response(
-                &editor_state,
-                &operation,
-                result.cell_changes,
-                result.search_index_update,
+        let execution = match result.operation {
+            Some(operation) => MutationExecution::new(
+                structural_delta_mutation_response(&editor_state, &operation, result.cell_changes),
+                result.search_index_work,
             ),
-            None => resync_required_mutation_response(
-                &editor_state,
-                "structure edit completed without an operation result",
+            None => MutationExecution::new(
+                resync_required_mutation_response(
+                    &editor_state,
+                    "structure edit completed without an operation result",
+                ),
+                SearchIndexWork::RebuildAll,
             ),
         };
-        (response, retired)
+        (execution, retired)
     };
     drop(retired);
 
-    Ok(response)
+    Ok(execution)
 }
 
 fn execute_layout(
@@ -246,9 +259,9 @@ fn execute_layout(
     base_revision: u64,
     command: EditorCommand,
     patch: LayoutPatch,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationExecution, AppError> {
     let handle = mutation_handle(registry, document_id)?;
-    let (response, retired) = {
+    let (execution, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let response = if result.operation.is_some() {
@@ -256,10 +269,37 @@ fn execute_layout(
         } else {
             status_mutation_response(&editor_state)
         };
-        (response, result.retired)
+        (
+            MutationExecution::new(response, result.search_index_work),
+            result.retired,
+        )
     };
     drop(retired);
-    Ok(response)
+    Ok(execution)
+}
+
+fn search_index_work_for_changes(
+    editor_state: &crate::state::editor_state::EditorState,
+    changes: &[SheetCellChange],
+) -> SearchIndexWork {
+    let updates = changes
+        .iter()
+        .map(|change| {
+            let sheet = editor_state.file_data().sheets.get(change.sheet_index);
+            let format = sheet.and_then(|sheet| sheet.cell_format_at(change.row, change.col));
+            let display_text = sheet
+                .map(|sheet| sheet.cell_display_text(change.row, change.col))
+                .unwrap_or_else(|| change.value.to_display_string());
+            SearchCellIndexUpdate {
+                sheet_index: change.sheet_index,
+                row: change.row,
+                col: change.col,
+                search_text: DisplayProjection::search_text(&change.value, format.as_ref()),
+                display_text,
+            }
+        })
+        .collect();
+    SearchIndexWork::UpdateCells(updates)
 }
 
 fn mutation_handle(
@@ -391,7 +431,10 @@ mod tests {
                 if patch.sheet_index == 0 && patch.row_index == 1 && patch.count == 1
         ));
         assert_eq!(add_row_response.patches.len(), 1);
-        assert!(add_row_response.search_index_update.rebuild_all);
+        assert_eq!(
+            add_row_response.search_index_work,
+            SearchIndexWork::RebuildAll
+        );
 
         let registry = make_registry();
         let (document_id, revision) = command_session(&registry);
@@ -403,7 +446,10 @@ mod tests {
                 if patch.sheet_index == 0 && patch.col_index == 1 && patch.count == 1
         ));
         assert_eq!(add_column_response.patches.len(), 1);
-        assert!(add_column_response.search_index_update.rebuild_all);
+        assert_eq!(
+            add_column_response.search_index_work,
+            SearchIndexWork::RebuildAll
+        );
     }
 
     #[test]
@@ -554,7 +600,7 @@ mod tests {
         let (document_id, revision) = command_session(&registry);
         let response = do_set_cell(&registry, document_id, revision, 0, 0, 0, "0.5".to_string())
             .expect("set formatted cell");
-        let json = serde_json::to_value(response).expect("serialize response");
+        let json = serde_json::to_value(response.response).expect("serialize response");
 
         assert!(json.get("searchIndexUpdate").is_none());
         assert_eq!(json["documentId"], document_id.to_string());

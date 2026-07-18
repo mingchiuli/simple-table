@@ -1,5 +1,6 @@
 pub mod cell_ops;
 pub mod editor_ops;
+pub mod mutation_execution;
 pub mod operation_impact;
 pub mod operation_projection;
 pub mod operation_resolver;

@@ -31,6 +31,7 @@ import {
   resetRegionState,
   touchRegionBlock,
 } from '@/stores/documentRegionState';
+import { markRaw } from 'vue';
 
 export type { DocumentSessionLifecycle } from '@/types';
 
@@ -116,7 +117,9 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     },
     replaceDocumentProjection(response: OpenDocumentResponse, protectedSheetIndex = 0) {
       resetRegionState(this);
-      this.data = createDocumentProjection(response.document, response.initialRegion);
+      this.data = markProjectionCellIndexesRaw(
+        createDocumentProjection(response.document, response.initialRegion)
+      );
       this.residentSheetOrder = response.initialRegion
         ? [response.initialRegion.region.sheetIndex]
         : [];
@@ -156,7 +159,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         ? Math.min(preferredSheetIndex, Math.max(0, response.document.sheets.length - 1))
         : preferredSheetIndex;
       if (response.document) {
-        this.data = createDocumentProjection(response.document);
+        this.data = markProjectionCellIndexesRaw(createDocumentProjection(response.document));
         this.activateResidentSheet(selected);
       } else if (this.data && response.identity) {
         this.data = {
@@ -241,7 +244,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
           response.patches,
           response.sheetExtents
         );
-        this.data = result.data;
+        this.data = markProjectionCellIndexesRaw(result.data);
         reconcileRegionBlocks(this, this.data?.sheets.flatMap((sheet) =>
           sheet.state === 'loaded' ? sheet.blocks.map((block) => block.key) : []
         ) ?? []);
@@ -389,6 +392,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       const data = this.data;
       const current = data?.sheets[region.sheetIndex];
       if (!data || !current || current.state !== 'loaded') return false;
+      markRegionCellIndexesRaw(newBlocks);
       const newKeys = new Set(newBlocks.map((block) => block.key));
       const blocks = [
         ...current.blocks.filter((entry) => !newKeys.has(entry.key)),
@@ -460,4 +464,18 @@ function currentRegionBlockKeys(data: DocumentProjection | null): string[] {
   return data?.sheets.flatMap((slot) => slot.state === 'loaded'
     ? slot.blocks.map((block) => block.key)
     : []) ?? [];
+}
+
+function markProjectionCellIndexesRaw(data: DocumentProjection | null): DocumentProjection | null {
+  for (const sheet of data?.sheets ?? []) {
+    if (sheet.state === 'loaded') markRegionCellIndexesRaw(sheet.blocks);
+  }
+  return data;
+}
+
+function markRegionCellIndexesRaw(blocks: SheetRegionBlock[]) {
+  for (const block of blocks) {
+    markRaw(block.cells);
+    markRaw(block.mergeAnchorCells);
+  }
 }

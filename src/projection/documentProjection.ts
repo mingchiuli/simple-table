@@ -166,8 +166,10 @@ export function regionBlock(response: SheetRegionProjectionResponse): SheetRegio
   return {
     key: regionKey(response.region),
     region: response.region,
-    cells: new Map(response.cells.map((cell) => [cellKey(cell.row, cell.col), cell.value])),
-    mergeAnchorCells: new Map(
+    cells: Object.fromEntries(
+      response.cells.map((cell) => [cellKey(cell.row, cell.col), cell.value])
+    ),
+    mergeAnchorCells: Object.fromEntries(
       (response.mergeAnchorCells ?? []).map((cell) => [cellKey(cell.row, cell.col), cell.value])
     ),
     metadata: normalizeMetadata(response.metadata),
@@ -194,8 +196,8 @@ export function sheetCell(
   const key = cellKey(row, col);
   for (let index = slot.blocks.length - 1; index >= 0; index -= 1) {
     const block = slot.blocks[index];
-    if (containsCell(block.region, row, col)) return block.cells.get(key);
-    const anchor = block.mergeAnchorCells.get(key);
+    if (containsCell(block.region, row, col)) return block.cells[key];
+    const anchor = block.mergeAnchorCells[key];
     if (anchor !== undefined) return anchor;
   }
   return undefined;
@@ -204,7 +206,8 @@ export function sheetCell(
 export function isCellLoaded(slot: SheetSlot | null | undefined, row: number, col: number): boolean {
   return slot?.state === 'loaded'
     && slot.blocks.some((block) =>
-      containsCell(block.region, row, col) || block.mergeAnchorCells.has(cellKey(row, col))
+      containsCell(block.region, row, col)
+      || Object.hasOwn(block.mergeAnchorCells, cellKey(row, col))
     );
 }
 
@@ -319,12 +322,12 @@ function applyCellChanges(
       for (const change of sheetChanges) {
         const key = cellKey(change.row, change.col);
         if (containsCell(block.region, change.row, change.col)) {
-          cells ??= new Map(block.cells);
-          cells.set(key, change.value);
+          cells ??= { ...block.cells };
+          cells[key] = change.value;
         }
-        if (block.mergeAnchorCells.has(key)) {
-          mergeAnchorCells ??= new Map(block.mergeAnchorCells);
-          mergeAnchorCells.set(key, change.value);
+        if (Object.hasOwn(block.mergeAnchorCells, key)) {
+          mergeAnchorCells ??= { ...block.mergeAnchorCells };
+          mergeAnchorCells[key] = change.value;
         }
       }
       if (!cells && !mergeAnchorCells) return block;

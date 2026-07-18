@@ -641,7 +641,7 @@ describe("useFileActions", () => {
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);
     expect(documentSessionStore.currentFilePath).toBe("/tmp/current.xlsx");
     expect(statusStore.hasPendingContentChange).toBe(true);
-    expect(pendingCellSavesStore.draftCellValues.get("0,0,0")).toBe("draft");
+    expect(pendingCellSavesStore.draftCellValues["0,0,0"]).toBe("draft");
   });
 
   it("allows closing a stale projection after discard confirmation", async () => {

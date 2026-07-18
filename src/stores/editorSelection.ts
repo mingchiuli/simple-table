@@ -7,7 +7,7 @@ export type EditorSelectionSnapshot = {
   selectedCell: CellPosition | null;
   cellEditorValue: string;
   autoScroll: boolean;
-  sheetSelectedCells: Map<number, CellPosition>;
+  sheetSelectedCells: Record<string, CellPosition>;
 };
 
 export const useEditorSelectionStore = defineStore("editorSelection", {
@@ -16,7 +16,7 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
     selectedCell: null as CellPosition | null,
     cellEditorValue: "",
     autoScroll: false,
-    sheetSelectedCells: new Map<number, CellPosition>(),
+    sheetSelectedCells: {} as Record<string, CellPosition>,
   }),
   actions: {
     reset() {
@@ -24,7 +24,7 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
       this.selectedCell = null;
       this.cellEditorValue = "";
       this.autoScroll = false;
-      this.sheetSelectedCells = new Map();
+      this.sheetSelectedCells = {};
     },
     captureSnapshot(): EditorSelectionSnapshot {
       return {
@@ -68,12 +68,12 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
     },
     rememberCurrentSheetSelection() {
       if (this.selectedCell) {
-        this.sheetSelectedCells.set(this.currentSheetIndex, { ...this.selectedCell });
+        this.sheetSelectedCells[this.currentSheetIndex] = { ...this.selectedCell };
       }
     },
     restoreSheetSelection(sheetIndex: number, editorValueFor: (cell: CellPosition) => string) {
       this.currentSheetIndex = sheetIndex;
-      const savedCell = this.sheetSelectedCells.get(sheetIndex);
+      const savedCell = this.sheetSelectedCells[sheetIndex];
       if (!savedCell) {
         this.clearSelection();
         return;
@@ -192,13 +192,13 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
         }
       }
 
-      const rememberedCell = this.sheetSelectedCells.get(sheetIndex);
+      const rememberedCell = this.sheetSelectedCells[sheetIndex];
       if (!rememberedCell) return;
       const transformed = transform(rememberedCell);
       if (transformed) {
-        this.sheetSelectedCells.set(sheetIndex, transformed);
+        this.sheetSelectedCells[sheetIndex] = transformed;
       } else {
-        this.sheetSelectedCells.delete(sheetIndex);
+        delete this.sheetSelectedCells[sheetIndex];
       }
     },
     clampToSheetData(
@@ -213,12 +213,13 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
       if (this.currentSheetIndex >= sheetCount) {
         this.currentSheetIndex = sheetCount - 1;
       }
-      for (const [sheetIndex, cell] of this.sheetSelectedCells) {
+      for (const [sheetIndexKey, cell] of Object.entries(this.sheetSelectedCells)) {
+        const sheetIndex = Number(sheetIndexKey);
         if (
           sheetIndex >= sheetCount
           || !isCellInSheetBounds(sheetIndex, cell.row, cell.col)
         ) {
-          this.sheetSelectedCells.delete(sheetIndex);
+          delete this.sheetSelectedCells[sheetIndex];
         }
       }
       if (!this.selectedCell) return;
@@ -235,14 +236,15 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
 });
 
 function remapSheetSelections(
-  selections: Map<number, CellPosition>,
+  selections: Record<string, CellPosition>,
   mapIndex: (index: number) => number | null
-): Map<number, CellPosition> {
-  const next = new Map<number, CellPosition>();
-  for (const [index, cell] of selections) {
+): Record<string, CellPosition> {
+  const next: Record<string, CellPosition> = {};
+  for (const [indexKey, cell] of Object.entries(selections)) {
+    const index = Number(indexKey);
     const mappedIndex = mapIndex(index);
     if (mappedIndex !== null) {
-      next.set(mappedIndex, { ...cell });
+      next[mappedIndex] = { ...cell };
     }
   }
   return next;
@@ -252,6 +254,10 @@ function cloneCellPosition(cell: CellPosition | null): CellPosition | null {
   return cell ? { ...cell } : null;
 }
 
-function cloneSelectedCells(cells: Map<number, CellPosition>): Map<number, CellPosition> {
-  return new Map(Array.from(cells, ([sheetIndex, cell]) => [sheetIndex, { ...cell }]));
+function cloneSelectedCells(
+  cells: Record<string, CellPosition>
+): Record<string, CellPosition> {
+  return Object.fromEntries(
+    Object.entries(cells).map(([sheetIndex, cell]) => [sheetIndex, { ...cell }])
+  );
 }

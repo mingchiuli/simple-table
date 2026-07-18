@@ -5,6 +5,5 @@ pub mod document_service;
 pub mod editor_command_service;
 pub(crate) mod mutation_replay;
 pub(crate) mod prepared_document_repository;
-pub mod recent_file_service;
 pub mod runtime;
 pub mod search_service;

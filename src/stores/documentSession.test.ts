@@ -10,6 +10,7 @@ import type {
 } from '@/types';
 import { isCellLoaded, loadedSheetMetadata, sheetCell } from '@/projection/documentProjection';
 import { blankCell } from '@/utils/cellValue';
+import { isReactive } from 'vue';
 
 describe('documentSession sparse projection', () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -22,6 +23,15 @@ describe('documentSession sparse projection', () => {
     expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
     expect(sheetCell(store.data?.sheets[0], 0, 0)?.display).toBe('A1');
     expect(store.data?.sheets[1].state).toBe('unloaded');
+  });
+
+  it('keeps loaded region blocks JSON serializable', () => {
+    const store = useDocumentSessionStore();
+    store.openDocumentResponse(openResponse());
+
+    const serialized = JSON.parse(JSON.stringify(store.$state));
+    expect(serialized.data.sheets[0].blocks[0].cells['0:0'].display).toBe('A1');
+    expect(isReactive(store.loadedSheet(0)?.blocks[0].cells)).toBe(false);
   });
 
   it('charges the initial region against the resident byte budget', () => {

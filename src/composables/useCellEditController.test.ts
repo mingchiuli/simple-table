@@ -138,7 +138,7 @@ describe("useCellEditController", () => {
     expect(documentSessionStore.projectionStale).toBe(false);
     expect(sheetCell(documentSessionStore.data?.sheets[0], 0, 0)).toEqual(text("draft"));
     expect(usePendingCellSavesStore().phase).toBe("idle");
-    expect(usePendingCellSavesStore().draftCellValues.size).toBe(0);
+    expect(Object.keys(usePendingCellSavesStore().draftCellValues)).toHaveLength(0);
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
 
@@ -200,7 +200,7 @@ describe("useCellEditController", () => {
     expect(documentSessionStore.isEditorInteractionLocked).toBe(true);
     expect(sheetCell(documentSessionStore.data?.sheets[0], 0, 0)).toEqual(text("old"));
     expect(usePendingCellSavesStore().phase).toBe("idle");
-    expect(usePendingCellSavesStore().draftCellValues.size).toBe(0);
+    expect(Object.keys(usePendingCellSavesStore().draftCellValues)).toHaveLength(0);
     expect(statusStore.hasPendingContentChange).toBe(false);
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
       "保存已提交，但刷新失败: Error: frontend apply failed"

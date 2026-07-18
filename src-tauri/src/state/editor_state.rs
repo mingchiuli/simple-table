@@ -20,11 +20,11 @@ use crate::state::search_index::{
     RetiredSearchIndexes, SearchIndexStamp, SearchScanCursor, SearchSheetIndex, SearchTextChunk,
     SearchWriterHandle, collect_sheet_search_text_chunk,
 };
+use crate::state::search_scheduler::SearchIndexWork;
 use crate::state::search_session::SearchSession;
 use crate::types::HistoryStatus;
 use crate::types::{
-    AppliedOperationResult, FileData, FormulaStatus, SearchIndexUpdatePlan, SheetCellChange,
-    WorkbookCapabilities,
+    AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ pub struct ExecutedOperation {
     pub operation: Option<AppliedOperationResult>,
     pub cell_changes: Vec<SheetCellChange>,
     pub restore: Option<DocumentRestoreResult>,
-    pub search_index_update: SearchIndexUpdatePlan,
+    pub search_index_work: SearchIndexWork,
     pub(crate) retired: RetiredEditorResources,
 }
 
@@ -431,7 +431,7 @@ impl EditorState {
                 operation: None,
                 cell_changes: Vec::new(),
                 restore: None,
-                search_index_update: SearchIndexUpdatePlan::default(),
+                search_index_work: SearchIndexWork::None,
                 retired: RetiredEditorResources::default(),
             });
         }
@@ -465,12 +465,11 @@ impl EditorState {
         self.bump_revision()?;
         if should_mark_search_stale {
             self.mark_search_index_stale();
-            let search_index_update = SearchIndexUpdatePlan::rebuild_all();
             return Ok(ExecutedOperation {
                 operation: Some(operation_result),
                 cell_changes,
                 restore: None,
-                search_index_update,
+                search_index_work: SearchIndexWork::RebuildAll,
                 retired: RetiredEditorResources::from_history_entries(retired_history),
             });
         } else {
@@ -480,7 +479,7 @@ impl EditorState {
             operation: Some(operation_result),
             cell_changes,
             restore: None,
-            search_index_update: SearchIndexUpdatePlan::default(),
+            search_index_work: SearchIndexWork::None,
             retired: RetiredEditorResources::from_history_entries(retired_history),
         })
     }
@@ -505,7 +504,7 @@ impl EditorState {
                 operation: None,
                 cell_changes: Vec::new(),
                 restore: Some(restore),
-                search_index_update: SearchIndexUpdatePlan::rebuild_all(),
+                search_index_work: SearchIndexWork::RebuildAll,
                 retired: RetiredEditorResources::from_history_entries(retired_history),
             }))
         } else {
@@ -533,7 +532,7 @@ impl EditorState {
                 operation: None,
                 cell_changes: Vec::new(),
                 restore: Some(restore),
-                search_index_update: SearchIndexUpdatePlan::rebuild_all(),
+                search_index_work: SearchIndexWork::RebuildAll,
                 retired: RetiredEditorResources::from_history_entries(retired_history),
             }))
         } else {

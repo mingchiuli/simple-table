@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use tauri::AppHandle;
 use umya_spreadsheet::Workbook;
 
 use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
@@ -10,11 +9,6 @@ use crate::io::file_format::{
     default_spreadsheet_extension, file_name_from_path_like, open_extension_from_path_name_or_bytes,
 };
 use crate::io::open_file_input::OpenFileInput;
-#[cfg(desktop)]
-use crate::io::platform::desktop::DesktopFileRuntime;
-#[cfg(any(target_os = "android", target_os = "ios", test))]
-use crate::io::platform::mobile::MobileFileRuntime;
-use crate::recent::store::RecentStore;
 use crate::resource_limits::validate_file_data;
 use crate::state::editor_state::EditorState;
 use crate::state::state::ActiveDocumentRepository;
@@ -24,29 +18,16 @@ use crate::types::{FileData, PreparedOpenDocument, SheetData};
 pub struct DocumentOpenService {
     documents: ActiveDocumentRepository,
     prepared_documents: PreparedDocumentRepository,
-    recent_files: RecentStore,
-    #[cfg(desktop)]
-    desktop_files: DesktopFileRuntime,
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
-    mobile_files: MobileFileRuntime,
 }
 
 impl DocumentOpenService {
     pub(crate) fn new(
         documents: ActiveDocumentRepository,
         prepared_documents: PreparedDocumentRepository,
-        recent_files: RecentStore,
-        #[cfg(desktop)] desktop_files: DesktopFileRuntime,
-        #[cfg(any(target_os = "android", target_os = "ios", test))] mobile_files: MobileFileRuntime,
     ) -> Self {
         Self {
             documents,
             prepared_documents,
-            recent_files,
-            #[cfg(desktop)]
-            desktop_files,
-            #[cfg(any(target_os = "android", target_os = "ios", test))]
-            mobile_files,
         }
     }
 
@@ -56,21 +37,6 @@ impl DocumentOpenService {
 
     pub(crate) fn prepared_documents(&self) -> &PreparedDocumentRepository {
         &self.prepared_documents
-    }
-
-    #[cfg(desktop)]
-    fn recent_files(&self) -> &RecentStore {
-        &self.recent_files
-    }
-
-    #[cfg(desktop)]
-    fn desktop_files(&self) -> &DesktopFileRuntime {
-        &self.desktop_files
-    }
-
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
-    pub(crate) fn mobile_files(&self) -> &MobileFileRuntime {
-        &self.mobile_files
     }
 
     #[cfg(test)]
@@ -112,41 +78,6 @@ pub fn prepare_open_input(
     )
 }
 
-#[cfg(desktop)]
-pub fn prepare_open_file_desktop(
-    service: &DocumentOpenService,
-    path: &str,
-) -> Result<PreparedOpenDocument, AppError> {
-    prepare_open_input(
-        service,
-        crate::io::platform::desktop::read_open_file(service.desktop_files(), path)?,
-    )
-}
-
-#[cfg(desktop)]
-pub fn prepare_recent_file_desktop(
-    service: &DocumentOpenService,
-    app: &AppHandle,
-    id: &str,
-) -> Result<PreparedOpenDocument, AppError> {
-    prepare_open_input(
-        service,
-        crate::io::platform::desktop::read_recent_file(service.recent_files(), app, id)?,
-    )
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn prepare_open_file_mobile(
-    service: &DocumentOpenService,
-    app: &AppHandle,
-    path: &str,
-) -> Result<PreparedOpenDocument, AppError> {
-    prepare_open_input(
-        service,
-        crate::io::platform::mobile::read_open_file(service.mobile_files(), app, path)?,
-    )
-}
-
 pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDocument, AppError> {
     let file_data = blank_file_data();
     validate_file_data(&file_data)?;
@@ -158,27 +89,6 @@ pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDoc
 
 pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Result<(), AppError> {
     service.prepared_documents().abort(token)
-}
-
-pub(crate) fn adopt_source_path_if_transient(
-    service: &DocumentOpenService,
-    source_path: Option<&std::path::Path>,
-    file_name: &str,
-) -> Result<(), AppError> {
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
-    if let Some(source_path) = source_path {
-        crate::io::managed_documents::adopt_transient_document(
-            service.mobile_files().managed_documents(),
-            service.mobile_files().transient_files(),
-            source_path,
-            file_name,
-        )?;
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-    let _ = (service, source_path, file_name);
-
-    Ok(())
 }
 
 fn blank_file_data() -> FileData {

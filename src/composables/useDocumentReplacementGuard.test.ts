@@ -117,7 +117,7 @@ describe("useDocumentReplacementGuard", () => {
 
     expect(replacement).not.toBeNull();
     expect(committed).toEqual([]);
-    expect(pendingStore.queuedCellSaves.get("0,0,0")?.value).toBe("draft");
+    expect(pendingStore.queuedCellSaves["0,0,0"]?.value).toBe("draft");
 
     replacement?.cancel();
     await vi.advanceTimersByTimeAsync(100);
@@ -141,7 +141,7 @@ describe("useDocumentReplacementGuard", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
-    expect(pendingStore.queuedCellSaves.get("0,0,0")?.value).toBe("draft");
+    expect(pendingStore.queuedCellSaves["0,0,0"]?.value).toBe("draft");
 
     resolveConfirm(false);
     await expect(replacementPromise).resolves.toBeNull();

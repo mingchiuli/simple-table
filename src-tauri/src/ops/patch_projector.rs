@@ -4,8 +4,8 @@ use crate::types::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
     EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
-    SearchIndexUpdatePlan, SheetCellChange, SheetDeletedPatch, SheetInsertedPatch,
-    SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest,
+    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetInvalidatedPatch,
+    SheetLayoutProjection, SheetManifest,
 };
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -28,18 +28,6 @@ pub fn mutation_response(
     editor_state: &EditorState,
     patches: Vec<EditorPatch>,
 ) -> EditorMutationResponse {
-    mutation_response_with_search_index_update(
-        editor_state,
-        patches,
-        SearchIndexUpdatePlan::default(),
-    )
-}
-
-pub fn mutation_response_with_search_index_update(
-    editor_state: &EditorState,
-    patches: Vec<EditorPatch>,
-    search_index_update: SearchIndexUpdatePlan,
-) -> EditorMutationResponse {
     let patches = bounded_patches(
         editor_state.file_data(),
         project_patch_display_formats(editor_state.file_data(), patches),
@@ -53,7 +41,6 @@ pub fn mutation_response_with_search_index_update(
         editor_state: editor_state_info(editor_state),
         patches,
         sheet_extents: Some(editor_state.sheet_extents()),
-        search_index_update,
     }
 }
 
@@ -115,9 +102,24 @@ pub fn status_mutation_response(editor_state: &EditorState) -> EditorMutationRes
 
 pub fn cell_delta_mutation_response(
     editor_state: &EditorState,
+    cell_changes: Vec<SheetCellChange>,
+) -> EditorMutationResponse {
+    mutation_response(
+        editor_state,
+        if cell_changes.is_empty() {
+            Vec::new()
+        } else {
+            vec![EditorPatch::Cells {
+                changes: cell_changes,
+            }]
+        },
+    )
+}
+
+pub(crate) fn complete_cell_changes(
     operation: &AppliedOperationResult,
     mut cell_changes: Vec<SheetCellChange>,
-) -> EditorMutationResponse {
+) -> Vec<SheetCellChange> {
     if let AppliedOperationResult::SetCell { sheet_index, cell } = operation {
         push_cell_change_if_missing(
             &mut cell_changes,
@@ -129,17 +131,7 @@ pub fn cell_delta_mutation_response(
             push_cell_change_if_missing(&mut cell_changes, change.clone());
         }
     }
-
-    mutation_response(
-        editor_state,
-        if cell_changes.is_empty() {
-            Vec::new()
-        } else {
-            vec![EditorPatch::Cells {
-                changes: cell_changes,
-            }]
-        },
-    )
+    cell_changes
 }
 
 pub fn layout_mutation_response(
@@ -153,7 +145,6 @@ pub fn structural_delta_mutation_response(
     editor_state: &EditorState,
     operation: &AppliedOperationResult,
     cell_changes: Vec<SheetCellChange>,
-    search_index_update: SearchIndexUpdatePlan,
 ) -> EditorMutationResponse {
     let mut patches = structural_patches(editor_state.file_data(), operation);
 
@@ -163,13 +154,12 @@ pub fn structural_delta_mutation_response(
         });
     }
 
-    mutation_response_with_search_index_update(editor_state, patches, search_index_update)
+    mutation_response(editor_state, patches)
 }
 
 pub fn restore_mutation_response(
     editor_state: &EditorState,
     restore: Option<DocumentRestoreResult>,
-    search_index_update: SearchIndexUpdatePlan,
 ) -> EditorMutationResponse {
     let Some(restore) = restore else {
         return resync_required_mutation_response(
@@ -178,7 +168,7 @@ pub fn restore_mutation_response(
         );
     };
 
-    mutation_response_with_search_index_update(editor_state, restore.patches, search_index_update)
+    mutation_response(editor_state, restore.patches)
 }
 
 pub fn structural_patches(

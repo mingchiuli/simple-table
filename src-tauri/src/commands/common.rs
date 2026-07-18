@@ -3,11 +3,13 @@
 use super::{
     CommandU64, blocking, mutation_executor, projection_executor, recent_executor, search_executor,
 };
+#[cfg(desktop)]
+use crate::adapters::document_file_adapter;
+use crate::adapters::recent_file_adapter;
 use crate::application::editor_command_service::EditorSessionInfo;
 use crate::application::runtime::ApplicationRuntime;
 use crate::application::{
-    document_open_service, document_query_service, document_save_service, document_service,
-    editor_command_service, recent_file_service,
+    document_open_service, document_query_service, document_service, editor_command_service,
 };
 use crate::error::AppError;
 #[cfg(desktop)]
@@ -202,7 +204,11 @@ pub async fn prepare_open_file_desktop(
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_open_service::prepare_open_file_desktop(runtime.document_opens(), &path)
+        document_file_adapter::prepare_open_file_desktop(
+            runtime.document_opens(),
+            runtime.desktop_files(),
+            &path,
+        )
     })
     .await
 }
@@ -217,7 +223,12 @@ pub async fn prepare_recent_file_desktop(
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_open_service::prepare_recent_file_desktop(runtime.document_opens(), &app, &id)
+        document_file_adapter::prepare_recent_file_desktop(
+            runtime.document_opens(),
+            runtime.recent_store(),
+            &app,
+            &id,
+        )
     })
     .await
 }
@@ -253,8 +264,9 @@ pub async fn save_file_desktop(
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_save_service::save_file_desktop(
+        document_file_adapter::save_file_desktop(
             runtime.document_saves(),
+            runtime.desktop_files(),
             &path,
             document_id.get(),
             base_revision.get(),
@@ -275,7 +287,7 @@ pub async fn export_file_desktop(
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_save_service::export_file_desktop(
+        document_file_adapter::export_file_desktop(
             runtime.document_saves(),
             &app,
             &default_name,
@@ -755,7 +767,7 @@ pub async fn get_recent_files(
 ) -> Result<Vec<RecentFile>, AppError> {
     let runtime = runtime.inner().clone();
     recent_executor::run(move || {
-        recent_file_service::do_get_recent_files(runtime.recent_files(), &app)
+        recent_file_adapter::do_get_recent_files(runtime.recent_files(), &app)
     })
     .await
 }
@@ -768,7 +780,7 @@ pub async fn remove_recent_file(
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
     recent_executor::run(move || {
-        recent_file_service::do_remove_recent_file(runtime.recent_files(), &app, &id)
+        recent_file_adapter::do_remove_recent_file(runtime.recent_files(), &app, &id)
     })
     .await
 }
@@ -781,7 +793,7 @@ pub async fn add_recent_file_with_thumbnail(
 ) -> Result<RecentFile, AppError> {
     let runtime = runtime.inner().clone();
     recent_executor::run(move || {
-        recent_file_service::do_add_recent_file_with_thumbnail(
+        recent_file_adapter::do_add_recent_file_with_thumbnail(
             runtime.recent_files(),
             &app,
             request,

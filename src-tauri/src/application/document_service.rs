@@ -1,6 +1,6 @@
+use std::path::Path;
 use std::sync::Arc;
 
-use crate::application::document_open_service::{self, DocumentOpenService};
 use crate::application::document_query_service;
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
@@ -8,6 +8,8 @@ use crate::application::search_service::SearchService;
 use crate::error::AppError;
 use crate::state::state::ActiveDocumentRepository;
 use crate::types::OpenDocumentResponse;
+pub(crate) type PreparedSourceAdopter =
+    Arc<dyn Fn(Option<&Path>, &str) -> Result<(), AppError> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct DocumentLifecycleService {
@@ -15,7 +17,7 @@ pub struct DocumentLifecycleService {
     prepared_documents: PreparedDocumentRepository,
     mutation_replays: Arc<MutationReplayCoordinator>,
     search: SearchService,
-    open_documents: DocumentOpenService,
+    prepared_source_adopter: PreparedSourceAdopter,
 }
 
 impl DocumentLifecycleService {
@@ -24,14 +26,14 @@ impl DocumentLifecycleService {
         prepared_documents: PreparedDocumentRepository,
         mutation_replays: Arc<MutationReplayCoordinator>,
         search: SearchService,
-        open_documents: DocumentOpenService,
+        prepared_source_adopter: PreparedSourceAdopter,
     ) -> Self {
         Self {
             documents,
             prepared_documents,
             mutation_replays,
             search,
-            open_documents,
+            prepared_source_adopter,
         }
     }
 
@@ -51,8 +53,12 @@ impl DocumentLifecycleService {
         &self.search
     }
 
-    fn open_documents(&self) -> &DocumentOpenService {
-        &self.open_documents
+    fn adopt_prepared_source(
+        &self,
+        source_path: Option<&Path>,
+        file_name: &str,
+    ) -> Result<(), AppError> {
+        (self.prepared_source_adopter)(source_path, file_name)
     }
 }
 
@@ -68,8 +74,7 @@ pub fn commit_prepared_document(
     let replacement = service
         .documents()
         .begin_replacement(expected_document_id, expected_revision)?;
-    document_open_service::adopt_source_path_if_transient(
-        service.open_documents(),
+    service.adopt_prepared_source(
         checkout.document().source_path.as_deref(),
         &checkout.document().editor_state.file_data().file_name,
     )?;

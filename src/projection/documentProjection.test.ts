@@ -4,21 +4,12 @@ import type { CellValue, DocumentProjection, EditorPatch, SheetRegionBlock } fro
 import { defaultRichProjection } from '@/types';
 import { blankCell } from '@/utils/cellValue';
 
-class CountingMap<K, V> extends Map<K, V> {
-  iterations = 0;
-
-  override [Symbol.iterator](): MapIterator<[K, V]> {
-    this.iterations += 1;
-    return super[Symbol.iterator]();
-  }
-}
-
 describe('documentProjection patch reduction', () => {
-  it('copies each affected cell map once for a batch', () => {
-    const cells = new CountingMap<string, CellValue>();
+  it('copies each affected cell index once for a batch', () => {
+    const source: Record<string, CellValue> = {};
     const changes: Extract<EditorPatch, { type: 'Cells' }>['data']['changes'] = [];
     for (let col = 0; col < 32; col += 1) {
-      cells.set(`0:${col}`, { ...blankCell(), display: `old-${col}` });
+      source[`0:${col}`] = { ...blankCell(), display: `old-${col}` };
       changes.push({
         sheetIndex: 0,
         row: 0,
@@ -26,21 +17,28 @@ describe('documentProjection patch reduction', () => {
         value: { ...blankCell(), display: `new-${col}` },
       });
     }
-    const untouched = block(0, 128, 256, new Map());
+    let enumerations = 0;
+    const cells = new Proxy(source, {
+      ownKeys(target) {
+        enumerations += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const untouched = block(0, 128, 256, {});
     const data = projection([block(0, 0, 128, cells), untouched]);
 
     const result = applyProjectionPatches(data, [{ type: 'Cells', data: { changes } }]);
     const updated = result.data!.sheets[0];
 
-    expect(cells.iterations).toBe(1);
+    expect(enumerations).toBe(1);
     expect(updated.state).toBe('loaded');
     if (updated.state !== 'loaded') throw new Error('Expected loaded sheet');
-    expect(updated.blocks[0].cells.get('0:31')?.display).toBe('new-31');
+    expect(updated.blocks[0].cells['0:31']?.display).toBe('new-31');
     expect(updated.blocks[1]).toBe(untouched);
   });
 
   it('preserves the complete projection for status-only responses', () => {
-    const data = projection([block(0, 0, 128, new Map())]);
+    const data = projection([block(0, 0, 128, {})]);
 
     const result = applyProjectionPatches(data, [], [
       { rowCount: 256, columnCount: 32 },
@@ -50,7 +48,7 @@ describe('documentProjection patch reduction', () => {
   });
 
   it('updates only sheets whose extent changed', () => {
-    const data = projection([block(0, 0, 128, new Map())]);
+    const data = projection([block(0, 0, 128, {})]);
     data.sheets.push({
       state: 'unloaded',
       name: 'Second',
@@ -71,7 +69,7 @@ describe('documentProjection patch reduction', () => {
   });
 
   it('does not mutate the input projection when invalidating a sheet', () => {
-    const data = projection([block(0, 0, 128, new Map())]);
+    const data = projection([block(0, 0, 128, {})]);
     const originalSheets = data.sheets;
     const originalSheet = data.sheets[0];
 
@@ -111,13 +109,13 @@ function block(
   sheetIndex: number,
   rowStart: number,
   rowEnd: number,
-  cells: Map<string, CellValue>
+  cells: Record<string, CellValue>
 ): SheetRegionBlock {
   return {
     key: `${sheetIndex}:${rowStart}:${rowEnd}:0:32`,
     region: { sheetIndex, rowStart, rowEnd, colStart: 0, colEnd: 32 },
     cells,
-    mergeAnchorCells: new Map(),
+    mergeAnchorCells: {},
     metadata: { merges: [], cellFormats: {}, cellStyles: {} },
     estimatedBytes: 1,
   };

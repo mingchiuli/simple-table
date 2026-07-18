@@ -7,6 +7,7 @@ import type {
 } from "@/types";
 import { cellToEditorString } from "@/utils/cellValue";
 import { utf8ByteLength } from "@/utils/utf8";
+import { markRaw } from "vue";
 
 export type {
   CellSaveRequest,
@@ -30,39 +31,46 @@ export class PendingCellSaveLimitError extends Error {
 
 export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
   state: () => ({
-    draftCellValues: new Map<string, string>(),
-    queuedCellSaves: new Map<string, CellSaveRequest>(),
-    activeCellSaves: new Map<string, CellSaveRequest>(),
+    draftCellValues: serializableIndex<string>(),
+    queuedCellSaves: serializableIndex<CellSaveRequest>(),
+    activeCellSaves: serializableIndex<CellSaveRequest>(),
+    draftVersion: 0,
+    queuedSaveCount: 0,
+    activeSaveCount: 0,
     pendingTextBytes: 0,
     phase: "idle" as PendingCellSavePhase,
     lastError: null as string | null,
   }),
   getters: {
-    hasQueuedSaves: (state) => state.queuedCellSaves.size > 0,
-    hasActiveSaves: (state) => state.activeCellSaves.size > 0,
+    hasQueuedSaves: (state) => state.queuedSaveCount > 0,
+    hasActiveSaves: (state) => state.activeSaveCount > 0,
   },
   actions: {
     stateFor(key: string): CellSaveState {
       return {
         key,
-        draft: this.draftCellValues.get(key),
-        queued: this.queuedCellSaves.get(key),
-        active: this.activeCellSaves.get(key),
+        draft: this.draftCellValues[key],
+        queued: this.queuedCellSaves[key],
+        active: this.activeCellSaves[key],
       };
     },
     setDraft(key: string, value: string) {
-      this.draftCellValues.set(key, value);
+      if (this.draftCellValues[key] === value) return;
+      this.draftCellValues[key] = value;
+      this.draftVersion += 1;
     },
     clearDraft(key: string) {
-      this.draftCellValues.delete(key);
+      if (!(key in this.draftCellValues)) return;
+      delete this.draftCellValues[key];
+      this.draftVersion += 1;
     },
     setPhase(phase: PendingCellSavePhase, error: string | null = null) {
       this.phase = phase;
       this.lastError = error;
     },
     queueSave(key: string, request: CellSaveRequest) {
-      const existing = this.queuedCellSaves.get(key);
-      const active = this.activeCellSaves.get(key);
+      const existing = this.queuedCellSaves[key];
+      const active = this.activeCellSaves[key];
       const nextRequest = {
         ...request,
         oldValue: existing?.oldValue ?? active?.oldValue ?? request.oldValue,
@@ -73,8 +81,8 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
           `Cell text is ${requestBytes} bytes; the maximum is ${MAX_CELL_TEXT_BYTES} bytes.`
         );
       }
-      const projectedChanges = this.queuedCellSaves.size
-        + this.activeCellSaves.size
+      const projectedChanges = this.queuedSaveCount
+        + this.activeSaveCount
         + Number(existing === undefined);
       if (projectedChanges > MAX_PENDING_CELL_CHANGES) {
         throw new PendingCellSaveLimitError(
@@ -89,7 +97,8 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
           `Pending cell text requires ${projectedBytes} bytes; the maximum is ${MAX_PENDING_TEXT_BYTES} bytes.`
         );
       }
-      this.queuedCellSaves.set(key, nextRequest);
+      this.queuedCellSaves[key] = nextRequest;
+      if (existing === undefined) this.queuedSaveCount += 1;
       this.pendingTextBytes = projectedBytes;
     },
     applyDraft(
@@ -97,8 +106,8 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       request: CellSaveRequest,
       committedValue: CellValue
     ): QueueDraftResult {
-      const active = this.activeCellSaves.get(key);
-      const queued = this.queuedCellSaves.get(key);
+      const active = this.activeCellSaves[key];
+      const queued = this.queuedCellSaves[key];
       const value = request.value;
 
       if (active && value === active.value) {
@@ -119,7 +128,7 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
         return { queued: false, shouldMarkPending: false, shouldClearPendingIfIdle: true };
       }
 
-      if (this.draftCellValues.get(key) === value && queued?.value === value) {
+      if (this.draftCellValues[key] === value && queued?.value === value) {
         return { queued: false, shouldMarkPending: false, shouldClearPendingIfIdle: false };
       }
 
@@ -138,31 +147,36 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
       return { queued: true, shouldMarkPending: true, shouldClearPendingIfIdle: false };
     },
     dropQueued(key: string) {
-      const request = this.queuedCellSaves.get(key);
+      const request = this.queuedCellSaves[key];
       if (!request) return;
-      this.queuedCellSaves.delete(key);
+      delete this.queuedCellSaves[key];
+      this.queuedSaveCount = Math.max(0, this.queuedSaveCount - 1);
       this.pendingTextBytes = Math.max(0, this.pendingTextBytes - requestTextBytes(request));
     },
     takeQueuedBatch(): CellSaveRequest[] {
       const batch: CellSaveRequest[] = [];
       let batchTextBytes = 0;
-      for (const [key, request] of this.queuedCellSaves) {
+      for (const key in this.queuedCellSaves) {
+        const request = this.queuedCellSaves[key];
+        if (!request) continue;
         const requestBytes = requestTextBytes(request);
         if (
           batch.length >= MAX_CELL_CHANGES_PER_BATCH
           || batchTextBytes + requestBytes > MAX_BATCH_TEXT_BYTES
         ) break;
 
-        this.queuedCellSaves.delete(key);
+        delete this.queuedCellSaves[key];
+        this.queuedSaveCount = Math.max(0, this.queuedSaveCount - 1);
         this.pendingTextBytes = Math.max(0, this.pendingTextBytes - requestBytes);
-        const previousActive = this.activeCellSaves.get(key);
+        const previousActive = this.activeCellSaves[key];
         if (previousActive) {
           this.pendingTextBytes = Math.max(
             0,
             this.pendingTextBytes - requestTextBytes(previousActive)
           );
         }
-        this.activeCellSaves.set(key, request);
+        this.activeCellSaves[key] = request;
+        if (!previousActive) this.activeSaveCount += 1;
         this.pendingTextBytes += requestBytes;
         batchTextBytes += requestBytes;
         batch.push(request);
@@ -172,42 +186,49 @@ export const usePendingCellSavesStore = defineStore("pendingCellSaves", {
     completeBatch(batch: CellSaveRequest[]) {
       for (const request of batch) {
         const key = cellKey(request);
-        const active = this.activeCellSaves.get(key);
+        const active = this.activeCellSaves[key];
         if (active) {
-          this.activeCellSaves.delete(key);
+          delete this.activeCellSaves[key];
+          this.activeSaveCount = Math.max(0, this.activeSaveCount - 1);
           this.pendingTextBytes = Math.max(0, this.pendingTextBytes - requestTextBytes(active));
         }
-        if (this.draftCellValues.get(key) === request.value) {
-          this.draftCellValues.delete(key);
+        if (this.draftCellValues[key] === request.value) {
+          delete this.draftCellValues[key];
+          this.draftVersion += 1;
         }
       }
     },
     failBatch(batch: CellSaveRequest[]) {
       for (const request of batch) {
         const key = cellKey(request);
-        const active = this.activeCellSaves.get(key);
+        const active = this.activeCellSaves[key];
         if (active) {
-          this.activeCellSaves.delete(key);
+          delete this.activeCellSaves[key];
+          this.activeSaveCount = Math.max(0, this.activeSaveCount - 1);
           this.pendingTextBytes = Math.max(0, this.pendingTextBytes - requestTextBytes(active));
         }
         this.clearDraftAndQueuedIfUnchanged(key, request.value);
       }
     },
     clearDraftAndQueuedIfUnchanged(key: string, value: string) {
-      if (this.draftCellValues.get(key) === value) {
-        this.draftCellValues.delete(key);
+      if (this.draftCellValues[key] === value) {
+        delete this.draftCellValues[key];
+        this.draftVersion += 1;
       }
-      if (this.queuedCellSaves.get(key)?.value === value) {
+      if (this.queuedCellSaves[key]?.value === value) {
         this.dropQueued(key);
       }
     },
     isIdle() {
-      return this.queuedCellSaves.size === 0 && this.activeCellSaves.size === 0;
+      return this.queuedSaveCount === 0 && this.activeSaveCount === 0;
     },
     reset() {
-      this.draftCellValues.clear();
-      this.queuedCellSaves.clear();
-      this.activeCellSaves.clear();
+      this.draftCellValues = serializableIndex<string>();
+      this.queuedCellSaves = serializableIndex<CellSaveRequest>();
+      this.activeCellSaves = serializableIndex<CellSaveRequest>();
+      this.draftVersion += 1;
+      this.queuedSaveCount = 0;
+      this.activeSaveCount = 0;
       this.pendingTextBytes = 0;
       this.phase = "idle";
       this.lastError = null;
@@ -221,4 +242,8 @@ function cellKey(request: Pick<CellSaveRequest, "sheetIndex" | "row" | "col">): 
 
 function requestTextBytes(request: CellSaveRequest): number {
   return utf8ByteLength(request.value);
+}
+
+function serializableIndex<T>(): Record<string, T> {
+  return markRaw({} as Record<string, T>);
 }

@@ -55,11 +55,11 @@ describe("editorSelection store", () => {
 
   it("moves remembered sheet selections with row structure patches", () => {
     const store = useEditorSelectionStore();
-    store.sheetSelectedCells.set(1, { row: 4, col: 2 });
+    store.sheetSelectedCells[1] = { row: 4, col: 2 };
 
     store.applyEditorPatches([rowDeleted(1, 1, 2)]);
 
-    expect(store.sheetSelectedCells.get(1)).toEqual({ row: 2, col: 2 });
+    expect(store.sheetSelectedCells[1]).toEqual({ row: 2, col: 2 });
   });
 
   it("switches sheets through the selection boundary", () => {
@@ -69,9 +69,9 @@ describe("editorSelection store", () => {
 
     expect(store.currentSheetIndex).toBe(1);
     expect(store.selectedCell).toBeNull();
-    expect(store.sheetSelectedCells.get(0)).toEqual({ row: 2, col: 3 });
+    expect(store.sheetSelectedCells[0]).toEqual({ row: 2, col: 3 });
 
-    store.sheetSelectedCells.set(2, { row: 4, col: 5 });
+    store.sheetSelectedCells[2] = { row: 4, col: 5 };
     store.switchSheet(2, () => "B5");
 
     expect(store.currentSheetIndex).toBe(2);
@@ -94,42 +94,51 @@ describe("editorSelection store", () => {
   it("remaps remembered sheet selections when a sheet is inserted", () => {
     const store = useEditorSelectionStore();
     store.currentSheetIndex = 2;
-    store.sheetSelectedCells.set(1, { row: 0, col: 0 });
-    store.sheetSelectedCells.set(2, { row: 1, col: 1 });
+    store.sheetSelectedCells[1] = { row: 0, col: 0 };
+    store.sheetSelectedCells[2] = { row: 1, col: 1 };
 
     store.applyEditorPatches([sheetInserted(1)]);
 
     expect(store.currentSheetIndex).toBe(3);
-    expect(store.sheetSelectedCells.get(2)).toEqual({ row: 0, col: 0 });
-    expect(store.sheetSelectedCells.get(3)).toEqual({ row: 1, col: 1 });
+    expect(store.sheetSelectedCells[2]).toEqual({ row: 0, col: 0 });
+    expect(store.sheetSelectedCells[3]).toEqual({ row: 1, col: 1 });
   });
 
   it("clears selections inside a replaced sheet range", () => {
     const store = useEditorSelectionStore();
     store.currentSheetIndex = 2;
     store.selectCell(1, 1);
-    store.sheetSelectedCells.set(0, { row: 0, col: 0 });
-    store.sheetSelectedCells.set(2, { row: 1, col: 1 });
+    store.sheetSelectedCells[0] = { row: 0, col: 0 };
+    store.sheetSelectedCells[2] = { row: 1, col: 1 };
 
     store.applyEditorPatches([sheetsReplaced(1)]);
 
     expect(store.selectedCell).toBeNull();
-    expect(store.sheetSelectedCells.get(0)).toEqual({ row: 0, col: 0 });
-    expect(store.sheetSelectedCells.has(2)).toBe(false);
+    expect(store.sheetSelectedCells[0]).toEqual({ row: 0, col: 0 });
+    expect(store.sheetSelectedCells[2]).toBeUndefined();
   });
 
   it("clamps remembered selections to current sheet bounds", () => {
     const store = useEditorSelectionStore();
-    store.sheetSelectedCells.set(0, { row: 0, col: 0 });
-    store.sheetSelectedCells.set(1, { row: 4, col: 4 });
-    store.sheetSelectedCells.set(3, { row: 0, col: 0 });
+    store.sheetSelectedCells[0] = { row: 0, col: 0 };
+    store.sheetSelectedCells[1] = { row: 4, col: 4 };
+    store.sheetSelectedCells[3] = { row: 0, col: 0 };
 
     store.clampToSheetData(2, (sheetIndex, row, col) => (
       sheetIndex === 0 && row === 0 && col === 0
     ));
 
-    expect(store.sheetSelectedCells.get(0)).toEqual({ row: 0, col: 0 });
-    expect(store.sheetSelectedCells.has(1)).toBe(false);
-    expect(store.sheetSelectedCells.has(3)).toBe(false);
+    expect(store.sheetSelectedCells[0]).toEqual({ row: 0, col: 0 });
+    expect(store.sheetSelectedCells[1]).toBeUndefined();
+    expect(store.sheetSelectedCells[3]).toBeUndefined();
+  });
+
+  it('keeps selection state JSON serializable', () => {
+    const store = useEditorSelectionStore();
+    store.sheetSelectedCells[2] = { row: 4, col: 5 };
+
+    expect(JSON.parse(JSON.stringify(store.$state)).sheetSelectedCells).toEqual({
+      2: { row: 4, col: 5 },
+    });
   });
 });

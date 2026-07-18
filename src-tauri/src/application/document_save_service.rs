@@ -5,10 +5,6 @@ use crate::application::search_service::SearchService;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
-#[cfg(desktop)]
-use crate::io::platform::desktop::DesktopFileRuntime;
-#[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::io::platform::mobile::MobileFileRuntime;
 use crate::io::save_work::{SaveWorkCoordinator, SaveWorkReservation};
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
@@ -21,10 +17,6 @@ pub struct DocumentSaveService {
     documents: ActiveDocumentRepository,
     search: SearchService,
     save_work: SaveWorkCoordinator,
-    #[cfg(desktop)]
-    desktop_files: DesktopFileRuntime,
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    mobile_files: MobileFileRuntime,
 }
 
 impl DocumentSaveService {
@@ -32,17 +24,11 @@ impl DocumentSaveService {
         documents: ActiveDocumentRepository,
         search: SearchService,
         save_work: SaveWorkCoordinator,
-        #[cfg(desktop)] desktop_files: DesktopFileRuntime,
-        #[cfg(any(target_os = "android", target_os = "ios"))] mobile_files: MobileFileRuntime,
     ) -> Self {
         Self {
             documents,
             search,
             save_work,
-            #[cfg(desktop)]
-            desktop_files,
-            #[cfg(any(target_os = "android", target_os = "ios"))]
-            mobile_files,
         }
     }
 
@@ -56,16 +42,6 @@ impl DocumentSaveService {
 
     fn save_work(&self) -> &SaveWorkCoordinator {
         &self.save_work
-    }
-
-    #[cfg(desktop)]
-    fn desktop_files(&self) -> &DesktopFileRuntime {
-        &self.desktop_files
-    }
-
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    fn mobile_files(&self) -> &MobileFileRuntime {
-        &self.mobile_files
     }
 
     #[cfg(test)]
@@ -329,7 +305,7 @@ fn document_handle_for_read(
     registry.read_handle(document_id)
 }
 
-fn current_document_path_for_command(
+pub(crate) fn current_document_path_for_command(
     service: &DocumentSaveService,
     document_id: u64,
     base_revision: u64,
@@ -341,137 +317,6 @@ fn current_document_path_for_command(
 
 fn default_extension_string() -> String {
     default_spreadsheet_extension().to_string()
-}
-
-#[cfg(desktop)]
-pub fn save_file_desktop(
-    service: &DocumentSaveService,
-    path: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<SavedDocumentResponse, AppError> {
-    use std::path::Path;
-
-    use crate::io::atomic_file::{
-        cleanup_temp_file, replace_temp_file, write_temp_file_for_target,
-    };
-    use crate::io::platform::desktop;
-
-    let current_path = current_document_path_for_command(service, document_id, base_revision)?;
-    desktop::ensure_save_path_authorized(service.desktop_files(), path, &current_path)?;
-    let prepared = prepare_current_file_save(service, document_id, base_revision, path)?;
-    let target = Path::new(path);
-    let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
-        Ok(temp_path) => temp_path,
-        Err(error) => {
-            abort_prepared_file_save(prepared);
-            return Err(error);
-        }
-    };
-
-    let result = commit_current_file_save(service, path.to_string(), prepared, || {
-        replace_temp_file(&temp_path, target)
-    });
-    if result.is_err() {
-        cleanup_temp_file(&temp_path);
-    }
-    result
-}
-
-#[cfg(desktop)]
-pub fn export_file_desktop(
-    service: &DocumentSaveService,
-    app: &tauri::AppHandle,
-    default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
-    use crate::io::platform::desktop;
-
-    let Some(target) = desktop::pick_export_target(app, default_name)? else {
-        return Ok(None);
-    };
-    let prepared = prepare_current_file_export(
-        service,
-        document_id,
-        base_revision,
-        &target.target_path_or_name,
-    )?;
-    desktop::write_export_target(&target, &prepared.bytes)?;
-    Ok(Some(target.path_string))
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn save_file_mobile(
-    service: &DocumentSaveService,
-    app: &tauri::AppHandle,
-    path: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<SavedDocumentResponse, AppError> {
-    use std::path::Path;
-
-    use crate::io::atomic_file::{
-        cleanup_temp_file, replace_temp_file, write_temp_file_for_target,
-    };
-    use crate::io::managed_documents;
-    use crate::io::platform::mobile;
-
-    let target = mobile::validated_mobile_files_path(service.mobile_files(), app, Path::new(path))?;
-    let current_path = current_document_path_for_command(service, document_id, base_revision)?;
-    mobile::ensure_save_target_authorized(service.mobile_files(), &target, &current_path)?;
-    let target_path = target.to_string_lossy().to_string();
-    let prepared = prepare_current_file_save(service, document_id, base_revision, &target_path)?;
-    managed_documents::validate_managed_save(
-        service.mobile_files().managed_documents(),
-        &target,
-        prepared.bytes.len() as u64,
-    )?;
-    let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
-        Ok(temp_path) => temp_path,
-        Err(error) => {
-            abort_prepared_file_save(prepared);
-            return Err(error);
-        }
-    };
-
-    let managed_file_name = prepared.output_name.clone();
-    let result = commit_current_file_save(service, target_path, prepared, || {
-        replace_temp_file(&temp_path, &target)?;
-        managed_documents::adopt_completed_save(
-            service.mobile_files().managed_documents(),
-            service.mobile_files().transient_files(),
-            &target,
-            &managed_file_name,
-        )
-    });
-    if result.is_err() {
-        cleanup_temp_file(&temp_path);
-    }
-    result
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn export_file_mobile(
-    service: &DocumentSaveService,
-    app: &tauri::AppHandle,
-    default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
-    use crate::io::platform::mobile;
-
-    let Some(target) = mobile::pick_export_target(app, default_name)? else {
-        return Ok(None);
-    };
-    let prepared = prepare_current_file_export(
-        service,
-        document_id,
-        base_revision,
-        &target.target_path_or_name,
-    )?;
-    mobile::write_export_target(app, &target, &prepared.bytes)?;
-    Ok(Some(target.destination_string))
 }
 
 #[cfg(test)]

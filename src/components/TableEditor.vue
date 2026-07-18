@@ -24,7 +24,7 @@ const props = defineProps<{
   cellAt: (rowIndex: number, colIndex: number) => CellValue | undefined;
   isCellLoaded: (rowIndex: number, colIndex: number) => boolean;
   sheetIndex: number;
-  draftCellValues?: ReadonlyMap<string, string>;
+  draftCellValues?: Readonly<Record<string, string>>;
   merges?: MergeRange[];
   selectedCell?: { row: number; col: number } | null;
   autoScroll?: boolean;
@@ -63,7 +63,7 @@ function getDraftKey(rowIndex: number, colIndex: number): string {
 }
 
 function getDraftValue(rowIndex: number, colIndex: number): string | undefined {
-  return props.draftCellValues?.get(getDraftKey(rowIndex, colIndex));
+  return props.draftCellValues?.[getDraftKey(rowIndex, colIndex)];
 }
 
 const viewportModel = computed(() =>

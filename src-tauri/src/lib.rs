@@ -1,3 +1,4 @@
+mod adapters;
 mod application;
 mod commands;
 mod document;

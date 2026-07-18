@@ -42,6 +42,22 @@ rejectMatches(
   'the synchronous side-effect-free Store boundary',
 );
 
+for (const file of sourceFiles(join(projectRoot, 'src', 'stores'), '.ts')) {
+  const source = readFileSync(file, 'utf8');
+  const state = source.match(/state\s*:\s*\(\)\s*=>\s*\(\{([\s\S]*?)\}\),\s*(?:getters|actions)\s*:/)?.[1];
+  if (state && /\bnew\s+(?:Map|Set)\b/.test(state)) {
+    violations.push(
+      `${relative(projectRoot, file)} violates the serializable Store state boundary`,
+    );
+  }
+}
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src', 'types'), '.ts'),
+  [/\b(?:Readonly)?Map\s*</, /\b(?:Readonly)?Set\s*</],
+  'the serializable frontend runtime contract boundary',
+);
+
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'io'), '.rs'),
   [
@@ -63,6 +79,18 @@ rejectMatches(
     /crate::state(?:::|\b)/,
   ],
   'the runtime-independent Rust contract boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs')],
+  [/\bEditorMutationResponse\b/, /\bEditorPatch\b/],
+  'the transport-independent search scheduling boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
+  [/\bSearchIndexWork\b/, /\bSearchIndexUpdatePlan\b/],
+  'the wire-only Rust response contract boundary',
 );
 
 rejectMatches(
@@ -137,6 +165,14 @@ rejectMatches(
   ],
   [/\bApplicationRuntime\b/],
   'the narrow Rust application service dependency boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs').filter(
+    (file) => relative(projectRoot, file) !== 'src-tauri/src/application/runtime.rs',
+  ),
+  [/\btauri::(?:AppHandle|State)\b/, /crate::io::platform(?:::|\b)/],
+  'the framework-independent Rust application service boundary',
 );
 
 rejectMatches(

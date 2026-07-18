@@ -43,8 +43,8 @@ export type LoadedSheetRegionMetadata = {
 export type SheetRegionBlock = {
   key: string;
   region: SheetRegion;
-  cells: Map<string, CellValue>;
-  mergeAnchorCells: Map<string, CellValue>;
+  cells: Record<string, CellValue>;
+  mergeAnchorCells: Record<string, CellValue>;
   metadata: SheetRegionMetadata;
   estimatedBytes: number;
 };

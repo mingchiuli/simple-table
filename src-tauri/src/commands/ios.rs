@@ -1,9 +1,9 @@
 #[cfg(target_os = "ios")]
 use super::{CommandU64, blocking};
 #[cfg(target_os = "ios")]
-use crate::application::runtime::ApplicationRuntime;
+use crate::adapters::document_file_adapter;
 #[cfg(target_os = "ios")]
-use crate::application::{document_open_service, document_save_service};
+use crate::application::runtime::ApplicationRuntime;
 #[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
@@ -78,7 +78,12 @@ pub async fn prepare_open_file_ios(
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_open_service::prepare_open_file_mobile(runtime.document_opens(), &app, &path)
+        document_file_adapter::prepare_open_file_mobile(
+            runtime.document_opens(),
+            runtime.mobile_files(),
+            &app,
+            &path,
+        )
     })
     .await
 }
@@ -114,8 +119,9 @@ pub async fn save_file_ios(
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_save_service::save_file_mobile(
+        document_file_adapter::save_file_mobile(
             runtime.document_saves(),
+            runtime.mobile_files(),
             &app,
             &path,
             document_id.get(),
@@ -137,8 +143,9 @@ pub async fn export_file_ios(
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
     blocking::run(move || {
-        document_save_service::export_file_mobile(
+        document_file_adapter::export_file_mobile(
             runtime.document_saves(),
+            runtime.mobile_files(),
             &app,
             &default_name,
             document_id.get(),

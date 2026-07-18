@@ -38,7 +38,7 @@ describe('documentSessionCoordinator', () => {
     expect(status.canUndo).toBe(true);
     expect(status.hasPendingContentChange).toBe(false);
     expect(selection.selectedCell).toBeNull();
-    expect(pending.draftCellValues.size).toBe(0);
+    expect(Object.keys(pending.draftCellValues)).toHaveLength(0);
     expect(search.searchQuery).toBe('');
     expect(search.isSearching).toBe(false);
   });
@@ -60,7 +60,7 @@ describe('documentSessionCoordinator', () => {
     );
 
     expect(applied).toBe(false);
-    expect(pending.draftCellValues.get('0:0:0')).toBe('draft');
+    expect(pending.draftCellValues['0:0:0']).toBe('draft');
     expect(status.hasPendingContentChange).toBe(true);
   });
 

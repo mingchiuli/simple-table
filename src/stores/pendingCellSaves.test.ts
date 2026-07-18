@@ -43,8 +43,22 @@ describe("pendingCellSaves store", () => {
 
     expect(active.value).toBe("2");
     expect(result.queued).toBe(true);
-    expect(store.queuedCellSaves.get("0,0,0")?.value).toBe("1");
-    expect(store.draftCellValues.get("0,0,0")).toBe("1");
+    expect(store.queuedCellSaves["0,0,0"]?.value).toBe("1");
+    expect(store.draftCellValues["0,0,0"]).toBe("1");
+  });
+
+  it("keeps pending edit state JSON serializable", () => {
+    const store = usePendingCellSavesStore();
+    store.queueSave("0,0,0", {
+      sheetIndex: 0,
+      row: 0,
+      col: 0,
+      value: "draft",
+      oldValue: text("old"),
+    });
+
+    const serialized = JSON.parse(JSON.stringify(store.$state));
+    expect(serialized.queuedCellSaves["0,0,0"].value).toBe("draft");
   });
 
   it("drops a queued draft when inline editing is cancelled before save starts", () => {
@@ -58,8 +72,8 @@ describe("pendingCellSaves store", () => {
     const result = store.cancelDraft("0,0,0");
 
     expect(result.shouldClearPendingIfIdle).toBe(true);
-    expect(store.queuedCellSaves.has("0,0,0")).toBe(false);
-    expect(store.draftCellValues.has("0,0,0")).toBe(false);
+    expect(store.queuedCellSaves["0,0,0"]).toBeUndefined();
+    expect(store.draftCellValues["0,0,0"]).toBeUndefined();
   });
 
   it("commits oversized pending changes as consecutive bounded batches", async () => {
@@ -128,8 +142,8 @@ describe("pendingCellSaves store", () => {
       },
       text("")
     )).toThrow(PendingCellSaveLimitError);
-    expect(store.draftCellValues.get("0,0,0")).toBe("accepted");
-    expect(store.queuedCellSaves.get("0,0,0")?.value).toBe("accepted");
+    expect(store.draftCellValues["0,0,0"]).toBe("accepted");
+    expect(store.queuedCellSaves["0,0,0"]?.value).toBe("accepted");
   });
 
   it("bounds all queued and active cell text", () => {
@@ -424,7 +438,7 @@ describe("pendingCellSaves store", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
-    expect(store.queuedCellSaves.get("0,0,0")?.value).toBe("draft");
+    expect(store.queuedCellSaves["0,0,0"]?.value).toBe("draft");
 
     resume();
     await vi.advanceTimersByTimeAsync(100);

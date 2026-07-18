@@ -16,13 +16,11 @@ use crate::state::search_scheduler::{
     CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, MAX_BUILDING_INDEX_BYTES,
     MAX_INDEXABLE_SHEET_BYTES, MAX_PENDING_INDEX_BYTES, MAX_PENDING_INDEX_BYTES_PER_SHEET,
     MAX_PENDING_INDEX_SHEETS, MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate,
-    SearchSchedulerStats, SheetPending,
+    SearchCellIndexUpdate, SearchIndexWork, SearchSchedulerStats, SheetPending,
 };
 use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 #[cfg(test)]
 use crate::types::CellValue;
-use crate::types::display::DisplayProjection;
-use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
 const SEARCH_SCAN_RESERVATION_BYTES: usize = 24 * 1024 * 1024;
@@ -161,24 +159,18 @@ impl SearchService {
     fn enqueue_cell_update(
         &self,
         document_id: u64,
-        sheet_index: usize,
         stamp: SearchIndexStamp,
-        change: &SheetCellChange,
+        update: SearchCellIndexUpdate,
         registry: &ActiveDocumentRepository,
     ) {
         self.enqueue(IndexJob::UpdateCell {
             document_id,
-            sheet_index,
+            sheet_index: update.sheet_index,
             stamp,
-            row: change.row,
-            col: change.col,
-            search_text: DisplayProjection::search_text(
-                &change.value,
-                change.display_format.as_ref(),
-            ),
-            display_text: change.display.clone().unwrap_or_else(|| {
-                DisplayProjection::display_text(&change.value, change.display_format.as_ref())
-            }),
+            row: update.row,
+            col: update.col,
+            search_text: update.search_text,
+            display_text: update.display_text,
             registry: registry.clone(),
         });
     }
@@ -198,93 +190,27 @@ impl SearchService {
         });
     }
 
-    pub fn schedule_for_response(
+    pub fn schedule_work(
         &self,
-        response: &EditorMutationResponse,
+        document_id: u64,
+        work: SearchIndexWork,
         registry: &ActiveDocumentRepository,
     ) {
-        let document_id = response.document_id;
-        if response.search_index_update.rebuild_all {
-            self.rebuild_all_sheets_index(registry, document_id);
-            return;
-        }
-
-        for sheet_index in &response.search_index_update.rebuild_sheets {
-            let Some(stamp) = current_search_stamp(registry, document_id, *sheet_index) else {
-                continue;
-            };
-            self.enqueue_rebuild(document_id, *sheet_index, stamp, registry);
-        }
-
-        let mut needs_rebuild = false;
-        for patch in &response.patches {
-            match patch {
-                EditorPatch::Cells { changes } => {
-                    for change in changes {
-                        let Some(stamp) =
-                            current_search_stamp(registry, document_id, change.sheet_index)
-                        else {
-                            continue;
-                        };
-                        self.enqueue_cell_update(
-                            document_id,
-                            change.sheet_index,
-                            stamp,
-                            change,
-                            registry,
-                        );
-                    }
-                }
-                EditorPatch::SheetInvalidated { patch } => {
+        match work {
+            SearchIndexWork::None => {}
+            SearchIndexWork::UpdateCells(updates) => {
+                for update in updates {
                     let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
+                        current_search_stamp(registry, document_id, update.sheet_index)
                     else {
                         continue;
                     };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
+                    self.enqueue_cell_update(document_id, stamp, update, registry);
                 }
-                EditorPatch::RowInserted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
-                    else {
-                        continue;
-                    };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
-                }
-                EditorPatch::RowDeleted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
-                    else {
-                        continue;
-                    };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
-                }
-                EditorPatch::ColumnInserted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
-                    else {
-                        continue;
-                    };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
-                }
-                EditorPatch::ColumnDeleted { patch } => {
-                    let Some(stamp) =
-                        current_search_stamp(registry, document_id, patch.sheet_index)
-                    else {
-                        continue;
-                    };
-                    self.enqueue_rebuild(document_id, patch.sheet_index, stamp, registry);
-                }
-                EditorPatch::ResyncRequired { .. }
-                | EditorPatch::SheetInserted { .. }
-                | EditorPatch::SheetDeleted { .. }
-                | EditorPatch::SheetsReplaced { .. } => needs_rebuild = true,
-                EditorPatch::Layout { .. } => {}
             }
-        }
-
-        if needs_rebuild {
-            self.rebuild_all_sheets_index(registry, document_id);
+            SearchIndexWork::RebuildAll => {
+                self.rebuild_all_sheets_index(registry, document_id);
+            }
         }
     }
 
