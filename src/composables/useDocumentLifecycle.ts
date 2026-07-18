@@ -1,9 +1,7 @@
 import { ElMessage } from "element-plus";
-import {
-  useDocumentSessionStore,
-  type DocumentSessionLifecycle,
-} from "@/stores/documentSession";
+import type { DocumentSessionLifecycle } from '@/types';
 import { appErrorMessage } from "@/utils/appError";
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 
 type ActiveDocumentLifecycle = Exclude<DocumentSessionLifecycle, "idle">;
 export type DocumentLifecycleRunStatus = "completed" | "failed" | "skipped";
@@ -18,7 +16,7 @@ type DocumentLifecycleOptions = {
 };
 
 export function useDocumentLifecycle() {
-  const documentSessionStore = useDocumentSessionStore();
+  const documentSessionCoordinator = useDocumentSessionCoordinator();
 
   async function runDocumentLifecycle(
     lifecycle: ActiveDocumentLifecycle,
@@ -33,7 +31,7 @@ export function useDocumentLifecycle() {
     const release = () => {
       if (released) return;
       released = true;
-      documentSessionStore.endLifecycle(lifecycle);
+      documentSessionCoordinator.endLifecycle(lifecycle);
     };
     try {
       await action({ release });
@@ -51,14 +49,14 @@ export function useDocumentLifecycle() {
     options: DocumentLifecycleOptions
   ): Promise<boolean> {
     if (!options.waitForIdle) {
-      return documentSessionStore.beginLifecycle(lifecycle);
+      return documentSessionCoordinator.beginLifecycle(lifecycle);
     }
 
     while (options.shouldContinue?.() !== false) {
-      if (documentSessionStore.beginLifecycle(lifecycle)) {
+      if (documentSessionCoordinator.beginLifecycle(lifecycle)) {
         return true;
       }
-      await documentSessionStore.waitForInteractionIdle();
+      await documentSessionCoordinator.waitForInteractionIdle();
     }
 
     return false;

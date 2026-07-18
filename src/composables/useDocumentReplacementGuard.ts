@@ -1,7 +1,6 @@
-import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
-import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
+import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import { confirmDiscardUnsavedChanges } from "@/composables/unsavedChangesDialog";
 
 type DocumentReplacementGuardOptions = {
@@ -16,10 +15,9 @@ export type DocumentReplacementLease = {
 export function useDocumentReplacementGuard({
   flushPendingCellChanges,
 }: DocumentReplacementGuardOptions = {}) {
-  const documentSessionStore = useDocumentSessionStore();
   const documentStatusStore = useDocumentStatusStore();
   const documentSessionCoordinator = useDocumentSessionCoordinator();
-  const pendingCellSavesStore = usePendingCellSavesStore();
+  const pendingCellSaveCoordinator = usePendingCellSaveCoordinator();
 
   async function beginDocumentReplacement(): Promise<DocumentReplacementLease | null> {
     if (documentStatusStore.hasUnsavedChanges) {
@@ -28,7 +26,7 @@ export function useDocumentReplacementGuard({
     if (flushPendingCellChanges && !(await flushPendingCellChanges())) {
       return null;
     }
-    await documentSessionStore.waitForMutations();
+    await documentSessionCoordinator.waitForMutations();
     if (!(await confirmReplacementIfUnsaved())) return null;
     return createReplacementLease();
   }
@@ -40,8 +38,8 @@ export function useDocumentReplacementGuard({
       if (!(await confirmReplacementIfUnsaved())) {
         return null;
       }
-      await pendingCellSavesStore.waitForInFlightSave();
-      await documentSessionStore.waitForMutations();
+      await pendingCellSaveCoordinator.waitForInFlightSave();
+      await documentSessionCoordinator.waitForMutations();
       keepReplacement = true;
       return replacement;
     } finally {
@@ -57,7 +55,7 @@ export function useDocumentReplacementGuard({
   }
 
   function createReplacementLease(): DocumentReplacementLease {
-    const resumeAutosave = pendingCellSavesStore.suspendAutosave();
+    const resumeAutosave = pendingCellSaveCoordinator.suspendAutosave();
     let settled = false;
 
     return {

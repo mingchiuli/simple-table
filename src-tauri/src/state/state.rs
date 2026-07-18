@@ -4,9 +4,138 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
 
-pub struct ActiveDocumentStore {
+struct ActiveDocumentStore {
     active: Option<Arc<DocumentHandle>>,
     replacement_lease: Option<u64>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ActiveDocumentRepository {
+    store: Arc<RwLock<ActiveDocumentStore>>,
+}
+
+impl Default for ActiveDocumentRepository {
+    fn default() -> Self {
+        Self {
+            store: Arc::new(RwLock::new(ActiveDocumentStore::new())),
+        }
+    }
+}
+
+impl ActiveDocumentRepository {
+    pub(crate) fn active_handle(&self) -> Result<Option<Arc<DocumentHandle>>, AppError> {
+        Ok(self.read_store()?.active_handle())
+    }
+
+    pub(crate) fn read_handle(&self, document_id: u64) -> Result<Arc<DocumentHandle>, AppError> {
+        self.read_store()?.active_handle_for_read(document_id)
+    }
+
+    pub(crate) fn mutation_handle(
+        &self,
+        document_id: u64,
+    ) -> Result<Arc<DocumentHandle>, AppError> {
+        self.read_store()?.active_handle_for_mutation(document_id)
+    }
+
+    pub(crate) fn begin_replacement(
+        &self,
+        expected_document_id: Option<u64>,
+        expected_revision: Option<u64>,
+    ) -> Result<DocumentReplacementTransaction, AppError> {
+        let lease = self
+            .write_store()?
+            .begin_document_replacement(expected_document_id, expected_revision)?;
+        Ok(DocumentReplacementTransaction {
+            repository: self.clone(),
+            lease,
+            finished: false,
+        })
+    }
+
+    pub(crate) fn close(&self, document_id: u64) -> Result<Option<Arc<DocumentHandle>>, AppError> {
+        self.write_store()?.close_active_document(document_id)
+    }
+
+    fn read_store(&self) -> Result<RwLockReadGuard<'_, ActiveDocumentStore>, AppError> {
+        self.store
+            .read()
+            .map_err(|_| AppError::poisoned_lock("document registry"))
+    }
+
+    fn write_store(&self) -> Result<RwLockWriteGuard<'_, ActiveDocumentStore>, AppError> {
+        self.store
+            .write()
+            .map_err(|_| AppError::poisoned_lock("document registry"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_active_for_test(&self, editor_state: EditorState) -> u64 {
+        self.write_store()
+            .expect("document registry")
+            .replace_active_for_test(editor_state)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_for_test(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
+        self.read_store()
+            .expect("document registry")
+            .get(document_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_write_available_for_test(&self) -> bool {
+        self.store.try_write().is_ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.store, &other.store)
+    }
+}
+
+pub(crate) struct DocumentReplacementResult {
+    pub(crate) document_id: u64,
+    pub(crate) previous_document: Option<Arc<DocumentHandle>>,
+    pub(crate) active_handle: Arc<DocumentHandle>,
+}
+
+pub(crate) struct DocumentReplacementTransaction {
+    repository: ActiveDocumentRepository,
+    lease: DocumentReplacementLease,
+    finished: bool,
+}
+
+impl DocumentReplacementTransaction {
+    pub(crate) fn finish(
+        mut self,
+        editor_state: EditorState,
+    ) -> Result<DocumentReplacementResult, AppError> {
+        let result = {
+            let mut store = self.repository.write_store()?;
+            let (document_id, previous_document) =
+                store.finish_document_replacement(self.lease, editor_state)?;
+            let active_handle = store.active_handle().ok_or(AppError::NoFileLoaded)?;
+            DocumentReplacementResult {
+                document_id,
+                previous_document,
+                active_handle,
+            }
+        };
+        self.finished = true;
+        Ok(result)
+    }
+}
+
+impl Drop for DocumentReplacementTransaction {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Ok(mut store) = self.repository.write_store() {
+            store.abort_document_replacement(self.lease);
+        }
+    }
 }
 
 pub struct DocumentHandle {
@@ -288,6 +417,7 @@ impl ActiveDocumentStore {
         Ok(Arc::clone(handle))
     }
 
+    #[cfg(test)]
     pub(crate) fn handle(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
         self.active
             .as_ref()
@@ -383,7 +513,7 @@ impl ActiveDocumentStore {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DocumentReplacementLease(u64);
+struct DocumentReplacementLease(u64);
 
 fn nonzero_random_u64() -> u64 {
     loop {
@@ -440,6 +570,24 @@ mod tests {
             store.active().map(|handle| handle.document_id()),
             Some(document_id)
         );
+    }
+
+    #[test]
+    fn dropping_repository_replacement_releases_the_mutation_barrier() {
+        let repository = ActiveDocumentRepository::default();
+        let state = editor_state("current.xlsx");
+        let document_id = state.document_id();
+        let revision = state.revision();
+        repository.replace_active_for_test(state);
+
+        let replacement = repository
+            .begin_replacement(Some(document_id), Some(revision))
+            .expect("begin replacement");
+        assert!(repository.mutation_handle(document_id).is_err());
+
+        drop(replacement);
+
+        assert!(repository.mutation_handle(document_id).is_ok());
     }
 
     #[test]

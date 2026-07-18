@@ -5,7 +5,7 @@ import type {
   SheetRegionBlock,
   SheetRegionProjectionResponse,
 } from '@/types';
-import { regionBlock, regionKey } from '@/stores/documentProjection';
+import { regionBlock, regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 
 const MAX_REGION_BLOCK_BYTES = 16 * 1024 * 1024;

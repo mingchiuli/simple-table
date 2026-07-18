@@ -1,21 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
-  beginViewportRegionLoad,
+  createDocumentRegionLoadScheduler,
+} from '@/application/documentRegionLoadScheduler';
+import {
   oldestEvictableRegionBlock,
   pinRegionBlocks,
   replacePinnedRegionBlock,
-  scheduleRegionLoad,
   touchRegionBlock,
-} from '@/stores/documentRegionCache';
+} from '@/stores/documentRegionState';
 
 describe('documentRegionCache', () => {
   it('runs at most four region requests concurrently', async () => {
-    const owner = {};
+    const scheduler = createDocumentRegionLoadScheduler();
     let active = 0;
     let peak = 0;
     const releases: Array<() => void> = [];
     const loads = Array.from({ length: 6 }, (_, index) =>
-      scheduleRegionLoad(owner, `block-${index}`, async () => {
+      scheduler.scheduleRegionLoad(`block-${index}`, async () => {
         active += 1;
         peak = Math.max(peak, active);
         await new Promise<void>((resolve) => releases.push(resolve));
@@ -35,12 +36,12 @@ describe('documentRegionCache', () => {
   });
 
   it('bounds admitted viewport requests and rejects excess work', async () => {
-    const owner = {};
+    const scheduler = createDocumentRegionLoadScheduler();
     const keys = Array.from({ length: 20 }, (_, index) => `block-${index}`);
-    const generation = beginViewportRegionLoad(owner, keys);
+    const generation = scheduler.beginViewportRegionLoad(keys);
     let started = 0;
     const releases: Array<() => void> = [];
-    const loads = keys.map((key) => scheduleRegionLoad(owner, key, async () => {
+    const loads = keys.map((key) => scheduler.scheduleRegionLoad(key, async () => {
       started += 1;
       await new Promise<void>((resolve) => releases.push(resolve));
       return true;
@@ -60,20 +61,20 @@ describe('documentRegionCache', () => {
   });
 
   it('drops queued tiles superseded by the latest viewport', async () => {
-    const owner = {};
+    const scheduler = createDocumentRegionLoadScheduler();
     const oldKeys = Array.from({ length: 10 }, (_, index) => `old-${index}`);
-    const oldGeneration = beginViewportRegionLoad(owner, oldKeys);
+    const oldGeneration = scheduler.beginViewportRegionLoad(oldKeys);
     let started = 0;
     const releases: Array<() => void> = [];
-    const oldLoads = oldKeys.map((key) => scheduleRegionLoad(owner, key, async () => {
+    const oldLoads = oldKeys.map((key) => scheduler.scheduleRegionLoad(key, async () => {
       started += 1;
       await new Promise<void>((resolve) => releases.push(resolve));
       return true;
     }, { priority: 'viewport', viewportGeneration: oldGeneration }));
     await waitFor(() => releases.length === 4);
 
-    const currentGeneration = beginViewportRegionLoad(owner, ['current']);
-    const current = scheduleRegionLoad(owner, 'current', async () => {
+    const currentGeneration = scheduler.beginViewportRegionLoad(['current']);
+    const current = scheduler.scheduleRegionLoad('current', async () => {
       started += 1;
       return true;
     }, { priority: 'viewport', viewportGeneration: currentGeneration });
@@ -86,12 +87,12 @@ describe('documentRegionCache', () => {
   });
 
   it('admits required work ahead of queued viewport loads', async () => {
-    const owner = {};
+    const scheduler = createDocumentRegionLoadScheduler();
     const keys = Array.from({ length: 16 }, (_, index) => `viewport-${index}`);
-    const generation = beginViewportRegionLoad(owner, keys);
+    const generation = scheduler.beginViewportRegionLoad(keys);
     const releases: Array<() => void> = [];
     let completed = 0;
-    const viewportLoads = keys.map((key) => scheduleRegionLoad(owner, key, async () => {
+    const viewportLoads = keys.map((key) => scheduler.scheduleRegionLoad(key, async () => {
       await new Promise<void>((resolve) => releases.push(resolve));
       completed += 1;
       return true;
@@ -99,7 +100,7 @@ describe('documentRegionCache', () => {
     await waitFor(() => releases.length === 4);
 
     let requiredStarted = false;
-    const required = scheduleRegionLoad(owner, 'required', async () => {
+    const required = scheduler.scheduleRegionLoad('required', async () => {
       requiredStarted = true;
       return true;
     });
@@ -118,7 +119,7 @@ describe('documentRegionCache', () => {
   });
 
   it('evicts the least recently used unpinned block', () => {
-    const owner = {};
+    const owner = { regionLru: [] as string[], pinnedRegionBlocks: [] as string[] };
     touchRegionBlock(owner, 'old');
     touchRegionBlock(owner, 'visible');
     touchRegionBlock(owner, 'recent');
@@ -130,7 +131,7 @@ describe('documentRegionCache', () => {
   });
 
   it('replaces one parent pin without dropping other visible blocks', () => {
-    const owner = {};
+    const owner = { regionLru: [] as string[], pinnedRegionBlocks: [] as string[] };
     pinRegionBlocks(owner, ['parent', 'other']);
 
     replacePinnedRegionBlock(owner, 'parent', ['child-a', 'child-b']);
@@ -142,7 +143,7 @@ describe('documentRegionCache', () => {
   });
 
   it('does not repin a completed tile from an obsolete viewport', () => {
-    const owner = {};
+    const owner = { regionLru: [] as string[], pinnedRegionBlocks: [] as string[] };
     pinRegionBlocks(owner, ['current']);
 
     replacePinnedRegionBlock(owner, 'obsolete', ['obsolete-child']);

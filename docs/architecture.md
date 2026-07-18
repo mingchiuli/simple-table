@@ -44,10 +44,17 @@ depend on command modules.
 
 `ApplicationRuntime` is the backend composition root managed by Tauri. It owns
 the active-document registry, prepared-document repository, mutation replay
-coordinator, and search service. Application services receive that runtime
+coordinator, search service, save-work coordinator, recent-file store, and
+platform file runtimes. Application services receive that runtime
 explicitly; business repositories and schedulers cannot locate process-global
 `OnceLock` instances. Commands may receive `tauri::State<ApplicationRuntime>`
 but only pass the runtime to application services.
+
+The active-document registry is hidden behind `ActiveDocumentRepository`.
+Application, operation, and search modules request semantic read or mutation
+handles from the repository; they cannot acquire its `RwLock` directly.
+Document replacement uses an RAII repository transaction that releases an
+unfinished replacement lease on drop.
 
 Document opening is split between platform I/O and application orchestration.
 Platform modules consume authorization and return `OpenFileInput`; the
@@ -106,8 +113,10 @@ the I/O layer must not call back into the application layer.
   values. Every Sheet owns a stable sparse layout index from its manifest.
   Loaded Sheets additionally own bounded cell blocks and render-only metadata.
   Cell-block eviction cannot change row or column geometry.
-- `documentSession` owns only document projection, revision, lifecycle, mutation
-  queue, and region-cache state. `documentSessionCoordinator` is the explicit
+- `documentSession` owns only serializable document projection, revision,
+  lifecycle flags, and region LRU/pin state. `documentSessionCoordinator` owns
+  mutation serialization, interaction waiters, and region request scheduling,
+  and is the explicit
   application transaction boundary for document, status, selection, search,
   and pending-edit Stores. Business Stores must not instantiate or mutate one
   another.
@@ -120,6 +129,9 @@ the I/O layer must not call back into the application layer.
   composables. Request concurrency and side effects belong to application
   services such as `recentFilesService` and `updateCoordinator`; both expose
   injectable ports for deterministic tests.
+- Search request tokens and pending-cell debounce/save state are likewise owned
+  by application coordinators. Composables cache one coordinator per Pinia
+  instance and adapt its synchronous Store port.
 - `documentFileCoordinator` owns open, route-load cancellation, save, export,
   and close compensation as a port-driven application workflow. Vue
   composables adapt Stores, platform APIs, lifecycle guards, router navigation,
@@ -301,7 +313,7 @@ platform modules only compare paths, consume authorization, select a target,
 and perform the requested write.
 
 Closing or replacing an active document while a save lease is held is invalid.
-Save and export snapshot generation has a process-wide RAII work reservation
+Save and export snapshot generation has a runtime-owned RAII work reservation
 that starts before the projection can be cloned and remains held through the
 temporary write, reparse, and commit or export write. Only one such job may run
 at a time, its estimated source is capped at 256 MiB, and XLSX/CSV writers use a

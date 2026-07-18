@@ -12,7 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
@@ -27,8 +27,16 @@ pub struct DesktopOpenFileInfo {
 const MAX_AUTHORIZED_PATHS: usize = 64;
 const PATH_AUTHORIZATION_TTL: Duration = Duration::from_secs(30 * 60);
 
-static AUTHORIZED_OPEN_PATHS: OnceLock<Mutex<PathAuthorizationRegistry>> = OnceLock::new();
-static AUTHORIZED_SAVE_PATHS: OnceLock<Mutex<PathAuthorizationRegistry>> = OnceLock::new();
+#[derive(Default)]
+struct DesktopFileRuntimeInner {
+    open_paths: Mutex<PathAuthorizationRegistry>,
+    save_paths: Mutex<PathAuthorizationRegistry>,
+}
+
+#[derive(Clone, Default)]
+pub struct DesktopFileRuntime {
+    inner: Arc<DesktopFileRuntimeInner>,
+}
 
 #[derive(Default)]
 struct PathAuthorizationRegistry {
@@ -81,19 +89,25 @@ impl PathAuthorizationRegistry {
     }
 }
 
-pub fn authorize_open_path(path: impl AsRef<Path>) {
-    authorize_path(open_paths(), normalize_existing_path(path.as_ref()));
+pub fn authorize_open_path(runtime: &DesktopFileRuntime, path: impl AsRef<Path>) {
+    authorize_path(
+        &runtime.inner.open_paths,
+        normalize_existing_path(path.as_ref()),
+    );
 }
 
-pub fn authorize_open_target(target: &str) {
+pub fn authorize_open_target(runtime: &DesktopFileRuntime, target: &str) {
     for candidate in open_target_candidates(target) {
         if is_supported_existing_spreadsheet_path(&candidate) {
-            authorize_open_path(candidate);
+            authorize_open_path(runtime, candidate);
         }
     }
 }
 
-pub fn pick_open_file(app: &AppHandle) -> Result<Option<DesktopOpenFileInfo>, AppError> {
+pub fn pick_open_file(
+    runtime: &DesktopFileRuntime,
+    app: &AppHandle,
+) -> Result<Option<DesktopOpenFileInfo>, AppError> {
     use tauri_plugin_dialog::DialogExt;
 
     let Some(path) = app
@@ -106,14 +120,17 @@ pub fn pick_open_file(app: &AppHandle) -> Result<Option<DesktopOpenFileInfo>, Ap
     };
 
     let path = file_path_to_path_buf(path)?;
-    authorize_open_path(&path);
+    authorize_open_path(runtime, &path);
     let path = path.to_string_lossy().to_string();
     let file_name = file_name_from_path_like(&path, "unknown");
     Ok(Some(DesktopOpenFileInfo { path, file_name }))
 }
 
-pub fn read_open_file(path: &str) -> Result<OpenFileInput, AppError> {
-    if !consume_path(open_paths(), &normalize_existing_path(Path::new(path))) {
+pub fn read_open_file(runtime: &DesktopFileRuntime, path: &str) -> Result<OpenFileInput, AppError> {
+    if !consume_path(
+        &runtime.inner.open_paths,
+        &normalize_existing_path(Path::new(path)),
+    ) {
         return Err(AppError::DocumentStateInvalid(
             "desktop file open path was not selected by the user".to_string(),
         ));
@@ -121,8 +138,13 @@ pub fn read_open_file(path: &str) -> Result<OpenFileInput, AppError> {
     read_file_trusted(path)
 }
 
-pub fn read_recent_file(app: &AppHandle, id: &str) -> Result<OpenFileInput, AppError> {
-    let recent = RecentStore::get_all(app)?
+pub fn read_recent_file(
+    recent_files: &RecentStore,
+    app: &AppHandle,
+    id: &str,
+) -> Result<OpenFileInput, AppError> {
+    let recent = recent_files
+        .get_all(app)?
         .into_iter()
         .find(|file| file.id == id)
         .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
@@ -146,11 +168,18 @@ fn read_file_trusted(path: &str) -> Result<OpenFileInput, AppError> {
     })
 }
 
-pub fn discard_open_file_selection(path: &str) {
-    revoke_path(open_paths(), &normalize_existing_path(Path::new(path)));
+pub fn discard_open_file_selection(runtime: &DesktopFileRuntime, path: &str) {
+    revoke_path(
+        &runtime.inner.open_paths,
+        &normalize_existing_path(Path::new(path)),
+    );
 }
 
-pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<Option<String>, AppError> {
+pub fn pick_save_location(
+    runtime: &DesktopFileRuntime,
+    app: &AppHandle,
+    default_name: &str,
+) -> Result<Option<String>, AppError> {
     use tauri_plugin_dialog::DialogExt;
 
     let Some(path) = app
@@ -164,15 +193,19 @@ pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<Option<
     };
 
     let path = file_path_to_path_buf(path)?;
-    authorize_path(save_paths(), normalize_target_path(&path));
+    authorize_path(&runtime.inner.save_paths, normalize_target_path(&path));
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
-pub fn discard_save_location(path: &str) {
-    revoke_path(save_paths(), &normalize_target_path(Path::new(path)));
+pub fn discard_save_location(runtime: &DesktopFileRuntime, path: &str) {
+    revoke_path(
+        &runtime.inner.save_paths,
+        &normalize_target_path(Path::new(path)),
+    );
 }
 
 pub(crate) fn ensure_save_path_authorized(
+    runtime: &DesktopFileRuntime,
     path: &str,
     current_document_path: &str,
 ) -> Result<(), AppError> {
@@ -180,7 +213,7 @@ pub(crate) fn ensure_save_path_authorized(
     if is_current_document_path(&target, current_document_path) {
         return Ok(());
     }
-    if consume_path(save_paths(), &target) {
+    if consume_path(&runtime.inner.save_paths, &target) {
         return Ok(());
     }
     Err(AppError::DocumentStateInvalid(
@@ -247,14 +280,6 @@ fn is_current_document_path(target: &Path, current_document_path: &str) -> bool 
         && normalize_target_path(Path::new(current_document_path)) == target
 }
 
-fn open_paths() -> &'static Mutex<PathAuthorizationRegistry> {
-    AUTHORIZED_OPEN_PATHS.get_or_init(|| Mutex::new(PathAuthorizationRegistry::default()))
-}
-
-fn save_paths() -> &'static Mutex<PathAuthorizationRegistry> {
-    AUTHORIZED_SAVE_PATHS.get_or_init(|| Mutex::new(PathAuthorizationRegistry::default()))
-}
-
 fn authorize_path(paths: &Mutex<PathAuthorizationRegistry>, path: PathBuf) {
     if let Ok(mut paths) = paths.lock() {
         paths.authorize(path);
@@ -271,6 +296,13 @@ fn consume_path(paths: &Mutex<PathAuthorizationRegistry>, path: &Path) -> bool {
 fn revoke_path(paths: &Mutex<PathAuthorizationRegistry>, path: &Path) {
     if let Ok(mut paths) = paths.lock() {
         paths.revoke(path);
+    }
+}
+
+impl DesktopFileRuntime {
+    #[cfg(test)]
+    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
@@ -381,13 +413,37 @@ mod tests {
 
     #[test]
     fn file_association_url_authorizes_the_resolved_spreadsheet_path() {
+        let runtime = DesktopFileRuntime::default();
         let path = temp_path("file-association.xlsx");
         std::fs::write(&path, b"").expect("write associated file");
         let target = format!("file://{}", path.to_string_lossy());
 
-        authorize_open_target(&target);
+        authorize_open_target(&runtime, &target);
 
-        assert!(consume_path(open_paths(), &normalize_existing_path(&path)));
+        assert!(consume_path(
+            &runtime.inner.open_paths,
+            &normalize_existing_path(&path)
+        ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn path_authorizations_are_isolated_by_runtime() {
+        let first = DesktopFileRuntime::default();
+        let second = DesktopFileRuntime::default();
+        let path = temp_path("isolated.xlsx");
+        std::fs::write(&path, b"").expect("write selected file");
+
+        authorize_open_path(&first, &path);
+
+        assert!(!consume_path(
+            &second.inner.open_paths,
+            &normalize_existing_path(&path)
+        ));
+        assert!(consume_path(
+            &first.inner.open_paths,
+            &normalize_existing_path(&path)
+        ));
         let _ = std::fs::remove_file(path);
     }
 

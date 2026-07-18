@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useFileActions } from "@/composables/useFileActions";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import {
@@ -413,7 +414,7 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    documentSessionStore.beginLifecycle("saving");
+    useDocumentSessionCoordinator().beginLifecycle('saving');
     mockPreparedOpen(openedResponse("queued.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
@@ -424,7 +425,7 @@ describe("useFileActions", () => {
     expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(documentSessionStore.lifecycle).toBe("saving");
 
-    documentSessionStore.endLifecycle("saving");
+    useDocumentSessionCoordinator().endLifecycle('saving');
 
     await expect(loadPromise).resolves.toBe(true);
     expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
@@ -435,7 +436,7 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    const releaseEditorCommand = documentSessionStore.beginEditorCommand();
+    const releaseEditorCommand = useDocumentSessionCoordinator().beginEditorCommand();
     mockPreparedOpen(openedResponse("queued.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
@@ -701,7 +702,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
-    expect(documentSessionStore.beginLifecycle("saving")).toBe(true);
+    expect(useDocumentSessionCoordinator().beginLifecycle('saving')).toBe(true);
 
     const actions = mountActions(flushPendingCellChanges);
     const closePromise = actions.closeCurrentDocument({ waitForIdle: true });
@@ -709,7 +710,7 @@ describe("useFileActions", () => {
     await flushPromises();
     expect(api.closeCurrentDocument).not.toHaveBeenCalled();
 
-    documentSessionStore.endLifecycle("saving");
+    useDocumentSessionCoordinator().endLifecycle('saving');
 
     await expect(closePromise).resolves.toBe(true);
     expect(api.closeCurrentDocument).toHaveBeenCalledWith('1');

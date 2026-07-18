@@ -1,15 +1,15 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::application::document_query_service;
 use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
-use crate::io::save_work::{self, SaveWorkReservation};
+use crate::io::save_work::SaveWorkReservation;
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
     search_service::SearchService,
-    state::{ActiveDocumentStore, DocumentHandle},
+    state::{ActiveDocumentRepository, DocumentHandle},
 };
 use crate::types::{SavedDocumentIdentity, SavedDocumentResponse};
 
@@ -36,7 +36,9 @@ pub fn prepare_current_file_export(
     let handle = document_handle_for_read(runtime.documents(), document_id)?;
     let (snapshot, work) = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        let work = save_work::reserve(document_id, editor_state.estimated_resource_bytes())?;
+        let work = runtime
+            .save_work()
+            .reserve(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
         (snapshot, work)
     };
@@ -65,7 +67,9 @@ pub fn prepare_current_file_save(
                 "save is already in progress".to_string(),
             ));
         }
-        let work = save_work::reserve(document_id, editor_state.estimated_resource_bytes())?;
+        let work = runtime
+            .save_work()
+            .reserve(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
         (snapshot, work)
     };
@@ -106,7 +110,7 @@ where
 
 fn commit_current_file_save_with_registry<F>(
     search: &SearchService,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
@@ -173,7 +177,7 @@ where
 }
 
 fn begin_prepared_save_commit<F>(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     revision: u64,
     clear_history: F,
@@ -181,21 +185,17 @@ fn begin_prepared_save_commit<F>(
 where
     F: FnOnce(&EditorState) -> bool,
 {
-    let registry_guard = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?;
-    let handle = registry_guard.active_handle_for_mutation(document_id)?;
+    let handle = registry.mutation_handle(document_id)?;
     let mut editor_state = handle.write()?;
     ensure_editor_matches_prepared_save(&editor_state, document_id, revision)?;
     let clear_history = clear_history(&editor_state);
     let lease = editor_state.begin_save_commit(document_id, revision)?;
     drop(editor_state);
-    drop(registry_guard);
     Ok((handle, lease, clear_history))
 }
 
 fn commit_current_file_save_without_reparse<F>(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     path: String,
     document_id: u64,
     revision: u64,
@@ -260,13 +260,10 @@ fn abort_save_commit(handle: &DocumentHandle, lease: SaveCommitLease) {
 }
 
 fn document_handle_for_read(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
 ) -> Result<Arc<DocumentHandle>, AppError> {
-    registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle_for_read(document_id)
+    registry.read_handle(document_id)
 }
 
 fn current_document_path_for_command(
@@ -298,7 +295,7 @@ pub fn save_file_desktop(
     use crate::io::platform::desktop;
 
     let current_path = current_document_path_for_command(runtime, document_id, base_revision)?;
-    desktop::ensure_save_path_authorized(path, &current_path)?;
+    desktop::ensure_save_path_authorized(runtime.desktop_files(), path, &current_path)?;
     let prepared = prepare_current_file_save(runtime, document_id, base_revision, path)?;
     let target = Path::new(path);
     let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
@@ -357,12 +354,16 @@ pub fn save_file_mobile(
     use crate::io::managed_documents;
     use crate::io::platform::mobile;
 
-    let target = mobile::validated_mobile_files_path(app, Path::new(path))?;
+    let target = mobile::validated_mobile_files_path(runtime.mobile_files(), app, Path::new(path))?;
     let current_path = current_document_path_for_command(runtime, document_id, base_revision)?;
-    mobile::ensure_save_target_authorized(&target, &current_path)?;
+    mobile::ensure_save_target_authorized(runtime.mobile_files(), &target, &current_path)?;
     let target_path = target.to_string_lossy().to_string();
     let prepared = prepare_current_file_save(runtime, document_id, base_revision, &target_path)?;
-    managed_documents::validate_managed_save(&target, prepared.bytes.len() as u64)?;
+    managed_documents::validate_managed_save(
+        runtime.mobile_files().managed_documents(),
+        &target,
+        prepared.bytes.len() as u64,
+    )?;
     let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
         Err(error) => {
@@ -374,7 +375,12 @@ pub fn save_file_mobile(
     let managed_file_name = prepared.output_name.clone();
     let result = commit_current_file_save(runtime, target_path, prepared, || {
         replace_temp_file(&temp_path, &target)?;
-        managed_documents::adopt_completed_save(&target, &managed_file_name)
+        managed_documents::adopt_completed_save(
+            runtime.mobile_files().managed_documents(),
+            runtime.mobile_files().transient_files(),
+            &target,
+            &managed_file_name,
+        )
     });
     if result.is_err() {
         cleanup_temp_file(&temp_path);
@@ -412,7 +418,7 @@ mod tests {
     use crate::types::{FileData, SheetData};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn test_registry() -> (Arc<RwLock<ActiveDocumentStore>>, u64, u64) {
+    fn test_registry() -> (ActiveDocumentRepository, u64, u64) {
         let state = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -423,9 +429,9 @@ mod tests {
         );
         let document_id = state.document_id();
         let revision = state.revision();
-        let mut store = ActiveDocumentStore::new_for_test();
-        store.replace_active_for_test(state);
-        (Arc::new(RwLock::new(store)), document_id, revision)
+        let registry = ActiveDocumentRepository::default();
+        registry.replace_active_for_test(state);
+        (registry, document_id, revision)
     }
 
     fn prepared_for_test(document_id: u64, revision: u64) -> PreparedDocumentSave {
@@ -454,7 +460,7 @@ mod tests {
         .expect_err("write must fail");
 
         assert!(matches!(error, AppError::WriteError(_)));
-        let handle = registry.read().unwrap().active_handle().unwrap();
+        let handle = registry.active_handle().unwrap().unwrap();
         let state = handle.read().unwrap();
         assert_eq!(state.revision(), revision);
         assert!(!state.has_save_commit_in_progress());

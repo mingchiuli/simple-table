@@ -179,16 +179,18 @@ impl<'de> serde::Deserialize<'de> for SetCellBatch {
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_open_file_desktop(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
 ) -> Result<Option<desktop::DesktopOpenFileInfo>, AppError> {
-    blocking::run(move || desktop::pick_open_file(&app)).await
+    let runtime = runtime.inner().clone();
+    blocking::run(move || desktop::pick_open_file(runtime.desktop_files(), &app)).await
 }
 
 /// Desktop: 释放已选择但没有被读取的文件路径授权。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn discard_open_file_selection_desktop(path: String) {
-    desktop::discard_open_file_selection(&path)
+pub fn discard_open_file_selection_desktop(runtime: State<'_, ApplicationRuntime>, path: String) {
+    desktop::discard_open_file_selection(runtime.desktop_files(), &path)
 }
 
 /// Desktop: 从后端已授权路径读取并解析文件。
@@ -219,17 +221,20 @@ pub async fn prepare_recent_file_desktop(
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_save_location_desktop(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    blocking::run(move || desktop::pick_save_location(&app, &default_name)).await
+    let runtime = runtime.inner().clone();
+    blocking::run(move || desktop::pick_save_location(runtime.desktop_files(), &app, &default_name))
+        .await
 }
 
 /// Desktop: 释放未使用的保存路径授权。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
-pub fn discard_save_location_desktop(path: String) {
-    desktop::discard_save_location(&path)
+pub fn discard_save_location_desktop(runtime: State<'_, ApplicationRuntime>, path: String) {
+    desktop::discard_save_location(runtime.desktop_files(), &path)
 }
 
 /// Desktop: 生成文件字节并写入路径
@@ -730,8 +735,12 @@ pub async fn search(
 // ==================== Recent Files Operations ====================
 
 #[tauri::command]
-pub async fn get_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, AppError> {
-    recent_executor::run(move || recent::do_get_recent_files(&app)).await
+pub async fn get_recent_files(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+) -> Result<Vec<RecentFile>, AppError> {
+    let runtime = runtime.inner().clone();
+    recent_executor::run(move || recent::do_get_recent_files(&runtime, &app)).await
 }
 
 #[tauri::command]

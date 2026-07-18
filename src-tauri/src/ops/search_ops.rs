@@ -1,10 +1,10 @@
 use std::io::Write;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Mutex, OnceLock};
 
 use crate::error::AppError;
 use crate::state::search_index::{SearchQueryPlan, SearchScanCursor};
 use crate::state::search_service::SearchService;
-use crate::state::state::{ActiveDocumentStore, DocumentHandle};
+use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 use crate::types::{SearchResponse, SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
@@ -30,7 +30,7 @@ fn col_to_letter(col: usize) -> String {
 /// 搜索单元格
 pub fn do_search(
     search_service: &SearchService,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     query: &str,
@@ -41,10 +41,7 @@ pub fn do_search(
         return Ok(SearchResponse::default());
     };
 
-    let handle = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle_for_read(document_id)?;
+    let handle = registry.read_handle(document_id)?;
     let sheet_indexes = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
 
@@ -357,7 +354,7 @@ mod query_limit_tests {
 
     #[test]
     fn search_query_rejects_oversized_text_before_accessing_the_document() {
-        let registry = Arc::new(RwLock::new(ActiveDocumentStore::new_for_test()));
+        let registry = ActiveDocumentRepository::default();
         let search = SearchService::new();
         let error = do_search(
             &search,

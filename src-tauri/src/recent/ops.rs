@@ -4,16 +4,18 @@ use crate::application::document_query_service;
 use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 
-use super::store::RecentStore;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use super::store::validate_recent_files;
 use super::thumbnail::{capture_thumbnail, generate_thumbnail};
 use super::types::{AddRecentFileRequest, RecentFile, StorageType};
 
-pub fn do_get_recent_files(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+pub fn do_get_recent_files(
+    runtime: &ApplicationRuntime,
+    app: &AppHandle,
+) -> Result<Vec<RecentFile>, AppError> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let stored = match RecentStore::get_all(app) {
+        let stored = match runtime.recent_files().get_all(app) {
             Ok(files) => files,
             Err(error) => {
                 eprintln!(
@@ -22,11 +24,11 @@ pub fn do_get_recent_files(app: &AppHandle) -> Result<Vec<RecentFile>, AppError>
                 Vec::new()
             }
         };
-        return reconcile_mobile_recent_files(app, stored);
+        return reconcile_mobile_recent_files(runtime, app, stored);
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    RecentStore::get_all(app)
+    runtime.recent_files().get_all(app)
 }
 
 pub fn do_add_recent_file_with_thumbnail(
@@ -63,9 +65,10 @@ pub fn do_add_recent_file_with_thumbnail(
     recent_file.storage_type = current_platform_storage_type();
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    if let Some(managed) = crate::io::platform::mobile::managed_document_records(app)?
-        .into_iter()
-        .find(|managed| managed.path.to_string_lossy() == recent_file.path)
+    if let Some(managed) =
+        crate::io::platform::mobile::managed_document_records(runtime.mobile_files(), app)?
+            .into_iter()
+            .find(|managed| managed.path.to_string_lossy() == recent_file.path)
     {
         recent_file.id = managed.id;
     }
@@ -76,7 +79,7 @@ pub fn do_add_recent_file_with_thumbnail(
 
     recent_file.thumbnail = thumbnail.and_then(generate_thumbnail);
 
-    let update = RecentStore::add(app, recent_file)?;
+    let update = runtime.recent_files().add(app, recent_file)?;
     cleanup_removed_mobile_files(runtime, app, &update.removed);
     Ok(update.updated)
 }
@@ -88,13 +91,14 @@ pub fn do_remove_recent_file(
 ) -> Result<(), AppError> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        if let Some(file) = do_get_recent_files(app)?
+        if let Some(file) = do_get_recent_files(runtime, app)?
             .into_iter()
             .find(|file| file.id == id)
             && file.storage_type == StorageType::MobileSandboxPath
         {
             let active_path = document_query_service::active_document_path(runtime)?;
             if !crate::io::platform::mobile::remove_managed_file_if_inactive(
+                runtime.mobile_files(),
                 app,
                 &file.path,
                 active_path.as_deref(),
@@ -104,13 +108,13 @@ pub fn do_remove_recent_file(
                 ));
             }
         }
-        RecentStore::remove(app, id)?;
+        runtime.recent_files().remove(app, id)?;
         return Ok(());
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        let removed = RecentStore::remove(app, id)?;
+        let removed = runtime.recent_files().remove(app, id)?;
         cleanup_removed_mobile_files(runtime, app, &removed);
         Ok(())
     }
@@ -118,6 +122,7 @@ pub fn do_remove_recent_file(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn reconcile_mobile_recent_files(
+    runtime: &ApplicationRuntime,
     app: &AppHandle,
     stored: Vec<RecentFile>,
 ) -> Result<Vec<RecentFile>, AppError> {
@@ -128,6 +133,7 @@ fn reconcile_mobile_recent_files(
         .filter(|file| file.storage_type == StorageType::MobileSandboxPath)
     {
         if let Err(error) = crate::io::platform::mobile::migrate_managed_document(
+            runtime.mobile_files(),
             app,
             &file.path,
             &file.file_name,
@@ -152,7 +158,9 @@ fn reconcile_mobile_recent_files(
         .filter(|file| file.storage_type != StorageType::MobileSandboxPath)
         .collect();
 
-    for managed in crate::io::platform::mobile::managed_document_records(app)? {
+    for managed in
+        crate::io::platform::mobile::managed_document_records(runtime.mobile_files(), app)?
+    {
         let path = managed.path.to_string_lossy().to_string();
         let existing = stored_mobile.remove(&path);
         reconciled.push(RecentFile {
@@ -181,7 +189,7 @@ fn reconcile_mobile_recent_files(
         }
     }
     validate_recent_files(&reconciled).map_err(AppError::ReadError)?;
-    if let Err(error) = RecentStore::replace_all(app, reconciled.clone()) {
+    if let Err(error) = runtime.recent_files().replace_all(app, reconciled.clone()) {
         eprintln!("Failed to persist reconciled recent metadata: {error}");
     }
     Ok(reconciled)
@@ -207,6 +215,7 @@ fn cleanup_removed_mobile_files(
             continue;
         }
         if let Err(error) = crate::io::platform::mobile::remove_managed_file_if_inactive(
+            runtime.mobile_files(),
             app,
             &file.path,
             active_path.as_deref(),

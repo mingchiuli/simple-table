@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 import { useDocumentSessionStore } from "@/stores/documentSession";
-import { createDocumentProjection } from "@/stores/documentProjection";
+import { createDocumentProjection } from "@/projection/documentProjection";
 import {
   defaultHistoryStatus,
   defaultRichProjection,

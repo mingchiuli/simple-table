@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyProjectionPatches } from '@/stores/documentProjection';
+import { applyProjectionPatches } from '@/projection/documentProjection';
 import type { CellValue, DocumentProjection, EditorPatch, SheetRegionBlock } from '@/types';
 import { defaultRichProjection } from '@/types';
 import { blankCell } from '@/utils/cellValue';

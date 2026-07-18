@@ -3,14 +3,14 @@ use crate::io::atomic_file::write_file_atomically;
 use crate::io::marker_store::{
     bounded_directory_entries, read_marker_bytes, validate_marker_field,
 };
-use crate::io::transient_files::{clear_persistent_marker, transient_file_registry};
+use crate::io::transient_files::{TransientFileRegistry, clear_persistent_marker};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_MANAGED_DOCUMENTS: usize = 64;
@@ -18,7 +18,10 @@ const MAX_MANAGED_DOCUMENT_BYTES: u64 = 1024 * 1024 * 1024;
 const MARKER_PREFIX: &str = ".simple-table-managed-";
 const MARKER_SUFFIX: &str = ".json";
 
-static MANAGED_DOCUMENT_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
+#[derive(Clone, Default)]
+pub struct ManagedDocumentCatalog {
+    transaction: Arc<Mutex<()>>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ManagedDocumentRecord {
@@ -38,24 +41,38 @@ struct PersistentManagedDocument {
     adopted_at_millis: i64,
 }
 
-pub(crate) fn adopt_transient_document(target: &Path, file_name: &str) -> Result<bool, AppError> {
-    if !transient_file_registry().contains(target)? {
+pub(crate) fn adopt_transient_document(
+    catalog: &ManagedDocumentCatalog,
+    transient_files: &TransientFileRegistry,
+    target: &Path,
+    file_name: &str,
+) -> Result<bool, AppError> {
+    if !transient_files.contains(target)? {
         return Ok(false);
     }
-    persist_managed_document(target, file_name, None, None, true)?;
-    transient_file_registry().adopt_if_registered(target)?;
+    persist_managed_document(catalog, target, file_name, None, None, true)?;
+    transient_files.adopt_if_registered(target)?;
     Ok(true)
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) fn adopt_completed_save(target: &Path, file_name: &str) -> Result<(), AppError> {
-    persist_managed_document(target, file_name, None, None, true)?;
-    transient_file_registry().adopt_if_registered(target)?;
+pub(crate) fn adopt_completed_save(
+    catalog: &ManagedDocumentCatalog,
+    transient_files: &TransientFileRegistry,
+    target: &Path,
+    file_name: &str,
+) -> Result<(), AppError> {
+    persist_managed_document(catalog, target, file_name, None, None, true)?;
+    transient_files.adopt_if_registered(target)?;
     Ok(())
 }
 
-pub(crate) fn validate_managed_save(target: &Path, future_size: u64) -> Result<(), AppError> {
-    let _guard = transaction_lock()?;
+pub(crate) fn validate_managed_save(
+    catalog: &ManagedDocumentCatalog,
+    target: &Path,
+    future_size: u64,
+) -> Result<(), AppError> {
+    let _guard = transaction_lock(catalog)?;
     let directory = target.parent().ok_or_else(|| {
         AppError::DocumentStateInvalid("managed document path has no parent".to_string())
     })?;
@@ -78,14 +95,18 @@ pub(crate) fn validate_managed_save(target: &Path, future_size: u64) -> Result<(
     Ok(())
 }
 
-pub(crate) fn recover_completed_save(target: &Path) -> Result<(), AppError> {
+pub(crate) fn recover_completed_save(
+    catalog: &ManagedDocumentCatalog,
+    target: &Path,
+) -> Result<(), AppError> {
     let file_name = direct_file_name(target)?;
-    persist_managed_document(target, &file_name, None, None, true)?;
+    persist_managed_document(catalog, target, &file_name, None, None, true)?;
     clear_persistent_marker(target);
     Ok(())
 }
 
 pub(crate) fn migrate_existing_document(
+    catalog: &ManagedDocumentCatalog,
     target: &Path,
     file_name: &str,
     id: &str,
@@ -94,22 +115,38 @@ pub(crate) fn migrate_existing_document(
     if marker_path(target)?.exists() || !target.exists() {
         return Ok(());
     }
-    persist_managed_document(target, file_name, Some(id), Some(adopted_at_millis), false)
+    persist_managed_document(
+        catalog,
+        target,
+        file_name,
+        Some(id),
+        Some(adopted_at_millis),
+        false,
+    )
 }
 
-pub(crate) fn managed_documents(directory: &Path) -> Result<Vec<ManagedDocumentRecord>, AppError> {
-    let _guard = transaction_lock()?;
+pub(crate) fn managed_documents(
+    catalog: &ManagedDocumentCatalog,
+    directory: &Path,
+) -> Result<Vec<ManagedDocumentRecord>, AppError> {
+    let _guard = transaction_lock(catalog)?;
     scan_managed_documents(directory, true)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn reconcile_managed_documents(directory: &Path) -> Result<(), AppError> {
-    managed_documents(directory).map(|_| ())
+pub(crate) fn reconcile_managed_documents(
+    catalog: &ManagedDocumentCatalog,
+    directory: &Path,
+) -> Result<(), AppError> {
+    managed_documents(catalog, directory).map(|_| ())
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) fn clear_managed_document(target: &Path) -> Result<(), AppError> {
-    let _guard = transaction_lock()?;
+pub(crate) fn clear_managed_document(
+    catalog: &ManagedDocumentCatalog,
+    target: &Path,
+) -> Result<(), AppError> {
+    let _guard = transaction_lock(catalog)?;
     match fs::remove_file(marker_path(target)?) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
@@ -120,13 +157,14 @@ pub(crate) fn clear_managed_document(target: &Path) -> Result<(), AppError> {
 }
 
 fn persist_managed_document(
+    catalog: &ManagedDocumentCatalog,
     target: &Path,
     file_name: &str,
     requested_id: Option<&str>,
     adopted_at_millis: Option<i64>,
     enforce_capacity: bool,
 ) -> Result<(), AppError> {
-    let _guard = transaction_lock()?;
+    let _guard = transaction_lock(catalog)?;
     let directory = target.parent().ok_or_else(|| {
         AppError::DocumentStateInvalid("managed document path has no parent".to_string())
     })?;
@@ -275,11 +313,20 @@ fn direct_file_name(path: &Path) -> Result<String, AppError> {
         })
 }
 
-fn transaction_lock() -> Result<std::sync::MutexGuard<'static, ()>, AppError> {
-    MANAGED_DOCUMENT_TRANSACTION
-        .get_or_init(|| Mutex::new(()))
+fn transaction_lock(
+    catalog: &ManagedDocumentCatalog,
+) -> Result<std::sync::MutexGuard<'_, ()>, AppError> {
+    catalog
+        .transaction
         .lock()
         .map_err(|_| AppError::poisoned_lock("managed document catalog"))
+}
+
+impl ManagedDocumentCatalog {
+    #[cfg(test)]
+    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.transaction, &other.transaction)
+    }
 }
 
 fn now_millis() -> i64 {
@@ -314,13 +361,14 @@ mod tests {
 
     #[test]
     fn managed_marker_recovers_document_metadata_without_recent_store() {
+        let catalog = ManagedDocumentCatalog::default();
         let dir = TestDir::new("recover");
         let target = dir.0.join("document.xlsx");
         fs::write(&target, b"workbook").expect("managed file");
 
-        persist_managed_document(&target, "Budget.xlsx", None, Some(42), true)
+        persist_managed_document(&catalog, &target, "Budget.xlsx", None, Some(42), true)
             .expect("managed marker");
-        let records = managed_documents(&dir.0).expect("managed records");
+        let records = managed_documents(&catalog, &dir.0).expect("managed records");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].path, target);
@@ -331,27 +379,29 @@ mod tests {
 
     #[test]
     fn reconciliation_removes_marker_for_missing_document() {
+        let catalog = ManagedDocumentCatalog::default();
         let dir = TestDir::new("missing");
         let target = dir.0.join("missing.xlsx");
         fs::write(&target, b"workbook").expect("managed file");
-        persist_managed_document(&target, "Missing.xlsx", None, None, true)
+        persist_managed_document(&catalog, &target, "Missing.xlsx", None, None, true)
             .expect("managed marker");
         fs::remove_file(&target).expect("remove target");
 
-        reconcile_managed_documents(&dir.0).expect("reconcile catalog");
+        reconcile_managed_documents(&catalog, &dir.0).expect("reconcile catalog");
 
         assert!(!marker_path(&target).expect("marker path").exists());
     }
 
     #[test]
     fn migration_preserves_existing_recent_identity() {
+        let catalog = ManagedDocumentCatalog::default();
         let dir = TestDir::new("migration");
         let target = dir.0.join("legacy.xlsx");
         fs::write(&target, b"workbook").expect("managed file");
 
-        migrate_existing_document(&target, "Legacy.xlsx", "stable-id", 7)
+        migrate_existing_document(&catalog, &target, "Legacy.xlsx", "stable-id", 7)
             .expect("migrate document");
-        let records = managed_documents(&dir.0).expect("managed records");
+        let records = managed_documents(&catalog, &dir.0).expect("managed records");
 
         assert_eq!(records[0].id, "stable-id");
         assert_eq!(records[0].adopted_at_millis, 7);
@@ -359,10 +409,12 @@ mod tests {
 
     #[test]
     fn adopting_transient_document_persists_catalog_before_clearing_transient_marker() {
+        let catalog = ManagedDocumentCatalog::default();
+        let transient_files = TransientFileRegistry::default();
         let dir = TestDir::new("adoption");
         let target = dir.0.join("imported.xlsx");
         fs::write(&target, b"workbook").expect("transient file");
-        transient_file_registry()
+        transient_files
             .register(
                 target.clone(),
                 crate::io::transient_files::TransientFilePurpose::OpenSelection,
@@ -374,44 +426,54 @@ mod tests {
         )
         .expect("transient marker");
 
-        assert!(adopt_transient_document(&target, "Imported.xlsx").expect("managed adoption"));
+        assert!(
+            adopt_transient_document(&catalog, &transient_files, &target, "Imported.xlsx")
+                .expect("managed adoption")
+        );
 
-        assert!(!transient_file_registry().contains(&target).unwrap());
-        assert_eq!(managed_documents(&dir.0).unwrap().len(), 1);
+        assert!(!transient_files.contains(&target).unwrap());
+        assert_eq!(managed_documents(&catalog, &dir.0).unwrap().len(), 1);
     }
 
     #[test]
     fn new_managed_documents_are_rejected_at_the_catalog_count_limit() {
+        let catalog = ManagedDocumentCatalog::default();
         let dir = TestDir::new("capacity");
         for index in 0..MAX_MANAGED_DOCUMENTS {
             let target = dir.0.join(format!("document-{index}.xlsx"));
             fs::write(&target, b"workbook").expect("managed file");
-            persist_managed_document(&target, "Document.xlsx", None, None, true)
+            persist_managed_document(&catalog, &target, "Document.xlsx", None, None, true)
                 .expect("managed marker");
         }
         let overflow = dir.0.join("overflow.xlsx");
         fs::write(&overflow, b"workbook").expect("overflow file");
 
         assert!(matches!(
-            persist_managed_document(&overflow, "Overflow.xlsx", None, None, true),
+            persist_managed_document(&catalog, &overflow, "Overflow.xlsx", None, None, true),
             Err(AppError::ResourceLimitExceeded(_))
         ));
         assert_eq!(
-            managed_documents(&dir.0).unwrap().len(),
+            managed_documents(&catalog, &dir.0).unwrap().len(),
             MAX_MANAGED_DOCUMENTS
         );
     }
 
     #[test]
     fn save_capacity_allows_existing_replacement_but_rejects_oversized_new_file() {
+        let catalog = ManagedDocumentCatalog::default();
         let dir = TestDir::new("save-capacity");
         let target = dir.0.join("existing.xlsx");
         fs::write(&target, b"workbook").expect("managed file");
-        migrate_existing_document(&target, "Existing.xlsx", "existing", 1).expect("managed marker");
+        migrate_existing_document(&catalog, &target, "Existing.xlsx", "existing", 1)
+            .expect("managed marker");
 
-        assert!(validate_managed_save(&target, 1).is_ok());
+        assert!(validate_managed_save(&catalog, &target, 1).is_ok());
         assert!(matches!(
-            validate_managed_save(&dir.0.join("new.xlsx"), MAX_MANAGED_DOCUMENT_BYTES + 1),
+            validate_managed_save(
+                &catalog,
+                &dir.0.join("new.xlsx"),
+                MAX_MANAGED_DOCUMENT_BYTES + 1
+            ),
             Err(AppError::ResourceLimitExceeded(_))
         ));
     }

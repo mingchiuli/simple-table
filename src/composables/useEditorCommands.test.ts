@@ -18,7 +18,7 @@ import {
   type SheetData,
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
-import { sheetCell } from "@/stores/documentProjection";
+import { sheetCell } from "@/projection/documentProjection";
 
 vi.mock("element-plus", () => ({
   ElMessage: {

@@ -19,7 +19,7 @@ import {
   isCellLoaded,
   loadedSheetMetadata,
   sheetCell,
-} from '@/stores/documentProjection';
+} from '@/projection/documentProjection';
 import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
 import { useApplicationExitGuard } from '@/composables/useApplicationExit';
 const route = useRoute();

@@ -4,6 +4,8 @@ import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacemen
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
+import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -64,7 +66,7 @@ function queueDraftWithAutosave(committed: string[]) {
     value: "draft",
     oldValue: text("old"),
   });
-  pendingStore.schedulePendingSave(
+  usePendingCellSaveCoordinator().schedulePendingSave(
     {
       commitBatch: async (changes) => {
         committed.push(changes[0].value);
@@ -166,7 +168,7 @@ describe("useDocumentReplacementGuard", () => {
   it("drops pending work when a replacement is committed", async () => {
     const statusStore = useDocumentStatusStore();
     const committed: string[] = [];
-    const pendingStore = queueDraftWithAutosave(committed);
+    queueDraftWithAutosave(committed);
     statusStore.markPendingContentChange();
     unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
 
@@ -176,18 +178,17 @@ describe("useDocumentReplacementGuard", () => {
 
     expect(committed).toEqual([]);
     expect(statusStore.hasPendingContentChange).toBe(false);
-    expect(pendingStore.hasPendingWork()).toBe(false);
+    expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
   });
 
   it("waits for active document mutations before allowing confirmed discard replacement", async () => {
     const statusStore = useDocumentStatusStore();
-    const documentSessionStore = useDocumentSessionStore();
     openTestDocument(1);
     statusStore.markPendingContentChange();
     unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
     let releaseMutation!: () => void;
     let replacementResolved = false;
-    void documentSessionStore.enqueueDocumentMutation('1', async () => {
+    void useDocumentSessionCoordinator().enqueueDocumentMutation('1', async () => {
       await new Promise<void>((resolve) => {
         releaseMutation = resolve;
       });
@@ -213,7 +214,6 @@ describe("useDocumentReplacementGuard", () => {
   it("waits for in-flight cell saves before allowing confirmed discard replacement", async () => {
     const statusStore = useDocumentStatusStore();
     const pendingStore = usePendingCellSavesStore();
-    const documentSessionStore = useDocumentSessionStore();
     const enqueueGate = deferred();
     const mutationGate = deferred();
     openTestDocument(1);
@@ -229,11 +229,11 @@ describe("useDocumentReplacementGuard", () => {
       value: "draft",
       oldValue: text("old"),
     });
-    pendingStore.startPendingSave({
+    usePendingCellSaveCoordinator().startPendingSave({
       commitBatch: async () => {
         saveStarted = true;
         await enqueueGate.promise;
-        await documentSessionStore.enqueueDocumentMutation('1', async () => {
+        await useDocumentSessionCoordinator().enqueueDocumentMutation('1', async () => {
           await mutationGate.promise;
         });
       },

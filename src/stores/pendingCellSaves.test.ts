@@ -8,6 +8,7 @@ import {
   PendingCellSaveLimitError,
   usePendingCellSavesStore,
 } from "@/stores/pendingCellSaves";
+import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import type { CellValue } from "@/types";
 
 function text(value: string): CellValue {
@@ -74,7 +75,7 @@ describe("pendingCellSaves store", () => {
       });
     }
 
-    const flushed = await store.flushPendingCellChanges({
+    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
       commitBatch: async (changes) => {
         committedBatchSizes.push(changes.length);
       },
@@ -205,7 +206,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    store.schedulePendingSave(
+    usePendingCellSaveCoordinator().schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -238,7 +239,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    store.schedulePendingSave(
+    usePendingCellSaveCoordinator().schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -248,12 +249,12 @@ describe("pendingCellSaves store", () => {
       100
     );
 
-    store.reset();
+    usePendingCellSaveCoordinator().reset();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
     expect(store.phase).toBe("idle");
-    expect(store.hasPendingWork()).toBe(false);
+    expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
   });
 
   it("flushes through the store scheduler and waits for active saves", async () => {
@@ -272,7 +273,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flush = store.flushPendingCellChanges({
+    const flush = usePendingCellSaveCoordinator().flushPendingCellChanges({
       commitBatch: async () => {
         started = true;
         await activeSave;
@@ -301,7 +302,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flushed = await store.flushPendingCellChanges({
+    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
       commitBatch: async () => {
         throw new Error("stale projection");
       },
@@ -331,7 +332,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flushed = await store.flushPendingCellChanges({
+    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
       commitBatch: async () => {
         throw new Error("backend failed");
       },
@@ -344,7 +345,7 @@ describe("pendingCellSaves store", () => {
     try {
       expect(flushed).toBe(false);
       expect(store.hasActiveSaves).toBe(false);
-      expect(store.hasPendingWork()).toBe(false);
+      expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
       expect(store.phase).toBe("failed");
       expect(store.lastError).toContain("refresh failed");
       expect(consoleError).toHaveBeenCalled();
@@ -364,7 +365,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flushed = await store.flushPendingCellChanges({
+    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
       commitBatch: async () => undefined,
       clearPendingContentChange: () => {
         throw new Error("dirty cleanup failed");
@@ -373,7 +374,7 @@ describe("pendingCellSaves store", () => {
 
     try {
       expect(flushed).toBe(true);
-      expect(store.hasPendingWork()).toBe(false);
+      expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
       expect(store.phase).toBe("idle");
       expect(consoleError).toHaveBeenCalled();
     } finally {
@@ -387,7 +388,7 @@ describe("pendingCellSaves store", () => {
 
     try {
       expect(() =>
-        store.clearPendingContentChangeIfIdle(() => {
+        usePendingCellSaveCoordinator().clearPendingContentChangeIfIdle(() => {
           throw new Error("dirty cleanup failed");
         })
       ).not.toThrow();
@@ -410,8 +411,8 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const resume = store.suspendAutosave();
-    store.schedulePendingSave(
+    const resume = usePendingCellSaveCoordinator().suspendAutosave();
+    usePendingCellSaveCoordinator().schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -444,8 +445,8 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const resume = store.suspendAutosave();
-    store.schedulePendingSave(
+    const resume = usePendingCellSaveCoordinator().suspendAutosave();
+    usePendingCellSaveCoordinator().schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -455,11 +456,11 @@ describe("pendingCellSaves store", () => {
       100
     );
 
-    store.reset();
+    usePendingCellSaveCoordinator().reset();
     resume();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
-    expect(store.hasPendingWork()).toBe(false);
+    expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
   });
 });

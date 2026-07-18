@@ -1,19 +1,17 @@
-use std::sync::{Arc, RwLock};
-
 use crate::error::AppError;
 use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
-use crate::state::state::{ActiveDocumentStore, DocumentHandle};
+use crate::state::state::ActiveDocumentRepository;
 use crate::types::{EditorMutationResponse, EditorSessionInfo};
 
 /// 获取编辑器状态（包含能否撤销/重做）
 pub fn do_get_editor_state(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: Option<u64>,
     base_revision: Option<u64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
     match (document_id, base_revision) {
         (Some(document_id), Some(base_revision)) => {
-            let handle = read_handle(registry, document_id)?;
+            let handle = registry.read_handle(document_id)?;
             let editor_state = handle.read_for_command(document_id, base_revision)?;
             Ok(Some(EditorSessionInfo {
                 document_id: editor_state.document_id(),
@@ -32,11 +30,11 @@ pub fn do_get_editor_state(
 
 /// 撤销操作
 pub fn do_undo(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
-    let handle = mutation_handle(registry, document_id)?;
+    let handle = registry.mutation_handle(document_id)?;
     let (response, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.undo()? {
@@ -57,11 +55,11 @@ pub fn do_undo(
 
 /// 重做操作
 pub fn do_redo(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
-    let handle = mutation_handle(registry, document_id)?;
+    let handle = registry.mutation_handle(document_id)?;
     let (response, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.redo()? {
@@ -80,33 +78,13 @@ pub fn do_redo(
     Ok(response)
 }
 
-fn read_handle(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
-    document_id: u64,
-) -> Result<Arc<DocumentHandle>, AppError> {
-    registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle_for_read(document_id)
-}
-
-fn mutation_handle(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
-    document_id: u64,
-) -> Result<Arc<DocumentHandle>, AppError> {
-    registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle_for_mutation(document_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::editor_state::EditorState;
     use crate::types::{CellValue, FileData, SheetData};
 
-    fn make_registry() -> Arc<RwLock<ActiveDocumentStore>> {
+    fn make_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -119,16 +97,15 @@ mod tests {
             },
             None,
         );
-        let mut registry = ActiveDocumentStore::new_for_test();
+        let registry = ActiveDocumentRepository::default();
         registry.replace_active_for_test(editor);
-        Arc::new(RwLock::new(registry))
+        registry
     }
 
-    fn command_session(registry: &Arc<RwLock<ActiveDocumentStore>>) -> (u64, u64) {
+    fn command_session(registry: &ActiveDocumentRepository) -> (u64, u64) {
         let handle = registry
-            .read()
-            .expect("registry")
             .active_handle()
+            .expect("registry")
             .expect("active document");
         let editor = handle.read().expect("document state");
         (editor.document_id(), editor.revision())

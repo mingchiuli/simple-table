@@ -1,5 +1,7 @@
 export * from './generated';
 export type * from './updateRuntime';
+export type * from './documentRuntime';
+export type * from './pendingCellSave';
 
 import type {
   FormulaDiagnostics,

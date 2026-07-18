@@ -8,7 +8,7 @@ import type {
   OpenDocumentResponse,
   SheetRegionProjectionResponse,
 } from '@/types';
-import { isCellLoaded, loadedSheetMetadata, sheetCell } from '@/stores/documentProjection';
+import { isCellLoaded, loadedSheetMetadata, sheetCell } from '@/projection/documentProjection';
 import { blankCell } from '@/utils/cellValue';
 
 describe('documentSession sparse projection', () => {
@@ -39,7 +39,7 @@ describe('documentSession sparse projection', () => {
     store.openDocumentResponse(openResponse());
     const response = regionResponse(0, 199_936, 200_000, 0, 32, 'far');
 
-    expect(await store.ensureSheetRegionLoaded(response.region, async () => response)).toBe(true);
+    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, async () => response)).toBe(true);
     expect(store.loadedSheet(0)?.blocks).toHaveLength(2);
     expect(sheetCell(store.data?.sheets[0], 199_936, 0)?.display).toBe('far');
   });
@@ -56,8 +56,8 @@ describe('documentSession sparse projection', () => {
     };
 
     await Promise.all([
-      store.ensureSheetRegionLoaded(response.region, fetch),
-      store.ensureSheetRegionLoaded(response.region, fetch),
+      useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, fetch),
+      useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, fetch),
     ]);
     expect(requests).toBe(1);
   });
@@ -68,7 +68,7 @@ describe('documentSession sparse projection', () => {
     const response = regionResponse(0, 128, 256, 0, 32, 'oversized');
     response.estimatedBytes = 16 * 1024 * 1024 + 1;
 
-    expect(await store.ensureSheetRegionLoaded(response.region, async () => response)).toBe(false);
+    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, async () => response)).toBe(false);
     expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
   });
 
@@ -95,12 +95,12 @@ describe('documentSession sparse projection', () => {
       );
     };
 
-    expect(await store.ensureSheetRegionLoaded(requested, fetch)).toBe(true);
+    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).toBe(true);
     expect(requests).toBe(3);
     expect(sheetCell(store.data?.sheets[0], 128, 0)?.display).toBe('row-128');
     expect(sheetCell(store.data?.sheets[0], 192, 0)?.display).toBe('row-192');
 
-    expect(await store.ensureSheetRegionLoaded(requested, fetch)).toBe(true);
+    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).toBe(true);
     expect(requests).toBe(3);
   });
 
@@ -128,7 +128,7 @@ describe('documentSession sparse projection', () => {
       );
     };
 
-    await expect(store.ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
+    await expect(useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
       'more than 64 fragment requests'
     );
     expect(requests).toBe(64);
@@ -158,7 +158,7 @@ describe('documentSession sparse projection', () => {
       return response;
     };
 
-    await expect(store.ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
+    await expect(useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
       'byte load budget'
     );
     expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
@@ -186,7 +186,7 @@ describe('documentSession sparse projection', () => {
       return child;
     };
 
-    const loading = store.ensureSheetRegionLoaded(requested, fetch);
+    const loading = useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch);
     while (requests < 2) await Promise.resolve();
     store.clearDocument();
     resolveChild(regionResponse(
@@ -208,7 +208,7 @@ describe('documentSession sparse projection', () => {
     store.openDocumentResponse(openResponse());
     for (let tile = 1; tile <= 10; tile += 1) {
       const response = regionResponse(0, tile * 128, (tile + 1) * 128, 0, 32, `${tile}`);
-      await store.ensureSheetRegionLoaded(response.region, async () => response);
+      await useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, async () => response);
     }
 
     expect(store.loadedSheet(0)?.blocks).toHaveLength(8);
@@ -231,7 +231,7 @@ describe('documentSession sparse projection', () => {
         endRow: tile * 128 + 1,
         endCol: 1,
       }];
-      await store.ensureSheetRegionLoaded(response.region, async () => response);
+      await useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, async () => response);
     }
 
     const merges = loadedSheetMetadata(store.loadedSheet(0)!).merges;
@@ -249,7 +249,7 @@ describe('documentSession sparse projection', () => {
     store.openDocumentResponse(opened);
     for (let tile = 1; tile <= 10; tile += 1) {
       const response = regionResponse(0, tile * 128, (tile + 1) * 128, 0, 32, `${tile}`);
-      await store.ensureSheetRegionLoaded(response.region, async () => response);
+      await useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, async () => response);
     }
 
     const sheet = store.loadedSheet(0);
@@ -269,7 +269,7 @@ describe('documentSession sparse projection', () => {
       col: 0,
       value: { ...blankCell(), display: 'anchor' },
     }];
-    expect(await store.ensureSheetRegionLoaded(response.region, async () => response)).toBe(true);
+    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, async () => response)).toBe(true);
     expect(sheetCell(store.data?.sheets[0], 0, 0)?.display).toBe('anchor');
     expect(isCellLoaded(store.data?.sheets[0], 0, 0)).toBe(true);
   });
@@ -456,7 +456,7 @@ describe('documentSession sparse projection', () => {
     };
     let requests = 0;
 
-    const loaded = await store.ensureSheetLoaded(0, async () => {
+    const loaded = await useDocumentSessionCoordinator().ensureSheetLoaded(0, async () => {
       requests += 1;
       return response;
     });

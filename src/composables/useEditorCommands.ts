@@ -7,7 +7,7 @@ import {
 } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
-import { useSearchSessionStore } from "@/stores/searchSession";
+import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
 import type {
     DocumentProjection,
     EditorMutationResponse,
@@ -39,7 +39,7 @@ export function useEditorCommands({
   const documentSessionStore = useDocumentSessionStore();
   const documentStatusStore = useDocumentStatusStore();
   const editorSelectionStore = useEditorSelectionStore();
-  const searchSessionStore = useSearchSessionStore();
+  const searchSessionCoordinator = useSearchSessionCoordinator();
   const commandBus = useDocumentCommandBus();
 
   function runEditorMutation(
@@ -144,7 +144,7 @@ export function useEditorCommands({
 
   async function handleSearch(query: string, scope: SearchScope) {
     if (!fileData.value || isEditorCommandBlocked()) return;
-    const requestId = searchSessionStore.beginSearch(query);
+    const requestId = searchSessionCoordinator.beginSearch(query);
     try {
       const response = await commandBus.runConsistentRead({
         flushPendingChanges: flushPendingCellChanges,
@@ -157,12 +157,12 @@ export function useEditorCommands({
         ),
       });
       if (response) {
-        searchSessionStore.applySearchResults(requestId, response);
+        searchSessionCoordinator.applySearchResults(requestId, response);
       }
     } catch (error) {
       ElMessage.error(`Search failed: ${appErrorMessage(error)}`);
     } finally {
-      searchSessionStore.finishSearch(requestId);
+      searchSessionCoordinator.finishSearch(requestId);
     }
   }
 
@@ -185,7 +185,7 @@ export function useEditorCommands({
   }
 
   function handleClearSearch() {
-    searchSessionStore.clearSearch();
+    searchSessionCoordinator.clearSearch();
   }
 
   function handleSelectCell(row: number, col: number) {

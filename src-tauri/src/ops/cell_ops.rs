@@ -1,16 +1,14 @@
-use std::sync::{Arc, RwLock};
-
 use crate::domain::{CellEditInput, EditorCommand};
 use crate::error::AppError;
 use crate::ops::patch_projector::{
     cell_delta_mutation_response, layout_mutation_response, resync_required_mutation_response,
     status_mutation_response, structural_delta_mutation_response,
 };
-use crate::state::state::{ActiveDocumentStore, DocumentHandle};
+use crate::state::state::ActiveDocumentRepository;
 use crate::types::{EditorMutationResponse, LayoutPatch};
 
 pub fn do_set_cell(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -34,7 +32,7 @@ pub fn do_set_cell(
 }
 
 pub fn do_set_cells(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     changes: Vec<CellEditInput>,
@@ -50,7 +48,7 @@ pub fn do_set_cells(
 }
 
 pub fn do_add_row(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -68,7 +66,7 @@ pub fn do_add_row(
 }
 
 pub fn do_delete_row(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -86,7 +84,7 @@ pub fn do_delete_row(
 }
 
 pub fn do_add_column(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -104,7 +102,7 @@ pub fn do_add_column(
 }
 
 pub fn do_delete_column(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -122,7 +120,7 @@ pub fn do_delete_column(
 }
 
 pub fn do_set_column_width(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -143,7 +141,7 @@ pub fn do_set_column_width(
 }
 
 pub fn do_set_row_height(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -164,7 +162,7 @@ pub fn do_set_row_height(
 }
 
 pub fn do_add_sheet(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
 ) -> Result<EditorMutationResponse, AppError> {
@@ -177,7 +175,7 @@ pub fn do_add_sheet(
 }
 
 pub fn do_delete_sheet(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     sheet_index: usize,
@@ -191,7 +189,7 @@ pub fn do_delete_sheet(
 }
 
 fn execute_cell_delta(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     command: EditorCommand,
@@ -213,7 +211,7 @@ fn execute_cell_delta(
 }
 
 fn execute_structural_command(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     command: EditorCommand,
@@ -243,7 +241,7 @@ fn execute_structural_command(
 }
 
 fn execute_layout(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     command: EditorCommand,
@@ -265,13 +263,10 @@ fn execute_layout(
 }
 
 fn mutation_handle(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
-) -> Result<Arc<DocumentHandle>, AppError> {
-    registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle_for_mutation(document_id)
+) -> Result<std::sync::Arc<crate::state::state::DocumentHandle>, AppError> {
+    registry.mutation_handle(document_id)
 }
 
 fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutPatch {
@@ -294,14 +289,14 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
 mod tests {
     use super::*;
     use crate::state::editor_state::EditorState;
-    use crate::state::state::ActiveDocumentStore;
+    use crate::state::state::ActiveDocumentRepository;
     use crate::types::{
         CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection, SheetData,
     };
     use serde_json::Value;
     use std::collections::HashMap;
 
-    fn make_registry() -> Arc<RwLock<ActiveDocumentStore>> {
+    fn make_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -314,12 +309,12 @@ mod tests {
             },
             None,
         );
-        let mut registry = ActiveDocumentStore::new_for_test();
+        let registry = ActiveDocumentRepository::default();
         registry.replace_active_for_test(editor);
-        Arc::new(RwLock::new(registry))
+        registry
     }
 
-    fn make_formatted_registry() -> Arc<RwLock<ActiveDocumentStore>> {
+    fn make_formatted_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -342,16 +337,15 @@ mod tests {
             },
             None,
         );
-        let mut registry = ActiveDocumentStore::new_for_test();
+        let registry = ActiveDocumentRepository::default();
         registry.replace_active_for_test(editor);
-        Arc::new(RwLock::new(registry))
+        registry
     }
 
-    fn command_session(registry: &Arc<RwLock<ActiveDocumentStore>>) -> (u64, u64) {
+    fn command_session(registry: &ActiveDocumentRepository) -> (u64, u64) {
         let handle = registry
-            .read()
-            .expect("registry")
             .active_handle()
+            .expect("registry")
             .expect("active document");
         let editor = handle.read().expect("document state");
         (editor.document_id(), editor.revision())
@@ -457,7 +451,7 @@ mod tests {
         assert_eq!(changes[0].col, 0);
         assert_eq!(changes[0].value, CellValue::String("final".to_string()));
 
-        let handle = registry.read().unwrap().active_handle().unwrap();
+        let handle = registry.active_handle().unwrap().unwrap();
         let editor = handle.read().unwrap();
         assert_eq!(
             editor.file_data().sheets[0].rows[0][0],
@@ -493,7 +487,7 @@ mod tests {
 
         assert_eq!(response.revision, revision);
         assert!(response.patches.is_empty());
-        let handle = registry.read().unwrap().active_handle().unwrap();
+        let handle = registry.active_handle().unwrap().unwrap();
         let editor = handle.read().unwrap();
         assert_eq!(
             editor.file_data().sheets[0].rows[0][0],

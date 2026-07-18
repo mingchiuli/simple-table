@@ -17,7 +17,7 @@ import {
   type SheetData,
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
-import { sheetCell } from "@/stores/documentProjection";
+import { sheetCell } from "@/projection/documentProjection";
 import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 
 vi.mock("element-plus", () => ({

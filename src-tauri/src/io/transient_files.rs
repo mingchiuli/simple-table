@@ -11,22 +11,12 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(any(target_os = "android", target_os = "ios", test))]
-use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_TRANSIENT_FILES_PER_PURPOSE: usize = 64;
 const TRANSIENT_FILE_TTL: Duration = Duration::from_secs(30 * 60);
 const MARKER_PREFIX: &str = ".simple-table-transient-";
 const MARKER_SUFFIX: &str = ".json";
-
-#[cfg(any(target_os = "android", target_os = "ios", test))]
-static TRANSIENT_FILE_REGISTRY: OnceLock<TransientFileRegistry> = OnceLock::new();
-
-#[cfg(any(target_os = "android", target_os = "ios", test))]
-pub fn transient_file_registry() -> &'static TransientFileRegistry {
-    TRANSIENT_FILE_REGISTRY.get_or_init(TransientFileRegistry::default)
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

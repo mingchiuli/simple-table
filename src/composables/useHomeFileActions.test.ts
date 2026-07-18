@@ -4,6 +4,7 @@ import { useHomeFileActions } from "@/composables/useHomeFileActions";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
+import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -183,7 +184,7 @@ describe("useHomeFileActions", () => {
       value: "draft",
       oldValue: text("old"),
     });
-    pendingStore.schedulePendingSave(
+    usePendingCellSaveCoordinator().schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);

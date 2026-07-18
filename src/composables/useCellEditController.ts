@@ -7,10 +7,10 @@ import {
   useDocumentSessionStore,
 } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
-import type { CellSaveRequest } from '@/stores/pendingCellSaves';
+import type { CellSaveRequest } from '@/types';
 import type { ComputedRef, Ref } from 'vue';
 import type { DocumentProjection, LoadedSheetSlot, SetCellRequest } from '@/types';
-import { isCellLoaded, sheetCell } from '@/stores/documentProjection';
+import { isCellLoaded, sheetCell } from '@/projection/documentProjection';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
 import { appErrorMessage } from '@/utils/appError';

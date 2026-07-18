@@ -1,5 +1,6 @@
 import type {
   DocumentProjection,
+  DocumentSessionLifecycle,
   EditorCommandContext,
   EditorMutationResponse,
   EditorSessionInfo,
@@ -8,7 +9,7 @@ import type {
   SavedDocumentResponse,
   SheetExtent,
   SheetRegion,
-  SheetRegionProjectionResponse,
+  SheetRegionBlock,
   U64String,
 } from '@/types';
 import {
@@ -19,48 +20,37 @@ import {
   regionCoveringBlockKeys,
   regionKey,
   replaceLoadedSheetBlocks,
-} from '@/stores/documentProjection';
+} from '@/projection/documentProjection';
 import { compareU64, isNextU64, maxU64, ZERO_U64 } from '@/utils/u64';
 import {
-  deleteRegionCache,
-  beginViewportRegionLoad,
   oldestEvictableRegionBlock,
   pinRegionBlocks,
   reconcileRegionBlocks,
   removeRegionBlocks,
   replacePinnedRegionBlock,
-  resetRegionCache,
-  scheduleRegionLoad,
+  resetRegionState,
   touchRegionBlock,
-  type RegionLoadPriority,
-} from '@/stores/documentRegionCache';
-import {
-  loadRegionBlocks,
-  tileRegions,
-  TILE_COLUMNS,
-  TILE_ROWS,
-} from '@/stores/documentRegionRepository';
-import {
-  beginSessionEditorCommand,
-  beginSessionLifecycle,
-  captureMutationSnapshot,
-  endSessionLifecycle,
-  enqueueMutation,
-  resetSessionEditorCommands,
-  resetSessionLifecycle,
-  resetSessionMutationQueue,
-  restoreMutationSnapshot,
-  waitForIdleSessionInteraction,
-  waitForQueuedMutations,
-  type DocumentSessionLifecycle,
-} from '@/stores/documentSessionRuntime';
+} from '@/stores/documentRegionState';
 
-export type { DocumentSessionLifecycle } from '@/stores/documentSessionRuntime';
+export type { DocumentSessionLifecycle } from '@/types';
 
 export type MutationApplyResult = {
   data: DocumentProjection | null;
   resyncRequired: boolean;
   applied: boolean;
+};
+
+export type DocumentSessionSnapshot = {
+  data: DocumentProjection | null;
+  currentFilePath: string | null;
+  documentId: U64String | null;
+  revision: U64String;
+  lifecycle: DocumentSessionLifecycle;
+  editorCommandDepth: number;
+  projectionStale: boolean;
+  residentSheetOrder: number[];
+  regionLru: string[];
+  pinnedRegionBlocks: string[];
 };
 
 const MAX_RESIDENT_SHEETS = 4;
@@ -77,6 +67,8 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     editorCommandDepth: 0,
     projectionStale: false,
     residentSheetOrder: [] as number[],
+    regionLru: [] as string[],
+    pinnedRegionBlocks: [] as string[],
   }),
   getters: {
     isInteractionLocked: (state) => state.lifecycle !== 'idle' || state.editorCommandDepth > 0,
@@ -89,31 +81,22 @@ export const useDocumentSessionStore = defineStore('documentSession', {
   },
   actions: {
     beginLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, 'idle'>): boolean {
-      return beginSessionLifecycle(this, lifecycle);
+      if (this.lifecycle !== 'idle' || this.editorCommandDepth > 0) return false;
+      this.lifecycle = lifecycle;
+      return true;
     },
     endLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, 'idle'>) {
-      endSessionLifecycle(this, lifecycle);
+      if (this.lifecycle === lifecycle) this.lifecycle = 'idle';
     },
-    waitForInteractionIdle(): Promise<void> {
-      return waitForIdleSessionInteraction(this);
+    beginEditorCommand(): boolean {
+      if (this.lifecycle !== 'idle' || this.projectionStale || this.editorCommandDepth > 0) {
+        return false;
+      }
+      this.editorCommandDepth += 1;
+      return true;
     },
-    enqueueDocumentMutation<T>(
-      documentId: U64String,
-      task: (context: EditorCommandContext) => Promise<T>
-    ): Promise<T | undefined> {
-      return enqueueMutation(this, async () => {
-        if (this.projectionStale) {
-          throw new Error('Document projection is stale; refresh the document before editing.');
-        }
-        const context = this.commandContextForDocument(documentId);
-        return context ? task(context) : undefined;
-      });
-    },
-    waitForMutations(): Promise<void> {
-      return waitForQueuedMutations(this);
-    },
-    beginEditorCommand(): (() => void) | null {
-      return beginSessionEditorCommand(this);
+    endEditorCommand() {
+      this.editorCommandDepth = Math.max(0, this.editorCommandDepth - 1);
     },
     currentCommandContext(): EditorCommandContext | null {
       if (this.documentId === null) return null;
@@ -131,11 +114,8 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     matchesCommandContext(context: EditorCommandContext): boolean {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
     },
-    discardPendingLocalWork() {
-      resetSessionMutationQueue(this);
-    },
     replaceDocumentProjection(response: OpenDocumentResponse, protectedSheetIndex = 0) {
-      resetRegionCache(this);
+      resetRegionState(this);
       this.data = createDocumentProjection(response.document, response.initialRegion);
       this.residentSheetOrder = response.initialRegion
         ? [response.initialRegion.region.sheetIndex]
@@ -146,12 +126,11 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
     },
     openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
-      resetSessionMutationQueue(this);
       this.replaceDocumentProjection(response);
       this.currentFilePath = path !== null ? path : response.document.path || null;
       this.documentId = response.editorSession.documentId;
       this.revision = response.editorSession.revision;
-      resetSessionEditorCommands(this);
+      this.editorCommandDepth = 0;
       this.projectionStale = false;
     },
     recoverActiveDocumentResponse(response: OpenDocumentResponse, preferredSheetIndex = 0): boolean {
@@ -172,8 +151,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       if (!response.document && (!response.identity || !this.data)) {
         throw new Error('Saved document response did not include manifest or identity data');
       }
-      resetSessionMutationQueue(this);
-      resetRegionCache(this);
+      resetRegionState(this);
       const selected = response.document
         ? Math.min(preferredSheetIndex, Math.max(0, response.document.sheets.length - 1))
         : preferredSheetIndex;
@@ -215,16 +193,15 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.currentFilePath = path;
     },
     clearDocument() {
-      resetSessionMutationQueue(this);
-      deleteRegionCache(this);
+      resetRegionState(this);
       this.data = null;
       this.currentFilePath = null;
       this.documentId = null;
       this.revision = ZERO_U64;
-      resetSessionEditorCommands(this);
+      this.editorCommandDepth = 0;
       this.projectionStale = false;
       this.residentSheetOrder = [];
-      resetSessionLifecycle(this);
+      this.lifecycle = 'idle';
     },
     applyMutationResponse(
       response: EditorMutationResponse,
@@ -258,7 +235,6 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       }
 
       this.revision = response.revision;
-      resetRegionCache(this, true);
       try {
         const result = applyProjectionPatches(
           this.data,
@@ -394,99 +370,40 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       removeRegionBlocks(this, removedKeys);
       this.data = { ...this.data, sheets };
     },
-    async ensureSheetLoaded(
-      sheetIndex: number,
-      fetchProjection: (
-        context: EditorCommandContext,
-        region: SheetRegion
-      ) => Promise<SheetRegionProjectionResponse>
-    ): Promise<boolean> {
-      if (!this.activateResidentSheet(sheetIndex, sheetIndex)) return false;
-      const slot = this.data?.sheets[sheetIndex];
-      if (!slot) return false;
-      if (slot.extent.rowCount === 0 || slot.extent.columnCount === 0) return true;
-      return this.ensureSheetRegionLoaded({
-        sheetIndex,
-        rowStart: 0,
-        rowEnd: Math.min(TILE_ROWS, slot.extent.rowCount),
-        colStart: 0,
-        colEnd: Math.min(TILE_COLUMNS, slot.extent.columnCount),
-      }, fetchProjection);
+    pinRegionBlocksForLoad(regions: SheetRegion[]) {
+      pinRegionBlocks(this, regions.map(regionKey));
     },
-    async ensureSheetRegionLoaded(
-      region: SheetRegion,
-      fetchProjection: (
-        context: EditorCommandContext,
-        region: SheetRegion
-      ) => Promise<SheetRegionProjectionResponse>,
-      options: { priority?: RegionLoadPriority } = {}
-    ): Promise<boolean> {
-      if (!this.activateResidentSheet(region.sheetIndex, region.sheetIndex)) return false;
-      const slot = this.data?.sheets[region.sheetIndex];
-      if (!slot) return false;
-      const tiles = tileRegions(region, slot.extent);
-      if (!tiles.length) return true;
-      const priority = options.priority ?? 'required';
-      const context = this.currentCommandContext();
-      if (!context) return false;
-      const viewportGeneration = priority === 'viewport'
-        ? beginViewportRegionLoad(this, tiles.map((tile) =>
-          `${context.documentId}:${context.baseRevision}:${regionKey(tile)}`
-        ))
-        : undefined;
-      pinRegionBlocks(this, tiles.map(regionKey));
-      const results = await Promise.all(tiles.map((tile) => this.loadRegionBlock(
-        tile,
-        fetchProjection,
-        { priority, viewportGeneration }
-      )));
-      return results.every(Boolean) && isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
-    },
-    async loadRegionBlock(
-      region: SheetRegion,
-      fetchProjection: (
-        context: EditorCommandContext,
-        region: SheetRegion
-      ) => Promise<SheetRegionProjectionResponse>,
-      options: { priority?: RegionLoadPriority; viewportGeneration?: number } = {}
-    ): Promise<boolean> {
+    touchLoadedRegion(region: SheetRegion): boolean {
       const slot = this.data?.sheets[region.sheetIndex];
       const coveringKeys = regionCoveringBlockKeys(slot, region);
-      if (coveringKeys !== null) {
-        for (const blockKey of coveringKeys) touchRegionBlock(this, blockKey);
-        return true;
-      }
-      const context = this.currentCommandContext();
-      if (!context) return false;
-      const key = `${context.documentId}:${context.baseRevision}:${regionKey(region)}`;
-      return scheduleRegionLoad(this, key, async (isCurrent) => {
-        const newBlocks = await loadRegionBlocks(
-          context,
-          region,
-          fetchProjection,
-          () => isCurrent() && this.matchesCommandContext(context)
-        );
-        if (!isCurrent() || !this.matchesCommandContext(context)) return false;
-        const data = this.data;
-        const current = data?.sheets[region.sheetIndex];
-        if (!data || !current || current.state !== 'loaded') return false;
-        const newKeys = new Set(newBlocks.map((block) => block.key));
-        const blocks = [
-          ...current.blocks.filter((entry) => !newKeys.has(entry.key)),
-          ...newBlocks,
-        ];
-        const sheets = [...data.sheets];
-        sheets[region.sheetIndex] = replaceLoadedSheetBlocks(current, blocks);
-        this.data = { ...data, sheets };
-        replacePinnedRegionBlock(
-          this,
-          regionKey(region),
-          newBlocks.map((block) => block.key)
-        );
-        this.touchResidentSheet(region.sheetIndex, region.sheetIndex);
-        this.enforceRegionBlockBudget(region.sheetIndex);
-        return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
-      }, options);
+      if (coveringKeys === null) return false;
+      for (const blockKey of coveringKeys) touchRegionBlock(this, blockKey);
+      return true;
+    },
+    commitLoadedRegionBlocks(
+      context: EditorCommandContext,
+      region: SheetRegion,
+      newBlocks: SheetRegionBlock[]
+    ): boolean {
+      if (!this.matchesCommandContext(context)) return false;
+      const data = this.data;
+      const current = data?.sheets[region.sheetIndex];
+      if (!data || !current || current.state !== 'loaded') return false;
+      const newKeys = new Set(newBlocks.map((block) => block.key));
+      const blocks = [
+        ...current.blocks.filter((entry) => !newKeys.has(entry.key)),
+        ...newBlocks,
+      ];
+      const sheets = [...data.sheets];
+      sheets[region.sheetIndex] = replaceLoadedSheetBlocks(current, blocks);
+      this.data = { ...data, sheets };
+      replacePinnedRegionBlock(this, regionKey(region), newBlocks.map((block) => block.key));
+      this.touchResidentSheet(region.sheetIndex, region.sheetIndex);
+      this.enforceRegionBlockBudget(region.sheetIndex);
+      return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
+    },
+    isSheetRegionLoaded(region: SheetRegion): boolean {
+      return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
     },
     markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
       if (this.documentId !== null && response.documentId !== this.documentId) return false;
@@ -510,11 +427,31 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       }
       return { applied: true, revisionAdvanced: revisionAdvancedWithoutProjection };
     },
-    captureSessionSnapshot() {
-      return captureMutationSnapshot(this);
+    captureSessionSnapshot(): DocumentSessionSnapshot {
+      return {
+        data: this.data,
+        currentFilePath: this.currentFilePath,
+        documentId: this.documentId,
+        revision: this.revision,
+        lifecycle: this.lifecycle,
+        editorCommandDepth: this.editorCommandDepth,
+        projectionStale: this.projectionStale,
+        residentSheetOrder: [...this.residentSheetOrder],
+        regionLru: [...this.regionLru],
+        pinnedRegionBlocks: [...this.pinnedRegionBlocks],
+      };
     },
-    restoreSessionSnapshot(snapshot: ReturnType<typeof captureMutationSnapshot>) {
-      restoreMutationSnapshot(this, snapshot);
+    restoreSessionSnapshot(snapshot: DocumentSessionSnapshot) {
+      this.data = snapshot.data;
+      this.currentFilePath = snapshot.currentFilePath;
+      this.documentId = snapshot.documentId;
+      this.revision = snapshot.revision;
+      this.lifecycle = snapshot.lifecycle;
+      this.editorCommandDepth = snapshot.editorCommandDepth;
+      this.projectionStale = snapshot.projectionStale;
+      this.residentSheetOrder = [...snapshot.residentSheetOrder];
+      this.regionLru = [...snapshot.regionLru];
+      this.pinnedRegionBlocks = [...snapshot.pinnedRegionBlocks];
     },
   },
 });

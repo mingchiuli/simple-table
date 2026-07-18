@@ -1,17 +1,4 @@
-import type { SearchResponse, SearchResult } from "@/types";
-
-type SearchSessionRuntime = {
-  requestId: number;
-};
-
-export type SearchSessionSnapshot = {
-  searchResults: SearchResult[];
-  searchResultsTruncated: boolean;
-  searchQuery: string;
-  isSearching: boolean;
-};
-
-const searchSessionRuntimes = new WeakMap<object, SearchSessionRuntime>();
+import type { SearchResponse, SearchResult, SearchSessionSnapshot } from "@/types";
 
 export const useSearchSessionStore = defineStore("searchSession", {
   state: () => ({
@@ -21,31 +8,21 @@ export const useSearchSessionStore = defineStore("searchSession", {
     isSearching: false,
   }),
   actions: {
-    beginSearch(query: string): number {
-      const runtime = runtimeFor(this);
-      runtime.requestId += 1;
+    beginSearch(query: string) {
       this.searchQuery = query;
       this.searchResults = [];
       this.searchResultsTruncated = false;
       this.isSearching = true;
-      return runtime.requestId;
     },
-    applySearchResults(requestId: number, response: SearchResponse): boolean {
-      if (requestId !== runtimeFor(this).requestId) {
-        return false;
-      }
+    applySearchResults(response: SearchResponse) {
       this.searchResults = response.results;
       this.searchResultsTruncated = response.truncated;
       this.isSearching = false;
-      return true;
     },
-    finishSearch(requestId: number) {
-      if (requestId === runtimeFor(this).requestId) {
-        this.isSearching = false;
-      }
+    finishSearch() {
+      this.isSearching = false;
     },
     clearSearch() {
-      runtimeFor(this).requestId += 1;
       this.searchResults = [];
       this.searchResultsTruncated = false;
       this.searchQuery = "";
@@ -63,7 +40,6 @@ export const useSearchSessionStore = defineStore("searchSession", {
       };
     },
     restoreSnapshot(snapshot: SearchSessionSnapshot) {
-      runtimeFor(this).requestId += 1;
       this.searchResults = [...snapshot.searchResults];
       this.searchResultsTruncated = snapshot.searchResultsTruncated;
       this.searchQuery = snapshot.searchQuery;
@@ -71,12 +47,3 @@ export const useSearchSessionStore = defineStore("searchSession", {
     },
   },
 });
-
-function runtimeFor(store: object): SearchSessionRuntime {
-  let runtime = searchSessionRuntimes.get(store);
-  if (!runtime) {
-    runtime = { requestId: 0 };
-    searchSessionRuntimes.set(store, runtime);
-  }
-  return runtime;
-}

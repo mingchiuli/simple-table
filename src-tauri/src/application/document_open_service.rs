@@ -50,7 +50,10 @@ pub fn prepare_open_file_desktop(
     runtime: &ApplicationRuntime,
     path: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
-    prepare_open_input(runtime, crate::io::platform::desktop::read_open_file(path)?)
+    prepare_open_input(
+        runtime,
+        crate::io::platform::desktop::read_open_file(runtime.desktop_files(), path)?,
+    )
 }
 
 #[cfg(desktop)]
@@ -61,7 +64,7 @@ pub fn prepare_recent_file_desktop(
 ) -> Result<PreparedOpenDocument, AppError> {
     prepare_open_input(
         runtime,
-        crate::io::platform::desktop::read_recent_file(app, id)?,
+        crate::io::platform::desktop::read_recent_file(runtime.recent_files(), app, id)?,
     )
 }
 
@@ -73,7 +76,7 @@ pub fn prepare_open_file_mobile(
 ) -> Result<PreparedOpenDocument, AppError> {
     prepare_open_input(
         runtime,
-        crate::io::platform::mobile::read_open_file(app, path)?,
+        crate::io::platform::mobile::read_open_file(runtime.mobile_files(), app, path)?,
     )
 }
 
@@ -91,16 +94,22 @@ pub fn abort_prepared_document(runtime: &ApplicationRuntime, token: &str) -> Res
 }
 
 pub(crate) fn adopt_source_path_if_transient(
+    runtime: &ApplicationRuntime,
     source_path: Option<&std::path::Path>,
     file_name: &str,
 ) -> Result<(), AppError> {
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     if let Some(source_path) = source_path {
-        crate::io::managed_documents::adopt_transient_document(source_path, file_name)?;
+        crate::io::managed_documents::adopt_transient_document(
+            runtime.mobile_files().managed_documents(),
+            runtime.mobile_files().transient_files(),
+            source_path,
+            file_name,
+        )?;
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-    let _ = (source_path, file_name);
+    let _ = (runtime, source_path, file_name);
 
     Ok(())
 }
@@ -135,11 +144,7 @@ fn prepare_editor_state(
 }
 
 fn active_document_resource_bytes(runtime: &ApplicationRuntime) -> Result<usize, AppError> {
-    let registry = runtime.documents();
-    let handle = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle();
+    let handle = runtime.documents().active_handle()?;
     handle
         .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
         .transpose()

@@ -20,16 +20,30 @@ use tauri::{AppHandle, State};
 /// iOS: import a picked file into the app sandbox without opening it in the editor.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn pick_open_file_ios(app: AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
-    blocking::run(move || ios::pick_file_info(&app)).await
+pub async fn pick_open_file_ios(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+) -> Result<Option<PickedFileInfo>, AppError> {
+    let runtime = runtime.inner().clone();
+    blocking::run(move || ios::pick_file_info(runtime.mobile_files(), &app)).await
 }
 
 /// iOS: remove a picked file that was imported but never opened as the active document.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn discard_open_file_selection_ios(app: AppHandle, path: String) -> Result<(), AppError> {
+pub async fn discard_open_file_selection_ios(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+    path: String,
+) -> Result<(), AppError> {
+    let runtime = runtime.inner().clone();
     blocking::run(move || {
-        mobile::discard_transient_file(&app, &path, TransientFilePurpose::OpenSelection)
+        mobile::discard_transient_file(
+            runtime.mobile_files(),
+            &app,
+            &path,
+            TransientFilePurpose::OpenSelection,
+        )
     })
     .await
 }
@@ -37,9 +51,19 @@ pub async fn discard_open_file_selection_ios(app: AppHandle, path: String) -> Re
 /// iOS: remove a save-as target that was reserved but never adopted.
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn discard_save_location_ios(app: AppHandle, path: String) -> Result<(), AppError> {
+pub async fn discard_save_location_ios(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+    path: String,
+) -> Result<(), AppError> {
+    let runtime = runtime.inner().clone();
     blocking::run(move || {
-        mobile::discard_transient_file(&app, &path, TransientFilePurpose::SaveLocation)
+        mobile::discard_transient_file(
+            runtime.mobile_files(),
+            &app,
+            &path,
+            TransientFilePurpose::SaveLocation,
+        )
     })
     .await
 }
@@ -61,10 +85,19 @@ pub async fn prepare_open_file_ios(
 #[cfg(target_os = "ios")]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_save_location_ios(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    blocking::run(move || Ok(Some(mobile::reserve_save_location(&app, &default_name)?))).await
+    let runtime = runtime.inner().clone();
+    blocking::run(move || {
+        Ok(Some(mobile::reserve_save_location(
+            runtime.mobile_files(),
+            &app,
+            &default_name,
+        )?))
+    })
+    .await
 }
 
 /// iOS: generate file bytes and write them to the sandbox path.

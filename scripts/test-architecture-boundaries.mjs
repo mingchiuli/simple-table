@@ -32,9 +32,14 @@ rejectMatches(
     /['"]@\/tauriInvoke['"]/,
     /['"]@\/platform(?:\/|['"])/,
     /['"]@\/composables(?:\/|['"])/,
+    /['"]@\/application(?:\/|['"])/,
     /['"]@tauri-apps\//,
+    /\basync\b/,
+    /new\s+Promise\b/,
+    /new\s+WeakMap\b/,
+    /\bset(?:Timeout|Interval)\s*\(/,
   ],
-  'the side-effect-free Store boundary',
+  'the synchronous side-effect-free Store boundary',
 );
 
 rejectMatches(
@@ -121,6 +126,30 @@ rejectMatches(
     /fn\s+index_scheduler\s*\(/,
   ],
   'the explicitly-owned Rust application runtime boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src'), '.rs').filter(
+    (file) => relative(projectRoot, file) !== 'src-tauri/src/state/state.rs',
+  ),
+  [/\bActiveDocumentStore\b/, /Arc\s*<\s*RwLock\s*<\s*ActiveDocumentStore/],
+  'the encapsulated active-document repository boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'io', 'save_work.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'io', 'transient_files.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'io', 'managed_documents.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'io', 'platform', 'desktop.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'io', 'platform', 'mobile.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'recent', 'store.rs'),
+  ],
+  [
+    /static\s+(?:SAVE_WORK|TRANSIENT_FILE_REGISTRY|MANAGED_DOCUMENT_TRANSACTION|AUTHORIZED_OPEN_PATHS|AUTHORIZED_SAVE_PATHS|MOBILE_STORAGE_DIRECTORY|RECENT_STORE_TRANSACTION)\b/,
+    /fn\s+(?:transient_file_registry|open_paths|save_paths)\s*\(/,
+  ],
+  'the explicitly-owned Rust infrastructure runtime boundary',
 );
 
 rejectMatches(

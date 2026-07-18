@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use crate::error::AppError;
 
@@ -46,7 +46,13 @@ impl SaveWorkState {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct SaveWorkCoordinator {
+    state: Arc<Mutex<SaveWorkState>>,
+}
+
 pub(crate) struct SaveWorkReservation {
+    coordinator: SaveWorkCoordinator,
     document_id: u64,
     source_bytes: usize,
     active: bool,
@@ -57,31 +63,37 @@ impl Drop for SaveWorkReservation {
         if !self.active {
             return;
         }
-        if let Ok(mut state) = state().lock() {
+        if let Ok(mut state) = self.coordinator.state.lock() {
             state.finish(self.document_id, self.source_bytes);
             self.active = false;
         }
     }
 }
 
-pub(crate) fn reserve(
-    document_id: u64,
-    estimated_source_bytes: usize,
-) -> Result<SaveWorkReservation, AppError> {
-    let mut state = state()
-        .lock()
-        .map_err(|_| AppError::poisoned_lock("save work coordinator"))?;
-    state.begin(document_id, estimated_source_bytes)?;
-    Ok(SaveWorkReservation {
-        document_id,
-        source_bytes: estimated_source_bytes,
-        active: true,
-    })
-}
+impl SaveWorkCoordinator {
+    pub(crate) fn reserve(
+        &self,
+        document_id: u64,
+        estimated_source_bytes: usize,
+    ) -> Result<SaveWorkReservation, AppError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("save work coordinator"))?;
+        state.begin(document_id, estimated_source_bytes)?;
+        drop(state);
+        Ok(SaveWorkReservation {
+            coordinator: self.clone(),
+            document_id,
+            source_bytes: estimated_source_bytes,
+            active: true,
+        })
+    }
 
-fn state() -> &'static Mutex<SaveWorkState> {
-    static SAVE_WORK: OnceLock<Mutex<SaveWorkState>> = OnceLock::new();
-    SAVE_WORK.get_or_init(|| Mutex::new(SaveWorkState::default()))
+    #[cfg(test)]
+    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
 }
 
 #[cfg(test)]
@@ -117,5 +129,18 @@ mod tests {
 
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
         assert_eq!(state.active_jobs, 0);
+    }
+
+    #[test]
+    fn save_work_coordinators_have_isolated_admission_state() {
+        let first = SaveWorkCoordinator::default();
+        let second = SaveWorkCoordinator::default();
+        let reservation = first.reserve(1, 1024).expect("first reservation");
+
+        assert!(first.reserve(2, 1024).is_err());
+        assert!(second.reserve(2, 1024).is_ok());
+
+        drop(reservation);
+        assert!(first.reserve(3, 1024).is_ok());
     }
 }

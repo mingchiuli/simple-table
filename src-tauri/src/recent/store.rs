@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -17,9 +17,10 @@ const MAX_RECENT_ID_BYTES: usize = 256;
 const MAX_RECENT_PATH_BYTES: usize = 16 * 1024;
 const MAX_RECENT_FILE_NAME_BYTES: usize = 1_024;
 const MAX_RECENT_THUMBNAIL_BYTES: usize = 256 * 1024;
-static RECENT_STORE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
-
-pub struct RecentStore;
+#[derive(Clone, Default)]
+pub struct RecentStore {
+    transaction: Arc<Mutex<()>>,
+}
 
 pub struct RecentStoreUpdate {
     pub updated: RecentFile,
@@ -27,8 +28,8 @@ pub struct RecentStoreUpdate {
 }
 
 impl RecentStore {
-    pub fn get_all(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
-        with_store_transaction(|| Self::get_all_unlocked(app))
+    pub fn get_all(&self, app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+        self.with_transaction(|| Self::get_all_unlocked(app))
     }
 
     fn get_all_unlocked(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
@@ -58,8 +59,8 @@ impl RecentStore {
         Ok(())
     }
 
-    pub fn add(app: &AppHandle, file: RecentFile) -> Result<RecentStoreUpdate, AppError> {
-        with_store_transaction(|| {
+    pub fn add(&self, app: &AppHandle, file: RecentFile) -> Result<RecentStoreUpdate, AppError> {
+        self.with_transaction(|| {
             let previous = Self::get_all_unlocked(app)?;
             let (files, updated) = upsert_recent_file(previous.clone(), file);
             let removed = removed_recent_files(previous, &files);
@@ -68,8 +69,8 @@ impl RecentStore {
         })
     }
 
-    pub fn remove(app: &AppHandle, id: &str) -> Result<Vec<RecentFile>, AppError> {
-        with_store_transaction(|| {
+    pub fn remove(&self, app: &AppHandle, id: &str) -> Result<Vec<RecentFile>, AppError> {
+        self.with_transaction(|| {
             let mut files = Self::get_all_unlocked(app)?;
             let removed = files.iter().filter(|file| file.id == id).cloned().collect();
             files.retain(|f| f.id != id);
@@ -80,13 +81,29 @@ impl RecentStore {
 
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     #[cfg_attr(test, allow(dead_code))]
-    pub fn replace_all(app: &AppHandle, mut files: Vec<RecentFile>) -> Result<(), AppError> {
-        with_store_transaction(|| {
+    pub fn replace_all(&self, app: &AppHandle, mut files: Vec<RecentFile>) -> Result<(), AppError> {
+        self.with_transaction(|| {
             files.sort_by_key(|file| Reverse(file.last_opened));
             limit_desktop_recents(&mut files, "");
             limit_managed_thumbnails(&mut files);
             Self::save_unlocked(app, &files)
         })
+    }
+
+    fn with_transaction<T>(
+        &self,
+        action: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let _guard = self
+            .transaction
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("recent file store transaction"))?;
+        action()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.transaction, &other.transaction)
     }
 }
 
@@ -152,14 +169,6 @@ fn recent_file_text_bytes(file: &RecentFile) -> usize {
         .saturating_add(file.thumbnail.as_ref().map_or(0, String::len))
         .saturating_add(file.original_path.as_ref().map_or(0, String::len))
         .saturating_add(std::mem::size_of::<RecentFile>())
-}
-
-fn with_store_transaction<T>(action: impl FnOnce() -> Result<T, AppError>) -> Result<T, AppError> {
-    let _guard = RECENT_STORE_TRANSACTION
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| AppError::poisoned_lock("recent file store transaction"))?;
-    action()
 }
 
 fn upsert_recent_file(
@@ -498,21 +507,24 @@ mod tests {
         let barrier = Arc::new(Barrier::new(CALLERS));
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
+        let store = RecentStore::default();
         let handles = (0..CALLERS)
             .map(|_| {
                 let barrier = Arc::clone(&barrier);
                 let active = Arc::clone(&active);
                 let max_active = Arc::clone(&max_active);
+                let store = store.clone();
                 thread::spawn(move || {
                     barrier.wait();
-                    with_store_transaction(|| {
-                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        max_active.fetch_max(current, Ordering::SeqCst);
-                        thread::sleep(Duration::from_millis(5));
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        Ok(())
-                    })
-                    .expect("recent store transaction");
+                    store
+                        .with_transaction(|| {
+                            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            max_active.fetch_max(current, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(5));
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                        .expect("recent store transaction");
                 })
             })
             .collect::<Vec<_>>();

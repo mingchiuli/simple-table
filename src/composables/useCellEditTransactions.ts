@@ -9,10 +9,11 @@ import {
   type QueueDraftResult,
 } from '@/stores/pendingCellSaves';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
+import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import type { CellValue, DocumentProjection } from '@/types';
 import { blankCell, cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
-import { sheetCell } from '@/stores/documentProjection';
+import { sheetCell } from '@/projection/documentProjection';
 
 type UseCellEditTransactionsOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
@@ -30,6 +31,7 @@ export function useCellEditTransactions({
   debounceMs = 500,
 }: UseCellEditTransactionsOptions) {
   const pendingCellSavesStore = usePendingCellSavesStore();
+  const pendingCellSaveCoordinator = usePendingCellSaveCoordinator();
   const documentStatusStore = useDocumentStatusStore();
   const draftCellValues = computed<ReadonlyMap<string, string>>(
     () => pendingCellSavesStore.draftCellValues
@@ -50,7 +52,7 @@ export function useCellEditTransactions({
   }
 
   function hasPendingWork() {
-    return pendingCellSavesStore.hasPendingWork();
+    return pendingCellSaveCoordinator.hasPendingWork();
   }
 
   function committedCellValue(sheetIndex: number, row: number, col: number): CellValue {
@@ -126,25 +128,25 @@ export function useCellEditTransactions({
   }
 
   function schedulePendingSave() {
-    pendingCellSavesStore.schedulePendingSave(schedulerCallbacks, debounceMs);
+    pendingCellSaveCoordinator.schedulePendingSave(schedulerCallbacks, debounceMs);
   }
 
   function clearDebounceIfNoQueuedSaves() {
-    pendingCellSavesStore.clearDebounceIfNoQueuedSaves();
+    pendingCellSaveCoordinator.clearDebounceIfNoQueuedSaves();
   }
 
   function clearPendingContentChangeIfIdle() {
-    pendingCellSavesStore.clearPendingContentChangeIfIdle(() =>
+    pendingCellSaveCoordinator.clearPendingContentChangeIfIdle(() =>
       documentStatusStore.clearPendingContentChange()
     );
   }
 
   async function flushPendingCellChanges(): Promise<boolean> {
-    return pendingCellSavesStore.flushPendingCellChanges(schedulerCallbacks);
+    return pendingCellSaveCoordinator.flushPendingCellChanges(schedulerCallbacks);
   }
 
   onUnmounted(() => {
-    pendingCellSavesStore.releaseSchedulerIfIdle();
+    pendingCellSaveCoordinator.releaseSchedulerIfIdle();
   });
 
   return {

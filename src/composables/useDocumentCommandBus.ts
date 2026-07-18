@@ -12,7 +12,7 @@ import type {
   U64String,
 } from '@/types';
 import { appErrorMessage } from '@/utils/appError';
-import type { RegionLoadPriority } from '@/stores/documentRegionCache';
+import type { RegionLoadPriority } from '@/application/documentRegionLoadScheduler';
 
 type InteractiveMutationOptions = {
   action: (context: MutationCommandContext) => Promise<EditorMutationResponse>;
@@ -61,7 +61,7 @@ export function useDocumentCommandBus() {
     refreshProjectionOnError = false,
     afterApplied,
   }: InteractiveMutationOptions): Promise<void> {
-    const releaseEditorCommand = documentSessionStore.beginEditorCommand();
+    const releaseEditorCommand = documentSessionCoordinator.beginEditorCommand();
     if (!releaseEditorCommand) return;
     const initialContext = documentSessionStore.currentCommandContext();
     if (!initialContext) {
@@ -71,7 +71,7 @@ export function useDocumentCommandBus() {
 
     try {
       if (!(await flushPendingChanges())) return;
-      await documentSessionStore.enqueueDocumentMutation(initialContext.documentId, async (context) => {
+      await documentSessionCoordinator.enqueueDocumentMutation(initialContext.documentId, async (context) => {
         const execution = await mutationProtocol.execute(action, context);
         if (execution.status === 'recovered') {
           runAfterApplied(afterApplied);
@@ -107,7 +107,7 @@ export function useDocumentCommandBus() {
     action,
     onRefreshFailed,
   }: BackgroundMutationOptions): Promise<void> {
-    await documentSessionStore.enqueueDocumentMutation(documentId, async (context) => {
+    await documentSessionCoordinator.enqueueDocumentMutation(documentId, async (context) => {
       const execution = await mutationProtocol.execute(action, context);
       if (execution.status === 'recovered') return;
       const response = execution.response;
@@ -145,7 +145,7 @@ export function useDocumentCommandBus() {
     lockInteraction = false,
   }: ConsistentReadOptions<T>): Promise<T | undefined> {
     const releaseEditorCommand = lockInteraction
-      ? documentSessionStore.beginEditorCommand()
+      ? documentSessionCoordinator.beginEditorCommand()
       : () => undefined;
     if (!releaseEditorCommand) return undefined;
     const initialContext = documentSessionStore.currentCommandContext();
@@ -155,7 +155,7 @@ export function useDocumentCommandBus() {
     }
     try {
       if (!(await flushPendingChanges())) return undefined;
-      await documentSessionStore.waitForMutations();
+      await documentSessionCoordinator.waitForMutations();
       const context = documentSessionStore.commandContextForDocument(initialContext.documentId);
       if (!context) return undefined;
       const result = await action(context);
@@ -171,7 +171,7 @@ export function useDocumentCommandBus() {
     const initialContext = documentSessionStore.currentCommandContext();
     if (!initialContext) return undefined;
     if (!(await flushPendingChanges())) return undefined;
-    await documentSessionStore.waitForMutations();
+    await documentSessionCoordinator.waitForMutations();
     return documentSessionStore.commandContextForDocument(initialContext.documentId) ?? undefined;
   }
 
@@ -187,12 +187,15 @@ export function useDocumentCommandBus() {
     sheetIndex: number,
     flushPendingChanges: () => Promise<boolean>
   ): Promise<boolean> {
-    const releaseEditorCommand = documentSessionStore.beginEditorCommand();
+    const releaseEditorCommand = documentSessionCoordinator.beginEditorCommand();
     if (!releaseEditorCommand) return false;
     try {
       if (!(await flushPendingChanges())) return false;
-      await documentSessionStore.waitForMutations();
-      return await documentSessionStore.ensureSheetLoaded(sheetIndex, api.getSheetRegionProjection);
+      await documentSessionCoordinator.waitForMutations();
+      return await documentSessionCoordinator.ensureSheetLoaded(
+        sheetIndex,
+        api.getSheetRegionProjection
+      );
     } catch (error) {
       ElMessage.error(`Failed to load sheet: ${appErrorMessage(error)}`);
       return false;
@@ -206,8 +209,8 @@ export function useDocumentCommandBus() {
     options: { priority?: RegionLoadPriority } = {}
   ): Promise<boolean> {
     try {
-      await documentSessionStore.waitForMutations();
-      return await documentSessionStore.ensureSheetRegionLoaded(
+      await documentSessionCoordinator.waitForMutations();
+      return await documentSessionCoordinator.ensureSheetRegionLoaded(
         region,
         api.getSheetRegionProjection,
         options

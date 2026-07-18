@@ -1,5 +1,5 @@
 use super::mobile::{
-    self, PickedFileInfo, mobile_dir, read_with_official_fs, unique_import_path,
+    self, MobileFileRuntime, PickedFileInfo, mobile_dir, read_with_official_fs, unique_import_path,
     write_path_with_official_fs,
 };
 use crate::error::AppError;
@@ -30,7 +30,10 @@ fn display_name_from_path(path: &FilePath) -> String {
     }
 }
 
-pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
+pub fn pick_file_info(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+) -> Result<Option<PickedFileInfo>, AppError> {
     use tauri_plugin_dialog::{DialogExt, PickerMode};
 
     let source = match app
@@ -58,9 +61,10 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
     let extension = import_extension_from_name_or_bytes(&raw_file_name, &bytes)
         .ok_or(AppError::UnsupportedFormat)?;
     let file_name = normalized_import_file_name(&raw_file_name, &extension);
-    let sandbox_path = unique_import_path(app, &file_name)?;
+    let sandbox_path = unique_import_path(runtime, app, &file_name)?;
     write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
     mobile::register_created_transient_path(
+        runtime,
         app,
         &sandbox_path,
         TransientFilePurpose::OpenSelection,
@@ -75,15 +79,19 @@ pub fn pick_file_info(app: &AppHandle) -> Result<Option<PickedFileInfo>, AppErro
     }))
 }
 
-pub fn pick_save_location(app: &AppHandle, default_name: &str) -> Result<String, AppError> {
+pub fn pick_save_location(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+    default_name: &str,
+) -> Result<String, AppError> {
     let stem = file_stem_from_path_like(default_name, "untitled");
-    let path = mobile_dir(app)?.join(format!(
+    let path = mobile_dir(runtime, app)?.join(format!(
         "{}-{}.{}",
         stem,
         uuid::Uuid::new_v4(),
         supported_extension_or_default(default_name)
     ));
-    mobile::register_transient_path(app, &path, TransientFilePurpose::SaveLocation)?;
+    mobile::register_transient_path(runtime, app, &path, TransientFilePurpose::SaveLocation)?;
     Ok(path.to_string_lossy().to_string())
 }
 

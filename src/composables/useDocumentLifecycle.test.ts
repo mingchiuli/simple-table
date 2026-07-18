@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentSessionStore } from "@/stores/documentSession";
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -41,7 +42,7 @@ describe("useDocumentLifecycle", () => {
     const action = vi.fn();
     const { runDocumentLifecycle } = useDocumentLifecycle();
 
-    store.beginLifecycle("saving");
+    useDocumentSessionCoordinator().beginLifecycle('saving');
 
     await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("skipped");
 
@@ -66,10 +67,11 @@ describe("useDocumentLifecycle", () => {
 
   it("waits for the active lifecycle when requested", async () => {
     const store = useDocumentSessionStore();
+    const coordinator = useDocumentSessionCoordinator();
     const action = vi.fn().mockResolvedValue(undefined);
     const { runDocumentLifecycle } = useDocumentLifecycle();
 
-    store.beginLifecycle("saving");
+    coordinator.beginLifecycle('saving');
     const runPromise = runDocumentLifecycle("loading", "Failed", action, {
       waitForIdle: true,
     });
@@ -77,7 +79,7 @@ describe("useDocumentLifecycle", () => {
 
     expect(action).not.toHaveBeenCalled();
 
-    store.endLifecycle("saving");
+    coordinator.endLifecycle('saving');
     await expect(runPromise).resolves.toBe("completed");
 
     expect(action).toHaveBeenCalledTimes(1);
@@ -86,11 +88,12 @@ describe("useDocumentLifecycle", () => {
 
   it("cancels a waiting lifecycle when its continuation guard expires", async () => {
     const store = useDocumentSessionStore();
+    const coordinator = useDocumentSessionCoordinator();
     const action = vi.fn().mockResolvedValue(undefined);
     const { runDocumentLifecycle } = useDocumentLifecycle();
     let shouldContinue = true;
 
-    store.beginLifecycle("saving");
+    coordinator.beginLifecycle('saving');
     const runPromise = runDocumentLifecycle("loading", "Failed", action, {
       waitForIdle: true,
       shouldContinue: () => shouldContinue,
@@ -98,7 +101,7 @@ describe("useDocumentLifecycle", () => {
     await Promise.resolve();
 
     shouldContinue = false;
-    store.endLifecycle("saving");
+    coordinator.endLifecycle('saving');
     await expect(runPromise).resolves.toBe("skipped");
 
     expect(action).not.toHaveBeenCalled();
@@ -117,7 +120,7 @@ describe("useDocumentLifecycle", () => {
     await Promise.resolve();
 
     expect(store.lifecycle).toBe("idle");
-    expect(store.beginLifecycle("saving")).toBe(true);
+    expect(useDocumentSessionCoordinator().beginLifecycle('saving')).toBe(true);
 
     work.resolve();
     await expect(runPromise).resolves.toBe("completed");

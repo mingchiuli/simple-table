@@ -5,7 +5,7 @@ use crate::application::runtime::ApplicationRuntime;
 use crate::domain::CellEditInput;
 use crate::error::AppError;
 use crate::ops::{cell_ops, editor_ops, search_ops};
-use crate::state::state::ActiveDocumentStore;
+use crate::state::state::ActiveDocumentRepository;
 use crate::types::{
     EditorMutationResponse, MutationResultLookup, SearchResponse, SearchScope, SetCellRequest,
 };
@@ -324,9 +324,7 @@ fn run_mutation<P: Serialize>(
     command_id: &str,
     command_name: &str,
     payload: &P,
-    execute: impl FnOnce(
-        &std::sync::Arc<std::sync::RwLock<ActiveDocumentStore>>,
-    ) -> Result<EditorMutationResponse, AppError>,
+    execute: impl FnOnce(&ActiveDocumentRepository) -> Result<EditorMutationResponse, AppError>,
 ) -> Result<EditorMutationResponse, AppError> {
     mutation_replay::run(
         runtime.mutation_replays(),

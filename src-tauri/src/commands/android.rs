@@ -20,19 +20,30 @@ use tauri::{AppHandle, State};
 /// Android: import a picked file into the app sandbox without opening it in the editor.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn pick_open_file_android(app: AppHandle) -> Result<Option<PickedFileInfo>, AppError> {
-    blocking::run(move || android::pick_file_info(&app)).await
+pub async fn pick_open_file_android(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+) -> Result<Option<PickedFileInfo>, AppError> {
+    let runtime = runtime.inner().clone();
+    blocking::run(move || android::pick_file_info(runtime.mobile_files(), &app)).await
 }
 
 /// Android: remove a picked file that was imported but never opened as the active document.
 #[cfg(target_os = "android")]
 #[tauri::command]
 pub async fn discard_open_file_selection_android(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     path: String,
 ) -> Result<(), AppError> {
+    let runtime = runtime.inner().clone();
     blocking::run(move || {
-        mobile::discard_transient_file(&app, &path, TransientFilePurpose::OpenSelection)
+        mobile::discard_transient_file(
+            runtime.mobile_files(),
+            &app,
+            &path,
+            TransientFilePurpose::OpenSelection,
+        )
     })
     .await
 }
@@ -40,9 +51,19 @@ pub async fn discard_open_file_selection_android(
 /// Android: remove a save-as target that was reserved but never adopted.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn discard_save_location_android(app: AppHandle, path: String) -> Result<(), AppError> {
+pub async fn discard_save_location_android(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+    path: String,
+) -> Result<(), AppError> {
+    let runtime = runtime.inner().clone();
     blocking::run(move || {
-        mobile::discard_transient_file(&app, &path, TransientFilePurpose::SaveLocation)
+        mobile::discard_transient_file(
+            runtime.mobile_files(),
+            &app,
+            &path,
+            TransientFilePurpose::SaveLocation,
+        )
     })
     .await
 }
@@ -110,8 +131,17 @@ pub async fn export_file_android(
 #[cfg(target_os = "android")]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_save_location_android(
+    runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
-    blocking::run(move || Ok(Some(android::pick_save_location(&app, &default_name)?))).await
+    let runtime = runtime.inner().clone();
+    blocking::run(move || {
+        Ok(Some(android::pick_save_location(
+            runtime.mobile_files(),
+            &app,
+            &default_name,
+        )?))
+    })
+    .await
 }

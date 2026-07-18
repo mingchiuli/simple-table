@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useSearchSessionStore } from "@/stores/searchSession";
+import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
 import type { SearchResponse, SearchResult } from "@/types";
 
 function result(value: string): SearchResult {
@@ -25,14 +26,15 @@ describe("searchSession store", () => {
 
   it("keeps only the latest search result", () => {
     const store = useSearchSessionStore();
-    const first = store.beginSearch("old");
-    const second = store.beginSearch("new");
+    const coordinator = useSearchSessionCoordinator();
+    const first = coordinator.beginSearch("old");
+    const second = coordinator.beginSearch("new");
 
-    expect(store.applySearchResults(first, response("old"))).toBe(false);
+    expect(coordinator.applySearchResults(first, response("old"))).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.isSearching).toBe(true);
 
-    expect(store.applySearchResults(second, response("new", true))).toBe(true);
+    expect(coordinator.applySearchResults(second, response("new", true))).toBe(true);
     expect(store.searchResults.map((item) => item.value)).toEqual(["new"]);
     expect(store.searchResultsTruncated).toBe(true);
     expect(store.isSearching).toBe(false);
@@ -40,11 +42,12 @@ describe("searchSession store", () => {
 
   it("invalidates pending searches when clearing", () => {
     const store = useSearchSessionStore();
-    const requestId = store.beginSearch("value");
+    const coordinator = useSearchSessionCoordinator();
+    const requestId = coordinator.beginSearch("value");
 
-    store.clearSearch();
+    coordinator.clearSearch();
 
-    expect(store.applySearchResults(requestId, response("value"))).toBe(false);
+    expect(coordinator.applySearchResults(requestId, response("value"))).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.searchQuery).toBe("");
     expect(store.isSearching).toBe(false);
@@ -52,10 +55,11 @@ describe("searchSession store", () => {
 
   it("clears old results when a new search starts", () => {
     const store = useSearchSessionStore();
-    const first = store.beginSearch("old");
-    store.applySearchResults(first, response("old", true));
+    const coordinator = useSearchSessionCoordinator();
+    const first = coordinator.beginSearch("old");
+    coordinator.applySearchResults(first, response("old", true));
 
-    store.beginSearch("new");
+    coordinator.beginSearch("new");
 
     expect(store.searchQuery).toBe("new");
     expect(store.searchResults).toEqual([]);
@@ -65,19 +69,20 @@ describe("searchSession store", () => {
 
   it("restores results without reviving an invalidated in-flight request", () => {
     const store = useSearchSessionStore();
-    const requestId = store.beginSearch("value");
-    const snapshot = store.captureSnapshot();
+    const coordinator = useSearchSessionCoordinator();
+    const requestId = coordinator.beginSearch("value");
+    const snapshot = coordinator.captureSnapshot();
 
-    store.restoreSnapshot(snapshot);
+    coordinator.restoreSnapshot(snapshot);
 
     expect(store.isSearching).toBe(false);
-    expect(store.applySearchResults(requestId, response("late"))).toBe(false);
+    expect(coordinator.applySearchResults(requestId, response("late"))).toBe(false);
   });
 
   it("keeps request tokens out of serializable UI state", () => {
     const store = useSearchSessionStore();
 
-    store.beginSearch("value");
+    useSearchSessionCoordinator().beginSearch("value");
 
     expect(Object.keys(store.$state)).toEqual([
       "searchResults",

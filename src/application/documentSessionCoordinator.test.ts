@@ -73,7 +73,7 @@ describe('documentSessionCoordinator', () => {
     coordinator.openDocumentResponse(opened('0'));
     selection.selectCell(0, 0);
     search.beginSearch('needle');
-    search.applySearchResults(1, {
+    search.applySearchResults({
       results: [{
         sheetIndex: 0,
         sheetName: 'Sheet1',

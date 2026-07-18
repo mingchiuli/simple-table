@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Condvar, Mutex};
 
 use crate::state::search_index::SearchIndexStamp;
-use crate::state::state::ActiveDocumentStore;
+use crate::state::state::ActiveDocumentRepository;
 
 pub(crate) const MAX_PENDING_INDEX_SHEETS: usize = 256;
 pub(crate) const MAX_PENDING_INDEX_UPDATES_PER_SHEET: usize = 4_096;
@@ -17,7 +17,7 @@ pub(crate) enum IndexJob {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        registry: Arc<RwLock<ActiveDocumentStore>>,
+        registry: ActiveDocumentRepository,
     },
     UpdateCell {
         document_id: u64,
@@ -27,7 +27,7 @@ pub(crate) enum IndexJob {
         col: usize,
         search_text: String,
         display_text: String,
-        registry: Arc<RwLock<ActiveDocumentStore>>,
+        registry: ActiveDocumentRepository,
     },
 }
 
@@ -60,7 +60,7 @@ impl IndexJob {
         }
     }
 
-    pub(crate) fn registry(&self) -> &Arc<RwLock<ActiveDocumentStore>> {
+    pub(crate) fn registry(&self) -> &ActiveDocumentRepository {
         match self {
             IndexJob::Rebuild { registry, .. } | IndexJob::UpdateCell { registry, .. } => registry,
         }
@@ -72,7 +72,7 @@ pub(crate) struct SheetPending {
     pub(crate) rebuild: Option<RebuildIndexUpdate>,
     pub(crate) incremental: HashMap<(usize, usize), CellIndexUpdate>,
     pub(crate) incremental_bytes: usize,
-    pub(crate) registry: Arc<RwLock<ActiveDocumentStore>>,
+    pub(crate) registry: ActiveDocumentRepository,
 }
 
 pub(crate) struct IndexScheduler {

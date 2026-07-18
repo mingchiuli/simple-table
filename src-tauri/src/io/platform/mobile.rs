@@ -9,14 +9,18 @@ use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::io::transient_files::{
     TransientFilePurpose, clear_persistent_marker, completed_persisted_save_locations,
-    reconcile_persisted_transient_files, transient_file_registry, write_persistent_marker,
+    reconcile_persisted_transient_files, write_persistent_marker,
 };
-use crate::io::{managed_documents, managed_documents::ManagedDocumentRecord};
+use crate::io::{
+    managed_documents,
+    managed_documents::{ManagedDocumentCatalog, ManagedDocumentRecord},
+    transient_files::TransientFileRegistry,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FilePath;
 
@@ -28,11 +32,45 @@ pub struct PickedFileInfo {
     pub file_name: String,
 }
 
+#[derive(Clone)]
+pub struct MobileFileRuntime {
+    storage_directory: Arc<OnceLock<Result<PathBuf, AppError>>>,
+    transient_files: Arc<TransientFileRegistry>,
+    managed_documents: ManagedDocumentCatalog,
+}
+
+impl Default for MobileFileRuntime {
+    fn default() -> Self {
+        Self {
+            storage_directory: Arc::new(OnceLock::new()),
+            transient_files: Arc::new(TransientFileRegistry::default()),
+            managed_documents: ManagedDocumentCatalog::default(),
+        }
+    }
+}
+
+impl MobileFileRuntime {
+    pub(crate) fn transient_files(&self) -> &TransientFileRegistry {
+        &self.transient_files
+    }
+
+    pub(crate) fn managed_documents(&self) -> &ManagedDocumentCatalog {
+        &self.managed_documents
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
+        !Arc::ptr_eq(&self.storage_directory, &other.storage_directory)
+            && !Arc::ptr_eq(&self.transient_files, &other.transient_files)
+            && !self
+                .managed_documents
+                .is_same_instance(&other.managed_documents)
+    }
+}
+
 pub(super) fn extension_from_name(file_name: &str) -> String {
     supported_extension_or_default(file_name)
 }
-
-static MOBILE_STORAGE_DIRECTORY: OnceLock<Result<PathBuf, AppError>> = OnceLock::new();
 
 fn resolve_mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     let dir = app
@@ -45,13 +83,18 @@ fn resolve_mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     Ok(dir)
 }
 
-fn initialize_mobile_storage(app: &AppHandle) -> Result<PathBuf, AppError> {
+fn initialize_mobile_storage(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+) -> Result<PathBuf, AppError> {
     let dir = resolve_mobile_dir(app)?;
-    for managed in managed_documents::managed_documents(&dir)? {
+    for managed in managed_documents::managed_documents(runtime.managed_documents(), &dir)? {
         clear_persistent_marker(&managed.path);
     }
     for target in completed_persisted_save_locations(&dir)? {
-        if let Err(error) = managed_documents::recover_completed_save(&target) {
+        if let Err(error) =
+            managed_documents::recover_completed_save(runtime.managed_documents(), &target)
+        {
             eprintln!(
                 "Failed to recover completed mobile save {}: {error}",
                 target.display()
@@ -62,8 +105,13 @@ fn initialize_mobile_storage(app: &AppHandle) -> Result<PathBuf, AppError> {
     Ok(dir)
 }
 
-pub(super) fn mobile_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
-    cached_mobile_storage_directory(&MOBILE_STORAGE_DIRECTORY, || initialize_mobile_storage(app))
+pub(super) fn mobile_dir(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+) -> Result<PathBuf, AppError> {
+    cached_mobile_storage_directory(&runtime.storage_directory, || {
+        initialize_mobile_storage(runtime, app)
+    })
 }
 
 fn cached_mobile_storage_directory(
@@ -73,8 +121,12 @@ fn cached_mobile_storage_directory(
     cache.get_or_init(initialize).clone()
 }
 
-pub(super) fn unique_import_path(app: &AppHandle, file_name: &str) -> Result<PathBuf, AppError> {
-    Ok(mobile_dir(app)?.join(format!(
+pub(super) fn unique_import_path(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+    file_name: &str,
+) -> Result<PathBuf, AppError> {
+    Ok(mobile_dir(runtime, app)?.join(format!(
         "{}.{}",
         uuid::Uuid::new_v4(),
         extension_from_name(file_name)
@@ -82,20 +134,22 @@ pub(super) fn unique_import_path(app: &AppHandle, file_name: &str) -> Result<Pat
 }
 
 pub(super) fn register_transient_path(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &Path,
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    let target = validated_mobile_files_path(app, path)?;
-    register_transient_target(target, purpose)
+    let target = validated_mobile_files_path(runtime, app, path)?;
+    register_transient_target(runtime, target, purpose)
 }
 
 pub(super) fn register_created_transient_path(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &Path,
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    if let Err(error) = register_transient_path(app, path, purpose) {
+    if let Err(error) = register_transient_path(runtime, app, path, purpose) {
         let _ = fs::remove_file(path);
         return Err(error);
     }
@@ -163,10 +217,14 @@ fn selected_file_name(path: &FilePath) -> Option<String> {
     .filter(|name| !name.is_empty())
 }
 
-pub fn read_open_file(app: &AppHandle, path: &str) -> Result<OpenFileInput, AppError> {
+pub fn read_open_file(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+    path: &str,
+) -> Result<OpenFileInput, AppError> {
     use tauri_plugin_fs::{FsExt, OpenOptions};
 
-    let target = validated_mobile_files_path(app, Path::new(path))?;
+    let target = validated_mobile_files_path(runtime, app, Path::new(path))?;
     if !target.exists() {
         return Err(AppError::FileNotFound(path.to_string()));
     }
@@ -193,11 +251,12 @@ pub fn read_open_file(app: &AppHandle, path: &str) -> Result<OpenFileInput, AppE
 }
 
 pub fn discard_transient_file(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &str,
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    let target = take_registered_transient_path(app, Path::new(path), purpose)?;
+    let target = take_registered_transient_path(runtime, app, Path::new(path), purpose)?;
     match fs::remove_file(&target) {
         Ok(()) => {
             clear_persistent_marker(&target);
@@ -209,7 +268,7 @@ pub fn discard_transient_file(
         }
         Err(error) => {
             let message = format!("Failed to remove unused transient file: {}", error);
-            let _ = register_transient_target(target, purpose);
+            let _ = register_transient_target(runtime, target, purpose);
             Err(AppError::WriteError(message))
         }
     }
@@ -217,24 +276,25 @@ pub fn discard_transient_file(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn remove_managed_file_if_inactive(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &str,
     active_document_path: Option<&str>,
 ) -> Result<bool, AppError> {
-    let target = validated_mobile_files_path(app, Path::new(path))?;
+    let target = validated_mobile_files_path(runtime, app, Path::new(path))?;
     if active_document_path.is_some_and(|active| Path::new(active) == target)
-        || transient_file_registry().contains(&target)?
+        || runtime.transient_files().contains(&target)?
     {
         return Ok(false);
     }
 
     match fs::remove_file(&target) {
         Ok(()) => {
-            managed_documents::clear_managed_document(&target)?;
+            managed_documents::clear_managed_document(runtime.managed_documents(), &target)?;
             Ok(true)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            managed_documents::clear_managed_document(&target)?;
+            managed_documents::clear_managed_document(runtime.managed_documents(), &target)?;
             Ok(true)
         }
         Err(error) => Err(AppError::WriteError(format!(
@@ -244,10 +304,11 @@ pub(crate) fn remove_managed_file_if_inactive(
 }
 
 pub(crate) fn validated_mobile_files_path(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &Path,
 ) -> Result<PathBuf, AppError> {
-    let files_dir = mobile_dir(app)?.canonicalize().map_err(|e| {
+    let files_dir = mobile_dir(runtime, app)?.canonicalize().map_err(|e| {
         AppError::DocumentStateInvalid(format!("Failed to resolve app file dir: {}", e))
     })?;
     validated_mobile_files_path_in_dir(&files_dir, path)
@@ -297,53 +358,70 @@ fn validated_mobile_files_path_in_dir(files_dir: &Path, path: &Path) -> Result<P
 }
 
 fn register_transient_target(
+    runtime: &MobileFileRuntime,
     target: PathBuf,
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    transient_file_registry().register(target.clone(), purpose)?;
+    runtime
+        .transient_files()
+        .register(target.clone(), purpose)?;
     if let Err(error) = write_persistent_marker(&target, purpose) {
-        let _ = transient_file_registry().adopt_if_registered(&target);
+        let _ = runtime.transient_files().adopt_if_registered(&target);
         return Err(error);
     }
     Ok(())
 }
 
 fn take_registered_transient_path(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &Path,
     purpose: TransientFilePurpose,
 ) -> Result<PathBuf, AppError> {
-    let target = validated_mobile_files_path(app, path)?;
-    transient_file_registry().take(&target, purpose)
+    let target = validated_mobile_files_path(runtime, app, path)?;
+    runtime.transient_files().take(&target, purpose)
 }
 
-pub(crate) fn reconcile_transient_files(app: &AppHandle) -> Result<(), AppError> {
-    mobile_dir(app).map(|_| ())
+pub(crate) fn reconcile_transient_files(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+) -> Result<(), AppError> {
+    mobile_dir(runtime, app).map(|_| ())
 }
 
 pub(crate) fn managed_document_records(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
 ) -> Result<Vec<ManagedDocumentRecord>, AppError> {
-    managed_documents::managed_documents(&mobile_dir(app)?)
+    managed_documents::managed_documents(runtime.managed_documents(), &mobile_dir(runtime, app)?)
 }
 
 pub(crate) fn migrate_managed_document(
+    runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &str,
     file_name: &str,
     id: &str,
     adopted_at_millis: i64,
 ) -> Result<(), AppError> {
-    let target = validated_mobile_files_path(app, Path::new(path))?;
-    managed_documents::migrate_existing_document(&target, file_name, id, adopted_at_millis)
+    let target = validated_mobile_files_path(runtime, app, Path::new(path))?;
+    managed_documents::migrate_existing_document(
+        runtime.managed_documents(),
+        &target,
+        file_name,
+        id,
+        adopted_at_millis,
+    )
 }
 
 pub(crate) fn ensure_save_target_authorized(
+    runtime: &MobileFileRuntime,
     target: &Path,
     current_document_path: &str,
 ) -> Result<(), AppError> {
-    let is_reserved =
-        transient_file_registry().contains_for(target, TransientFilePurpose::SaveLocation)?;
+    let is_reserved = runtime
+        .transient_files()
+        .contains_for(target, TransientFilePurpose::SaveLocation)?;
     if is_save_target_authorized(current_document_path, target, is_reserved) {
         return Ok(());
     }
@@ -357,14 +435,18 @@ fn is_save_target_authorized(current_path: &str, target: &Path, is_reserved: boo
     is_reserved || (!current_path.is_empty() && Path::new(current_path) == target)
 }
 
-pub fn reserve_save_location(app: &AppHandle, file_name: &str) -> Result<String, AppError> {
-    let path = mobile_dir(app)?.join(format!(
+pub fn reserve_save_location(
+    runtime: &MobileFileRuntime,
+    app: &AppHandle,
+    file_name: &str,
+) -> Result<String, AppError> {
+    let path = mobile_dir(runtime, app)?.join(format!(
         "{}.{}",
         uuid::Uuid::new_v4(),
         extension_from_name(file_name)
     ));
     write_path_with_official_fs(app, path.clone(), &[])?;
-    register_created_transient_path(app, &path, TransientFilePurpose::SaveLocation)?;
+    register_created_transient_path(runtime, app, &path, TransientFilePurpose::SaveLocation)?;
 
     Ok(path.to_string_lossy().to_string())
 }

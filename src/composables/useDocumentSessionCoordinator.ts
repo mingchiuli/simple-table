@@ -2,8 +2,8 @@ import { createDocumentSessionCoordinator } from '@/application/documentSessionC
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
-import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
-import { useSearchSessionStore } from '@/stores/searchSession';
+import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
+import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
 
 type DocumentSessionCoordinator = ReturnType<typeof createDocumentSessionCoordinator>;
 
@@ -17,8 +17,8 @@ export function useDocumentSessionCoordinator() {
     document,
     status: useDocumentStatusStore(),
     selection: useEditorSelectionStore(),
-    pending: usePendingCellSavesStore(),
-    search: useSearchSessionStore(),
+    pending: usePendingCellSaveCoordinator(),
+    search: useSearchSessionCoordinator(),
   });
   coordinators.set(document, coordinator);
   return coordinator;

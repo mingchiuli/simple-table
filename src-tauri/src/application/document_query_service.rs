@@ -7,7 +7,7 @@ use crate::io::file_format::{
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::{
     editor_state::EditorState,
-    state::{ActiveDocumentStore, DocumentHandle},
+    state::{ActiveDocumentRepository, DocumentHandle},
 };
 use crate::types::{
     DocumentCapabilities, DocumentManifest, EditorSessionInfo, FileData, NativeSavePlan,
@@ -28,13 +28,7 @@ const MAX_REGION_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub fn active_document_response(
     runtime: &ApplicationRuntime,
 ) -> Result<Option<OpenDocumentResponse>, AppError> {
-    let registry = runtime.documents();
-    let handle = {
-        let registry_guard = registry
-            .read()
-            .map_err(|_| AppError::poisoned_lock("document registry"))?;
-        registry_guard.active_handle()
-    };
+    let handle = runtime.documents().active_handle()?;
     handle
         .map(|handle| {
             let editor_state = handle.read()?;
@@ -49,11 +43,7 @@ pub fn active_document_response(
 pub(crate) fn active_document_path(
     runtime: &ApplicationRuntime,
 ) -> Result<Option<String>, AppError> {
-    let registry = runtime.documents();
-    let handle = registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle();
+    let handle = runtime.documents().active_handle()?;
     Ok(handle
         .map(|handle| {
             handle
@@ -99,7 +89,7 @@ fn sheet_region_snapshot_for_command(
 }
 
 fn sheet_region_snapshot_from_registry(
-    registry: &std::sync::Arc<std::sync::RwLock<crate::state::state::ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     region: SheetRegion,
@@ -246,15 +236,12 @@ fn active_workbook_capabilities(
     current_path: Option<&str>,
     native_save_allowed: bool,
 ) -> WorkbookCapabilities {
-    let registry = runtime.documents();
-    let Ok(registry_guard) = registry.read() else {
-        eprintln!("document registry lock poisoned while reading workbook capabilities");
+    let Ok(handle) = runtime.documents().active_handle() else {
+        eprintln!("document registry unavailable while reading workbook capabilities");
         let mut capabilities = WorkbookCapabilities::default();
         capabilities.save.can_native_save = native_save_allowed;
         return capabilities;
     };
-    let handle = registry_guard.active_handle();
-    drop(registry_guard);
     if let Some(handle) = handle
         && let Ok(editor_state) = handle.read()
     {
@@ -337,13 +324,10 @@ fn workbook_capabilities_for_command_and_target(
 }
 
 fn document_handle_for_read(
-    registry: &std::sync::Arc<std::sync::RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
 ) -> Result<std::sync::Arc<DocumentHandle>, AppError> {
-    registry
-        .read()
-        .map_err(|_| AppError::poisoned_lock("document registry"))?
-        .active_handle_for_read(document_id)
+    registry.read_handle(document_id)
 }
 
 pub(crate) fn ensure_native_save_target_allowed(
@@ -673,8 +657,6 @@ fn default_extension_string() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, RwLock};
-
     use super::*;
     use crate::types::{CellValue, SheetData};
 
@@ -846,9 +828,8 @@ mod tests {
         );
         let document_id = state.document_id();
         let revision = state.revision();
-        let mut store = crate::state::state::ActiveDocumentStore::new_for_test();
-        store.replace_active_for_test(state);
-        let registry = Arc::new(RwLock::new(store));
+        let registry = ActiveDocumentRepository::default();
+        registry.replace_active_for_test(state);
 
         let snapshot = sheet_region_snapshot_from_registry(
             &registry,
@@ -863,14 +844,11 @@ mod tests {
             },
         )
         .expect("region snapshot");
-        let write_guard = registry
-            .try_write()
-            .expect("region snapshot must not retain the document lock");
+        assert!(registry.is_write_available_for_test());
 
         let response =
             finalize_region_response(snapshot, MAX_REGION_RESPONSE_BYTES).expect("sized response");
         assert!(response.estimated_bytes.is_some());
-        drop(write_guard);
     }
 
     #[test]

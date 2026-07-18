@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,7 @@ use crate::state::search_scheduler::{
     MAX_PENDING_INDEX_SHEETS, MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate,
     SearchSchedulerStats, SheetPending,
 };
-use crate::state::state::{ActiveDocumentStore, DocumentHandle};
+use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 #[cfg(test)]
 use crate::types::CellValue;
 use crate::types::display::DisplayProjection;
@@ -68,11 +68,7 @@ impl SearchService {
             .unwrap_or_default()
     }
 
-    pub fn rebuild_all_sheets_index(
-        &self,
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
-        document_id: u64,
-    ) {
+    pub fn rebuild_all_sheets_index(&self, registry: &ActiveDocumentRepository, document_id: u64) {
         let jobs: Vec<(usize, SearchIndexStamp)> = document_handle(registry, document_id)
             .and_then(|handle| {
                 handle.read().ok().map(|editor| {
@@ -96,14 +92,14 @@ impl SearchService {
                 document_id,
                 sheet_index,
                 stamp,
-                registry: Arc::clone(registry),
+                registry: registry.clone(),
             });
         }
     }
 
     pub fn rebuild_sheet_index(
         &self,
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
         document_id: u64,
         sheet_index: usize,
     ) {
@@ -119,7 +115,7 @@ impl SearchService {
         sheet_index: usize,
         stamp: SearchIndexStamp,
         change: &SheetCellChange,
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
     ) {
         self.enqueue(IndexJob::UpdateCell {
             document_id,
@@ -134,7 +130,7 @@ impl SearchService {
             display_text: change.display.clone().unwrap_or_else(|| {
                 DisplayProjection::display_text(&change.value, change.display_format.as_ref())
             }),
-            registry: Arc::clone(registry),
+            registry: registry.clone(),
         });
     }
 
@@ -143,20 +139,20 @@ impl SearchService {
         document_id: u64,
         sheet_index: usize,
         stamp: SearchIndexStamp,
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
     ) {
         self.enqueue(IndexJob::Rebuild {
             document_id,
             sheet_index,
             stamp,
-            registry: Arc::clone(registry),
+            registry: registry.clone(),
         });
     }
 
     pub fn schedule_for_response(
         &self,
         response: &EditorMutationResponse,
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
     ) {
         let document_id = response.document_id;
         if response.search_index_update.rebuild_all {
@@ -293,7 +289,7 @@ impl Default for SearchService {
 }
 
 fn current_search_stamp(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
     sheet_index: usize,
 ) -> Option<SearchIndexStamp> {
@@ -331,7 +327,7 @@ fn create_index_scheduler() -> Arc<IndexScheduler> {
 fn merge_job(state: &mut IndexSchedulerState, job: IndexJob) {
     let document_id = job.document_id();
     let sheet_index = job.sheet_index();
-    let registry = Arc::clone(job.registry());
+    let registry = job.registry().clone();
     let key = (document_id, sheet_index);
     if !state.pending.contains_key(&key) && state.pending.len() >= MAX_PENDING_INDEX_SHEETS {
         state.stats.dropped_jobs_at_capacity =
@@ -349,7 +345,7 @@ fn merge_job(state: &mut IndexSchedulerState, job: IndexJob) {
             rebuild: None,
             incremental: HashMap::new(),
             incremental_bytes: 0,
-            registry: Arc::clone(&registry),
+            registry: registry.clone(),
         });
         let previous_entry_bytes = entry.incremental_bytes;
         let previous_entry_updates = entry.incremental.len();
@@ -688,7 +684,7 @@ fn rebuild_sheet_with_budget(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
 ) {
     let Some(source_bytes) =
         search_sheet_source_estimated_bytes(document_id, sheet_index, stamp, registry)
@@ -715,7 +711,7 @@ fn search_sheet_source_estimated_bytes(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
 ) -> Option<usize> {
     let handle = document_handle(registry, document_id)?;
     handle.read().ok().and_then(|editor| {
@@ -735,7 +731,7 @@ fn run_rebuild(
     sheet_index: usize,
     stamp: SearchIndexStamp,
     search_text: Arc<[SearchCellText]>,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
 ) {
     if !search_stamp_is_current(document_id, sheet_index, stamp, registry) {
         return;
@@ -763,7 +759,7 @@ fn search_stamp_is_current(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
 ) -> bool {
     document_handle(registry, document_id)
         .and_then(|handle| {
@@ -779,7 +775,7 @@ fn snapshot_sheet_search_text(
     document_id: u64,
     sheet_index: usize,
     stamp: SearchIndexStamp,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
 ) -> Option<Arc<[SearchCellText]>> {
     let handle = document_handle(registry, document_id)?;
     let sheet = handle.read().ok().and_then(|editor| {
@@ -794,7 +790,7 @@ fn snapshot_sheet_search_text(
 fn run_incremental(
     document_id: u64,
     sheet_index: usize,
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     ops: &[CellIndexUpdate],
 ) -> bool {
     let Some(latest_stamp) = ops.iter().map(|op| op.stamp).max() else {
@@ -855,10 +851,10 @@ fn run_incremental(
 }
 
 fn document_handle(
-    registry: &Arc<RwLock<ActiveDocumentStore>>,
+    registry: &ActiveDocumentRepository,
     document_id: u64,
 ) -> Option<Arc<DocumentHandle>> {
-    registry.read().ok()?.handle(document_id)
+    registry.read_handle(document_id).ok()
 }
 
 #[cfg(test)]
@@ -868,7 +864,6 @@ mod tests {
     use crate::error::AppError;
     use crate::ops::search_ops::do_search;
     use crate::state::editor_state::EditorState;
-    use crate::state::state::ActiveDocumentStore;
     use crate::types::{
         CellFormatProjection, FileData, ReadOnlyRichProjection, SearchScope, SheetData,
     };
@@ -878,7 +873,7 @@ mod tests {
         CellValue::String(value.to_string())
     }
 
-    fn make_registry(rows: Vec<Vec<CellValue>>) -> (Arc<RwLock<ActiveDocumentStore>>, u64) {
+    fn make_registry(rows: Vec<Vec<CellValue>>) -> (ActiveDocumentRepository, u64) {
         let editor = EditorState::with_workbook(
             FileData {
                 path: String::new(),
@@ -892,9 +887,9 @@ mod tests {
             None,
         );
         let document_id = editor.document_id();
-        let mut registry = ActiveDocumentStore::new_for_test();
+        let registry = ActiveDocumentRepository::default();
         registry.replace_active_for_test(editor);
-        (Arc::new(RwLock::new(registry)), document_id)
+        (registry, document_id)
     }
 
     fn isolated_search_service() -> SearchService {
@@ -968,12 +963,11 @@ mod tests {
     }
 
     fn rows_of(
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
         document_id: u64,
         query: &str,
     ) -> Vec<(usize, usize)> {
-        let guard = registry.read().unwrap();
-        let editor = guard.get(document_id).unwrap();
+        let editor = registry.get_for_test(document_id).unwrap();
         let plan = SearchQueryPlan::new(query).expect("query plan");
         let cells = if let Some(index) = editor.indexed_search_sheet(0) {
             index.search(&plan, 10)
@@ -993,7 +987,7 @@ mod tests {
     }
 
     fn rows_of_current_search(
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
         query: &str,
     ) -> Vec<(usize, usize)> {
         let (document_id, revision) = active_search_context(registry);
@@ -1016,10 +1010,7 @@ mod tests {
         rows
     }
 
-    fn values_of_current_search(
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
-        query: &str,
-    ) -> Vec<String> {
+    fn values_of_current_search(registry: &ActiveDocumentRepository, query: &str) -> Vec<String> {
         let (document_id, revision) = active_search_context(registry);
         let search = isolated_search_service();
         do_search(
@@ -1038,22 +1029,20 @@ mod tests {
         .collect()
     }
 
-    fn active_search_context(registry: &Arc<RwLock<ActiveDocumentStore>>) -> (u64, u64) {
-        let guard = registry.read().unwrap();
-        let editor = guard.active().unwrap();
+    fn active_search_context(registry: &ActiveDocumentRepository) -> (u64, u64) {
+        let editor = registry.active_handle().unwrap().unwrap();
         (editor.document_id(), editor.revision())
     }
 
-    fn current_stamp(
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
-        document_id: u64,
-    ) -> SearchIndexStamp {
-        let guard = registry.read().unwrap();
-        guard.get(document_id).unwrap().search_sheet_index_stamp(0)
+    fn current_stamp(registry: &ActiveDocumentRepository, document_id: u64) -> SearchIndexStamp {
+        registry
+            .get_for_test(document_id)
+            .unwrap()
+            .search_sheet_index_stamp(0)
     }
 
     fn search_text_snapshot(
-        registry: &Arc<RwLock<ActiveDocumentStore>>,
+        registry: &ActiveDocumentRepository,
         document_id: u64,
     ) -> Arc<[SearchCellText]> {
         snapshot_sheet_search_text(
@@ -1065,7 +1054,7 @@ mod tests {
         .expect("search text snapshot")
     }
 
-    fn rebuild_current_sheet(registry: &Arc<RwLock<ActiveDocumentStore>>, document_id: u64) {
+    fn rebuild_current_sheet(registry: &ActiveDocumentRepository, document_id: u64) {
         run_rebuild(
             document_id,
             0,
@@ -1078,10 +1067,7 @@ mod tests {
     #[test]
     fn search_rejects_stale_document_revision() {
         let (registry, document_id) = make_registry(vec![vec![s("old")]]);
-        let revision = {
-            let guard = registry.read().unwrap();
-            guard.get(document_id).unwrap().revision()
-        };
+        let revision = registry.get_for_test(document_id).unwrap().revision();
         {
             let handle = document_handle(&registry, document_id).unwrap();
             handle
@@ -1114,33 +1100,22 @@ mod tests {
     #[test]
     fn search_sources_remain_usable_without_holding_the_document_lock() {
         let (registry, document_id) = make_registry(vec![vec![s("alpha beta")]]);
-        let snapshot = {
-            let guard = registry.read().unwrap();
-            guard
-                .get(document_id)
-                .unwrap()
-                .search_sheet_data(0)
-                .expect("search sheet")
-        };
-        let write_guard = registry
-            .try_write()
-            .expect("snapshot does not retain registry lock");
+        let snapshot = registry
+            .get_for_test(document_id)
+            .unwrap()
+            .search_sheet_data(0)
+            .expect("search sheet");
+        assert!(registry.is_write_available_for_test());
         let snapshot_cells = collect_sheet_search_text(&snapshot);
         assert_eq!(snapshot_cells[0].search_text, "alpha beta");
-        drop(write_guard);
 
         rebuild_current_sheet(&registry, document_id);
-        let indexed = {
-            let guard = registry.read().unwrap();
-            guard
-                .get(document_id)
-                .unwrap()
-                .indexed_search_sheet(0)
-                .expect("indexed source")
-        };
-        let _write_guard = registry
-            .try_write()
-            .expect("index does not retain registry lock");
+        let indexed = registry
+            .get_for_test(document_id)
+            .unwrap()
+            .indexed_search_sheet(0)
+            .expect("indexed source");
+        assert!(registry.is_write_available_for_test());
         let plan = SearchQueryPlan::new("alpha beta").expect("query plan");
         let cells = indexed.search(&plan, 10);
         assert_eq!(cells.len(), 1);
@@ -1162,7 +1137,7 @@ mod tests {
                 col: 0,
                 search_text: "intermediate".to_string(),
                 display_text: "intermediate".to_string(),
-                registry: Arc::clone(&registry),
+                registry: registry.clone(),
             },
         );
         merge_job(
@@ -1208,7 +1183,7 @@ mod tests {
                 col: 0,
                 search_text: "latest".to_string(),
                 display_text: "latest".to_string(),
-                registry: Arc::clone(&registry),
+                registry: registry.clone(),
             },
         );
         merge_job(
@@ -1248,7 +1223,7 @@ mod tests {
                     col: 0,
                     search_text: "value".to_string(),
                     display_text: "value".to_string(),
-                    registry: Arc::clone(&registry),
+                    registry: registry.clone(),
                 },
             );
         }
@@ -1305,7 +1280,7 @@ mod tests {
             document_id: old_document_id,
             sheet_index: 0,
             stamp: old_stamp,
-            registry: Arc::clone(&old_registry),
+            registry: old_registry.clone(),
         });
         service.enqueue(IndexJob::UpdateCell {
             document_id: new_document_id,
@@ -1315,7 +1290,7 @@ mod tests {
             col: 0,
             search_text: "newer".to_string(),
             display_text: "newer".to_string(),
-            registry: Arc::clone(&new_registry),
+            registry: new_registry.clone(),
         });
 
         service.cancel_document_jobs(old_document_id);
@@ -1559,9 +1534,8 @@ mod tests {
             None,
         );
         let document_id = editor.document_id();
-        let mut store = ActiveDocumentStore::new_for_test();
-        store.replace_active_for_test(editor);
-        let registry = Arc::new(RwLock::new(store));
+        let registry = ActiveDocumentRepository::default();
+        registry.replace_active_for_test(editor);
 
         assert_eq!(rows_of_current_search(&registry, "0.4"), vec![(0, 0)]);
         assert_eq!(values_of_current_search(&registry, "0.4"), vec!["40%"]);
@@ -1589,14 +1563,11 @@ mod tests {
             },
             None,
         );
-        {
-            let mut guard = registry.write().unwrap();
-            guard.replace_active_for_test(new_editor);
-        }
+        registry.replace_active_for_test(new_editor);
 
         run_rebuild(old_document_id, 0, old_stamp, old_search_text, &registry);
 
         assert_eq!(rows_of_current_search(&registry, "new"), vec![(0, 0)]);
-        assert!(registry.read().unwrap().get(old_document_id).is_none());
+        assert!(registry.get_for_test(old_document_id).is_none());
     }
 }
