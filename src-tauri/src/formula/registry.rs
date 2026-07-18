@@ -2,17 +2,18 @@ use std::collections::HashSet;
 
 use formualizer_workbook::Workbook;
 
+use crate::domain::DocumentCellChange;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::sheet_name::canonicalize_formula_sheet_names;
 use crate::formula::value_codec::{cell_to_literal, to_formula_index};
-use crate::types::{CellValue, FileData, SheetCellChange};
+use crate::types::{CellValue, FileData};
 
 #[derive(Default)]
 pub(crate) struct FormulaRegistrationResult {
     pub(crate) registered_formulas: HashSet<FormulaCellRef>,
-    pub(crate) invalid_formulas: Vec<SheetCellChange>,
+    pub(crate) invalid_formulas: Vec<DocumentCellChange>,
 }
 
 pub(crate) struct FormulaCellRegistration<'a> {
@@ -93,7 +94,7 @@ pub(crate) fn set_workbook_cell(
                     let value = registration
                         .cell
                         .with_formula_result(CellValue::Null, Some(error));
-                    result.invalid_formulas.push(SheetCellChange::new(
+                    result.invalid_formulas.push(DocumentCellChange::new(
                         registration.cell_ref.sheet_index,
                         registration.cell_ref.row,
                         registration.cell_ref.col,
@@ -115,7 +116,7 @@ pub(crate) fn set_workbook_cell(
     Ok(result)
 }
 
-pub(crate) fn apply_cell_changes(file_data: &mut FileData, changes: &[SheetCellChange]) {
+pub(crate) fn apply_cell_changes(file_data: &mut FileData, changes: &[DocumentCellChange]) {
     for change in changes {
         let Some(cell) = file_data
             .sheets

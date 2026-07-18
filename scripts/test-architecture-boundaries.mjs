@@ -93,6 +93,10 @@ rejectMatches(
     /std::thread/,
     /\bCondvar\b/,
     /\bIndexScheduler(?:State)?\b/,
+    /\bActiveDocumentRepository\b/,
+    /\bDocumentHandle\b/,
+    /crate::state(?:::|\b)/,
+    /\bRepositorySearchDocumentSource\b/,
   ],
   'the transport-independent search scheduling boundary',
 );
@@ -111,7 +115,7 @@ rejectMatches(
 
 rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'application', 'document_save_service.rs')],
-  [/document_query_service/],
+  [/document_query_service/, /\.generate_file_bytes_for_target\s*\(/],
   'the independent document save workflow boundary',
 );
 
@@ -128,6 +132,35 @@ rejectMatches(
   ],
   [/crate::io(?:::|\b)/],
   'the Rust document aggregate boundary',
+);
+
+rejectMatches(
+  [
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'document'), '.rs').filter((file) => {
+      const path = relative(projectRoot, file);
+      return !path.includes('/backing/') && !path.endsWith('/test_support.rs');
+    }),
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
+  ],
+  [
+    /\bEditorMutationResponse\b/,
+    /\bEditorPatch\b/,
+    /\bAppliedOperationResult\b/,
+    /\bSheetCellChange\b/,
+    /\bLayoutPatch\b/,
+    /\bResyncRequiredPatch\b/,
+    /\bts_rs\b/,
+  ],
+  'the protocol-independent Rust document and state outcome boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'document'), '.rs').filter((file) => {
+    const path = relative(projectRoot, file);
+    return !path.includes('/backing/') && !path.endsWith('/test_support.rs');
+  }),
+  [/crate::io(?:::|\b)/],
+  'the backing-mediated Rust document dependency boundary',
 );
 
 rejectMatches(

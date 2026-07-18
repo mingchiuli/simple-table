@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::application::document_codec_port::DocumentCodecPort;
+use crate::application::document_encode_port::DocumentEncodePort;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::search_service::SearchService;
 use crate::application::{document_format_policy, document_projection};
@@ -17,6 +18,7 @@ pub struct DocumentSaveService {
     documents: ActiveDocumentRepository,
     search: SearchService,
     codec: Arc<dyn DocumentCodecPort>,
+    encoder: Arc<dyn DocumentEncodePort>,
     work_budget: Arc<dyn DocumentWorkBudgetPort>,
 }
 
@@ -25,12 +27,14 @@ impl DocumentSaveService {
         documents: ActiveDocumentRepository,
         search: SearchService,
         codec: Arc<dyn DocumentCodecPort>,
+        encoder: Arc<dyn DocumentEncodePort>,
         work_budget: Arc<dyn DocumentWorkBudgetPort>,
     ) -> Self {
         Self {
             documents,
             search,
             codec,
+            encoder,
             work_budget,
         }
     }
@@ -47,6 +51,10 @@ impl DocumentSaveService {
         self.codec.as_ref()
     }
 
+    fn encoder(&self) -> &dyn DocumentEncodePort {
+        self.encoder.as_ref()
+    }
+
     fn work_budget(&self) -> &dyn DocumentWorkBudgetPort {
         self.work_budget.as_ref()
     }
@@ -56,6 +64,7 @@ impl DocumentSaveService {
         !self.documents.is_same_instance(&other.documents)
             && self.search.is_isolated_from(&other.search)
             && !Arc::ptr_eq(&self.codec, &other.codec)
+            && !Arc::ptr_eq(&self.encoder, &other.encoder)
             && !Arc::ptr_eq(&self.work_budget, &other.work_budget)
     }
 }
@@ -89,7 +98,7 @@ pub fn prepare_current_file_export(
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
         (snapshot, work)
     };
-    let (_, bytes) = snapshot.generate_file_bytes_for_target(target_path_or_name)?;
+    let (_, bytes) = service.encoder().encode(&snapshot, target_path_or_name)?;
     Ok(PreparedDocumentExport {
         bytes,
         _work: Some(work),
@@ -121,7 +130,7 @@ pub fn prepare_current_file_save(
         (snapshot, work)
     };
 
-    let (output_name, bytes) = snapshot.generate_file_bytes_for_target(target_path_or_name)?;
+    let (output_name, bytes) = service.encoder().encode(&snapshot, target_path_or_name)?;
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
         .unwrap_or_else(default_extension_string);

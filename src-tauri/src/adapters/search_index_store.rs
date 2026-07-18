@@ -878,7 +878,7 @@ fn escape_regex_literal(literal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::search_service::collect_sheet_search_text;
+    use crate::adapters::search_document_source_adapter::collect_sheet_search_text;
     use crate::domain::SearchScanCursor;
     use crate::state::search_document::collect_sheet_search_text_chunk;
     use crate::types::{CellFormatProjection, ReadOnlyRichProjection, SheetData};

@@ -1,6 +1,7 @@
 use crate::domain::{AppliedOperation, OperationPatchProjector};
 use crate::types::{
-    AppliedOperationResult, CellValue, ColumnChange, FileData, RowChange, SheetData,
+    AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange, FileData,
+    RowChange, RowHeightChange, SheetCellChange, SheetData,
 };
 
 impl OperationPatchProjector<'_> {
@@ -9,12 +10,69 @@ impl OperationPatchProjector<'_> {
         file_data: &FileData,
     ) -> AppliedOperationResult {
         match self.operation {
-            AppliedOperation::SetCell { .. }
-            | AppliedOperation::SetCells { .. }
-            | AppliedOperation::SetColumnWidth { .. }
-            | AppliedOperation::SetRowHeight { .. } => {
-                unreachable!("cell/layout operations already return from execute_cells_and_layout")
-            }
+            AppliedOperation::SetCell {
+                sheet_index,
+                row,
+                col,
+                new_value,
+                ..
+            } => AppliedOperationResult::SetCell {
+                sheet_index: *sheet_index,
+                cell: CellChange {
+                    row: *row,
+                    col: *col,
+                    value: file_data
+                        .sheets
+                        .get(*sheet_index)
+                        .and_then(|sheet| sheet.rows.get(*row))
+                        .and_then(|row_data| row_data.get(*col))
+                        .cloned()
+                        .unwrap_or_else(|| new_value.clone()),
+                },
+            },
+            AppliedOperation::SetCells { changes } => AppliedOperationResult::SetCells {
+                changes: changes
+                    .iter()
+                    .map(|change| {
+                        SheetCellChange::new(
+                            change.sheet_index,
+                            change.row,
+                            change.col,
+                            file_data
+                                .sheets
+                                .get(change.sheet_index)
+                                .and_then(|sheet| sheet.rows.get(change.row))
+                                .and_then(|row| row.get(change.col))
+                                .cloned()
+                                .unwrap_or_else(|| change.new_value.clone()),
+                        )
+                    })
+                    .collect(),
+            },
+            AppliedOperation::SetColumnWidth {
+                sheet_index,
+                col_index,
+                new_width,
+                ..
+            } => AppliedOperationResult::SetColumnWidth {
+                sheet_index: *sheet_index,
+                column: ColumnWidthChange {
+                    col_index: *col_index,
+                    width: *new_width,
+                },
+            },
+            AppliedOperation::SetRowHeight {
+                sheet_index,
+                row_index,
+                new_height,
+                ..
+            } => AppliedOperationResult::SetRowHeight {
+                sheet_index: *sheet_index,
+                row: RowHeightChange {
+                    row_index: *row_index,
+                    height: *new_height,
+                },
+            },
             AppliedOperation::AddRow {
                 sheet_index,
                 row_index,

@@ -1,8 +1,7 @@
 use crate::document::document_memento::DocumentMementoSide;
 use crate::document::document_model::{DocumentOperationResult, SpreadsheetDocument};
-use crate::domain::AppliedOperation;
+use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
-use crate::types::SheetCellChange;
 use std::collections::BTreeSet;
 
 pub(crate) struct DocumentTransaction<'a> {
@@ -25,20 +24,17 @@ impl<'a> DocumentTransaction<'a> {
     }
 
     pub(crate) fn commit(&mut self) -> Result<DocumentOperationResult, AppError> {
-        let result = match self
+        if let Err(error) = self
             .document
             .apply_operation_to_body_and_projection(self.operation)
         {
-            Ok(result) => result,
-            Err(error) => {
-                self.rollback_after_failure(&error)?;
-                return Err(error);
-            }
-        };
+            self.rollback_after_failure(&error)?;
+            return Err(error);
+        }
 
-        if let Err(error) =
-            self.document
-                .patch_workbook_after_operation(self.operation, &result, &[])
+        if let Err(error) = self
+            .document
+            .patch_workbook_after_operation(self.operation, &[])
         {
             self.rollback_after_failure(&error)?;
             return Err(error);
@@ -61,10 +57,7 @@ impl<'a> DocumentTransaction<'a> {
             self.document.refresh_region_metadata_index();
         }
 
-        Ok(DocumentOperationResult {
-            operation: result,
-            cell_changes,
-        })
+        Ok(DocumentOperationResult { cell_changes })
     }
 
     fn rollback_after_failure(&mut self, operation_error: &AppError) -> Result<(), AppError> {
@@ -84,7 +77,7 @@ impl<'a> DocumentTransaction<'a> {
         }
     }
 
-    fn validate_after_commit(&self, cell_changes: &[SheetCellChange]) -> Result<(), AppError> {
+    fn validate_after_commit(&self, cell_changes: &[DocumentCellChange]) -> Result<(), AppError> {
         if self.operation.impact().is_structure_change() {
             self.document.validate_persisted_projection_consistency()?;
             return self.document.validate_projection_consistency();
@@ -101,7 +94,7 @@ impl<'a> DocumentTransaction<'a> {
 
 fn touched_sheet_indexes(
     operation: &AppliedOperation,
-    cell_changes: &[SheetCellChange],
+    cell_changes: &[DocumentCellChange],
     sheet_count: usize,
 ) -> Vec<usize> {
     let mut sheets = BTreeSet::new();

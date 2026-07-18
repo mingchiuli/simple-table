@@ -3,8 +3,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::document_memento::DocumentMementoSide;
-use crate::domain::AppliedOperation;
-use crate::types::{CellValue, FileData, MergeRange, SheetCellChange, SheetData};
+use crate::domain::{AppliedOperation, DocumentCellChange};
+use crate::types::{CellValue, FileData, MergeRange, SheetData};
 
 pub type ContentHash = [u8; 32];
 
@@ -113,7 +113,7 @@ impl IncrementalContentFingerprint {
     pub fn apply_operation(
         &mut self,
         operation: &AppliedOperation,
-        formula_changes: &[SheetCellChange],
+        formula_changes: &[DocumentCellChange],
         file_data: &FileData,
     ) {
         match operation {
@@ -475,8 +475,8 @@ impl IncrementalContentFingerprint {
 
     fn rebuild_changed_cell_sheets(
         &mut self,
-        target: &[SheetCellChange],
-        rollback: &[SheetCellChange],
+        target: &[DocumentCellChange],
+        rollback: &[DocumentCellChange],
         file_data: &FileData,
     ) {
         let sheet_indexes: BTreeSet<_> = target
@@ -511,8 +511,8 @@ enum LayoutKind {
 }
 
 fn history_cell_changes(
-    rollback: &[SheetCellChange],
-    target: &[SheetCellChange],
+    rollback: &[DocumentCellChange],
+    target: &[DocumentCellChange],
 ) -> Option<Vec<CellFingerprintChange>> {
     let rollback: BTreeMap<_, _> = rollback
         .iter()

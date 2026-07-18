@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::domain::cell_key::parse_cell_key;
-use crate::io::document_body::BodyStructureMemento;
-use crate::io::rich_projection::{
+use crate::document::backing::document_body::BodyStructureMemento;
+use crate::document::backing::rich_projection::{
     RichProjectionScope, filter_rich_projection, restore_rich_projection_scope,
 };
+use crate::domain::{DocumentCellChange, cell_key::parse_cell_key};
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingProjection, FreezePaneProjection,
-    HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetCellChange, SheetData,
+    HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
 };
 
 pub(crate) struct DocumentMemento {
@@ -42,14 +42,14 @@ impl DocumentMementoSide {
 }
 
 pub(crate) struct CellMemento {
-    pub(crate) cells: Vec<SheetCellChange>,
+    pub(crate) cells: Vec<DocumentCellChange>,
     pub(crate) sheet_shapes: Vec<SheetShapeMemento>,
     pub(crate) formula_capabilities_may_change: bool,
 }
 
 impl CellMemento {
     pub(crate) fn new(
-        cells: Vec<SheetCellChange>,
+        cells: Vec<DocumentCellChange>,
         sheet_shapes: Vec<SheetShapeMemento>,
         formula_capabilities_may_change: bool,
     ) -> Self {
@@ -313,8 +313,8 @@ fn push_unique_position_2d(
     }
 }
 
-fn estimate_sheet_cell_change_bytes(change: &SheetCellChange) -> usize {
-    std::mem::size_of::<SheetCellChange>() + estimate_cell_value_bytes(&change.value)
+fn estimate_sheet_cell_change_bytes(change: &DocumentCellChange) -> usize {
+    std::mem::size_of::<DocumentCellChange>() + estimate_cell_value_bytes(&change.value)
 }
 
 fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {

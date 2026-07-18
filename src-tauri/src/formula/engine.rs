@@ -2,6 +2,7 @@ use std::collections::{HashSet, VecDeque};
 
 use formualizer_workbook::{Workbook, WorkbookMode};
 
+use crate::domain::DocumentCellChange;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
@@ -12,7 +13,7 @@ use crate::formula::registry::{
     FormulaCellRegistration, apply_cell_changes, register_workbook_cells, set_workbook_cell,
 };
 use crate::formula::value_codec::{literal_to_cell, to_formula_index};
-use crate::types::{CellValue, FileData, FormulaDiagnostics, SheetCellChange};
+use crate::types::{CellValue, FileData, FormulaDiagnostics};
 
 const MAX_FORMULA_RUNTIME_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const FORMULA_RUNTIME_ENTRY_ESTIMATED_BYTES: usize = 512;
@@ -24,7 +25,7 @@ pub struct FormulaRuntime {
 }
 
 pub struct FormulaRebuildResult {
-    pub changes: Vec<SheetCellChange>,
+    pub changes: Vec<DocumentCellChange>,
     pub diagnostics: FormulaDiagnostics,
 }
 
@@ -76,7 +77,7 @@ impl FormulaRuntime {
         &mut self,
         file_data: &mut FileData,
         ast_service: &mut FormulaAstService,
-    ) -> Result<Vec<SheetCellChange>, AppError> {
+    ) -> Result<Vec<DocumentCellChange>, AppError> {
         Ok(self
             .rebuild_preserving_cached_results(file_data, ast_service)?
             .changes)
@@ -157,7 +158,7 @@ impl FormulaRuntime {
         sheet_index: usize,
         row: usize,
         col: usize,
-    ) -> Result<Vec<SheetCellChange>, AppError> {
+    ) -> Result<Vec<DocumentCellChange>, AppError> {
         let sheet_names = formula_sheet_names(file_data);
         let sheet = file_data
             .sheets
@@ -217,7 +218,7 @@ impl FormulaRuntime {
         file_data: &mut FileData,
         ast_service: &mut FormulaAstService,
         changed_cells: impl IntoIterator<Item = FormulaCellRef>,
-    ) -> Result<Vec<SheetCellChange>, AppError> {
+    ) -> Result<Vec<DocumentCellChange>, AppError> {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
         let sheet_names = formula_sheet_names(file_data);
         let mut changes = Vec::new();
@@ -358,7 +359,7 @@ impl FormulaRuntime {
     fn recalculate_all_formula_cells(
         &mut self,
         file_data: &mut FileData,
-    ) -> Result<Vec<SheetCellChange>, AppError> {
+    ) -> Result<Vec<DocumentCellChange>, AppError> {
         let targets: Vec<FormulaCellRef> = self.dependency_index.formulas.iter().copied().collect();
         self.recalculate_formula_cells(file_data, targets.iter())
     }
@@ -367,7 +368,7 @@ impl FormulaRuntime {
         &mut self,
         file_data: &mut FileData,
         targets: impl IntoIterator<Item = &'a FormulaCellRef>,
-    ) -> Result<Vec<SheetCellChange>, AppError> {
+    ) -> Result<Vec<DocumentCellChange>, AppError> {
         let mut changes = Vec::new();
 
         for target in targets {
@@ -399,7 +400,7 @@ impl FormulaRuntime {
                 }
             }
 
-            changes.push(SheetCellChange::new(
+            changes.push(DocumentCellChange::new(
                 target.sheet_index,
                 target.row,
                 target.col,

@@ -4,6 +4,7 @@ use crate::adapters::document_codec_adapter::DocumentCodecAdapter;
 use crate::adapters::document_file_adapter::DocumentFileAdapter;
 use crate::adapters::document_work_budget_adapter::DocumentWorkBudgetAdapter;
 use crate::adapters::recent_file_adapter::RecentFileAdapter;
+use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
 use crate::adapters::search_index_adapter::SearchIndexAdapter;
 use crate::application::document_open_service::DocumentOpenService;
 use crate::application::document_query_service::DocumentQueryService;
@@ -12,7 +13,7 @@ use crate::application::document_service::DocumentLifecycleService;
 use crate::application::editor_command_service::EditorCommandService;
 use crate::application::mutation_replay::MutationReplayCoordinator;
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
-use crate::application::search_service::{RepositorySearchDocumentSource, SearchService};
+use crate::application::search_service::SearchService;
 #[cfg(desktop)]
 use crate::io::platform::desktop::DesktopFileRuntime;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -47,8 +48,13 @@ impl Default for ApplicationRuntime {
         let document_opens =
             DocumentOpenService::new(documents.clone(), prepared_documents.clone(), codec.clone());
         let document_queries = DocumentQueryService::new(documents.clone());
-        let document_saves =
-            DocumentSaveService::new(documents.clone(), search.clone(), codec, work_budget);
+        let document_saves = DocumentSaveService::new(
+            documents.clone(),
+            search.clone(),
+            codec.clone(),
+            codec,
+            work_budget,
+        );
         #[cfg(any(target_os = "android", target_os = "ios", test))]
         let prepared_source_adopter = {
             let mobile_files = mobile_files.clone();

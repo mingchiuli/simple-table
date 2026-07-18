@@ -204,7 +204,10 @@ fn execute_cell_delta(
         let result = editor_state.execute(command)?;
         let retired = result.retired;
         let execution = if let Some(operation) = result.operation {
-            let changes = complete_cell_changes(&operation, result.cell_changes);
+            let projected = operation
+                .patch_projector()
+                .projected_result_from_current_file(editor_state.file_data());
+            let changes = complete_cell_changes(&projected, result.cell_changes);
             let search_index_work = search_index_work_for_changes(&editor_state, &changes);
             MutationExecution::new(
                 cell_delta_mutation_response(&editor_state, changes),
@@ -234,10 +237,19 @@ fn execute_structural_command(
         let result = editor_state.execute(command)?;
         let retired = result.retired;
         let execution = match result.operation {
-            Some(operation) => MutationExecution::new(
-                structural_delta_mutation_response(&editor_state, &operation, result.cell_changes),
-                result.search_index_work,
-            ),
+            Some(operation) => {
+                let projected = operation
+                    .patch_projector()
+                    .projected_result_from_current_file(editor_state.file_data());
+                MutationExecution::new(
+                    structural_delta_mutation_response(
+                        &editor_state,
+                        &projected,
+                        result.cell_changes,
+                    ),
+                    result.search_index_work,
+                )
+            }
             None => MutationExecution::new(
                 resync_required_mutation_response(
                     &editor_state,

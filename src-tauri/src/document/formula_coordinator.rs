@@ -1,13 +1,13 @@
 use formualizer_parse::parser::ReferenceType;
 
-use crate::domain::AppliedOperation;
+use crate::document::backing::workbook_state::StructurePatchDiagnostics;
+use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
 use crate::formula::sheet_name::sheet_names_equal;
-use crate::io::workbook_state::StructurePatchDiagnostics;
-use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus, SheetCellChange};
+use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus};
 
 pub(crate) struct FormulaCoordinator {
     runtime: FormulaRuntime,
@@ -232,7 +232,7 @@ impl FormulaCoordinator {
         &mut self,
         operation: &AppliedOperation,
         projection: &mut FileData,
-    ) -> Vec<SheetCellChange> {
+    ) -> Vec<DocumentCellChange> {
         match operation {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -327,7 +327,7 @@ impl FormulaCoordinator {
         }
     }
 
-    pub(crate) fn rebuild(&mut self, projection: &mut FileData) -> Vec<SheetCellChange> {
+    pub(crate) fn rebuild(&mut self, projection: &mut FileData) -> Vec<DocumentCellChange> {
         match self
             .runtime
             .rebuild_preserving_cached_results(projection, &mut self.ast_service)
@@ -374,7 +374,7 @@ impl FormulaCoordinator {
         &mut self,
         projection: &mut FileData,
         error: String,
-    ) -> Vec<SheetCellChange> {
+    ) -> Vec<DocumentCellChange> {
         let mut changes = Vec::new();
         for (sheet_index, sheet) in projection.sheets.iter_mut().enumerate() {
             for (row, row_data) in sheet.rows.iter_mut().enumerate() {
@@ -383,7 +383,7 @@ impl FormulaCoordinator {
                         continue;
                     }
                     *cell = cell.with_formula_result(CellValue::Null, Some(error.clone()));
-                    changes.push(SheetCellChange::new(sheet_index, row, col, cell.clone()));
+                    changes.push(DocumentCellChange::new(sheet_index, row, col, cell.clone()));
                 }
             }
         }
@@ -570,7 +570,7 @@ fn formula_error_change(
     col: usize,
     value: &CellValue,
     error: String,
-) -> Vec<SheetCellChange> {
+) -> Vec<DocumentCellChange> {
     if !matches!(value, CellValue::Formula { .. }) {
         return Vec::new();
     }
@@ -585,10 +585,10 @@ fn formula_error_change(
     };
 
     *cell = cell.with_formula_result(CellValue::Null, Some(error));
-    vec![SheetCellChange::new(sheet_index, row, col, cell.clone())]
+    vec![DocumentCellChange::new(sheet_index, row, col, cell.clone())]
 }
 
-fn append_unique_changes(target: &mut Vec<SheetCellChange>, changes: Vec<SheetCellChange>) {
+fn append_unique_changes(target: &mut Vec<DocumentCellChange>, changes: Vec<DocumentCellChange>) {
     for change in changes {
         if let Some(existing) = target.iter_mut().find(|existing| {
             existing.sheet_index == change.sheet_index

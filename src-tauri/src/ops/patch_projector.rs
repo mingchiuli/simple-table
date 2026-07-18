@@ -1,11 +1,12 @@
-use crate::document::document_model::DocumentRestoreResult;
+use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
+use crate::domain::DocumentCellChange;
 use crate::state::editor_state::EditorState;
 use crate::types::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
     EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
-    SheetCellChange, SheetDeletedPatch, SheetInsertedPatch, SheetInvalidatedPatch,
-    SheetLayoutProjection, SheetManifest,
+    SheetCellChange, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
+    SheetLayoutProjection, SheetManifest, SheetsReplacedPatch,
 };
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -118,8 +119,9 @@ pub fn cell_delta_mutation_response(
 
 pub(crate) fn complete_cell_changes(
     operation: &AppliedOperationResult,
-    mut cell_changes: Vec<SheetCellChange>,
+    cell_changes: Vec<DocumentCellChange>,
 ) -> Vec<SheetCellChange> {
+    let mut cell_changes = wire_cell_changes(cell_changes);
     if let AppliedOperationResult::SetCell { sheet_index, cell } = operation {
         push_cell_change_if_missing(
             &mut cell_changes,
@@ -144,8 +146,9 @@ pub fn layout_mutation_response(
 pub fn structural_delta_mutation_response(
     editor_state: &EditorState,
     operation: &AppliedOperationResult,
-    cell_changes: Vec<SheetCellChange>,
+    cell_changes: Vec<DocumentCellChange>,
 ) -> EditorMutationResponse {
+    let cell_changes = wire_cell_changes(cell_changes);
     let mut patches = structural_patches(editor_state.file_data(), operation);
 
     if !cell_changes.is_empty() {
@@ -168,7 +171,105 @@ pub fn restore_mutation_response(
         );
     };
 
-    mutation_response(editor_state, restore.patches)
+    mutation_response(
+        editor_state,
+        restore
+            .changes
+            .into_iter()
+            .map(restore_change_patch)
+            .collect(),
+    )
+}
+
+fn restore_change_patch(change: DocumentRestoreChange) -> EditorPatch {
+    match change {
+        DocumentRestoreChange::Cells(changes) => EditorPatch::Cells {
+            changes: wire_cell_changes(changes),
+        },
+        DocumentRestoreChange::Layout {
+            sheet_index,
+            column_widths,
+            row_heights,
+        } => EditorPatch::Layout {
+            patch: LayoutPatch {
+                sheet_index,
+                column_widths,
+                row_heights,
+            },
+        },
+        DocumentRestoreChange::RowInserted {
+            sheet_index,
+            row_index,
+            count,
+        } => EditorPatch::RowInserted {
+            patch: RowInsertedPatch {
+                sheet_index,
+                row_index,
+                count,
+            },
+        },
+        DocumentRestoreChange::RowDeleted {
+            sheet_index,
+            row_index,
+            count,
+        } => EditorPatch::RowDeleted {
+            patch: RowDeletedPatch {
+                sheet_index,
+                row_index,
+                count,
+            },
+        },
+        DocumentRestoreChange::ColumnInserted {
+            sheet_index,
+            col_index,
+            count,
+        } => EditorPatch::ColumnInserted {
+            patch: ColumnInsertedPatch {
+                sheet_index,
+                col_index,
+                count,
+            },
+        },
+        DocumentRestoreChange::ColumnDeleted {
+            sheet_index,
+            col_index,
+            count,
+        } => EditorPatch::ColumnDeleted {
+            patch: ColumnDeletedPatch {
+                sheet_index,
+                col_index,
+                count,
+            },
+        },
+        DocumentRestoreChange::SheetsReplaced {
+            start_index,
+            sheets,
+        } => EditorPatch::SheetsReplaced {
+            patch: SheetsReplacedPatch {
+                start_index,
+                sheets: sheets
+                    .into_iter()
+                    .map(|sheet| SheetManifest {
+                        name: sheet.name,
+                        extent: SheetExtent {
+                            row_count: sheet.row_count,
+                            column_count: sheet.column_count,
+                        },
+                        layout: SheetLayoutProjection {
+                            column_widths: sheet.column_widths,
+                            row_heights: sheet.row_heights,
+                        },
+                    })
+                    .collect(),
+            },
+        },
+        DocumentRestoreChange::SheetInvalidated { sheet_index } => EditorPatch::SheetInvalidated {
+            patch: SheetInvalidatedPatch { sheet_index },
+        },
+        DocumentRestoreChange::ResyncRequired { reason } => EditorPatch::ResyncRequired {
+            patch: ResyncRequiredPatch { reason },
+        },
+    }
 }
 
 pub fn structural_patches(
@@ -325,6 +426,15 @@ fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: 
     }) {
         cell_changes.push(change);
     }
+}
+
+fn wire_cell_changes(changes: Vec<DocumentCellChange>) -> Vec<SheetCellChange> {
+    changes
+        .into_iter()
+        .map(|change| {
+            SheetCellChange::new(change.sheet_index, change.row, change.col, change.value)
+        })
+        .collect()
 }
 
 #[cfg(test)]

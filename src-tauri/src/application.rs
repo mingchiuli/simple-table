@@ -1,4 +1,5 @@
 pub(crate) mod document_codec_port;
+pub(crate) mod document_encode_port;
 pub(crate) mod document_format_policy;
 pub mod document_open_service;
 pub(crate) mod document_projection;

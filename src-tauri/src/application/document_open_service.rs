@@ -73,12 +73,7 @@ pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDoc
     let reservation = service
         .prepared_documents()
         .reserve_for_file_data(&file_data, active_document_resource_bytes(service)?)?;
-    prepare_editor_state(
-        service,
-        EditorState::with_workbook(file_data, None),
-        None,
-        reservation,
-    )
+    prepare_editor_state(service, EditorState::new(file_data), None, reservation)
 }
 
 pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Result<(), AppError> {

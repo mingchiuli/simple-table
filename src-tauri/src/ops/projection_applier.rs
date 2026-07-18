@@ -2,13 +2,11 @@ use std::collections::HashMap;
 
 use crate::domain::{AppliedOperation, ProjectionMutation, cell_key::parse_cell_key};
 use crate::types::{
-    AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange,
-    DrawingProjection, FileData, MergeRange, ReadOnlyRichProjection, RowChange, RowHeightChange,
-    SheetCellChange, SheetData,
+    CellValue, DrawingProjection, FileData, MergeRange, ReadOnlyRichProjection, SheetData,
 };
 
 impl ProjectionMutation<'_> {
-    pub fn execute(&self, file_data: &mut FileData) -> AppliedOperationResult {
+    pub fn execute(&self, file_data: &mut FileData) {
         match self.operation {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -21,14 +19,6 @@ impl ProjectionMutation<'_> {
                     ensure_cell_exists(sheet, *row, *col);
                     sheet.rows[*row][*col] = new_value.clone();
                 }
-                AppliedOperationResult::SetCell {
-                    sheet_index: *sheet_index,
-                    cell: CellChange {
-                        row: *row,
-                        col: *col,
-                        value: new_value.clone(),
-                    },
-                }
             }
             AppliedOperation::SetCells { changes } => {
                 for change in changes {
@@ -36,19 +26,6 @@ impl ProjectionMutation<'_> {
                         ensure_cell_exists(sheet, change.row, change.col);
                         sheet.rows[change.row][change.col] = change.new_value.clone();
                     }
-                }
-                AppliedOperationResult::SetCells {
-                    changes: changes
-                        .iter()
-                        .map(|change| {
-                            SheetCellChange::new(
-                                change.sheet_index,
-                                change.row,
-                                change.col,
-                                change.new_value.clone(),
-                            )
-                        })
-                        .collect(),
                 }
             }
             AppliedOperation::AddRow {
@@ -72,13 +49,6 @@ impl ProjectionMutation<'_> {
                             .insert(*row_index, *height);
                     }
                 }
-                AppliedOperationResult::AddRow {
-                    sheet_index: *sheet_index,
-                    row: RowChange {
-                        index: *row_index,
-                        values: row_data.clone(),
-                    },
-                }
             }
             AppliedOperation::DeleteRow {
                 sheet_index,
@@ -91,10 +61,6 @@ impl ProjectionMutation<'_> {
                     shift_layout_map_on_delete(sheet.row_heights.as_mut(), *row_index);
                     shift_row_merges_on_delete(&mut sheet.merges, *row_index);
                     shift_rich_rows_on_delete(&mut sheet.rich, *row_index);
-                }
-                AppliedOperationResult::DeleteRow {
-                    sheet_index: *sheet_index,
-                    row_index: *row_index,
                 }
             }
             AppliedOperation::AddColumn {
@@ -124,11 +90,6 @@ impl ProjectionMutation<'_> {
                             .insert(*col_index, *width);
                     }
                 }
-                AppliedOperationResult::AddColumn {
-                    sheet_index: *sheet_index,
-                    column: ColumnChange { index: *col_index },
-                    col_data: col_data.clone(),
-                }
             }
             AppliedOperation::DeleteColumn {
                 sheet_index,
@@ -144,10 +105,6 @@ impl ProjectionMutation<'_> {
                     shift_column_merges_on_delete(&mut sheet.merges, *col_index);
                     shift_rich_columns_on_delete(&mut sheet.rich, *col_index);
                 }
-                AppliedOperationResult::DeleteColumn {
-                    sheet_index: *sheet_index,
-                    column_index: *col_index,
-                }
             }
             AppliedOperation::SetColumnWidth {
                 sheet_index,
@@ -157,13 +114,6 @@ impl ProjectionMutation<'_> {
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     set_layout_value(&mut sheet.column_widths, *col_index, *new_width);
-                }
-                AppliedOperationResult::SetColumnWidth {
-                    sheet_index: *sheet_index,
-                    column: ColumnWidthChange {
-                        col_index: *col_index,
-                        width: *new_width,
-                    },
                 }
             }
             AppliedOperation::SetRowHeight {
@@ -175,13 +125,6 @@ impl ProjectionMutation<'_> {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     set_layout_value(&mut sheet.row_heights, *row_index, *new_height);
                 }
-                AppliedOperationResult::SetRowHeight {
-                    sheet_index: *sheet_index,
-                    row: RowHeightChange {
-                        row_index: *row_index,
-                        height: *new_height,
-                    },
-                }
             }
             AppliedOperation::AddSheet {
                 sheet_index,
@@ -191,38 +134,29 @@ impl ProjectionMutation<'_> {
             } => {
                 let index = (*sheet_index).min(file_data.sheets.len());
                 let sheet_data = new_sheet_data(name, *row_count, *column_count);
-                file_data.sheets.insert(index, sheet_data.clone());
-                AppliedOperationResult::AddSheet {
-                    sheet_index: index,
-                    name: name.clone(),
-                    sheet_data,
-                }
+                file_data.sheets.insert(index, sheet_data);
             }
             AppliedOperation::DeleteSheet { sheet_index } => {
-                let removed_sheet = file_data.sheets.remove(*sheet_index);
-                AppliedOperationResult::DeleteSheet {
-                    sheet_index: *sheet_index,
-                    sheet_data: removed_sheet,
-                }
+                file_data.sheets.remove(*sheet_index);
             }
         }
     }
 
-    pub fn execute_cells_and_layout(
-        &self,
-        file_data: &mut FileData,
-    ) -> Option<AppliedOperationResult> {
+    pub fn execute_cells_and_layout(&self, file_data: &mut FileData) -> bool {
         match self.operation {
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
             | AppliedOperation::SetColumnWidth { .. }
-            | AppliedOperation::SetRowHeight { .. } => Some(self.execute(file_data)),
+            | AppliedOperation::SetRowHeight { .. } => {
+                self.execute(file_data);
+                true
+            }
             AppliedOperation::AddRow { .. }
             | AppliedOperation::DeleteRow { .. }
             | AppliedOperation::AddColumn { .. }
             | AppliedOperation::DeleteColumn { .. }
             | AppliedOperation::AddSheet { .. }
-            | AppliedOperation::DeleteSheet { .. } => None,
+            | AppliedOperation::DeleteSheet { .. } => false,
         }
     }
 }

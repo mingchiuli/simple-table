@@ -1,8 +1,6 @@
 use crate::document::document_memento::FileStructureMemento;
-use crate::types::{
-    ColumnDeletedPatch, ColumnInsertedPatch, EditorPatch, FileData, ResyncRequiredPatch,
-    RowDeletedPatch, RowInsertedPatch, SheetLayoutProjection, SheetManifest, SheetsReplacedPatch,
-};
+use crate::document::document_restore::{DocumentRestoreChange, RestoredSheet};
+use crate::types::FileData;
 
 pub(crate) enum CurrentStructureShape {
     Empty,
@@ -36,32 +34,28 @@ impl CurrentStructureShape {
     }
 }
 
-pub(crate) fn restore_structure_patches(
+pub(crate) fn restore_structure_changes(
     current_shape: &CurrentStructureShape,
     target_memento: &FileStructureMemento,
     restored: &FileData,
-) -> Vec<EditorPatch> {
+) -> Vec<DocumentRestoreChange> {
     match (current_shape, target_memento) {
         (CurrentStructureShape::Row { row_count }, FileStructureMemento::Row(target))
             if target.row_count > *row_count =>
         {
-            vec![EditorPatch::RowInserted {
-                patch: RowInsertedPatch {
-                    sheet_index: target.sheet_index,
-                    row_index: target.row_index,
-                    count: target.row_count - *row_count,
-                },
+            vec![DocumentRestoreChange::RowInserted {
+                sheet_index: target.sheet_index,
+                row_index: target.row_index,
+                count: target.row_count - *row_count,
             }]
         }
         (CurrentStructureShape::Row { row_count }, FileStructureMemento::Row(target))
             if target.row_count < *row_count =>
         {
-            vec![EditorPatch::RowDeleted {
-                patch: RowDeletedPatch {
-                    sheet_index: target.sheet_index,
-                    row_index: target.row_index,
-                    count: *row_count - target.row_count,
-                },
+            vec![DocumentRestoreChange::RowDeleted {
+                sheet_index: target.sheet_index,
+                row_index: target.row_index,
+                count: *row_count - target.row_count,
             }]
         }
         (CurrentStructureShape::Column { row_lengths }, FileStructureMemento::Column(target)) => {
@@ -70,24 +64,24 @@ pub(crate) fn restore_structure_patches(
         (CurrentStructureShape::Sheets { sheet_index }, FileStructureMemento::Sheets(target))
             if *sheet_index == target.truncate_from =>
         {
-            vec![EditorPatch::SheetsReplaced {
-                patch: SheetsReplacedPatch {
-                    start_index: target.truncate_from,
-                    sheets: restored
-                        .sheets
-                        .get(target.truncate_from..)
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|sheet| SheetManifest {
+            vec![DocumentRestoreChange::SheetsReplaced {
+                start_index: target.truncate_from,
+                sheets: restored
+                    .sheets
+                    .get(target.truncate_from..)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|sheet| {
+                        let extent = sheet.extent();
+                        RestoredSheet {
                             name: sheet.name.clone(),
-                            extent: sheet.extent(),
-                            layout: SheetLayoutProjection {
-                                column_widths: sheet.column_widths.clone().unwrap_or_default(),
-                                row_heights: sheet.row_heights.clone().unwrap_or_default(),
-                            },
-                        })
-                        .collect(),
-                },
+                            row_count: extent.row_count,
+                            column_count: extent.column_count,
+                            column_widths: sheet.column_widths.clone().unwrap_or_default(),
+                            row_heights: sheet.row_heights.clone().unwrap_or_default(),
+                        }
+                    })
+                    .collect(),
             }]
         }
         (_, FileStructureMemento::Row(_)) | (_, FileStructureMemento::Column(_)) => {
@@ -100,7 +94,7 @@ pub(crate) fn restore_structure_patches(
 fn column_restore_patch(
     current_lengths: &[usize],
     target: &crate::document::document_memento::ColumnStructureMemento,
-) -> Vec<EditorPatch> {
+) -> Vec<DocumentRestoreChange> {
     let mut target_is_wider = false;
     let mut current_is_wider = false;
     let row_count = current_lengths.len().max(target.row_lengths.len());
@@ -115,29 +109,22 @@ fn column_restore_patch(
         current_is_wider |= current > restored;
     }
     match (target_is_wider, current_is_wider) {
-        (true, false) => vec![EditorPatch::ColumnInserted {
-            patch: ColumnInsertedPatch {
-                sheet_index: target.sheet_index,
-                col_index: target.col_index,
-                count: 1,
-            },
+        (true, false) => vec![DocumentRestoreChange::ColumnInserted {
+            sheet_index: target.sheet_index,
+            col_index: target.col_index,
+            count: 1,
         }],
-        (false, true) => vec![EditorPatch::ColumnDeleted {
-            patch: ColumnDeletedPatch {
-                sheet_index: target.sheet_index,
-                col_index: target.col_index,
-                count: 1,
-            },
+        (false, true) => vec![DocumentRestoreChange::ColumnDeleted {
+            sheet_index: target.sheet_index,
+            col_index: target.col_index,
+            count: 1,
         }],
         _ => resync_structure_patch(),
     }
 }
 
-fn resync_structure_patch() -> Vec<EditorPatch> {
-    vec![EditorPatch::ResyncRequired {
-        patch: ResyncRequiredPatch {
-            reason: "structure restore direction could not be represented incrementally"
-                .to_string(),
-        },
+fn resync_structure_patch() -> Vec<DocumentRestoreChange> {
+    vec![DocumentRestoreChange::ResyncRequired {
+        reason: "structure restore direction could not be represented incrementally".to_string(),
     }]
 }

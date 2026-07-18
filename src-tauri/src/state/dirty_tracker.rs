@@ -1,5 +1,5 @@
 use crate::document::document_memento::DocumentMementoSide;
-use crate::domain::AppliedOperation;
+use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::state::content_hash::{ContentHash, IncrementalContentFingerprint};
 use crate::types::FileData;
 
@@ -33,7 +33,7 @@ impl DirtyTracker {
     pub fn apply_operation(
         &mut self,
         operation: &AppliedOperation,
-        formula_changes: &[crate::types::SheetCellChange],
+        formula_changes: &[DocumentCellChange],
         file_data: &FileData,
     ) {
         self.current

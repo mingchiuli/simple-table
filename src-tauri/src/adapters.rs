@@ -2,6 +2,7 @@ pub(crate) mod document_codec_adapter;
 pub mod document_file_adapter;
 pub(crate) mod document_work_budget_adapter;
 pub mod recent_file_adapter;
+pub(crate) mod search_document_source_adapter;
 pub mod search_index_adapter;
 pub(crate) mod search_index_scheduler;
 pub(crate) mod search_index_store;

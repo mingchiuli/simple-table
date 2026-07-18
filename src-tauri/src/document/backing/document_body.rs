@@ -1,15 +1,16 @@
 use std::{collections::BTreeSet, sync::Arc};
 
+use crate::document::backing::workbook_state::{self, StructurePatchDiagnostics};
 use crate::document_format::{SpreadsheetFileFormat, extension_of};
-use crate::domain::AppliedOperation;
+use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
+#[cfg(test)]
 use crate::io::codec::writer;
 use crate::io::projection_codec::WorkbookProjectionCodec;
-use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::types::{
-    AppliedOperationResult, FileData, SheetCapabilities, SheetCellChange, WorkbookCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    FileData, SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 use umya_spreadsheet::{Workbook, Worksheet};
 
@@ -51,7 +52,6 @@ pub struct WorksheetSnapshot {
 }
 
 pub struct BodyStructureOperationResult {
-    pub result: AppliedOperationResult,
     pub diagnostics: StructurePatchDiagnostics,
 }
 
@@ -207,6 +207,7 @@ impl SpreadsheetDocumentBody {
         SpreadsheetDocumentBodySnapshot { body }
     }
 
+    #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
         projection: &FileData,
@@ -226,26 +227,6 @@ impl SpreadsheetDocumentBody {
                 writer::generate_file_bytes_for_target(projection, target_path_or_name)
             }
             None => Err(AppError::UnsupportedFormat),
-        }
-    }
-
-    pub fn generate_file_bytes_without_projection_for_target(
-        &self,
-        target_path_or_name: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
-        match SpreadsheetFileFormat::from_path_or_default(target_path_or_name) {
-            Some(SpreadsheetFileFormat::Xlsx) => match self {
-                Self::Excel(body) => writer::generate_excel_bytes_from_workbook_for_target(
-                    excel_workbook(body),
-                    target_path_or_name,
-                ),
-                Self::Csv | Self::GeneratedWorkbook => Err(AppError::Internal(
-                    "projection is required to generate this document body".to_string(),
-                )),
-            },
-            Some(SpreadsheetFileFormat::Csv) | None => Err(AppError::Internal(
-                "projection-free save snapshots only support native xlsx workbooks".to_string(),
-            )),
         }
     }
 
@@ -269,17 +250,14 @@ impl SpreadsheetDocumentBody {
                 WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
                 WorkbookProjectionCodec::sync_merge_ranges(excel_workbook_mut(body), projection)?;
                 WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
+                Ok(Some(BodyStructureOperationResult { diagnostics }))
+            }
+            Self::Csv | Self::GeneratedWorkbook => {
+                operation.projection_mutation().execute(projection);
                 Ok(Some(BodyStructureOperationResult {
-                    result: operation
-                        .patch_projector()
-                        .projected_result_from_current_file(projection),
-                    diagnostics,
+                    diagnostics: StructurePatchDiagnostics::default(),
                 }))
             }
-            Self::Csv | Self::GeneratedWorkbook => Ok(Some(BodyStructureOperationResult {
-                result: operation.projection_mutation().execute(projection),
-                diagnostics: StructurePatchDiagnostics::default(),
-            })),
         }
     }
 
@@ -287,7 +265,7 @@ impl SpreadsheetDocumentBody {
         &mut self,
         projection: &mut FileData,
         operation: &AppliedOperation,
-        cell_changes: &[SheetCellChange],
+        cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
         match self {
             Self::Excel(_) if operation.impact().is_structure_change() => Ok(()),
@@ -304,7 +282,7 @@ impl SpreadsheetDocumentBody {
     pub fn patch_formula_changes(
         &mut self,
         projection: &mut FileData,
-        cell_changes: &[SheetCellChange],
+        cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => workbook_state::patch_formula_changes(
@@ -390,21 +368,11 @@ impl SpreadsheetDocumentBodySnapshot {
         self.body.is_excel_backed()
     }
 
-    pub fn generate_file_bytes_without_projection_for_target(
-        &self,
-        target_path_or_name: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
-        self.body
-            .generate_file_bytes_without_projection_for_target(target_path_or_name)
-    }
-
-    pub fn generate_file_bytes_for_target(
-        &self,
-        projection: &FileData,
-        target_path_or_name: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
-        self.body
-            .generate_file_bytes_for_target(projection, target_path_or_name)
+    pub(crate) fn native_workbook(&self) -> Option<&Workbook> {
+        match &self.body {
+            SpreadsheetDocumentBody::Excel(body) => Some(excel_workbook(body)),
+            SpreadsheetDocumentBody::Csv | SpreadsheetDocumentBody::GeneratedWorkbook => None,
+        }
     }
 
     pub fn validate_persisted_projection_consistency(

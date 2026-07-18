@@ -1,6 +1,12 @@
+use crate::document::backing::document_body::SpreadsheetDocumentBodySnapshot;
 use crate::error::AppError;
-use crate::io::document_body::SpreadsheetDocumentBodySnapshot;
 use crate::types::FileData;
+use umya_spreadsheet::Workbook;
+
+pub(crate) enum DocumentSaveEncoding<'a> {
+    NativeWorkbook(&'a Workbook),
+    Projection(&'a FileData),
+}
 
 pub struct SpreadsheetDocumentSaveSnapshot {
     projection: SaveProjectionSnapshot,
@@ -41,10 +47,7 @@ impl SpreadsheetDocumentSaveSnapshot {
         self.body.is_excel_backed()
     }
 
-    pub fn generate_file_bytes_for_target(
-        &self,
-        target_path_or_name: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
+    pub(crate) fn encoding(&self) -> Result<DocumentSaveEncoding<'_>, AppError> {
         if let Some(reason) = &self.transaction_failure {
             return Err(AppError::DocumentStateInvalid(reason.clone()));
         }
@@ -52,12 +55,17 @@ impl SpreadsheetDocumentSaveSnapshot {
             SaveProjectionSnapshot::Projection(projection) => {
                 self.body
                     .validate_persisted_projection_consistency(projection)?;
-                self.body
-                    .generate_file_bytes_for_target(projection, target_path_or_name)
+                Ok(DocumentSaveEncoding::Projection(projection))
             }
             SaveProjectionSnapshot::ValidatedNativeWorkbook => self
                 .body
-                .generate_file_bytes_without_projection_for_target(target_path_or_name),
+                .native_workbook()
+                .map(DocumentSaveEncoding::NativeWorkbook)
+                .ok_or_else(|| {
+                    AppError::Internal(
+                        "validated native save snapshot has no workbook backing".to_string(),
+                    )
+                }),
         }
     }
 }

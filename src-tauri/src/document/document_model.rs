@@ -1,3 +1,5 @@
+use crate::document::backing::document_body::BodySheetShape;
+use crate::document::backing::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
 use crate::document::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
     FileStructureMemento, LayoutMemento, ProjectionSheetSnapshot, RichProjectionMemento,
@@ -5,47 +7,30 @@ use crate::document::document_memento::{
     protected_rich_cell_positions,
 };
 use crate::document::document_memento_budget;
-use crate::document::document_patches::{CurrentStructureShape, restore_structure_patches};
+use crate::document::document_patches::{CurrentStructureShape, restore_structure_changes};
+use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::document_transaction::DocumentTransaction;
 use crate::document::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
 use crate::document::region_metadata_index::RegionMetadataIndex;
-use crate::domain::{AppliedOperation, ResolvedCellEdit};
+use crate::domain::{AppliedOperation, DocumentCellChange, ResolvedCellEdit};
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
-use crate::io::document_body::BodySheetShape;
-use crate::io::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
 use crate::types::FormulaStatus;
-use crate::types::{
-    AppliedOperationResult, CellValue, EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch,
-    SheetCapabilities, SheetCellChange, SheetData, SheetInvalidatedPatch, WorkbookCapabilities,
-};
+use crate::types::{CellValue, FileData, SheetCapabilities, SheetData, WorkbookCapabilities};
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug, Clone)]
 pub struct DocumentOperationResult {
-    pub operation: AppliedOperationResult,
-    pub cell_changes: Vec<SheetCellChange>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DocumentRestoreResult {
-    pub patches: Vec<EditorPatch>,
-}
-
-impl DocumentRestoreResult {
-    fn empty() -> Self {
-        Self {
-            patches: Vec::new(),
-        }
-    }
+    pub cell_changes: Vec<DocumentCellChange>,
 }
 
 /// Canonical spreadsheet document.
 ///
-/// Excel files keep the original `Workbook` as the persistence object. `FileData`
-/// is a projection used by UI, formula calculation, search, and dirty hashing.
+/// The physical backing preserves format-specific metadata while `FileData` is
+/// the projection used by editing, formula calculation, search, and dirty hashing.
 pub struct SpreadsheetDocument {
     projection: FileData,
     body: SpreadsheetDocumentBody,
@@ -60,9 +45,13 @@ pub struct SpreadsheetDocument {
 }
 
 impl SpreadsheetDocument {
-    pub fn new(mut projection: FileData, workbook: Option<Workbook>) -> Self {
+    pub fn new(projection: FileData) -> Self {
+        let body = SpreadsheetDocumentBody::from_projection(&projection, None);
+        Self::from_backing(projection, body)
+    }
+
+    pub(crate) fn from_backing(mut projection: FileData, body: SpreadsheetDocumentBody) -> Self {
         let formulas = FormulaCoordinator::new(&mut projection);
-        let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
         let formula_structure_limitations = formulas.structure_formula_limitations();
         let cached_capabilities = body.capabilities(&formula_structure_limitations);
         let region_metadata = RegionMetadataIndex::from_file_data(&projection);
@@ -79,6 +68,12 @@ impl SpreadsheetDocument {
             #[cfg(test)]
             injected_post_patch_restore_failures: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_workbook(projection: FileData, workbook: Option<Workbook>) -> Self {
+        let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
+        Self::from_backing(projection, body)
     }
 
     pub fn projection(&self) -> &FileData {
@@ -392,7 +387,7 @@ impl SpreadsheetDocument {
         let cells = positions
             .into_iter()
             .map(|(sheet_index, row, col)| {
-                SheetCellChange::new(
+                DocumentCellChange::new(
                     sheet_index,
                     row,
                     col,
@@ -558,18 +553,16 @@ impl SpreadsheetDocument {
         }
         self.fail_post_patch_restore_if_injected()?;
         self.validate_projection_sheets(cell_memento_sheet_indexes(memento))?;
-        let mut patches = Vec::new();
+        let mut changes = Vec::new();
         let mut cell_changes = memento.cells.clone();
         for change in formula_changes {
             push_sheet_cell_change_if_missing(&mut cell_changes, change);
         }
         if !cell_changes.is_empty() {
-            patches.push(EditorPatch::Cells {
-                changes: cell_changes,
-            });
+            changes.push(DocumentRestoreChange::Cells(cell_changes));
         }
-        patches.extend(shape_restore_patches(&memento.sheet_shapes));
-        Ok(DocumentRestoreResult { patches })
+        changes.extend(shape_restore_changes(&memento.sheet_shapes));
+        Ok(DocumentRestoreResult { changes })
     }
 
     fn restore_cell_shapes(&mut self, shapes: &[SheetShapeMemento]) {
@@ -591,7 +584,7 @@ impl SpreadsheetDocument {
         memento: &LayoutMemento,
     ) -> Result<DocumentRestoreResult, AppError> {
         let Some(sheet) = self.projection.sheets.get_mut(memento.sheet_index) else {
-            return Ok(DocumentRestoreResult::empty());
+            return Ok(DocumentRestoreResult::default());
         };
 
         for (col_index, width) in &memento.column_widths {
@@ -637,12 +630,10 @@ impl SpreadsheetDocument {
         self.fail_post_patch_restore_if_injected()?;
         self.validate_projection_sheets([memento.sheet_index])?;
         Ok(DocumentRestoreResult {
-            patches: vec![EditorPatch::Layout {
-                patch: LayoutPatch {
-                    sheet_index: memento.sheet_index,
-                    column_widths: memento.column_widths.clone(),
-                    row_heights: memento.row_heights.clone(),
-                },
+            changes: vec![DocumentRestoreChange::Layout {
+                sheet_index: memento.sheet_index,
+                column_widths: memento.column_widths.clone(),
+                row_heights: memento.row_heights.clone(),
             }],
         })
     }
@@ -669,28 +660,24 @@ impl SpreadsheetDocument {
         self.fail_post_patch_restore_if_injected()?;
         self.validate_persisted_projection_consistency()?;
         self.validate_projection_consistency()?;
-        let mut patches =
-            restore_structure_patches(&current_shape, &memento.projection, &self.projection);
-        if patches.is_empty() {
-            patches.push(EditorPatch::ResyncRequired {
-                patch: ResyncRequiredPatch {
-                    reason: "structure restore changed workbook projection".to_string(),
-                },
+        let mut changes =
+            restore_structure_changes(&current_shape, &memento.projection, &self.projection);
+        if changes.is_empty() {
+            changes.push(DocumentRestoreChange::ResyncRequired {
+                reason: "structure restore changed workbook projection".to_string(),
             });
         }
         if !formula_changes.is_empty() {
-            patches.push(EditorPatch::Cells {
-                changes: formula_changes,
-            });
+            changes.push(DocumentRestoreChange::Cells(formula_changes));
         }
         self.refresh_region_metadata_index();
-        Ok(DocumentRestoreResult { patches })
+        Ok(DocumentRestoreResult { changes })
     }
 
     pub(in crate::document) fn recalculate_after_operation(
         &mut self,
         operation: &AppliedOperation,
-    ) -> Vec<SheetCellChange> {
+    ) -> Vec<DocumentCellChange> {
         let changes = self
             .formulas
             .recalculate_after_operation(operation, &mut self.projection);
@@ -703,8 +690,7 @@ impl SpreadsheetDocument {
     pub(in crate::document) fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
-        _result: &AppliedOperationResult,
-        cell_changes: &[SheetCellChange],
+        cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
         self.body
             .patch_after_operation(&mut self.projection, operation, cell_changes)
@@ -718,7 +704,7 @@ impl SpreadsheetDocument {
     pub(in crate::document) fn apply_operation_to_body_and_projection(
         &mut self,
         operation: &AppliedOperation,
-    ) -> Result<AppliedOperationResult, AppError> {
+    ) -> Result<(), AppError> {
         if let Some(result) = self.body.apply_structure_operation(
             &mut self.projection,
             operation,
@@ -728,22 +714,23 @@ impl SpreadsheetDocument {
                 .set_pending_structure_diagnostics(result.diagnostics);
             self.refresh_capabilities();
             self.validate_persisted_projection_consistency()?;
-            return Ok(result.result);
+            return Ok(());
         }
 
-        Ok(operation
+        if !operation
             .projection_mutation()
             .execute_cells_and_layout(&mut self.projection)
-            .unwrap_or_else(|| {
-                operation
-                    .projection_mutation()
-                    .execute(&mut self.projection)
-            }))
+        {
+            operation
+                .projection_mutation()
+                .execute(&mut self.projection);
+        }
+        Ok(())
     }
 
     pub(in crate::document) fn patch_workbook_formula_changes(
         &mut self,
-        cell_changes: &[SheetCellChange],
+        cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
         self.body
             .patch_formula_changes(&mut self.projection, cell_changes)
@@ -985,7 +972,10 @@ fn push_unique_position(
     }
 }
 
-fn push_sheet_cell_change_if_missing(changes: &mut Vec<SheetCellChange>, change: SheetCellChange) {
+fn push_sheet_cell_change_if_missing(
+    changes: &mut Vec<DocumentCellChange>,
+    change: DocumentCellChange,
+) {
     if !changes.iter().any(|existing| {
         existing.sheet_index == change.sheet_index
             && existing.row == change.row
@@ -1006,7 +996,7 @@ fn cell_memento_sheet_indexes(memento: &CellMemento) -> Vec<usize> {
     sheets.into_iter().collect()
 }
 
-fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<EditorPatch> {
+fn shape_restore_changes(shapes: &[SheetShapeMemento]) -> Vec<DocumentRestoreChange> {
     let mut sheet_indexes = shapes
         .iter()
         .map(|shape| shape.sheet_index)
@@ -1015,9 +1005,7 @@ fn shape_restore_patches(shapes: &[SheetShapeMemento]) -> Vec<EditorPatch> {
     sheet_indexes.dedup();
     sheet_indexes
         .into_iter()
-        .map(|sheet_index| EditorPatch::SheetInvalidated {
-            patch: SheetInvalidatedPatch { sheet_index },
-        })
+        .map(|sheet_index| DocumentRestoreChange::SheetInvalidated { sheet_index })
         .collect()
 }
 

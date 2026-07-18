@@ -935,8 +935,8 @@ fn run_incremental(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
     use crate::adapters::search_index_store::SearchIndexRegistry;
-    use crate::application::search_service::RepositorySearchDocumentSource;
     use crate::domain::EditorCommand;
     use crate::error::AppError;
     use crate::state::editor_state::EditorState;

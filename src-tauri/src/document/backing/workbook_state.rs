@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::domain::AppliedOperation;
+use crate::document::backing::document_body::BodySheetShape;
+use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::reference_rewrite::{
@@ -8,11 +9,10 @@ use crate::formula::reference_rewrite::{
     adjust_formula_references, invalidate_deleted_sheet_references,
 };
 use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
-use crate::io::document_body::BodySheetShape;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::types::{
-    FileData, SheetCapabilities, SheetCellChange, SheetData, WorkbookCapabilities,
-    WorkbookRichCapabilities, WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    FileData, SheetCapabilities, SheetData, WorkbookCapabilities, WorkbookRichCapabilities,
+    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 use umya_spreadsheet::{Workbook, Worksheet};
 
@@ -37,7 +37,7 @@ pub fn patch_after_operation(
     workbook: &mut Workbook,
     file_data: &mut FileData,
     operation: &AppliedOperation,
-    cell_changes: &[SheetCellChange],
+    cell_changes: &[DocumentCellChange],
 ) -> Result<(), AppError> {
     match operation {
         AppliedOperation::SetCell {
@@ -647,7 +647,7 @@ fn should_rewrite_formula_sheet(
 pub fn patch_formula_changes(
     workbook: &mut Workbook,
     file_data: &mut FileData,
-    cell_changes: &[SheetCellChange],
+    cell_changes: &[DocumentCellChange],
 ) -> Result<(), AppError> {
     patch_cell_changes(workbook, file_data, cell_changes)
 }
@@ -707,7 +707,7 @@ pub fn patch_cell_shapes(
 fn patch_cell_changes(
     workbook: &mut Workbook,
     file_data: &mut FileData,
-    cell_changes: &[SheetCellChange],
+    cell_changes: &[DocumentCellChange],
 ) -> Result<(), AppError> {
     for change in cell_changes {
         patch_cell(

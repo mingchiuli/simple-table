@@ -1,8 +1,10 @@
-use crate::document::document_model::{DocumentRestoreResult, SpreadsheetDocument};
+use crate::document::document_model::SpreadsheetDocument;
+use crate::document::document_restore::DocumentRestoreResult;
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
 use crate::domain::{
-    AppliedOperation, EditorCommand, SearchIndexWork, SearchScanCursor, SearchTextChunk,
+    AppliedOperation, DocumentCellChange, EditorCommand, SearchIndexWork, SearchScanCursor,
+    SearchTextChunk,
 };
 use crate::error::AppError;
 use crate::resource_limits::ResourceLedger;
@@ -20,16 +22,15 @@ use crate::state::history_store::{
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_document::collect_sheet_search_text_chunk;
 use crate::types::HistoryStatus;
-use crate::types::{
-    AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
-};
+use crate::types::{FileData, FormulaStatus, WorkbookCapabilities};
 use std::collections::HashSet;
+#[cfg(test)]
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug)]
 pub struct ExecutedOperation {
-    pub operation: Option<AppliedOperationResult>,
-    pub cell_changes: Vec<SheetCellChange>,
+    pub operation: Option<AppliedOperation>,
+    pub cell_changes: Vec<DocumentCellChange>,
     pub restore: Option<DocumentRestoreResult>,
     pub search_index_work: SearchIndexWork,
     pub(crate) retired: RetiredEditorResources,
@@ -80,8 +81,11 @@ impl RetiredEditorResources {
 }
 
 impl EditorState {
-    pub fn with_workbook(file_data: FileData, workbook: Option<Workbook>) -> Self {
-        let document = SpreadsheetDocument::new(file_data, workbook);
+    pub fn new(file_data: FileData) -> Self {
+        Self::from_document(SpreadsheetDocument::new(file_data))
+    }
+
+    pub(crate) fn from_document(document: SpreadsheetDocument) -> Self {
         let dirty = DirtyTracker::new(document.projection());
         let resources = ResourceLedger::from_file_data(document.projection());
         Self {
@@ -92,6 +96,11 @@ impl EditorState {
             resources,
             save_commit: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_workbook(file_data: FileData, workbook: Option<Workbook>) -> Self {
+        Self::from_document(SpreadsheetDocument::with_workbook(file_data, workbook))
     }
 
     pub fn file_data(&self) -> &FileData {
@@ -114,7 +123,7 @@ impl EditorState {
         clear_history: bool,
     ) -> Result<RetiredEditorResources, AppError> {
         self.rebind_saved_document_model(
-            SpreadsheetDocument::new(file_data, workbook),
+            SpreadsheetDocument::with_workbook(file_data, workbook),
             clear_history,
         )
     }
@@ -364,7 +373,6 @@ impl EditorState {
         let before = self.document.capture_memento_side(&operation);
 
         let result = self.document.execute_operation(&operation, &before)?;
-        let operation_result = result.operation;
         let cell_changes = result.cell_changes;
         let resource_sheets = operation_resource_sheets(&operation, &cell_changes);
         self.resources
@@ -384,7 +392,7 @@ impl EditorState {
         self.bump_revision()?;
         if should_mark_search_stale {
             return Ok(ExecutedOperation {
-                operation: Some(operation_result),
+                operation: Some(operation),
                 cell_changes,
                 restore: None,
                 search_index_work: SearchIndexWork::RebuildAll,
@@ -392,7 +400,7 @@ impl EditorState {
             });
         }
         Ok(ExecutedOperation {
-            operation: Some(operation_result),
+            operation: Some(operation),
             cell_changes,
             restore: None,
             search_index_work: SearchIndexWork::None,
@@ -526,7 +534,7 @@ fn nonzero_random_u64() -> u64 {
 
 fn operation_resource_sheets(
     operation: &AppliedOperation,
-    formula_changes: &[SheetCellChange],
+    formula_changes: &[DocumentCellChange],
 ) -> Vec<usize> {
     let mut sheets = HashSet::new();
     match operation {

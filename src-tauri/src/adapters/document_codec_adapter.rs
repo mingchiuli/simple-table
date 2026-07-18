@@ -1,13 +1,17 @@
 use crate::application::document_codec_port::{
     DocumentCodecPort, DocumentDecodePlan, OpenDocumentSource,
 };
+use crate::application::document_encode_port::DocumentEncodePort;
+use crate::document::backing::document_body::SpreadsheetDocumentBody;
 use crate::document::document_model::SpreadsheetDocument;
+use crate::document::document_save::{DocumentSaveEncoding, SpreadsheetDocumentSaveSnapshot};
 use crate::document_format::{file_name_from_path_like, open_extension_from_path_name_or_bytes};
 use crate::error::AppError;
 use crate::io::codec::reader::{
     InputFilePreflight, preflight_input_file, read_file_with_workbook_from_bytes,
     read_file_with_workbook_from_preflight,
 };
+use crate::io::codec::writer;
 use crate::state::editor_state::EditorState;
 
 #[derive(Default)]
@@ -32,10 +36,27 @@ impl DocumentDecodePlan for IoDocumentDecodePlan {
             source.path,
             resolved_file_name,
         )?;
-        Ok(EditorState::with_workbook(
-            result.file_data,
-            result.workbook,
+        let body = SpreadsheetDocumentBody::from_projection(&result.file_data, result.workbook);
+        Ok(EditorState::from_document(
+            SpreadsheetDocument::from_backing(result.file_data, body),
         ))
+    }
+}
+
+impl DocumentEncodePort for DocumentCodecAdapter {
+    fn encode(
+        &self,
+        snapshot: &SpreadsheetDocumentSaveSnapshot,
+        target_path_or_name: &str,
+    ) -> Result<(String, Vec<u8>), AppError> {
+        match snapshot.encoding()? {
+            DocumentSaveEncoding::NativeWorkbook(workbook) => {
+                writer::generate_excel_bytes_from_workbook_for_target(workbook, target_path_or_name)
+            }
+            DocumentSaveEncoding::Projection(projection) => {
+                writer::generate_file_bytes_for_target(projection, target_path_or_name)
+            }
+        }
     }
 }
 
@@ -62,14 +83,15 @@ impl DocumentCodecPort for DocumentCodecAdapter {
         file_name: String,
     ) -> Result<SpreadsheetDocument, AppError> {
         let result = read_file_with_workbook_from_bytes(extension, bytes, path, file_name)?;
-        Ok(SpreadsheetDocument::new(result.file_data, result.workbook))
+        let body = SpreadsheetDocumentBody::from_projection(&result.file_data, result.workbook);
+        Ok(SpreadsheetDocument::from_backing(result.file_data, body))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CellValue;
+    use crate::types::{CellValue, FileData, SheetData};
 
     #[test]
     fn extensionless_csv_source_is_decoded_through_the_port() {
@@ -85,5 +107,27 @@ mod tests {
 
         assert_eq!(rows[0][0], CellValue::String("name".to_string()));
         assert_eq!(rows[1][1], CellValue::Number(42.into()));
+    }
+
+    #[test]
+    fn projection_snapshot_is_encoded_through_the_port() {
+        let document = SpreadsheetDocument::new(FileData {
+            path: String::new(),
+            file_name: "source.csv".to_string(),
+            sheets: vec![SheetData {
+                rows: vec![vec![CellValue::String("encoded".to_string())]],
+                ..Default::default()
+            }],
+        });
+        let snapshot = document
+            .save_snapshot_for_target("export.csv")
+            .expect("save snapshot");
+
+        let (output_name, bytes) = DocumentCodecAdapter
+            .encode(&snapshot, "export.csv")
+            .expect("encode snapshot");
+
+        assert_eq!(output_name, "export.csv");
+        assert_eq!(String::from_utf8(bytes).expect("UTF-8 CSV"), "encoded\n");
     }
 }

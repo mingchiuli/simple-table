@@ -19,12 +19,14 @@ flowchart TB
     STATE[EditorState session]
     DOMAIN[Editor command and applied-operation domain contract]
     DOC[Document aggregate]
+    BACKING[Workbook-backed document backing]
     IO[Workbook, CSV, and platform I/O]
 
     UI --> APP --> STORE
     APP --> REGION --> STORE
-    APP --> RPC --> IPC --> ADAPTER --> SERVICE --> OPS --> STATE --> DOC --> IO
+    APP --> RPC --> IPC --> ADAPTER --> SERVICE --> OPS --> STATE --> DOC --> BACKING
     ADAPTER --> IO
+    IO --> BACKING
     OPS --> DOMAIN
     STATE --> DOMAIN
     DOC --> DOMAIN
@@ -60,6 +62,9 @@ may receive `tauri::State<ApplicationRuntime>` and
 `tauri::State<CommandExecutionRuntime>`, but select a narrow service, outer
 adapter, and executor before delegating work. Business repositories,
 schedulers, and command executors cannot locate process-global mutable state.
+Repository-backed search document access is an outer adapter assembled by the
+composition root. `search_service` contains only the port-driven use case and
+cannot depend on the active-document repository or `DocumentHandle`.
 
 The active-document registry is hidden behind `ActiveDocumentRepository`.
 Application and operation modules request semantic read or mutation handles
@@ -105,10 +110,21 @@ projection and workbook adapters construct their own representations.
 
 The Rust `document` module is the physical aggregate boundary. It owns
 `SpreadsheetDocument`, transactions, mementos, formula coordination, save
-snapshots, and region metadata. `state` owns the active editor session and may
-depend on `document`, but neither `state` nor `ops` may import `io` directly.
-The `io` module owns codecs, input limits, filesystem/platform adapters, and the
-workbook-backed persistence body used behind the document aggregate.
+snapshots, region metadata, and the concrete workbook backing that participates
+in those invariants. Format-specific backing code is isolated under
+`document::backing`; the rest of the aggregate cannot import `io`.
+`SpreadsheetDocument` and `EditorState` production constructors receive either
+plain document data or an already assembled backing and never expose the
+third-party workbook type. `state` owns the active editor session and may depend
+on `document`, but neither `state` nor `ops` may import `io` directly. The `io`
+module owns codecs, input limits, filesystem/platform adapters, and byte-level
+file generation.
+
+Document execution returns internal `AppliedOperation`, `DocumentCellChange`,
+and `DocumentRestoreChange` values. The document, formula, memento, and state
+layers cannot construct mutation protocol DTOs. `ops::patch_projector` is the
+single mapper from those internal outcomes to `AppliedOperationResult`,
+`SheetCellChange`, and `EditorPatch` wire values.
 
 Rust `types` is a runtime-independent protocol boundary. Session DTOs such as
 `EditorSessionInfo`, `EditorStateInfo`, and `HistoryStatus` live there rather
@@ -119,6 +135,8 @@ Save and export orchestration live in `application::document_save_service`.
 That service owns revision validation, save leases, state commit, and post-save
 index scheduling. Save admission is obtained through `DocumentWorkBudgetPort`,
 and optional reparse goes through the same `DocumentCodecPort` used by open.
+Byte generation is a separate `DocumentEncodePort`; the document save snapshot
+exposes an immutable encoding source but never invokes an I/O writer itself.
 Platform I/O modules
 provide path authorization, destination selection, and write primitives. Outer
 file adapters compose those primitives with prepared save work and managed
