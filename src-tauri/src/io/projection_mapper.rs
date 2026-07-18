@@ -1,13 +1,14 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use crate::error::AppError;
 use crate::io::codec::reader::read_worksheet;
 use crate::io::codec::writer::coordinate;
-use crate::types::{CellValue, FileData, SheetData};
+use crate::types::CellValue;
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub(crate) struct ProjectionMapper;
 
 impl ProjectionMapper {
-    pub(crate) fn sheets_from_workbook(workbook: &Workbook) -> Vec<SheetData> {
+    pub(crate) fn sheets_from_workbook(workbook: &Workbook) -> Vec<DocumentSheet> {
         workbook
             .sheet_collection()
             .iter()
@@ -15,13 +16,16 @@ impl ProjectionMapper {
             .collect()
     }
 
-    pub(crate) fn refresh_file_data_from_workbook(workbook: &Workbook, file_data: &mut FileData) {
+    pub(crate) fn refresh_file_data_from_workbook(
+        workbook: &Workbook,
+        file_data: &mut DocumentData,
+    ) {
         file_data.sheets = Self::sheets_from_workbook(workbook);
     }
 
     pub(crate) fn sync_merge_ranges_to_workbook(
         workbook: &mut Workbook,
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) -> Result<(), AppError> {
         for sheet_index in 0..file_data.sheets.len() {
             let Some(worksheet) = sheet_mut(workbook, sheet_index)? else {
@@ -45,7 +49,7 @@ impl ProjectionMapper {
 
     pub(crate) fn validate_workbook_matches_projection(
         workbook: &Workbook,
-        projection: &FileData,
+        projection: &DocumentData,
     ) -> Result<(), AppError> {
         if workbook.sheet_count() != projection.sheets.len() {
             return Err(AppError::Internal(format!(
@@ -76,7 +80,7 @@ impl ProjectionMapper {
 
     pub(crate) fn validate_workbook_sheets_match_projection(
         workbook: &Workbook,
-        projection: &FileData,
+        projection: &DocumentData,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) -> Result<(), AppError> {
         if workbook.sheet_count() != projection.sheets.len() {
@@ -125,7 +129,7 @@ fn sheet_mut(
         .map_err(|e| AppError::WriteError(e.to_string()))
 }
 
-fn sheet_difference(expected: &SheetData, actual: &SheetData) -> String {
+fn sheet_difference(expected: &DocumentSheet, actual: &DocumentSheet) -> String {
     if expected.name != actual.name {
         return format!(
             "name differs: projection={:?}, workbook={:?}",
@@ -154,7 +158,7 @@ fn sheet_difference(expected: &SheetData, actual: &SheetData) -> String {
     "unknown difference".to_string()
 }
 
-fn sheets_are_consistent(expected: &SheetData, actual: &SheetData) -> bool {
+fn sheets_are_consistent(expected: &DocumentSheet, actual: &DocumentSheet) -> bool {
     expected.name == actual.name
         && rows_are_consistent(&expected.rows, &actual.rows)
         && expected.merges == actual.merges

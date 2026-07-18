@@ -1,3 +1,4 @@
+use crate::document_data::DocumentData;
 use std::collections::{HashSet, VecDeque};
 
 use formualizer_workbook::{Workbook, WorkbookMode};
@@ -13,7 +14,7 @@ use crate::formula::registry::{
     FormulaCellRegistration, apply_cell_changes, register_workbook_cells, set_workbook_cell,
 };
 use crate::formula::value_codec::{literal_to_cell, to_formula_index};
-use crate::types::{CellValue, FileData, FormulaDiagnostics};
+use crate::types::{CellValue, FormulaDiagnostics};
 
 const MAX_FORMULA_RUNTIME_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const FORMULA_RUNTIME_ENTRY_ESTIMATED_BYTES: usize = 512;
@@ -37,7 +38,7 @@ enum FormulaRebuildPolicy {
 
 impl FormulaRuntime {
     pub fn new(
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
     ) -> Result<Self, AppError> {
         let mut runtime = Self::empty();
@@ -53,7 +54,7 @@ impl FormulaRuntime {
         }
     }
 
-    pub fn estimated_bytes(&self, file_data: &FileData) -> usize {
+    pub fn estimated_bytes(&self, file_data: &DocumentData) -> usize {
         let workbook_cells = file_data
             .sheets
             .iter()
@@ -75,7 +76,7 @@ impl FormulaRuntime {
 
     pub fn rebuild(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
     ) -> Result<Vec<DocumentCellChange>, AppError> {
         Ok(self
@@ -85,7 +86,7 @@ impl FormulaRuntime {
 
     pub fn rebuild_preserving_cached_results(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
     ) -> Result<FormulaRebuildResult, AppError> {
         self.rebuild_with_policy(
@@ -97,7 +98,7 @@ impl FormulaRuntime {
 
     pub fn rebuild_and_recalculate_with_diagnostics(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
     ) -> Result<FormulaRebuildResult, AppError> {
         self.rebuild_with_policy(
@@ -109,7 +110,7 @@ impl FormulaRuntime {
 
     fn rebuild_with_policy(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
         policy: FormulaRebuildPolicy,
     ) -> Result<FormulaRebuildResult, AppError> {
@@ -153,7 +154,7 @@ impl FormulaRuntime {
 
     pub fn sync_cell_and_recalculate(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
         sheet_index: usize,
         row: usize,
@@ -215,7 +216,7 @@ impl FormulaRuntime {
 
     pub fn sync_cells_and_recalculate(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         ast_service: &mut FormulaAstService,
         changed_cells: impl IntoIterator<Item = FormulaCellRef>,
     ) -> Result<Vec<DocumentCellChange>, AppError> {
@@ -302,7 +303,7 @@ impl FormulaRuntime {
         self.dependency_index.formulas.iter().copied().collect()
     }
 
-    fn refresh_formula_diagnostics(&mut self, file_data: &FileData) {
+    fn refresh_formula_diagnostics(&mut self, file_data: &DocumentData) {
         let (invalid_formula_count, invalid_issues) =
             unregistered_formula_diagnostics(file_data, &self.registered_formulas);
         self.dependency_index.diagnostics.invalid_formula_count = invalid_formula_count;
@@ -358,7 +359,7 @@ impl FormulaRuntime {
 
     fn recalculate_all_formula_cells(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
     ) -> Result<Vec<DocumentCellChange>, AppError> {
         let targets: Vec<FormulaCellRef> = self.dependency_index.formulas.iter().copied().collect();
         self.recalculate_formula_cells(file_data, targets.iter())
@@ -366,7 +367,7 @@ impl FormulaRuntime {
 
     fn recalculate_formula_cells<'a>(
         &mut self,
-        file_data: &mut FileData,
+        file_data: &mut DocumentData,
         targets: impl IntoIterator<Item = &'a FormulaCellRef>,
     ) -> Result<Vec<DocumentCellChange>, AppError> {
         let mut changes = Vec::new();
@@ -429,12 +430,12 @@ fn estimated_formula_cell_bytes(cell: &CellValue) -> usize {
     }
 }
 
-fn validate_formula_runtime_source(file_data: &FileData) -> Result<(), AppError> {
+fn validate_formula_runtime_source(file_data: &DocumentData) -> Result<(), AppError> {
     validate_formula_runtime_source_with_limit(file_data, MAX_FORMULA_RUNTIME_SOURCE_BYTES)
 }
 
 fn validate_formula_runtime_source_with_limit(
-    file_data: &FileData,
+    file_data: &DocumentData,
     maximum_bytes: usize,
 ) -> Result<(), AppError> {
     let estimated_bytes = file_data
@@ -459,7 +460,7 @@ fn validate_formula_runtime_source_with_limit(
     Ok(())
 }
 
-fn formula_sheet_names(file_data: &FileData) -> Vec<String> {
+fn formula_sheet_names(file_data: &DocumentData) -> Vec<String> {
     file_data
         .sheets
         .iter()
@@ -469,12 +470,12 @@ fn formula_sheet_names(file_data: &FileData) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::SheetData;
+    use crate::document_data::DocumentSheet;
     use serde_json::Value;
 
     use super::*;
 
-    fn build_runtime(file_data: &mut FileData) -> (FormulaRuntime, FormulaAstService) {
+    fn build_runtime(file_data: &mut DocumentData) -> (FormulaRuntime, FormulaAstService) {
         let mut ast_service = FormulaAstService::new();
         let runtime = FormulaRuntime::new(file_data, &mut ast_service).expect("formula runtime");
         (runtime, ast_service)
@@ -482,10 +483,10 @@ mod tests {
 
     #[test]
     fn formula_runtime_source_is_rejected_before_workbook_construction() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::formula("=A1+1", CellValue::Null)]],
                 ..Default::default()
@@ -500,10 +501,10 @@ mod tests {
 
     #[test]
     fn rebuild_preserves_cached_formula_results_until_an_edit_impacts_them() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![
                     vec![
@@ -535,10 +536,10 @@ mod tests {
 
     #[test]
     fn rebuild_keeps_valid_formulas_working_when_one_formula_is_invalid() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),
@@ -564,10 +565,10 @@ mod tests {
 
     #[test]
     fn invalid_formula_edit_returns_cell_error_and_keeps_other_formulas_live() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),
@@ -612,10 +613,10 @@ mod tests {
 
     #[test]
     fn diagnostics_report_formula_dependency_fallbacks() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "diagnostics.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::formula("=SUM(", CellValue::Null),
@@ -649,10 +650,10 @@ mod tests {
         row[0] = CellValue::Number(Value::from(1));
         row[1] = CellValue::formula("=SUM(A1:A10001)", CellValue::Null);
         row[2] = CellValue::Number(Value::from(0));
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "range.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![row],
                 ..Default::default()
@@ -683,10 +684,10 @@ mod tests {
 
     #[test]
     fn batch_formula_edit_returns_cell_error_and_keeps_other_formulas_live() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),
@@ -744,10 +745,10 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_after_value_change() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(2)),
@@ -769,10 +770,10 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_after_formula_change() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(10)),
@@ -794,10 +795,10 @@ mod tests {
 
     #[test]
     fn formula_dependency_update_replaces_old_edges_and_diagnostics() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),
@@ -838,10 +839,10 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_when_value_becomes_formula() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(5)),
@@ -863,10 +864,10 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_dependents_when_formula_becomes_value() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::formula("=5", CellValue::Null),
@@ -888,10 +889,10 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_dependency_closure() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),
@@ -915,16 +916,16 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_cross_sheet_dependencies() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
             sheets: vec![
-                SheetData {
+                DocumentSheet {
                     name: "Inputs".to_string(),
                     rows: vec![vec![CellValue::Number(Value::from(4))]],
                     ..Default::default()
                 },
-                SheetData {
+                DocumentSheet {
                     name: "Summary".to_string(),
                     rows: vec![vec![CellValue::formula("=Inputs!A1*3", CellValue::Null)]],
                     ..Default::default()
@@ -944,16 +945,16 @@ mod tests {
 
     #[test]
     fn incrementally_recalculates_cross_sheet_dependencies_case_insensitively() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
             sheets: vec![
-                SheetData {
+                DocumentSheet {
                     name: "Inputs".to_string(),
                     rows: vec![vec![CellValue::Number(Value::from(4))]],
                     ..Default::default()
                 },
-                SheetData {
+                DocumentSheet {
                     name: "Summary".to_string(),
                     rows: vec![vec![CellValue::formula("=inputs!A1*3", CellValue::Null)]],
                     ..Default::default()
@@ -973,10 +974,10 @@ mod tests {
 
     #[test]
     fn unchanged_formula_cache_is_not_refreshed_for_unrelated_edit() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),
@@ -1010,10 +1011,10 @@ mod tests {
 
     #[test]
     fn range_formula_cache_is_not_refreshed_for_outside_edit() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "range.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Number(Value::from(1)),

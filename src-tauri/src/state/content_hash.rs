@@ -1,10 +1,11 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use sha2::{Digest, Sha256};
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::document_memento::DocumentMementoSide;
 use crate::domain::{AppliedOperation, DocumentCellChange};
-use crate::types::{CellValue, FileData, MergeRange, SheetData};
+use crate::types::{CellValue, MergeRange};
 
 pub type ContentHash = [u8; 32];
 
@@ -45,7 +46,7 @@ struct CellFingerprintChange {
 
 #[cfg(test)]
 impl<'a> ContentFingerprint<'a> {
-    pub fn from_file_data(file_data: &'a FileData) -> Self {
+    pub fn from_file_data(file_data: &'a DocumentData) -> Self {
         Self {
             sheets: file_data
                 .sheets
@@ -57,7 +58,7 @@ impl<'a> ContentFingerprint<'a> {
 }
 
 impl<'a> SheetFingerprint<'a> {
-    fn from_sheet_data(sheet: &'a SheetData) -> Self {
+    fn from_sheet_data(sheet: &'a DocumentSheet) -> Self {
         Self {
             name: &sheet.name,
             rows: &sheet.rows,
@@ -84,7 +85,7 @@ pub fn hash_content_fingerprint(fingerprint: &ContentFingerprint<'_>) -> Content
 }
 
 impl IncrementalContentFingerprint {
-    pub fn from_file_data(file_data: &FileData) -> Self {
+    pub fn from_file_data(file_data: &DocumentData) -> Self {
         let sheets: Vec<_> = file_data
             .sheets
             .iter()
@@ -114,7 +115,7 @@ impl IncrementalContentFingerprint {
         &mut self,
         operation: &AppliedOperation,
         formula_changes: &[DocumentCellChange],
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) {
         match operation {
             AppliedOperation::SetCell {
@@ -197,7 +198,7 @@ impl IncrementalContentFingerprint {
         &mut self,
         target: &DocumentMementoSide,
         rollback: &DocumentMementoSide,
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) {
         match (target, rollback) {
             (DocumentMementoSide::Cells(target), DocumentMementoSide::Cells(rollback)) => {
@@ -270,7 +271,7 @@ impl IncrementalContentFingerprint {
     fn apply_cell_changes(
         &mut self,
         changes: Vec<CellFingerprintChange>,
-        file_data: &FileData,
+        file_data: &DocumentData,
         reconcile_shapes: &BTreeSet<usize>,
     ) {
         let mut changes_by_sheet = BTreeMap::<usize, Vec<CellFingerprintChange>>::new();
@@ -407,7 +408,7 @@ impl IncrementalContentFingerprint {
         index: usize,
         old_value: Option<u32>,
         new_value: Option<u32>,
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) {
         let Some(sheet) = self.sheets.get_mut(sheet_index) else {
             *self = Self::from_file_data(file_data);
@@ -458,7 +459,7 @@ impl IncrementalContentFingerprint {
         xor_hash(&mut self.hash, &sheet.hash);
     }
 
-    fn rebuild_sheet(&mut self, sheet_index: usize, file_data: &FileData) {
+    fn rebuild_sheet(&mut self, sheet_index: usize, file_data: &DocumentData) {
         let Some(sheet_data) = file_data.sheets.get(sheet_index) else {
             *self = Self::from_file_data(file_data);
             return;
@@ -477,7 +478,7 @@ impl IncrementalContentFingerprint {
         &mut self,
         target: &[DocumentCellChange],
         rollback: &[DocumentCellChange],
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) {
         let sheet_indexes: BTreeSet<_> = target
             .iter()
@@ -491,7 +492,7 @@ impl IncrementalContentFingerprint {
 }
 
 impl IncrementalSheetFingerprint {
-    fn from_sheet_data(sheet_index: usize, sheet: &SheetData) -> Self {
+    fn from_sheet_data(sheet_index: usize, sheet: &DocumentSheet) -> Self {
         let fingerprint = SheetFingerprint::from_sheet_data(sheet);
         let row_lengths: Vec<_> = sheet.rows.iter().map(Vec::len).collect();
         Self {
@@ -751,13 +752,14 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{ContentFingerprint, hash_content_fingerprint};
-    use crate::types::{CellValue, FileData, SheetData};
+    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::types::CellValue;
 
-    fn file_data() -> FileData {
-        FileData {
+    fn file_data() -> DocumentData {
+        DocumentData {
             path: "/tmp/source.xlsx".to_string(),
             file_name: "source.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("a".to_string())]],
                 merges: vec![],
@@ -766,7 +768,7 @@ mod tests {
         }
     }
 
-    fn hash_file_content(file_data: &FileData) -> super::ContentHash {
+    fn hash_file_content(file_data: &DocumentData) -> super::ContentHash {
         hash_content_fingerprint(&ContentFingerprint::from_file_data(file_data))
     }
 

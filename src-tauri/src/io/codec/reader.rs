@@ -1,3 +1,4 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 use std::io::Cursor;
 
@@ -15,15 +16,15 @@ use crate::resource_limits::{
     validate_file_data, validate_position,
 };
 use crate::types::{
-    CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection, FileData,
-    FreezePaneProjection, HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
+    CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection,
+    FreezePaneProjection, HyperlinkProjection, MergeRange, ReadOnlyRichProjection,
 };
 use csv::ReaderBuilder;
 use serde_json::Value;
 use umya_spreadsheet::{Cell, Workbook, Worksheet, reader};
 
 pub struct ReadFileResult {
-    pub file_data: FileData,
+    pub file_data: DocumentData,
     pub workbook: Option<Workbook>,
 }
 
@@ -42,7 +43,7 @@ impl InputFilePreflight {
 const CSV_PARSE_MEMORY_MULTIPLIER: usize = 3;
 const XLSX_UNCOMPRESSED_MEMORY_MULTIPLIER: usize = 3;
 
-/// 从已读取的文件字节解析 FileData，并在 Excel 格式下保留原始 umya Workbook。
+/// 从已读取的文件字节解析 DocumentData，并在 Excel 格式下保留原始 umya Workbook。
 pub fn read_file_with_workbook_from_bytes(
     extension: &str,
     bytes: Vec<u8>,
@@ -123,7 +124,7 @@ fn read_xlsx_from_bytes(
 ) -> Result<ReadFileResult, AppError> {
     let workbook = read_workbook_from_reader(cursor)?;
     validate_workbook_before_projection(&workbook)?;
-    let file_data = FileData {
+    let file_data = DocumentData {
         path,
         file_name,
         sheets: WorkbookProjectionCodec::read_sheets(&workbook),
@@ -181,7 +182,7 @@ fn read_workbook_from_reader(cursor: Cursor<Vec<u8>>) -> Result<Workbook, AppErr
     reader::xlsx::read_reader(cursor, true).map_err(|e| AppError::ReadError(e.to_string()))
 }
 
-pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
+pub(crate) fn read_worksheet(worksheet: &Worksheet) -> DocumentSheet {
     let mut rows: Vec<Vec<CellValue>> = Vec::new();
 
     for cell in worksheet.cells() {
@@ -202,7 +203,7 @@ pub(crate) fn read_worksheet(worksheet: &Worksheet) -> SheetData {
     }
     trim_trailing_empty_projection(&mut rows);
 
-    SheetData {
+    DocumentSheet {
         name: worksheet.name().to_string(),
         rows,
         merges: read_merge_ranges(worksheet),
@@ -576,10 +577,10 @@ fn read_csv_from_bytes(
         rows.push(row);
     }
 
-    let file_data = FileData {
+    let file_data = DocumentData {
         path,
         file_name,
-        sheets: vec![SheetData {
+        sheets: vec![DocumentSheet {
             name: "Sheet1".to_string(),
             rows,
             ..Default::default()

@@ -80,15 +80,16 @@ pub fn do_redo(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document_data::{DocumentData, DocumentSheet};
     use crate::state::editor_state::EditorState;
-    use crate::types::{CellValue, FileData, SheetData};
+    use crate::types::CellValue;
 
     fn make_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "test.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())]],
                     ..Default::default()

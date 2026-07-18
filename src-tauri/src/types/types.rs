@@ -1,7 +1,6 @@
 pub use crate::domain::CellValue;
 use crate::domain::normalize_formula_text;
-use crate::types::display::DisplayProjection;
-use crate::types::projection::{CellValueProjection, SheetRowsProjection};
+use crate::types::projection::CellValueProjection;
 use crate::types::{EditorSessionInfo, EditorStateInfo, FormulaStatus};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
@@ -165,235 +164,12 @@ pub struct MergeRange {
     pub end_col: u16,
 }
 
-#[derive(Deserialize, TS, Clone, Debug, Default, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct SheetData {
-    pub name: String,
-    pub rows: Vec<Vec<CellValue>>,
-    /// 合并范围
-    pub merges: Vec<MergeRange>,
-    /// 列宽配置（用于持久化）
-    #[serde(default)]
-    #[ts(optional)]
-    pub column_widths: Option<HashMap<usize, u32>>,
-    /// 行高配置（持久化到 Excel，属于文档状态）
-    #[serde(default)]
-    #[ts(optional)]
-    pub row_heights: Option<HashMap<usize, u32>>,
-    /// Read-only rich Excel projection. This is display metadata only; the
-    /// original workbook remains the persistence source for styles and drawings.
-    #[serde(default)]
-    pub rich: ReadOnlyRichProjection,
-}
-
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct SheetExtent {
     pub row_count: usize,
     pub column_count: usize,
-}
-
-impl Serialize for SheetData {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("SheetData", 6)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("rows", &SheetRowsProjection { sheet: self })?;
-        state.serialize_field("merges", &self.merges)?;
-        if let Some(column_widths) = &self.column_widths {
-            state.serialize_field("columnWidths", column_widths)?;
-        }
-        if let Some(row_heights) = &self.row_heights {
-            state.serialize_field("rowHeights", row_heights)?;
-        }
-        state.serialize_field("rich", &self.rich)?;
-        state.end()
-    }
-}
-
-impl SheetData {
-    pub(crate) fn search_snapshot(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            rows: self.rows.clone(),
-            merges: Vec::new(),
-            column_widths: None,
-            row_heights: None,
-            rich: ReadOnlyRichProjection {
-                cell_formats: self.rich.cell_formats.clone(),
-                cell_styles: self.rich.cell_styles.clone(),
-                ..Default::default()
-            },
-        }
-    }
-
-    pub fn extent(&self) -> SheetExtent {
-        let value_row_count = self.rows.len();
-        let value_column_count = self.rows.iter().map(Vec::len).max().unwrap_or(0);
-        let merge_row_count = self
-            .merges
-            .iter()
-            .map(|merge| merge.end_row as usize + 1)
-            .max()
-            .unwrap_or(0);
-        let merge_column_count = self
-            .merges
-            .iter()
-            .map(|merge| merge.end_col as usize + 1)
-            .max()
-            .unwrap_or(0);
-        let layout_row_count = self
-            .row_heights
-            .as_ref()
-            .and_then(|values| values.keys().max().map(|index| index + 1))
-            .unwrap_or(0);
-        let layout_column_count = self
-            .column_widths
-            .as_ref()
-            .and_then(|values| values.keys().max().map(|index| index + 1))
-            .unwrap_or(0);
-        let rich_extent = rich_projection_extent(&self.rich);
-
-        SheetExtent {
-            row_count: value_row_count
-                .max(merge_row_count)
-                .max(layout_row_count)
-                .max(rich_extent.row_count),
-            column_count: value_column_count
-                .max(merge_column_count)
-                .max(layout_column_count)
-                .max(rich_extent.column_count),
-        }
-    }
-
-    pub fn cell_format_at(&self, row: usize, col: usize) -> Option<CellFormatProjection> {
-        let key = excel_cell_key(row, col);
-        let explicit = self.rich.cell_formats.get(&key);
-        let style_number_format = self
-            .rich
-            .cell_styles
-            .get(&key)
-            .and_then(|style| style.number_format.clone());
-
-        if explicit.is_none() && style_number_format.is_none() {
-            return None;
-        }
-
-        Some(CellFormatProjection {
-            number_format: explicit
-                .and_then(|format| format.number_format.clone())
-                .or(style_number_format),
-            style_id: explicit.and_then(|format| format.style_id.clone()),
-        })
-    }
-
-    pub fn cell_style_at(&self, row: usize, col: usize) -> Option<CellStyleProjection> {
-        self.rich
-            .cell_styles
-            .get(&excel_cell_key(row, col))
-            .cloned()
-    }
-
-    pub fn cell_display_text(&self, row: usize, col: usize) -> String {
-        self.rows
-            .get(row)
-            .and_then(|row_data| row_data.get(col))
-            .map(|cell| {
-                DisplayProjection::display_text(cell, self.cell_format_at(row, col).as_ref())
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn cell_search_text(&self, row: usize, col: usize) -> String {
-        self.rows
-            .get(row)
-            .and_then(|row_data| row_data.get(col))
-            .map(|cell| {
-                DisplayProjection::search_text(cell, self.cell_format_at(row, col).as_ref())
-            })
-            .unwrap_or_default()
-    }
-}
-
-fn excel_cell_key(row_index: usize, col_index: usize) -> String {
-    let mut col = col_index + 1;
-    let mut letters = String::new();
-    while col > 0 {
-        let rem = (col - 1) % 26;
-        letters.insert(0, (b'A' + rem as u8) as char);
-        col = (col - 1) / 26;
-    }
-    format!("{letters}{}", row_index + 1)
-}
-
-fn rich_projection_extent(rich: &ReadOnlyRichProjection) -> SheetExtent {
-    let mut extent = SheetExtent::default();
-    for key in rich
-        .cell_formats
-        .keys()
-        .chain(rich.cell_styles.keys())
-        .chain(rich.hyperlinks.keys())
-    {
-        if let Some((row, col)) = parse_cell_address(key) {
-            extent.row_count = extent.row_count.max(row + 1);
-            extent.column_count = extent.column_count.max(col + 1);
-        }
-    }
-    for row in &rich.hidden_rows {
-        extent.row_count = extent.row_count.max(row + 1);
-    }
-    for col in &rich.hidden_columns {
-        extent.column_count = extent.column_count.max(col + 1);
-    }
-    for drawing in &rich.drawings {
-        extent.row_count = extent.row_count.max(
-            drawing
-                .to_row
-                .unwrap_or(drawing.from_row)
-                .max(drawing.from_row) as usize
-                + 1,
-        );
-        extent.column_count = extent.column_count.max(
-            drawing
-                .to_col
-                .unwrap_or(drawing.from_col)
-                .max(drawing.from_col) as usize
-                + 1,
-        );
-    }
-    extent
-}
-
-fn parse_cell_address(key: &str) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    let mut row = 0usize;
-    let mut saw_digit = false;
-    for byte in key.bytes() {
-        if byte.is_ascii_alphabetic() && !saw_digit {
-            col = col
-                .checked_mul(26)?
-                .checked_add(usize::from(byte.to_ascii_uppercase() - b'A' + 1))?;
-        } else if byte.is_ascii_digit() {
-            saw_digit = true;
-            row = row.checked_mul(10)?.checked_add(usize::from(byte - b'0'))?;
-        } else {
-            return None;
-        }
-    }
-    (col > 0 && row > 0).then_some((row - 1, col - 1))
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct FileData {
-    pub path: String,
-    pub file_name: String,
-    pub sheets: Vec<SheetData>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -916,19 +692,13 @@ pub enum AppliedOperationResult {
     AddSheet {
         #[serde(rename = "sheetIndex")]
         sheet_index: usize,
-        name: String,
-        /// 完整的 sheet 数据（用于撤销时恢复）
-        #[serde(rename = "sheetData")]
-        sheet_data: SheetData,
+        sheet: SheetManifest,
     },
     /// 删除 Sheet
     #[serde(rename = "DeleteSheet")]
     DeleteSheet {
         #[serde(rename = "sheetIndex")]
         sheet_index: usize,
-        /// 被删除的 sheet 数据（用于撤销时恢复）
-        #[serde(rename = "sheetData")]
-        sheet_data: SheetData,
     },
 }
 
@@ -1074,7 +844,7 @@ pub struct EditorCommandContext {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct EditorMutationResponse {
-    #[ts(type = "4")]
+    #[ts(type = "typeof EDITOR_MUTATION_PROTOCOL_VERSION")]
     pub protocol_version: u16,
     #[serde(with = "crate::types::u64_string")]
     #[ts(type = "U64String")]
@@ -1132,77 +902,5 @@ impl MutationResultLookup {
             status: MutationResultStatus::Missing,
             response: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn sheet_serialization_projects_formatted_cell_display() {
-        let sheet = SheetData {
-            name: "Sheet1".to_string(),
-            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-            rich: ReadOnlyRichProjection {
-                cell_formats: HashMap::from([(
-                    "A1".to_string(),
-                    CellFormatProjection {
-                        number_format: Some("0%".to_string()),
-                        style_id: None,
-                    },
-                )]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let json = serde_json::to_value(&sheet).expect("serialize sheet");
-        assert_eq!(json["rows"][0][0]["display"], "40%");
-        assert_eq!(json["rows"][0][0]["raw"], 0.4);
-        assert_eq!(json["rows"][0][0]["format"]["numberFormat"], "0%");
-    }
-
-    #[test]
-    fn search_snapshot_retains_display_metadata_but_drops_unrelated_rich_state() {
-        let sheet = SheetData {
-            name: "Sheet1".to_string(),
-            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-            merges: vec![MergeRange {
-                start_row: 0,
-                start_col: 0,
-                end_row: 1,
-                end_col: 1,
-            }],
-            column_widths: Some(HashMap::from([(0, 120)])),
-            rich: ReadOnlyRichProjection {
-                cell_formats: HashMap::from([(
-                    "A1".to_string(),
-                    CellFormatProjection {
-                        number_format: Some("0%".to_string()),
-                        style_id: None,
-                    },
-                )]),
-                hyperlinks: HashMap::from([(
-                    "A1".to_string(),
-                    HyperlinkProjection {
-                        url: "https://example.com".to_string(),
-                        tooltip: None,
-                        location: false,
-                    },
-                )]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let snapshot = sheet.search_snapshot();
-
-        assert_eq!(snapshot.cell_display_text(0, 0), "40%");
-        assert!(snapshot.merges.is_empty());
-        assert!(snapshot.column_widths.is_none());
-        assert!(snapshot.rich.hyperlinks.is_empty());
-        assert!(snapshot.rich.cell_formats.contains_key("A1"));
     }
 }

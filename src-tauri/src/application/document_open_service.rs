@@ -1,3 +1,4 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use crate::error::AppError;
 use crate::resource_limits::validate_file_data;
 use crate::state::editor_state::EditorState;
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::{FileData, PreparedOpenDocument, SheetData};
+use crate::types::PreparedOpenDocument;
 
 #[derive(Clone)]
 pub struct DocumentOpenService {
@@ -80,11 +81,11 @@ pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Re
     service.prepared_documents().abort(token)
 }
 
-fn blank_file_data() -> FileData {
-    FileData {
+fn blank_file_data() -> DocumentData {
+    DocumentData {
         path: String::new(),
         file_name: format!("untitled.{}", default_spreadsheet_extension()),
-        sheets: vec![SheetData {
+        sheets: vec![DocumentSheet {
             name: "Sheet1".to_string(),
             rows: vec![vec![crate::types::CellValue::Null; 5]; 5],
             ..Default::default()
@@ -132,12 +133,12 @@ mod tests {
             let text = String::from_utf8(source.bytes)
                 .map_err(|error| AppError::ReadError(error.to_string()))?;
             Ok(EditorState::with_workbook(
-                FileData {
+                DocumentData {
                     path: source.path,
                     file_name: source
                         .file_name
                         .unwrap_or_else(|| "unknown.csv".to_string()),
-                    sheets: vec![SheetData {
+                    sheets: vec![DocumentSheet {
                         rows: vec![vec![CellValue::String(text)]],
                         ..Default::default()
                     }],

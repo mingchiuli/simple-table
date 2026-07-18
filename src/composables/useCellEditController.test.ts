@@ -13,10 +13,12 @@ import {
   type CellValue,
   type EditorMutationResponse,
   type EditorSessionInfo,
+} from "@/types";
+import {
+  openResponseFromFileData,
   type FileData,
   type SheetData,
-} from "@/types";
-import { openResponseFromFileData } from "@/test/documentFixtures";
+} from "@/test/documentFixtures";
 import { sheetCell } from "@/projection/documentProjection";
 import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 

@@ -113,6 +113,12 @@ The Rust `document` module is the physical aggregate boundary. It owns
 snapshots, region metadata, and the concrete workbook backing that participates
 in those invariants. Format-specific backing code is isolated under
 `document::backing`; the rest of the aggregate cannot import `io`.
+Canonical editable content lives in the serialization-independent
+`document_data::DocumentData` and `DocumentSheet` model. These types have no
+`serde` or `ts-rs` implementation and are not emitted to TypeScript. The
+application projection layer maps canonical content into manifests, bounded
+regions, and mutation patches; the Rust protocol module cannot expose or own a
+complete canonical document aggregate.
 `SpreadsheetDocument` and `EditorState` production constructors receive either
 plain document data or an already assembled backing and never expose the
 third-party workbook type. `state` owns the active editor session and may depend
@@ -158,9 +164,11 @@ modules, never on the query service.
   mutation or projection releases the registry lock before accessing document
   content. Closing and replacement retire the old handle under its content
   lock; work that cloned it earlier is rejected before it can read or commit.
-- `SpreadsheetDocument` keeps the UI `FileData` projection consistent with the
+- `SpreadsheetDocument` keeps canonical `DocumentData` consistent with the
   persistence body. XLSX documents retain the original workbook so supported
-  edits preserve metadata that is only projected read-only.
+  edits preserve metadata that is only projected read-only. Complete document
+  data is never an IPC response; the frontend receives manifests and bounded
+  Sheet regions.
 - `documentSession` stores a `DocumentProjection` made of explicit `SheetSlot`
   values. Every Sheet owns a stable sparse layout index from its manifest.
   Loaded Sheets additionally own bounded cell blocks and render-only metadata.
@@ -263,9 +271,10 @@ Search scheduling metadata is internal to Rust and must not be serialized in
 `EditorMutationResponse`. Operations return a `MutationExecution` containing a
 wire response and separate `SearchIndexWork`. The application schedules that
 work only on first execution, while mutation replay stores only the response.
-`SearchIndexWork` is an internal domain contract. `SearchService` depends on a
-`SearchIndexPort`; that port accepts only semantic search requests, document
-revisions, and index work. Worker threads, query plans, queue coalescing,
+`SearchIndexWork` is an internal domain contract. `SearchService` depends only
+on `SearchQueryPort`. Save, mutation, and lifecycle workflows depend separately
+on `SearchIndexMaintenancePort`, so they cannot invoke the search use case and
+tests do not implement unrelated query behavior. Worker threads, query plans, queue coalescing,
 resident indexes, memory reservations, and Tantivy updates live in the outer
 search-index adapter. The adapter reads canonical content only through
 `SearchDocumentSourcePort`. Search scheduling cannot inspect frontend
@@ -307,6 +316,11 @@ Rust `ts-rs` declarations and the `TauriCommandMap` are emitted together into
 `#[tauri::command]` Rust signatures, including argument naming and return types.
 `invokeCommand` is the only direct wrapper around Tauri `invoke` in application
 code; command names, arguments, and results are checked against that map.
+
+Static cross-process policy is also generated from Rust. Mutation protocol
+version and mutation/region response byte limits have one source in
+`editor_protocol`; frontend session and region logic imports the generated
+constants instead of repeating numeric literals.
 
 Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary

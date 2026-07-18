@@ -340,20 +340,19 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document_data::{DocumentData, DocumentSheet};
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentRepository;
-    use crate::types::{
-        CellFormatProjection, CellValue, EditorPatch, FileData, ReadOnlyRichProjection, SheetData,
-    };
+    use crate::types::{CellFormatProjection, CellValue, EditorPatch, ReadOnlyRichProjection};
     use serde_json::Value;
     use std::collections::HashMap;
 
     fn make_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "test.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())]],
                     ..Default::default()
@@ -368,10 +367,10 @@ mod tests {
 
     fn make_formatted_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "test.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Number(Value::from(0.4))]],
                     rich: ReadOnlyRichProjection {

@@ -91,7 +91,8 @@ impl DocumentCodecPort for DocumentCodecAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellValue, FileData, SheetData};
+    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::types::CellValue;
 
     #[test]
     fn extensionless_csv_source_is_decoded_through_the_port() {
@@ -111,10 +112,10 @@ mod tests {
 
     #[test]
     fn projection_snapshot_is_encoded_through_the_port() {
-        let document = SpreadsheetDocument::new(FileData {
+        let document = SpreadsheetDocument::new(DocumentData {
             path: String::new(),
             file_name: "source.csv".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 rows: vec![vec![CellValue::String("encoded".to_string())]],
                 ..Default::default()
             }],

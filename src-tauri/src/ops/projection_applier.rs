@@ -1,12 +1,11 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::domain::{AppliedOperation, ProjectionMutation, cell_key::parse_cell_key};
-use crate::types::{
-    CellValue, DrawingProjection, FileData, MergeRange, ReadOnlyRichProjection, SheetData,
-};
+use crate::types::{CellValue, DrawingProjection, MergeRange, ReadOnlyRichProjection};
 
 impl ProjectionMutation<'_> {
-    pub fn execute(&self, file_data: &mut FileData) {
+    pub fn execute(&self, file_data: &mut DocumentData) {
         match self.operation {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -142,7 +141,7 @@ impl ProjectionMutation<'_> {
         }
     }
 
-    pub fn execute_cells_and_layout(&self, file_data: &mut FileData) -> bool {
+    pub fn execute_cells_and_layout(&self, file_data: &mut DocumentData) -> bool {
         match self.operation {
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
@@ -161,8 +160,8 @@ impl ProjectionMutation<'_> {
     }
 }
 
-fn new_sheet_data(name: &str, row_count: usize, column_count: usize) -> SheetData {
-    SheetData {
+fn new_sheet_data(name: &str, row_count: usize, column_count: usize) -> DocumentSheet {
+    DocumentSheet {
         name: name.to_string(),
         rows: vec![vec![CellValue::Null; column_count]; row_count],
         ..Default::default()
@@ -203,7 +202,7 @@ fn shift_layout_map_on_insert(map: Option<&mut HashMap<usize, u32>>, index: usiz
     *map = shifted;
 }
 
-fn ensure_cell_exists(sheet: &mut SheetData, row: usize, col: usize) {
+fn ensure_cell_exists(sheet: &mut DocumentSheet, row: usize, col: usize) {
     let target_width = col + 1;
     while sheet.rows.len() <= row {
         sheet.rows.push(vec![CellValue::Null; target_width]);
@@ -486,11 +485,11 @@ mod tests {
     use super::*;
     use crate::types::{CellStyleProjection, DrawingKind, HyperlinkProjection};
 
-    fn file_data_with_rich_projection() -> FileData {
-        FileData {
+    fn file_data_with_rich_projection() -> DocumentData {
+        DocumentData {
             path: String::new(),
             file_name: "projection.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("A1".to_string())]],
                 rich: ReadOnlyRichProjection {
@@ -565,10 +564,10 @@ mod tests {
 
     #[test]
     fn add_column_projection_preserves_sparse_column_position() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "sparse.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("A1".to_string())], vec![]],
                 ..Default::default()

@@ -1,3 +1,4 @@
+use crate::document_data::DocumentSheet;
 use std::sync::Arc;
 
 use crate::application::search_ports::SearchDocumentSourcePort;
@@ -7,7 +8,7 @@ use crate::domain::{
 use crate::error::AppError;
 use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 
-pub(crate) fn collect_sheet_search_text(sheet: &crate::types::SheetData) -> Vec<SearchCellText> {
+pub(crate) fn collect_sheet_search_text(sheet: &DocumentSheet) -> Vec<SearchCellText> {
     sheet
         .rows
         .iter()
@@ -90,7 +91,7 @@ impl SearchDocumentSourcePort for RepositorySearchDocumentSource {
             .file_data()
             .sheets
             .get(sheet_index)
-            .map(crate::types::SheetData::search_snapshot);
+            .map(DocumentSheet::search_snapshot);
         Ok(sheet.map(|sheet| Arc::from(collect_sheet_search_text(&sheet))))
     }
 

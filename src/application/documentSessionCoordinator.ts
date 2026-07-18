@@ -15,6 +15,7 @@ import type {
   U64String,
   WorkbookCapabilities,
 } from '@/types';
+import { EDITOR_MUTATION_PROTOCOL_VERSION } from '@/types';
 import { isNextU64 } from '@/utils/u64';
 import {
   createDocumentRegionLoadScheduler,
@@ -283,7 +284,7 @@ export function createDocumentSessionCoordinator<
   function markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
     if (!document.markProjectionStaleFromMutationResponse(response)) return false;
     regionLoads.reset();
-    if (response.protocolVersion === 4) applyResponseStatus(response);
+    if (response.protocolVersion === EDITOR_MUTATION_PROTOCOL_VERSION) applyResponseStatus(response);
     search.clearSearch();
     return true;
   }

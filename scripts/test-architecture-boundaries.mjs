@@ -108,6 +108,21 @@ rejectMatches(
 );
 
 rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'search_ports.rs')],
+  [/\bSearchIndexPort\b/],
+  'the segregated search query and index-maintenance port boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'application', 'document_save_service.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'document_service.rs'),
+  ],
+  [/\bSearchService\b/],
+  'the search-use-case-independent document workflow boundary',
+);
+
+rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'application', 'document_query_service.rs')],
   [/crate::io(?:::|\b)/, /crate::ops(?:::|\b)/],
   'the query-orchestration-only document service boundary',
@@ -123,6 +138,18 @@ rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
   [/\bSearchIndexWork\b/, /\bSearchIndexUpdatePlan\b/],
   'the wire-only Rust response contract boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
+  [/\bDocumentData\b/, /\bDocumentSheet\b/],
+  'the projection-only Rust protocol model boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'document_data.rs')],
+  [/\bts_rs\b/, /\bTS\b/, /\bSerialize\b/, /\bDeserialize\b/, /#\[(?:serde|ts)\b/],
+  'the serialization-independent canonical document data boundary',
 );
 
 rejectMatches(
@@ -353,6 +380,24 @@ rejectMatches(
     /['"]@tauri-apps\//,
   ],
   'the port-driven document file coordinator boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'stores', 'documentSession.ts'),
+    join(projectRoot, 'src', 'application', 'documentSessionCoordinator.ts'),
+  ],
+  [/protocolVersion\s*[!=]==?\s*4\b/],
+  'the generated editor protocol version boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'stores', 'documentSession.ts'),
+    join(projectRoot, 'src', 'application', 'documentRegionRepository.ts'),
+  ],
+  [/16\s*\*\s*1024\s*\*\s*1024/],
+  'the generated Sheet-region response policy boundary',
 );
 
 rejectMatches(

@@ -1,8 +1,9 @@
+use crate::document_data::DocumentSheet;
 use crate::error::AppError;
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::editor_state::EditorState;
 use crate::types::{
-    DocumentManifest, EditorSessionInfo, OpenDocumentResponse, SheetData, SheetLayoutProjection,
+    DocumentManifest, EditorSessionInfo, OpenDocumentResponse, SheetLayoutProjection,
     SheetManifest, SheetRegion, SheetRegionProjectionResponse,
 };
 
@@ -133,7 +134,7 @@ fn initial_sheet_region(sheet_index: usize, extent: &crate::types::SheetExtent) 
     }
 }
 
-fn sheet_layout_projection(sheet: &SheetData) -> SheetLayoutProjection {
+fn sheet_layout_projection(sheet: &DocumentSheet) -> SheetLayoutProjection {
     SheetLayoutProjection {
         column_widths: sheet.column_widths.clone().unwrap_or_default(),
         row_heights: sheet.row_heights.clone().unwrap_or_default(),
@@ -141,7 +142,7 @@ fn sheet_layout_projection(sheet: &SheetData) -> SheetLayoutProjection {
 }
 
 pub(crate) fn project_merge_anchor_cells(
-    sheet: &SheetData,
+    sheet: &DocumentSheet,
     region: &SheetRegion,
     merges: &[crate::types::MergeRange],
 ) -> Vec<crate::types::SheetCellChange> {
@@ -179,7 +180,7 @@ pub(crate) fn project_merge_anchor_cells(
 }
 
 pub(crate) fn project_region_cells(
-    sheet: &SheetData,
+    sheet: &DocumentSheet,
     region: &SheetRegion,
 ) -> Vec<crate::types::SheetCellChange> {
     let mut cells = Vec::new();

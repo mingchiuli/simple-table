@@ -1,3 +1,4 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
@@ -6,18 +7,18 @@ use crate::domain::{
 };
 use crate::error::AppError;
 use crate::resource_limits::{ResourceLedger, validate_added_sheet};
-use crate::types::{FileData, ReadOnlyRichProjection, SheetData};
+use crate::types::ReadOnlyRichProjection;
 
 impl EditorCommand {
     #[cfg(test)]
-    pub fn resolve(self, file_data: &FileData) -> Result<AppliedOperation, AppError> {
+    pub fn resolve(self, file_data: &DocumentData) -> Result<AppliedOperation, AppError> {
         let resources = ResourceLedger::from_file_data(file_data);
         self.resolve_with_resources(file_data, &resources)
     }
 
     pub fn resolve_with_resources(
         self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         resources: &ResourceLedger,
     ) -> Result<AppliedOperation, AppError> {
         match self {
@@ -240,7 +241,7 @@ impl EditorCommand {
     }
 }
 
-fn require_sheet(file_data: &FileData, sheet_index: usize) -> Result<&SheetData, AppError> {
+fn require_sheet(file_data: &DocumentData, sheet_index: usize) -> Result<&DocumentSheet, AppError> {
     file_data
         .sheets
         .get(sheet_index)
@@ -253,7 +254,7 @@ struct SheetMutationExtent {
 }
 
 impl SheetMutationExtent {
-    fn from_sheet(sheet: &SheetData) -> Self {
+    fn from_sheet(sheet: &DocumentSheet) -> Self {
         let value_rows = sheet.rows.len();
         let value_columns = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
         let merge_rows = sheet
@@ -359,11 +360,11 @@ mod tests {
         ReadOnlyRichProjection,
     };
 
-    fn file_data_with_rich(rich: ReadOnlyRichProjection) -> FileData {
-        FileData {
+    fn file_data_with_rich(rich: ReadOnlyRichProjection) -> DocumentData {
+        DocumentData {
             path: String::new(),
             file_name: "rich.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: Vec::new(),
                 rich,

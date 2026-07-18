@@ -6,7 +6,11 @@ import { useDocumentStatusStore } from '@/stores/documentStatus';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
 import { useSearchSessionStore } from '@/stores/searchSession';
-import { openResponseFromFileData, savedResponseFromFileData } from '@/test/documentFixtures';
+import {
+  openResponseFromFileData,
+  savedResponseFromFileData,
+  type FileData,
+} from '@/test/documentFixtures';
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -15,7 +19,6 @@ import {
   type CellValue,
   type EditorMutationResponse,
   type EditorSessionInfo,
-  type FileData,
 } from '@/types';
 
 describe('documentSessionCoordinator', () => {

@@ -2,6 +2,7 @@ use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_restore::DocumentRestoreResult;
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
+use crate::document_data::DocumentData;
 use crate::domain::{
     AppliedOperation, DocumentCellChange, EditorCommand, SearchIndexWork, SearchScanCursor,
     SearchTextChunk,
@@ -22,7 +23,7 @@ use crate::state::history_store::{
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_document::collect_sheet_search_text_chunk;
 use crate::types::HistoryStatus;
-use crate::types::{FileData, FormulaStatus, WorkbookCapabilities};
+use crate::types::{FormulaStatus, WorkbookCapabilities};
 use std::collections::HashSet;
 #[cfg(test)]
 use umya_spreadsheet::Workbook;
@@ -81,7 +82,7 @@ impl RetiredEditorResources {
 }
 
 impl EditorState {
-    pub fn new(file_data: FileData) -> Self {
+    pub fn new(file_data: DocumentData) -> Self {
         Self::from_document(SpreadsheetDocument::new(file_data))
     }
 
@@ -99,11 +100,11 @@ impl EditorState {
     }
 
     #[cfg(test)]
-    pub fn with_workbook(file_data: FileData, workbook: Option<Workbook>) -> Self {
+    pub fn with_workbook(file_data: DocumentData, workbook: Option<Workbook>) -> Self {
         Self::from_document(SpreadsheetDocument::with_workbook(file_data, workbook))
     }
 
-    pub fn file_data(&self) -> &FileData {
+    pub fn file_data(&self) -> &DocumentData {
         self.document.projection()
     }
 
@@ -118,7 +119,7 @@ impl EditorState {
     #[cfg(test)]
     pub(crate) fn rebind_saved_document(
         &mut self,
-        file_data: FileData,
+        file_data: DocumentData,
         workbook: Option<Workbook>,
         clear_history: bool,
     ) -> Result<RetiredEditorResources, AppError> {
@@ -561,6 +562,7 @@ fn operation_resource_sheets(
 
 #[cfg(test)]
 mod tests {
+    use crate::document_data::DocumentSheet;
     use std::collections::HashMap;
     use std::io::Cursor;
 
@@ -581,10 +583,10 @@ mod tests {
     #[test]
     fn updating_file_identity_does_not_mark_content_dirty() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "/tmp/source.xlsx".to_string(),
                 file_name: "source.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("value".to_string())]],
                     ..Default::default()
@@ -606,10 +608,10 @@ mod tests {
     #[test]
     fn incremental_content_hash_tracks_cells_layout_and_history() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "incremental.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("saved".to_string())]],
                     ..Default::default()
@@ -653,10 +655,10 @@ mod tests {
     #[test]
     fn incremental_content_hash_returns_clean_when_saved_value_is_restored() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "incremental.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("saved".to_string())]],
                     ..Default::default()
@@ -689,10 +691,10 @@ mod tests {
     #[test]
     fn formula_work_limit_rejects_before_document_state_changes() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "formula-work-limit.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![
                         CellValue::String("1".to_string()),
@@ -732,10 +734,10 @@ mod tests {
     #[test]
     fn revision_exhaustion_rejects_mutation_before_state_changes() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "revision-limit.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("saved".to_string())]],
                     ..Default::default()
@@ -766,10 +768,10 @@ mod tests {
     #[test]
     fn incremental_content_hash_rebuilds_only_structurally_affected_state() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "incremental.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("value".to_string())]],
                     ..Default::default()
@@ -804,10 +806,10 @@ mod tests {
     #[test]
     fn structure_edits_refresh_region_metadata_index_for_undo_and_redo() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "metadata.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Null], vec![CellValue::Null]],
                     rich: ReadOnlyRichProjection {
@@ -856,16 +858,16 @@ mod tests {
     #[test]
     fn incremental_content_hash_tracks_cross_sheet_formula_rewrites() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "incremental.xlsx".to_string(),
                 sheets: vec![
-                    crate::types::SheetData {
+                    DocumentSheet {
                         name: "Data".to_string(),
                         rows: vec![vec![CellValue::Number(1.into())]],
                         ..Default::default()
                     },
-                    crate::types::SheetData {
+                    DocumentSheet {
                         name: "Summary".to_string(),
                         rows: vec![vec![CellValue::formula(
                             "=Data!A1",
@@ -901,10 +903,10 @@ mod tests {
     #[test]
     fn save_commit_lease_blocks_mutations_until_released() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "/tmp/source.xlsx".to_string(),
                 file_name: "source.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("old".to_string())]],
                     ..Default::default()
@@ -941,10 +943,10 @@ mod tests {
     #[test]
     fn failed_undo_rolls_back_document_and_keeps_history_entry() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "history.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("old".to_string())]],
                     ..Default::default()
@@ -991,10 +993,10 @@ mod tests {
     #[test]
     fn failed_redo_rolls_back_document_and_keeps_history_entry() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "history.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("old".to_string())]],
                     ..Default::default()
@@ -1102,10 +1104,10 @@ mod tests {
     #[test]
     fn failed_history_rollback_marks_document_unavailable() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "history.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("old".to_string())]],
                     ..Default::default()
@@ -2066,16 +2068,16 @@ mod tests {
     #[test]
     fn projection_only_structure_undo_preserves_other_sheets() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "generated.xlsx".to_string(),
                 sheets: vec![
-                    crate::types::SheetData {
+                    DocumentSheet {
                         name: "One".to_string(),
                         rows: vec![vec![CellValue::String("first".to_string())]],
                         ..Default::default()
                     },
-                    crate::types::SheetData {
+                    DocumentSheet {
                         name: "Two".to_string(),
                         rows: vec![vec![CellValue::String("second".to_string())]],
                         ..Default::default()
@@ -2107,10 +2109,10 @@ mod tests {
     #[test]
     fn set_cell_extends_sparse_projection_and_saved_workbook() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "sparse.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())]],
                     ..Default::default()
@@ -2151,10 +2153,10 @@ mod tests {
     #[test]
     fn set_cell_undo_restores_sparse_projection_shape() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "sparse.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())]],
                     ..Default::default()
@@ -2190,10 +2192,10 @@ mod tests {
     #[test]
     fn structure_redo_restores_sparse_projection_shape() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "sparse-structure.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())], vec![]],
                     column_widths: Some(std::collections::HashMap::from([(3, 120)])),
@@ -2238,10 +2240,10 @@ mod tests {
         );
 
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "sparse-structure.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("A1".to_string())]],
                     row_heights: Some(std::collections::HashMap::from([(3, 72)])),
@@ -2410,10 +2412,10 @@ mod tests {
     #[test]
     fn csv_document_can_export_xlsx_from_projection() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "input.csv".to_string(),
                 file_name: "input.csv".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("csv".to_string())]],
                     ..Default::default()
@@ -2443,10 +2445,10 @@ mod tests {
     #[test]
     fn csv_saved_as_xlsx_rebinds_workbook_capabilities() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "input.csv".to_string(),
                 file_name: "input.csv".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("csv".to_string())]],
                     ..Default::default()
@@ -2490,10 +2492,10 @@ mod tests {
     #[test]
     fn csv_capabilities_disable_unpersisted_features() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "input.csv".to_string(),
                 file_name: "input.csv".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::String("csv".to_string())]],
                     ..Default::default()
@@ -2649,10 +2651,10 @@ mod tests {
     #[test]
     fn batched_invalid_formula_returns_error_cell_and_keeps_dependencies_live() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "batch-formula.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![
                         CellValue::Number(Value::from(1)),
@@ -2760,10 +2762,10 @@ mod tests {
     #[test]
     fn history_is_bounded() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "history.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Null]],
                     ..Default::default()
@@ -2791,10 +2793,10 @@ mod tests {
     #[test]
     fn new_edit_returns_cleared_redo_history_for_external_release() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "retired-history.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Null]],
                     ..Default::default()
@@ -2832,10 +2834,10 @@ mod tests {
     #[test]
     fn history_is_bounded_by_estimated_bytes() {
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "history-memory.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Null]],
                     ..Default::default()
@@ -2865,10 +2867,10 @@ mod tests {
     fn no_op_cell_edit_bypasses_memento_budget() {
         let huge_text = "x".repeat(MAX_SINGLE_HISTORY_ENTRY_BYTES + 1024);
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "huge-no-op.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData {
+                sheets: vec![DocumentSheet {
                     name: "Huge".to_string(),
                     rows: vec![vec![CellValue::String(huge_text.clone())]],
                     ..Default::default()
@@ -2896,16 +2898,16 @@ mod tests {
     fn oversized_structure_memento_is_rejected_before_history_capture() {
         let huge_text = "x".repeat(MAX_SINGLE_HISTORY_ENTRY_BYTES + 1024);
         let mut state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "huge-structure.xlsx".to_string(),
                 sheets: vec![
-                    crate::types::SheetData {
+                    DocumentSheet {
                         name: "Huge".to_string(),
                         rows: vec![vec![CellValue::String(huge_text)]],
                         ..Default::default()
                     },
-                    crate::types::SheetData {
+                    DocumentSheet {
                         name: "Other".to_string(),
                         rows: vec![vec![CellValue::Null]],
                         ..Default::default()

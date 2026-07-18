@@ -1,20 +1,20 @@
 use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
+use crate::document_data::DocumentData;
 use crate::domain::DocumentCellChange;
+use crate::editor_protocol::{EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES};
 use crate::state::editor_state::EditorState;
 use crate::types::EditorStateInfo;
 use crate::types::{
     AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
-    EditorPatch, FileData, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
+    EditorPatch, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
     SheetCellChange, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
     SheetLayoutProjection, SheetManifest, SheetsReplacedPatch,
 };
 use std::collections::BTreeSet;
 use std::io::Write;
 
-const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 4;
 const MAX_CELL_CHANGES_PER_RESPONSE: usize = 4_096;
 const MAX_CELL_PATCH_BYTES_PER_RESPONSE: usize = 2 * 1024 * 1024;
-const MAX_MUTATION_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
 
 pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
     EditorStateInfo {
@@ -273,7 +273,7 @@ fn restore_change_patch(change: DocumentRestoreChange) -> EditorPatch {
 }
 
 pub fn structural_patches(
-    _file_data: &FileData,
+    _file_data: &DocumentData,
     operation: &AppliedOperationResult,
 ) -> Vec<EditorPatch> {
     match operation {
@@ -315,23 +315,14 @@ pub fn structural_patches(
                 count: 1,
             },
         }],
-        AppliedOperationResult::AddSheet {
-            sheet_index,
-            sheet_data,
-            ..
-        } => vec![EditorPatch::SheetInserted {
-            patch: SheetInsertedPatch {
-                sheet_index: *sheet_index,
-                sheet: SheetManifest {
-                    name: sheet_data.name.clone(),
-                    extent: sheet_data.extent(),
-                    layout: SheetLayoutProjection {
-                        column_widths: sheet_data.column_widths.clone().unwrap_or_default(),
-                        row_heights: sheet_data.row_heights.clone().unwrap_or_default(),
-                    },
+        AppliedOperationResult::AddSheet { sheet_index, sheet } => {
+            vec![EditorPatch::SheetInserted {
+                patch: SheetInsertedPatch {
+                    sheet_index: *sheet_index,
+                    sheet: sheet.clone(),
                 },
-            },
-        }],
+            }]
+        }
         AppliedOperationResult::DeleteSheet { sheet_index, .. } => {
             vec![EditorPatch::SheetDeleted {
                 patch: SheetDeletedPatch {
@@ -346,7 +337,7 @@ pub fn structural_patches(
     }
 }
 
-fn bounded_patches(file_data: &FileData, patches: Vec<EditorPatch>) -> Vec<EditorPatch> {
+fn bounded_patches(file_data: &DocumentData, patches: Vec<EditorPatch>) -> Vec<EditorPatch> {
     let mut cell_change_count = 0usize;
     let mut estimated_bytes = 0usize;
     for patch in &patches {
@@ -391,7 +382,7 @@ fn bounded_patches(file_data: &FileData, patches: Vec<EditorPatch>) -> Vec<Edito
 }
 
 fn project_patch_display_formats(
-    file_data: &FileData,
+    file_data: &DocumentData,
     patches: Vec<EditorPatch>,
 ) -> Vec<EditorPatch> {
     patches
@@ -440,16 +431,17 @@ fn wire_cell_changes(changes: Vec<DocumentCellChange>) -> Vec<SheetCellChange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellValue, SheetData, SheetExtent, SheetManifest, SheetsReplacedPatch};
+    use crate::document_data::DocumentSheet;
+    use crate::types::{CellValue, SheetExtent, SheetManifest, SheetsReplacedPatch};
     use std::collections::HashMap;
 
     #[test]
     fn oversized_cell_patch_becomes_sheet_invalidation() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "book.xlsx".to_string(),
-                sheets: vec![SheetData::default()],
+                sheets: vec![DocumentSheet::default()],
             },
             None,
         );
@@ -471,10 +463,10 @@ mod tests {
     #[test]
     fn oversized_cell_patch_bytes_become_sheet_invalidation() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "book.xlsx".to_string(),
-                sheets: vec![SheetData::default()],
+                sheets: vec![DocumentSheet::default()],
             },
             None,
         );
@@ -499,16 +491,16 @@ mod tests {
     #[test]
     fn structural_response_does_not_clone_complete_layout_maps() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "book.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     row_heights: Some(
                         (0..100_000)
                             .map(|index| (index, 24))
                             .collect::<HashMap<_, _>>(),
                     ),
-                    ..SheetData::default()
+                    ..DocumentSheet::default()
                 }],
             },
             None,
@@ -535,10 +527,10 @@ mod tests {
     #[test]
     fn oversized_mutation_response_becomes_resync_required() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "book.xlsx".to_string(),
-                sheets: vec![SheetData::default()],
+                sheets: vec![DocumentSheet::default()],
             },
             None,
         );

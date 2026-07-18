@@ -13,6 +13,10 @@ import type {
   U64String,
 } from '@/types';
 import {
+  EDITOR_MUTATION_PROTOCOL_VERSION,
+  MAX_SHEET_REGION_RESPONSE_BYTES,
+} from '@/types';
+import {
   applyProjectionPatches,
   createLoadedSheetSlot,
   createDocumentProjection,
@@ -57,7 +61,7 @@ export type DocumentSessionSnapshot = {
 const MAX_RESIDENT_SHEETS = 4;
 const MAX_BLOCKS_PER_SHEET = 8;
 const MAX_RESIDENT_BLOCKS = 24;
-const MAX_RESIDENT_BLOCK_BYTES = 16 * 1024 * 1024;
+const MAX_RESIDENT_BLOCK_BYTES = MAX_SHEET_REGION_RESPONSE_BYTES;
 export const useDocumentSessionStore = defineStore('documentSession', {
   state: () => ({
     data: null as DocumentProjection | null,
@@ -210,7 +214,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       response: EditorMutationResponse,
       protectedSheetIndex = 0
     ): MutationApplyResult {
-      if (response.protocolVersion !== 4) {
+      if (response.protocolVersion !== EDITOR_MUTATION_PROTOCOL_VERSION) {
         throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
       }
       if (this.documentId !== null && response.documentId !== this.documentId) {

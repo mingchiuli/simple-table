@@ -879,14 +879,15 @@ fn escape_regex_literal(literal: &str) -> String {
 mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::collect_sheet_search_text;
+    use crate::document_data::DocumentSheet;
     use crate::domain::SearchScanCursor;
     use crate::state::search_document::collect_sheet_search_text_chunk;
-    use crate::types::{CellFormatProjection, ReadOnlyRichProjection, SheetData};
+    use crate::types::{CellFormatProjection, ReadOnlyRichProjection};
     use serde_json::Value;
     use std::collections::HashMap;
 
     fn index_rows(rows: &[Vec<CellValue>]) -> SearchSheetIndex {
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             name: "Test".to_string(),
             rows: rows.to_vec(),
             ..Default::default()
@@ -1034,7 +1035,7 @@ mod tests {
             vec![CellValue::String("beta only".to_string())],
             vec![CellValue::String("alpha and beta".to_string())],
         ];
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             name: "Test".to_string(),
             rows: rows.clone(),
             ..Default::default()
@@ -1063,7 +1064,7 @@ mod tests {
             vec![CellValue::String("other".to_string())],
             vec![CellValue::String("cost (net)".to_string())],
         ];
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             name: "Test".to_string(),
             rows: rows.clone(),
             ..Default::default()
@@ -1097,7 +1098,7 @@ mod tests {
             ],
             vec![CellValue::String("match c".to_string())],
         ];
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             name: "Test".to_string(),
             rows: rows.clone(),
             ..Default::default()
@@ -1122,7 +1123,7 @@ mod tests {
 
     #[test]
     fn collect_search_text_includes_raw_and_formatted_display() {
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             name: "Test".to_string(),
             rows: vec![vec![CellValue::Number(Value::from(0.4))]],
             rich: ReadOnlyRichProjection {
@@ -1147,7 +1148,7 @@ mod tests {
 
     #[test]
     fn chunked_search_text_scan_obeys_text_and_cell_budgets() {
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             name: "Sheet1".to_string(),
             rows: vec![
                 vec![CellValue::String("one".to_string()), CellValue::Null],

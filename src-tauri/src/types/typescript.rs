@@ -4,18 +4,21 @@ use quote::ToTokens;
 use syn::{FnArg, GenericArgument, Item, PathArguments, ReturnType, Type};
 use ts_rs::{Config, TS};
 
+use crate::editor_protocol::{
+    EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES, MAX_SHEET_REGION_RESPONSE_BYTES,
+};
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::types::{
     CellData, CellFormatProjection, CellFormulaProjection, CellKind, CellStyleProjection,
     CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities, DocumentManifest,
     DrawingKind, DrawingProjection, EditorCommandContext, EditorMutationResponse, EditorPatch,
-    EditorSessionInfo, EditorStateInfo, FileData, FormulaDiagnostics, FormulaIssue,
-    FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus, HyperlinkProjection,
-    LayoutPatch, MergeRange, MutationResultLookup, MutationResultStatus, NativeSavePlan,
-    OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch,
-    RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse,
-    ScalarCellValue, SearchResponse, SearchResult, SearchScope, SetCellRequest, SheetCapabilities,
-    SheetData, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
+    EditorSessionInfo, EditorStateInfo, FormulaDiagnostics, FormulaIssue, FormulaIssueKind,
+    FormulaStatus, FreezePaneProjection, HistoryStatus, HyperlinkProjection, LayoutPatch,
+    MergeRange, MutationResultLookup, MutationResultStatus, NativeSavePlan, OpenDocumentResponse,
+    PreparedOpenDocument, ReadOnlyRichProjection, ResyncRequiredPatch, RowDeletedPatch,
+    RowInsertedPatch, SavedDocumentIdentity, SavedDocumentResponse, ScalarCellValue,
+    SearchResponse, SearchResult, SearchScope, SetCellRequest, SheetCapabilities,
+    SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
     SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionMetadata,
     SheetRegionProjectionResponse, SheetsReplacedPatch, SpreadsheetFormatOptions, UpdateInfo,
     WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
@@ -28,6 +31,15 @@ pub fn generated_typescript_contract() -> String {
     let mut output =
         String::from("// Generated from Rust editor contract by ts-rs. Do not edit by hand.\n\n");
     output.push_str("export type U64String = `${bigint}`;\n\n");
+    output.push_str(&format!(
+        "export const EDITOR_MUTATION_PROTOCOL_VERSION = {EDITOR_MUTATION_PROTOCOL_VERSION} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_MUTATION_RESPONSE_BYTES = {MAX_MUTATION_RESPONSE_BYTES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_SHEET_REGION_RESPONSE_BYTES = {MAX_SHEET_REGION_RESPONSE_BYTES} as const;\n\n"
+    ));
 
     push_decl::<ScalarCellValue>(&mut output, &cfg);
     push_decl::<CellKind>(&mut output, &cfg);
@@ -36,9 +48,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<CellValue>(&mut output, &cfg);
     push_decl::<CellFormatProjection>(&mut output, &cfg);
     push_decl::<MergeRange>(&mut output, &cfg);
-    push_decl::<SheetData>(&mut output, &cfg);
     push_decl::<SheetExtent>(&mut output, &cfg);
-    push_decl::<FileData>(&mut output, &cfg);
     push_decl::<SheetLayoutProjection>(&mut output, &cfg);
     push_decl::<SheetManifest>(&mut output, &cfg);
     push_decl::<DocumentManifest>(&mut output, &cfg);

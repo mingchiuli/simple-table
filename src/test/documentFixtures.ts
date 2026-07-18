@@ -1,12 +1,28 @@
 import type {
+  CellValue,
   EditorSessionInfo,
-  FileData,
+  MergeRange,
   OpenDocumentResponse,
+  ReadOnlyRichProjection,
   SavedDocumentResponse,
-  SheetData,
   SheetRegionProjectionResponse,
 } from '@/types';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
+
+export type SheetData = {
+  name: string;
+  rows: CellValue[][];
+  merges: MergeRange[];
+  columnWidths?: Record<number, number>;
+  rowHeights?: Record<number, number>;
+  rich: ReadOnlyRichProjection;
+};
+
+export type FileData = {
+  path: string;
+  fileName: string;
+  sheets: SheetData[];
+};
 
 export function openResponseFromFileData(
   fileData: FileData,

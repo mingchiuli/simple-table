@@ -1,3 +1,4 @@
+use crate::document_data::DocumentData;
 use std::collections::{HashMap, HashSet};
 
 use formualizer_parse::parser::ReferenceType;
@@ -5,7 +6,7 @@ use formualizer_parse::parser::ReferenceType;
 use crate::formula::ast::{FormulaAstService, MAX_FORMULA_REFERENCES};
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::sheet_name::sheet_name_key;
-use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaIssue, FormulaIssueKind};
+use crate::types::{CellValue, FormulaDiagnostics, FormulaIssue, FormulaIssueKind};
 
 const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
 const LARGE_RANGE_COLUMN_THRESHOLD: usize = 128;
@@ -339,7 +340,7 @@ impl FormulaDependencyIndex {
 
     pub(crate) fn update_formula_dependencies(
         &mut self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         formula_refs: impl IntoIterator<Item = FormulaCellRef>,
         registered_formulas: &HashSet<FormulaCellRef>,
         ast_service: &mut FormulaAstService,
@@ -360,7 +361,7 @@ impl FormulaDependencyIndex {
 
     fn insert_registered_formula(
         &mut self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         formula_ref: FormulaCellRef,
         registered_formulas: &HashSet<FormulaCellRef>,
         sheet_indexes: &HashMap<String, usize>,
@@ -528,7 +529,7 @@ impl FormulaDependencyIndex {
 }
 
 pub(crate) fn build_dependency_index(
-    file_data: &FileData,
+    file_data: &DocumentData,
     registered_formulas: &HashSet<FormulaCellRef>,
     ast_service: &mut FormulaAstService,
 ) -> FormulaDependencyIndex {
@@ -560,7 +561,7 @@ pub(crate) fn build_dependency_index(
     index
 }
 
-fn sheet_indexes(file_data: &FileData) -> HashMap<String, usize> {
+fn sheet_indexes(file_data: &DocumentData) -> HashMap<String, usize> {
     let mut indexes = HashMap::new();
     for (sheet_index, sheet) in file_data.sheets.iter().enumerate() {
         indexes
@@ -633,7 +634,7 @@ fn collect_large_range_dependents(
 }
 
 pub(crate) fn unregistered_formula_diagnostics(
-    file_data: &FileData,
+    file_data: &DocumentData,
     registered_formulas: &HashSet<FormulaCellRef>,
 ) -> (usize, Vec<FormulaIssue>) {
     let mut count = 0usize;
@@ -829,7 +830,7 @@ fn to_zero_based(index: u32) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SheetData;
+    use crate::document_data::DocumentSheet;
 
     #[test]
     fn excessive_formula_references_use_dependency_fallback() {
@@ -863,10 +864,10 @@ mod tests {
             col: 2,
         };
         let registered = HashSet::from([first, second]);
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "dependencies.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Null,

@@ -1,8 +1,9 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
 use crate::error::AppError;
-use crate::types::{CellValue, FileData, SheetData, SheetExtent};
+use crate::types::{CellValue, SheetExtent};
 
 pub const MAX_WORKBOOK_SHEETS: usize = 256;
 pub const MAX_ROWS_PER_SHEET: usize = 250_000;
@@ -28,7 +29,7 @@ struct SheetResourceUsage {
 }
 
 impl ResourceLedger {
-    pub fn from_file_data(file_data: &FileData) -> Self {
+    pub fn from_file_data(file_data: &DocumentData) -> Self {
         let sheets: Vec<_> = file_data.sheets.iter().map(sheet_resource_usage).collect();
         let total = sheets
             .iter()
@@ -48,7 +49,7 @@ impl ResourceLedger {
 
     pub fn refresh_sheets(
         &mut self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) {
         if self.sheets.len() != file_data.sheets.len() {
@@ -73,13 +74,13 @@ impl ResourceLedger {
         }
     }
 
-    pub fn replace_all(&mut self, file_data: &FileData) {
+    pub fn replace_all(&mut self, file_data: &DocumentData) {
         *self = Self::from_file_data(file_data);
     }
 
     pub fn validate_cell_changes<'a>(
         &self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         changes: impl IntoIterator<Item = (usize, usize, usize, &'a CellValue, &'a CellValue)>,
     ) -> Result<(), AppError> {
         validate_cell_changes_with_usage(file_data, self.total, changes)
@@ -87,7 +88,7 @@ impl ResourceLedger {
 
     pub fn validate_added_row(
         &self,
-        sheet: &SheetData,
+        sheet: &DocumentSheet,
         projected_sheet_rows: usize,
         row_width: usize,
     ) -> Result<(), AppError> {
@@ -96,7 +97,7 @@ impl ResourceLedger {
 
     pub fn validate_added_column(
         &self,
-        sheet: &SheetData,
+        sheet: &DocumentSheet,
         projected_row_count: usize,
         col_index: usize,
     ) -> Result<(), AppError> {
@@ -130,7 +131,7 @@ impl ResourceLedger {
     }
 }
 
-pub fn validate_file_data(file_data: &FileData) -> Result<(), AppError> {
+pub fn validate_file_data(file_data: &DocumentData) -> Result<(), AppError> {
     ensure_limit(
         "workbook sheets",
         file_data.sheets.len(),
@@ -142,7 +143,7 @@ pub fn validate_file_data(file_data: &FileData) -> Result<(), AppError> {
 
 #[cfg(test)]
 pub fn validate_cell_changes<'a>(
-    file_data: &FileData,
+    file_data: &DocumentData,
     changes: impl IntoIterator<Item = (usize, usize, usize, &'a CellValue, &'a CellValue)>,
 ) -> Result<(), AppError> {
     let usage = projection_usage(file_data)?;
@@ -150,7 +151,7 @@ pub fn validate_cell_changes<'a>(
 }
 
 fn validate_cell_changes_with_usage<'a>(
-    file_data: &FileData,
+    file_data: &DocumentData,
     usage: ProjectionUsage,
     changes: impl IntoIterator<Item = (usize, usize, usize, &'a CellValue, &'a CellValue)>,
 ) -> Result<(), AppError> {
@@ -213,7 +214,7 @@ fn validate_cell_changes_with_usage<'a>(
 
 fn validate_added_row_with_usage(
     usage: ProjectionUsage,
-    sheet: &SheetData,
+    sheet: &DocumentSheet,
     projected_sheet_rows: usize,
     row_width: usize,
 ) -> Result<(), AppError> {
@@ -231,7 +232,7 @@ fn validate_added_row_with_usage(
 
 fn validate_added_column_with_usage(
     usage: ProjectionUsage,
-    sheet: &SheetData,
+    sheet: &DocumentSheet,
     projected_row_count: usize,
     col_index: usize,
 ) -> Result<(), AppError> {
@@ -261,7 +262,7 @@ fn validate_added_column_with_usage(
     })
 }
 
-pub fn validate_added_sheet(file_data: &FileData) -> Result<(), AppError> {
+pub fn validate_added_sheet(file_data: &DocumentData) -> Result<(), AppError> {
     ensure_limit(
         "workbook sheets",
         file_data.sheets.len().saturating_add(1),
@@ -319,7 +320,7 @@ impl std::ops::Sub for ProjectionUsage {
     }
 }
 
-fn projection_usage(file_data: &FileData) -> Result<ProjectionUsage, AppError> {
+fn projection_usage(file_data: &DocumentData) -> Result<ProjectionUsage, AppError> {
     let mut usage = ProjectionUsage {
         dense_slots: 0,
         total_rows: 0,
@@ -344,7 +345,7 @@ fn projection_usage(file_data: &FileData) -> Result<ProjectionUsage, AppError> {
     Ok(usage)
 }
 
-fn sheet_resource_usage(sheet: &SheetData) -> SheetResourceUsage {
+fn sheet_resource_usage(sheet: &DocumentSheet) -> SheetResourceUsage {
     let dense_slots = sheet.rows.iter().map(Vec::len).sum();
     let text_bytes = sheet.rows.iter().flatten().map(cell_text_bytes).sum();
     let rich_entries = sheet.merges.len()
@@ -369,7 +370,10 @@ fn sheet_resource_usage(sheet: &SheetData) -> SheetResourceUsage {
     }
 }
 
-fn validate_sheet_metadata(sheet: &SheetData, usage: &mut ProjectionUsage) -> Result<(), AppError> {
+fn validate_sheet_metadata(
+    sheet: &DocumentSheet,
+    usage: &mut ProjectionUsage,
+) -> Result<(), AppError> {
     for merge in &sheet.merges {
         validate_position(merge.start_row as usize, merge.start_col as usize)?;
         validate_position(merge.end_row as usize, merge.end_col as usize)?;
@@ -497,14 +501,14 @@ fn limit_error(message: String) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellValue, SheetData};
+    use crate::types::CellValue;
 
     #[test]
     fn rejects_remote_cell_targets_before_projection_growth() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "book.xlsx".to_string(),
-            sheets: vec![SheetData::default()],
+            sheets: vec![DocumentSheet::default()],
         };
 
         let old_value = CellValue::Null;
@@ -520,10 +524,10 @@ mod tests {
 
     #[test]
     fn accounts_for_dense_growth_across_batched_targets() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "book.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 rows: vec![vec![CellValue::Null]],
                 ..Default::default()
             }],
@@ -558,10 +562,10 @@ mod tests {
 
     #[test]
     fn resource_ledger_refreshes_only_the_changed_sheet_extent() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "book.xlsx".to_string(),
-            sheets: vec![SheetData::default(), SheetData::default()],
+            sheets: vec![DocumentSheet::default(), DocumentSheet::default()],
         };
         let mut ledger = ResourceLedger::from_file_data(&file_data);
         file_data.sheets[1].rows = vec![vec![CellValue::String("value".to_string())]];

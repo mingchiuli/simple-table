@@ -1,3 +1,4 @@
+use crate::document_data::DocumentData;
 use std::{collections::BTreeSet, sync::Arc};
 
 use crate::document::backing::workbook_state::{self, StructurePatchDiagnostics};
@@ -9,7 +10,7 @@ use crate::formula::ast::FormulaAstService;
 use crate::io::codec::writer;
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::types::{
-    FileData, SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
+    SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
     WorkbookStructureCapabilities,
 };
 use umya_spreadsheet::{Workbook, Worksheet};
@@ -73,7 +74,7 @@ impl BodyStructureMemento {
 }
 
 impl SpreadsheetDocumentBody {
-    pub fn from_projection(projection: &FileData, workbook: Option<Workbook>) -> Self {
+    pub fn from_projection(projection: &DocumentData, workbook: Option<Workbook>) -> Self {
         match workbook {
             Some(workbook) => Self::Excel(ExcelDocumentBody {
                 workbook: Arc::new(workbook),
@@ -210,7 +211,7 @@ impl SpreadsheetDocumentBody {
     #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,
-        projection: &FileData,
+        projection: &DocumentData,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
         match SpreadsheetFileFormat::from_path_or_default(target_path_or_name) {
@@ -232,7 +233,7 @@ impl SpreadsheetDocumentBody {
 
     pub fn apply_structure_operation(
         &mut self,
-        projection: &mut FileData,
+        projection: &mut DocumentData,
         operation: &AppliedOperation,
         ast_service: &mut FormulaAstService,
     ) -> Result<Option<BodyStructureOperationResult>, AppError> {
@@ -263,7 +264,7 @@ impl SpreadsheetDocumentBody {
 
     pub fn patch_after_operation(
         &mut self,
-        projection: &mut FileData,
+        projection: &mut DocumentData,
         operation: &AppliedOperation,
         cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
@@ -281,7 +282,7 @@ impl SpreadsheetDocumentBody {
 
     pub fn patch_formula_changes(
         &mut self,
-        projection: &mut FileData,
+        projection: &mut DocumentData,
         cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
         match self {
@@ -320,13 +321,16 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn refresh_projection_from_workbook(&self, projection: &mut FileData) {
+    pub fn refresh_projection_from_workbook(&self, projection: &mut DocumentData) {
         if let Self::Excel(body) = self {
             WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
         }
     }
 
-    pub fn validate_projection_consistency(&self, projection: &FileData) -> Result<(), AppError> {
+    pub fn validate_projection_consistency(
+        &self,
+        projection: &DocumentData,
+    ) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
                 WorkbookProjectionCodec::validate(excel_workbook(body), projection)
@@ -337,7 +341,7 @@ impl SpreadsheetDocumentBody {
 
     pub fn validate_persisted_projection_consistency(
         &self,
-        projection: &FileData,
+        projection: &DocumentData,
     ) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
@@ -349,7 +353,7 @@ impl SpreadsheetDocumentBody {
 
     pub fn validate_projection_sheets(
         &self,
-        projection: &FileData,
+        projection: &DocumentData,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) -> Result<(), AppError> {
         match self {
@@ -377,7 +381,7 @@ impl SpreadsheetDocumentBodySnapshot {
 
     pub fn validate_persisted_projection_consistency(
         &self,
-        projection: &FileData,
+        projection: &DocumentData,
     ) -> Result<(), AppError> {
         self.body
             .validate_persisted_projection_consistency(projection)
@@ -592,7 +596,7 @@ fn estimate_worksheet_bytes(worksheet: &Worksheet) -> usize {
             .sum::<usize>()
 }
 
-fn is_csv_document(file_data: &FileData) -> bool {
+fn is_csv_document(file_data: &DocumentData) -> bool {
     extension_of(&file_data.file_name)
         .or_else(|| extension_of(&file_data.path))
         .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))

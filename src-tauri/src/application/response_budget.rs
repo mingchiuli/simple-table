@@ -1,9 +1,10 @@
 use std::io::Write;
 
+use crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES;
 use crate::error::AppError;
 use crate::types::{OpenDocumentResponse, SheetRegionProjectionResponse};
 
-pub(crate) const MAX_REGION_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_REGION_RESPONSE_BYTES: usize = MAX_SHEET_REGION_RESPONSE_BYTES;
 
 pub(crate) fn finalize_open_document_response(
     mut response: OpenDocumentResponse,

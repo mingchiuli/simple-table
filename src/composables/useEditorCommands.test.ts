@@ -12,12 +12,14 @@ import {
   readyFormulaStatus,
   type CellValue,
   type EditorMutationResponse,
-  type FileData,
   type OpenDocumentResponse,
   type SearchResult,
-  type SheetData,
 } from "@/types";
-import { openResponseFromFileData } from "@/test/documentFixtures";
+import {
+  openResponseFromFileData,
+  type FileData,
+  type SheetData,
+} from "@/test/documentFixtures";
 import { sheetCell } from "@/projection/documentProjection";
 
 vi.mock("element-plus", () => ({

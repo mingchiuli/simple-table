@@ -1,9 +1,10 @@
+use crate::document_data::DocumentData;
 use std::io::Cursor;
 
 use base64::Engine;
 use image::{ImageBuffer, Rgba};
 
-use crate::types::{CellValue, FileData};
+use crate::types::CellValue;
 
 const THUMBNAIL_WIDTH: u32 = 200;
 const CELL_WIDTH: u32 = 40;
@@ -24,7 +25,7 @@ pub(crate) struct ThumbnailSnapshot {
     rows: Vec<Vec<ThumbnailCell>>,
 }
 
-pub(crate) fn capture_thumbnail(file_data: &FileData) -> Option<ThumbnailSnapshot> {
+pub(crate) fn capture_thumbnail(file_data: &DocumentData) -> Option<ThumbnailSnapshot> {
     thumbnail_rows_from_file_data(file_data).map(|rows| ThumbnailSnapshot { rows })
 }
 
@@ -70,7 +71,7 @@ pub(crate) fn generate_thumbnail(snapshot: ThumbnailSnapshot) -> Option<String> 
     Some(format!("data:image/png;base64,{}", base64_str))
 }
 
-fn thumbnail_rows_from_file_data(file_data: &FileData) -> Option<Vec<Vec<ThumbnailCell>>> {
+fn thumbnail_rows_from_file_data(file_data: &DocumentData) -> Option<Vec<Vec<ThumbnailCell>>> {
     let sheet = file_data.sheets.first()?;
     let row_count = sheet.rows.len().min(MAX_ROWS);
     let col_count = sheet
@@ -151,14 +152,15 @@ fn get_cell_color(cell: &ThumbnailCell) -> Rgba<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ReadOnlyRichProjection, SheetData};
+    use crate::document_data::DocumentSheet;
+    use crate::types::ReadOnlyRichProjection;
 
     #[test]
     fn generates_thumbnail_from_file_projection_without_workbook_bytes() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "projection.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::String("text".to_string()),
@@ -184,10 +186,10 @@ mod tests {
 
     #[test]
     fn thumbnail_snapshot_does_not_retain_cell_text() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "projection.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("https://example.com".repeat(1024))]],
                 ..Default::default()

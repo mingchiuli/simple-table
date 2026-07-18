@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::application::document_codec_port::DocumentCodecPort;
 use crate::application::document_encode_port::DocumentEncodePort;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
-use crate::application::search_service::SearchService;
+use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::application::{document_format_policy, document_projection};
 use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::error::AppError;
@@ -16,7 +16,7 @@ use crate::types::{SavedDocumentIdentity, SavedDocumentResponse};
 #[derive(Clone)]
 pub struct DocumentSaveService {
     documents: ActiveDocumentRepository,
-    search: SearchService,
+    search_indexes: Arc<dyn SearchIndexMaintenancePort>,
     codec: Arc<dyn DocumentCodecPort>,
     encoder: Arc<dyn DocumentEncodePort>,
     work_budget: Arc<dyn DocumentWorkBudgetPort>,
@@ -25,14 +25,14 @@ pub struct DocumentSaveService {
 impl DocumentSaveService {
     pub(crate) fn new(
         documents: ActiveDocumentRepository,
-        search: SearchService,
+        search_indexes: Arc<dyn SearchIndexMaintenancePort>,
         codec: Arc<dyn DocumentCodecPort>,
         encoder: Arc<dyn DocumentEncodePort>,
         work_budget: Arc<dyn DocumentWorkBudgetPort>,
     ) -> Self {
         Self {
             documents,
-            search,
+            search_indexes,
             codec,
             encoder,
             work_budget,
@@ -43,8 +43,8 @@ impl DocumentSaveService {
         &self.documents
     }
 
-    fn search(&self) -> &SearchService {
-        &self.search
+    fn search_indexes(&self) -> &dyn SearchIndexMaintenancePort {
+        self.search_indexes.as_ref()
     }
 
     fn codec(&self) -> &dyn DocumentCodecPort {
@@ -62,7 +62,7 @@ impl DocumentSaveService {
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !self.documents.is_same_instance(&other.documents)
-            && self.search.is_isolated_from(&other.search)
+            && !Arc::ptr_eq(&self.search_indexes, &other.search_indexes)
             && !Arc::ptr_eq(&self.codec, &other.codec)
             && !Arc::ptr_eq(&self.encoder, &other.encoder)
             && !Arc::ptr_eq(&self.work_budget, &other.work_budget)
@@ -156,7 +156,7 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     commit_current_file_save_with_registry(
-        service.search(),
+        service.search_indexes(),
         service.documents(),
         service.codec(),
         path,
@@ -166,7 +166,7 @@ where
 }
 
 fn commit_current_file_save_with_registry<F>(
-    search: &SearchService,
+    search_indexes: &dyn SearchIndexMaintenancePort,
     registry: &ActiveDocumentRepository,
     codec: &dyn DocumentCodecPort,
     path: String,
@@ -189,7 +189,7 @@ where
         .unwrap_or_else(default_extension_string);
     if finish_without_reparse {
         return commit_current_file_save_without_reparse(
-            search,
+            search_indexes,
             registry,
             path,
             document_id,
@@ -226,7 +226,7 @@ where
         (editor_state.document_id(), response, retired)
     };
     drop(retired);
-    search.rebuild_all_sheets_index(document_id);
+    search_indexes.rebuild_all_sheets_index(document_id);
     Ok(response)
 }
 
@@ -249,7 +249,7 @@ where
 }
 
 fn commit_current_file_save_without_reparse<F>(
-    search: &SearchService,
+    search_indexes: &dyn SearchIndexMaintenancePort,
     registry: &ActiveDocumentRepository,
     path: String,
     document_id: u64,
@@ -292,7 +292,7 @@ where
         (response, retired)
     };
     drop(retired);
-    search.schedule_work(
+    search_indexes.schedule_work(
         document_id,
         response.editor_session.revision,
         crate::domain::SearchIndexWork::None,
@@ -343,10 +343,13 @@ fn default_extension_string() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::search_ports::SearchIndexPort;
+    use crate::application::search_ports::{
+        NoopSearchIndexMaintenancePort, SearchIndexMaintenancePort,
+    };
+    use crate::document_data::{DocumentData, DocumentSheet};
     use crate::domain::SearchIndexWork;
     use crate::state::editor_state::EditorState;
-    use crate::types::{FileData, SearchResponse, SearchScope, SheetData};
+
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -357,18 +360,7 @@ mod tests {
         scheduled: Mutex<Vec<(u64, u64, SearchIndexWork)>>,
     }
 
-    impl SearchIndexPort for RecordingSearchPort {
-        fn search(
-            &self,
-            _document_id: u64,
-            _base_revision: u64,
-            _query: &str,
-            _scope: SearchScope,
-            _current_sheet_index: Option<usize>,
-        ) -> Result<SearchResponse, AppError> {
-            Ok(SearchResponse::default())
-        }
-
+    impl SearchIndexMaintenancePort for RecordingSearchPort {
         fn rebuild_all_sheets_index(&self, _document_id: u64) {}
 
         fn schedule_work(&self, document_id: u64, source_revision: u64, work: SearchIndexWork) {
@@ -403,10 +395,10 @@ mod tests {
 
     fn test_registry() -> (ActiveDocumentRepository, u64, u64) {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "book.xlsx".to_string(),
-                sheets: vec![SheetData::default()],
+                sheets: vec![DocumentSheet::default()],
             },
             None,
         );
@@ -431,10 +423,10 @@ mod tests {
     #[test]
     fn failed_write_releases_save_lease_without_changing_revision() {
         let (registry, document_id, revision) = test_registry();
-        let search = SearchService::new();
+        let search_indexes = NoopSearchIndexMaintenancePort;
 
         let error = commit_current_file_save_with_registry(
-            &search,
+            &search_indexes,
             &registry,
             &TestCodec,
             "/tmp/saved.xlsx".to_string(),
@@ -454,11 +446,10 @@ mod tests {
     fn successful_write_commits_identity_once() {
         let (registry, document_id, revision) = test_registry();
         let search_port = Arc::new(RecordingSearchPort::default());
-        let search = SearchService::from_port(search_port.clone());
         let writes = AtomicUsize::new(0);
 
         let response = commit_current_file_save_with_registry(
-            &search,
+            search_port.as_ref(),
             &registry,
             &TestCodec,
             "/tmp/saved.xlsx".to_string(),
@@ -482,11 +473,11 @@ mod tests {
     #[test]
     fn stale_prepared_save_never_calls_writer() {
         let (registry, document_id, revision) = test_registry();
-        let search = SearchService::new();
+        let search_indexes = NoopSearchIndexMaintenancePort;
         let writes = AtomicUsize::new(0);
 
         let result = commit_current_file_save_with_registry(
-            &search,
+            &search_indexes,
             &registry,
             &TestCodec,
             "/tmp/saved.xlsx".to_string(),

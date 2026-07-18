@@ -5,10 +5,10 @@ import type {
   SheetRegionBlock,
   SheetRegionProjectionResponse,
 } from '@/types';
+import { MAX_SHEET_REGION_RESPONSE_BYTES } from '@/types';
 import { regionBlock, regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 
-const MAX_REGION_BLOCK_BYTES = 16 * 1024 * 1024;
 const MAX_REGION_FRAGMENT_REQUESTS = 64;
 const MAX_REGION_FRAGMENT_BYTES = 32 * 1024 * 1024;
 const MAX_REGION_LOAD_DURATION_MS = 10_000;
@@ -92,7 +92,7 @@ async function fetchRegionBlocks(
       || response.revision !== context.baseRevision
     ) return [];
     const block = regionBlock(response);
-    if (block.estimatedBytes > MAX_REGION_BLOCK_BYTES) return [];
+    if (block.estimatedBytes > MAX_SHEET_REGION_RESPONSE_BYTES) return [];
     budget.loadedBytes += block.estimatedBytes;
     if (budget.loadedBytes > MAX_REGION_FRAGMENT_BYTES) {
       throw new RegionLoadLimitError(

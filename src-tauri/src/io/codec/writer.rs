@@ -1,3 +1,4 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::io::Write;
 use std::str::FromStr;
 
@@ -6,7 +7,7 @@ use crate::document_format::{
 };
 use crate::error::AppError;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
-use crate::types::{CellValue, FileData};
+use crate::types::CellValue;
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
 
 const DEFAULT_SHEET_NAME: &str = "Sheet1";
@@ -56,7 +57,7 @@ impl Write for LimitedBuffer {
 
 /// 根据目标文件名/路径生成对应格式的字节。
 pub fn generate_file_bytes_for_target(
-    file_data: &FileData,
+    file_data: &DocumentData,
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     let target_name = file_name_from_path_like(target_path_or_name, target_path_or_name);
@@ -64,7 +65,7 @@ pub fn generate_file_bytes_for_target(
 }
 
 fn generate_file_bytes_for_name(
-    file_data: &FileData,
+    file_data: &DocumentData,
     output_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     let format = SpreadsheetFileFormat::from_path_or_default(output_name)
@@ -85,7 +86,7 @@ fn generate_file_bytes_for_name(
     }
 }
 
-/// 在已有 umya Workbook 上同步当前 FileData，再按目标文件名生成 Excel 字节。
+/// 在已有 umya Workbook 上同步当前 DocumentData，再按目标文件名生成 Excel 字节。
 pub fn generate_excel_bytes_from_workbook_for_target(
     workbook: &Workbook,
     target_path_or_name: &str,
@@ -104,7 +105,7 @@ pub fn generate_excel_bytes_from_workbook_for_target(
     Ok((format!("{output_stem}.{extension}"), bytes))
 }
 
-pub fn workbook_from_file_data(file_data: &FileData) -> Result<Workbook, AppError> {
+pub fn workbook_from_file_data(file_data: &DocumentData) -> Result<Workbook, AppError> {
     let mut workbook = new_file();
     sync_workbook_from_file_data(&mut workbook, file_data)?;
     Ok(workbook)
@@ -112,7 +113,7 @@ pub fn workbook_from_file_data(file_data: &FileData) -> Result<Workbook, AppErro
 
 pub fn sync_workbook_from_file_data(
     workbook: &mut Workbook,
-    file_data: &FileData,
+    file_data: &DocumentData,
 ) -> Result<(), AppError> {
     if file_data.sheets.is_empty() {
         return Ok(());
@@ -159,7 +160,7 @@ pub fn write_workbook_to_bytes(workbook: &Workbook) -> Result<Vec<u8>, AppError>
 
 pub fn sync_sheet_from_sheet_data(
     worksheet: &mut Worksheet,
-    sheet: &crate::types::SheetData,
+    sheet: &DocumentSheet,
 ) -> Result<(), AppError> {
     let target_column_widths = sheet.column_widths.as_ref();
     worksheet.column_dimensions_mut().retain(|column| {
@@ -257,7 +258,7 @@ pub fn write_cell(worksheet: &mut Worksheet, row: u32, col: u32, cell: &CellValu
     }
 }
 
-fn clear_cells_outside_sheet_data(worksheet: &mut Worksheet, sheet: &crate::types::SheetData) {
+fn clear_cells_outside_sheet_data(worksheet: &mut Worksheet, sheet: &DocumentSheet) {
     let existing_cells: Vec<(u32, u32)> = worksheet
         .cells()
         .iter()
@@ -331,7 +332,7 @@ fn normalized_sheet_name(name: &str, sheet_index: usize) -> String {
     }
 }
 
-fn write_csv_to_bytes(file_data: &FileData) -> Result<Vec<u8>, AppError> {
+fn write_csv_to_bytes(file_data: &DocumentData) -> Result<Vec<u8>, AppError> {
     let mut buffer = LimitedBuffer::new(MAX_GENERATED_FILE_BYTES);
     let result = {
         let mut writer = csv::Writer::from_writer(&mut buffer);
@@ -381,7 +382,7 @@ mod tests {
 
     use super::*;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-    use crate::types::{MergeRange, SheetData};
+    use crate::types::MergeRange;
 
     #[test]
     fn limited_output_buffer_rejects_bytes_before_growing_past_its_limit() {
@@ -395,10 +396,10 @@ mod tests {
 
     #[test]
     fn preserves_formula_in_merged_top_left_cell() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "merged-formula.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::Formula {
@@ -443,10 +444,10 @@ mod tests {
         let mut row_heights = HashMap::new();
         row_heights.insert(1, 96);
 
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "layout.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("layout".to_string())]],
                 column_widths: Some(column_widths),
@@ -497,7 +498,7 @@ mod tests {
         column_widths.insert(1, 210);
         let mut row_heights = HashMap::new();
         row_heights.insert(1, 120);
-        let sheet_data = SheetData {
+        let sheet_data = DocumentSheet {
             name: "Sheet1".to_string(),
             rows: vec![vec![CellValue::String("layout".to_string())]],
             column_widths: Some(column_widths),
@@ -550,10 +551,10 @@ mod tests {
 
     #[test]
     fn output_name_uses_decoded_path_like_target_name() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "source.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("ok".to_string())]],
                 ..Default::default()
@@ -571,10 +572,10 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_output_extension() {
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "unsupported.bin".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("ok".to_string())]],
                 ..Default::default()

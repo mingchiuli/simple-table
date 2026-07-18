@@ -388,9 +388,9 @@ fn wait_for_completion<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document_data::DocumentData;
     use crate::ops::patch_projector::status_mutation_response;
     use crate::state::editor_state::EditorState;
-    use crate::types::FileData;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
@@ -398,7 +398,7 @@ mod tests {
 
     fn response() -> EditorMutationResponse {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "book.xlsx".to_string(),
                 sheets: Vec::new(),

@@ -1,8 +1,9 @@
 use crate::application::{document_format_policy, document_projection, response_budget};
+use crate::document_data::DocumentData;
 use crate::error::AppError;
 use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 use crate::types::{
-    DocumentCapabilities, FileData, NativeSavePlan, OpenDocumentResponse, SheetRegion,
+    DocumentCapabilities, NativeSavePlan, OpenDocumentResponse, SheetRegion,
     SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 
@@ -119,7 +120,7 @@ pub(crate) fn inspect_current_file_for_command<T>(
     service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
-    inspect: impl FnOnce(&FileData) -> T,
+    inspect: impl FnOnce(&DocumentData) -> T,
 ) -> Result<T, AppError> {
     let handle = document_handle_for_read(service.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
@@ -202,7 +203,8 @@ fn document_handle_for_read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellValue, SheetData};
+    use crate::document_data::DocumentSheet;
+    use crate::types::CellValue;
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
@@ -237,18 +239,18 @@ mod tests {
 
     #[test]
     fn open_document_response_contains_manifest_and_initial_region() {
-        let first_sheet = SheetData {
+        let first_sheet = DocumentSheet {
             name: "First".to_string(),
             rows: vec![vec![CellValue::String("loaded".to_string())]],
             ..Default::default()
         };
-        let second_sheet = SheetData {
+        let second_sheet = DocumentSheet {
             name: "Second".to_string(),
             rows: vec![vec![CellValue::String("deferred".to_string())]],
             ..Default::default()
         };
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "/tmp/book.xlsx".to_string(),
                 file_name: "book.xlsx".to_string(),
                 sheets: vec![first_sheet, second_sheet],
@@ -285,7 +287,7 @@ mod tests {
 
     #[test]
     fn region_projection_keeps_absolute_cell_coordinates() {
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             rows: vec![
                 vec![
                     CellValue::String("A1".into()),
@@ -316,10 +318,10 @@ mod tests {
     #[test]
     fn region_projection_reports_and_enforces_final_serialized_size() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "region.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     rows: vec![vec![CellValue::String("value".to_string())]],
                     ..Default::default()
                 }],
@@ -360,10 +362,10 @@ mod tests {
     #[test]
     fn region_snapshot_releases_document_lock_before_response_sizing() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "region.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     rows: vec![vec![CellValue::String("value".to_string())]],
                     ..Default::default()
                 }],
@@ -397,7 +399,7 @@ mod tests {
 
     #[test]
     fn region_projection_includes_merge_anchor_outside_region() {
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             rows: vec![vec![CellValue::String("anchor".to_string())]],
             merges: vec![crate::types::MergeRange {
                 start_row: 0,
@@ -414,7 +416,7 @@ mod tests {
             col_start: 0,
             col_end: 1,
         };
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "merge.xlsx".to_string(),
             sheets: vec![sheet.clone()],
@@ -449,10 +451,10 @@ mod tests {
     #[test]
     fn native_save_rejects_lossy_csv_conversion_but_export_remains_available() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "untitled.xlsx".to_string(),
-                sheets: vec![SheetData::default(), SheetData::default()],
+                sheets: vec![DocumentSheet::default(), DocumentSheet::default()],
             },
             None,
         );
@@ -467,10 +469,10 @@ mod tests {
     #[test]
     fn native_save_allows_an_existing_csv_document_to_remain_csv() {
         let state = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: "/tmp/data.csv".to_string(),
                 file_name: "data.csv".to_string(),
-                sheets: vec![SheetData::default()],
+                sheets: vec![DocumentSheet::default()],
             },
             None,
         );

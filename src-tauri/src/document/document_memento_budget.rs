@@ -1,3 +1,4 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashSet;
 
 use crate::document::backing::document_body::SpreadsheetDocumentBody;
@@ -12,12 +13,12 @@ use crate::document::formula_coordinator::FormulaCoordinator;
 use crate::domain::{AppliedOperation, cell_key::parse_cell_key};
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::types::{
-    CellFormatProjection, CellStyleProjection, CellValue, FileData, FreezePaneProjection,
-    HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
+    CellFormatProjection, CellStyleProjection, CellValue, FreezePaneProjection,
+    HyperlinkProjection, MergeRange, ReadOnlyRichProjection,
 };
 
 pub(crate) fn estimate_memento_side_bytes(
-    projection: &FileData,
+    projection: &DocumentData,
     body: &SpreadsheetDocumentBody,
     formulas: &mut FormulaCoordinator,
     operation: &AppliedOperation,
@@ -66,7 +67,7 @@ pub(crate) fn estimate_memento_side_bytes(
 }
 
 fn estimate_cell_memento_bytes(
-    projection: &FileData,
+    projection: &DocumentData,
     formulas: &FormulaCoordinator,
     changed_cells: impl IntoIterator<Item = FormulaCellRef>,
     formula_capabilities_may_change: bool,
@@ -109,7 +110,7 @@ fn estimate_cell_memento_bytes(
 }
 
 fn estimate_file_structure_memento_bytes(
-    file_data: &FileData,
+    file_data: &DocumentData,
     operation: &AppliedOperation,
 ) -> usize {
     let sheet_count = file_data.sheets.len();
@@ -186,7 +187,12 @@ fn estimate_file_structure_memento_bytes(
     }
 }
 
-fn projection_cell(file_data: &FileData, sheet_index: usize, row: usize, col: usize) -> CellValue {
+fn projection_cell(
+    file_data: &DocumentData,
+    sheet_index: usize,
+    row: usize,
+    col: usize,
+) -> CellValue {
     file_data
         .sheets
         .get(sheet_index)
@@ -196,21 +202,21 @@ fn projection_cell(file_data: &FileData, sheet_index: usize, row: usize, col: us
         .unwrap_or(CellValue::Null)
 }
 
-fn estimate_sheet_shape_memento_bytes(sheet: &SheetData) -> usize {
+fn estimate_sheet_shape_memento_bytes(sheet: &DocumentSheet) -> usize {
     std::mem::size_of::<SheetShapeMemento>()
         + sheet.rows.len() * std::mem::size_of::<usize>()
         + estimate_protected_rich_cell_count(sheet) * std::mem::size_of::<(usize, usize)>()
 }
 
-fn estimate_protected_rich_cell_count(sheet: &SheetData) -> usize {
+fn estimate_protected_rich_cell_count(sheet: &DocumentSheet) -> usize {
     sheet.rich.cell_formats.len()
         + sheet.rich.cell_styles.len()
         + sheet.rich.hyperlinks.len()
         + sheet.rich.drawings.len() * 2
 }
 
-fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
-    std::mem::size_of::<SheetData>()
+fn estimate_sheet_data_bytes(sheet: &DocumentSheet) -> usize {
+    std::mem::size_of::<DocumentSheet>()
         + sheet.name.len()
         + sheet
             .rows
@@ -551,10 +557,10 @@ mod tests {
 
     #[test]
     fn cell_memento_budget_includes_sheet_shape_rows_and_rich_positions() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "shape-budget.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::Null]; 12],
                 rich: ReadOnlyRichProjection {

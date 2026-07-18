@@ -1,8 +1,8 @@
+use crate::document_data::DocumentSheet;
 use crate::domain::{SearchCellText, SearchScanCursor, SearchTextChunk};
-use crate::types::SheetData;
 
 pub(crate) fn collect_sheet_search_text_chunk(
-    sheet: &SheetData,
+    sheet: &DocumentSheet,
     mut cursor: SearchScanCursor,
     maximum_text_bytes: usize,
     maximum_cells: usize,

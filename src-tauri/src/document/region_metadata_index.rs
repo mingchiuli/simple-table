@@ -1,7 +1,8 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
-use crate::types::{FileData, MergeRange, SheetData, SheetRegion, SheetRegionMetadata};
+use crate::types::{MergeRange, SheetRegion, SheetRegionMetadata};
 
 const TILE_ROWS: usize = 128;
 const TILE_COLUMNS: usize = 32;
@@ -44,7 +45,7 @@ struct MergeIntervalNode {
 }
 
 impl RegionMetadataIndex {
-    pub(crate) fn from_file_data(file_data: &FileData) -> Self {
+    pub(crate) fn from_file_data(file_data: &DocumentData) -> Self {
         Self {
             sheets: file_data
                 .sheets
@@ -54,13 +55,13 @@ impl RegionMetadataIndex {
         }
     }
 
-    pub(crate) fn rebuild(&mut self, file_data: &FileData) {
+    pub(crate) fn rebuild(&mut self, file_data: &DocumentData) {
         *self = Self::from_file_data(file_data);
     }
 
     pub(crate) fn project(
         &self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         region: &SheetRegion,
     ) -> SheetRegionMetadata {
         if region.row_start >= region.row_end || region.col_start >= region.col_end {
@@ -94,7 +95,7 @@ impl RegionMetadataIndex {
 }
 
 impl SheetMetadataIndex {
-    fn from_sheet(sheet: &SheetData) -> Self {
+    fn from_sheet(sheet: &DocumentSheet) -> Self {
         Self {
             merges: MergeIntervalIndex::new(&sheet.merges),
             format_keys: CellKeyBuckets::new(sheet.rich.cell_formats.keys()),
@@ -102,7 +103,7 @@ impl SheetMetadataIndex {
         }
     }
 
-    fn project(&self, sheet: &SheetData, region: &SheetRegion) -> SheetRegionMetadata {
+    fn project(&self, sheet: &DocumentSheet, region: &SheetRegion) -> SheetRegionMetadata {
         SheetRegionMetadata {
             merges: self.merges.query(region),
             cell_formats: self
@@ -306,7 +307,7 @@ mod tests {
 
     #[test]
     fn projects_only_metadata_intersecting_the_requested_region() {
-        let sheet = SheetData {
+        let sheet = DocumentSheet {
             merges: vec![
                 merge(100, 40, 140, 42),
                 merge(100, 2, 140, 3),
@@ -325,7 +326,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let file_data = FileData {
+        let file_data = DocumentData {
             path: String::new(),
             file_name: "metadata.xlsx".to_string(),
             sheets: vec![sheet],
@@ -355,10 +356,10 @@ mod tests {
 
     #[test]
     fn rebuild_replaces_stale_bucket_entries() {
-        let mut file_data = FileData {
+        let mut file_data = DocumentData {
             path: String::new(),
             file_name: "metadata.xlsx".to_string(),
-            sheets: vec![SheetData {
+            sheets: vec![DocumentSheet {
                 rich: ReadOnlyRichProjection {
                     cell_formats: HashMap::from([("A1".to_string(), format("old"))]),
                     ..Default::default()

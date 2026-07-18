@@ -1,3 +1,4 @@
+use crate::document_data::DocumentSheet;
 use std::collections::{HashMap, HashSet};
 
 use crate::document::backing::document_body::BodyStructureMemento;
@@ -7,7 +8,7 @@ use crate::document::backing::rich_projection::{
 use crate::domain::{DocumentCellChange, cell_key::parse_cell_key};
 use crate::types::{
     CellFormatProjection, CellStyleProjection, CellValue, DrawingProjection, FreezePaneProjection,
-    HyperlinkProjection, MergeRange, ReadOnlyRichProjection, SheetData,
+    HyperlinkProjection, MergeRange, ReadOnlyRichProjection,
 };
 
 pub(crate) struct DocumentMemento {
@@ -263,7 +264,7 @@ impl SheetTailMemento {
 
 pub(crate) struct ProjectionSheetSnapshot {
     pub(crate) sheet_index: usize,
-    pub(crate) sheet: SheetData,
+    pub(crate) sheet: DocumentSheet,
 }
 
 impl ProjectionSheetSnapshot {
@@ -272,7 +273,7 @@ impl ProjectionSheetSnapshot {
     }
 }
 
-pub(crate) fn protected_rich_cell_positions(sheet: &SheetData) -> Vec<(usize, usize)> {
+pub(crate) fn protected_rich_cell_positions(sheet: &DocumentSheet) -> Vec<(usize, usize)> {
     let mut positions = Vec::new();
     let mut seen = HashSet::new();
     for key in sheet
@@ -317,8 +318,8 @@ fn estimate_sheet_cell_change_bytes(change: &DocumentCellChange) -> usize {
     std::mem::size_of::<DocumentCellChange>() + estimate_cell_value_bytes(&change.value)
 }
 
-fn estimate_sheet_data_bytes(sheet: &SheetData) -> usize {
-    std::mem::size_of::<SheetData>()
+fn estimate_sheet_data_bytes(sheet: &DocumentSheet) -> usize {
+    std::mem::size_of::<DocumentSheet>()
         + sheet.name.len()
         + sheet
             .rows

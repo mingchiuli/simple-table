@@ -31,7 +31,7 @@ pub(crate) trait SearchDocumentSourcePort: Send + Sync {
     ) -> Result<Option<SearchTextChunk>, AppError>;
 }
 
-pub(crate) trait SearchIndexPort: Send + Sync {
+pub(crate) trait SearchQueryPort: Send + Sync {
     fn search(
         &self,
         document_id: u64,
@@ -40,10 +40,24 @@ pub(crate) trait SearchIndexPort: Send + Sync {
         scope: SearchScope,
         current_sheet_index: Option<usize>,
     ) -> Result<SearchResponse, AppError>;
+}
 
+pub(crate) trait SearchIndexMaintenancePort: Send + Sync {
     fn rebuild_all_sheets_index(&self, document_id: u64);
 
     fn schedule_work(&self, document_id: u64, source_revision: u64, work: SearchIndexWork);
 
     fn cancel_document_jobs(&self, document_id: u64);
+}
+
+#[cfg(test)]
+pub(crate) struct NoopSearchIndexMaintenancePort;
+
+#[cfg(test)]
+impl SearchIndexMaintenancePort for NoopSearchIndexMaintenancePort {
+    fn rebuild_all_sheets_index(&self, _document_id: u64) {}
+
+    fn schedule_work(&self, _document_id: u64, _source_revision: u64, _work: SearchIndexWork) {}
+
+    fn cancel_document_jobs(&self, _document_id: u64) {}
 }

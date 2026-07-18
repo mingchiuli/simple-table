@@ -1,7 +1,7 @@
 use crate::document::document_memento::DocumentMementoSide;
+use crate::document_data::DocumentData;
 use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::state::content_hash::{ContentHash, IncrementalContentFingerprint};
-use crate::types::FileData;
 
 pub struct DirtyTracker {
     current: IncrementalContentFingerprint,
@@ -9,7 +9,7 @@ pub struct DirtyTracker {
 }
 
 impl DirtyTracker {
-    pub fn new(file_data: &FileData) -> Self {
+    pub fn new(file_data: &DocumentData) -> Self {
         let current = IncrementalContentFingerprint::from_file_data(file_data);
         Self {
             saved_content_hash: current.hash(),
@@ -26,7 +26,7 @@ impl DirtyTracker {
         self.current.hash() != self.saved_content_hash
     }
 
-    pub fn replace_current(&mut self, file_data: &FileData) {
+    pub fn replace_current(&mut self, file_data: &DocumentData) {
         self.current = IncrementalContentFingerprint::from_file_data(file_data);
     }
 
@@ -34,7 +34,7 @@ impl DirtyTracker {
         &mut self,
         operation: &AppliedOperation,
         formula_changes: &[DocumentCellChange],
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) {
         self.current
             .apply_operation(operation, formula_changes, file_data);
@@ -44,7 +44,7 @@ impl DirtyTracker {
         &mut self,
         target: &DocumentMementoSide,
         rollback: &DocumentMementoSide,
-        file_data: &FileData,
+        file_data: &DocumentData,
     ) {
         self.current
             .apply_history_restore(target, rollback, file_data);

@@ -475,14 +475,14 @@ fn nonzero_random_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FileData, SheetData};
+    use crate::document_data::{DocumentData, DocumentSheet};
 
     fn editor_state(name: &str) -> EditorState {
         EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: name.to_string(),
-                sheets: vec![SheetData::default()],
+                sheets: vec![DocumentSheet::default()],
             },
             None,
         )

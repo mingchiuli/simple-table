@@ -16,7 +16,9 @@ use crate::adapters::search_index_store::{
     MAX_RESIDENT_SEARCH_INDEXES, SearchIndexStamp, WRITER_ARENA_BYTES,
     build_sheet_index_with_cancel, search_position,
 };
-use crate::application::search_ports::{SearchDocumentSourcePort, SearchIndexPort};
+use crate::application::search_ports::{
+    SearchDocumentSourcePort, SearchIndexMaintenancePort, SearchQueryPort,
+};
 use crate::domain::{SearchCellIndexUpdate, SearchCellText, SearchIndexWork};
 #[cfg(test)]
 use crate::types::CellValue;
@@ -331,7 +333,7 @@ struct SearchScanReservation {
     active_bytes: Arc<Mutex<usize>>,
 }
 
-impl SearchIndexPort for SearchIndexAdapter {
+impl SearchQueryPort for SearchIndexAdapter {
     fn search(
         &self,
         document_id: u64,
@@ -349,7 +351,9 @@ impl SearchIndexPort for SearchIndexAdapter {
             current_sheet_index,
         )
     }
+}
 
+impl SearchIndexMaintenancePort for SearchIndexAdapter {
     fn rebuild_all_sheets_index(&self, document_id: u64) {
         SearchIndexAdapter::rebuild_all_sheets_index(self, document_id);
     }
@@ -937,13 +941,12 @@ mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
     use crate::adapters::search_index_store::SearchIndexRegistry;
+    use crate::document_data::{DocumentData, DocumentSheet};
     use crate::domain::EditorCommand;
     use crate::error::AppError;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentRepository;
-    use crate::types::{
-        CellFormatProjection, FileData, ReadOnlyRichProjection, SearchScope, SheetData,
-    };
+    use crate::types::{CellFormatProjection, ReadOnlyRichProjection, SearchScope};
     use serde_json::Value;
 
     struct TestContext {
@@ -956,9 +959,9 @@ mod tests {
         CellValue::String(value.to_string())
     }
 
-    fn context_for_sheet(sheet: SheetData) -> TestContext {
+    fn context_for_sheet(sheet: DocumentSheet) -> TestContext {
         let editor = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "test.xlsx".to_string(),
                 sheets: vec![sheet],
@@ -978,7 +981,7 @@ mod tests {
     }
 
     fn context_for_rows(rows: Vec<Vec<CellValue>>) -> TestContext {
-        context_for_sheet(SheetData {
+        context_for_sheet(DocumentSheet {
             name: "Test".to_string(),
             rows,
             ..Default::default()
@@ -1264,7 +1267,7 @@ mod tests {
 
     #[test]
     fn scan_and_index_return_the_same_formatted_display_value() {
-        let context = context_for_sheet(SheetData {
+        let context = context_for_sheet(DocumentSheet {
             name: "Test".to_string(),
             rows: vec![vec![CellValue::Number(Value::from(0.4))]],
             rich: ReadOnlyRichProjection {
@@ -1406,10 +1409,10 @@ mod tests {
             snapshot_sheet_search_text(&context.search.scheduler, context.document_id, 0, stamp)
                 .unwrap();
         let replacement = EditorState::with_workbook(
-            FileData {
+            DocumentData {
                 path: String::new(),
                 file_name: "new.xlsx".to_string(),
-                sheets: vec![SheetData {
+                sheets: vec![DocumentSheet {
                     name: "New".to_string(),
                     rows: vec![vec![s("new")]],
                     ..Default::default()

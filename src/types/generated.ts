@@ -2,6 +2,10 @@
 
 export type U64String = `${bigint}`;
 
+export const EDITOR_MUTATION_PROTOCOL_VERSION = 4 as const;
+export const MAX_MUTATION_RESPONSE_BYTES = 3145728 as const;
+export const MAX_SHEET_REGION_RESPONSE_BYTES = 16777216 as const;
+
 export type ScalarCellValue = string | number | boolean | null;
 
 export type CellKind = "blank" | "text" | "number" | "boolean" | "formula" | "error";
@@ -16,28 +20,7 @@ export type CellFormatProjection = { numberFormat?: string | null, styleId?: str
 
 export type MergeRange = { startRow: number, startCol: number, endRow: number, endCol: number, };
 
-export type SheetData = { name: string, rows: Array<Array<CellValue>>, 
-/**
- * 合并范围
- */
-merges: Array<MergeRange>, 
-/**
- * 列宽配置（用于持久化）
- */
-columnWidths?: { [key in number]: number }, 
-/**
- * 行高配置（持久化到 Excel，属于文档状态）
- */
-rowHeights?: { [key in number]: number }, 
-/**
- * Read-only rich Excel projection. This is display metadata only; the
- * original workbook remains the persistence source for styles and drawings.
- */
-rich: ReadOnlyRichProjection, };
-
 export type SheetExtent = { rowCount: number, columnCount: number, };
-
-export type FileData = { path: string, fileName: string, sheets: Array<SheetData>, };
 
 export type SheetLayoutProjection = { columnWidths?: { [key in number]: number }, rowHeights?: { [key in number]: number }, };
 
@@ -135,7 +118,7 @@ export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellC
 
 export type EditorCommandContext = { documentId: U64String, baseRevision: U64String, };
 
-export type EditorMutationResponse = { protocolVersion: 4, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
+export type EditorMutationResponse = { protocolVersion: typeof EDITOR_MUTATION_PROTOCOL_VERSION, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
 
 export type MutationResultStatus = "pending" | "completed" | "missing";
 

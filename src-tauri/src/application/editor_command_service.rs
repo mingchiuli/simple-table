@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
+use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::application::search_service::SearchService;
 use crate::domain::CellEditInput;
 use crate::error::AppError;
@@ -19,6 +20,7 @@ pub struct EditorCommandService {
     documents: ActiveDocumentRepository,
     mutation_replays: Arc<MutationReplayCoordinator>,
     search: SearchService,
+    search_indexes: Arc<dyn SearchIndexMaintenancePort>,
 }
 
 impl EditorCommandService {
@@ -26,11 +28,13 @@ impl EditorCommandService {
         documents: ActiveDocumentRepository,
         mutation_replays: Arc<MutationReplayCoordinator>,
         search: SearchService,
+        search_indexes: Arc<dyn SearchIndexMaintenancePort>,
     ) -> Self {
         Self {
             documents,
             mutation_replays,
             search,
+            search_indexes,
         }
     }
 
@@ -46,11 +50,16 @@ impl EditorCommandService {
         &self.search
     }
 
+    fn search_indexes(&self) -> &dyn SearchIndexMaintenancePort {
+        self.search_indexes.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !self.documents.is_same_instance(&other.documents)
             && !Arc::ptr_eq(&self.mutation_replays, &other.mutation_replays)
             && self.search.is_isolated_from(&other.search)
+            && !Arc::ptr_eq(&self.search_indexes, &other.search_indexes)
     }
 }
 
@@ -376,7 +385,7 @@ fn run_mutation<P: Serialize>(
         || {
             let execution = execute(service.documents())?;
             let revision = execution.response.revision;
-            service.search_service().schedule_work(
+            service.search_indexes().schedule_work(
                 document_id,
                 revision,
                 execution.search_index_work,

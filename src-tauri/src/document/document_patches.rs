@@ -1,6 +1,6 @@
 use crate::document::document_memento::FileStructureMemento;
 use crate::document::document_restore::{DocumentRestoreChange, RestoredSheet};
-use crate::types::FileData;
+use crate::document_data::DocumentData;
 
 pub(crate) enum CurrentStructureShape {
     Empty,
@@ -10,7 +10,7 @@ pub(crate) enum CurrentStructureShape {
 }
 
 impl CurrentStructureShape {
-    pub(crate) fn capture(file_data: &FileData, target: &FileStructureMemento) -> Self {
+    pub(crate) fn capture(file_data: &DocumentData, target: &FileStructureMemento) -> Self {
         match target {
             FileStructureMemento::Empty { .. } => Self::Empty,
             FileStructureMemento::Row(target) => file_data
@@ -37,7 +37,7 @@ impl CurrentStructureShape {
 pub(crate) fn restore_structure_changes(
     current_shape: &CurrentStructureShape,
     target_memento: &FileStructureMemento,
-    restored: &FileData,
+    restored: &DocumentData,
 ) -> Vec<DocumentRestoreChange> {
     match (current_shape, target_memento) {
         (CurrentStructureShape::Row { row_count }, FileStructureMemento::Row(target))

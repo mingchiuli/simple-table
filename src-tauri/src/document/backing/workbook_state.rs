@@ -1,3 +1,4 @@
+use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::document::backing::document_body::BodySheetShape;
@@ -11,8 +12,8 @@ use crate::formula::reference_rewrite::{
 use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::types::{
-    FileData, SheetCapabilities, SheetData, WorkbookCapabilities, WorkbookRichCapabilities,
-    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    SheetCapabilities, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 use umya_spreadsheet::{Workbook, Worksheet};
 
@@ -35,7 +36,7 @@ struct FormulaRewritePlan<'a> {
 
 pub fn patch_after_operation(
     workbook: &mut Workbook,
-    file_data: &mut FileData,
+    file_data: &mut DocumentData,
     operation: &AppliedOperation,
     cell_changes: &[DocumentCellChange],
 ) -> Result<(), AppError> {
@@ -203,7 +204,7 @@ pub fn apply_structure_operation(
             row_count,
             column_count,
         } => {
-            let sheet_data = SheetData {
+            let sheet_data = DocumentSheet {
                 name: name.clone(),
                 rows: vec![vec![crate::types::CellValue::Null; *column_count]; *row_count],
                 ..Default::default()
@@ -646,7 +647,7 @@ fn should_rewrite_formula_sheet(
 
 pub fn patch_formula_changes(
     workbook: &mut Workbook,
-    file_data: &mut FileData,
+    file_data: &mut DocumentData,
     cell_changes: &[DocumentCellChange],
 ) -> Result<(), AppError> {
     patch_cell_changes(workbook, file_data, cell_changes)
@@ -706,7 +707,7 @@ pub fn patch_cell_shapes(
 
 fn patch_cell_changes(
     workbook: &mut Workbook,
-    file_data: &mut FileData,
+    file_data: &mut DocumentData,
     cell_changes: &[DocumentCellChange],
 ) -> Result<(), AppError> {
     for change in cell_changes {
@@ -817,7 +818,7 @@ fn invalidate_sheet_references_before_delete(
 
 fn patch_cell(
     workbook: &mut Workbook,
-    file_data: &FileData,
+    file_data: &DocumentData,
     sheet_index: usize,
     row: usize,
     col: usize,
@@ -870,7 +871,7 @@ fn patch_row_height(worksheet: &mut Worksheet, row_index: usize, height: Option<
 fn insert_sheet(
     workbook: &mut Workbook,
     sheet_index: usize,
-    sheet_data: &SheetData,
+    sheet_data: &DocumentSheet,
 ) -> Result<(), AppError> {
     let sheet_name = if sheet_data.name.is_empty() {
         format!("Sheet{}", sheet_index + 1)

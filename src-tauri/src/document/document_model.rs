@@ -13,11 +13,12 @@ use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::document_transaction::DocumentTransaction;
 use crate::document::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
 use crate::document::region_metadata_index::RegionMetadataIndex;
+use crate::document_data::{DocumentData, DocumentSheet};
 use crate::domain::{AppliedOperation, DocumentCellChange, ResolvedCellEdit};
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::types::FormulaStatus;
-use crate::types::{CellValue, FileData, SheetCapabilities, SheetData, WorkbookCapabilities};
+use crate::types::{CellValue, SheetCapabilities, WorkbookCapabilities};
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use umya_spreadsheet::Workbook;
@@ -29,10 +30,10 @@ pub struct DocumentOperationResult {
 
 /// Canonical spreadsheet document.
 ///
-/// The physical backing preserves format-specific metadata while `FileData` is
+/// The physical backing preserves format-specific metadata while `DocumentData` is
 /// the projection used by editing, formula calculation, search, and dirty hashing.
 pub struct SpreadsheetDocument {
-    projection: FileData,
+    projection: DocumentData,
     body: SpreadsheetDocumentBody,
     cached_capabilities: WorkbookCapabilities,
     formulas: FormulaCoordinator,
@@ -45,12 +46,15 @@ pub struct SpreadsheetDocument {
 }
 
 impl SpreadsheetDocument {
-    pub fn new(projection: FileData) -> Self {
+    pub fn new(projection: DocumentData) -> Self {
         let body = SpreadsheetDocumentBody::from_projection(&projection, None);
         Self::from_backing(projection, body)
     }
 
-    pub(crate) fn from_backing(mut projection: FileData, body: SpreadsheetDocumentBody) -> Self {
+    pub(crate) fn from_backing(
+        mut projection: DocumentData,
+        body: SpreadsheetDocumentBody,
+    ) -> Self {
         let formulas = FormulaCoordinator::new(&mut projection);
         let formula_structure_limitations = formulas.structure_formula_limitations();
         let cached_capabilities = body.capabilities(&formula_structure_limitations);
@@ -71,12 +75,12 @@ impl SpreadsheetDocument {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_workbook(projection: FileData, workbook: Option<Workbook>) -> Self {
+    pub(crate) fn with_workbook(projection: DocumentData, workbook: Option<Workbook>) -> Self {
         let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
         Self::from_backing(projection, body)
     }
 
-    pub fn projection(&self) -> &FileData {
+    pub fn projection(&self) -> &DocumentData {
         &self.projection
     }
 
@@ -854,7 +858,7 @@ fn formula_capability_signature(value: &CellValue) -> Option<&str> {
     }
 }
 
-fn restore_projection_structure(file_data: &mut FileData, memento: &FileStructureMemento) {
+fn restore_projection_structure(file_data: &mut DocumentData, memento: &FileStructureMemento) {
     match memento {
         FileStructureMemento::Empty { sheet_count } => {
             file_data.sheets.truncate(*sheet_count);
@@ -865,7 +869,7 @@ fn restore_projection_structure(file_data: &mut FileData, memento: &FileStructur
     }
 }
 
-fn restore_projection_row(file_data: &mut FileData, memento: &RowStructureMemento) {
+fn restore_projection_row(file_data: &mut DocumentData, memento: &RowStructureMemento) {
     let Some(sheet) = file_data.sheets.get_mut(memento.sheet_index) else {
         return;
     };
@@ -898,7 +902,7 @@ fn restore_projection_row(file_data: &mut FileData, memento: &RowStructureMement
     memento.rich.restore_into(&mut sheet.rich);
 }
 
-fn restore_projection_column(file_data: &mut FileData, memento: &ColumnStructureMemento) {
+fn restore_projection_column(file_data: &mut DocumentData, memento: &ColumnStructureMemento) {
     let Some(sheet) = file_data.sheets.get_mut(memento.sheet_index) else {
         return;
     };
@@ -941,14 +945,14 @@ fn restore_projection_column(file_data: &mut FileData, memento: &ColumnStructure
     memento.rich.restore_into(&mut sheet.rich);
 }
 
-fn restore_projection_sheet_tail(file_data: &mut FileData, memento: &SheetTailMemento) {
+fn restore_projection_sheet_tail(file_data: &mut DocumentData, memento: &SheetTailMemento) {
     file_data.sheets.truncate(memento.truncate_from);
 
     for snapshot in &memento.sheets {
         if file_data.sheets.len() < snapshot.sheet_index {
             file_data
                 .sheets
-                .resize_with(snapshot.sheet_index, SheetData::default);
+                .resize_with(snapshot.sheet_index, DocumentSheet::default);
         }
         if file_data.sheets.len() == snapshot.sheet_index {
             file_data.sheets.push(snapshot.sheet.clone());
@@ -1009,7 +1013,7 @@ fn shape_restore_changes(shapes: &[SheetShapeMemento]) -> Vec<DocumentRestoreCha
         .collect()
 }
 
-fn ensure_projection_cell_exists(sheet: &mut crate::types::SheetData, row: usize, col: usize) {
+fn ensure_projection_cell_exists(sheet: &mut DocumentSheet, row: usize, col: usize) {
     let target_width = col + 1;
     while sheet.rows.len() <= row {
         sheet.rows.push(vec![CellValue::Null; target_width]);

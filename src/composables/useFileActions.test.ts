@@ -13,16 +13,16 @@ import {
   readyFormulaStatus,
   type CellValue,
   type DocumentCapabilities,
-  type FileData,
   type NativeSavePlan,
   type OpenDocumentResponse,
   type PreparedOpenDocument,
   type SavedDocumentResponse,
-  type SheetData,
 } from "@/types";
 import {
   openResponseFromFileData,
   savedResponseFromFileData,
+  type FileData,
+  type SheetData,
 } from "@/test/documentFixtures";
 
 const routerMocks = vi.hoisted(() => ({

@@ -1,3 +1,4 @@
+use crate::document_data::DocumentData;
 use std::collections::HashSet;
 
 use formualizer_workbook::Workbook;
@@ -8,7 +9,7 @@ use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::sheet_name::canonicalize_formula_sheet_names;
 use crate::formula::value_codec::{cell_to_literal, to_formula_index};
-use crate::types::{CellValue, FileData};
+use crate::types::CellValue;
 
 #[derive(Default)]
 pub(crate) struct FormulaRegistrationResult {
@@ -26,7 +27,7 @@ pub(crate) struct FormulaCellRegistration<'a> {
 pub(crate) fn register_workbook_cells(
     workbook: &mut Workbook,
     ast_service: &mut FormulaAstService,
-    file_data: &mut FileData,
+    file_data: &mut DocumentData,
 ) -> Result<FormulaRegistrationResult, AppError> {
     let mut result = FormulaRegistrationResult::default();
     let sheet_names: Vec<String> = file_data
@@ -116,7 +117,7 @@ pub(crate) fn set_workbook_cell(
     Ok(result)
 }
 
-pub(crate) fn apply_cell_changes(file_data: &mut FileData, changes: &[DocumentCellChange]) {
+pub(crate) fn apply_cell_changes(file_data: &mut DocumentData, changes: &[DocumentCellChange]) {
     for change in changes {
         let Some(cell) = file_data
             .sheets

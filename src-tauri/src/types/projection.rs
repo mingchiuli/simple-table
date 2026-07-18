@@ -1,9 +1,9 @@
 use crate::types::display::DisplayProjection;
 use serde::Serialize;
-use serde::ser::{SerializeMap, SerializeSeq};
+use serde::ser::SerializeMap;
 use ts_rs::{Config, TS, TypeVisitor};
 
-use super::types::{CellFormatProjection, CellValue, SheetData};
+use super::types::{CellFormatProjection, CellValue};
 
 pub struct ScalarCellValue;
 
@@ -152,48 +152,5 @@ impl Serialize for CellValueProjection<'_> {
             map.serialize_entry("formula", &formula_projection)?;
         }
         map.end()
-    }
-}
-
-pub(crate) struct SheetRowsProjection<'a> {
-    pub(crate) sheet: &'a SheetData,
-}
-
-impl Serialize for SheetRowsProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut rows = serializer.serialize_seq(Some(self.sheet.rows.len()))?;
-        for (row_index, row) in self.sheet.rows.iter().enumerate() {
-            rows.serialize_element(&SheetRowProjection {
-                sheet: self.sheet,
-                row_index,
-                row,
-            })?;
-        }
-        rows.end()
-    }
-}
-
-struct SheetRowProjection<'a> {
-    sheet: &'a SheetData,
-    row_index: usize,
-    row: &'a [CellValue],
-}
-
-impl Serialize for SheetRowProjection<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut row = serializer.serialize_seq(Some(self.row.len()))?;
-        for (col_index, cell) in self.row.iter().enumerate() {
-            row.serialize_element(&CellValueProjection::new(
-                cell,
-                self.sheet.cell_format_at(self.row_index, col_index),
-            ))?;
-        }
-        row.end()
     }
 }

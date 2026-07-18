@@ -1,3 +1,4 @@
+use crate::document_data::DocumentData;
 use formualizer_parse::parser::ReferenceType;
 
 use crate::document::backing::workbook_state::StructurePatchDiagnostics;
@@ -7,7 +8,7 @@ use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
 use crate::formula::sheet_name::sheet_names_equal;
-use crate::types::{CellValue, FileData, FormulaDiagnostics, FormulaStatus};
+use crate::types::{CellValue, FormulaDiagnostics, FormulaStatus};
 
 pub(crate) struct FormulaCoordinator {
     runtime: FormulaRuntime,
@@ -41,7 +42,7 @@ struct FormulaWorkEstimate {
 }
 
 impl FormulaCoordinator {
-    pub(crate) fn new(projection: &mut FileData) -> Self {
+    pub(crate) fn new(projection: &mut DocumentData) -> Self {
         let mut ast_service = FormulaAstService::new();
         match FormulaRuntime::new(projection, &mut ast_service) {
             Ok(runtime) => {
@@ -68,7 +69,7 @@ impl FormulaCoordinator {
         }
     }
 
-    pub(crate) fn estimated_bytes(&self, projection: &FileData) -> usize {
+    pub(crate) fn estimated_bytes(&self, projection: &DocumentData) -> usize {
         std::mem::size_of::<Self>()
             + self.runtime.estimated_bytes(projection)
             + self.ast_service.estimated_bytes()
@@ -115,7 +116,7 @@ impl FormulaCoordinator {
 
     pub(crate) fn structure_memento_sheet_indexes(
         &mut self,
-        projection: &FileData,
+        projection: &DocumentData,
         operation: &AppliedOperation,
     ) -> Vec<usize> {
         if !operation.impact().is_structure_change() {
@@ -134,7 +135,7 @@ impl FormulaCoordinator {
     pub(crate) fn impacted_cells_for_memento(
         &self,
         changed_cells: impl IntoIterator<Item = FormulaCellRef>,
-        projection: &FileData,
+        projection: &DocumentData,
     ) -> Vec<FormulaCellRef> {
         let changed_cells: Vec<FormulaCellRef> = changed_cells.into_iter().collect();
         match &self.status {
@@ -148,7 +149,7 @@ impl FormulaCoordinator {
     pub(crate) fn validate_recalculation_work(
         &self,
         operation: &AppliedOperation,
-        projection: &FileData,
+        projection: &DocumentData,
         limits: FormulaWorkLimits,
     ) -> Result<(), AppError> {
         validate_formula_work_estimate(self.recalculation_work(operation, projection), limits)
@@ -157,7 +158,7 @@ impl FormulaCoordinator {
     fn recalculation_work(
         &self,
         operation: &AppliedOperation,
-        projection: &FileData,
+        projection: &DocumentData,
     ) -> FormulaWorkEstimate {
         let mut prospective_formulas = std::collections::HashMap::new();
         let mut positions: std::collections::HashSet<FormulaCellRef> = match operation {
@@ -231,7 +232,7 @@ impl FormulaCoordinator {
     pub(crate) fn recalculate_after_operation(
         &mut self,
         operation: &AppliedOperation,
-        projection: &mut FileData,
+        projection: &mut DocumentData,
     ) -> Vec<DocumentCellChange> {
         match operation {
             AppliedOperation::SetCell {
@@ -327,7 +328,7 @@ impl FormulaCoordinator {
         }
     }
 
-    pub(crate) fn rebuild(&mut self, projection: &mut FileData) -> Vec<DocumentCellChange> {
+    pub(crate) fn rebuild(&mut self, projection: &mut DocumentData) -> Vec<DocumentCellChange> {
         match self
             .runtime
             .rebuild_preserving_cached_results(projection, &mut self.ast_service)
@@ -348,7 +349,7 @@ impl FormulaCoordinator {
         }
     }
 
-    fn formula_cell_positions(&self, projection: &FileData) -> Vec<FormulaCellRef> {
+    fn formula_cell_positions(&self, projection: &DocumentData) -> Vec<FormulaCellRef> {
         let mut positions = self.runtime.all_formula_cells();
         let mut seen: std::collections::HashSet<_> = positions.iter().copied().collect();
         for (sheet_index, sheet) in projection.sheets.iter().enumerate() {
@@ -372,7 +373,7 @@ impl FormulaCoordinator {
 
     fn formula_error_changes_for_all_formulas(
         &mut self,
-        projection: &mut FileData,
+        projection: &mut DocumentData,
         error: String,
     ) -> Vec<DocumentCellChange> {
         let mut changes = Vec::new();
@@ -400,7 +401,7 @@ impl FormulaCoordinator {
     }
 }
 
-fn formula_source_at(file_data: &FileData, cell_ref: FormulaCellRef) -> Option<&str> {
+fn formula_source_at(file_data: &DocumentData, cell_ref: FormulaCellRef) -> Option<&str> {
     match file_data
         .sheets
         .get(cell_ref.sheet_index)?
@@ -455,7 +456,7 @@ struct FormulaStructureTarget<'a> {
 }
 
 impl<'a> FormulaStructureTarget<'a> {
-    fn from_operation(projection: &'a FileData, operation: &AppliedOperation) -> Option<Self> {
+    fn from_operation(projection: &'a DocumentData, operation: &AppliedOperation) -> Option<Self> {
         match operation {
             AppliedOperation::AddRow { sheet_index, .. }
             | AppliedOperation::DeleteRow { sheet_index, .. }
@@ -486,7 +487,7 @@ impl<'a> FormulaStructureTarget<'a> {
 }
 
 fn formula_sheets_referencing_target(
-    projection: &FileData,
+    projection: &DocumentData,
     target: &FormulaStructureTarget<'_>,
     ast_service: &mut FormulaAstService,
 ) -> Vec<usize> {
@@ -564,7 +565,7 @@ fn formula_sheet_indexes(cells: Vec<FormulaCellRef>) -> Vec<usize> {
 }
 
 fn formula_error_change(
-    projection: &mut FileData,
+    projection: &mut DocumentData,
     sheet_index: usize,
     row: usize,
     col: usize,
@@ -605,10 +606,11 @@ fn append_unique_changes(target: &mut Vec<DocumentCellChange>, changes: Vec<Docu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellValue, FileData, SheetData};
+    use crate::document_data::DocumentSheet;
+    use crate::types::CellValue;
 
-    fn sheet(name: &str, rows: Vec<Vec<CellValue>>) -> SheetData {
-        SheetData {
+    fn sheet(name: &str, rows: Vec<Vec<CellValue>>) -> DocumentSheet {
+        DocumentSheet {
             name: name.to_string(),
             rows,
             ..Default::default()
@@ -617,7 +619,7 @@ mod tests {
 
     #[test]
     fn structure_memento_only_includes_formula_sheets_referencing_target() {
-        let mut projection = FileData {
+        let mut projection = DocumentData {
             path: String::new(),
             file_name: "formulas.xlsx".to_string(),
             sheets: vec![
@@ -662,7 +664,7 @@ mod tests {
 
     #[test]
     fn degraded_formula_runtime_blocks_formula_dependent_structure_edits() {
-        let mut projection = FileData {
+        let mut projection = DocumentData {
             path: String::new(),
             file_name: "formulas.xlsx".to_string(),
             sheets: vec![sheet("Sheet1", Vec::new())],
@@ -714,7 +716,7 @@ mod tests {
 
     #[test]
     fn formula_work_accounts_for_a_new_formula_before_it_is_registered() {
-        let mut projection = FileData {
+        let mut projection = DocumentData {
             path: String::new(),
             file_name: "new-formula.xlsx".to_string(),
             sheets: vec![sheet(

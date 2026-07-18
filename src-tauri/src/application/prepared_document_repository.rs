@@ -1,3 +1,4 @@
+use crate::document_data::DocumentData;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -6,7 +7,6 @@ use std::time::{Duration, Instant};
 use crate::error::AppError;
 use crate::resource_limits::ResourceLedger;
 use crate::state::editor_state::EditorState;
-use crate::types::FileData;
 
 pub(crate) struct PreparedDocument {
     pub(crate) editor_state: EditorState,
@@ -235,7 +235,7 @@ impl PreparedDocumentRepository {
 
     pub(crate) fn reserve_for_file_data(
         &self,
-        file_data: &FileData,
+        file_data: &DocumentData,
         active_document_bytes: usize,
     ) -> Result<PrepareReservation, AppError> {
         let estimated_bytes = ResourceLedger::from_file_data(file_data)
@@ -380,15 +380,15 @@ impl PreparedDocumentRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FileData, SheetData};
+    use crate::document_data::DocumentSheet;
 
     fn prepared(name: &str) -> PreparedDocument {
         PreparedDocument {
             editor_state: EditorState::with_workbook(
-                FileData {
+                DocumentData {
                     path: String::new(),
                     file_name: name.to_string(),
-                    sheets: vec![SheetData::default()],
+                    sheets: vec![DocumentSheet::default()],
                 },
                 None,
             ),

@@ -8,9 +8,8 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
-  type FileData,
 } from "@/types";
-import { openResponseFromFileData } from "@/test/documentFixtures";
+import { openResponseFromFileData, type FileData } from "@/test/documentFixtures";
 
 vi.mock("@/api", () => ({
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({

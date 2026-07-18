@@ -1,11 +1,11 @@
 use crate::document::backing::document_body::SpreadsheetDocumentBodySnapshot;
+use crate::document_data::DocumentData;
 use crate::error::AppError;
-use crate::types::FileData;
 use umya_spreadsheet::Workbook;
 
 pub(crate) enum DocumentSaveEncoding<'a> {
     NativeWorkbook(&'a Workbook),
-    Projection(&'a FileData),
+    Projection(&'a DocumentData),
 }
 
 pub struct SpreadsheetDocumentSaveSnapshot {
@@ -16,7 +16,7 @@ pub struct SpreadsheetDocumentSaveSnapshot {
 
 enum SaveProjectionSnapshot {
     ValidatedNativeWorkbook,
-    Projection(FileData),
+    Projection(DocumentData),
 }
 
 impl SpreadsheetDocumentSaveSnapshot {
@@ -32,7 +32,7 @@ impl SpreadsheetDocumentSaveSnapshot {
     }
 
     pub(crate) fn projection(
-        projection: FileData,
+        projection: DocumentData,
         body: SpreadsheetDocumentBodySnapshot,
         transaction_failure: Option<String>,
     ) -> Self {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
-use crate::application::search_service::SearchService;
+use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::application::{document_projection, response_budget};
 use crate::error::AppError;
 use crate::state::state::ActiveDocumentRepository;
@@ -16,7 +16,7 @@ pub struct DocumentLifecycleService {
     documents: ActiveDocumentRepository,
     prepared_documents: PreparedDocumentRepository,
     mutation_replays: Arc<MutationReplayCoordinator>,
-    search: SearchService,
+    search_indexes: Arc<dyn SearchIndexMaintenancePort>,
     prepared_source_adopter: PreparedSourceAdopter,
 }
 
@@ -25,14 +25,14 @@ impl DocumentLifecycleService {
         documents: ActiveDocumentRepository,
         prepared_documents: PreparedDocumentRepository,
         mutation_replays: Arc<MutationReplayCoordinator>,
-        search: SearchService,
+        search_indexes: Arc<dyn SearchIndexMaintenancePort>,
         prepared_source_adopter: PreparedSourceAdopter,
     ) -> Self {
         Self {
             documents,
             prepared_documents,
             mutation_replays,
-            search,
+            search_indexes,
             prepared_source_adopter,
         }
     }
@@ -49,8 +49,8 @@ impl DocumentLifecycleService {
         &self.mutation_replays
     }
 
-    fn search(&self) -> &SearchService {
-        &self.search
+    fn search_indexes(&self) -> &dyn SearchIndexMaintenancePort {
+        self.search_indexes.as_ref()
     }
 
     fn adopt_prepared_source(
@@ -99,7 +99,9 @@ pub fn commit_prepared_document(
         retire_document_runtime(service, previous_document_id);
     }
     drop(previous_document);
-    service.search().rebuild_all_sheets_index(document_id);
+    service
+        .search_indexes()
+        .rebuild_all_sheets_index(document_id);
     Ok(response)
 }
 
@@ -116,6 +118,6 @@ pub fn close_current_document(
 }
 
 fn retire_document_runtime(service: &DocumentLifecycleService, document_id: u64) {
-    service.search().cancel_document_jobs(document_id);
+    service.search_indexes().cancel_document_jobs(document_id);
     mutation_replay::retire_document(service.mutation_replays(), document_id);
 }

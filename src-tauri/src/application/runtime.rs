@@ -37,7 +37,8 @@ impl Default for ApplicationRuntime {
         let prepared_documents = PreparedDocumentRepository::default();
         let mutation_replays = Arc::new(MutationReplayCoordinator::default());
         let search_source = Arc::new(RepositorySearchDocumentSource::new(documents.clone()));
-        let search = SearchService::from_port(Arc::new(SearchIndexAdapter::new(search_source)));
+        let search_indexes = Arc::new(SearchIndexAdapter::new(search_source));
+        let search = SearchService::from_port(search_indexes.clone());
         let codec = Arc::new(DocumentCodecAdapter);
         let work_budget = Arc::new(DocumentWorkBudgetAdapter::default());
         let recent_files = RecentStore::default();
@@ -50,7 +51,7 @@ impl Default for ApplicationRuntime {
         let document_queries = DocumentQueryService::new(documents.clone());
         let document_saves = DocumentSaveService::new(
             documents.clone(),
-            search.clone(),
+            search_indexes.clone(),
             codec.clone(),
             codec,
             work_budget,
@@ -93,10 +94,15 @@ impl Default for ApplicationRuntime {
                 documents.clone(),
                 prepared_documents,
                 Arc::clone(&mutation_replays),
-                search.clone(),
+                search_indexes.clone(),
                 prepared_source_adopter,
             ),
-            editor_commands: EditorCommandService::new(documents, mutation_replays, search),
+            editor_commands: EditorCommandService::new(
+                documents,
+                mutation_replays,
+                search,
+                search_indexes,
+            ),
             document_files,
             recent_files: RecentFileAdapter::new(
                 document_queries,
