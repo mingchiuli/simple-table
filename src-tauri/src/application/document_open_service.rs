@@ -1,33 +1,32 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use umya_spreadsheet::Workbook;
-
+use crate::application::document_codec_port::{DocumentCodecPort, OpenDocumentSource};
 use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
+use crate::document_format::default_spreadsheet_extension;
 use crate::error::AppError;
-use crate::io::codec::reader::{preflight_input_file, read_file_with_workbook_from_preflight};
-use crate::io::file_format::{
-    default_spreadsheet_extension, file_name_from_path_like, open_extension_from_path_name_or_bytes,
-};
-use crate::io::open_file_input::OpenFileInput;
 use crate::resource_limits::validate_file_data;
 use crate::state::editor_state::EditorState;
 use crate::state::state::ActiveDocumentRepository;
 use crate::types::{FileData, PreparedOpenDocument, SheetData};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct DocumentOpenService {
     documents: ActiveDocumentRepository,
     prepared_documents: PreparedDocumentRepository,
+    codec: Arc<dyn DocumentCodecPort>,
 }
 
 impl DocumentOpenService {
     pub(crate) fn new(
         documents: ActiveDocumentRepository,
         prepared_documents: PreparedDocumentRepository,
+        codec: Arc<dyn DocumentCodecPort>,
     ) -> Self {
         Self {
             documents,
             prepared_documents,
+            codec,
         }
     }
 
@@ -39,43 +38,33 @@ impl DocumentOpenService {
         &self.prepared_documents
     }
 
+    fn codec(&self) -> &dyn DocumentCodecPort {
+        self.codec.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !self.documents.is_same_instance(&other.documents)
             && !self
                 .prepared_documents
                 .is_same_instance(&other.prepared_documents)
+            && !Arc::ptr_eq(&self.codec, &other.codec)
     }
 }
 
 pub fn prepare_open_input(
     service: &DocumentOpenService,
-    input: OpenFileInput,
+    source: OpenDocumentSource,
 ) -> Result<PreparedOpenDocument, AppError> {
-    let OpenFileInput {
-        path,
-        bytes,
-        file_name,
-    } = input;
-    let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
-    let preflight = preflight_input_file(&extension, &bytes)?;
+    let source_path = PathBuf::from(&source.path);
+    let plan = service.codec().plan_open(&source)?;
     let reservation = service.prepared_documents().reserve_for_parse_bytes(
-        preflight.estimated_parse_bytes(),
+        plan.estimated_parse_bytes(),
         active_document_resource_bytes(service)?,
     )?;
-    let resolved_file_name =
-        file_name.unwrap_or_else(|| file_name_from_path_like(&path, "unknown"));
-    let source_path = PathBuf::from(&path);
-    let result =
-        read_file_with_workbook_from_preflight(preflight, bytes, path, resolved_file_name)?;
+    let editor_state = plan.decode(source)?;
 
-    prepare_editor_state(
-        service,
-        result.file_data,
-        result.workbook,
-        Some(source_path),
-        reservation,
-    )
+    prepare_editor_state(service, editor_state, Some(source_path), reservation)
 }
 
 pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDocument, AppError> {
@@ -84,7 +73,12 @@ pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDoc
     let reservation = service
         .prepared_documents()
         .reserve_for_file_data(&file_data, active_document_resource_bytes(service)?)?;
-    prepare_editor_state(service, file_data, None, None, reservation)
+    prepare_editor_state(
+        service,
+        EditorState::with_workbook(file_data, None),
+        None,
+        reservation,
+    )
 }
 
 pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Result<(), AppError> {
@@ -105,12 +99,10 @@ fn blank_file_data() -> FileData {
 
 fn prepare_editor_state(
     service: &DocumentOpenService,
-    file_data: FileData,
-    workbook: Option<Workbook>,
+    editor_state: EditorState,
     source_path: Option<PathBuf>,
     reservation: prepared_document_repository::PrepareReservation,
 ) -> Result<PreparedOpenDocument, AppError> {
-    let editor_state = EditorState::with_workbook(file_data, workbook);
     let token = service.prepared_documents().replace(
         editor_state,
         source_path,
@@ -133,33 +125,87 @@ mod tests {
     use super::*;
     use crate::types::CellValue;
 
+    struct TestCodec;
+    struct TestDecodePlan;
+
+    impl crate::application::document_codec_port::DocumentDecodePlan for TestDecodePlan {
+        fn estimated_parse_bytes(&self) -> usize {
+            1024
+        }
+
+        fn decode(self: Box<Self>, source: OpenDocumentSource) -> Result<EditorState, AppError> {
+            let text = String::from_utf8(source.bytes)
+                .map_err(|error| AppError::ReadError(error.to_string()))?;
+            Ok(EditorState::with_workbook(
+                FileData {
+                    path: source.path,
+                    file_name: source
+                        .file_name
+                        .unwrap_or_else(|| "unknown.csv".to_string()),
+                    sheets: vec![SheetData {
+                        rows: vec![vec![CellValue::String(text)]],
+                        ..Default::default()
+                    }],
+                },
+                None,
+            ))
+        }
+    }
+
+    impl DocumentCodecPort for TestCodec {
+        fn plan_open(
+            &self,
+            _source: &OpenDocumentSource,
+        ) -> Result<Box<dyn crate::application::document_codec_port::DocumentDecodePlan>, AppError>
+        {
+            Ok(Box::new(TestDecodePlan))
+        }
+
+        fn decode_saved(
+            &self,
+            _extension: &str,
+            _bytes: Vec<u8>,
+            _path: String,
+            _file_name: String,
+        ) -> Result<crate::document::document_model::SpreadsheetDocument, AppError> {
+            unreachable!("open-service tests do not reparse saved files")
+        }
+    }
+
+    fn service() -> DocumentOpenService {
+        DocumentOpenService::new(
+            ActiveDocumentRepository::default(),
+            PreparedDocumentRepository::default(),
+            Arc::new(TestCodec),
+        )
+    }
+
     #[test]
-    fn open_input_detects_extensionless_csv_content() {
-        let service = DocumentOpenService::default();
+    fn open_input_is_decoded_through_the_injected_codec() {
+        let service = service();
         let prepared = prepare_open_input(
             &service,
-            OpenFileInput {
+            OpenDocumentSource {
                 path: "/tmp/imported".to_string(),
-                bytes: b"name,score\nalice,42".to_vec(),
-                file_name: Some("imported".to_string()),
+                bytes: b"decoded through port".to_vec(),
+                file_name: Some("imported.csv".to_string()),
             },
         )
-        .expect("open extensionless csv");
+        .expect("prepare source");
         let response = service
             .prepared_documents()
             .take(&prepared.token)
             .expect("prepared document");
 
-        let rows = &response.editor_state.file_data().sheets[0].rows;
-        assert_eq!(rows[0][0], CellValue::String("name".to_string()));
-        assert_eq!(rows[0][1], CellValue::String("score".to_string()));
-        assert_eq!(rows[1][0], CellValue::String("alice".to_string()));
-        assert_eq!(rows[1][1], CellValue::Number(42.into()));
+        assert_eq!(
+            response.editor_state.file_data().sheets[0].rows[0][0],
+            CellValue::String("decoded through port".to_string())
+        );
     }
 
     #[test]
     fn new_file_uses_the_backend_owned_blank_template() {
-        let service = DocumentOpenService::default();
+        let service = service();
         let prepared = prepare_new_file(&service).expect("init file");
         let response = service
             .prepared_documents()

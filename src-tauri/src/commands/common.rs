@@ -1,8 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use super::{
-    CommandU64, blocking, mutation_executor, projection_executor, recent_executor, search_executor,
-};
+use super::{CommandExecutionRuntime, CommandU64};
 use crate::adapters::recent_file_adapter;
 use crate::application::editor_command_service::EditorSessionInfo;
 use crate::application::runtime::ApplicationRuntime;
@@ -177,10 +175,14 @@ impl<'de> serde::Deserialize<'de> for SetCellBatch {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_open_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
 ) -> Result<Option<DesktopOpenFileInfo>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || runtime.document_files().pick_open_file(&app)).await
+    executions
+        .file()
+        .run(move || runtime.document_files().pick_open_file(&app))
+        .await
 }
 
 /// Desktop: 释放已选择但没有被读取的文件路径授权。
@@ -195,10 +197,14 @@ pub fn discard_open_file_selection_desktop(runtime: State<'_, ApplicationRuntime
 #[tauri::command(rename_all = "camelCase")]
 pub async fn prepare_open_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || runtime.document_files().prepare_open_file(&path)).await
+    executions
+        .file()
+        .run(move || runtime.document_files().prepare_open_file(&path))
+        .await
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
@@ -206,11 +212,15 @@ pub async fn prepare_open_file_desktop(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn prepare_recent_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || runtime.document_files().prepare_recent_file(&app, &id)).await
+    executions
+        .file()
+        .run(move || runtime.document_files().prepare_recent_file(&app, &id))
+        .await
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -218,16 +228,19 @@ pub async fn prepare_recent_file_desktop(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_save_location_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime
-            .document_files()
-            .pick_save_location(&app, &default_name)
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime
+                .document_files()
+                .pick_save_location(&app, &default_name)
+        })
+        .await
 }
 
 /// Desktop: 释放未使用的保存路径授权。
@@ -242,17 +255,20 @@ pub fn discard_save_location_desktop(runtime: State<'_, ApplicationRuntime>, pat
 #[tauri::command(rename_all = "camelCase")]
 pub async fn save_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     path: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime
-            .document_files()
-            .save_file(&path, document_id.get(), base_revision.get())
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime
+                .document_files()
+                .save_file(&path, document_id.get(), base_revision.get())
+        })
+        .await
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
@@ -260,71 +276,85 @@ pub async fn save_file_desktop(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn export_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     default_name: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime.document_files().export_file(
-            &app,
-            &default_name,
-            document_id.get(),
-            base_revision.get(),
-        )
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime.document_files().export_file(
+                &app,
+                &default_name,
+                document_id.get(),
+                base_revision.get(),
+            )
+        })
+        .await
 }
 
 #[tauri::command]
 pub async fn prepare_new_file(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || document_open_service::prepare_new_file(runtime.document_opens())).await
+    executions
+        .file()
+        .run(move || document_open_service::prepare_new_file(runtime.document_opens()))
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn commit_prepared_document(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     token: String,
     expected_document_id: Option<CommandU64>,
     expected_revision: Option<CommandU64>,
 ) -> Result<OpenDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        document_service::commit_prepared_document(
-            runtime.document_lifecycle(),
-            &token,
-            expected_document_id.map(CommandU64::get),
-            expected_revision.map(CommandU64::get),
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            document_service::commit_prepared_document(
+                runtime.document_lifecycle(),
+                &token,
+                expected_document_id.map(CommandU64::get),
+                expected_revision.map(CommandU64::get),
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn abort_prepared_document(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     token: String,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        document_open_service::abort_prepared_document(runtime.document_opens(), &token)
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            document_open_service::abort_prepared_document(runtime.document_opens(), &token)
+        })
+        .await
 }
 
 #[tauri::command]
 pub async fn get_active_document(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
 ) -> Result<Option<OpenDocumentResponse>, AppError> {
     let runtime = runtime.inner().clone();
-    projection_executor::run(move || {
-        document_query_service::active_document_response(runtime.document_queries())
-    })
-    .await
+    executions
+        .projection()
+        .run(move || document_query_service::active_document_response(runtime.document_queries()))
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -343,51 +373,63 @@ pub fn get_mutation_result(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_current_document_projection(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     preferred_sheet_index: usize,
 ) -> Result<OpenDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
-    projection_executor::run(move || {
-        document_query_service::current_document_projection_for_command(
-            runtime.document_queries(),
-            document_id.get(),
-            base_revision.get(),
-            preferred_sheet_index,
-        )
-    })
-    .await
+    executions
+        .projection()
+        .run(move || {
+            document_query_service::current_document_projection_for_command(
+                runtime.document_queries(),
+                document_id.get(),
+                base_revision.get(),
+                preferred_sheet_index,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_sheet_region_projection(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
     let runtime = runtime.inner().clone();
-    projection_executor::run(move || {
-        document_query_service::sheet_region_projection_for_command(
-            runtime.document_queries(),
-            document_id.get(),
-            base_revision.get(),
-            region,
-        )
-    })
-    .await
+    executions
+        .projection()
+        .run(move || {
+            document_query_service::sheet_region_projection_for_command(
+                runtime.document_queries(),
+                document_id.get(),
+                base_revision.get(),
+                region,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn close_current_document(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        document_service::close_current_document(runtime.document_lifecycle(), document_id.get())
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            document_service::close_current_document(
+                runtime.document_lifecycle(),
+                document_id.get(),
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -441,39 +483,45 @@ pub fn get_editor_state(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn undo(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::undo(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::undo(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn redo(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::redo(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::redo(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+            )
+        })
+        .await
 }
 
 // ==================== Cell Operations ====================
@@ -481,6 +529,7 @@ pub async fn redo(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn set_cell(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -491,24 +540,27 @@ pub async fn set_cell(
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
     let text = text.into_inner();
-    mutation_executor::run(move || {
-        editor_command_service::set_cell(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            row,
-            col,
-            text,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::set_cell(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                row,
+                col,
+                text,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn set_cells(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -516,21 +568,24 @@ pub async fn set_cells(
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
     let changes = changes.into_inner();
-    mutation_executor::run(move || {
-        editor_command_service::set_cells(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            changes,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::set_cells(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                changes,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn add_row(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -538,22 +593,25 @@ pub async fn add_row(
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::add_row(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            row_index,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::add_row(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                row_index,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn delete_row(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -561,22 +619,25 @@ pub async fn delete_row(
     row_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::delete_row(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            row_index,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::delete_row(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                row_index,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn add_column(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -584,22 +645,25 @@ pub async fn add_column(
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::add_column(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            col_index,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::add_column(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                col_index,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn delete_column(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -607,22 +671,25 @@ pub async fn delete_column(
     col_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::delete_column(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            col_index,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::delete_column(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                col_index,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn set_column_width(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -631,23 +698,26 @@ pub async fn set_column_width(
     width: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::set_column_width(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            col_index,
-            width,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::set_column_width(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                col_index,
+                width,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn set_row_height(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
@@ -656,18 +726,20 @@ pub async fn set_row_height(
     height: Option<u32>,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::set_row_height(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-            row_index,
-            height,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::set_row_height(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+                row_index,
+                height,
+            )
+        })
+        .await
 }
 
 // ==================== Sheet Operations ====================
@@ -675,41 +747,47 @@ pub async fn set_row_height(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn add_sheet(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::add_sheet(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::add_sheet(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+            )
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn delete_sheet(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     command_id: String,
     sheet_index: usize,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    mutation_executor::run(move || {
-        editor_command_service::delete_sheet(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &command_id,
-            sheet_index,
-        )
-    })
-    .await
+    executions
+        .mutation()
+        .run(move || {
+            editor_command_service::delete_sheet(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &command_id,
+                sheet_index,
+            )
+        })
+        .await
 }
 
 // ==================== Search Operations ====================
@@ -717,6 +795,7 @@ pub async fn delete_sheet(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn search(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     query: String,
@@ -724,17 +803,19 @@ pub async fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
     let runtime = runtime.inner().clone();
-    search_executor::run(move || {
-        editor_command_service::search(
-            runtime.editor_commands(),
-            document_id.get(),
-            base_revision.get(),
-            &query,
-            scope,
-            current_sheet_index,
-        )
-    })
-    .await
+    executions
+        .search()
+        .run(move || {
+            editor_command_service::search(
+                runtime.editor_commands(),
+                document_id.get(),
+                base_revision.get(),
+                &query,
+                scope,
+                current_sheet_index,
+            )
+        })
+        .await
 }
 
 // ==================== Recent Files Operations ====================
@@ -742,43 +823,48 @@ pub async fn search(
 #[tauri::command]
 pub async fn get_recent_files(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
 ) -> Result<Vec<RecentFile>, AppError> {
     let runtime = runtime.inner().clone();
-    recent_executor::run(move || {
-        recent_file_adapter::do_get_recent_files(runtime.recent_files(), &app)
-    })
-    .await
+    executions
+        .recent()
+        .run(move || recent_file_adapter::do_get_recent_files(runtime.recent_files(), &app))
+        .await
 }
 
 #[tauri::command]
 pub async fn remove_recent_file(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     id: String,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    recent_executor::run(move || {
-        recent_file_adapter::do_remove_recent_file(runtime.recent_files(), &app, &id)
-    })
-    .await
+    executions
+        .recent()
+        .run(move || recent_file_adapter::do_remove_recent_file(runtime.recent_files(), &app, &id))
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn add_recent_file_with_thumbnail(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
     let runtime = runtime.inner().clone();
-    recent_executor::run(move || {
-        recent_file_adapter::do_add_recent_file_with_thumbnail(
-            runtime.recent_files(),
-            &app,
-            request,
-        )
-    })
-    .await
+    executions
+        .recent()
+        .run(move || {
+            recent_file_adapter::do_add_recent_file_with_thumbnail(
+                runtime.recent_files(),
+                &app,
+                request,
+            )
+        })
+        .await
 }
 
 #[cfg(test)]

@@ -82,7 +82,10 @@ rejectMatches(
 );
 
 rejectMatches(
-  [join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs')],
+  [
+    join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'search_ports.rs'),
+  ],
   [
     /\bEditorMutationResponse\b/,
     /\bEditorPatch\b/,
@@ -92,6 +95,12 @@ rejectMatches(
     /\bIndexScheduler(?:State)?\b/,
   ],
   'the transport-independent search scheduling boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'search_ports.rs')],
+  [/\bActiveDocumentRepository\b/, /\bDocumentHandle\b/, /crate::state(?:::|\b)/],
+  'the repository-independent search port boundary',
 );
 
 rejectMatches(
@@ -140,9 +149,27 @@ rejectMatches(
 );
 
 rejectMatches(
-  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
-  [/\bIndexScheduler(?:State)?\b/, /\bIndexJob\b/],
-  'the infrastructure-free Rust editor state boundary',
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs'),
+  [/\bOnceLock\b/, /static\s+EXECUTOR\b/, /fn\s+executor\s*\(/],
+  'the explicitly-owned command execution runtime boundary',
+);
+
+rejectMatches(
+  [
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'ops'), '.rs'),
+  ],
+  [
+    /\bIndexScheduler(?:State)?\b/,
+    /\bIndexJob\b/,
+    /\bSearchIndexStore\b/,
+    /\bSearchSheetIndex\b/,
+    /\bSearchWriterHandle\b/,
+    /\bSearchQueryPlan\b/,
+    /\btantivy\b/,
+    /crate::adapters(?:::|\b)/,
+  ],
+  'the infrastructure-free Rust state and operation boundary',
 );
 
 rejectMatches(
@@ -204,7 +231,7 @@ rejectMatches(
   ),
   [
     /\btauri::(?:AppHandle|State)\b/,
-    /crate::io::platform(?:::|\b)/,
+    /crate::io(?:::|\b)/,
     /crate::adapters(?:::|\b)/,
   ],
   'the framework-independent Rust application service boundary',
@@ -226,7 +253,7 @@ rejectMatches(
 
 rejectMatches(
   [
-    join(projectRoot, 'src-tauri', 'src', 'io', 'save_work.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'document_work_budget_adapter.rs'),
     join(projectRoot, 'src-tauri', 'src', 'io', 'transient_files.rs'),
     join(projectRoot, 'src-tauri', 'src', 'io', 'managed_documents.rs'),
     join(projectRoot, 'src-tauri', 'src', 'io', 'platform', 'desktop.rs'),

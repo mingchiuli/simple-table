@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use crate::application::document_codec_port::DocumentCodecPort;
+use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::search_service::SearchService;
 use crate::application::{document_format_policy, document_projection};
+use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::error::AppError;
-use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
-use crate::io::save_work::{SaveWorkCoordinator, SaveWorkReservation};
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
     state::{ActiveDocumentRepository, DocumentHandle},
@@ -16,19 +16,22 @@ use crate::types::{SavedDocumentIdentity, SavedDocumentResponse};
 pub struct DocumentSaveService {
     documents: ActiveDocumentRepository,
     search: SearchService,
-    save_work: SaveWorkCoordinator,
+    codec: Arc<dyn DocumentCodecPort>,
+    work_budget: Arc<dyn DocumentWorkBudgetPort>,
 }
 
 impl DocumentSaveService {
     pub(crate) fn new(
         documents: ActiveDocumentRepository,
         search: SearchService,
-        save_work: SaveWorkCoordinator,
+        codec: Arc<dyn DocumentCodecPort>,
+        work_budget: Arc<dyn DocumentWorkBudgetPort>,
     ) -> Self {
         Self {
             documents,
             search,
-            save_work,
+            codec,
+            work_budget,
         }
     }
 
@@ -40,21 +43,26 @@ impl DocumentSaveService {
         &self.search
     }
 
-    fn save_work(&self) -> &SaveWorkCoordinator {
-        &self.save_work
+    fn codec(&self) -> &dyn DocumentCodecPort {
+        self.codec.as_ref()
+    }
+
+    fn work_budget(&self) -> &dyn DocumentWorkBudgetPort {
+        self.work_budget.as_ref()
     }
 
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !self.documents.is_same_instance(&other.documents)
-            && !self.save_work.is_same_instance(&other.save_work)
             && self.search.is_isolated_from(&other.search)
+            && !Arc::ptr_eq(&self.codec, &other.codec)
+            && !Arc::ptr_eq(&self.work_budget, &other.work_budget)
     }
 }
 
 pub struct PreparedDocumentExport {
     pub bytes: Vec<u8>,
-    _work: Option<SaveWorkReservation>,
+    _work: Option<Box<dyn DocumentWorkLease>>,
 }
 
 pub struct PreparedDocumentSave {
@@ -63,7 +71,7 @@ pub struct PreparedDocumentSave {
     pub output_name: String,
     pub bytes: Vec<u8>,
     pub finish_without_reparse: bool,
-    _work: Option<SaveWorkReservation>,
+    _work: Option<Box<dyn DocumentWorkLease>>,
 }
 
 pub fn prepare_current_file_export(
@@ -76,8 +84,8 @@ pub fn prepare_current_file_export(
     let (snapshot, work) = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
         let work = service
-            .save_work()
-            .reserve(document_id, editor_state.estimated_resource_bytes())?;
+            .work_budget()
+            .reserve_save(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
         (snapshot, work)
     };
@@ -107,8 +115,8 @@ pub fn prepare_current_file_save(
             ));
         }
         let work = service
-            .save_work()
-            .reserve(document_id, editor_state.estimated_resource_bytes())?;
+            .work_budget()
+            .reserve_save(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
         (snapshot, work)
     };
@@ -141,6 +149,7 @@ where
     commit_current_file_save_with_registry(
         service.search(),
         service.documents(),
+        service.codec(),
         path,
         prepared,
         commit_write,
@@ -150,6 +159,7 @@ where
 fn commit_current_file_save_with_registry<F>(
     search: &SearchService,
     registry: &ActiveDocumentRepository,
+    codec: &dyn DocumentCodecPort,
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
@@ -170,6 +180,7 @@ where
         .unwrap_or_else(default_extension_string);
     if finish_without_reparse {
         return commit_current_file_save_without_reparse(
+            search,
             registry,
             path,
             document_id,
@@ -180,13 +191,13 @@ where
         );
     }
 
-    let result = read_file_with_workbook_from_bytes(&extension, bytes, path.clone(), output_name)?;
+    let document = codec.decode_saved(&extension, bytes, path.clone(), output_name)?;
+    let saved_extension = extension_of(&document.projection().file_name)
+        .or_else(|| extension_of(&document.projection().path));
     let (handle, lease, clear_history) =
         begin_prepared_save_commit(registry, document_id, revision, |editor_state| {
             let current_extension = extension_of(&editor_state.file_data().file_name)
                 .or_else(|| extension_of(&editor_state.file_data().path));
-            let saved_extension = extension_of(&result.file_data.file_name)
-                .or_else(|| extension_of(&result.file_data.path));
             current_extension != saved_extension
         })?;
 
@@ -197,12 +208,7 @@ where
 
     let (document_id, response, retired) = {
         let mut editor_state = handle.write()?;
-        let retired = editor_state.finish_save_commit(
-            lease,
-            result.file_data,
-            result.workbook,
-            clear_history,
-        )?;
+        let retired = editor_state.finish_save_commit(lease, document, clear_history)?;
         let response = SavedDocumentResponse {
             document: Some(document_projection::document_manifest(&editor_state)),
             identity: None,
@@ -211,7 +217,7 @@ where
         (editor_state.document_id(), response, retired)
     };
     drop(retired);
-    search.rebuild_all_sheets_index(registry, document_id);
+    search.rebuild_all_sheets_index(document_id);
     Ok(response)
 }
 
@@ -234,6 +240,7 @@ where
 }
 
 fn commit_current_file_save_without_reparse<F>(
+    search: &SearchService,
     registry: &ActiveDocumentRepository,
     path: String,
     document_id: u64,
@@ -276,6 +283,11 @@ where
         (response, retired)
     };
     drop(retired);
+    search.schedule_work(
+        document_id,
+        response.editor_session.revision,
+        crate::domain::SearchIndexWork::None,
+    );
     Ok(response)
 }
 
@@ -322,9 +334,63 @@ fn default_extension_string() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::search_ports::SearchIndexPort;
+    use crate::domain::SearchIndexWork;
     use crate::state::editor_state::EditorState;
-    use crate::types::{FileData, SheetData};
+    use crate::types::{FileData, SearchResponse, SearchScope, SheetData};
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct TestCodec;
+
+    #[derive(Default)]
+    struct RecordingSearchPort {
+        scheduled: Mutex<Vec<(u64, u64, SearchIndexWork)>>,
+    }
+
+    impl SearchIndexPort for RecordingSearchPort {
+        fn search(
+            &self,
+            _document_id: u64,
+            _base_revision: u64,
+            _query: &str,
+            _scope: SearchScope,
+            _current_sheet_index: Option<usize>,
+        ) -> Result<SearchResponse, AppError> {
+            Ok(SearchResponse::default())
+        }
+
+        fn rebuild_all_sheets_index(&self, _document_id: u64) {}
+
+        fn schedule_work(&self, document_id: u64, source_revision: u64, work: SearchIndexWork) {
+            self.scheduled
+                .lock()
+                .unwrap()
+                .push((document_id, source_revision, work));
+        }
+
+        fn cancel_document_jobs(&self, _document_id: u64) {}
+    }
+
+    impl DocumentCodecPort for TestCodec {
+        fn plan_open(
+            &self,
+            _source: &crate::application::document_codec_port::OpenDocumentSource,
+        ) -> Result<Box<dyn crate::application::document_codec_port::DocumentDecodePlan>, AppError>
+        {
+            unreachable!("save-service tests do not open files")
+        }
+
+        fn decode_saved(
+            &self,
+            _extension: &str,
+            _bytes: Vec<u8>,
+            _path: String,
+            _file_name: String,
+        ) -> Result<crate::document::document_model::SpreadsheetDocument, AppError> {
+            unreachable!("native XLSX test saves do not require reparsing")
+        }
+    }
 
     fn test_registry() -> (ActiveDocumentRepository, u64, u64) {
         let state = EditorState::with_workbook(
@@ -361,6 +427,7 @@ mod tests {
         let error = commit_current_file_save_with_registry(
             &search,
             &registry,
+            &TestCodec,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision),
             || Err(AppError::WriteError("injected write failure".to_string())),
@@ -377,12 +444,14 @@ mod tests {
     #[test]
     fn successful_write_commits_identity_once() {
         let (registry, document_id, revision) = test_registry();
-        let search = SearchService::new();
+        let search_port = Arc::new(RecordingSearchPort::default());
+        let search = SearchService::from_port(search_port.clone());
         let writes = AtomicUsize::new(0);
 
         let response = commit_current_file_save_with_registry(
             &search,
             &registry,
+            &TestCodec,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision),
             || {
@@ -395,6 +464,10 @@ mod tests {
         assert_eq!(writes.load(Ordering::SeqCst), 1);
         assert_eq!(response.editor_session.revision, revision + 1);
         assert_eq!(response.identity.unwrap().file_name, "saved.xlsx");
+        assert_eq!(
+            *search_port.scheduled.lock().unwrap(),
+            vec![(document_id, revision + 1, SearchIndexWork::None)]
+        );
     }
 
     #[test]
@@ -406,6 +479,7 @@ mod tests {
         let result = commit_current_file_save_with_registry(
             &search,
             &registry,
+            &TestCodec,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision + 1),
             || {

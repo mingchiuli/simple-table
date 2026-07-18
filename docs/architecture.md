@@ -44,34 +44,48 @@ layer, which owns retirement of mutation replay and search-index work before
 releasing the old document. Neither the document model nor the I/O layer may
 depend on command modules.
 
+`CommandExecutionRuntime` is a second Tauri-managed composition object for
+transport admission. It explicitly owns file, mutation, projection, search,
+and recent-file executors over one shared process budget. Command executors
+cannot be located through static `OnceLock` values.
+
 `ApplicationRuntime` is the backend composition root managed by Tauri. It
 constructs narrow document-query, document-open, document-lifecycle,
 document-save, and editor-command services over shared repositories and
 coordinators. It owns outer recent, file, and search adapters; concrete platform
 runtimes are private fields of those adapters and are not exposed to commands.
 Application services declare only their actual dependencies and cannot import
-the complete runtime, `AppHandle`, or platform I/O implementations. Commands
-may receive `tauri::State<ApplicationRuntime>`, but select a narrow service and
-outer adapter before delegating work. Business repositories and schedulers
-cannot locate process-global `OnceLock` instances.
+the complete runtime, `AppHandle`, adapters, or I/O implementations. Commands
+may receive `tauri::State<ApplicationRuntime>` and
+`tauri::State<CommandExecutionRuntime>`, but select a narrow service, outer
+adapter, and executor before delegating work. Business repositories,
+schedulers, and command executors cannot locate process-global mutable state.
 
 The active-document registry is hidden behind `ActiveDocumentRepository`.
-Application, operation, and search modules request semantic read or mutation
-handles from the repository; they cannot acquire its `RwLock` directly.
+Application and operation modules request semantic read or mutation handles
+from the repository; they cannot acquire its `RwLock` directly. Search
+infrastructure receives only `SearchDocumentSourcePort`, whose operations
+return version-checked metadata, admitted full-Sheet text snapshots, or bounded
+scan chunks. It cannot receive the concrete repository.
 Document replacement uses an RAII repository transaction that releases an
 unfinished replacement lease on drop.
 
 Document opening is split between outer platform adapters and application
 orchestration. Platform modules consume authorization and return
-`OpenFileInput`; the adapter passes that input to the application open service,
-which owns parse reservations, parsing, `EditorState` construction, and
-prepared-document insertion. Mobile prepared-source adoption is injected as a
-semantic lifecycle port at the composition root. The application query service
+`OpenFileInput`; the outer adapter maps that value to `OpenDocumentSource`.
+The application open service owns parse reservations and prepared-document
+insertion, while an injected `DocumentCodecPort` owns format preflight, parsing,
+and `EditorState` construction. The opaque decode plan retains validated codec
+preflight state so XLSX archives are not scanned twice. Mobile prepared-source
+adoption is injected as a semantic lifecycle port at the composition root. The
+application query service
 only coordinates consistent repository reads. Manifest/region/session assembly
 lives in `document_projection`, serialized response limits live in
 `response_budget`, and native-save capability policy lives in
-`document_format_policy`. The I/O layer cannot depend on `application`,
-`commands`, `ops`, or `state`.
+`document_format_policy`. Pure file-format policy lives in the top-level
+`document_format` module. Application production modules other than the
+composition root cannot import `io`; the I/O layer cannot depend on
+`application`, `commands`, `ops`, or `state`.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
 applied operations, and their lightweight impact/projection views. Domain
@@ -102,8 +116,10 @@ than in `state`. Its display projection is an internal wire serializer; the
 module cannot depend on application, state, operations, or I/O modules.
 
 Save and export orchestration live in `application::document_save_service`.
-That service owns work reservations, revision validation, save leases, optional
-reparse, state commit, and post-save index scheduling. Platform I/O modules
+That service owns revision validation, save leases, state commit, and post-save
+index scheduling. Save admission is obtained through `DocumentWorkBudgetPort`,
+and optional reparse goes through the same `DocumentCodecPort` used by open.
+Platform I/O modules
 provide path authorization, destination selection, and write primitives. Outer
 file adapters compose those primitives with prepared save work and managed
 mobile-document adoption; the I/O layer must not call back into the application
@@ -113,7 +129,12 @@ modules, never on the query service.
 ## State Ownership
 
 - `EditorState` is authoritative for content, revision, history, dirty state,
-  formula state, capabilities, and search indexes.
+  formula state, and capabilities. It contains no search engine, index writer,
+  index freshness state, worker, or scheduler.
+- The search adapter owns derived Tantivy indexes in a separate registry keyed
+  by document ID and source revision. A revision mismatch makes an index
+  unavailable before queued index work runs; search then uses the authoritative
+  bounded document scan.
 - The active-document registry owns only the current `Arc<DocumentHandle>` and
   replacement lease. Each handle owns a separate `RwLock<EditorState>`, so a
   mutation or projection releases the registry lock before accessing document
@@ -225,9 +246,12 @@ Search scheduling metadata is internal to Rust and must not be serialized in
 wire response and separate `SearchIndexWork`. The application schedules that
 work only on first execution, while mutation replay stores only the response.
 `SearchIndexWork` is an internal domain contract. `SearchService` depends on a
-`SearchIndexPort`; worker threads, queue coalescing, memory reservations, and
-Tantivy updates live in the outer search-index adapter. Search scheduling cannot
-inspect frontend `EditorPatch` DTOs.
+`SearchIndexPort`; that port accepts only semantic search requests, document
+revisions, and index work. Worker threads, query plans, queue coalescing,
+resident indexes, memory reservations, and Tantivy updates live in the outer
+search-index adapter. The adapter reads canonical content only through
+`SearchDocumentSourcePort`. Search scheduling cannot inspect frontend
+`EditorPatch` DTOs.
 
 Formula parsing has a separate complexity boundary from ordinary cell text.
 Formula source is limited to 64 KiB, delimiter nesting to 128 levels, parsed
@@ -301,8 +325,10 @@ Prepared documents are process-local, limited to one entry and an estimated
 live token exists; it never evicts the first token. The active and prepared
 documents are also limited to an estimated 256 MiB combined. The estimate
 includes the UI projection, retained XLSX workbook, formula runtime, metadata
-index, search indexes, and history. Callers should still abort unused tokens
-promptly. Before third-party parsing, a format preflight validates archive
+index, and history. Derived search indexes use the adapter's independent
+resident-index budget and are discarded when a document retires. Callers should
+still abort unused tokens promptly. Before third-party parsing, a format
+preflight validates archive
 structure and estimates parse memory from CSV input bytes or XLSX compressed
 plus expanded bytes. That estimate must fit both the prepared-document and
 combined active/prepared budgets; it is never clamped down to the budget. The
@@ -419,21 +445,21 @@ merges use a row interval tree. Region projection therefore examines only
 intersecting buckets and intervals. Structural commits and history restores
 rebuild the index at the transaction boundary.
 
-Rust retains at most four Tantivy indexes and 64 MiB of measured resident index
-memory. Each index accounts for its live RAM-directory files, writer arena, and
-index structure rather than a fixed per-index estimate. Incremental commits
+The search adapter retains at most four Tantivy indexes and 64 MiB of measured
+resident index memory for the active document. Each index accounts for its live
+RAM-directory files, writer arena, and index structure rather than a fixed
+per-index estimate. Incremental commits
 recheck the byte budget and evict the oldest resident index when necessary.
 Search fallback scans through a cursor with chunks capped at 8 MiB of generated
 text and 32,768 visited cells. Each chunk is copied while holding only the
 document read lock and is consumed before the next chunk, so fallback never
 retains both a complete Sheet snapshot and a complete search-text snapshot. A
 24 MiB reservation owned by the application-scoped search-index adapter covers
-fallback scan memory. Search commands run
-on a dedicated blocking executor with one execution slot and two admission
-slots, so a long scan cannot consume file-open or save capacity. A fallback
-queues one missing Sheet index per search so repeated searches converge to
-indexed execution without flooding the resident cache. Layout overrides are
-limited to 100,000 entries per document.
+fallback scan memory. Search commands have one category execution slot and two
+category admission slots, and also participate in the shared command budget. A
+fallback queues one missing Sheet index per search so repeated searches
+converge to indexed execution without flooding the resident cache. Layout
+overrides are limited to 100,000 entries per document.
 
 Search queries are limited to 4 KiB of UTF-8 text and 64 unique normalized
 terms before document access. Query construction uses set-based deduplication,
@@ -458,8 +484,9 @@ is acquired before cloning search text and released after installation,
 cancellation, or failure. Sheets estimated above 12 MiB are not indexed and
 continue using the correct scan fallback. Scheduler statistics expose pending
 and building bytes separately. Index replacement, byte-budget eviction,
-truncation, and oversized-index rejection return detached indexes so Tantivy
-resources are released only after the document registry write lock is dropped.
+truncation, cancellation, and oversized-index rejection return detached indexes
+so Tantivy resources are released only after the adapter index-registry lock is
+dropped.
 
 Undo and redo history uses deque storage. Clearing redo after a new edit and
 evicting old entries at the count or 64 MiB byte limit detach mementos from the
@@ -467,14 +494,14 @@ history store and return them with the mutation result. The operation layer
 builds the consistent response under the document lock, then releases detached
 history resources after leaving the registry critical section.
 
-Parsing, file dialogs, save/export generation and I/O, mobile file work, search,
-and file metadata reads run through a blocking command executor with two
-execution permits and eight total admission permits. Recent-file transactions
-and thumbnail encoding use a separate executor with one execution permit and
-three total admission permits, so rebuildable metadata cannot exhaust critical
-file-command admission. Tauri async runtime threads do not perform those
-synchronous workloads directly, and saturation cannot create an unbounded
-semaphore wait queue.
+All blocking command categories share an explicit runtime budget of three
+executing and sixteen admitted commands. Category limits remain narrower: file
+2/8, mutation 1/8, projection 2/8, search 1/2, and recent-file 1/3
+(execution/admission). A request must acquire both shared and category admission
+before it can wait for execution. Tauri async runtime threads do not perform
+those synchronous workloads directly, saturation cannot create an unbounded
+semaphore wait queue, and separate category limits cannot overcommit the shared
+blocking pool.
 
 Frontend recent-file updates use a latest-only worker shared by all composable
 instances. At most one update is active and one latest request is pending;

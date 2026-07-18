@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
+use crate::document_format::SpreadsheetFileFormat;
 use crate::error::AppError;
-use crate::io::file_format::SpreadsheetFileFormat;
 use crate::io::input_limits::{
     MAX_XLSX_ARCHIVE_ENTRIES, MAX_XLSX_UNCOMPRESSED_BYTES, validate_input_size,
 };

@@ -6,6 +6,5 @@ pub mod editor_session;
 pub mod editor_state;
 pub(crate) mod history_restore_transaction;
 pub mod history_store;
-pub mod search_index;
-pub mod search_session;
+pub(crate) mod search_document;
 pub mod state;

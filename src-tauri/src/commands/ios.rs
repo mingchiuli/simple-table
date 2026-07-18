@@ -1,5 +1,5 @@
 #[cfg(target_os = "ios")]
-use super::{CommandU64, blocking};
+use super::{CommandExecutionRuntime, CommandU64};
 #[cfg(target_os = "ios")]
 use crate::application::runtime::ApplicationRuntime;
 #[cfg(target_os = "ios")]
@@ -14,10 +14,14 @@ use tauri::{AppHandle, State};
 #[tauri::command]
 pub async fn pick_open_file_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
 ) -> Result<Option<PickedFileInfo>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || runtime.document_files().pick_open_file_ios(&app)).await
+    executions
+        .file()
+        .run(move || runtime.document_files().pick_open_file_ios(&app))
+        .await
 }
 
 /// iOS: remove a picked file that was imported but never opened as the active document.
@@ -25,16 +29,19 @@ pub async fn pick_open_file_ios(
 #[tauri::command]
 pub async fn discard_open_file_selection_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     path: String,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime
-            .document_files()
-            .discard_open_file_selection_mobile(&app, &path)
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime
+                .document_files()
+                .discard_open_file_selection_mobile(&app, &path)
+        })
+        .await
 }
 
 /// iOS: remove a save-as target that was reserved but never adopted.
@@ -42,16 +49,19 @@ pub async fn discard_open_file_selection_ios(
 #[tauri::command]
 pub async fn discard_save_location_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     path: String,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime
-            .document_files()
-            .discard_save_location_mobile(&app, &path)
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime
+                .document_files()
+                .discard_save_location_mobile(&app, &path)
+        })
+        .await
 }
 
 /// iOS: read and parse a sandboxed file path saved in recent files.
@@ -59,16 +69,19 @@ pub async fn discard_save_location_ios(
 #[tauri::command]
 pub async fn prepare_open_file_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime
-            .document_files()
-            .prepare_open_file_mobile(&app, &path)
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime
+                .document_files()
+                .prepare_open_file_mobile(&app, &path)
+        })
+        .await
 }
 
 /// iOS: create a new sandbox save target that must be adopted by save_file_ios or discarded.
@@ -76,16 +89,19 @@ pub async fn prepare_open_file_ios(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pick_save_location_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     default_name: String,
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime
-            .document_files()
-            .pick_save_location_ios(&app, &default_name)
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime
+                .document_files()
+                .pick_save_location_ios(&app, &default_name)
+        })
+        .await
 }
 
 /// iOS: generate file bytes and write them to the sandbox path.
@@ -93,21 +109,24 @@ pub async fn pick_save_location_ios(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn save_file_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     path: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime.document_files().save_file_mobile(
-            &app,
-            &path,
-            document_id.get(),
-            base_revision.get(),
-        )
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime.document_files().save_file_mobile(
+                &app,
+                &path,
+                document_id.get(),
+                base_revision.get(),
+            )
+        })
+        .await
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.
@@ -115,19 +134,22 @@ pub async fn save_file_ios(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn export_file_ios(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     default_name: String,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<Option<String>, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || {
-        runtime.document_files().export_file_mobile(
-            &app,
-            &default_name,
-            document_id.get(),
-            base_revision.get(),
-        )
-    })
-    .await
+    executions
+        .file()
+        .run(move || {
+            runtime.document_files().export_file_mobile(
+                &app,
+                &default_name,
+                document_id.get(),
+                base_revision.get(),
+            )
+        })
+        .await
 }

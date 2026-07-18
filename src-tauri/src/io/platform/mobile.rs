@@ -1,10 +1,10 @@
 #![cfg_attr(test, allow(dead_code))]
 
-use crate::error::AppError;
-use crate::io::file_format::{
+use crate::document_format::{
     SUPPORTED_SPREADSHEET_EXTENSIONS, file_name_from_path_like, output_name_for_selected_target,
     supported_extension_or_default,
 };
+use crate::error::AppError;
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::io::transient_files::{

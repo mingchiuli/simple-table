@@ -1,8 +1,9 @@
 use crate::document::document_model::{DocumentRestoreResult, SpreadsheetDocument};
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
-use crate::domain::SearchIndexWork;
-use crate::domain::{AppliedOperation, EditorCommand};
+use crate::domain::{
+    AppliedOperation, EditorCommand, SearchIndexWork, SearchScanCursor, SearchTextChunk,
+};
 use crate::error::AppError;
 use crate::resource_limits::ResourceLedger;
 #[cfg(test)]
@@ -17,17 +18,12 @@ use crate::state::history_store::{
 };
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
-use crate::state::search_index::{
-    RetiredSearchIndexes, SearchIndexStamp, SearchScanCursor, SearchSheetIndex, SearchTextChunk,
-    SearchWriterHandle, collect_sheet_search_text_chunk,
-};
-use crate::state::search_session::SearchSession;
+use crate::state::search_document::collect_sheet_search_text_chunk;
 use crate::types::HistoryStatus;
 use crate::types::{
     AppliedOperationResult, FileData, FormulaStatus, SheetCellChange, WorkbookCapabilities,
 };
 use std::collections::HashSet;
-use std::sync::Arc;
 use umya_spreadsheet::Workbook;
 
 #[derive(Debug)]
@@ -52,7 +48,6 @@ pub struct EditorState {
     document: SpreadsheetDocument,
     history: HistoryStore,
     dirty: DirtyTracker,
-    search: SearchSession,
     resources: ResourceLedger,
     save_commit: Option<SaveCommitLease>,
 }
@@ -62,7 +57,6 @@ pub(crate) struct RetiredEditorResources {
     _document: Option<SpreadsheetDocument>,
     _history: Option<HistoryStore>,
     _history_entries: RetiredHistoryEntries,
-    _search_indexes: RetiredSearchIndexes,
 }
 
 impl std::fmt::Debug for RetiredEditorResources {
@@ -79,28 +73,15 @@ impl RetiredEditorResources {
         }
     }
 
-    fn from_search_indexes(search_indexes: RetiredSearchIndexes) -> Self {
-        Self {
-            _search_indexes: search_indexes,
-            ..Self::default()
-        }
-    }
-
     #[cfg(test)]
     fn retired_history_entry_count(&self) -> usize {
         self._history_entries.len()
-    }
-
-    #[cfg(test)]
-    fn retired_search_index_count(&self) -> usize {
-        self._search_indexes.len()
     }
 }
 
 impl EditorState {
     pub fn with_workbook(file_data: FileData, workbook: Option<Workbook>) -> Self {
         let document = SpreadsheetDocument::new(file_data, workbook);
-        let search = SearchSession::from_file_data(document.projection(), 0);
         let dirty = DirtyTracker::new(document.projection());
         let resources = ResourceLedger::from_file_data(document.projection());
         Self {
@@ -108,7 +89,6 @@ impl EditorState {
             document,
             history: HistoryStore::default(),
             dirty,
-            search,
             resources,
             save_commit: None,
         }
@@ -126,17 +106,26 @@ impl EditorState {
         self.document.update_identity(path, file_name);
     }
 
+    #[cfg(test)]
     pub(crate) fn rebind_saved_document(
         &mut self,
         file_data: FileData,
         workbook: Option<Workbook>,
         clear_history: bool,
     ) -> Result<RetiredEditorResources, AppError> {
-        self.ensure_revision_available()?;
-        let previous_document = std::mem::replace(
-            &mut self.document,
+        self.rebind_saved_document_model(
             SpreadsheetDocument::new(file_data, workbook),
-        );
+            clear_history,
+        )
+    }
+
+    fn rebind_saved_document_model(
+        &mut self,
+        document: SpreadsheetDocument,
+        clear_history: bool,
+    ) -> Result<RetiredEditorResources, AppError> {
+        self.ensure_revision_available()?;
+        let previous_document = std::mem::replace(&mut self.document, document);
         let previous_history = clear_history.then(|| std::mem::take(&mut self.history));
         self.bump_revision()?;
         self.dirty.replace_current(self.document.projection());
@@ -183,8 +172,7 @@ impl EditorState {
     pub(crate) fn finish_save_commit(
         &mut self,
         lease: SaveCommitLease,
-        file_data: FileData,
-        workbook: Option<Workbook>,
+        document: SpreadsheetDocument,
         clear_history: bool,
     ) -> Result<RetiredEditorResources, AppError> {
         if self.save_commit != Some(lease) {
@@ -200,9 +188,8 @@ impl EditorState {
         }
 
         self.save_commit = None;
-        let retired = self.rebind_saved_document(file_data, workbook, clear_history)?;
+        let retired = self.rebind_saved_document_model(document, clear_history)?;
         self.mark_saved();
-        self.mark_search_index_stale();
         Ok(retired)
     }
 
@@ -307,70 +294,10 @@ impl EditorState {
             .estimated_bytes()
             .saturating_add(self.document.estimated_runtime_bytes())
             .saturating_add(self.history.estimated_bytes())
-            .saturating_add(self.search.estimated_bytes())
     }
 
     pub fn transaction_failure(&self) -> Option<&str> {
         self.document.transaction_failure()
-    }
-
-    pub fn search_sheet_index_stamp(&self, sheet_index: usize) -> SearchIndexStamp {
-        self.search.sheet_stamp(self.document_id(), sheet_index)
-    }
-
-    pub fn install_search_index(
-        &mut self,
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-        index: Option<SearchSheetIndex>,
-    ) -> RetiredEditorResources {
-        RetiredEditorResources::from_search_indexes(self.search.install_sheet_index(
-            self.document_id(),
-            sheet_index,
-            self.file_data().sheets.len(),
-            stamp,
-            index,
-        ))
-    }
-
-    pub fn mark_search_index_stale(&mut self) -> SearchIndexStamp {
-        self.search.mark_all_stale(self.document_id())
-    }
-
-    pub fn mark_search_sheets_stale(&mut self, sheet_indexes: impl IntoIterator<Item = usize>) {
-        self.search.mark_sheets_stale(sheet_indexes);
-    }
-
-    pub fn mark_search_sheet_fresh(
-        &mut self,
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-    ) -> RetiredEditorResources {
-        RetiredEditorResources::from_search_indexes(self.search.mark_sheet_fresh(
-            self.document_id(),
-            sheet_index,
-            stamp,
-        ))
-    }
-
-    pub fn search_writer_handle(
-        &self,
-        sheet_index: usize,
-        stamp: SearchIndexStamp,
-    ) -> Option<SearchWriterHandle> {
-        self.search
-            .writer_handle(self.document_id(), sheet_index, stamp)
-    }
-
-    pub fn indexed_search_sheet(&self, sheet_index: usize) -> Option<Arc<SearchSheetIndex>> {
-        self.search.sheet_index(sheet_index)
-    }
-
-    pub fn search_sheet_data(&self, sheet_index: usize) -> Option<crate::types::SheetData> {
-        self.file_data()
-            .sheets
-            .get(sheet_index)
-            .map(crate::types::SheetData::search_snapshot)
     }
 
     pub fn search_sheet_text_chunk(
@@ -387,13 +314,6 @@ impl EditorState {
 
     pub fn search_sheet_snapshot_estimated_bytes(&self, sheet_index: usize) -> Option<usize> {
         self.resources.sheet_estimated_bytes(sheet_index)
-    }
-
-    pub fn sheet_name(&self, sheet_index: usize) -> Option<String> {
-        self.file_data()
-            .sheets
-            .get(sheet_index)
-            .map(|sheet| sheet.name.clone())
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -444,7 +364,6 @@ impl EditorState {
         let before = self.document.capture_memento_side(&operation);
 
         let result = self.document.execute_operation(&operation, &before)?;
-        let stale_sheets = operation.search_stale_sheets(&result.cell_changes);
         let operation_result = result.operation;
         let cell_changes = result.cell_changes;
         let resource_sheets = operation_resource_sheets(&operation, &cell_changes);
@@ -464,7 +383,6 @@ impl EditorState {
 
         self.bump_revision()?;
         if should_mark_search_stale {
-            self.mark_search_index_stale();
             return Ok(ExecutedOperation {
                 operation: Some(operation_result),
                 cell_changes,
@@ -472,8 +390,6 @@ impl EditorState {
                 search_index_work: SearchIndexWork::RebuildAll,
                 retired: RetiredEditorResources::from_history_entries(retired_history),
             });
-        } else {
-            self.mark_search_sheets_stale(stale_sheets);
         }
         Ok(ExecutedOperation {
             operation: Some(operation_result),
@@ -499,7 +415,6 @@ impl EditorState {
         {
             self.resources.replace_all(self.document.projection());
             self.bump_revision()?;
-            self.mark_search_index_stale();
             Ok(Some(ExecutedOperation {
                 operation: None,
                 cell_changes: Vec::new(),
@@ -527,7 +442,6 @@ impl EditorState {
         {
             self.resources.replace_all(self.document.projection());
             self.bump_revision()?;
-            self.mark_search_index_stale();
             Ok(Some(ExecutedOperation {
                 operation: None,
                 cell_changes: Vec::new(),
@@ -637,31 +551,6 @@ fn operation_resource_sheets(
     sheets.into_iter().collect()
 }
 
-trait SearchInvalidation {
-    fn search_stale_sheets(&self, formula_changes: &[SheetCellChange]) -> Vec<usize>;
-}
-
-impl SearchInvalidation for AppliedOperation {
-    fn search_stale_sheets(&self, formula_changes: &[SheetCellChange]) -> Vec<usize> {
-        let mut sheets = HashSet::new();
-        match self {
-            AppliedOperation::SetCell { sheet_index, .. } => {
-                sheets.insert(*sheet_index);
-            }
-            AppliedOperation::SetCells { changes } => {
-                for change in changes {
-                    sheets.insert(change.sheet_index);
-                }
-            }
-            _ => {}
-        }
-        for change in formula_changes {
-            sheets.insert(change.sheet_index);
-        }
-        sheets.into_iter().collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -670,7 +559,6 @@ mod tests {
     use super::*;
     use crate::document::test_support::read_file_with_workbook_from_bytes;
     use crate::domain::EditorCommand;
-    use crate::state::search_index::build_sheet_index;
     use crate::types::{CellFormatProjection, CellValue, ReadOnlyRichProjection, SheetRegion};
     use serde_json::Value;
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
@@ -2931,26 +2819,6 @@ mod tests {
 
         assert_eq!(second.retired.retired_history_entry_count(), 1);
         assert!(!state.can_redo());
-    }
-
-    #[test]
-    fn search_index_replacement_returns_previous_index_for_external_release() {
-        let mut state = EditorState::with_workbook(
-            FileData {
-                path: String::new(),
-                file_name: "retired-index.xlsx".to_string(),
-                sheets: vec![crate::types::SheetData::default()],
-            },
-            None,
-        );
-        let stamp = state.search_sheet_index_stamp(0);
-        let first = state.install_search_index(0, stamp, build_sheet_index(&[]));
-        assert_eq!(first.retired_search_index_count(), 0);
-        drop(first);
-
-        let retired = state.install_search_index(0, stamp, build_sheet_index(&[]));
-
-        assert_eq!(retired.retired_search_index_count(), 1);
     }
 
     #[test]

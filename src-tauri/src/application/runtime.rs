@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use crate::adapters::document_codec_adapter::DocumentCodecAdapter;
 use crate::adapters::document_file_adapter::DocumentFileAdapter;
+use crate::adapters::document_work_budget_adapter::DocumentWorkBudgetAdapter;
 use crate::adapters::recent_file_adapter::RecentFileAdapter;
 use crate::adapters::search_index_adapter::SearchIndexAdapter;
 use crate::application::document_open_service::DocumentOpenService;
@@ -10,12 +12,11 @@ use crate::application::document_service::DocumentLifecycleService;
 use crate::application::editor_command_service::EditorCommandService;
 use crate::application::mutation_replay::MutationReplayCoordinator;
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
-use crate::application::search_service::SearchService;
+use crate::application::search_service::{RepositorySearchDocumentSource, SearchService};
 #[cfg(desktop)]
 use crate::io::platform::desktop::DesktopFileRuntime;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 use crate::io::platform::mobile::MobileFileRuntime;
-use crate::io::save_work::SaveWorkCoordinator;
 use crate::recent::store::RecentStore;
 use crate::state::state::ActiveDocumentRepository;
 
@@ -34,17 +35,20 @@ impl Default for ApplicationRuntime {
         let documents = ActiveDocumentRepository::default();
         let prepared_documents = PreparedDocumentRepository::default();
         let mutation_replays = Arc::new(MutationReplayCoordinator::default());
-        let search = SearchService::from_port(Arc::new(SearchIndexAdapter::new()));
-        let save_work = SaveWorkCoordinator::default();
+        let search_source = Arc::new(RepositorySearchDocumentSource::new(documents.clone()));
+        let search = SearchService::from_port(Arc::new(SearchIndexAdapter::new(search_source)));
+        let codec = Arc::new(DocumentCodecAdapter);
+        let work_budget = Arc::new(DocumentWorkBudgetAdapter::default());
         let recent_files = RecentStore::default();
         #[cfg(desktop)]
         let desktop_files = DesktopFileRuntime::default();
         #[cfg(any(target_os = "android", target_os = "ios", test))]
         let mobile_files = MobileFileRuntime::default();
         let document_opens =
-            DocumentOpenService::new(documents.clone(), prepared_documents.clone());
+            DocumentOpenService::new(documents.clone(), prepared_documents.clone(), codec.clone());
         let document_queries = DocumentQueryService::new(documents.clone());
-        let document_saves = DocumentSaveService::new(documents.clone(), search.clone(), save_work);
+        let document_saves =
+            DocumentSaveService::new(documents.clone(), search.clone(), codec, work_budget);
         #[cfg(any(target_os = "android", target_os = "ios", test))]
         let prepared_source_adopter = {
             let mobile_files = mobile_files.clone();

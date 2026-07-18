@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
@@ -11,10 +11,10 @@ use tantivy::tokenizer::{LowerCaser, TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
+use crate::domain::SearchCellText;
 use crate::error::AppError;
 #[cfg(test)]
 use crate::types::CellValue;
-use crate::types::SheetData;
 
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
@@ -93,6 +93,7 @@ enum SearchSheetSlot {
 pub struct SearchIndexStamp {
     pub document_id: u64,
     pub generation: u64,
+    pub source_revision: u64,
     pub revision: u64,
 }
 
@@ -107,37 +108,55 @@ pub struct SearchWriterHandle {
     pub cell_id_field: Field,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SearchCellText {
-    pub row: usize,
-    pub col: usize,
-    pub search_text: String,
-    pub display_text: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SearchScanCursor {
-    pub row: usize,
-    pub col: usize,
-}
-
-pub struct SearchTextChunk {
-    pub cells: Vec<SearchCellText>,
-    pub next: Option<SearchScanCursor>,
-}
-
 pub struct SearchIndexStore {
     generation: u64,
+    source_revision: u64,
     revision: u64,
     sheet_revisions: Vec<u64>,
     sheets: Vec<SearchSheetSlot>,
     resident_order: VecDeque<usize>,
 }
 
+#[derive(Default)]
+pub(crate) struct SearchIndexRegistry {
+    documents: HashMap<u64, SearchIndexStore>,
+}
+
+impl SearchIndexRegistry {
+    pub(crate) fn document(&self, document_id: u64) -> Option<&SearchIndexStore> {
+        self.documents.get(&document_id)
+    }
+
+    pub(crate) fn document_mut(&mut self, document_id: u64) -> &mut SearchIndexStore {
+        self.documents.entry(document_id).or_default()
+    }
+
+    pub(crate) fn synchronize_revision(
+        &mut self,
+        document_id: u64,
+        source_revision: u64,
+    ) -> Option<&mut SearchIndexStore> {
+        let store = self.document_mut(document_id);
+        if store.source_revision() > source_revision {
+            return None;
+        }
+        if store.source_revision() != source_revision {
+            store.set_source_revision(source_revision);
+            store.mark_stale(document_id);
+        }
+        Some(store)
+    }
+
+    pub(crate) fn remove(&mut self, document_id: u64) -> Option<SearchIndexStore> {
+        self.documents.remove(&document_id)
+    }
+}
+
 impl Default for SearchIndexStore {
     fn default() -> Self {
         Self {
             generation: nonzero_random_u64(),
+            source_revision: 0,
             revision: 0,
             sheet_revisions: Vec::new(),
             sheets: Vec::new(),
@@ -147,18 +166,11 @@ impl Default for SearchIndexStore {
 }
 
 impl SearchIndexStore {
-    pub fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.sheets.capacity() * std::mem::size_of::<SearchSheetSlot>()
-            + self.sheet_revisions.capacity() * std::mem::size_of::<u64>()
-            + self.resident_order.capacity() * std::mem::size_of::<usize>()
-            + self.resident_index_bytes()
-    }
-
     pub fn stamp(&self, document_id: u64) -> SearchIndexStamp {
         SearchIndexStamp {
             document_id,
             generation: self.generation,
+            source_revision: self.source_revision,
             revision: self.revision,
         }
     }
@@ -167,8 +179,17 @@ impl SearchIndexStore {
         SearchIndexStamp {
             document_id,
             generation: self.generation,
+            source_revision: self.source_revision,
             revision: self.sheet_revision(sheet_index),
         }
+    }
+
+    pub fn source_revision(&self) -> u64 {
+        self.source_revision
+    }
+
+    pub fn set_source_revision(&mut self, source_revision: u64) {
+        self.source_revision = source_revision;
     }
 
     pub fn mark_stale(&mut self, document_id: u64) -> SearchIndexStamp {
@@ -570,73 +591,6 @@ impl SearchQueryPlan {
     }
 }
 
-pub fn collect_sheet_search_text(sheet: &SheetData) -> Vec<SearchCellText> {
-    sheet
-        .rows
-        .iter()
-        .enumerate()
-        .flat_map(|(row_idx, row)| {
-            row.iter().enumerate().filter_map(move |(col_idx, _cell)| {
-                let text = sheet.cell_search_text(row_idx, col_idx);
-                let display = sheet.cell_display_text(row_idx, col_idx);
-                (!text.is_empty()).then_some(SearchCellText {
-                    row: row_idx,
-                    col: col_idx,
-                    search_text: text,
-                    display_text: display,
-                })
-            })
-        })
-        .collect()
-}
-
-pub fn collect_sheet_search_text_chunk(
-    sheet: &SheetData,
-    mut cursor: SearchScanCursor,
-    maximum_text_bytes: usize,
-    maximum_cells: usize,
-) -> SearchTextChunk {
-    let mut cells = Vec::new();
-    let mut text_bytes = 0usize;
-    let mut visited_cells = 0usize;
-
-    while cursor.row < sheet.rows.len() {
-        let row = &sheet.rows[cursor.row];
-        while cursor.col < row.len() {
-            let search_text = sheet.cell_search_text(cursor.row, cursor.col);
-            let display_text = sheet.cell_display_text(cursor.row, cursor.col);
-            let cell_bytes = search_text.len().saturating_add(display_text.len());
-            if !cells.is_empty() && text_bytes.saturating_add(cell_bytes) > maximum_text_bytes {
-                return SearchTextChunk {
-                    cells,
-                    next: Some(cursor),
-                };
-            }
-            if !search_text.is_empty() {
-                cells.push(SearchCellText {
-                    row: cursor.row,
-                    col: cursor.col,
-                    search_text,
-                    display_text,
-                });
-                text_bytes = text_bytes.saturating_add(cell_bytes);
-            }
-            cursor.col += 1;
-            visited_cells += 1;
-            if visited_cells >= maximum_cells {
-                return SearchTextChunk {
-                    cells,
-                    next: Some(cursor),
-                };
-            }
-        }
-        cursor.row += 1;
-        cursor.col = 0;
-    }
-
-    SearchTextChunk { cells, next: None }
-}
-
 #[cfg(test)]
 pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
     build_sheet_index_with_cancel(cells, || true)
@@ -924,7 +878,10 @@ fn escape_regex_literal(literal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellFormatProjection, ReadOnlyRichProjection};
+    use crate::application::search_service::collect_sheet_search_text;
+    use crate::domain::SearchScanCursor;
+    use crate::state::search_document::collect_sheet_search_text_chunk;
+    use crate::types::{CellFormatProjection, ReadOnlyRichProjection, SheetData};
     use serde_json::Value;
     use std::collections::HashMap;
 
@@ -936,6 +893,15 @@ mod tests {
         };
         let cells = collect_sheet_search_text(&sheet);
         build_sheet_index(&cells).expect("index")
+    }
+
+    #[test]
+    fn registry_revision_never_moves_backwards_for_a_stale_reader() {
+        let mut registry = SearchIndexRegistry::default();
+        assert!(registry.synchronize_revision(7, 5).is_some());
+
+        assert!(registry.synchronize_revision(7, 4).is_none());
+        assert_eq!(registry.document(7).unwrap().source_revision(), 5);
     }
 
     #[test]

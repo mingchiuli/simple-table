@@ -2,6 +2,7 @@ mod adapters;
 mod application;
 mod commands;
 mod document;
+mod document_format;
 mod domain;
 mod error;
 mod formula;
@@ -46,8 +47,9 @@ use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder =
-        tauri::Builder::default().manage(application::runtime::ApplicationRuntime::default());
+    let mut builder = tauri::Builder::default()
+        .manage(application::runtime::ApplicationRuntime::default())
+        .manage(commands::CommandExecutionRuntime::default());
 
     #[cfg(desktop)]
     {

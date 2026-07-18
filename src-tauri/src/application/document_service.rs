@@ -99,9 +99,7 @@ pub fn commit_prepared_document(
         retire_document_runtime(service, previous_document_id);
     }
     drop(previous_document);
-    service
-        .search()
-        .rebuild_all_sheets_index(service.documents(), document_id);
+    service.search().rebuild_all_sheets_index(document_id);
     Ok(response)
 }
 

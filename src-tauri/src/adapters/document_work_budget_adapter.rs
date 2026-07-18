@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::error::AppError;
 
 const MAX_CONCURRENT_SAVE_WORK: usize = 1;
@@ -47,12 +48,12 @@ impl SaveWorkState {
 }
 
 #[derive(Clone, Default)]
-pub struct SaveWorkCoordinator {
+pub(crate) struct DocumentWorkBudgetAdapter {
     state: Arc<Mutex<SaveWorkState>>,
 }
 
-pub(crate) struct SaveWorkReservation {
-    coordinator: SaveWorkCoordinator,
+struct SaveWorkReservation {
+    coordinator: DocumentWorkBudgetAdapter,
     document_id: u64,
     source_bytes: usize,
     active: bool,
@@ -70,31 +71,28 @@ impl Drop for SaveWorkReservation {
     }
 }
 
-impl SaveWorkCoordinator {
-    pub(crate) fn reserve(
+impl DocumentWorkBudgetPort for DocumentWorkBudgetAdapter {
+    fn reserve_save(
         &self,
         document_id: u64,
         estimated_source_bytes: usize,
-    ) -> Result<SaveWorkReservation, AppError> {
+    ) -> Result<Box<dyn DocumentWorkLease>, AppError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| AppError::poisoned_lock("save work coordinator"))?;
         state.begin(document_id, estimated_source_bytes)?;
         drop(state);
-        Ok(SaveWorkReservation {
+        Ok(Box::new(SaveWorkReservation {
             coordinator: self.clone(),
             document_id,
             source_bytes: estimated_source_bytes,
             active: true,
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.state, &other.state)
+        }))
     }
 }
+
+impl DocumentWorkLease for SaveWorkReservation {}
 
 #[cfg(test)]
 mod tests {
@@ -133,14 +131,14 @@ mod tests {
 
     #[test]
     fn save_work_coordinators_have_isolated_admission_state() {
-        let first = SaveWorkCoordinator::default();
-        let second = SaveWorkCoordinator::default();
-        let reservation = first.reserve(1, 1024).expect("first reservation");
+        let first = DocumentWorkBudgetAdapter::default();
+        let second = DocumentWorkBudgetAdapter::default();
+        let reservation = first.reserve_save(1, 1024).expect("first reservation");
 
-        assert!(first.reserve(2, 1024).is_err());
-        assert!(second.reserve(2, 1024).is_ok());
+        assert!(first.reserve_save(2, 1024).is_err());
+        assert!(second.reserve_save(2, 1024).is_ok());
 
         drop(reservation);
-        assert!(first.reserve(3, 1024).is_ok());
+        assert!(first.reserve_save(3, 1024).is_ok());
     }
 }

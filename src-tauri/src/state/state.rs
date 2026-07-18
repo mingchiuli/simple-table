@@ -77,13 +77,6 @@ impl ActiveDocumentRepository {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_for_test(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
-        self.read_store()
-            .expect("document registry")
-            .get(document_id)
-    }
-
-    #[cfg(test)]
     pub(crate) fn is_write_available_for_test(&self) -> bool {
         self.store.try_write().is_ok()
     }
@@ -155,38 +148,6 @@ impl DocumentHandle {
 
     pub(crate) fn document_id(&self) -> u64 {
         self.document_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn revision(&self) -> u64 {
-        self.read().expect("document state").revision()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn search_sheet_index_stamp(
-        &self,
-        sheet_index: usize,
-    ) -> crate::state::search_index::SearchIndexStamp {
-        self.read()
-            .expect("document state")
-            .search_sheet_index_stamp(sheet_index)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn indexed_search_sheet(
-        &self,
-        sheet_index: usize,
-    ) -> Option<Arc<crate::state::search_index::SearchSheetIndex>> {
-        self.read()
-            .expect("document state")
-            .indexed_search_sheet(sheet_index)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn search_sheet_data(&self, sheet_index: usize) -> Option<crate::types::SheetData> {
-        self.read()
-            .expect("document state")
-            .search_sheet_data(sheet_index)
     }
 
     pub(crate) fn read(&self) -> Result<RwLockReadGuard<'_, EditorState>, AppError> {
@@ -415,19 +376,6 @@ impl ActiveDocumentStore {
             ));
         }
         Ok(Arc::clone(handle))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn handle(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
-        self.active
-            .as_ref()
-            .filter(|handle| handle.document_id() == document_id)
-            .map(Arc::clone)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn get(&self, document_id: u64) -> Option<Arc<DocumentHandle>> {
-        self.handle(document_id)
     }
 
     #[cfg(test)]

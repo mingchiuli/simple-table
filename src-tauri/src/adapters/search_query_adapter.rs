@@ -1,8 +1,9 @@
 use std::io::Write;
 
+use crate::adapters::search_index_store::{SearchQueryPlan, SearchSheetIndex};
+use crate::application::search_ports::SearchDocumentSourcePort;
+use crate::domain::SearchScanCursor;
 use crate::error::AppError;
-use crate::state::search_index::{SearchQueryPlan, SearchScanCursor};
-use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 use crate::types::{SearchResponse, SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
@@ -26,12 +27,13 @@ fn col_to_letter(col: usize) -> String {
 
 /// 搜索单元格
 pub(crate) fn do_search<P>(
-    registry: &ActiveDocumentRepository,
+    source: &dyn SearchDocumentSourcePort,
     document_id: u64,
     base_revision: u64,
     query: &str,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
+    mut indexed_sheet: impl FnMut(usize) -> Option<std::sync::Arc<SearchSheetIndex>>,
     mut reserve_scan_work: impl FnMut() -> Result<P, AppError>,
     mut schedule_rebuild: impl FnMut(usize),
 ) -> Result<SearchResponse, AppError> {
@@ -39,14 +41,14 @@ pub(crate) fn do_search<P>(
         return Ok(SearchResponse::default());
     };
 
-    let handle = registry.read_handle(document_id)?;
-    let sheet_indexes = {
-        let editor_state = handle.read_for_command(document_id, base_revision)?;
-
-        match scope {
-            SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
-            SearchScope::AllSheets => (0..editor_state.file_data().sheets.len()).collect(),
-        }
+    let document = source
+        .document_snapshot(document_id, Some(base_revision))?
+        .ok_or_else(|| {
+            AppError::DocumentStateInvalid("search document is no longer active".to_string())
+        })?;
+    let sheet_indexes = match scope {
+        SearchScope::CurrentSheet => vec![current_sheet_index.unwrap_or(0)],
+        SearchScope::AllSheets => (0..document.sheets.len()).collect(),
     };
 
     let mut results = SearchResultCollector::new()?;
@@ -59,16 +61,13 @@ pub(crate) fn do_search<P>(
             results.mark_truncated();
             break;
         }
-        let input = {
-            let editor_state = handle.read_for_command(document_id, base_revision)?;
-            let Some(sheet_name) = editor_state.sheet_name(sheet_index) else {
-                continue;
-            };
-            SearchInput {
-                sheet_index,
-                sheet_name,
-                index: editor_state.indexed_search_sheet(sheet_index),
-            }
+        let Some(sheet) = document.sheets.get(sheet_index) else {
+            continue;
+        };
+        let input = SearchInput {
+            sheet_index,
+            sheet_name: sheet.name.clone(),
+            index: indexed_sheet(sheet_index),
         };
         match input.index.as_ref() {
             Some(index) => {
@@ -95,7 +94,7 @@ pub(crate) fn do_search<P>(
                     on_demand_rebuilds.push(input.sheet_index);
                 }
                 scan_sheet_fallback(
-                    &handle,
+                    source,
                     document_id,
                     base_revision,
                     &input,
@@ -114,11 +113,13 @@ pub(crate) fn do_search<P>(
         schedule_rebuild(sheet_index);
     }
 
+    source.document_snapshot(document_id, Some(base_revision))?;
+
     results.finish()
 }
 
 fn scan_sheet_fallback(
-    handle: &DocumentHandle,
+    source: &dyn SearchDocumentSourcePort,
     document_id: u64,
     base_revision: u64,
     input: &SearchInput,
@@ -127,15 +128,14 @@ fn scan_sheet_fallback(
 ) -> Result<(), AppError> {
     let mut cursor = SearchScanCursor::default();
     loop {
-        let chunk = {
-            let editor_state = handle.read_for_command(document_id, base_revision)?;
-            editor_state.search_sheet_text_chunk(
-                input.sheet_index,
-                cursor,
-                MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES,
-                MAX_SEARCH_SCAN_CHUNK_CELLS,
-            )
-        };
+        let chunk = source.sheet_text_chunk(
+            document_id,
+            base_revision,
+            input.sheet_index,
+            cursor,
+            MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES,
+            MAX_SEARCH_SCAN_CHUNK_CELLS,
+        )?;
         let Some(chunk) = chunk else {
             return Ok(());
         };
@@ -180,7 +180,7 @@ fn search_result(
 struct SearchInput {
     sheet_index: usize,
     sheet_name: String,
-    index: Option<std::sync::Arc<crate::state::search_index::SearchSheetIndex>>,
+    index: Option<std::sync::Arc<SearchSheetIndex>>,
 }
 
 struct SearchResultCollector {
@@ -316,22 +316,12 @@ impl Write for CountingWriter {
 #[cfg(test)]
 mod query_limit_tests {
     use super::*;
-    use crate::state::search_index::{MAX_SEARCH_QUERY_BYTES, MAX_SEARCH_QUERY_TERMS};
+    use crate::adapters::search_index_store::{MAX_SEARCH_QUERY_BYTES, MAX_SEARCH_QUERY_TERMS};
 
     #[test]
     fn search_query_rejects_oversized_text_before_accessing_the_document() {
-        let registry = ActiveDocumentRepository::default();
-        let error = do_search(
-            &registry,
-            1,
-            0,
-            &"x".repeat(MAX_SEARCH_QUERY_BYTES + 1),
-            SearchScope::AllSheets,
-            None,
-            || Ok(()),
-            |_| {},
-        )
-        .expect_err("oversized search query");
+        let error = SearchQueryPlan::try_new(&"x".repeat(MAX_SEARCH_QUERY_BYTES + 1))
+            .expect_err("oversized search query");
 
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
     }

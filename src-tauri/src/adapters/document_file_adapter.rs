@@ -1,3 +1,4 @@
+use crate::application::document_codec_port::OpenDocumentSource;
 use crate::application::document_open_service::{self, DocumentOpenService};
 use crate::application::document_save_service::{self, DocumentSaveService};
 use crate::error::AppError;
@@ -260,10 +261,8 @@ pub fn prepare_open_file_desktop(
     files: &crate::io::platform::desktop::DesktopFileRuntime,
     path: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
-    document_open_service::prepare_open_input(
-        service,
-        crate::io::platform::desktop::read_open_file(files, path)?,
-    )
+    let input = crate::io::platform::desktop::read_open_file(files, path)?;
+    document_open_service::prepare_open_input(service, into_open_document_source(input))
 }
 
 #[cfg(desktop)]
@@ -273,10 +272,8 @@ pub fn prepare_recent_file_desktop(
     app: &tauri::AppHandle,
     id: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
-    document_open_service::prepare_open_input(
-        service,
-        crate::io::platform::desktop::read_recent_file(recent_files, app, id)?,
-    )
+    let input = crate::io::platform::desktop::read_recent_file(recent_files, app, id)?;
+    document_open_service::prepare_open_input(service, into_open_document_source(input))
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -286,10 +283,18 @@ pub fn prepare_open_file_mobile(
     app: &tauri::AppHandle,
     path: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
-    document_open_service::prepare_open_input(
-        service,
-        crate::io::platform::mobile::read_open_file(files, app, path)?,
-    )
+    let input = crate::io::platform::mobile::read_open_file(files, app, path)?;
+    document_open_service::prepare_open_input(service, into_open_document_source(input))
+}
+
+fn into_open_document_source(
+    input: crate::io::open_file_input::OpenFileInput,
+) -> OpenDocumentSource {
+    OpenDocumentSource {
+        path: input.path,
+        bytes: input.bytes,
+        file_name: input.file_name,
+    }
 }
 
 #[cfg(desktop)]

@@ -349,7 +349,6 @@ pub fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
     service.search_service().search(
-        service.documents(),
         document_id,
         base_revision,
         query,
@@ -376,10 +375,11 @@ fn run_mutation<P: Serialize>(
         payload,
         || {
             let execution = execute(service.documents())?;
+            let revision = execution.response.revision;
             service.search_service().schedule_work(
                 document_id,
+                revision,
                 execution.search_index_work,
-                service.documents(),
             );
             Ok(execution.response)
         },

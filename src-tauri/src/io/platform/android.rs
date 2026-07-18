@@ -2,12 +2,12 @@ use super::mobile::{
     self, MobileFileRuntime, mobile_dir, read_with_official_fs, unique_import_path,
     write_path_with_official_fs,
 };
-use crate::error::AppError;
-use crate::io::file_format::{
+use crate::document_format::{
     default_spreadsheet_file_name, file_name_from_path_like, file_stem_from_path_like,
     import_extension_from_name_or_bytes, normalized_import_file_name,
     supported_extension_or_default,
 };
+use crate::error::AppError;
 use crate::io::transient_files::TransientFilePurpose;
 use crate::types::PickedFileInfo;
 use tauri::AppHandle;

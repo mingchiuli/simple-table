@@ -1,10 +1,10 @@
 use std::{collections::BTreeSet, sync::Arc};
 
+use crate::document_format::{SpreadsheetFileFormat, extension_of};
 use crate::domain::AppliedOperation;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::io::codec::writer;
-use crate::io::file_format::{SpreadsheetFileFormat, extension_of};
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::io::workbook_state::{self, StructurePatchDiagnostics};
 use crate::types::{
