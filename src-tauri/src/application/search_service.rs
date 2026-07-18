@@ -25,10 +25,12 @@ use crate::types::display::DisplayProjection;
 use crate::types::{EditorMutationResponse, EditorPatch, SheetCellChange};
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
+const SEARCH_SCAN_RESERVATION_BYTES: usize = 24 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct SearchService {
     scheduler: Arc<IndexScheduler>,
+    scan_work: Arc<Mutex<usize>>,
     _lifecycle: Arc<SearchServiceLifecycle>,
 }
 
@@ -57,7 +59,54 @@ impl SearchService {
                 scheduler: Arc::clone(&scheduler),
             }),
             scheduler,
+            scan_work: Arc::new(Mutex::new(0)),
         }
+    }
+
+    pub fn search(
+        &self,
+        registry: &ActiveDocumentRepository,
+        document_id: u64,
+        base_revision: u64,
+        query: &str,
+        scope: crate::types::SearchScope,
+        current_sheet_index: Option<usize>,
+    ) -> Result<crate::types::SearchResponse, crate::error::AppError> {
+        crate::ops::search_ops::do_search(
+            registry,
+            document_id,
+            base_revision,
+            query,
+            scope,
+            current_sheet_index,
+            || self.reserve_scan_work(),
+            |sheet_index| self.rebuild_sheet_index(registry, document_id, sheet_index),
+        )
+    }
+
+    fn reserve_scan_work(&self) -> Result<SearchScanReservation, crate::error::AppError> {
+        let mut active_bytes = self
+            .scan_work
+            .lock()
+            .map_err(|_| crate::error::AppError::poisoned_lock("search scan work"))?;
+        if active_bytes.saturating_add(SEARCH_SCAN_RESERVATION_BYTES)
+            > SEARCH_SCAN_RESERVATION_BYTES
+        {
+            return Err(crate::error::AppError::ResourceLimitExceeded(
+                "another search scan is already using the fallback memory budget".to_string(),
+            ));
+        }
+        *active_bytes += SEARCH_SCAN_RESERVATION_BYTES;
+        drop(active_bytes);
+        Ok(SearchScanReservation {
+            active_bytes: Arc::clone(&self.scan_work),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
+        !Arc::ptr_eq(&self.scheduler, &other.scheduler)
+            && !Arc::ptr_eq(&self.scan_work, &other.scan_work)
     }
 
     pub fn stats(&self) -> SearchSchedulerStats {
@@ -278,6 +327,18 @@ impl SearchService {
             state.stats.queued_jobs = state.stats.queued_jobs.saturating_add(1);
             merge_job(&mut state, job);
             self.scheduler.wake.notify_one();
+        }
+    }
+}
+
+struct SearchScanReservation {
+    active_bytes: Arc<Mutex<usize>>,
+}
+
+impl Drop for SearchScanReservation {
+    fn drop(&mut self) {
+        if let Ok(mut active_bytes) = self.active_bytes.lock() {
+            *active_bytes = active_bytes.saturating_sub(SEARCH_SCAN_RESERVATION_BYTES);
         }
     }
 }
@@ -862,7 +923,6 @@ mod tests {
     use super::*;
     use crate::domain::EditorCommand;
     use crate::error::AppError;
-    use crate::ops::search_ops::do_search;
     use crate::state::editor_state::EditorState;
     use crate::types::{
         CellFormatProjection, FileData, ReadOnlyRichProjection, SearchScope, SheetData,
@@ -922,6 +982,22 @@ mod tests {
 
         assert!(scheduler.shutdown.load(Ordering::Acquire));
         assert!(!scheduler.workers_available.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn search_scan_reservations_are_isolated_per_service() {
+        let first = isolated_search_service();
+        let second = isolated_search_service();
+        let first_reservation = first.reserve_scan_work().expect("first reservation");
+
+        assert!(matches!(
+            first.reserve_scan_work(),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+        assert!(second.reserve_scan_work().is_ok());
+
+        drop(first_reservation);
+        assert!(first.reserve_scan_work().is_ok());
     }
 
     #[test]
@@ -992,20 +1068,20 @@ mod tests {
     ) -> Vec<(usize, usize)> {
         let (document_id, revision) = active_search_context(registry);
         let search = isolated_search_service();
-        let mut rows: Vec<_> = do_search(
-            &search,
-            registry,
-            document_id,
-            revision,
-            query,
-            SearchScope::CurrentSheet,
-            Some(0),
-        )
-        .unwrap()
-        .results
-        .into_iter()
-        .map(|result| (result.row, result.col))
-        .collect();
+        let mut rows: Vec<_> = search
+            .search(
+                registry,
+                document_id,
+                revision,
+                query,
+                SearchScope::CurrentSheet,
+                Some(0),
+            )
+            .unwrap()
+            .results
+            .into_iter()
+            .map(|result| (result.row, result.col))
+            .collect();
         rows.sort();
         rows
     }
@@ -1013,20 +1089,20 @@ mod tests {
     fn values_of_current_search(registry: &ActiveDocumentRepository, query: &str) -> Vec<String> {
         let (document_id, revision) = active_search_context(registry);
         let search = isolated_search_service();
-        do_search(
-            &search,
-            registry,
-            document_id,
-            revision,
-            query,
-            SearchScope::CurrentSheet,
-            Some(0),
-        )
-        .unwrap()
-        .results
-        .into_iter()
-        .map(|result| result.value)
-        .collect()
+        search
+            .search(
+                registry,
+                document_id,
+                revision,
+                query,
+                SearchScope::CurrentSheet,
+                Some(0),
+            )
+            .unwrap()
+            .results
+            .into_iter()
+            .map(|result| result.value)
+            .collect()
     }
 
     fn active_search_context(registry: &ActiveDocumentRepository) -> (u64, u64) {
@@ -1083,16 +1159,16 @@ mod tests {
         }
 
         let search = isolated_search_service();
-        let error = do_search(
-            &search,
-            &registry,
-            document_id,
-            revision,
-            "new",
-            SearchScope::CurrentSheet,
-            Some(0),
-        )
-        .expect_err("stale search context should be rejected");
+        let error = search
+            .search(
+                &registry,
+                document_id,
+                revision,
+                "new",
+                SearchScope::CurrentSheet,
+                Some(0),
+            )
+            .expect_err("stale search context should be rejected");
 
         assert!(matches!(error, AppError::DocumentStateInvalid(_)));
     }

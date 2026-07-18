@@ -1,15 +1,11 @@
 import { computed, ref } from "vue";
 import type { RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
-import * as api from "@/api";
-import { pickOpenFile, prepareRecentFile } from "@/platform";
+import { pickOpenFile } from "@/platform";
 import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
-import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
-import { useOpenFileSelection } from "@/composables/useOpenFileSelection";
 import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
-import { commitPreparedDocumentOrAbort } from "@/composables/preparedDocument";
 import { isAppErrorCode } from "@/utils/appError";
-import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
+import { useDocumentFileCoordinator } from "@/composables/useDocumentFileCoordinator";
 
 type UseHomeFileActionsOptions = {
   navigateToTable?: () => Promise<void> | void;
@@ -20,14 +16,9 @@ export function useHomeFileActions({
 }: UseHomeFileActionsOptions = {}) {
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
-  const documentSessionCoordinator = useDocumentSessionCoordinator();
-  const { beginDocumentReplacement } = useDocumentReplacementGuard();
-  const { openSelectedFileOrDiscard } = useOpenFileSelection({
-    beginDocumentReplacement,
-  });
+  const fileCoordinator = useDocumentFileCoordinator();
   const { runDocumentLifecycle } = useDocumentLifecycle();
   const {
-    queueRecentFileEntryUpdate,
     refreshRecentFiles,
     removeRecentFile,
   } = useRecentFileUpdates();
@@ -50,28 +41,16 @@ export function useHomeFileActions({
     await runHomeFileAction("Failed to open file", async () => {
       const selection = await pickOpenFile();
       if (!selection) return;
-      const opened = await openSelectedFileOrDiscard(selection);
+      const opened = await fileCoordinator.openSelectedFile(selection);
       if (!opened) return;
-
-      queueRecentFileEntryUpdate(selection.originalPath);
       await navigateToTableRoute();
     });
   }
 
   async function handleNewFile() {
     await runHomeFileAction("Failed to create file", async () => {
-      const replacement = await beginDocumentReplacement();
-      if (!replacement) return;
-      try {
-        const expectedContext = documentSessionStore.currentCommandContext();
-        const prepared = await api.prepareNewFile();
-        const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
-        replacement.commit();
-        documentSessionCoordinator.openDocumentResponse(opened, null);
+      if (await fileCoordinator.createNewDocument()) {
         await navigateToTableRoute();
-      } catch (error) {
-        replacement.cancel();
-        throw error;
       }
     });
   }
@@ -79,7 +58,7 @@ export function useHomeFileActions({
   async function handleOpenRecent(file: RecentFile) {
     await runHomeFileAction("Failed to open file", async () => {
       try {
-        if (await openRecentPath(file)) {
+        if (await fileCoordinator.openRecentDocument(file)) {
           await navigateToTableRoute();
           return;
         }
@@ -96,29 +75,11 @@ export function useHomeFileActions({
     });
   }
 
-  async function openRecentPath(file: RecentFile): Promise<boolean> {
-    const replacement = await beginDocumentReplacement();
-    if (!replacement) return false;
-    try {
-      const expectedContext = documentSessionStore.currentCommandContext();
-      const prepared = await prepareRecentFile(file);
-      const opened = await commitPreparedDocumentOrAbort(prepared, expectedContext);
-      replacement.commit();
-      documentSessionCoordinator.openDocumentResponse(opened, file.path);
-      queueRecentFileEntryUpdate(file.originalPath);
-      return true;
-    } catch (error) {
-      replacement.cancel();
-      throw error;
-    }
-  }
-
   async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {
     const selection = await pickOpenFile();
     if (!selection) return false;
-    const opened = await openSelectedFileOrDiscard(selection);
+    const opened = await fileCoordinator.openSelectedFile(selection);
     if (!opened) return false;
-    queueRecentFileEntryUpdate(selection.originalPath);
 
     if (file.path !== selection.path) {
       try {

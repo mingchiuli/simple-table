@@ -1,9 +1,7 @@
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
 
 use crate::error::AppError;
 use crate::state::search_index::{SearchQueryPlan, SearchScanCursor};
-use crate::state::search_service::SearchService;
 use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 use crate::types::{SearchResponse, SearchResult, SearchScope};
 
@@ -13,7 +11,6 @@ pub(crate) const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
 const MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SEARCH_SCAN_CHUNK_CELLS: usize = 32_768;
-const SEARCH_SCAN_RESERVATION_BYTES: usize = 24 * 1024 * 1024;
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -28,14 +25,15 @@ fn col_to_letter(col: usize) -> String {
 }
 
 /// 搜索单元格
-pub fn do_search(
-    search_service: &SearchService,
+pub(crate) fn do_search<P>(
     registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
     query: &str,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
+    mut reserve_scan_work: impl FnMut() -> Result<P, AppError>,
+    mut schedule_rebuild: impl FnMut(usize),
 ) -> Result<SearchResponse, AppError> {
     let Some(plan) = SearchQueryPlan::try_new(query)? else {
         return Ok(SearchResponse::default());
@@ -91,7 +89,7 @@ pub fn do_search(
             None => {
                 used_scan_fallback = true;
                 if scan_reservation.is_none() {
-                    scan_reservation = Some(SearchScanReservation::acquire()?);
+                    scan_reservation = Some(reserve_scan_work()?);
                 }
                 if on_demand_rebuilds.len() < MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH {
                     on_demand_rebuilds.push(input.sheet_index);
@@ -113,7 +111,7 @@ pub fn do_search(
         eprintln!("Search used bounded scan fallback while index was stale or unavailable");
     }
     for sheet_index in on_demand_rebuilds {
-        search_service.rebuild_sheet_index(registry, document_id, sheet_index);
+        schedule_rebuild(sheet_index);
     }
 
     results.finish()
@@ -177,38 +175,6 @@ fn search_result(
         value: bounded_search_snippet(display_text, plan, MAX_SEARCH_RESULT_SNIPPET_BYTES),
         cell_position: format!("{}{}", col_to_letter(col), row + 1),
     }
-}
-
-struct SearchScanReservation;
-
-impl SearchScanReservation {
-    fn acquire() -> Result<Self, AppError> {
-        let mut active_bytes = search_scan_work()
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("search scan work"))?;
-        if active_bytes.saturating_add(SEARCH_SCAN_RESERVATION_BYTES)
-            > SEARCH_SCAN_RESERVATION_BYTES
-        {
-            return Err(AppError::ResourceLimitExceeded(
-                "another search scan is already using the fallback memory budget".to_string(),
-            ));
-        }
-        *active_bytes += SEARCH_SCAN_RESERVATION_BYTES;
-        Ok(Self)
-    }
-}
-
-impl Drop for SearchScanReservation {
-    fn drop(&mut self) {
-        if let Ok(mut active_bytes) = search_scan_work().lock() {
-            *active_bytes = active_bytes.saturating_sub(SEARCH_SCAN_RESERVATION_BYTES);
-        }
-    }
-}
-
-fn search_scan_work() -> &'static Mutex<usize> {
-    static SEARCH_SCAN_WORK: OnceLock<Mutex<usize>> = OnceLock::new();
-    SEARCH_SCAN_WORK.get_or_init(|| Mutex::new(0))
 }
 
 struct SearchInput {
@@ -355,15 +321,15 @@ mod query_limit_tests {
     #[test]
     fn search_query_rejects_oversized_text_before_accessing_the_document() {
         let registry = ActiveDocumentRepository::default();
-        let search = SearchService::new();
         let error = do_search(
-            &search,
             &registry,
             1,
             0,
             &"x".repeat(MAX_SEARCH_QUERY_BYTES + 1),
             SearchScope::AllSheets,
             None,
+            || Ok(()),
+            |_| {},
         )
         .expect_err("oversized search query");
 

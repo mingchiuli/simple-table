@@ -1,22 +1,75 @@
-use crate::application::runtime::ApplicationRuntime;
-use crate::application::{document_open_service, document_query_service, mutation_replay};
+use std::sync::Arc;
+
+use crate::application::document_open_service::{self, DocumentOpenService};
+use crate::application::document_query_service;
+use crate::application::mutation_replay::{self, MutationReplayCoordinator};
+use crate::application::prepared_document_repository::PreparedDocumentRepository;
+use crate::application::search_service::SearchService;
 use crate::error::AppError;
+use crate::state::state::ActiveDocumentRepository;
 use crate::types::OpenDocumentResponse;
 
-/// Commits a prepared document and retires every runtime resource owned by the
+#[derive(Clone)]
+pub struct DocumentLifecycleService {
+    documents: ActiveDocumentRepository,
+    prepared_documents: PreparedDocumentRepository,
+    mutation_replays: Arc<MutationReplayCoordinator>,
+    search: SearchService,
+    open_documents: DocumentOpenService,
+}
+
+impl DocumentLifecycleService {
+    pub(crate) fn new(
+        documents: ActiveDocumentRepository,
+        prepared_documents: PreparedDocumentRepository,
+        mutation_replays: Arc<MutationReplayCoordinator>,
+        search: SearchService,
+        open_documents: DocumentOpenService,
+    ) -> Self {
+        Self {
+            documents,
+            prepared_documents,
+            mutation_replays,
+            search,
+            open_documents,
+        }
+    }
+
+    fn documents(&self) -> &ActiveDocumentRepository {
+        &self.documents
+    }
+
+    fn prepared_documents(&self) -> &PreparedDocumentRepository {
+        &self.prepared_documents
+    }
+
+    fn mutation_replays(&self) -> &Arc<MutationReplayCoordinator> {
+        &self.mutation_replays
+    }
+
+    fn search(&self) -> &SearchService {
+        &self.search
+    }
+
+    fn open_documents(&self) -> &DocumentOpenService {
+        &self.open_documents
+    }
+}
+
+/// Commits a prepared document and retires every service resource owned by the
 /// previous document before its state is released.
 pub fn commit_prepared_document(
-    runtime: &ApplicationRuntime,
+    service: &DocumentLifecycleService,
     token: &str,
     expected_document_id: Option<u64>,
     expected_revision: Option<u64>,
 ) -> Result<OpenDocumentResponse, AppError> {
-    let checkout = runtime.prepared_documents().checkout(token)?;
-    let replacement = runtime
+    let checkout = service.prepared_documents().checkout(token)?;
+    let replacement = service
         .documents()
         .begin_replacement(expected_document_id, expected_revision)?;
     document_open_service::adopt_source_path_if_transient(
-        runtime,
+        service.open_documents(),
         checkout.document().source_path.as_deref(),
         &checkout.document().editor_state.file_data().file_name,
     )?;
@@ -38,28 +91,28 @@ pub fn commit_prepared_document(
         .map(|handle| handle.document_id())
         && previous_document_id != document_id
     {
-        retire_document_runtime(runtime, previous_document_id);
+        retire_document_runtime(service, previous_document_id);
     }
     drop(previous_document);
-    runtime
+    service
         .search()
-        .rebuild_all_sheets_index(runtime.documents(), document_id);
+        .rebuild_all_sheets_index(service.documents(), document_id);
     Ok(response)
 }
 
 pub fn close_current_document(
-    runtime: &ApplicationRuntime,
+    service: &DocumentLifecycleService,
     document_id: u64,
 ) -> Result<(), AppError> {
-    let closed_document = runtime.documents().close(document_id)?;
+    let closed_document = service.documents().close(document_id)?;
     if let Some(document_id) = closed_document.as_ref().map(|handle| handle.document_id()) {
-        retire_document_runtime(runtime, document_id);
+        retire_document_runtime(service, document_id);
     }
     drop(closed_document);
     Ok(())
 }
 
-fn retire_document_runtime(runtime: &ApplicationRuntime, document_id: u64) {
-    runtime.search().cancel_document_jobs(document_id);
-    mutation_replay::retire_document(runtime.mutation_replays(), document_id);
+fn retire_document_runtime(service: &DocumentLifecycleService, document_id: u64) {
+    service.search().cancel_document_jobs(document_id);
+    mutation_replay::retire_document(service.mutation_replays(), document_id);
 }

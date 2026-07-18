@@ -77,8 +77,10 @@ pub async fn prepare_open_file_ios(
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || document_open_service::prepare_open_file_mobile(&runtime, &app, &path))
-        .await
+    blocking::run(move || {
+        document_open_service::prepare_open_file_mobile(runtime.document_opens(), &app, &path)
+    })
+    .await
 }
 
 /// iOS: create a new sandbox save target that must be adopted by save_file_ios or discarded.
@@ -113,7 +115,7 @@ pub async fn save_file_ios(
     let runtime = runtime.inner().clone();
     blocking::run(move || {
         document_save_service::save_file_mobile(
-            &runtime,
+            runtime.document_saves(),
             &app,
             &path,
             document_id.get(),
@@ -136,7 +138,7 @@ pub async fn export_file_ios(
     let runtime = runtime.inner().clone();
     blocking::run(move || {
         document_save_service::export_file_mobile(
-            &runtime,
+            runtime.document_saves(),
             &app,
             &default_name,
             document_id.get(),

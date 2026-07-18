@@ -7,12 +7,12 @@ use crate::application::editor_command_service::EditorSessionInfo;
 use crate::application::runtime::ApplicationRuntime;
 use crate::application::{
     document_open_service, document_query_service, document_save_service, document_service,
-    editor_command_service,
+    editor_command_service, recent_file_service,
 };
 use crate::error::AppError;
 #[cfg(desktop)]
 use crate::io::platform::desktop;
-use crate::recent::{self, AddRecentFileRequest, RecentFile};
+use crate::recent::{AddRecentFileRequest, RecentFile};
 use crate::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
 #[cfg(desktop)]
 use crate::types::SavedDocumentResponse;
@@ -201,7 +201,10 @@ pub async fn prepare_open_file_desktop(
     path: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || document_open_service::prepare_open_file_desktop(&runtime, &path)).await
+    blocking::run(move || {
+        document_open_service::prepare_open_file_desktop(runtime.document_opens(), &path)
+    })
+    .await
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
@@ -213,8 +216,10 @@ pub async fn prepare_recent_file_desktop(
     id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || document_open_service::prepare_recent_file_desktop(&runtime, &app, &id))
-        .await
+    blocking::run(move || {
+        document_open_service::prepare_recent_file_desktop(runtime.document_opens(), &app, &id)
+    })
+    .await
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -249,7 +254,7 @@ pub async fn save_file_desktop(
     let runtime = runtime.inner().clone();
     blocking::run(move || {
         document_save_service::save_file_desktop(
-            &runtime,
+            runtime.document_saves(),
             &path,
             document_id.get(),
             base_revision.get(),
@@ -271,7 +276,7 @@ pub async fn export_file_desktop(
     let runtime = runtime.inner().clone();
     blocking::run(move || {
         document_save_service::export_file_desktop(
-            &runtime,
+            runtime.document_saves(),
             &app,
             &default_name,
             document_id.get(),
@@ -286,7 +291,7 @@ pub async fn prepare_new_file(
     runtime: State<'_, ApplicationRuntime>,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || document_open_service::prepare_new_file(&runtime)).await
+    blocking::run(move || document_open_service::prepare_new_file(runtime.document_opens())).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -299,7 +304,7 @@ pub async fn commit_prepared_document(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         document_service::commit_prepared_document(
-            &runtime,
+            runtime.document_lifecycle(),
             &token,
             expected_document_id.map(CommandU64::get),
             expected_revision.map(CommandU64::get),
@@ -314,7 +319,10 @@ pub async fn abort_prepared_document(
     token: String,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    blocking::run(move || document_open_service::abort_prepared_document(&runtime, &token)).await
+    blocking::run(move || {
+        document_open_service::abort_prepared_document(runtime.document_opens(), &token)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -322,8 +330,10 @@ pub async fn get_active_document(
     runtime: State<'_, ApplicationRuntime>,
 ) -> Result<Option<OpenDocumentResponse>, AppError> {
     let runtime = runtime.inner().clone();
-    projection_executor::run(move || document_query_service::active_document_response(&runtime))
-        .await
+    projection_executor::run(move || {
+        document_query_service::active_document_response(runtime.document_queries())
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -332,7 +342,11 @@ pub fn get_mutation_result(
     document_id: CommandU64,
     command_id: String,
 ) -> Result<MutationResultLookup, AppError> {
-    editor_command_service::get_mutation_result(&runtime, document_id.get(), &command_id)
+    editor_command_service::get_mutation_result(
+        runtime.editor_commands(),
+        document_id.get(),
+        &command_id,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -345,7 +359,7 @@ pub async fn get_current_document_projection(
     let runtime = runtime.inner().clone();
     projection_executor::run(move || {
         document_query_service::current_document_projection_for_command(
-            &runtime,
+            runtime.document_queries(),
             document_id.get(),
             base_revision.get(),
             preferred_sheet_index,
@@ -364,7 +378,7 @@ pub async fn get_sheet_region_projection(
     let runtime = runtime.inner().clone();
     projection_executor::run(move || {
         document_query_service::sheet_region_projection_for_command(
-            &runtime,
+            runtime.document_queries(),
             document_id.get(),
             base_revision.get(),
             region,
@@ -380,7 +394,7 @@ pub async fn close_current_document(
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
-        document_service::close_current_document(&runtime, document_id.get())
+        document_service::close_current_document(runtime.document_lifecycle(), document_id.get())
     })
     .await
 }
@@ -392,7 +406,7 @@ pub fn get_document_capabilities(
     base_revision: CommandU64,
 ) -> Result<DocumentCapabilities, AppError> {
     document_query_service::document_capabilities_for_command(
-        &runtime,
+        runtime.document_queries(),
         document_id.get(),
         base_revision.get(),
     )
@@ -406,7 +420,7 @@ pub fn get_native_save_plan(
     target_path_or_name: String,
 ) -> Result<NativeSavePlan, AppError> {
     document_query_service::native_save_plan_for_command(
-        &runtime,
+        runtime.document_queries(),
         document_id.get(),
         base_revision.get(),
         &target_path_or_name,
@@ -427,7 +441,7 @@ pub fn get_editor_state(
     base_revision: Option<CommandU64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
     editor_command_service::get_editor_state(
-        &runtime,
+        runtime.editor_commands(),
         document_id.map(CommandU64::get),
         base_revision.map(CommandU64::get),
     )
@@ -443,7 +457,7 @@ pub async fn undo(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::undo(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -462,7 +476,7 @@ pub async fn redo(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::redo(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -488,7 +502,7 @@ pub async fn set_cell(
     let text = text.into_inner();
     mutation_executor::run(move || {
         editor_command_service::set_cell(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -513,7 +527,7 @@ pub async fn set_cells(
     let changes = changes.into_inner();
     mutation_executor::run(move || {
         editor_command_service::set_cells(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -535,7 +549,7 @@ pub async fn add_row(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::add_row(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -558,7 +572,7 @@ pub async fn delete_row(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::delete_row(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -581,7 +595,7 @@ pub async fn add_column(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::add_column(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -604,7 +618,7 @@ pub async fn delete_column(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::delete_column(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -628,7 +642,7 @@ pub async fn set_column_width(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::set_column_width(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -653,7 +667,7 @@ pub async fn set_row_height(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::set_row_height(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -677,7 +691,7 @@ pub async fn add_sheet(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::add_sheet(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -697,7 +711,7 @@ pub async fn delete_sheet(
     let runtime = runtime.inner().clone();
     mutation_executor::run(move || {
         editor_command_service::delete_sheet(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &command_id,
@@ -721,7 +735,7 @@ pub async fn search(
     let runtime = runtime.inner().clone();
     search_executor::run(move || {
         editor_command_service::search(
-            &runtime,
+            runtime.editor_commands(),
             document_id.get(),
             base_revision.get(),
             &query,
@@ -740,7 +754,10 @@ pub async fn get_recent_files(
     app: AppHandle,
 ) -> Result<Vec<RecentFile>, AppError> {
     let runtime = runtime.inner().clone();
-    recent_executor::run(move || recent::do_get_recent_files(&runtime, &app)).await
+    recent_executor::run(move || {
+        recent_file_service::do_get_recent_files(runtime.recent_files(), &app)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -750,7 +767,10 @@ pub async fn remove_recent_file(
     id: String,
 ) -> Result<(), AppError> {
     let runtime = runtime.inner().clone();
-    recent_executor::run(move || recent::do_remove_recent_file(&runtime, &app, &id)).await
+    recent_executor::run(move || {
+        recent_file_service::do_remove_recent_file(runtime.recent_files(), &app, &id)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -760,8 +780,14 @@ pub async fn add_recent_file_with_thumbnail(
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
     let runtime = runtime.inner().clone();
-    recent_executor::run(move || recent::do_add_recent_file_with_thumbnail(&runtime, &app, request))
-        .await
+    recent_executor::run(move || {
+        recent_file_service::do_add_recent_file_with_thumbnail(
+            runtime.recent_files(),
+            &app,
+            request,
+        )
+    })
+    .await
 }
 
 #[cfg(test)]

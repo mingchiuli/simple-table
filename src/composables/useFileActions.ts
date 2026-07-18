@@ -1,25 +1,7 @@
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 
-import * as api from '@/api';
-import {
-  discardOpenFileSelection,
-  exportFile,
-  pickOpenFile,
-  prepareOpenFile,
-  saveFile,
-} from '@/platform';
-import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
-import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
-import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
-import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
-import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
-import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
-import { useSaveLocation } from '@/composables/useSaveLocation';
-import { commitPreparedDocumentOrAbort } from '@/composables/preparedDocument';
-import { useDocumentSessionStore } from '@/stores/documentSession';
-import { useEditorSelectionStore } from '@/stores/editorSelection';
+import { useDocumentFileCoordinator } from '@/composables/useDocumentFileCoordinator';
 import type { DocumentProjection } from '@/types';
 import { appErrorMessage } from '@/utils/appError';
 
@@ -33,51 +15,9 @@ export function useFileActions({
   flushPendingCellChanges,
 }: UseFileActionsOptions) {
   const router = useRouter();
-  const documentSessionStore = useDocumentSessionStore();
-  const documentSessionCoordinator = useDocumentSessionCoordinator();
-  const editorSelectionStore = useEditorSelectionStore();
-  const { beginDocumentReplacement } = useDocumentReplacementGuard({
+  const fileCoordinator = useDocumentFileCoordinator({
+    fileData,
     flushPendingCellChanges,
-  });
-  const { withReservedSaveLocation } = useSaveLocation();
-  const { runDocumentLifecycle } = useDocumentLifecycle();
-  const commandBus = useDocumentCommandBus();
-  const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
-  const spreadsheetFormats = createSpreadsheetFormatService(api);
-
-  const fileCoordinator = createDocumentFileCoordinator({
-    getFileData: () => fileData.value,
-    getCommandContext: () => documentSessionStore.currentCommandContext(),
-    getCurrentFilePath: () => documentSessionStore.currentFilePath,
-    getCurrentSheetIndex: () => editorSelectionStore.currentSheetIndex,
-    beginDocumentReplacement,
-    runDocumentLifecycle,
-    prepareConsistentContext: () =>
-      commandBus.prepareConsistentContext(flushPendingCellChanges).then((context) => context ?? null),
-    pickOpenFile,
-    discardOpenFileSelection,
-    prepareOpenFile,
-    commitPreparedDocument: commitPreparedDocumentOrAbort,
-    abortPreparedDocument: (prepared) => api.abortPreparedDocument(prepared.token),
-    closeDocument: api.closeCurrentDocument,
-    saveFile,
-    exportFile,
-    nativeSavePlan: api.getNativeSavePlan,
-    documentCapabilities: api.getDocumentCapabilities,
-    defaultSpreadsheetExtension: spreadsheetFormats.defaultSpreadsheetExtension,
-    withReservedSaveLocation,
-    openDocumentResponse: (response, path) =>
-      documentSessionCoordinator.openDocumentResponse(response, path),
-    applySavedDocumentResponse: (context, response, path, preferredSheetIndex) =>
-      documentSessionCoordinator.applySavedDocumentResponseForContext(
-        context,
-        response,
-        path,
-        preferredSheetIndex
-      ),
-    clearDocument: () => documentSessionCoordinator.clearDocument(),
-    queueRecentFileEntryUpdate,
-    reportCleanupError: (message, error) => console.warn(`${message}:`, error),
   });
 
   async function handleOpenFile() {

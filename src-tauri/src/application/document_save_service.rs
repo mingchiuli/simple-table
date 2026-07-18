@@ -1,17 +1,80 @@
 use std::sync::Arc;
 
 use crate::application::document_query_service;
-use crate::application::runtime::ApplicationRuntime;
+use crate::application::search_service::SearchService;
 use crate::error::AppError;
 use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 use crate::io::file_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
-use crate::io::save_work::SaveWorkReservation;
+#[cfg(desktop)]
+use crate::io::platform::desktop::DesktopFileRuntime;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::io::platform::mobile::MobileFileRuntime;
+use crate::io::save_work::{SaveWorkCoordinator, SaveWorkReservation};
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
-    search_service::SearchService,
     state::{ActiveDocumentRepository, DocumentHandle},
 };
 use crate::types::{SavedDocumentIdentity, SavedDocumentResponse};
+
+#[derive(Clone)]
+pub struct DocumentSaveService {
+    documents: ActiveDocumentRepository,
+    search: SearchService,
+    save_work: SaveWorkCoordinator,
+    #[cfg(desktop)]
+    desktop_files: DesktopFileRuntime,
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    mobile_files: MobileFileRuntime,
+}
+
+impl DocumentSaveService {
+    pub(crate) fn new(
+        documents: ActiveDocumentRepository,
+        search: SearchService,
+        save_work: SaveWorkCoordinator,
+        #[cfg(desktop)] desktop_files: DesktopFileRuntime,
+        #[cfg(any(target_os = "android", target_os = "ios"))] mobile_files: MobileFileRuntime,
+    ) -> Self {
+        Self {
+            documents,
+            search,
+            save_work,
+            #[cfg(desktop)]
+            desktop_files,
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            mobile_files,
+        }
+    }
+
+    fn documents(&self) -> &ActiveDocumentRepository {
+        &self.documents
+    }
+
+    fn search(&self) -> &SearchService {
+        &self.search
+    }
+
+    fn save_work(&self) -> &SaveWorkCoordinator {
+        &self.save_work
+    }
+
+    #[cfg(desktop)]
+    fn desktop_files(&self) -> &DesktopFileRuntime {
+        &self.desktop_files
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    fn mobile_files(&self) -> &MobileFileRuntime {
+        &self.mobile_files
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
+        !self.documents.is_same_instance(&other.documents)
+            && !self.save_work.is_same_instance(&other.save_work)
+            && self.search.is_isolated_from(&other.search)
+    }
+}
 
 pub struct PreparedDocumentExport {
     pub bytes: Vec<u8>,
@@ -28,15 +91,15 @@ pub struct PreparedDocumentSave {
 }
 
 pub fn prepare_current_file_export(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     document_id: u64,
     base_revision: u64,
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentExport, AppError> {
-    let handle = document_handle_for_read(runtime.documents(), document_id)?;
+    let handle = document_handle_for_read(service.documents(), document_id)?;
     let (snapshot, work) = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        let work = runtime
+        let work = service
             .save_work()
             .reserve(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
@@ -50,13 +113,13 @@ pub fn prepare_current_file_export(
 }
 
 pub fn prepare_current_file_save(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     document_id: u64,
     base_revision: u64,
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentSave, AppError> {
     let (snapshot, work) = {
-        let handle = document_handle_for_read(runtime.documents(), document_id)?;
+        let handle = document_handle_for_read(service.documents(), document_id)?;
         let editor_state = handle.read_for_command(document_id, base_revision)?;
         document_query_service::ensure_native_save_target_allowed(
             &editor_state,
@@ -67,7 +130,7 @@ pub fn prepare_current_file_save(
                 "save is already in progress".to_string(),
             ));
         }
-        let work = runtime
+        let work = service
             .save_work()
             .reserve(document_id, editor_state.estimated_resource_bytes())?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
@@ -91,7 +154,7 @@ pub fn prepare_current_file_save(
 pub fn abort_prepared_file_save(_prepared: PreparedDocumentSave) {}
 
 pub fn commit_current_file_save<F>(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
@@ -100,8 +163,8 @@ where
     F: FnOnce() -> Result<(), AppError>,
 {
     commit_current_file_save_with_registry(
-        runtime.search(),
-        runtime.documents(),
+        service.search(),
+        service.documents(),
         path,
         prepared,
         commit_write,
@@ -267,11 +330,11 @@ fn document_handle_for_read(
 }
 
 fn current_document_path_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     document_id: u64,
     base_revision: u64,
 ) -> Result<String, AppError> {
-    let handle = document_handle_for_read(runtime.documents(), document_id)?;
+    let handle = document_handle_for_read(service.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
     Ok(editor_state.file_data().path.clone())
 }
@@ -282,7 +345,7 @@ fn default_extension_string() -> String {
 
 #[cfg(desktop)]
 pub fn save_file_desktop(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     path: &str,
     document_id: u64,
     base_revision: u64,
@@ -294,9 +357,9 @@ pub fn save_file_desktop(
     };
     use crate::io::platform::desktop;
 
-    let current_path = current_document_path_for_command(runtime, document_id, base_revision)?;
-    desktop::ensure_save_path_authorized(runtime.desktop_files(), path, &current_path)?;
-    let prepared = prepare_current_file_save(runtime, document_id, base_revision, path)?;
+    let current_path = current_document_path_for_command(service, document_id, base_revision)?;
+    desktop::ensure_save_path_authorized(service.desktop_files(), path, &current_path)?;
+    let prepared = prepare_current_file_save(service, document_id, base_revision, path)?;
     let target = Path::new(path);
     let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
         Ok(temp_path) => temp_path,
@@ -306,7 +369,7 @@ pub fn save_file_desktop(
         }
     };
 
-    let result = commit_current_file_save(runtime, path.to_string(), prepared, || {
+    let result = commit_current_file_save(service, path.to_string(), prepared, || {
         replace_temp_file(&temp_path, target)
     });
     if result.is_err() {
@@ -317,7 +380,7 @@ pub fn save_file_desktop(
 
 #[cfg(desktop)]
 pub fn export_file_desktop(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     app: &tauri::AppHandle,
     default_name: &str,
     document_id: u64,
@@ -329,7 +392,7 @@ pub fn export_file_desktop(
         return Ok(None);
     };
     let prepared = prepare_current_file_export(
-        runtime,
+        service,
         document_id,
         base_revision,
         &target.target_path_or_name,
@@ -340,7 +403,7 @@ pub fn export_file_desktop(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn save_file_mobile(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     app: &tauri::AppHandle,
     path: &str,
     document_id: u64,
@@ -354,13 +417,13 @@ pub fn save_file_mobile(
     use crate::io::managed_documents;
     use crate::io::platform::mobile;
 
-    let target = mobile::validated_mobile_files_path(runtime.mobile_files(), app, Path::new(path))?;
-    let current_path = current_document_path_for_command(runtime, document_id, base_revision)?;
-    mobile::ensure_save_target_authorized(runtime.mobile_files(), &target, &current_path)?;
+    let target = mobile::validated_mobile_files_path(service.mobile_files(), app, Path::new(path))?;
+    let current_path = current_document_path_for_command(service, document_id, base_revision)?;
+    mobile::ensure_save_target_authorized(service.mobile_files(), &target, &current_path)?;
     let target_path = target.to_string_lossy().to_string();
-    let prepared = prepare_current_file_save(runtime, document_id, base_revision, &target_path)?;
+    let prepared = prepare_current_file_save(service, document_id, base_revision, &target_path)?;
     managed_documents::validate_managed_save(
-        runtime.mobile_files().managed_documents(),
+        service.mobile_files().managed_documents(),
         &target,
         prepared.bytes.len() as u64,
     )?;
@@ -373,11 +436,11 @@ pub fn save_file_mobile(
     };
 
     let managed_file_name = prepared.output_name.clone();
-    let result = commit_current_file_save(runtime, target_path, prepared, || {
+    let result = commit_current_file_save(service, target_path, prepared, || {
         replace_temp_file(&temp_path, &target)?;
         managed_documents::adopt_completed_save(
-            runtime.mobile_files().managed_documents(),
-            runtime.mobile_files().transient_files(),
+            service.mobile_files().managed_documents(),
+            service.mobile_files().transient_files(),
             &target,
             &managed_file_name,
         )
@@ -390,7 +453,7 @@ pub fn save_file_mobile(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn export_file_mobile(
-    runtime: &ApplicationRuntime,
+    service: &DocumentSaveService,
     app: &tauri::AppHandle,
     default_name: &str,
     document_id: u64,
@@ -402,7 +465,7 @@ pub fn export_file_mobile(
         return Ok(None);
     };
     let prepared = prepare_current_file_export(
-        runtime,
+        service,
         document_id,
         base_revision,
         &target.target_path_or_name,

@@ -114,7 +114,7 @@ rejectMatches(
     join(projectRoot, 'src-tauri', 'src', 'state', 'state.rs'),
     join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs'),
     join(projectRoot, 'src-tauri', 'src', 'application', 'prepared_document_repository.rs'),
-    join(projectRoot, 'src-tauri', 'src', 'state', 'search_service.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs'),
   ],
   [
     /static\s+ACTIVE_DOCUMENT_STORE/,
@@ -124,8 +124,19 @@ rejectMatches(
     /fn\s+active_document_store\s*\(/,
     /fn\s+replay_coordinator\s*\(/,
     /fn\s+index_scheduler\s*\(/,
+    /static\s+SEARCH_SCAN_WORK/,
   ],
   'the explicitly-owned Rust application runtime boundary',
+);
+
+rejectMatches(
+  [
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs').filter(
+      (file) => relative(projectRoot, file) !== 'src-tauri/src/application/runtime.rs',
+    ),
+  ],
+  [/\bApplicationRuntime\b/],
+  'the narrow Rust application service dependency boundary',
 );
 
 rejectMatches(
@@ -205,6 +216,20 @@ rejectMatches(
     /['"]@tauri-apps\//,
   ],
   'the port-driven document file coordinator boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src', 'composables'), '.ts').filter(
+    (file) => relative(projectRoot, file) !== 'src/composables/useDocumentFileCoordinator.ts',
+  ),
+  [
+    /\bprepareNewFile\s*\(/,
+    /\bprepareRecentFile\s*\(/,
+    /\bprepareOpenFile\s*\(/,
+    /\bcommitPreparedDocument\s*\(/,
+    /\babortPreparedDocument\s*\(/,
+  ],
+  'the centralized frontend prepared-document workflow boundary',
 );
 
 if (violations.length > 0) {

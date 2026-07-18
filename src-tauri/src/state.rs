@@ -8,6 +8,5 @@ pub(crate) mod history_restore_transaction;
 pub mod history_store;
 pub mod search_index;
 pub mod search_scheduler;
-pub mod search_service;
 pub mod search_session;
 pub mod state;

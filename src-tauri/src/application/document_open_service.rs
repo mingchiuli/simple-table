@@ -3,20 +3,87 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use umya_spreadsheet::Workbook;
 
-use crate::application::prepared_document_repository;
-use crate::application::runtime::ApplicationRuntime;
+use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
 use crate::error::AppError;
 use crate::io::codec::reader::{preflight_input_file, read_file_with_workbook_from_preflight};
 use crate::io::file_format::{
     default_spreadsheet_extension, file_name_from_path_like, open_extension_from_path_name_or_bytes,
 };
 use crate::io::open_file_input::OpenFileInput;
+#[cfg(desktop)]
+use crate::io::platform::desktop::DesktopFileRuntime;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+use crate::io::platform::mobile::MobileFileRuntime;
+use crate::recent::store::RecentStore;
 use crate::resource_limits::validate_file_data;
 use crate::state::editor_state::EditorState;
+use crate::state::state::ActiveDocumentRepository;
 use crate::types::{FileData, PreparedOpenDocument, SheetData};
 
+#[derive(Clone, Default)]
+pub struct DocumentOpenService {
+    documents: ActiveDocumentRepository,
+    prepared_documents: PreparedDocumentRepository,
+    recent_files: RecentStore,
+    #[cfg(desktop)]
+    desktop_files: DesktopFileRuntime,
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    mobile_files: MobileFileRuntime,
+}
+
+impl DocumentOpenService {
+    pub(crate) fn new(
+        documents: ActiveDocumentRepository,
+        prepared_documents: PreparedDocumentRepository,
+        recent_files: RecentStore,
+        #[cfg(desktop)] desktop_files: DesktopFileRuntime,
+        #[cfg(any(target_os = "android", target_os = "ios", test))] mobile_files: MobileFileRuntime,
+    ) -> Self {
+        Self {
+            documents,
+            prepared_documents,
+            recent_files,
+            #[cfg(desktop)]
+            desktop_files,
+            #[cfg(any(target_os = "android", target_os = "ios", test))]
+            mobile_files,
+        }
+    }
+
+    fn documents(&self) -> &ActiveDocumentRepository {
+        &self.documents
+    }
+
+    pub(crate) fn prepared_documents(&self) -> &PreparedDocumentRepository {
+        &self.prepared_documents
+    }
+
+    #[cfg(desktop)]
+    fn recent_files(&self) -> &RecentStore {
+        &self.recent_files
+    }
+
+    #[cfg(desktop)]
+    fn desktop_files(&self) -> &DesktopFileRuntime {
+        &self.desktop_files
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    pub(crate) fn mobile_files(&self) -> &MobileFileRuntime {
+        &self.mobile_files
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
+        !self.documents.is_same_instance(&other.documents)
+            && !self
+                .prepared_documents
+                .is_same_instance(&other.prepared_documents)
+    }
+}
+
 pub fn prepare_open_input(
-    runtime: &ApplicationRuntime,
+    service: &DocumentOpenService,
     input: OpenFileInput,
 ) -> Result<PreparedOpenDocument, AppError> {
     let OpenFileInput {
@@ -26,9 +93,9 @@ pub fn prepare_open_input(
     } = input;
     let extension = open_extension_from_path_name_or_bytes(&path, file_name.as_deref(), &bytes);
     let preflight = preflight_input_file(&extension, &bytes)?;
-    let reservation = runtime.prepared_documents().reserve_for_parse_bytes(
+    let reservation = service.prepared_documents().reserve_for_parse_bytes(
         preflight.estimated_parse_bytes(),
-        active_document_resource_bytes(runtime)?,
+        active_document_resource_bytes(service)?,
     )?;
     let resolved_file_name =
         file_name.unwrap_or_else(|| file_name_from_path_like(&path, "unknown"));
@@ -37,7 +104,7 @@ pub fn prepare_open_input(
         read_file_with_workbook_from_preflight(preflight, bytes, path, resolved_file_name)?;
 
     prepare_editor_state(
-        runtime,
+        service,
         result.file_data,
         result.workbook,
         Some(source_path),
@@ -47,69 +114,69 @@ pub fn prepare_open_input(
 
 #[cfg(desktop)]
 pub fn prepare_open_file_desktop(
-    runtime: &ApplicationRuntime,
+    service: &DocumentOpenService,
     path: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
     prepare_open_input(
-        runtime,
-        crate::io::platform::desktop::read_open_file(runtime.desktop_files(), path)?,
+        service,
+        crate::io::platform::desktop::read_open_file(service.desktop_files(), path)?,
     )
 }
 
 #[cfg(desktop)]
 pub fn prepare_recent_file_desktop(
-    runtime: &ApplicationRuntime,
+    service: &DocumentOpenService,
     app: &AppHandle,
     id: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
     prepare_open_input(
-        runtime,
-        crate::io::platform::desktop::read_recent_file(runtime.recent_files(), app, id)?,
+        service,
+        crate::io::platform::desktop::read_recent_file(service.recent_files(), app, id)?,
     )
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn prepare_open_file_mobile(
-    runtime: &ApplicationRuntime,
+    service: &DocumentOpenService,
     app: &AppHandle,
     path: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
     prepare_open_input(
-        runtime,
-        crate::io::platform::mobile::read_open_file(runtime.mobile_files(), app, path)?,
+        service,
+        crate::io::platform::mobile::read_open_file(service.mobile_files(), app, path)?,
     )
 }
 
-pub fn prepare_new_file(runtime: &ApplicationRuntime) -> Result<PreparedOpenDocument, AppError> {
+pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDocument, AppError> {
     let file_data = blank_file_data();
     validate_file_data(&file_data)?;
-    let reservation = runtime
+    let reservation = service
         .prepared_documents()
-        .reserve_for_file_data(&file_data, active_document_resource_bytes(runtime)?)?;
-    prepare_editor_state(runtime, file_data, None, None, reservation)
+        .reserve_for_file_data(&file_data, active_document_resource_bytes(service)?)?;
+    prepare_editor_state(service, file_data, None, None, reservation)
 }
 
-pub fn abort_prepared_document(runtime: &ApplicationRuntime, token: &str) -> Result<(), AppError> {
-    runtime.prepared_documents().abort(token)
+pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Result<(), AppError> {
+    service.prepared_documents().abort(token)
 }
 
 pub(crate) fn adopt_source_path_if_transient(
-    runtime: &ApplicationRuntime,
+    service: &DocumentOpenService,
     source_path: Option<&std::path::Path>,
     file_name: &str,
 ) -> Result<(), AppError> {
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     if let Some(source_path) = source_path {
         crate::io::managed_documents::adopt_transient_document(
-            runtime.mobile_files().managed_documents(),
-            runtime.mobile_files().transient_files(),
+            service.mobile_files().managed_documents(),
+            service.mobile_files().transient_files(),
             source_path,
             file_name,
         )?;
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-    let _ = (runtime, source_path, file_name);
+    let _ = (service, source_path, file_name);
 
     Ok(())
 }
@@ -127,24 +194,24 @@ fn blank_file_data() -> FileData {
 }
 
 fn prepare_editor_state(
-    runtime: &ApplicationRuntime,
+    service: &DocumentOpenService,
     file_data: FileData,
     workbook: Option<Workbook>,
     source_path: Option<PathBuf>,
     reservation: prepared_document_repository::PrepareReservation,
 ) -> Result<PreparedOpenDocument, AppError> {
     let editor_state = EditorState::with_workbook(file_data, workbook);
-    let token = runtime.prepared_documents().replace(
+    let token = service.prepared_documents().replace(
         editor_state,
         source_path,
         reservation,
-        active_document_resource_bytes(runtime)?,
+        active_document_resource_bytes(service)?,
     )?;
     Ok(PreparedOpenDocument { token })
 }
 
-fn active_document_resource_bytes(runtime: &ApplicationRuntime) -> Result<usize, AppError> {
-    let handle = runtime.documents().active_handle()?;
+fn active_document_resource_bytes(service: &DocumentOpenService) -> Result<usize, AppError> {
+    let handle = service.documents().active_handle()?;
     handle
         .map(|handle| handle.read().map(|state| state.estimated_resource_bytes()))
         .transpose()
@@ -158,9 +225,9 @@ mod tests {
 
     #[test]
     fn open_input_detects_extensionless_csv_content() {
-        let runtime = ApplicationRuntime::default();
+        let service = DocumentOpenService::default();
         let prepared = prepare_open_input(
-            &runtime,
+            &service,
             OpenFileInput {
                 path: "/tmp/imported".to_string(),
                 bytes: b"name,score\nalice,42".to_vec(),
@@ -168,7 +235,7 @@ mod tests {
             },
         )
         .expect("open extensionless csv");
-        let response = runtime
+        let response = service
             .prepared_documents()
             .take(&prepared.token)
             .expect("prepared document");
@@ -182,9 +249,9 @@ mod tests {
 
     #[test]
     fn new_file_uses_the_backend_owned_blank_template() {
-        let runtime = ApplicationRuntime::default();
-        let prepared = prepare_new_file(&runtime).expect("init file");
-        let response = runtime
+        let service = DocumentOpenService::default();
+        let prepared = prepare_new_file(&service).expect("init file");
+        let response = service
             .prepared_documents()
             .take(&prepared.token)
             .expect("prepared document");

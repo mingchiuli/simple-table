@@ -1,4 +1,3 @@
-use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 use crate::io::file_format::{
     default_spreadsheet_extension, export_extensions, extension_of, spreadsheet_format_options,
@@ -24,11 +23,26 @@ const MAX_REGION_ROWS: usize = 1_024;
 const MAX_REGION_COLUMNS: usize = 512;
 const MAX_REGION_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-/// Restores the frontend after its runtime state was lost while the Rust process stayed alive.
+#[derive(Clone, Default)]
+pub struct DocumentQueryService {
+    documents: ActiveDocumentRepository,
+}
+
+impl DocumentQueryService {
+    pub(crate) fn new(documents: ActiveDocumentRepository) -> Self {
+        Self { documents }
+    }
+
+    fn documents(&self) -> &ActiveDocumentRepository {
+        &self.documents
+    }
+}
+
+/// Restores the frontend after its service state was lost while the Rust process stayed alive.
 pub fn active_document_response(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
 ) -> Result<Option<OpenDocumentResponse>, AppError> {
-    let handle = runtime.documents().active_handle()?;
+    let handle = service.documents().active_handle()?;
     handle
         .map(|handle| {
             let editor_state = handle.read()?;
@@ -41,9 +55,9 @@ pub fn active_document_response(
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn active_document_path(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
 ) -> Result<Option<String>, AppError> {
-    let handle = runtime.documents().active_handle()?;
+    let handle = service.documents().active_handle()?;
     Ok(handle
         .map(|handle| {
             handle
@@ -55,12 +69,12 @@ pub(crate) fn active_document_path(
 }
 
 pub fn current_document_projection_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     preferred_sheet_index: usize,
 ) -> Result<OpenDocumentResponse, AppError> {
-    let handle = document_handle_for_read(runtime.documents(), document_id)?;
+    let handle = document_handle_for_read(service.documents(), document_id)?;
     let response = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
         open_document_response_snapshot_for_sheet(&editor_state, preferred_sheet_index)
@@ -69,23 +83,23 @@ pub fn current_document_projection_for_command(
 }
 
 pub fn sheet_region_projection_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
     validate_sheet_region(&region)?;
-    let response = sheet_region_snapshot_for_command(runtime, document_id, base_revision, region)?;
+    let response = sheet_region_snapshot_for_command(service, document_id, base_revision, region)?;
     finalize_region_response(response, MAX_REGION_RESPONSE_BYTES)
 }
 
 fn sheet_region_snapshot_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
-    sheet_region_snapshot_from_registry(runtime.documents(), document_id, base_revision, region)
+    sheet_region_snapshot_from_registry(service.documents(), document_id, base_revision, region)
 }
 
 fn sheet_region_snapshot_from_registry(
@@ -100,19 +114,19 @@ fn sheet_region_snapshot_from_registry(
 }
 
 pub(crate) fn inspect_current_file_for_command<T>(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     inspect: impl FnOnce(&FileData) -> T,
 ) -> Result<T, AppError> {
-    let handle = document_handle_for_read(runtime.documents(), document_id)?;
+    let handle = document_handle_for_read(service.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
     Ok(inspect(editor_state.file_data()))
 }
 
 #[cfg(test)]
 pub fn document_capabilities(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     file_name: &str,
     current_path: Option<&str>,
 ) -> DocumentCapabilities {
@@ -134,7 +148,7 @@ pub fn document_capabilities(
         native_save_extension: native_extension,
         export_extension,
         workbook: active_workbook_capabilities(
-            runtime,
+            service,
             file_name,
             current_path,
             native_save_allowed,
@@ -143,12 +157,12 @@ pub fn document_capabilities(
 }
 
 pub fn document_capabilities_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
 ) -> Result<DocumentCapabilities, AppError> {
     let (file_name, current_path) =
-        inspect_current_file_for_command(runtime, document_id, base_revision, |file_data| {
+        inspect_current_file_for_command(service, document_id, base_revision, |file_data| {
             (
                 file_data.file_name.clone(),
                 (!file_data.path.is_empty()).then(|| file_data.path.clone()),
@@ -165,7 +179,7 @@ pub fn document_capabilities_for_command(
     let export_extension = export_extension(file_name).unwrap_or_else(|| source_format.clone());
     let export_formats = export_formats_for(&source_format);
     let workbook = workbook_capabilities_for_command(
-        runtime,
+        service,
         document_id,
         base_revision,
         native_save_allowed,
@@ -184,7 +198,7 @@ pub fn document_capabilities_for_command(
 }
 
 pub fn native_save_plan_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     target_path_or_name: &str,
@@ -197,7 +211,7 @@ pub fn native_save_plan_for_command(
         export_extension(target_path_or_name).unwrap_or_else(|| source_format.clone());
     let export_formats = export_formats_for(&source_format);
     let workbook = native_save_workbook_capabilities_for_command(
-        runtime,
+        service,
         document_id,
         base_revision,
         native_save_allowed,
@@ -231,12 +245,12 @@ pub fn format_options() -> SpreadsheetFormatOptions {
 
 #[cfg(test)]
 fn active_workbook_capabilities(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     file_name: &str,
     current_path: Option<&str>,
     native_save_allowed: bool,
 ) -> WorkbookCapabilities {
-    let Ok(handle) = runtime.documents().active_handle() else {
+    let Ok(handle) = service.documents().active_handle() else {
         eprintln!("document registry unavailable while reading workbook capabilities");
         let mut capabilities = WorkbookCapabilities::default();
         capabilities.save.can_native_save = native_save_allowed;
@@ -263,13 +277,13 @@ fn active_workbook_capabilities(
 }
 
 fn workbook_capabilities_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     native_save_allowed: bool,
 ) -> Result<WorkbookCapabilities, AppError> {
     workbook_capabilities_for_command_and_target(
-        runtime,
+        service,
         document_id,
         base_revision,
         native_save_allowed,
@@ -278,14 +292,14 @@ fn workbook_capabilities_for_command(
 }
 
 fn native_save_workbook_capabilities_for_command(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     native_save_allowed: bool,
     target_path_or_name: &str,
 ) -> Result<WorkbookCapabilities, AppError> {
     workbook_capabilities_for_command_and_target(
-        runtime,
+        service,
         document_id,
         base_revision,
         native_save_allowed,
@@ -294,13 +308,13 @@ fn native_save_workbook_capabilities_for_command(
 }
 
 fn workbook_capabilities_for_command_and_target(
-    runtime: &ApplicationRuntime,
+    service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     native_save_allowed: bool,
     target_path_or_name: Option<&str>,
 ) -> Result<WorkbookCapabilities, AppError> {
-    let handle = document_handle_for_read(runtime.documents(), document_id)?;
+    let handle = document_handle_for_read(service.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
     let mut capabilities = editor_state.capabilities();
     capabilities.save.can_native_save = native_save_allowed && capabilities.save.can_native_save;
@@ -662,9 +676,9 @@ mod tests {
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
-        let runtime = ApplicationRuntime::default();
+        let service = DocumentQueryService::default();
         assert_eq!(
-            document_capabilities(&runtime, "book.xlsx", None),
+            document_capabilities(&service, "book.xlsx", None),
             DocumentCapabilities {
                 source_format: "xlsx".to_string(),
                 can_save_original: true,
@@ -677,7 +691,7 @@ mod tests {
             }
         );
         assert_eq!(
-            document_capabilities(&runtime, "data.csv", Some("/tmp/data.csv")),
+            document_capabilities(&service, "data.csv", Some("/tmp/data.csv")),
             DocumentCapabilities {
                 source_format: "csv".to_string(),
                 can_save_original: true,

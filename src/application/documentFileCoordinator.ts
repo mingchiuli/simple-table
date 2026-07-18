@@ -5,6 +5,7 @@ import type {
   NativeSavePlan,
   OpenDocumentResponse,
   PreparedOpenDocument,
+  RecentFile,
   SavedDocumentResponse,
 } from '@/types';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
@@ -65,6 +66,8 @@ export type DocumentFileCoordinatorPorts = {
   pickOpenFile: () => Promise<OpenFileSelection | null>;
   discardOpenFileSelection: (selection: OpenFileSelection) => Promise<void>;
   prepareOpenFile: (path: string) => Promise<PreparedOpenDocument>;
+  prepareRecentFile: (file: RecentFile) => Promise<PreparedOpenDocument>;
+  prepareNewFile: () => Promise<PreparedOpenDocument>;
   commitPreparedDocument: (
     prepared: PreparedOpenDocument,
     expectedContext: EditorCommandContext | null
@@ -88,7 +91,7 @@ export type DocumentFileCoordinatorPorts = {
     defaultName: string,
     action: (location: ReservedSaveLocation) => Promise<T>
   ) => Promise<T | null>;
-  openDocumentResponse: (response: OpenDocumentResponse, path: string) => void;
+  openDocumentResponse: (response: OpenDocumentResponse, path: string | null) => void;
   applySavedDocumentResponse: (
     context: EditorCommandContext,
     response: SavedDocumentResponse,
@@ -126,7 +129,7 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
             abortPreparedDocumentQuietly
           );
           if (!prepared) return;
-          const opened = await ports.commitPreparedDocument(prepared, expectedContext);
+          const opened = await commitPreparedDocument(prepared, expectedContext);
           if (!shouldContinue()) {
             try {
               await ports.closeDocument(opened.editorSession.documentId);
@@ -160,6 +163,21 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
       openedFile = await openSelectedFile(selection);
     });
     return openedFile;
+  }
+
+  async function createNewDocument(): Promise<boolean> {
+    return replaceWithPreparedDocument(
+      ports.prepareNewFile,
+      null,
+    );
+  }
+
+  async function openRecentDocument(file: RecentFile): Promise<boolean> {
+    return replaceWithPreparedDocument(
+      () => ports.prepareRecentFile(file),
+      file.path,
+      file.originalPath,
+    );
   }
 
   async function saveCurrentFile(): Promise<SaveFileOutcome> {
@@ -261,7 +279,7 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
       if (!replacement) return false;
       const expectedContext = ports.getCommandContext();
       const prepared = await ports.prepareOpenFile(selection.path);
-      const opened = await ports.commitPreparedDocument(prepared, expectedContext);
+      const opened = await commitPreparedDocument(prepared, expectedContext);
       discardSelection = false;
       replacement.commit();
       replacement = null;
@@ -285,6 +303,39 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
           );
         }
       }
+    }
+  }
+
+  async function replaceWithPreparedDocument(
+    prepare: () => Promise<PreparedOpenDocument>,
+    path: string | null,
+    recentOriginalPath?: string,
+  ): Promise<boolean> {
+    const replacement = await ports.beginDocumentReplacement();
+    if (!replacement) return false;
+    try {
+      const expectedContext = ports.getCommandContext();
+      const prepared = await prepare();
+      const opened = await commitPreparedDocument(prepared, expectedContext);
+      replacement.commit();
+      ports.openDocumentResponse(opened, path);
+      if (path !== null) ports.queueRecentFileEntryUpdate(recentOriginalPath);
+      return true;
+    } catch (error) {
+      replacement.cancel();
+      throw error;
+    }
+  }
+
+  async function commitPreparedDocument(
+    prepared: PreparedOpenDocument,
+    expectedContext: EditorCommandContext | null,
+  ): Promise<OpenDocumentResponse> {
+    try {
+      return await ports.commitPreparedDocument(prepared, expectedContext);
+    } catch (error) {
+      await abortPreparedDocumentQuietly(prepared);
+      throw error;
     }
   }
 
@@ -331,6 +382,9 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
   return {
     loadFileFromPath,
     openPickedFile,
+    openSelectedFile,
+    createNewDocument,
+    openRecentDocument,
     saveCurrentFile,
     exportCurrentFile,
     closeCurrentDocument,

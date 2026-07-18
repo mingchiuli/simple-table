@@ -42,13 +42,14 @@ layer, which owns retirement of mutation replay and search-index work before
 releasing the old document. Neither the document model nor the I/O layer may
 depend on command modules.
 
-`ApplicationRuntime` is the backend composition root managed by Tauri. It owns
-the active-document registry, prepared-document repository, mutation replay
-coordinator, search service, save-work coordinator, recent-file store, and
-platform file runtimes. Application services receive that runtime
-explicitly; business repositories and schedulers cannot locate process-global
-`OnceLock` instances. Commands may receive `tauri::State<ApplicationRuntime>`
-but only pass the runtime to application services.
+`ApplicationRuntime` is the backend composition root managed by Tauri. It
+constructs narrow document-query, document-open, document-lifecycle,
+document-save, editor-command, and recent-file services over shared
+repositories and coordinators. Application services declare only their actual
+dependencies and cannot import or receive the complete runtime. Commands may
+receive `tauri::State<ApplicationRuntime>`, but select one narrow service before
+delegating business work. Business repositories and schedulers cannot locate
+process-global `OnceLock` instances.
 
 The active-document registry is hidden behind `ActiveDocumentRepository`.
 Application, operation, and search modules request semantic read or mutation
@@ -132,8 +133,9 @@ the I/O layer must not call back into the application layer.
 - Search request tokens and pending-cell debounce/save state are likewise owned
   by application coordinators. Composables cache one coordinator per Pinia
   instance and adapt its synchronous Store port.
-- `documentFileCoordinator` owns open, route-load cancellation, save, export,
-  and close compensation as a port-driven application workflow. Vue
+- `documentFileCoordinator` owns new-document creation, selected/recent/path
+  opening, prepared-document commit/abort, route-load cancellation, save,
+  export, and close compensation as a port-driven application workflow. Vue
   composables adapt Stores, platform APIs, lifecycle guards, router navigation,
   and user notifications to that workflow; application modules do not import
   composables or UI libraries.
@@ -404,8 +406,9 @@ recheck the byte budget and evict the oldest resident index when necessary.
 Search fallback scans through a cursor with chunks capped at 8 MiB of generated
 text and 32,768 visited cells. Each chunk is copied while holding only the
 document read lock and is consumed before the next chunk, so fallback never
-retains both a complete Sheet snapshot and a complete search-text snapshot. A
-process-wide 24 MiB reservation covers fallback scan memory. Search commands run
+retains both a complete Sheet snapshot and a complete search-text snapshot. An
+application-scoped 24 MiB reservation owned by `SearchService` covers fallback
+scan memory. Search commands run
 on a dedicated blocking executor with one execution slot and two admission
 slots, so a long scan cannot consume file-open or save capacity. A fallback
 queues one missing Sheet index per search so repeated searches converge to

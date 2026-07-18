@@ -20,15 +20,15 @@ enum ThumbnailCell {
     Error,
 }
 
-pub(super) struct ThumbnailSnapshot {
+pub(crate) struct ThumbnailSnapshot {
     rows: Vec<Vec<ThumbnailCell>>,
 }
 
-pub(super) fn capture_thumbnail(file_data: &FileData) -> Option<ThumbnailSnapshot> {
+pub(crate) fn capture_thumbnail(file_data: &FileData) -> Option<ThumbnailSnapshot> {
     thumbnail_rows_from_file_data(file_data).map(|rows| ThumbnailSnapshot { rows })
 }
 
-pub(super) fn generate_thumbnail(snapshot: ThumbnailSnapshot) -> Option<String> {
+pub(crate) fn generate_thumbnail(snapshot: ThumbnailSnapshot) -> Option<String> {
     let rows = snapshot.rows;
     if rows.is_empty() {
         return None;

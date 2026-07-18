@@ -10,12 +10,19 @@ import {
   type EditorCommandContext,
   type NativeSavePlan,
   type OpenDocumentResponse,
+  type RecentFile,
   type SavedDocumentResponse,
 } from '@/types';
 
 const context: EditorCommandContext = {
   documentId: '1',
   baseRevision: '0',
+};
+
+const selection = {
+  path: '/tmp/imported.xlsx',
+  fileName: 'imported.xlsx',
+  originalPath: 'content://picked',
 };
 
 function projection(fileName = 'book.xlsx'): DocumentProjection {
@@ -70,6 +77,8 @@ function createPorts(overrides: Partial<DocumentFileCoordinatorPorts> = {}) {
     pickOpenFile: vi.fn().mockResolvedValue(null),
     discardOpenFileSelection: vi.fn().mockResolvedValue(undefined),
     prepareOpenFile: vi.fn().mockResolvedValue({ token: 'prepared' }),
+    prepareRecentFile: vi.fn().mockResolvedValue({ token: 'recent' }),
+    prepareNewFile: vi.fn().mockResolvedValue({ token: 'new' }),
     commitPreparedDocument: vi.fn().mockResolvedValue({} as OpenDocumentResponse),
     abortPreparedDocument: vi.fn().mockResolvedValue(undefined),
     closeDocument: vi.fn().mockResolvedValue(undefined),
@@ -144,5 +153,134 @@ describe('documentFileCoordinator', () => {
 
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.clearDocument).not.toHaveBeenCalled();
+  });
+
+  it('aborts a prepared document when commit fails', async () => {
+    const commitPreparedDocument = vi.fn().mockRejectedValue(new Error('commit failed'));
+    const { ports, replacement } = createPorts({ commitPreparedDocument });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('commit failed');
+
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'prepared' });
+    expect(replacement.cancel).toHaveBeenCalledOnce();
+    expect(ports.discardOpenFileSelection).toHaveBeenCalledWith(selection);
+    expect(ports.openDocumentResponse).not.toHaveBeenCalled();
+  });
+
+  it('discards a selected file when document replacement is denied', async () => {
+    const reportCleanupError = vi.fn();
+    const { ports } = createPorts({
+      beginDocumentReplacement: vi.fn().mockResolvedValue(null),
+      discardOpenFileSelection: vi.fn().mockRejectedValue(new Error('cleanup failed')),
+      reportCleanupError,
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
+
+    expect(ports.prepareOpenFile).not.toHaveBeenCalled();
+    expect(ports.discardOpenFileSelection).toHaveBeenCalledWith(selection);
+    expect(reportCleanupError).toHaveBeenCalledWith(
+      'Failed to discard unused open file selection',
+      expect.any(Error),
+    );
+  });
+
+  it('preserves a read failure when selected-file cleanup also fails', async () => {
+    const reportCleanupError = vi.fn();
+    const { ports, replacement } = createPorts({
+      prepareOpenFile: vi.fn().mockRejectedValue(new Error('broken file')),
+      discardOpenFileSelection: vi.fn().mockRejectedValue(new Error('cleanup failed')),
+      reportCleanupError,
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('broken file');
+
+    expect(replacement.cancel).toHaveBeenCalledOnce();
+    expect(reportCleanupError).toHaveBeenCalledWith(
+      'Failed to discard open file selection after open error',
+      expect.any(Error),
+    );
+  });
+
+  it('commits replacement before publishing a selected document', async () => {
+    let replacementCommitted = false;
+    const opened = {} as OpenDocumentResponse;
+    const openDocumentResponse = vi.fn(() => {
+      expect(replacementCommitted).toBe(true);
+    });
+    const cancel = vi.fn();
+    const { ports } = createPorts({
+      beginDocumentReplacement: vi.fn().mockResolvedValue({
+        commit: vi.fn(() => {
+          replacementCommitted = true;
+        }),
+        cancel,
+      }),
+      commitPreparedDocument: vi.fn().mockResolvedValue(opened),
+      openDocumentResponse,
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.openSelectedFile(selection)).resolves.toBe(true);
+
+    expect(openDocumentResponse).toHaveBeenCalledWith(opened, selection.path);
+    expect(ports.discardOpenFileSelection).not.toHaveBeenCalled();
+    expect(ports.abortPreparedDocument).not.toHaveBeenCalled();
+    expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(selection.originalPath);
+  });
+
+  it('aborts a prepared route document when commit fails', async () => {
+    const { ports, replacement } = createPorts({
+      commitPreparedDocument: vi.fn().mockRejectedValue(new Error('stale context')),
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.loadFileFromPath('/tmp/route.xlsx')).resolves.toBe(false);
+
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'prepared' });
+    expect(replacement.cancel).toHaveBeenCalledOnce();
+    expect(ports.openDocumentResponse).not.toHaveBeenCalled();
+  });
+
+  it('opens a recent document through the shared replacement protocol', async () => {
+    const recent = {
+      id: 'recent-1',
+      path: '/tmp/recent.xlsx',
+      fileName: 'recent.xlsx',
+      lastOpened: 1,
+      fileSize: 1,
+      thumbnail: undefined,
+      storageType: 'desktopPath',
+      originalPath: '/original/recent.xlsx',
+    } as RecentFile;
+    const opened = {} as OpenDocumentResponse;
+    const commitPreparedDocument = vi.fn().mockResolvedValue(opened);
+    const { ports, replacement } = createPorts({ commitPreparedDocument });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.openRecentDocument(recent)).resolves.toBe(true);
+
+    expect(ports.prepareRecentFile).toHaveBeenCalledWith(recent);
+    expect(replacement.commit).toHaveBeenCalledOnce();
+    expect(ports.openDocumentResponse).toHaveBeenCalledWith(opened, recent.path);
+    expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(recent.originalPath);
+  });
+
+  it('creates a new document without adding an unsaved recent entry', async () => {
+    const opened = {} as OpenDocumentResponse;
+    const { ports, replacement } = createPorts({
+      commitPreparedDocument: vi.fn().mockResolvedValue(opened),
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.createNewDocument()).resolves.toBe(true);
+
+    expect(ports.prepareNewFile).toHaveBeenCalledOnce();
+    expect(replacement.commit).toHaveBeenCalledOnce();
+    expect(ports.openDocumentResponse).toHaveBeenCalledWith(opened, null);
+    expect(ports.queueRecentFileEntryUpdate).not.toHaveBeenCalled();
   });
 });
