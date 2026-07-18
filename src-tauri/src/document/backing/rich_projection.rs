@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use crate::document_data::{Drawing, RichMetadata};
 use crate::domain::cell_key::parse_cell_key;
 #[cfg(test)]
 use crate::types::SheetRegion;
-use crate::types::{DrawingProjection, ReadOnlyRichProjection};
 
 #[derive(Clone, Copy)]
 pub(crate) enum RichProjectionScope {
@@ -33,14 +33,14 @@ impl RichProjectionScope {
         }
     }
 
-    pub(crate) fn contains_drawing(self, drawing: &DrawingProjection) -> bool {
+    pub(crate) fn contains_drawing(self, drawing: &Drawing) -> bool {
         match self {
             Self::Rows { start } => drawing_row_scope_affected(drawing, start),
             Self::Columns { start } => drawing_column_scope_affected(drawing, start),
         }
     }
 
-    pub(crate) fn contains_freeze_pane(self, projection: &ReadOnlyRichProjection) -> bool {
+    pub(crate) fn contains_freeze_pane(self, projection: &RichMetadata) -> bool {
         projection
             .freeze_pane
             .as_ref()
@@ -50,10 +50,10 @@ impl RichProjectionScope {
 }
 
 pub(crate) fn filter_rich_projection(
-    source: &ReadOnlyRichProjection,
+    source: &RichMetadata,
     scope: RichProjectionScope,
-) -> ReadOnlyRichProjection {
-    ReadOnlyRichProjection {
+) -> RichMetadata {
+    RichMetadata {
         cell_formats: filter_cell_projection_map(&source.cell_formats, scope),
         cell_styles: filter_cell_projection_map(&source.cell_styles, scope),
         hidden_rows: source
@@ -88,9 +88,9 @@ pub(crate) fn filter_rich_projection(
 
 #[cfg(test)]
 pub(crate) fn filter_rich_projection_region(
-    source: &ReadOnlyRichProjection,
+    source: &RichMetadata,
     region: &SheetRegion,
-) -> ReadOnlyRichProjection {
+) -> RichMetadata {
     let contains_cell = |row: usize, col: usize| {
         row >= region.row_start
             && row < region.row_end
@@ -110,7 +110,7 @@ pub(crate) fn filter_rich_projection_region(
         })
         .cloned()
         .collect();
-    ReadOnlyRichProjection {
+    RichMetadata {
         cell_formats: source
             .cell_formats
             .iter()
@@ -151,9 +151,9 @@ pub(crate) fn filter_rich_projection_region(
 }
 
 pub(crate) fn restore_rich_projection_scope(
-    target: &mut ReadOnlyRichProjection,
+    target: &mut RichMetadata,
     scope: RichProjectionScope,
-    projection: &ReadOnlyRichProjection,
+    projection: &RichMetadata,
 ) {
     target
         .cell_formats
@@ -202,14 +202,14 @@ pub(crate) fn restore_rich_projection_scope(
     target.has_freeze_pane = target.freeze_pane.is_some();
 }
 
-pub(crate) fn drawing_row_scope_affected(drawing: &DrawingProjection, row_index: usize) -> bool {
+pub(crate) fn drawing_row_scope_affected(drawing: &Drawing, row_index: usize) -> bool {
     drawing.from_row as usize >= row_index
         || drawing
             .to_row
             .is_some_and(|to_row| to_row as usize >= row_index)
 }
 
-pub(crate) fn drawing_column_scope_affected(drawing: &DrawingProjection, col_index: usize) -> bool {
+pub(crate) fn drawing_column_scope_affected(drawing: &Drawing, col_index: usize) -> bool {
     drawing.from_col as usize >= col_index
         || drawing
             .to_col
@@ -235,12 +235,12 @@ fn cell_key_matches(key: &str, matches: impl Fn(usize, usize) -> bool) -> bool {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::types::{CellStyleProjection, FreezePaneProjection};
+    use crate::document_data::{CellStyle, FreezePane};
 
     use super::*;
 
-    fn freeze(top_left_cell: &str) -> FreezePaneProjection {
-        FreezePaneProjection {
+    fn freeze(top_left_cell: &str) -> FreezePane {
+        FreezePane {
             top_left_cell: top_left_cell.to_string(),
             horizontal_split: 1.0,
             vertical_split: 1.0,
@@ -251,10 +251,10 @@ mod tests {
 
     #[test]
     fn restore_row_scope_keeps_unaffected_freeze_pane() {
-        let mut target = ReadOnlyRichProjection {
+        let mut target = RichMetadata {
             cell_styles: HashMap::from([(
                 "A1".to_string(),
-                CellStyleProjection {
+                CellStyle {
                     bold: Some(true),
                     ..Default::default()
                 },
@@ -262,10 +262,10 @@ mod tests {
             freeze_pane: Some(freeze("A1")),
             ..Default::default()
         };
-        let projection = ReadOnlyRichProjection {
+        let projection = RichMetadata {
             cell_styles: HashMap::from([(
                 "A3".to_string(),
-                CellStyleProjection {
+                CellStyle {
                     italic: Some(true),
                     ..Default::default()
                 },
@@ -293,11 +293,11 @@ mod tests {
 
     #[test]
     fn restore_column_scope_replaces_affected_freeze_pane() {
-        let mut target = ReadOnlyRichProjection {
+        let mut target = RichMetadata {
             freeze_pane: Some(freeze("C1")),
             ..Default::default()
         };
-        let projection = ReadOnlyRichProjection {
+        let projection = RichMetadata {
             freeze_pane: Some(freeze("D1")),
             ..Default::default()
         };
@@ -319,10 +319,10 @@ mod tests {
 
     #[test]
     fn region_filter_excludes_metadata_outside_the_requested_tile() {
-        let source = ReadOnlyRichProjection {
+        let source = RichMetadata {
             cell_styles: HashMap::from([
-                ("A1".to_string(), CellStyleProjection::default()),
-                ("A200".to_string(), CellStyleProjection::default()),
+                ("A1".to_string(), CellStyle::default()),
+                ("A200".to_string(), CellStyle::default()),
             ]),
             hidden_rows: vec![0, 199],
             ..Default::default()

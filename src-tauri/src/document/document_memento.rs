@@ -1,15 +1,13 @@
-use crate::document_data::DocumentSheet;
+use crate::document_data::{
+    CellFormat, CellStyle, DocumentSheet, Drawing, FreezePane, Hyperlink, MergeRange, RichMetadata,
+};
 use std::collections::{HashMap, HashSet};
 
 use crate::document::backing::document_body::BodyStructureMemento;
 use crate::document::backing::rich_projection::{
     RichProjectionScope, filter_rich_projection, restore_rich_projection_scope,
 };
-use crate::domain::{DocumentCellChange, cell_key::parse_cell_key};
-use crate::types::{
-    CellFormatProjection, CellStyleProjection, CellValue, DrawingProjection, FreezePaneProjection,
-    HyperlinkProjection, MergeRange, ReadOnlyRichProjection,
-};
+use crate::domain::{CellValue, DocumentCellChange, cell_key::parse_cell_key};
 
 pub(crate) struct DocumentMemento {
     pub(crate) before: DocumentMementoSide,
@@ -212,11 +210,11 @@ impl ColumnStructureMemento {
 
 pub(crate) struct RichProjectionMemento {
     scope: RichProjectionScope,
-    projection: ReadOnlyRichProjection,
+    projection: RichMetadata,
 }
 
 impl RichProjectionMemento {
-    pub(crate) fn row_tail(source: &ReadOnlyRichProjection, row_index: usize) -> Self {
+    pub(crate) fn row_tail(source: &RichMetadata, row_index: usize) -> Self {
         Self {
             scope: RichProjectionScope::Rows { start: row_index },
             projection: filter_rich_projection(
@@ -226,7 +224,7 @@ impl RichProjectionMemento {
         }
     }
 
-    pub(crate) fn column_tail(source: &ReadOnlyRichProjection, col_index: usize) -> Self {
+    pub(crate) fn column_tail(source: &RichMetadata, col_index: usize) -> Self {
         Self {
             scope: RichProjectionScope::Columns { start: col_index },
             projection: filter_rich_projection(
@@ -236,7 +234,7 @@ impl RichProjectionMemento {
         }
     }
 
-    pub(crate) fn restore_into(&self, target: &mut ReadOnlyRichProjection) {
+    pub(crate) fn restore_into(&self, target: &mut RichMetadata) {
         restore_rich_projection_scope(target, self.scope, &self.projection);
     }
 
@@ -343,8 +341,8 @@ fn estimate_sheet_data_bytes(sheet: &DocumentSheet) -> usize {
         + estimate_sheet_rich_projection_bytes(&sheet.rich)
 }
 
-fn estimate_sheet_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize {
-    std::mem::size_of::<ReadOnlyRichProjection>()
+fn estimate_sheet_rich_projection_bytes(rich: &RichMetadata) -> usize {
+    std::mem::size_of::<RichMetadata>()
         + rich
             .cell_formats
             .iter()
@@ -367,11 +365,11 @@ fn estimate_sheet_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize 
             .iter()
             .map(|(cell, hyperlink)| cell.len() + estimate_hyperlink_projection_bytes(hyperlink))
             .sum::<usize>()
-        + rich.drawings.len() * std::mem::size_of::<DrawingProjection>()
+        + rich.drawings.len() * std::mem::size_of::<Drawing>()
 }
 
-fn estimate_cell_format_projection_bytes(format: &CellFormatProjection) -> usize {
-    std::mem::size_of::<CellFormatProjection>()
+fn estimate_cell_format_projection_bytes(format: &CellFormat) -> usize {
+    std::mem::size_of::<CellFormat>()
         + format
             .number_format
             .as_ref()
@@ -384,7 +382,7 @@ fn estimate_cell_format_projection_bytes(format: &CellFormatProjection) -> usize
             .unwrap_or_default()
 }
 
-fn estimate_cell_style_projection_bytes(style: &CellStyleProjection) -> usize {
+fn estimate_cell_style_projection_bytes(style: &CellStyle) -> usize {
     style
         .font_color
         .as_ref()
@@ -410,18 +408,18 @@ fn estimate_cell_style_projection_bytes(style: &CellStyleProjection) -> usize {
             .as_ref()
             .map(String::len)
             .unwrap_or_default()
-        + std::mem::size_of::<CellStyleProjection>()
+        + std::mem::size_of::<CellStyle>()
 }
 
-fn estimate_freeze_pane_projection_bytes(freeze_pane: &FreezePaneProjection) -> usize {
-    std::mem::size_of::<FreezePaneProjection>()
+fn estimate_freeze_pane_projection_bytes(freeze_pane: &FreezePane) -> usize {
+    std::mem::size_of::<FreezePane>()
         + freeze_pane.top_left_cell.len()
         + freeze_pane.active_pane.len()
         + freeze_pane.state.len()
 }
 
-fn estimate_hyperlink_projection_bytes(hyperlink: &HyperlinkProjection) -> usize {
-    std::mem::size_of::<HyperlinkProjection>()
+fn estimate_hyperlink_projection_bytes(hyperlink: &Hyperlink) -> usize {
+    std::mem::size_of::<Hyperlink>()
         + hyperlink.url.len()
         + hyperlink
             .tooltip

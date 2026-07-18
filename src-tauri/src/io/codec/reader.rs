@@ -1,8 +1,12 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{
+    CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
+    Hyperlink, MergeRange, RichMetadata,
+};
 use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::document_format::SpreadsheetFileFormat;
+use crate::domain::{CellNumber, CellValue};
 use crate::error::AppError;
 use crate::io::input_limits::{
     MAX_XLSX_ARCHIVE_ENTRIES, MAX_XLSX_UNCOMPRESSED_BYTES, validate_input_size,
@@ -15,12 +19,7 @@ use crate::resource_limits::{
     MAX_DENSE_CELL_SLOTS, MAX_ROWS_PER_SHEET, MAX_TOTAL_ROWS, MAX_WORKBOOK_SHEETS,
     validate_file_data, validate_position,
 };
-use crate::types::{
-    CellFormatProjection, CellStyleProjection, CellValue, DrawingKind, DrawingProjection,
-    FreezePaneProjection, HyperlinkProjection, MergeRange, ReadOnlyRichProjection,
-};
 use csv::ReaderBuilder;
-use serde_json::Value;
 use umya_spreadsheet::{Cell, Workbook, Worksheet, reader};
 
 pub struct ReadFileResult {
@@ -252,9 +251,9 @@ fn raw_cell_value(cell: &Cell) -> CellValue {
         && number.is_finite()
     {
         if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
-            return CellValue::Number(Value::from(number as i64));
+            return CellValue::Number(CellNumber::from(number as i64));
         }
-        return CellValue::Number(Value::from(number));
+        return CellValue::Number(CellNumber::from_f64(number).expect("finite workbook number"));
     }
 
     let value = cell.value().into_owned();
@@ -324,7 +323,7 @@ fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
     (!heights.is_empty()).then_some(heights)
 }
 
-fn read_rich_projection(worksheet: &Worksheet) -> ReadOnlyRichProjection {
+fn read_rich_projection(worksheet: &Worksheet) -> RichMetadata {
     let cell_formats = read_cell_formats(worksheet);
     let cell_styles = read_cell_styles(worksheet);
     let freeze_pane = read_freeze_pane(worksheet);
@@ -334,7 +333,7 @@ fn read_rich_projection(worksheet: &Worksheet) -> ReadOnlyRichProjection {
     let has_hyperlinks = !hyperlinks.is_empty();
     let has_freeze_pane = freeze_pane.is_some();
 
-    ReadOnlyRichProjection {
+    RichMetadata {
         cell_formats,
         cell_styles,
         hidden_rows: read_hidden_rows(worksheet),
@@ -372,13 +371,13 @@ fn read_hidden_columns(worksheet: &Worksheet) -> Vec<usize> {
         .collect()
 }
 
-fn read_freeze_pane(worksheet: &Worksheet) -> Option<FreezePaneProjection> {
+fn read_freeze_pane(worksheet: &Worksheet) -> Option<FreezePane> {
     worksheet
         .sheets_views()
         .sheet_view_list()
         .iter()
         .find_map(|sheet_view| sheet_view.pane())
-        .map(|pane| FreezePaneProjection {
+        .map(|pane| FreezePane {
             top_left_cell: pane.top_left_cell().to_string(),
             horizontal_split: pane.horizontal_split(),
             vertical_split: pane.vertical_split(),
@@ -387,7 +386,7 @@ fn read_freeze_pane(worksheet: &Worksheet) -> Option<FreezePaneProjection> {
         })
 }
 
-fn read_hyperlinks(worksheet: &Worksheet) -> HashMap<String, HyperlinkProjection> {
+fn read_hyperlinks(worksheet: &Worksheet) -> HashMap<String, Hyperlink> {
     worksheet
         .cells()
         .into_iter()
@@ -395,7 +394,7 @@ fn read_hyperlinks(worksheet: &Worksheet) -> HashMap<String, HyperlinkProjection
             let hyperlink = cell.hyperlink()?;
             Some((
                 cell.coordinate().to_string(),
-                HyperlinkProjection {
+                Hyperlink {
                     url: hyperlink.url().to_string(),
                     tooltip: (!hyperlink.tooltip().is_empty())
                         .then(|| hyperlink.tooltip().to_string()),
@@ -406,7 +405,7 @@ fn read_hyperlinks(worksheet: &Worksheet) -> HashMap<String, HyperlinkProjection
         .collect()
 }
 
-fn read_cell_formats(worksheet: &Worksheet) -> HashMap<String, CellFormatProjection> {
+fn read_cell_formats(worksheet: &Worksheet) -> HashMap<String, CellFormat> {
     worksheet
         .cells()
         .into_iter()
@@ -416,7 +415,7 @@ fn read_cell_formats(worksheet: &Worksheet) -> HashMap<String, CellFormatProject
                 .numbering_format()
                 .map(|format| format.format_code().to_string())
                 .filter(|value| !value.is_empty());
-            let projection = CellFormatProjection {
+            let projection = CellFormat {
                 number_format,
                 style_id: None,
             };
@@ -425,18 +424,18 @@ fn read_cell_formats(worksheet: &Worksheet) -> HashMap<String, CellFormatProject
         .collect()
 }
 
-fn has_format_projection(format: &CellFormatProjection) -> bool {
+fn has_format_projection(format: &CellFormat) -> bool {
     format.number_format.is_some() || format.style_id.is_some()
 }
 
-fn read_cell_styles(worksheet: &Worksheet) -> HashMap<String, CellStyleProjection> {
+fn read_cell_styles(worksheet: &Worksheet) -> HashMap<String, CellStyle> {
     worksheet
         .cells()
         .into_iter()
         .filter_map(|cell| {
             let style = cell.style();
             let font = style.font();
-            let projection = CellStyleProjection {
+            let projection = CellStyle {
                 font_color: font
                     .map(|font| font.color().argb_str())
                     .filter(|value| !value.is_empty()),
@@ -464,7 +463,7 @@ fn read_cell_styles(worksheet: &Worksheet) -> HashMap<String, CellStyleProjectio
         .collect()
 }
 
-fn has_style_projection(style: &CellStyleProjection) -> bool {
+fn has_style_projection(style: &CellStyle) -> bool {
     style.font_color.is_some()
         || style.background_color.is_some()
         || style.bold.is_some()
@@ -474,12 +473,12 @@ fn has_style_projection(style: &CellStyleProjection) -> bool {
         || style.number_format.is_some()
 }
 
-fn read_drawings(worksheet: &Worksheet) -> Vec<DrawingProjection> {
+fn read_drawings(worksheet: &Worksheet) -> Vec<Drawing> {
     let mut drawings = Vec::new();
     drawings.extend(worksheet.image_collection().iter().map(|image| {
         let from = image.from_marker_type();
         let to = image.to_marker_type();
-        DrawingProjection {
+        Drawing {
             kind: DrawingKind::Image,
             from_row: from.row(),
             from_col: from.col(),
@@ -489,7 +488,7 @@ fn read_drawings(worksheet: &Worksheet) -> Vec<DrawingProjection> {
     }));
     drawings.extend(worksheet.chart_collection().iter().filter_map(|chart| {
         let (col, row) = parse_coordinate_1_based(&chart.coordinate())?;
-        Some(DrawingProjection {
+        Some(Drawing {
             kind: DrawingKind::Chart,
             from_row: row.saturating_sub(1),
             from_col: col.saturating_sub(1),
@@ -558,10 +557,10 @@ fn read_csv_from_bytes(
                     if !(-9007199254740991..=9007199254740991).contains(&int_val) {
                         return CellValue::String(field.to_string());
                     }
-                    CellValue::Number(Value::from(int_val))
+                    CellValue::Number(CellNumber::from(int_val))
                 } else if let Ok(num) = field.parse::<f64>() {
                     if num.is_finite() {
-                        CellValue::Number(Value::from(num))
+                        CellValue::Number(CellNumber::from_f64(num).expect("finite CSV number"))
                     } else {
                         CellValue::String(field.to_string())
                     }

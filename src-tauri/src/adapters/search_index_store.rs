@@ -880,10 +880,10 @@ mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::collect_sheet_search_text;
     use crate::document_data::DocumentSheet;
+    use crate::document_data::{CellFormat, RichMetadata};
+    use crate::domain::CellNumber;
     use crate::domain::SearchScanCursor;
     use crate::state::search_document::collect_sheet_search_text_chunk;
-    use crate::types::{CellFormatProjection, ReadOnlyRichProjection};
-    use serde_json::Value;
     use std::collections::HashMap;
 
     fn index_rows(rows: &[Vec<CellValue>]) -> SearchSheetIndex {
@@ -1125,11 +1125,11 @@ mod tests {
     fn collect_search_text_includes_raw_and_formatted_display() {
         let sheet = DocumentSheet {
             name: "Test".to_string(),
-            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-            rich: ReadOnlyRichProjection {
+            rows: vec![vec![CellValue::Number(CellNumber::from_f64(0.4).unwrap())]],
+            rich: RichMetadata {
                 cell_formats: HashMap::from([(
                     "A1".to_string(),
-                    CellFormatProjection {
+                    CellFormat {
                         number_format: Some("0%".to_string()),
                         style_id: None,
                     },

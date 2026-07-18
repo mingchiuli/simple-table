@@ -1,7 +1,6 @@
 use formualizer_workbook::LiteralValue;
-use serde_json::Value;
 
-use crate::types::CellValue;
+use crate::domain::{CellNumber, CellValue};
 
 pub(crate) fn to_formula_index(index: usize) -> u32 {
     index.saturating_add(1) as u32
@@ -14,10 +13,8 @@ pub(crate) fn cell_to_literal(cell: &CellValue) -> LiteralValue {
         CellValue::Number(value) => {
             if let Some(int) = value.as_i64() {
                 LiteralValue::Int(int)
-            } else if let Some(float) = value.as_f64() {
-                LiteralValue::Number(float)
             } else {
-                LiteralValue::Text(value.to_string())
+                LiteralValue::Number(value.as_f64())
             }
         }
         CellValue::Boolean(value) => LiteralValue::Boolean(*value),
@@ -28,8 +25,13 @@ pub(crate) fn cell_to_literal(cell: &CellValue) -> LiteralValue {
 pub(crate) fn literal_to_cell(value: LiteralValue) -> (CellValue, Option<String>) {
     match value {
         LiteralValue::Empty | LiteralValue::Pending => (CellValue::Null, None),
-        LiteralValue::Int(value) => (CellValue::Number(Value::from(value)), None),
-        LiteralValue::Number(value) => (CellValue::Number(Value::from(value)), None),
+        LiteralValue::Int(value) => (CellValue::Number(CellNumber::from(value)), None),
+        LiteralValue::Number(value) => (
+            CellNumber::from_f64(value)
+                .map(CellValue::Number)
+                .unwrap_or_else(|| CellValue::String(value.to_string())),
+            None,
+        ),
         LiteralValue::Text(value) => (CellValue::String(value), None),
         LiteralValue::Boolean(value) => (CellValue::Boolean(value), None),
         LiteralValue::Error(error) => (CellValue::Null, Some(error.kind.to_string())),

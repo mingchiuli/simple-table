@@ -27,6 +27,7 @@ pub struct ApplicationRuntime {
     document_opens: DocumentOpenService,
     document_lifecycle: DocumentLifecycleService,
     editor_commands: EditorCommandService,
+    search_queries: SearchService,
     document_files: DocumentFileAdapter,
     recent_files: RecentFileAdapter,
 }
@@ -38,7 +39,7 @@ impl Default for ApplicationRuntime {
         let mutation_replays = Arc::new(MutationReplayCoordinator::default());
         let search_source = Arc::new(RepositorySearchDocumentSource::new(documents.clone()));
         let search_indexes = Arc::new(SearchIndexAdapter::new(search_source));
-        let search = SearchService::from_port(search_indexes.clone());
+        let search_queries = SearchService::from_port(search_indexes.clone());
         let codec = Arc::new(DocumentCodecAdapter);
         let work_budget = Arc::new(DocumentWorkBudgetAdapter::default());
         let recent_files = RecentStore::default();
@@ -97,12 +98,8 @@ impl Default for ApplicationRuntime {
                 search_indexes.clone(),
                 prepared_source_adopter,
             ),
-            editor_commands: EditorCommandService::new(
-                documents,
-                mutation_replays,
-                search,
-                search_indexes,
-            ),
+            editor_commands: EditorCommandService::new(documents, mutation_replays, search_indexes),
+            search_queries,
             document_files,
             recent_files: RecentFileAdapter::new(
                 document_queries,
@@ -131,6 +128,10 @@ impl ApplicationRuntime {
         &self.editor_commands
     }
 
+    pub(crate) fn search_queries(&self) -> &SearchService {
+        &self.search_queries
+    }
+
     pub(crate) fn recent_files(&self) -> &RecentFileAdapter {
         &self.recent_files
     }
@@ -153,6 +154,11 @@ mod tests {
             first
                 .editor_commands()
                 .is_isolated_from(second.editor_commands())
+        );
+        assert!(
+            first
+                .search_queries()
+                .is_isolated_from(second.search_queries())
         );
         assert!(
             first

@@ -152,8 +152,8 @@ fn get_cell_color(cell: &ThumbnailCell) -> Rgba<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentSheet;
-    use crate::types::ReadOnlyRichProjection;
+    use crate::document_data::{DocumentSheet, RichMetadata};
+    use crate::domain::CellNumber;
 
     #[test]
     fn generates_thumbnail_from_file_projection_without_workbook_bytes() {
@@ -164,7 +164,7 @@ mod tests {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
                     CellValue::String("text".to_string()),
-                    CellValue::Number(serde_json::Value::from(42)),
+                    CellValue::Number(CellNumber::from(42)),
                     CellValue::Boolean(true),
                     CellValue::Formula {
                         formula: "=A1".to_string(),
@@ -173,7 +173,7 @@ mod tests {
                     },
                 ]],
                 merges: Vec::new(),
-                rich: ReadOnlyRichProjection::default(),
+                rich: RichMetadata::default(),
                 ..Default::default()
             }],
         };

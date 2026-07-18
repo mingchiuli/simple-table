@@ -202,10 +202,7 @@ fn cells_are_consistent(expected: &CellValue, actual: &CellValue) -> bool {
         (CellValue::String(expected), CellValue::String(actual)) => expected == actual,
         (CellValue::Boolean(expected), CellValue::Boolean(actual)) => expected == actual,
         (CellValue::Number(expected), CellValue::Number(actual)) => {
-            match (expected.as_f64(), actual.as_f64()) {
-                (Some(expected), Some(actual)) => (expected - actual).abs() < 0.000_000_1,
-                _ => expected == actual,
-            }
+            (expected.as_f64() - actual.as_f64()).abs() < 0.000_000_1
         }
         (
             CellValue::Formula {

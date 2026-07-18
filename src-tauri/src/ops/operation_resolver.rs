@@ -1,4 +1,4 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{DocumentData, DocumentSheet, RichMetadata};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
@@ -7,7 +7,6 @@ use crate::domain::{
 };
 use crate::error::AppError;
 use crate::resource_limits::{ResourceLedger, validate_added_sheet};
-use crate::types::ReadOnlyRichProjection;
 
 impl EditorCommand {
     #[cfg(test)]
@@ -299,7 +298,7 @@ impl SheetMutationExtent {
     }
 }
 
-fn rich_projection_extent(rich: &ReadOnlyRichProjection) -> SheetMutationExtent {
+fn rich_projection_extent(rich: &RichMetadata) -> SheetMutationExtent {
     let mut rows = 0;
     let mut columns = 0;
 
@@ -355,12 +354,8 @@ fn rich_projection_extent(rich: &ReadOnlyRichProjection) -> SheetMutationExtent 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{
-        CellStyleProjection, DrawingKind, DrawingProjection, HyperlinkProjection,
-        ReadOnlyRichProjection,
-    };
-
-    fn file_data_with_rich(rich: ReadOnlyRichProjection) -> DocumentData {
+    use crate::document_data::{CellStyle, Drawing, DrawingKind, Hyperlink};
+    fn file_data_with_rich(rich: RichMetadata) -> DocumentData {
         DocumentData {
             path: String::new(),
             file_name: "rich.xlsx".to_string(),
@@ -375,10 +370,10 @@ mod tests {
 
     #[test]
     fn sheet_extent_includes_rich_cell_metadata() {
-        let file_data = file_data_with_rich(ReadOnlyRichProjection {
+        let file_data = file_data_with_rich(RichMetadata {
             cell_styles: [(
                 "E4".to_string(),
-                CellStyleProjection {
+                CellStyle {
                     bold: Some(true),
                     ..Default::default()
                 },
@@ -387,7 +382,7 @@ mod tests {
             .collect(),
             hyperlinks: [(
                 "F5".to_string(),
-                HyperlinkProjection {
+                Hyperlink {
                     url: "https://example.com".to_string(),
                     tooltip: None,
                     location: false,
@@ -426,10 +421,10 @@ mod tests {
 
     #[test]
     fn sheet_extent_includes_hidden_rows_columns_and_drawings() {
-        let file_data = file_data_with_rich(ReadOnlyRichProjection {
+        let file_data = file_data_with_rich(RichMetadata {
             hidden_rows: vec![9],
             hidden_columns: vec![7],
-            drawings: vec![DrawingProjection {
+            drawings: vec![Drawing {
                 kind: DrawingKind::Image,
                 from_row: 11,
                 from_col: 12,

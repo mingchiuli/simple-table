@@ -1,11 +1,10 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{DocumentData, DocumentSheet, MergeRange};
 use sha2::{Digest, Sha256};
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::document_memento::DocumentMementoSide;
-use crate::domain::{AppliedOperation, DocumentCellChange};
-use crate::types::{CellValue, MergeRange};
+use crate::domain::{AppliedOperation, CellValue, DocumentCellChange};
 
 pub type ContentHash = [u8; 32];
 

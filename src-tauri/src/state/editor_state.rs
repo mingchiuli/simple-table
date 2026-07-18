@@ -2,7 +2,7 @@ use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_restore::DocumentRestoreResult;
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
-use crate::document_data::DocumentData;
+use crate::document_data::{DocumentData, SheetExtent};
 use crate::domain::{
     AppliedOperation, DocumentCellChange, EditorCommand, SearchIndexWork, SearchScanCursor,
     SearchTextChunk,
@@ -284,11 +284,11 @@ impl EditorState {
         self.document.capabilities()
     }
 
-    pub fn sheet_extents(&self) -> Vec<crate::types::SheetExtent> {
+    pub fn sheet_extents(&self) -> Vec<SheetExtent> {
         self.resources.sheet_extents()
     }
 
-    pub fn sheet_extent(&self, sheet_index: usize) -> Option<crate::types::SheetExtent> {
+    pub fn sheet_extent(&self, sheet_index: usize) -> Option<SheetExtent> {
         self.resources.sheet_extent(sheet_index)
     }
 
@@ -562,15 +562,14 @@ fn operation_resource_sheets(
 
 #[cfg(test)]
 mod tests {
-    use crate::document_data::DocumentSheet;
+    use crate::document_data::{CellFormat, DocumentSheet, RichMetadata};
     use std::collections::HashMap;
     use std::io::Cursor;
 
     use super::*;
     use crate::document::test_support::read_file_with_workbook_from_bytes;
-    use crate::domain::EditorCommand;
-    use crate::types::{CellFormatProjection, CellValue, ReadOnlyRichProjection, SheetRegion};
-    use serde_json::Value;
+    use crate::domain::{CellNumber, CellValue, EditorCommand};
+    use crate::types::{CellFormatProjection, SheetRegion};
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
     fn assert_incremental_content_hash_is_current(state: &EditorState) {
@@ -812,10 +811,10 @@ mod tests {
                 sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![CellValue::Null], vec![CellValue::Null]],
-                    rich: ReadOnlyRichProjection {
+                    rich: RichMetadata {
                         cell_formats: HashMap::from([(
                             "A2".to_string(),
-                            CellFormatProjection {
+                            CellFormat {
                                 number_format: Some("0%".to_string()),
                                 style_id: None,
                             },
@@ -2657,7 +2656,7 @@ mod tests {
                 sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
                     rows: vec![vec![
-                        CellValue::Number(Value::from(1)),
+                        CellValue::Number(CellNumber::from(1)),
                         CellValue::formula("=A1+1", CellValue::Null),
                         CellValue::formula("=A1+2", CellValue::Null),
                     ]],

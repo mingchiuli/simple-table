@@ -1,10 +1,13 @@
-use crate::document_data::DocumentSheet;
+use crate::document_data::{
+    CellFormat, CellStyle, DocumentSheet, SheetExtent as DocumentSheetExtent,
+};
 use crate::error::AppError;
 use crate::ops::patch_projector::editor_state_info;
 use crate::state::editor_state::EditorState;
 use crate::types::{
-    DocumentManifest, EditorSessionInfo, OpenDocumentResponse, SheetLayoutProjection,
-    SheetManifest, SheetRegion, SheetRegionProjectionResponse,
+    CellFormatProjection, CellStyleProjection, DocumentManifest, EditorSessionInfo,
+    OpenDocumentResponse, SheetExtent, SheetLayoutProjection, SheetManifest, SheetRegion,
+    SheetRegionProjectionResponse,
 };
 
 const INITIAL_REGION_ROWS: usize = 128;
@@ -54,7 +57,7 @@ pub(crate) fn document_manifest(editor_state: &EditorState) -> DocumentManifest 
             .zip(extents)
             .map(|(sheet, extent)| SheetManifest {
                 name: sheet.name.clone(),
-                extent,
+                extent: project_sheet_extent(extent),
                 layout: sheet_layout_projection(sheet),
             })
             .collect(),
@@ -124,7 +127,7 @@ pub(crate) fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError
     Ok(())
 }
 
-fn initial_sheet_region(sheet_index: usize, extent: &crate::types::SheetExtent) -> SheetRegion {
+fn initial_sheet_region(sheet_index: usize, extent: &DocumentSheetExtent) -> SheetRegion {
     SheetRegion {
         sheet_index,
         row_start: 0,
@@ -172,8 +175,8 @@ pub(crate) fn project_merge_anchor_cells(
             crate::types::SheetCellChange::new(region.sheet_index, row, col, value)
                 .with_display_projection(
                     sheet.cell_display_text(row, col),
-                    sheet.cell_format_at(row, col),
-                    sheet.cell_style_at(row, col),
+                    sheet.cell_format_at(row, col).map(project_cell_format),
+                    sheet.cell_style_at(row, col).map(project_cell_style),
                 )
         })
         .collect()
@@ -203,11 +206,41 @@ pub(crate) fn project_region_cells(
                 )
                 .with_display_projection(
                     sheet.cell_display_text(row_index, col_index),
-                    sheet.cell_format_at(row_index, col_index),
-                    sheet.cell_style_at(row_index, col_index),
+                    sheet
+                        .cell_format_at(row_index, col_index)
+                        .map(project_cell_format),
+                    sheet
+                        .cell_style_at(row_index, col_index)
+                        .map(project_cell_style),
                 ),
             );
         }
     }
     cells
+}
+
+fn project_sheet_extent(value: DocumentSheetExtent) -> SheetExtent {
+    SheetExtent {
+        row_count: value.row_count,
+        column_count: value.column_count,
+    }
+}
+
+pub(crate) fn project_cell_format(value: CellFormat) -> CellFormatProjection {
+    CellFormatProjection {
+        number_format: value.number_format,
+        style_id: value.style_id,
+    }
+}
+
+pub(crate) fn project_cell_style(value: CellStyle) -> CellStyleProjection {
+    CellStyleProjection {
+        font_color: value.font_color,
+        background_color: value.background_color,
+        bold: value.bold,
+        italic: value.italic,
+        horizontal_align: value.horizontal_align,
+        vertical_align: value.vertical_align,
+        number_format: value.number_format,
+    }
 }

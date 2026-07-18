@@ -1,14 +1,15 @@
 use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
-use crate::document_data::DocumentData;
+use crate::document_data::{CellFormat, CellStyle, DocumentData};
 use crate::domain::DocumentCellChange;
 use crate::editor_protocol::{EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES};
 use crate::state::editor_state::EditorState;
 use crate::types::EditorStateInfo;
 use crate::types::{
-    AppliedOperationResult, ColumnDeletedPatch, ColumnInsertedPatch, EditorMutationResponse,
-    EditorPatch, LayoutPatch, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
-    SheetCellChange, SheetDeletedPatch, SheetExtent, SheetInsertedPatch, SheetInvalidatedPatch,
-    SheetLayoutProjection, SheetManifest, SheetsReplacedPatch,
+    AppliedOperationResult, CellFormatProjection, CellStyleProjection, ColumnDeletedPatch,
+    ColumnInsertedPatch, EditorMutationResponse, EditorPatch, LayoutPatch, ResyncRequiredPatch,
+    RowDeletedPatch, RowInsertedPatch, SheetCellChange, SheetDeletedPatch, SheetExtent,
+    SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest,
+    SheetsReplacedPatch,
 };
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -41,7 +42,16 @@ pub fn mutation_response(
         capabilities: editor_state.capabilities(),
         editor_state: editor_state_info(editor_state),
         patches,
-        sheet_extents: Some(editor_state.sheet_extents()),
+        sheet_extents: Some(
+            editor_state
+                .sheet_extents()
+                .into_iter()
+                .map(|extent| SheetExtent {
+                    row_count: extent.row_count,
+                    column_count: extent.column_count,
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -396,10 +406,12 @@ fn project_patch_display_formats(
                         let display = sheet
                             .map(|sheet| sheet.cell_display_text(change.row, change.col))
                             .unwrap_or_else(|| change.value.to_display_string());
-                        let format =
-                            sheet.and_then(|sheet| sheet.cell_format_at(change.row, change.col));
-                        let style =
-                            sheet.and_then(|sheet| sheet.cell_style_at(change.row, change.col));
+                        let format = sheet
+                            .and_then(|sheet| sheet.cell_format_at(change.row, change.col))
+                            .map(project_cell_format);
+                        let style = sheet
+                            .and_then(|sheet| sheet.cell_style_at(change.row, change.col))
+                            .map(project_cell_style);
                         change.with_display_projection(display, format, style)
                     })
                     .collect(),
@@ -407,6 +419,25 @@ fn project_patch_display_formats(
             other => other,
         })
         .collect()
+}
+
+fn project_cell_format(value: CellFormat) -> CellFormatProjection {
+    CellFormatProjection {
+        number_format: value.number_format,
+        style_id: value.style_id,
+    }
+}
+
+fn project_cell_style(value: CellStyle) -> CellStyleProjection {
+    CellStyleProjection {
+        font_color: value.font_color,
+        background_color: value.background_color,
+        bold: value.bold,
+        italic: value.italic,
+        horizontal_align: value.horizontal_align,
+        vertical_align: value.vertical_align,
+        number_format: value.number_format,
+    }
 }
 
 fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: SheetCellChange) {

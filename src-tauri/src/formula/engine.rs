@@ -471,7 +471,7 @@ fn formula_sheet_names(file_data: &DocumentData) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::document_data::DocumentSheet;
-    use serde_json::Value;
+    use crate::domain::CellNumber;
 
     use super::*;
 
@@ -508,8 +508,8 @@ mod tests {
                 name: "Sheet1".to_string(),
                 rows: vec![
                     vec![
-                        CellValue::Number(Value::from(2)),
-                        CellValue::Number(Value::from(3)),
+                        CellValue::Number(CellNumber::from(2)),
+                        CellValue::Number(CellNumber::from(3)),
                     ],
                     vec![
                         CellValue::formula("=A1+B1", CellValue::String("cached".to_string())),
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(file_data.sheets[0].rows[1][0].to_display_string(), "cached");
         assert_eq!(file_data.sheets[0].rows[1][1].to_display_string(), "cached");
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(4));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(4));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -542,7 +542,7 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(CellNumber::from(1)),
                     CellValue::formula("=SUM(", CellValue::Null),
                     CellValue::formula("=A1+1", CellValue::Null),
                 ]],
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(runtime.diagnostics().invalid_formula_count, 1);
         assert_eq!(file_data.sheets[0].rows[0][2].to_display_string(), "");
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(10));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -571,7 +571,7 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(CellNumber::from(1)),
                     CellValue::formula("=A1+1", CellValue::Null),
                     CellValue::formula("=A1+2", CellValue::Null),
                 ]],
@@ -598,7 +598,7 @@ mod tests {
         ));
         assert_eq!(runtime.diagnostics().invalid_formula_count, 1);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(10));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -647,9 +647,9 @@ mod tests {
     #[test]
     fn large_bounded_ranges_recalculate_only_when_the_source_is_inside_the_range() {
         let mut row = vec![CellValue::Null; 3];
-        row[0] = CellValue::Number(Value::from(1));
+        row[0] = CellValue::Number(CellNumber::from(1));
         row[1] = CellValue::formula("=SUM(A1:A10001)", CellValue::Null);
-        row[2] = CellValue::Number(Value::from(0));
+        row[2] = CellValue::Number(CellNumber::from(0));
         let mut file_data = DocumentData {
             path: String::new(),
             file_name: "range.xlsx".to_string(),
@@ -663,14 +663,14 @@ mod tests {
         let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
         assert_eq!(runtime.diagnostics().large_range_dependency_count, 1);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(5));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(5));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental range recalc");
 
         assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "5.0");
 
-        file_data.sheets[0].rows[0][2] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][2] = CellValue::Number(CellNumber::from(10));
         let changes = runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 2)
             .expect("unrelated edit");
@@ -690,10 +690,10 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(CellNumber::from(1)),
                     CellValue::formula("=A1+1", CellValue::Null),
                     CellValue::formula("=A1+2", CellValue::Null),
-                    CellValue::Number(Value::from(0)),
+                    CellValue::Number(CellNumber::from(0)),
                 ]],
                 ..Default::default()
             }],
@@ -730,7 +730,7 @@ mod tests {
         }));
         assert_eq!(file_data.sheets[0].rows[0][3].to_display_string(), "4.0");
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(10));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc remains live");
@@ -751,7 +751,7 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(2)),
+                    CellValue::Number(CellNumber::from(2)),
                     CellValue::formula("=A1+1", CellValue::Null),
                 ]],
                 ..Default::default()
@@ -760,7 +760,7 @@ mod tests {
 
         let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(10));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -776,7 +776,7 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(10)),
+                    CellValue::Number(CellNumber::from(10)),
                     CellValue::formula("=A1+1", CellValue::Null),
                 ]],
                 ..Default::default()
@@ -801,9 +801,9 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(CellNumber::from(1)),
                     CellValue::formula("=SUM(A1:A10001)", CellValue::Null),
-                    CellValue::Number(Value::from(10)),
+                    CellValue::Number(CellNumber::from(10)),
                 ]],
                 ..Default::default()
             }],
@@ -820,7 +820,7 @@ mod tests {
         assert_eq!(runtime.diagnostics().large_range_dependency_count, 0);
         assert_eq!(file_data.sheets[0].rows[0][1].to_display_string(), "11.0");
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(99));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(99));
         let changes = runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("old dependency should not recalc");
@@ -830,7 +830,7 @@ mod tests {
                 .any(|change| change.sheet_index == 0 && change.row == 0 && change.col == 1)
         );
 
-        file_data.sheets[0].rows[0][2] = CellValue::Number(Value::from(20));
+        file_data.sheets[0].rows[0][2] = CellValue::Number(CellNumber::from(20));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 2)
             .expect("new dependency should recalc");
@@ -845,8 +845,8 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(5)),
-                    CellValue::Number(Value::from(0)),
+                    CellValue::Number(CellNumber::from(5)),
+                    CellValue::Number(CellNumber::from(0)),
                 ]],
                 ..Default::default()
             }],
@@ -879,7 +879,7 @@ mod tests {
 
         let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(10));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -895,7 +895,7 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(CellNumber::from(1)),
                     CellValue::formula("=A1+1", CellValue::Null),
                     CellValue::formula("=B1+1", CellValue::Null),
                 ]],
@@ -905,7 +905,7 @@ mod tests {
 
         let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(5));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(5));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -922,7 +922,7 @@ mod tests {
             sheets: vec![
                 DocumentSheet {
                     name: "Inputs".to_string(),
-                    rows: vec![vec![CellValue::Number(Value::from(4))]],
+                    rows: vec![vec![CellValue::Number(CellNumber::from(4))]],
                     ..Default::default()
                 },
                 DocumentSheet {
@@ -935,7 +935,7 @@ mod tests {
 
         let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(7));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(7));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -951,7 +951,7 @@ mod tests {
             sheets: vec![
                 DocumentSheet {
                     name: "Inputs".to_string(),
-                    rows: vec![vec![CellValue::Number(Value::from(4))]],
+                    rows: vec![vec![CellValue::Number(CellNumber::from(4))]],
                     ..Default::default()
                 },
                 DocumentSheet {
@@ -964,7 +964,7 @@ mod tests {
 
         let (mut runtime, mut ast_service) = build_runtime(&mut file_data);
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(7));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(7));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -980,9 +980,9 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
+                    CellValue::Number(CellNumber::from(1)),
                     CellValue::formula("=A1+1", CellValue::Null),
-                    CellValue::Number(Value::from(5)),
+                    CellValue::Number(CellNumber::from(5)),
                     CellValue::Formula {
                         formula: "=C1+1".to_string(),
                         cached_value: Box::new(CellValue::String("stale".to_string())),
@@ -1000,7 +1000,7 @@ mod tests {
             error: None,
         };
 
-        file_data.sheets[0].rows[0][0] = CellValue::Number(Value::from(2));
+        file_data.sheets[0].rows[0][0] = CellValue::Number(CellNumber::from(2));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 0)
             .expect("incremental recalc");
@@ -1017,14 +1017,14 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![
-                    CellValue::Number(Value::from(1)),
-                    CellValue::Number(Value::from(2)),
+                    CellValue::Number(CellNumber::from(1)),
+                    CellValue::Number(CellNumber::from(2)),
                     CellValue::Formula {
                         formula: "=SUM(A1:B1)".to_string(),
                         cached_value: Box::new(CellValue::String("stale".to_string())),
                         error: None,
                     },
-                    CellValue::Number(Value::from(5)),
+                    CellValue::Number(CellNumber::from(5)),
                 ]],
                 ..Default::default()
             }],
@@ -1037,7 +1037,7 @@ mod tests {
             error: None,
         };
 
-        file_data.sheets[0].rows[0][3] = CellValue::Number(Value::from(10));
+        file_data.sheets[0].rows[0][3] = CellValue::Number(CellNumber::from(10));
         runtime
             .sync_cell_and_recalculate(&mut file_data, &mut ast_service, 0, 0, 3)
             .expect("incremental recalc");

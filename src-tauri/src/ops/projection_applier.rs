@@ -1,8 +1,9 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{
+    DocumentData, DocumentSheet, Drawing, FreezePane, MergeRange, RichMetadata,
+};
 use std::collections::HashMap;
 
-use crate::domain::{AppliedOperation, ProjectionMutation, cell_key::parse_cell_key};
-use crate::types::{CellValue, DrawingProjection, MergeRange, ReadOnlyRichProjection};
+use crate::domain::{AppliedOperation, CellValue, ProjectionMutation, cell_key::parse_cell_key};
 
 impl ProjectionMutation<'_> {
     pub fn execute(&self, file_data: &mut DocumentData) {
@@ -270,7 +271,7 @@ fn shift_column_merges_on_delete(merges: &mut Vec<MergeRange>, col_index: usize)
     });
 }
 
-fn shift_rich_rows_on_insert(rich: &mut ReadOnlyRichProjection, row_index: usize) {
+fn shift_rich_rows_on_insert(rich: &mut RichMetadata, row_index: usize) {
     remap_cell_map(&mut rich.cell_formats, |row, col| {
         Some((if row >= row_index { row + 1 } else { row }, col))
     });
@@ -298,7 +299,7 @@ fn shift_rich_rows_on_insert(rich: &mut ReadOnlyRichProjection, row_index: usize
     }
 }
 
-fn shift_rich_rows_on_delete(rich: &mut ReadOnlyRichProjection, row_index: usize) {
+fn shift_rich_rows_on_delete(rich: &mut RichMetadata, row_index: usize) {
     remap_cell_map(&mut rich.cell_formats, |row, col| {
         delete_index(row, row_index).map(|row| (row, col))
     });
@@ -319,7 +320,7 @@ fn shift_rich_rows_on_delete(rich: &mut ReadOnlyRichProjection, row_index: usize
         .collect();
 }
 
-fn shift_rich_columns_on_insert(rich: &mut ReadOnlyRichProjection, col_index: usize) {
+fn shift_rich_columns_on_insert(rich: &mut RichMetadata, col_index: usize) {
     remap_cell_map(&mut rich.cell_formats, |row, col| {
         Some((row, if col >= col_index { col + 1 } else { col }))
     });
@@ -347,7 +348,7 @@ fn shift_rich_columns_on_insert(rich: &mut ReadOnlyRichProjection, col_index: us
     }
 }
 
-fn shift_rich_columns_on_delete(rich: &mut ReadOnlyRichProjection, col_index: usize) {
+fn shift_rich_columns_on_delete(rich: &mut RichMetadata, col_index: usize) {
     remap_cell_map(&mut rich.cell_formats, |row, col| {
         delete_index(col, col_index).map(|col| (row, col))
     });
@@ -391,7 +392,7 @@ fn remap_index_vec(values: &mut Vec<usize>, map: impl Fn(usize) -> Option<usize>
 }
 
 fn remap_freeze_pane(
-    freeze_pane: &mut Option<crate::types::FreezePaneProjection>,
+    freeze_pane: &mut Option<FreezePane>,
     map: impl Fn(usize, usize) -> Option<(usize, usize)>,
 ) {
     let Some(pane) = freeze_pane else {
@@ -406,10 +407,7 @@ fn remap_freeze_pane(
     }
 }
 
-fn delete_drawing_row(
-    mut drawing: DrawingProjection,
-    row_index: usize,
-) -> Option<DrawingProjection> {
+fn delete_drawing_row(mut drawing: Drawing, row_index: usize) -> Option<Drawing> {
     let from_row = delete_index(drawing.from_row as usize, row_index).map(|row| row as u32);
     let to_row = drawing
         .to_row
@@ -422,10 +420,7 @@ fn delete_drawing_row(
     Some(drawing)
 }
 
-fn delete_drawing_column(
-    mut drawing: DrawingProjection,
-    col_index: usize,
-) -> Option<DrawingProjection> {
+fn delete_drawing_column(mut drawing: Drawing, col_index: usize) -> Option<Drawing> {
     let from_col = delete_index(drawing.from_col as usize, col_index).map(|col| col as u32);
     let to_col = drawing
         .to_col
@@ -483,7 +478,7 @@ fn shift_layout_map_on_delete(map: Option<&mut HashMap<usize, u32>>, index: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellStyleProjection, DrawingKind, HyperlinkProjection};
+    use crate::document_data::{CellStyle, DrawingKind, Hyperlink};
 
     fn file_data_with_rich_projection() -> DocumentData {
         DocumentData {
@@ -492,10 +487,10 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::String("A1".to_string())]],
-                rich: ReadOnlyRichProjection {
+                rich: RichMetadata {
                     cell_styles: [(
                         "B2".to_string(),
-                        CellStyleProjection {
+                        CellStyle {
                             bold: Some(true),
                             ..Default::default()
                         },
@@ -504,7 +499,7 @@ mod tests {
                     .collect(),
                     hyperlinks: [(
                         "B3".to_string(),
-                        HyperlinkProjection {
+                        Hyperlink {
                             url: "https://example.com".to_string(),
                             tooltip: None,
                             location: false,
@@ -514,7 +509,7 @@ mod tests {
                     .collect(),
                     hidden_rows: vec![2],
                     hidden_columns: vec![1],
-                    drawings: vec![DrawingProjection {
+                    drawings: vec![Drawing {
                         kind: DrawingKind::Image,
                         from_row: 1,
                         from_col: 1,

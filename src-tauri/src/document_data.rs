@@ -1,19 +1,92 @@
 use std::collections::HashMap;
 
-use crate::domain::CellValue;
-use crate::types::display::DisplayProjection;
-use crate::types::{
-    CellFormatProjection, CellStyleProjection, ReadOnlyRichProjection, SheetExtent,
-};
+use crate::domain::{CellValue, format_cell_display, format_cell_search};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CellFormat {
+    pub number_format: Option<String>,
+    pub style_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CellStyle {
+    pub font_color: Option<String>,
+    pub background_color: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub horizontal_align: Option<String>,
+    pub vertical_align: Option<String>,
+    pub number_format: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FreezePane {
+    pub top_left_cell: String,
+    pub horizontal_split: f64,
+    pub vertical_split: f64,
+    pub active_pane: String,
+    pub state: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hyperlink {
+    pub url: String,
+    pub tooltip: Option<String>,
+    pub location: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DrawingKind {
+    Image,
+    Chart,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Drawing {
+    pub kind: DrawingKind,
+    pub from_row: u32,
+    pub from_col: u32,
+    pub to_row: Option<u32>,
+    pub to_col: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RichMetadata {
+    pub cell_formats: HashMap<String, CellFormat>,
+    pub cell_styles: HashMap<String, CellStyle>,
+    pub hidden_rows: Vec<usize>,
+    pub hidden_columns: Vec<usize>,
+    pub freeze_pane: Option<FreezePane>,
+    pub hyperlinks: HashMap<String, Hyperlink>,
+    pub drawings: Vec<Drawing>,
+    pub has_more_drawings: bool,
+    pub has_style_metadata: bool,
+    pub has_hyperlinks: bool,
+    pub has_freeze_pane: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeRange {
+    pub start_row: u32,
+    pub start_col: u16,
+    pub end_row: u32,
+    pub end_col: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SheetExtent {
+    pub row_count: usize,
+    pub column_count: usize,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocumentSheet {
     pub name: String,
     pub rows: Vec<Vec<CellValue>>,
-    pub merges: Vec<crate::types::MergeRange>,
+    pub merges: Vec<MergeRange>,
     pub column_widths: Option<HashMap<usize, u32>>,
     pub row_heights: Option<HashMap<usize, u32>>,
-    pub rich: ReadOnlyRichProjection,
+    pub rich: RichMetadata,
 }
 
 impl DocumentSheet {
@@ -24,7 +97,7 @@ impl DocumentSheet {
             merges: Vec::new(),
             column_widths: None,
             row_heights: None,
-            rich: ReadOnlyRichProjection {
+            rich: RichMetadata {
                 cell_formats: self.rich.cell_formats.clone(),
                 cell_styles: self.rich.cell_styles.clone(),
                 ..Default::default()
@@ -71,7 +144,7 @@ impl DocumentSheet {
         }
     }
 
-    pub fn cell_format_at(&self, row: usize, col: usize) -> Option<CellFormatProjection> {
+    pub fn cell_format_at(&self, row: usize, col: usize) -> Option<CellFormat> {
         let key = excel_cell_key(row, col);
         let explicit = self.rich.cell_formats.get(&key);
         let style_number_format = self
@@ -84,7 +157,7 @@ impl DocumentSheet {
             return None;
         }
 
-        Some(CellFormatProjection {
+        Some(CellFormat {
             number_format: explicit
                 .and_then(|format| format.number_format.clone())
                 .or(style_number_format),
@@ -92,7 +165,7 @@ impl DocumentSheet {
         })
     }
 
-    pub fn cell_style_at(&self, row: usize, col: usize) -> Option<CellStyleProjection> {
+    pub fn cell_style_at(&self, row: usize, col: usize) -> Option<CellStyle> {
         self.rich
             .cell_styles
             .get(&excel_cell_key(row, col))
@@ -104,7 +177,11 @@ impl DocumentSheet {
             .get(row)
             .and_then(|row_data| row_data.get(col))
             .map(|cell| {
-                DisplayProjection::display_text(cell, self.cell_format_at(row, col).as_ref())
+                let format = self.cell_format_at(row, col);
+                format_cell_display(
+                    cell,
+                    format.and_then(|value| value.number_format).as_deref(),
+                )
             })
             .unwrap_or_default()
     }
@@ -114,7 +191,11 @@ impl DocumentSheet {
             .get(row)
             .and_then(|row_data| row_data.get(col))
             .map(|cell| {
-                DisplayProjection::search_text(cell, self.cell_format_at(row, col).as_ref())
+                let format = self.cell_format_at(row, col);
+                format_cell_search(
+                    cell,
+                    format.and_then(|value| value.number_format).as_deref(),
+                )
             })
             .unwrap_or_default()
     }
@@ -138,7 +219,7 @@ fn excel_cell_key(row_index: usize, col_index: usize) -> String {
     format!("{letters}{}", row_index + 1)
 }
 
-fn rich_projection_extent(rich: &ReadOnlyRichProjection) -> SheetExtent {
+fn rich_projection_extent(rich: &RichMetadata) -> SheetExtent {
     let mut extent = SheetExtent::default();
     for key in rich
         .cell_formats
@@ -198,14 +279,13 @@ fn parse_cell_address(key: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellFormatProjection, HyperlinkProjection, MergeRange};
-    use serde_json::Value;
+    use crate::domain::CellNumber;
 
     #[test]
     fn search_snapshot_retains_display_metadata_but_drops_unrelated_rich_state() {
         let sheet = DocumentSheet {
             name: "Sheet1".to_string(),
-            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
+            rows: vec![vec![CellValue::Number(CellNumber::from_f64(0.4).unwrap())]],
             merges: vec![MergeRange {
                 start_row: 0,
                 start_col: 0,
@@ -213,17 +293,17 @@ mod tests {
                 end_col: 1,
             }],
             column_widths: Some(HashMap::from([(0, 120)])),
-            rich: ReadOnlyRichProjection {
+            rich: RichMetadata {
                 cell_formats: HashMap::from([(
                     "A1".to_string(),
-                    CellFormatProjection {
+                    CellFormat {
                         number_format: Some("0%".to_string()),
                         style_id: None,
                     },
                 )]),
                 hyperlinks: HashMap::from([(
                     "A1".to_string(),
-                    HyperlinkProjection {
+                    Hyperlink {
                         url: "https://example.com".to_string(),
                         tooltip: None,
                         location: false,

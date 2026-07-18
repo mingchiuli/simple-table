@@ -806,8 +806,7 @@ pub async fn search(
     executions
         .search()
         .run(move || {
-            editor_command_service::search(
-                runtime.editor_commands(),
+            runtime.search_queries().search(
                 document_id.get(),
                 base_revision.get(),
                 &query,

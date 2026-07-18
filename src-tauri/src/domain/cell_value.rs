@@ -1,4 +1,4 @@
-use serde_json::Value;
+use std::fmt;
 
 const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 const JS_MIN_SAFE_INTEGER: i64 = -9_007_199_254_740_991;
@@ -7,13 +7,66 @@ const JS_MIN_SAFE_INTEGER: i64 = -9_007_199_254_740_991;
 pub enum CellValue {
     Null,
     String(String),
-    Number(Value),
+    Number(CellNumber),
     Boolean(bool),
     Formula {
         formula: String,
         cached_value: Box<CellValue>,
         error: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellNumber(CellNumberRepr);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CellNumberRepr {
+    Integer(i64),
+    Float(f64),
+}
+
+impl CellNumber {
+    pub fn from_f64(value: f64) -> Option<Self> {
+        value
+            .is_finite()
+            .then_some(Self(CellNumberRepr::Float(value)))
+    }
+
+    pub fn as_i64(self) -> Option<i64> {
+        match self.0 {
+            CellNumberRepr::Integer(value) => Some(value),
+            CellNumberRepr::Float(_) => None,
+        }
+    }
+
+    pub fn as_f64(self) -> f64 {
+        match self.0 {
+            CellNumberRepr::Integer(value) => value as f64,
+            CellNumberRepr::Float(value) => value,
+        }
+    }
+}
+
+impl From<i64> for CellNumber {
+    fn from(value: i64) -> Self {
+        Self(CellNumberRepr::Integer(value))
+    }
+}
+
+impl From<i32> for CellNumber {
+    fn from(value: i32) -> Self {
+        Self::from(i64::from(value))
+    }
+}
+
+impl fmt::Display for CellNumber {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            CellNumberRepr::Integer(value) => value.fmt(formatter),
+            CellNumberRepr::Float(value) if value.fract() == 0.0 => write!(formatter, "{value:.1}"),
+            CellNumberRepr::Float(value) => value.fmt(formatter),
+        }
+    }
 }
 
 impl CellValue {
@@ -89,14 +142,14 @@ pub fn parse_cell_text(text: &str) -> CellValue {
     }
     if let Ok(value) = text.parse::<i64>() {
         if (JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&value) {
-            return CellValue::Number(Value::from(value));
+            return CellValue::Number(CellNumber::from(value));
         }
         return CellValue::String(text.to_string());
     }
     if let Ok(value) = text.parse::<f64>()
         && value.is_finite()
     {
-        return CellValue::Number(Value::from(value));
+        return CellValue::Number(CellNumber::from_f64(value).expect("finite parsed number"));
     }
     if text.eq_ignore_ascii_case("true") {
         return CellValue::Boolean(true);
@@ -125,12 +178,21 @@ mod tests {
     fn parses_user_cell_text() {
         assert_eq!(parse_cell_text(""), CellValue::Null);
         assert_eq!(parse_cell_text("007"), CellValue::String("007".to_string()));
-        assert_eq!(parse_cell_text("42"), CellValue::Number(Value::from(42)));
-        assert_eq!(parse_cell_text("3.5"), CellValue::Number(Value::from(3.5)));
+        assert_eq!(parse_cell_text("42"), CellValue::Number(42.into()));
+        assert_eq!(
+            parse_cell_text("3.5"),
+            CellValue::Number(CellNumber::from_f64(3.5).unwrap())
+        );
         assert_eq!(parse_cell_text("true"), CellValue::Boolean(true));
         assert_eq!(
             parse_cell_text("=A1+1"),
             CellValue::formula("=A1+1", CellValue::Null)
         );
+    }
+
+    #[test]
+    fn rejects_non_finite_domain_numbers() {
+        assert!(CellNumber::from_f64(f64::NAN).is_none());
+        assert!(CellNumber::from_f64(f64::INFINITY).is_none());
     }
 }

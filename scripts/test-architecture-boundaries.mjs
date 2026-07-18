@@ -148,8 +148,23 @@ rejectMatches(
 
 rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'document_data.rs')],
-  [/\bts_rs\b/, /\bTS\b/, /\bSerialize\b/, /\bDeserialize\b/, /#\[(?:serde|ts)\b/],
+  [
+    /crate::types(?:::|\b)/,
+    /\bserde(?:::|\b)/,
+    /\bserde_json(?:::|\b)/,
+    /\bts_rs\b/,
+    /\bTS\b/,
+    /\bSerialize\b/,
+    /\bDeserialize\b/,
+    /#\[(?:serde|ts)\b/,
+  ],
   'the serialization-independent canonical document data boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'editor_command_service.rs')],
+  [/\bSearchService\b/, /\bSearchResponse\b/, /\bSearchScope\b/, /pub\s+fn\s+search\s*\(/],
+  'the mutation-only editor command service boundary',
 );
 
 rejectMatches(
@@ -335,10 +350,35 @@ rejectMatches(
     /EditorMutationResponse/,
     /EditorPatch/,
     /AppliedOperationResult/,
+    /\bserde(?:::|\b)/,
+    /\bserde_json(?:::|\b)/,
     /ts_rs/,
     /tauri::/,
   ],
   'the transport-independent Rust domain model boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'documentSessionCoordinator.ts')],
+  [
+    /documentRegionLoadScheduler/,
+    /documentRegionRepository/,
+    /\bensureSheetRegionLoaded\b/,
+    /\bloadRegionBlock\b/,
+  ],
+  'the region-loading-independent document session transaction boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'documentRegionCoordinator.ts')],
+  [
+    /\bEditorMutationResponse\b/,
+    /\bDocumentSessionLifecycle\b/,
+    /\bFormulaStatus\b/,
+    /\bWorkbookCapabilities\b/,
+    /\bSearchSessionSnapshot\b/,
+  ],
+  'the narrow frontend document region coordinator boundary',
 );
 
 rejectMatches(

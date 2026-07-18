@@ -8,7 +8,6 @@ use crate::ops::patch_projector::{
     structural_delta_mutation_response,
 };
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::display::DisplayProjection;
 use crate::types::{LayoutPatch, SheetCellChange};
 
 pub fn do_set_cell(
@@ -298,7 +297,6 @@ fn search_index_work_for_changes(
         .iter()
         .map(|change| {
             let sheet = editor_state.file_data().sheets.get(change.sheet_index);
-            let format = sheet.and_then(|sheet| sheet.cell_format_at(change.row, change.col));
             let display_text = sheet
                 .map(|sheet| sheet.cell_display_text(change.row, change.col))
                 .unwrap_or_else(|| change.value.to_display_string());
@@ -306,7 +304,9 @@ fn search_index_work_for_changes(
                 sheet_index: change.sheet_index,
                 row: change.row,
                 col: change.col,
-                search_text: DisplayProjection::search_text(&change.value, format.as_ref()),
+                search_text: sheet
+                    .map(|sheet| sheet.cell_search_text(change.row, change.col))
+                    .unwrap_or_else(|| change.value.to_display_string()),
                 display_text,
             }
         })
@@ -340,11 +340,11 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document_data::{CellFormat, DocumentData, DocumentSheet, RichMetadata};
+    use crate::domain::{CellNumber, CellValue};
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentRepository;
-    use crate::types::{CellFormatProjection, CellValue, EditorPatch, ReadOnlyRichProjection};
-    use serde_json::Value;
+    use crate::types::EditorPatch;
     use std::collections::HashMap;
 
     fn make_registry() -> ActiveDocumentRepository {
@@ -372,11 +372,11 @@ mod tests {
                 file_name: "test.xlsx".to_string(),
                 sheets: vec![DocumentSheet {
                     name: "Sheet1".to_string(),
-                    rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-                    rich: ReadOnlyRichProjection {
+                    rows: vec![vec![CellValue::Number(CellNumber::from_f64(0.4).unwrap())]],
+                    rich: RichMetadata {
                         cell_formats: HashMap::from([(
                             "A1".to_string(),
-                            CellFormatProjection {
+                            CellFormat {
                                 number_format: Some("0%".to_string()),
                                 style_id: None,
                             },

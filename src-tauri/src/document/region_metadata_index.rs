@@ -1,8 +1,11 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{CellFormat, CellStyle, DocumentData, DocumentSheet, MergeRange};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
-use crate::types::{MergeRange, SheetRegion, SheetRegionMetadata};
+use crate::types::{
+    CellFormatProjection, CellStyleProjection, MergeRange as WireMergeRange, SheetRegion,
+    SheetRegionMetadata,
+};
 
 const TILE_ROWS: usize = 128;
 const TILE_COLUMNS: usize = 32;
@@ -105,7 +108,12 @@ impl SheetMetadataIndex {
 
     fn project(&self, sheet: &DocumentSheet, region: &SheetRegion) -> SheetRegionMetadata {
         SheetRegionMetadata {
-            merges: self.merges.query(region),
+            merges: self
+                .merges
+                .query(region)
+                .into_iter()
+                .map(project_merge_range)
+                .collect(),
             cell_formats: self
                 .format_keys
                 .keys_in_region(region)
@@ -115,7 +123,7 @@ impl SheetMetadataIndex {
                         .cell_formats
                         .get(key)
                         .cloned()
-                        .map(|value| (key.to_string(), value))
+                        .map(|value| (key.to_string(), project_cell_format(value)))
                 })
                 .collect(),
             cell_styles: self
@@ -127,7 +135,7 @@ impl SheetMetadataIndex {
                         .cell_styles
                         .get(key)
                         .cloned()
-                        .map(|value| (key.to_string(), value))
+                        .map(|value| (key.to_string(), project_cell_style(value)))
                 })
                 .collect(),
         }
@@ -300,10 +308,38 @@ fn bucket_range(start: usize, end: usize, size: usize) -> std::ops::RangeInclusi
     first..=last
 }
 
+fn project_merge_range(value: MergeRange) -> WireMergeRange {
+    WireMergeRange {
+        start_row: value.start_row,
+        start_col: value.start_col,
+        end_row: value.end_row,
+        end_col: value.end_col,
+    }
+}
+
+fn project_cell_format(value: CellFormat) -> CellFormatProjection {
+    CellFormatProjection {
+        number_format: value.number_format,
+        style_id: value.style_id,
+    }
+}
+
+fn project_cell_style(value: CellStyle) -> CellStyleProjection {
+    CellStyleProjection {
+        font_color: value.font_color,
+        background_color: value.background_color,
+        bold: value.bold,
+        italic: value.italic,
+        horizontal_align: value.horizontal_align,
+        vertical_align: value.vertical_align,
+        number_format: value.number_format,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CellFormatProjection, CellStyleProjection, ReadOnlyRichProjection};
+    use crate::document_data::RichMetadata;
 
     #[test]
     fn projects_only_metadata_intersecting_the_requested_region() {
@@ -313,7 +349,7 @@ mod tests {
                 merge(100, 2, 140, 3),
                 merge(300, 40, 320, 42),
             ],
-            rich: ReadOnlyRichProjection {
+            rich: RichMetadata {
                 cell_formats: HashMap::from([
                     ("A1".to_string(), format("outside")),
                     ("AG129".to_string(), format("inside")),
@@ -343,7 +379,10 @@ mod tests {
             },
         );
 
-        assert_eq!(metadata.merges, vec![merge(100, 40, 140, 42)]);
+        assert_eq!(
+            metadata.merges,
+            vec![project_merge_range(merge(100, 40, 140, 42))]
+        );
         assert_eq!(
             metadata.cell_formats.keys().collect::<Vec<_>>(),
             vec!["AG129"]
@@ -360,7 +399,7 @@ mod tests {
             path: String::new(),
             file_name: "metadata.xlsx".to_string(),
             sheets: vec![DocumentSheet {
-                rich: ReadOnlyRichProjection {
+                rich: RichMetadata {
                     cell_formats: HashMap::from([("A1".to_string(), format("old"))]),
                     ..Default::default()
                 },
@@ -399,15 +438,15 @@ mod tests {
         }
     }
 
-    fn format(value: &str) -> CellFormatProjection {
-        CellFormatProjection {
+    fn format(value: &str) -> CellFormat {
+        CellFormat {
             number_format: Some(value.to_string()),
             style_id: None,
         }
     }
 
-    fn style(value: &str) -> CellStyleProjection {
-        CellStyleProjection {
+    fn style(value: &str) -> CellStyle {
+        CellStyle {
             background_color: Some(value.to_string()),
             ..Default::default()
         }

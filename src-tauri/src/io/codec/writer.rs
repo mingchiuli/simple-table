@@ -5,9 +5,9 @@ use std::str::FromStr;
 use crate::document_format::{
     SpreadsheetFileFormat, file_name_from_path_like, file_stem_from_path_like,
 };
+use crate::domain::CellValue;
 use crate::error::AppError;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
-use crate::types::CellValue;
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
 
 const DEFAULT_SHEET_NAME: &str = "Sheet1";
@@ -241,12 +241,8 @@ pub fn write_cell(worksheet: &mut Worksheet, row: u32, col: u32, cell: &CellValu
                 } else {
                     cell_ref.set_value_string(num.to_string());
                 }
-            } else if let Some(num) = n.as_f64() {
-                if num.is_finite() {
-                    cell_ref.set_value_number(num);
-                }
             } else {
-                cell_ref.set_value_string(n.to_string());
+                cell_ref.set_value_number(n.as_f64());
             }
         }
         CellValue::Boolean(b) => {
@@ -289,12 +285,8 @@ fn write_formula_cached_value(cell: &mut umya_spreadsheet::Cell, value: &CellVal
         CellValue::Number(n) => {
             if let Some(num) = n.as_i64() {
                 cell.set_formula_result_number(num as f64);
-            } else if let Some(num) = n.as_f64()
-                && num.is_finite()
-            {
-                cell.set_formula_result_number(num);
             } else {
-                cell.set_formula_result_blank();
+                cell.set_formula_result_number(n.as_f64());
             }
         }
         CellValue::Boolean(b) => {
@@ -360,15 +352,7 @@ fn cell_to_csv_string(cell: &CellValue) -> String {
     match cell {
         CellValue::Formula { .. } => cell.to_display_string(),
         CellValue::String(s) => s.clone(),
-        CellValue::Number(n) => {
-            if let Some(f) = n.as_f64()
-                && !f.is_finite()
-                && n.as_i64().is_none()
-            {
-                return String::new();
-            }
-            n.to_string()
-        }
+        CellValue::Number(n) => n.to_string(),
         CellValue::Boolean(b) => b.to_string(),
         CellValue::Null => String::new(),
     }
@@ -378,11 +362,10 @@ fn cell_to_csv_string(cell: &CellValue) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use serde_json::Value;
-
     use super::*;
+    use crate::document_data::MergeRange;
+    use crate::domain::CellNumber;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
-    use crate::types::MergeRange;
 
     #[test]
     fn limited_output_buffer_rejects_bytes_before_growing_past_its_limit() {
@@ -404,7 +387,7 @@ mod tests {
                 rows: vec![vec![
                     CellValue::Formula {
                         formula: "=1+2".to_string(),
-                        cached_value: Box::new(CellValue::Number(Value::from(3))),
+                        cached_value: Box::new(CellValue::Number(CellNumber::from(3))),
                         error: None,
                     },
                     CellValue::Null,

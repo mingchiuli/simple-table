@@ -109,6 +109,7 @@ function coordinatorForStores() {
     selection: useEditorSelectionStore(),
     pending: usePendingCellSavesStore(),
     search: useSearchSessionStore(),
+    regions: { reset: () => undefined },
   });
 }
 

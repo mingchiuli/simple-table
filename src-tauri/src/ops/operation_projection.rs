@@ -135,7 +135,13 @@ impl OperationPatchProjector<'_> {
                     .get(*sheet_index)
                     .map(|sheet| SheetManifest {
                         name: sheet.name.clone(),
-                        extent: sheet.extent(),
+                        extent: {
+                            let extent = sheet.extent();
+                            crate::types::SheetExtent {
+                                row_count: extent.row_count,
+                                column_count: extent.column_count,
+                            }
+                        },
                         layout: SheetLayoutProjection {
                             column_widths: sheet.column_widths.clone().unwrap_or_default(),
                             row_heights: sheet.row_heights.clone().unwrap_or_default(),

@@ -53,8 +53,8 @@ cannot be located through static `OnceLock` values.
 
 `ApplicationRuntime` is the backend composition root managed by Tauri. It
 constructs narrow document-query, document-open, document-lifecycle,
-document-save, and editor-command services over shared repositories and
-coordinators. It owns outer recent, file, and search adapters; concrete platform
+document-save, editor-mutation, and search-query services over shared
+repositories and coordinators. It owns outer recent, file, and search adapters; concrete platform
 runtimes are private fields of those adapters and are not exposed to commands.
 Application services declare only their actual dependencies and cannot import
 the complete runtime, `AppHandle`, adapters, or I/O implementations. Commands
@@ -64,7 +64,9 @@ adapter, and executor before delegating work. Business repositories,
 schedulers, and command executors cannot locate process-global mutable state.
 Repository-backed search document access is an outer adapter assembled by the
 composition root. `search_service` contains only the port-driven use case and
-cannot depend on the active-document repository or `DocumentHandle`.
+cannot depend on the active-document repository or `DocumentHandle`. The
+runtime exposes that query service independently; `EditorCommandService` owns
+only mutation replay, mutation execution, and post-mutation index maintenance.
 
 The active-document registry is hidden behind `ActiveDocumentRepository`.
 Application and operation modules request semantic read or mutation handles
@@ -104,8 +106,10 @@ domain contract and state session to implement a use case, never the reverse.
 Core cell values and text parsing belong to `domain::cell_value`. Wire edit
 requests such as `SetCellRequest` belong to `types::editor_command` and are
 mapped to `CellEditInput` at the application boundary. Domain commands cannot
-depend on RPC requests, mutation responses, patches, TypeScript generation, or
-Tauri types. A new-Sheet operation carries only domain initialization data;
+depend on serde/JSON values, RPC requests, mutation responses, patches,
+TypeScript generation, or Tauri types. `CellNumber` admits only finite integer
+or floating-point values; the wire serializer alone maps those values to JSON.
+A new-Sheet operation carries only domain initialization data;
 projection and workbook adapters construct their own representations.
 
 The Rust `document` module is the physical aggregate boundary. It owns
@@ -115,8 +119,10 @@ in those invariants. Format-specific backing code is isolated under
 `document::backing`; the rest of the aggregate cannot import `io`.
 Canonical editable content lives in the serialization-independent
 `document_data::DocumentData` and `DocumentSheet` model. These types have no
-`serde` or `ts-rs` implementation and are not emitted to TypeScript. The
-application projection layer maps canonical content into manifests, bounded
+`serde` or `ts-rs` implementation and are not emitted to TypeScript. Merge,
+extent, cell-format, style, hyperlink, drawing, and freeze-pane values in that
+aggregate are internal semantic values rather than aliases of protocol DTOs.
+The application projection layer maps canonical content into manifests, bounded
 regions, and mutation patches; the Rust protocol module cannot expose or own a
 complete canonical document aggregate.
 `SpreadsheetDocument` and `EditorState` production constructors receive either
@@ -174,12 +180,13 @@ modules, never on the query service.
   Loaded Sheets additionally own bounded cell blocks and render-only metadata.
   Cell-block eviction cannot change row or column geometry.
 - `documentSession` owns only serializable document projection, revision,
-  lifecycle flags, and region LRU/pin state. `documentSessionCoordinator` owns
-  mutation serialization, interaction waiters, and region request scheduling,
-  and is the explicit
+  lifecycle flags, and region LRU/pin state. `documentSessionCoordinator` is the
   application transaction boundary for document, status, selection, search,
-  and pending-edit Stores. Business Stores must not instantiate or mutate one
-  another.
+  and pending-edit Stores. `documentSessionRuntime` owns lifecycle and mutation
+  serialization, while `documentRegionCoordinator` independently owns region
+  tiling, admission, cancellation, and commit through a narrow document port.
+  The composable composition layer exposes a combined facade. Business Stores
+  must not instantiate or mutate one another.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
   is the backend dirty flag OR pending frontend content. Store dictionaries are
   JSON-serializable records; large pending dictionaries remain raw and expose
@@ -306,8 +313,9 @@ port, clock, and command-id generator are injectable. `DocumentCommandBus` is
 the Vue adapter around that protocol: it owns interaction locks, pending-edit
 flushes, response application, post-mutation callbacks, and user-facing error
 messages. It delegates projection/status/selection/search commits and recovery
-to `documentSessionCoordinator`. Components and feature composables should call
-the bus or coordinator instead of rebuilding either lifecycle.
+to `documentSessionCoordinator`; bounded region navigation delegates to the
+separate `documentRegionCoordinator`. Components and feature composables should
+call the composed bus/coordinator facade instead of rebuilding either lifecycle.
 
 ## RPC Contract
 
@@ -412,8 +420,9 @@ The frontend retains at most four resident Sheet slots, eight blocks per Sheet,
 24 blocks overall, and approximately 16 MiB of block payload. `RegionCache`
 uses access LRU, pins at most eight visible tiles, shares in-flight promises,
 rejects previous document generations, and runs at most four projection
-requests concurrently. Active and queued loads for the current generation are
-limited to 16. A new viewport generation removes queued tiles that no longer
+requests concurrently. `documentRegionCoordinator` owns this scheduling state;
+document session transactions only reset its generation. Active and queued
+loads for the current generation are limited to 16. A new viewport generation removes queued tiles that no longer
 cover the visible area, while explicit Sheet loads and search-result navigation
 can evict queued viewport work. The initial region is a normal 128 x 32 tile and
 participates in the same LRU and byte budget. Rust caps each serialized region

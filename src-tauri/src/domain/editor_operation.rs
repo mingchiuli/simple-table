@@ -1,7 +1,6 @@
 use crate::domain::CellValue;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CellEditInput {
     pub sheet_index: usize,
     pub row: usize,
@@ -13,7 +12,7 @@ pub struct CellEditInput {
 ///
 /// This is intentionally not a history record. Undo/redo is handled by
 /// document mementos, so command variants only describe the requested mutation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum EditorCommand {
     SetCell {
         sheet_index: usize,

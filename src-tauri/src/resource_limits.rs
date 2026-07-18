@@ -1,9 +1,9 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{DocumentData, DocumentSheet, SheetExtent};
 use std::collections::HashMap;
 
+use crate::domain::CellValue;
 use crate::domain::cell_key::parse_cell_key;
 use crate::error::AppError;
-use crate::types::{CellValue, SheetExtent};
 
 pub const MAX_WORKBOOK_SHEETS: usize = 256;
 pub const MAX_ROWS_PER_SHEET: usize = 250_000;

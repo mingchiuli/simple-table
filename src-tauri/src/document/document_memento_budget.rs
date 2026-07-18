@@ -1,4 +1,7 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{
+    CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, FreezePane, Hyperlink, MergeRange,
+    RichMetadata,
+};
 use std::collections::HashSet;
 
 use crate::document::backing::document_body::SpreadsheetDocumentBody;
@@ -10,12 +13,8 @@ use crate::document::document_memento::{
     RowStructureMemento, SheetShapeMemento, SheetTailMemento,
 };
 use crate::document::formula_coordinator::FormulaCoordinator;
-use crate::domain::{AppliedOperation, cell_key::parse_cell_key};
+use crate::domain::{AppliedOperation, CellValue, cell_key::parse_cell_key};
 use crate::formula::cell_ref::FormulaCellRef;
-use crate::types::{
-    CellFormatProjection, CellStyleProjection, CellValue, FreezePaneProjection,
-    HyperlinkProjection, MergeRange, ReadOnlyRichProjection,
-};
 
 pub(crate) fn estimate_memento_side_bytes(
     projection: &DocumentData,
@@ -256,8 +255,8 @@ fn estimate_cell_value_bytes(cell: &CellValue) -> usize {
     }
 }
 
-fn estimate_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize {
-    std::mem::size_of::<ReadOnlyRichProjection>()
+fn estimate_rich_projection_bytes(rich: &RichMetadata) -> usize {
+    std::mem::size_of::<RichMetadata>()
         + rich
             .cell_formats
             .iter()
@@ -280,11 +279,11 @@ fn estimate_rich_projection_bytes(rich: &ReadOnlyRichProjection) -> usize {
             .iter()
             .map(|(cell, hyperlink)| cell.len() + estimate_hyperlink_projection_bytes(hyperlink))
             .sum::<usize>()
-        + rich.drawings.len() * std::mem::size_of::<crate::types::DrawingProjection>()
+        + rich.drawings.len() * std::mem::size_of::<Drawing>()
 }
 
 fn estimate_rich_projection_tail_bytes(
-    rich: &ReadOnlyRichProjection,
+    rich: &RichMetadata,
     min_row: Option<usize>,
     min_col: Option<usize>,
 ) -> usize {
@@ -342,11 +341,11 @@ fn estimate_rich_projection_tail_bytes(
                         .is_some_and(|min_col| drawing_column_scope_affected(drawing, min_col))
             })
             .count()
-            * std::mem::size_of::<crate::types::DrawingProjection>()
+            * std::mem::size_of::<Drawing>()
 }
 
 fn freeze_pane_matches_scope(
-    freeze_pane: &FreezePaneProjection,
+    freeze_pane: &FreezePane,
     min_row: Option<usize>,
     min_col: Option<usize>,
 ) -> bool {
@@ -356,8 +355,8 @@ fn freeze_pane_matches_scope(
     })
 }
 
-fn estimate_cell_format_projection_bytes(format: &CellFormatProjection) -> usize {
-    std::mem::size_of::<CellFormatProjection>()
+fn estimate_cell_format_projection_bytes(format: &CellFormat) -> usize {
+    std::mem::size_of::<CellFormat>()
         + format
             .number_format
             .as_ref()
@@ -370,8 +369,8 @@ fn estimate_cell_format_projection_bytes(format: &CellFormatProjection) -> usize
             .unwrap_or_default()
 }
 
-fn estimate_cell_style_projection_bytes(style: &CellStyleProjection) -> usize {
-    std::mem::size_of::<CellStyleProjection>()
+fn estimate_cell_style_projection_bytes(style: &CellStyle) -> usize {
+    std::mem::size_of::<CellStyle>()
         + style
             .font_color
             .as_ref()
@@ -399,15 +398,15 @@ fn estimate_cell_style_projection_bytes(style: &CellStyleProjection) -> usize {
             .unwrap_or_default()
 }
 
-fn estimate_freeze_pane_projection_bytes(freeze_pane: &FreezePaneProjection) -> usize {
-    std::mem::size_of::<FreezePaneProjection>()
+fn estimate_freeze_pane_projection_bytes(freeze_pane: &FreezePane) -> usize {
+    std::mem::size_of::<FreezePane>()
         + freeze_pane.top_left_cell.len()
         + freeze_pane.active_pane.len()
         + freeze_pane.state.len()
 }
 
-fn estimate_hyperlink_projection_bytes(hyperlink: &HyperlinkProjection) -> usize {
-    std::mem::size_of::<HyperlinkProjection>()
+fn estimate_hyperlink_projection_bytes(hyperlink: &Hyperlink) -> usize {
+    std::mem::size_of::<Hyperlink>()
         + hyperlink.url.len()
         + hyperlink
             .tooltip
@@ -460,10 +459,10 @@ fn push_unique_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{DrawingKind, DrawingProjection};
+    use crate::document_data::DrawingKind;
 
-    fn freeze(top_left_cell: &str) -> FreezePaneProjection {
-        FreezePaneProjection {
+    fn freeze(top_left_cell: &str) -> FreezePane {
+        FreezePane {
             top_left_cell: top_left_cell.to_string(),
             horizontal_split: 1.0,
             vertical_split: 1.0,
@@ -476,7 +475,7 @@ mod tests {
     fn rich_tail_budget_includes_hidden_rows_columns_and_freeze_pane() {
         let row_freeze = freeze("A5");
         let row_tail = estimate_rich_projection_tail_bytes(
-            &ReadOnlyRichProjection {
+            &RichMetadata {
                 hidden_rows: vec![0, 3, 4],
                 freeze_pane: Some(row_freeze.clone()),
                 ..Default::default()
@@ -485,7 +484,7 @@ mod tests {
             None,
         );
         let empty_row_tail =
-            estimate_rich_projection_tail_bytes(&ReadOnlyRichProjection::default(), Some(3), None);
+            estimate_rich_projection_tail_bytes(&RichMetadata::default(), Some(3), None);
 
         assert!(
             row_tail
@@ -496,7 +495,7 @@ mod tests {
 
         let column_freeze = freeze("E1");
         let column_tail = estimate_rich_projection_tail_bytes(
-            &ReadOnlyRichProjection {
+            &RichMetadata {
                 hidden_columns: vec![0, 4, 5],
                 freeze_pane: Some(column_freeze.clone()),
                 ..Default::default()
@@ -505,7 +504,7 @@ mod tests {
             Some(4),
         );
         let empty_column_tail =
-            estimate_rich_projection_tail_bytes(&ReadOnlyRichProjection::default(), None, Some(4));
+            estimate_rich_projection_tail_bytes(&RichMetadata::default(), None, Some(4));
 
         assert!(
             column_tail
@@ -518,10 +517,10 @@ mod tests {
     #[test]
     fn rich_tail_budget_includes_hyperlink_value_size() {
         let short = estimate_rich_projection_tail_bytes(
-            &ReadOnlyRichProjection {
+            &RichMetadata {
                 hyperlinks: [(
                     "A2".to_string(),
-                    HyperlinkProjection {
+                    Hyperlink {
                         url: "https://x.test".to_string(),
                         tooltip: None,
                         location: false,
@@ -535,10 +534,10 @@ mod tests {
             None,
         );
         let long = estimate_rich_projection_tail_bytes(
-            &ReadOnlyRichProjection {
+            &RichMetadata {
                 hyperlinks: [(
                     "A2".to_string(),
-                    HyperlinkProjection {
+                    Hyperlink {
                         url: format!("https://x.test/{}", "a".repeat(1024)),
                         tooltip: Some("tooltip".repeat(64)),
                         location: false,
@@ -563,10 +562,10 @@ mod tests {
             sheets: vec![DocumentSheet {
                 name: "Sheet1".to_string(),
                 rows: vec![vec![CellValue::Null]; 12],
-                rich: ReadOnlyRichProjection {
+                rich: RichMetadata {
                     cell_styles: [(
                         "A1".to_string(),
-                        CellStyleProjection {
+                        CellStyle {
                             bold: Some(true),
                             ..Default::default()
                         },
@@ -575,7 +574,7 @@ mod tests {
                     .collect(),
                     hyperlinks: [(
                         "B2".to_string(),
-                        HyperlinkProjection {
+                        Hyperlink {
                             url: "https://example.com".to_string(),
                             tooltip: None,
                             location: false,
@@ -583,7 +582,7 @@ mod tests {
                     )]
                     .into_iter()
                     .collect(),
-                    drawings: vec![DrawingProjection {
+                    drawings: vec![Drawing {
                         kind: DrawingKind::Image,
                         from_row: 1,
                         from_col: 1,

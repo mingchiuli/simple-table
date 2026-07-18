@@ -203,7 +203,7 @@ fn document_handle_for_read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentSheet;
+    use crate::document_data::{DocumentSheet, MergeRange};
     use crate::types::CellValue;
 
     #[test]
@@ -401,7 +401,7 @@ mod tests {
     fn region_projection_includes_merge_anchor_outside_region() {
         let sheet = DocumentSheet {
             rows: vec![vec![CellValue::String("anchor".to_string())]],
-            merges: vec![crate::types::MergeRange {
+            merges: vec![MergeRange {
                 start_row: 0,
                 start_col: 0,
                 end_row: 140,

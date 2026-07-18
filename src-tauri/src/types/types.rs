@@ -1,5 +1,5 @@
-pub use crate::domain::CellValue;
 use crate::domain::normalize_formula_text;
+pub use crate::domain::{CellNumber, CellValue};
 use crate::types::projection::CellValueProjection;
 use crate::types::{EditorSessionInfo, EditorStateInfo, FormulaStatus};
 use serde::ser::SerializeStruct;
@@ -50,7 +50,14 @@ impl CellValue {
                 {
                     return Value::String(i.to_string());
                 }
-                value.clone()
+                value.as_i64().map_or_else(
+                    || {
+                        serde_json::Number::from_f64(value.as_f64())
+                            .map(Value::Number)
+                            .unwrap_or(Value::Null)
+                    },
+                    |value| Value::Number(value.into()),
+                )
             }
             CellValue::Boolean(value) => Value::Bool(*value),
             CellValue::Formula { cached_value, .. } => cached_value.raw_json_value(),
@@ -70,9 +77,11 @@ impl<'de> Deserialize<'de> for CellValue {
             Value::Bool(b) => Ok(CellValue::Boolean(b)),
             Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
-                    Ok(CellValue::Number(Value::from(i)))
+                    Ok(CellValue::Number(CellNumber::from(i)))
                 } else if let Some(f) = n.as_f64() {
-                    Ok(CellValue::Number(Value::from(f)))
+                    CellNumber::from_f64(f)
+                        .map(CellValue::Number)
+                        .ok_or_else(|| serde::de::Error::custom("cell number must be finite"))
                 } else {
                     // 解析失败，尝试作为字符串
                     Ok(CellValue::String(n.to_string()))
@@ -290,6 +299,7 @@ pub struct SpreadsheetFormatOptions {
     pub supported_extensions: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename = "ReadOnlyRichProjection", rename_all = "camelCase")]
@@ -318,6 +328,7 @@ pub struct ReadOnlyRichProjection {
     pub has_freeze_pane: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -329,6 +340,7 @@ pub struct FreezePaneProjection {
     pub state: String,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -359,6 +371,7 @@ pub struct CellStyleProjection {
     pub number_format: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -372,6 +385,7 @@ pub struct DrawingProjection {
     pub to_col: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

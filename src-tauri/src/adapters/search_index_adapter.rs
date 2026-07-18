@@ -941,13 +941,14 @@ mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
     use crate::adapters::search_index_store::SearchIndexRegistry;
+    use crate::document_data::{CellFormat, RichMetadata};
     use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::domain::CellNumber;
     use crate::domain::EditorCommand;
     use crate::error::AppError;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentRepository;
-    use crate::types::{CellFormatProjection, ReadOnlyRichProjection, SearchScope};
-    use serde_json::Value;
+    use crate::types::SearchScope;
 
     struct TestContext {
         documents: ActiveDocumentRepository,
@@ -1269,11 +1270,11 @@ mod tests {
     fn scan_and_index_return_the_same_formatted_display_value() {
         let context = context_for_sheet(DocumentSheet {
             name: "Test".to_string(),
-            rows: vec![vec![CellValue::Number(Value::from(0.4))]],
-            rich: ReadOnlyRichProjection {
+            rows: vec![vec![CellValue::Number(CellNumber::from_f64(0.4).unwrap())]],
+            rich: RichMetadata {
                 cell_formats: HashMap::from([(
                     "A1".to_string(),
-                    CellFormatProjection {
+                    CellFormat {
                         number_format: Some("0%".to_string()),
                         style_id: None,
                     },
