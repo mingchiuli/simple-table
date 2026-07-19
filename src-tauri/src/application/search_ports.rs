@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    SearchCellText, SearchDocumentSnapshot, SearchIndexWork, SearchScanCursor, SearchTextChunk,
+    SearchCellText, SearchDocumentSnapshot, SearchIndexWork, SearchOutcome, SearchScanCursor,
+    SearchScope, SearchTextChunk,
 };
 use crate::error::AppError;
-use crate::types::{SearchResponse, SearchScope};
 
 pub(crate) trait SearchDocumentSourcePort: Send + Sync {
     fn document_snapshot(
@@ -39,7 +39,7 @@ pub(crate) trait SearchQueryPort: Send + Sync {
         query: &str,
         scope: SearchScope,
         current_sheet_index: Option<usize>,
-    ) -> Result<SearchResponse, AppError>;
+    ) -> Result<SearchOutcome, AppError>;
 }
 
 pub(crate) trait SearchIndexMaintenancePort: Send + Sync {

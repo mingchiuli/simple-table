@@ -1,31 +1,25 @@
 import type {
+  DocumentIdentityStateInput,
+  DocumentMutationStateInput,
   DocumentProjection,
   DocumentSessionLifecycle,
+  DocumentSessionStateInput,
   EditorCommandContext,
-  EditorMutationResponse,
-  EditorSessionInfo,
   LoadedSheetSlot,
-  OpenDocumentResponse,
-  SavedDocumentResponse,
   SheetExtent,
   SheetRegion,
   SheetRegionBlock,
   U64String,
-} from '@/types';
+} from '@/types/documentRuntime';
+import { MAX_RESIDENT_REGION_BYTES } from '@/types/documentRuntime';
 import {
-  EDITOR_MUTATION_PROTOCOL_VERSION,
-  MAX_SHEET_REGION_RESPONSE_BYTES,
-} from '@/types';
-import {
-  applyProjectionPatches,
   createLoadedSheetSlot,
-  createDocumentProjection,
   isRegionLoaded,
   regionCoveringBlockKeys,
   regionKey,
   replaceLoadedSheetBlocks,
 } from '@/projection/documentProjection';
-import { compareU64, isNextU64, maxU64, ZERO_U64 } from '@/utils/u64';
+import { ZERO_U64 } from '@/utils/u64';
 import {
   oldestEvictableRegionBlock,
   pinRegionBlocks,
@@ -37,7 +31,7 @@ import {
 } from '@/stores/documentRegionState';
 import { markRaw } from 'vue';
 
-export type { DocumentSessionLifecycle } from '@/types';
+export type { DocumentSessionLifecycle } from '@/types/documentRuntime';
 
 export type MutationApplyResult = {
   data: DocumentProjection | null;
@@ -61,7 +55,7 @@ export type DocumentSessionSnapshot = {
 const MAX_RESIDENT_SHEETS = 4;
 const MAX_BLOCKS_PER_SHEET = 8;
 const MAX_RESIDENT_BLOCKS = 24;
-const MAX_RESIDENT_BLOCK_BYTES = MAX_SHEET_REGION_RESPONSE_BYTES;
+const MAX_RESIDENT_BLOCK_BYTES = MAX_RESIDENT_REGION_BYTES;
 export const useDocumentSessionStore = defineStore('documentSession', {
   state: () => ({
     data: null as DocumentProjection | null,
@@ -119,79 +113,34 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     matchesCommandContext(context: EditorCommandContext): boolean {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
     },
-    replaceDocumentProjection(response: OpenDocumentResponse, protectedSheetIndex = 0) {
+    replaceProjection(data: DocumentProjection, protectedSheetIndex = 0) {
       resetRegionState(this);
-      this.data = markProjectionCellIndexesRaw(
-        createDocumentProjection(response.document, response.initialRegion)
-      );
-      this.residentSheetOrder = response.initialRegion
-        ? [response.initialRegion.region.sheetIndex]
-        : [];
+      this.data = markProjectionCellIndexesRaw(data);
+      this.residentSheetOrder = this.loadedSheetIndexes;
       this.projectionStale = false;
       reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
       this.enforceResidentSheetBudget(protectedSheetIndex);
-      this.enforceRegionBlockBudget(response.initialRegion?.region.sheetIndex ?? 0);
+      this.enforceRegionBlockBudget(protectedSheetIndex);
     },
-    openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
-      this.replaceDocumentProjection(response);
-      this.currentFilePath = path !== null ? path : response.document.path || null;
-      this.documentId = response.editorSession.documentId;
-      this.revision = response.editorSession.revision;
-      this.editorCommandDepth = 0;
-      this.projectionStale = false;
-    },
-    recoverActiveDocumentResponse(response: OpenDocumentResponse, preferredSheetIndex = 0): boolean {
-      if (
-        this.documentId !== response.editorSession.documentId
-        || compareU64(response.editorSession.revision, this.revision) < 0
-      ) return false;
-      this.replaceDocumentProjection(response, preferredSheetIndex);
-      this.revision = response.editorSession.revision;
-      this.currentFilePath = response.document.path || this.currentFilePath;
-      return true;
-    },
-    applySavedDocumentResponse(
-      response: SavedDocumentResponse,
-      path: string | null = null,
-      preferredSheetIndex = 0
-    ) {
-      if (!response.document && (!response.identity || !this.data)) {
-        throw new Error('Saved document response did not include manifest or identity data');
+    replaceSessionState(state: DocumentSessionStateInput) {
+      const residentSheetOrder = state.preserveResidentSheetOrder
+        ? [...this.residentSheetOrder]
+        : [];
+      this.replaceProjection(state.data, state.preferredSheetIndex);
+      if (state.preserveResidentSheetOrder) {
+        const loaded = new Set(this.loadedSheetIndexes);
+        this.residentSheetOrder = residentSheetOrder.filter((index) => loaded.has(index));
       }
-      resetRegionState(this);
-      const selected = response.document
-        ? Math.min(preferredSheetIndex, Math.max(0, response.document.sheets.length - 1))
-        : preferredSheetIndex;
-      if (response.document) {
-        this.data = markProjectionCellIndexesRaw(createDocumentProjection(response.document));
-        this.activateResidentSheet(selected);
-      } else if (this.data && response.identity) {
-        this.data = {
-          ...this.data,
-          path: response.identity.path,
-          fileName: response.identity.fileName,
-        };
-      }
-      const responsePath = response.document?.path ?? response.identity?.path;
-      this.currentFilePath = path !== null ? path : responsePath || null;
-      this.documentId = response.editorSession.documentId;
-      this.revision = response.editorSession.revision;
+      this.currentFilePath = state.currentFilePath;
+      this.documentId = state.documentId;
+      this.revision = state.revision;
+      if (state.resetEditorCommandDepth) this.editorCommandDepth = 0;
       this.projectionStale = false;
-      this.enforceResidentSheetBudget(selected);
-    },
-    applySavedDocumentResponseForContext(
-      context: EditorCommandContext,
-      response: SavedDocumentResponse,
-      path: string | null = null,
-      preferredSheetIndex = 0
-    ): boolean {
-      if (
-        response.editorSession.documentId !== context.documentId
-        || compareU64(response.editorSession.revision, context.baseRevision) < 0
-        || !this.matchesCommandContext(context)
-      ) return false;
-      this.applySavedDocumentResponse(response, path, preferredSheetIndex);
-      return true;
+      if (state.activatePreferredSheet && this.data?.sheets[state.preferredSheetIndex]) {
+        this.activateResidentSheet(state.preferredSheetIndex, state.preferredSheetIndex);
+      }
+      this.enforceResidentSheetBudget(state.preferredSheetIndex);
+      this.enforceRegionBlockBudget(state.preferredSheetIndex);
     },
     updateIdentity(path: string | null, fileName: string) {
       if (this.data) {
@@ -210,57 +159,19 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.residentSheetOrder = [];
       this.lifecycle = 'idle';
     },
-    applyMutationResponse(
-      response: EditorMutationResponse,
+    applyMutationState(
+      state: DocumentMutationStateInput,
       protectedSheetIndex = 0
     ): MutationApplyResult {
-      if (response.protocolVersion !== EDITOR_MUTATION_PROTOCOL_VERSION) {
-        throw new Error(`Unsupported editor mutation protocol: ${response.protocolVersion}`);
-      }
-      if (this.documentId !== null && response.documentId !== this.documentId) {
-        return { data: this.data, resyncRequired: false, applied: false };
-      }
-      if (this.documentId === null && this.data === null) {
-        return { data: this.data, resyncRequired: false, applied: false };
-      }
-      if (this.documentId === null) this.documentId = response.documentId;
-      if (compareU64(response.revision, this.revision) < 0) {
-        return { data: this.data, resyncRequired: false, applied: false };
-      }
-      if (compareU64(response.revision, this.revision) > 0
-          && !isNextU64(response.revision, this.revision)) {
-        this.revision = response.revision;
-        this.projectionStale = true;
-        return { data: this.data, resyncRequired: true, applied: true };
-      }
-      if (response.revision === this.revision && response.patches?.length) {
-        this.projectionStale = true;
-        return { data: this.data, resyncRequired: true, applied: true };
-      }
-      if (response.revision === this.revision) {
-        return { data: this.data, resyncRequired: false, applied: true };
-      }
-
-      this.revision = response.revision;
-      try {
-        const result = applyProjectionPatches(
-          this.data,
-          response.patches,
-          response.sheetExtents
-        );
-        this.data = markProjectionCellIndexesRaw(result.data);
-        reconcileRegionBlocks(this, this.data?.sheets.flatMap((sheet) =>
-          sheet.state === 'loaded' ? sheet.blocks.map((block) => block.key) : []
-        ) ?? []);
-        this.reconcileResidentSheets(protectedSheetIndex);
-        if (result.resyncRequired) {
-          this.projectionStale = true;
-        }
-        return { ...result, applied: true };
-      } catch (error) {
-        this.projectionStale = true;
-        throw error;
-      }
+      this.documentId = state.documentId;
+      this.revision = state.revision;
+      this.data = markProjectionCellIndexesRaw(state.data);
+      reconcileRegionBlocks(this, this.data?.sheets.flatMap((sheet) =>
+        sheet.state === 'loaded' ? sheet.blocks.map((block) => block.key) : []
+      ) ?? []);
+      this.reconcileResidentSheets(protectedSheetIndex);
+      if (state.resyncRequired) this.projectionStale = true;
+      return { data: this.data, resyncRequired: state.resyncRequired, applied: true };
     },
     isSheetLoaded(sheetIndex: number): boolean {
       return this.data?.sheets[sheetIndex]?.state === 'loaded';
@@ -413,27 +324,15 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     isSheetRegionLoaded(region: SheetRegion): boolean {
       return isRegionLoaded(this.data?.sheets[region.sheetIndex], region);
     },
-    markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
-      if (this.documentId !== null && response.documentId !== this.documentId) return false;
-      if (this.documentId === null && this.data === null) return false;
-      if (compareU64(response.revision, this.revision) < 0) return false;
-      if (this.documentId === null) this.documentId = response.documentId;
-      this.revision = response.revision;
+    markProjectionStale(identity: DocumentIdentityStateInput) {
+      this.documentId = identity.documentId;
+      this.revision = identity.revision;
       this.projectionStale = true;
-      return true;
     },
-    applyEditorSessionIdentity(info: EditorSessionInfo) {
-      if (this.data === null) return { applied: false, revisionAdvanced: false };
-      if (this.documentId !== null && info.documentId !== this.documentId) {
-        return { applied: false, revisionAdvanced: false };
-      }
-      const revisionAdvancedWithoutProjection = compareU64(info.revision, this.revision) > 0;
-      this.documentId = info.documentId;
-      this.revision = maxU64(this.revision, info.revision);
-      if (revisionAdvancedWithoutProjection) {
-        this.projectionStale = true;
-      }
-      return { applied: true, revisionAdvanced: revisionAdvancedWithoutProjection };
+    applyEditorSessionIdentity(identity: DocumentIdentityStateInput, revisionAdvanced: boolean) {
+      this.documentId = identity.documentId;
+      this.revision = identity.revision;
+      if (revisionAdvanced) this.projectionStale = true;
     },
     captureSessionSnapshot(): DocumentSessionSnapshot {
       return {

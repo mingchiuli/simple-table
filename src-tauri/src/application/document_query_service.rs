@@ -1,6 +1,8 @@
 use crate::application::{document_format_policy, document_projection, response_budget};
 use crate::document_data::DocumentData;
 use crate::error::AppError;
+#[cfg(test)]
+use crate::protocol_projection;
 use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 use crate::types::{
     DocumentCapabilities, NativeSavePlan, OpenDocumentResponse, SheetRegion,
@@ -187,7 +189,7 @@ fn active_workbook_capabilities(
             _ => active_file.file_name == file_name,
         };
         if matches {
-            return editor_state.capabilities();
+            return protocol_projection::workbook_capabilities(editor_state.capabilities());
         }
     }
     WorkbookCapabilities::default()
@@ -203,8 +205,9 @@ fn document_handle_for_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::region_metadata_index::DocumentRegion;
     use crate::document_data::{DocumentSheet, MergeRange};
-    use crate::types::CellValue;
+    use crate::domain::CellValue;
 
     #[test]
     fn document_capabilities_are_computed_by_backend() {
@@ -421,9 +424,19 @@ mod tests {
             file_name: "merge.xlsx".to_string(),
             sheets: vec![sheet.clone()],
         };
-        let metadata =
+        let metadata = crate::protocol_projection::region_metadata(
             crate::document::region_metadata_index::RegionMetadataIndex::from_file_data(&file_data)
-                .project(&file_data, &region);
+                .project(
+                    &file_data,
+                    &DocumentRegion {
+                        sheet_index: region.sheet_index,
+                        row_start: region.row_start,
+                        row_end: region.row_end,
+                        col_start: region.col_start,
+                        col_end: region.col_end,
+                    },
+                ),
+        );
         let anchors = project_merge_anchor_cells(&sheet, &region, &metadata.merges);
 
         assert_eq!(anchors.len(), 1);

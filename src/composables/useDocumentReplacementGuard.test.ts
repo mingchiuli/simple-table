@@ -14,6 +14,7 @@ import {
   type CellValue,
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
+import { openDocumentSession } from '@/test/documentSessionTestDriver';
 
 const unsavedChanges = vi.hoisted(() => ({
   confirmDiscardUnsavedChanges: vi.fn(),
@@ -51,7 +52,8 @@ function openTestDocument(documentId: number | string = '1') {
         history: defaultHistoryStatus(),
       },
     };
-  useDocumentSessionStore().openDocumentResponse(
+  openDocumentSession(
+    useDocumentSessionStore(),
     openResponseFromFileData(fileData, editorSession),
     "/tmp/book.xlsx"
   );

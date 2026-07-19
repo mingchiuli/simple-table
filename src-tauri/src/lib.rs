@@ -10,6 +10,7 @@ mod error;
 mod formula;
 mod io;
 mod ops;
+mod protocol_projection;
 mod recent;
 mod resource_limits;
 mod state;

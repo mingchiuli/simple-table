@@ -3,7 +3,7 @@ use std::collections::{HashSet, VecDeque};
 
 use formualizer_workbook::{Workbook, WorkbookMode};
 
-use crate::domain::DocumentCellChange;
+use crate::domain::{CellValue, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
@@ -13,8 +13,8 @@ use crate::formula::index::{
 use crate::formula::registry::{
     FormulaCellRegistration, apply_cell_changes, register_workbook_cells, set_workbook_cell,
 };
+use crate::formula::status::{FormulaDiagnostics, FormulaIssueKind};
 use crate::formula::value_codec::{literal_to_cell, to_formula_index};
-use crate::types::{CellValue, FormulaDiagnostics};
 
 const MAX_FORMULA_RUNTIME_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const FORMULA_RUNTIME_ENTRY_ESTIMATED_BYTES: usize = 512;
@@ -310,7 +310,7 @@ impl FormulaRuntime {
         self.dependency_index
             .diagnostics
             .issues
-            .retain(|issue| !matches!(issue.kind, crate::types::FormulaIssueKind::InvalidFormula));
+            .retain(|issue| !matches!(issue.kind, FormulaIssueKind::InvalidFormula));
         let remaining = 100usize.saturating_sub(self.dependency_index.diagnostics.issues.len());
         self.dependency_index
             .diagnostics
@@ -640,7 +640,7 @@ mod tests {
             issue.sheet_index == 0
                 && issue.row == 0
                 && issue.col == 0
-                && matches!(issue.kind, crate::types::FormulaIssueKind::InvalidFormula)
+                && matches!(issue.kind, FormulaIssueKind::InvalidFormula)
         }));
     }
 

@@ -6,6 +6,7 @@ import { useDocumentSessionStore } from "@/stores/documentSession";
 import type { OpenDocumentResponse } from "@/types";
 import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
+import { openDocumentSession } from '@/test/documentSessionTestDriver';
 
 vi.mock("@/api", () => ({
   getActiveDocument: vi.fn(),
@@ -59,7 +60,7 @@ describe("restoreActiveDocument", () => {
 
   it("does not replace an already initialized frontend session", async () => {
     const store = useDocumentSessionStore();
-    store.openDocumentResponse(activeDocument(), "/tmp/recovered.xlsx");
+    openDocumentSession(store, activeDocument(), "/tmp/recovered.xlsx");
 
     await expect(restoreActiveDocument()).resolves.toBe(false);
     expect(api.getActiveDocument).not.toHaveBeenCalled();

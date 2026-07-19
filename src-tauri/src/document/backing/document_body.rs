@@ -2,6 +2,10 @@ use crate::document_data::DocumentData;
 use std::{collections::BTreeSet, sync::Arc};
 
 use crate::document::backing::workbook_state::{self, StructurePatchDiagnostics};
+use crate::document::capabilities::{
+    SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
+};
 use crate::document_format::{SpreadsheetFileFormat, extension_of};
 use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
@@ -9,10 +13,6 @@ use crate::formula::ast::FormulaAstService;
 #[cfg(test)]
 use crate::io::codec::writer;
 use crate::io::projection_codec::WorkbookProjectionCodec;
-use crate::types::{
-    SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
-};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {

@@ -3,10 +3,11 @@ use std::collections::{HashMap, HashSet};
 
 use formualizer_parse::parser::ReferenceType;
 
+use crate::domain::CellValue;
 use crate::formula::ast::{FormulaAstService, MAX_FORMULA_REFERENCES};
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::sheet_name::sheet_name_key;
-use crate::types::{CellValue, FormulaDiagnostics, FormulaIssue, FormulaIssueKind};
+use crate::formula::status::{FormulaDiagnostics, FormulaIssue, FormulaIssueKind};
 
 const LARGE_RANGE_ROW_THRESHOLD: usize = 512;
 const LARGE_RANGE_COLUMN_THRESHOLD: usize = 128;

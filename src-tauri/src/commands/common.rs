@@ -8,6 +8,7 @@ use crate::application::{
     document_open_service, document_query_service, document_service, editor_command_service,
 };
 use crate::error::AppError;
+use crate::protocol_projection;
 use crate::recent::{AddRecentFileRequest, RecentFile};
 use crate::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
 use crate::types::{
@@ -803,16 +804,21 @@ pub async fn search(
     current_sheet_index: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
     let runtime = runtime.inner().clone();
+    let scope = match scope {
+        SearchScope::CurrentSheet => crate::domain::SearchScope::CurrentSheet,
+        SearchScope::AllSheets => crate::domain::SearchScope::AllSheets,
+    };
     executions
         .search()
         .run(move || {
-            runtime.search_queries().search(
+            let outcome = runtime.search_queries().search(
                 document_id.get(),
                 base_revision.get(),
                 &query,
                 scope,
                 current_sheet_index,
-            )
+            )?;
+            protocol_projection::search_response(outcome)
         })
         .await
 }

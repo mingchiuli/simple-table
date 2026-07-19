@@ -2,7 +2,11 @@ use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::document::backing::document_body::BodySheetShape;
-use crate::domain::{AppliedOperation, DocumentCellChange};
+use crate::document::capabilities::{
+    SheetCapabilities, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
+};
+use crate::domain::{AppliedOperation, CellValue, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::reference_rewrite::{
@@ -11,10 +15,6 @@ use crate::formula::reference_rewrite::{
 };
 use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
-use crate::types::{
-    SheetCapabilities, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
-};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -206,7 +206,7 @@ pub fn apply_structure_operation(
         } => {
             let sheet_data = DocumentSheet {
                 name: name.clone(),
-                rows: vec![vec![crate::types::CellValue::Null; *column_count]; *row_count],
+                rows: vec![vec![CellValue::Null; *column_count]; *row_count],
                 ..Default::default()
             };
             insert_sheet(workbook, *sheet_index, &sheet_data)?;

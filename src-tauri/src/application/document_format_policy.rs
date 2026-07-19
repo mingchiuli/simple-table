@@ -3,6 +3,7 @@ use crate::document_format::{
     supported_extension_from_name,
 };
 use crate::error::AppError;
+use crate::protocol_projection;
 use crate::state::editor_state::EditorState;
 use crate::types::{
     DocumentCapabilities, NativeSavePlan, SpreadsheetFormatOptions, WorkbookCapabilities,
@@ -16,7 +17,7 @@ pub(crate) fn document_capabilities(editor_state: &EditorState) -> DocumentCapab
     capabilities_for_source(
         file.file_name.as_str(),
         current_path,
-        editor_state.capabilities(),
+        protocol_projection::workbook_capabilities(editor_state.capabilities()),
     )
 }
 
@@ -30,7 +31,7 @@ pub(crate) fn native_save_plan(
     let native_save_allowed = native_extension.is_some();
     let export_extension =
         export_extension(target_path_or_name).unwrap_or_else(|| source_format.clone());
-    let mut workbook = editor_state.capabilities();
+    let mut workbook = protocol_projection::workbook_capabilities(editor_state.capabilities());
     workbook.save.can_native_save = native_save_allowed && workbook.save.can_native_save;
     if let Some(reason) = native_save_target_block_reason(editor_state, target_path_or_name) {
         workbook.save.can_native_save = false;

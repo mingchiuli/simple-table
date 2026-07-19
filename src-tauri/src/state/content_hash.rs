@@ -752,7 +752,7 @@ mod tests {
 
     use super::{ContentFingerprint, hash_content_fingerprint};
     use crate::document_data::{DocumentData, DocumentSheet};
-    use crate::types::CellValue;
+    use crate::domain::CellValue;
 
     fn file_data() -> DocumentData {
         DocumentData {

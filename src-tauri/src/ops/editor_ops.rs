@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
+use crate::protocol_projection;
 use crate::state::state::ActiveDocumentRepository;
 use crate::types::EditorSessionInfo;
 
@@ -17,8 +18,13 @@ pub fn do_get_editor_state(
             Ok(Some(EditorSessionInfo {
                 document_id: editor_state.document_id(),
                 revision: editor_state.revision(),
-                formula_status: editor_state.formula_status(),
-                capabilities: editor_state.capabilities(),
+                formula_status: protocol_projection::formula_status(
+                    editor_state.formula_status(),
+                    100,
+                ),
+                capabilities: protocol_projection::workbook_capabilities(
+                    editor_state.capabilities(),
+                ),
                 editor_state: editor_state_info(&editor_state),
             }))
         }

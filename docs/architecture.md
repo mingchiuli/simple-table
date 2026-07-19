@@ -67,6 +67,11 @@ composition root. `search_service` contains only the port-driven use case and
 cannot depend on the active-document repository or `DocumentHandle`. The
 runtime exposes that query service independently; `EditorCommandService` owns
 only mutation replay, mutation execution, and post-mutation index maintenance.
+Search query and index ports exchange internal `SearchScope`, `SearchHit`, and
+`SearchOutcome` values rather than RPC responses. Search infrastructure
+enforces semantic result and memory budgets. The outward protocol projection
+performs final `SearchResponse` mapping and exact serialized-byte admission at
+the command boundary.
 
 The active-document registry is hidden behind `ActiveDocumentRepository`.
 Application and operation modules request semantic read or mutation handles
@@ -111,6 +116,11 @@ TypeScript generation, or Tauri types. `CellNumber` admits only finite integer
 or floating-point values; the wire serializer alone maps those values to JSON.
 A new-Sheet operation carries only domain initialization data;
 projection and workbook adapters construct their own representations.
+Formula diagnostics and runtime status, workbook and Sheet capabilities,
+history status, and region metadata are also internal semantic models. The
+document, formula, and state modules cannot import `types`. The top-level
+`protocol_projection` module is their explicit outward wire mapper, so serde
+and TypeScript DTO changes cannot propagate into the document aggregate.
 
 The Rust `document` module is the physical aggregate boundary. It owns
 `SpreadsheetDocument`, transactions, mementos, formula coordination, save
@@ -187,6 +197,12 @@ modules, never on the query service.
   tiling, admission, cancellation, and commit through a narrow document port.
   The composable composition layer exposes a combined facade. Business Stores
   must not instantiate or mutate one another.
+- Backend open, save, mutation, and editor-session responses are interpreted by
+  the pure `documentSessionProtocol` application module. It owns protocol
+  version checks, document/revision admission, patch application, and resync
+  decisions. `documentSession` accepts only runtime state inputs and cannot
+  import response DTOs, generated protocol constants, or projection patch
+  interpreters.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
   is the backend dirty flag OR pending frontend content. Store dictionaries are
   JSON-serializable records; large pending dictionaries remain raw and expose

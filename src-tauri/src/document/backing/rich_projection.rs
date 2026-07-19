@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+#[cfg(test)]
+use crate::document::region_metadata_index::DocumentRegion;
 use crate::document_data::{Drawing, RichMetadata};
 use crate::domain::cell_key::parse_cell_key;
-#[cfg(test)]
-use crate::types::SheetRegion;
 
 #[derive(Clone, Copy)]
 pub(crate) enum RichProjectionScope {
@@ -89,7 +89,7 @@ pub(crate) fn filter_rich_projection(
 #[cfg(test)]
 pub(crate) fn filter_rich_projection_region(
     source: &RichMetadata,
-    region: &SheetRegion,
+    region: &DocumentRegion,
 ) -> RichMetadata {
     let contains_cell = |row: usize, col: usize| {
         row >= region.row_start
@@ -327,7 +327,7 @@ mod tests {
             hidden_rows: vec![0, 199],
             ..Default::default()
         };
-        let region = SheetRegion {
+        let region = DocumentRegion {
             sheet_index: 0,
             row_start: 0,
             row_end: 128,

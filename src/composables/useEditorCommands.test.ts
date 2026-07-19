@@ -21,6 +21,10 @@ import {
   type SheetData,
 } from "@/test/documentFixtures";
 import { sheetCell } from "@/projection/documentProjection";
+import {
+  applyDocumentMutation,
+  openDocumentSession,
+} from '@/test/documentSessionTestDriver';
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -199,7 +203,11 @@ describe("useEditorCommands", () => {
     const api = await import("@/api");
     let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
     const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
-      documentSessionStore.openDocumentResponse(openedResponse(2, "next.xlsx"), "/tmp/next.xlsx");
+      openDocumentSession(
+        documentSessionStore,
+        openedResponse(2, "next.xlsx"),
+        "/tmp/next.xlsx",
+      );
       return true;
     });
     const setup = setupCommands(flushPendingCellChanges);
@@ -216,7 +224,11 @@ describe("useEditorCommands", () => {
     const api = await import("@/api");
     let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
     const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
-      documentSessionStore.openDocumentResponse(openedResponse(2, "next.xlsx"), "/tmp/next.xlsx");
+      openDocumentSession(
+        documentSessionStore,
+        openedResponse(2, "next.xlsx"),
+        "/tmp/next.xlsx",
+      );
       return true;
     });
     const setup = setupCommands(flushPendingCellChanges);
@@ -445,7 +457,7 @@ describe("useEditorCommands", () => {
       });
     vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: '1' }));
     setup.applyMutationResponse.mockImplementation(async (response) => {
-      return setup.documentSessionStore.applyMutationResponse(response);
+      return applyDocumentMutation(setup.documentSessionStore, response);
     });
 
     await setup.commands.handleAddSheet();

@@ -7,62 +7,10 @@ import type {
   FormulaDiagnostics,
   FormulaStatus,
   HistoryStatus,
-  EditorCommandContext,
-  CellValue,
   ReadOnlyRichProjection,
-  SheetRegionMetadata,
   SheetCapabilities,
-  SheetExtent,
-  SheetRegion,
   WorkbookCapabilities,
 } from './generated';
-
-export type SheetLayoutState = {
-  columnWidths: Record<number, number>;
-  rowHeights: Record<number, number>;
-};
-
-export type MutationCommandContext = EditorCommandContext & {
-  commandId: string;
-};
-
-export type LoadedSheetSlot = {
-  state: 'loaded';
-  name: string;
-  extent: SheetExtent;
-  layout: SheetLayoutState;
-  blocks: SheetRegionBlock[];
-  metadata: LoadedSheetRegionMetadata;
-};
-
-export type LoadedSheetRegionMetadata = {
-  merges: NonNullable<SheetRegionMetadata['merges']>;
-  rich: ReadOnlyRichProjection;
-};
-
-export type SheetRegionBlock = {
-  key: string;
-  region: SheetRegion;
-  cells: Record<string, CellValue>;
-  mergeAnchorCells: Record<string, CellValue>;
-  metadata: SheetRegionMetadata;
-  estimatedBytes: number;
-};
-
-export type UnloadedSheetSlot = {
-  state: 'unloaded';
-  name: string;
-  extent: SheetExtent;
-  layout: SheetLayoutState;
-};
-
-export type SheetSlot = LoadedSheetSlot | UnloadedSheetSlot;
-
-export type DocumentProjection = {
-  path: string;
-  fileName: string;
-  sheets: SheetSlot[];
-};
 
 export function defaultSheetCapabilities(): SheetCapabilities {
   return {

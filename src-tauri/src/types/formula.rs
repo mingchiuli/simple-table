@@ -22,6 +22,7 @@ pub struct FormulaIssue {
     pub message: String,
 }
 
+#[cfg(test)]
 impl FormulaIssue {
     pub fn new(
         sheet_index: usize,
@@ -68,16 +69,10 @@ pub enum FormulaStatus {
     },
 }
 
+#[cfg(test)]
 impl FormulaStatus {
     pub fn ready(diagnostics: FormulaDiagnostics) -> Self {
         Self::Ready { diagnostics }
-    }
-
-    pub fn degraded(message: String, diagnostics: FormulaDiagnostics) -> Self {
-        Self::Degraded {
-            message,
-            diagnostics,
-        }
     }
 
     pub fn bounded(mut self, maximum_issues: usize) -> Self {

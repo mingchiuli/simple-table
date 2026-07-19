@@ -2,6 +2,7 @@ use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreRe
 use crate::document_data::{CellFormat, CellStyle, DocumentData};
 use crate::domain::DocumentCellChange;
 use crate::editor_protocol::{EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES};
+use crate::protocol_projection;
 use crate::state::editor_state::EditorState;
 use crate::types::EditorStateInfo;
 use crate::types::{
@@ -22,7 +23,7 @@ pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
         can_undo: editor_state.can_undo(),
         can_redo: editor_state.can_redo(),
         is_dirty: editor_state.is_dirty(),
-        history: editor_state.history_status(),
+        history: protocol_projection::history_status(editor_state.history_status()),
     }
 }
 
@@ -38,8 +39,8 @@ pub fn mutation_response(
         protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
-        formula_status: editor_state.formula_status().bounded(100),
-        capabilities: editor_state.capabilities(),
+        formula_status: protocol_projection::formula_status(editor_state.formula_status(), 100),
+        capabilities: protocol_projection::workbook_capabilities(editor_state.capabilities()),
         editor_state: editor_state_info(editor_state),
         patches,
         sheet_extents: Some(

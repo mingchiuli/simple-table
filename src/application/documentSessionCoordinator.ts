@@ -11,9 +11,25 @@ import type {
   U64String,
   WorkbookCapabilities,
 } from '@/types';
-import { EDITOR_MUTATION_PROTOCOL_VERSION } from '@/types';
 import { isNextU64 } from '@/utils/u64';
 import { createDocumentSessionRuntime } from '@/application/documentSessionRuntime';
+import {
+  editorSessionIdentity,
+  hasSupportedMutationProtocol,
+  interpretMutationResponse,
+  openSessionState,
+  recoveredSessionState,
+  responseProjection,
+  savedSessionState,
+  savedSessionStateForContext,
+  staleMutationIdentity,
+  type DocumentProtocolState,
+} from '@/application/documentSessionProtocol';
+import type {
+  DocumentIdentityStateInput,
+  DocumentMutationStateInput,
+  DocumentSessionStateInput,
+} from '@/types/documentRuntime';
 
 export type MutationApplyResult = {
   data: DocumentProjection | null;
@@ -29,6 +45,7 @@ export type DocumentSessionCoordinatorPorts<
 > = {
   document: {
     readonly data: DocumentProjection | null;
+    readonly currentFilePath: string | null;
     readonly documentId: U64String | null;
     readonly revision: U64String;
     readonly lifecycle: DocumentSessionLifecycle;
@@ -38,33 +55,18 @@ export type DocumentSessionCoordinatorPorts<
     endLifecycle(lifecycle: Exclude<DocumentSessionLifecycle, 'idle'>): void;
     beginEditorCommand(): boolean;
     endEditorCommand(): void;
-    openDocumentResponse(response: OpenDocumentResponse, path?: string | null): void;
-    recoverActiveDocumentResponse(response: OpenDocumentResponse, preferredSheetIndex?: number): boolean;
-    applySavedDocumentResponse(
-      response: SavedDocumentResponse,
-      path?: string | null,
-      preferredSheetIndex?: number,
-    ): void;
-    applySavedDocumentResponseForContext(
-      context: EditorCommandContext,
-      response: SavedDocumentResponse,
-      path?: string | null,
-      preferredSheetIndex?: number,
-    ): boolean;
+    replaceSessionState(state: DocumentSessionStateInput): void;
+    replaceProjection(data: DocumentProjection, protectedSheetIndex?: number): void;
     clearDocument(): void;
-    applyMutationResponse(
-      response: EditorMutationResponse,
+    applyMutationState(
+      state: DocumentMutationStateInput,
       preferredSheetIndex?: number,
     ): MutationApplyResult;
     matchesCommandContext(context: EditorCommandContext): boolean;
-    replaceDocumentProjection(response: OpenDocumentResponse, preferredSheetIndex?: number): void;
-    markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean;
+    markProjectionStale(identity: DocumentIdentityStateInput): void;
     currentCommandContext(): EditorCommandContext | null;
     commandContextForDocument(documentId: U64String): EditorCommandContext | null;
-    applyEditorSessionIdentity(info: EditorSessionInfo): {
-      applied: boolean;
-      revisionAdvanced: boolean;
-    };
+    applyEditorSessionIdentity(identity: DocumentIdentityStateInput, revisionAdvanced: boolean): void;
     captureSessionSnapshot(): DocumentSnapshot;
     restoreSessionSnapshot(snapshot: DocumentSnapshot): void;
   };
@@ -141,7 +143,7 @@ export function createDocumentSessionCoordinator<
   function openDocumentResponse(response: OpenDocumentResponse, path: string | null = null) {
     sessionRuntime.reset();
     regions.reset();
-    document.openDocumentResponse(response, path);
+    document.replaceSessionState(openSessionState(response, path));
     pending.reset();
     selection.reset();
     search.reset();
@@ -153,7 +155,9 @@ export function createDocumentSessionCoordinator<
     response: OpenDocumentResponse,
     preferredSheetIndex = 0
   ): boolean {
-    if (!document.recoverActiveDocumentResponse(response, preferredSheetIndex)) return false;
+    const state = recoveredSessionState(protocolState(), response, preferredSheetIndex);
+    if (!state) return false;
+    document.replaceSessionState(state);
     regions.reset();
     status.applyEditorSession(response.editorSession);
     clampSelectionToProjection();
@@ -168,7 +172,9 @@ export function createDocumentSessionCoordinator<
   ) {
     sessionRuntime.reset();
     regions.reset();
-    document.applySavedDocumentResponse(response, path, preferredSheetIndex);
+    document.replaceSessionState(
+      savedSessionState(protocolState(), response, path, preferredSheetIndex),
+    );
     pending.reset();
     status.clearPendingContentChange();
     status.applyEditorSession(response.editorSession);
@@ -182,12 +188,15 @@ export function createDocumentSessionCoordinator<
     path: string | null = null,
     preferredSheetIndex = 0
   ): boolean {
-    if (!document.applySavedDocumentResponseForContext(
+    const state = savedSessionStateForContext(
+      protocolState(),
       context,
       response,
       path,
-      preferredSheetIndex
-    )) return false;
+      preferredSheetIndex,
+    );
+    if (!state) return false;
+    document.replaceSessionState(state);
     sessionRuntime.reset();
     regions.reset();
     pending.reset();
@@ -215,7 +224,11 @@ export function createDocumentSessionCoordinator<
   ): Promise<MutationApplyResult> {
     const snapshot = captureSnapshot();
     const previousRevision = document.revision;
-    const result = document.applyMutationResponse(response, preferredSheetIndex);
+    const interpretation = interpretMutationResponse(protocolState(), response);
+    if (interpretation.status === 'ignored') {
+      return { data: document.data, resyncRequired: false, applied: false };
+    }
+    const result = document.applyMutationState(interpretation.state, preferredSheetIndex);
     if (!result.applied) return result;
 
     applyResponseStatus(response);
@@ -236,7 +249,7 @@ export function createDocumentSessionCoordinator<
       if (!document.matchesCommandContext(resyncContext)) {
         return { data: document.data, resyncRequired: true, applied: false };
       }
-      document.replaceDocumentProjection(projection, preferredSheetIndex);
+      document.replaceProjection(responseProjection(projection), preferredSheetIndex);
       regions.reset();
       status.applyEditorSession(projection.editorSession);
       clampSelectionToProjection();
@@ -244,9 +257,7 @@ export function createDocumentSessionCoordinator<
       if (document.matchesCommandContext(resyncContext)) {
         restoreSnapshot(snapshot);
         regions.reset();
-        document.markProjectionStaleFromMutationResponse(response);
-        applyResponseStatus(response);
-        search.clearSearch();
+        markProjectionStaleFromMutationResponse(response);
       }
       throw error;
     }
@@ -254,9 +265,11 @@ export function createDocumentSessionCoordinator<
   }
 
   function markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean {
-    if (!document.markProjectionStaleFromMutationResponse(response)) return false;
+    const identity = staleMutationIdentity(protocolState(), response);
+    if (!identity) return false;
+    document.markProjectionStale(identity);
     regions.reset();
-    if (response.protocolVersion === EDITOR_MUTATION_PROTOCOL_VERSION) applyResponseStatus(response);
+    if (hasSupportedMutationProtocol(response)) applyResponseStatus(response);
     search.clearSearch();
     return true;
   }
@@ -279,7 +292,7 @@ export function createDocumentSessionCoordinator<
         fetchEditorSession(context),
       ]);
       if (!document.matchesCommandContext(context)) return;
-      document.replaceDocumentProjection(projection, preferredSheetIndex);
+      document.replaceProjection(responseProjection(projection), preferredSheetIndex);
       regions.reset();
       status.applyEditorSession(projection.editorSession);
       clampSelectionToProjection();
@@ -312,8 +325,9 @@ export function createDocumentSessionCoordinator<
       clearDocument();
       return;
     }
-    const result = document.applyEditorSessionIdentity(info);
-    if (!result.applied) return;
+    const result = editorSessionIdentity(protocolState(), info);
+    if (!result) return;
+    document.applyEditorSessionIdentity(result.state, result.revisionAdvanced);
     status.applyEditorSession(info);
     if (result.revisionAdvanced) {
       regions.reset();
@@ -348,6 +362,15 @@ export function createDocumentSessionCoordinator<
       status: status.captureSnapshot(),
       selection: selection.captureSnapshot(),
       search: search.captureSnapshot(),
+    };
+  }
+
+  function protocolState(): DocumentProtocolState {
+    return {
+      data: document.data,
+      currentFilePath: document.currentFilePath,
+      documentId: document.documentId,
+      revision: document.revision,
     };
   }
 

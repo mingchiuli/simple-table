@@ -359,6 +359,32 @@ rejectMatches(
 );
 
 rejectMatches(
+  [
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'document'), '.rs'),
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'formula'), '.rs'),
+    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
+  ],
+  [/crate::types(?:::|\b)/],
+  'the wire-independent Rust document, formula, and state model boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'application', 'search_ports.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_adapter.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_adapter.rs'),
+  ],
+  [
+    /crate::types(?:::|\b)/,
+    /\bSearchResponse\b/,
+    /\bSearchResult\b/,
+    /\bserde_json\b/,
+  ],
+  'the internal-model-only Rust search use-case boundary',
+);
+
+rejectMatches(
   [join(projectRoot, 'src', 'application', 'documentSessionCoordinator.ts')],
   [
     /documentRegionLoadScheduler/,
@@ -379,6 +405,21 @@ rejectMatches(
     /\bSearchSessionSnapshot\b/,
   ],
   'the narrow frontend document region coordinator boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'stores', 'documentSession.ts')],
+  [
+    /\bEditorMutationResponse\b/,
+    /\bOpenDocumentResponse\b/,
+    /\bSavedDocumentResponse\b/,
+    /\bEditorSessionInfo\b/,
+    /\bEDITOR_MUTATION_PROTOCOL_VERSION\b/,
+    /['"]@\/types\/generated['"]/,
+    /\bapplyProjectionPatches\b/,
+    /\bcreateDocumentProjection\b/,
+  ],
+  'the protocol-agnostic frontend document Store boundary',
 );
 
 rejectMatches(

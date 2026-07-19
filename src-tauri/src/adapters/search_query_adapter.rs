@@ -1,14 +1,11 @@
-use std::io::Write;
-
 use crate::adapters::search_index_store::{SearchQueryPlan, SearchSheetIndex};
 use crate::application::search_ports::SearchDocumentSourcePort;
-use crate::domain::SearchScanCursor;
+use crate::domain::{SearchHit, SearchOutcome, SearchScanCursor, SearchScope};
+use crate::editor_protocol::MAX_SEARCH_RESPONSE_BYTES;
 use crate::error::AppError;
-use crate::types::{SearchResponse, SearchResult, SearchScope};
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
 pub(crate) const MAX_SEARCH_RESULT_SNIPPET_BYTES: usize = 512;
-pub(crate) const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
 const MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SEARCH_SCAN_CHUNK_CELLS: usize = 32_768;
@@ -36,9 +33,9 @@ pub(crate) fn do_search<P>(
     mut indexed_sheet: impl FnMut(usize) -> Option<std::sync::Arc<SearchSheetIndex>>,
     mut reserve_scan_work: impl FnMut() -> Result<P, AppError>,
     mut schedule_rebuild: impl FnMut(usize),
-) -> Result<SearchResponse, AppError> {
+) -> Result<SearchOutcome, AppError> {
     let Some(plan) = SearchQueryPlan::try_new(query)? else {
-        return Ok(SearchResponse::default());
+        return Ok(SearchOutcome::default());
     };
 
     let document = source
@@ -166,8 +163,8 @@ fn search_result(
     row: usize,
     col: usize,
     plan: &SearchQueryPlan,
-) -> SearchResult {
-    SearchResult {
+) -> SearchHit {
+    SearchHit {
         sheet_index: input.sheet_index,
         sheet_name: input.sheet_name.clone(),
         row,
@@ -184,8 +181,8 @@ struct SearchInput {
 }
 
 struct SearchResultCollector {
-    results: Vec<SearchResult>,
-    serialized_bytes: usize,
+    results: Vec<SearchHit>,
+    estimated_bytes: usize,
     truncated: bool,
 }
 
@@ -193,7 +190,7 @@ impl SearchResultCollector {
     fn new() -> Result<Self, AppError> {
         Ok(Self {
             results: Vec::new(),
-            serialized_bytes: serialized_json_bytes(&SearchResponse::default())?,
+            estimated_bytes: 64,
             truncated: false,
         })
     }
@@ -210,41 +207,30 @@ impl SearchResultCollector {
         self.truncated = true;
     }
 
-    fn try_push(&mut self, result: SearchResult) -> Result<bool, AppError> {
+    fn try_push(&mut self, result: SearchHit) -> Result<bool, AppError> {
         if self.results.len() >= SEARCH_RESULT_LIMIT {
             self.truncated = true;
             return Ok(false);
         }
-        let separator_bytes = usize::from(!self.results.is_empty());
-        let result_bytes = serialized_json_bytes(&result)?;
-        let projected_bytes = self
-            .serialized_bytes
-            .saturating_add(separator_bytes)
-            .saturating_add(result_bytes);
+        let result_bytes = estimated_search_hit_bytes(&result);
+        let projected_bytes = self.estimated_bytes.saturating_add(result_bytes);
         if projected_bytes > MAX_SEARCH_RESPONSE_BYTES {
             self.truncated = true;
             return Ok(false);
         }
         self.results.push(result);
-        self.serialized_bytes = projected_bytes;
+        self.estimated_bytes = projected_bytes;
         Ok(true)
     }
 
-    fn finish(mut self) -> Result<SearchResponse, AppError> {
+    fn finish(mut self) -> Result<SearchOutcome, AppError> {
         if self.results.len() >= SEARCH_RESULT_LIMIT {
             self.truncated = true;
         }
-        let response = SearchResponse {
+        Ok(SearchOutcome {
             results: self.results,
             truncated: self.truncated,
-        };
-        let actual_bytes = serialized_json_bytes(&response)?;
-        if actual_bytes > MAX_SEARCH_RESPONSE_BYTES {
-            return Err(AppError::Internal(format!(
-                "bounded search response requires {actual_bytes} bytes"
-            )));
-        }
-        Ok(response)
+        })
     }
 }
 
@@ -290,27 +276,11 @@ fn truncate_utf8(value: &str, maximum_bytes: usize) -> &str {
     &value[..end]
 }
 
-fn serialized_json_bytes(value: &impl serde::Serialize) -> Result<usize, AppError> {
-    let mut counter = CountingWriter::default();
-    serde_json::to_writer(&mut counter, value)
-        .map_err(|error| AppError::Internal(format!("failed to size search response: {error}")))?;
-    Ok(counter.bytes)
-}
-
-#[derive(Default)]
-struct CountingWriter {
-    bytes: usize,
-}
-
-impl Write for CountingWriter {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.bytes = self.bytes.saturating_add(buffer.len());
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+fn estimated_search_hit_bytes(result: &SearchHit) -> usize {
+    128usize
+        .saturating_add(result.sheet_name.len().saturating_mul(6))
+        .saturating_add(result.value.len().saturating_mul(6))
+        .saturating_add(result.cell_position.len().saturating_mul(6))
 }
 
 #[cfg(test)]
@@ -352,11 +322,11 @@ mod query_limit_tests {
     }
 
     #[test]
-    fn search_result_collector_enforces_final_serialized_byte_budget() {
+    fn search_result_collector_enforces_internal_memory_budget() {
         let mut collector = SearchResultCollector::new().expect("collector");
         for row in 0..SEARCH_RESULT_LIMIT {
             if !collector
-                .try_push(SearchResult {
+                .try_push(SearchHit {
                     sheet_index: 0,
                     sheet_name: "Sheet1".to_string(),
                     row,
@@ -373,6 +343,14 @@ mod query_limit_tests {
         let response = collector.finish().expect("bounded response");
         assert!(response.truncated);
         assert!(response.results.len() < SEARCH_RESULT_LIMIT);
-        assert!(serialized_json_bytes(&response).unwrap() <= MAX_SEARCH_RESPONSE_BYTES);
+        assert!(collector_estimated_bytes(&response) <= MAX_SEARCH_RESPONSE_BYTES);
+    }
+
+    fn collector_estimated_bytes(response: &SearchOutcome) -> usize {
+        64 + response
+            .results
+            .iter()
+            .map(estimated_search_hit_bytes)
+            .sum::<usize>()
     }
 }

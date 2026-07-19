@@ -3,13 +3,12 @@ use std::collections::HashSet;
 
 use formualizer_workbook::Workbook;
 
-use crate::domain::DocumentCellChange;
+use crate::domain::{CellValue, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::sheet_name::canonicalize_formula_sheet_names;
 use crate::formula::value_codec::{cell_to_literal, to_formula_index};
-use crate::types::CellValue;
 
 #[derive(Default)]
 pub(crate) struct FormulaRegistrationResult {

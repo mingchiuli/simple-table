@@ -19,9 +19,11 @@ use crate::adapters::search_index_store::{
 use crate::application::search_ports::{
     SearchDocumentSourcePort, SearchIndexMaintenancePort, SearchQueryPort,
 };
-use crate::domain::{SearchCellIndexUpdate, SearchCellText, SearchIndexWork};
 #[cfg(test)]
-use crate::types::CellValue;
+use crate::domain::CellValue;
+use crate::domain::{
+    SearchCellIndexUpdate, SearchCellText, SearchIndexWork, SearchOutcome, SearchScope,
+};
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
 const SEARCH_SCAN_RESERVATION_BYTES: usize = 24 * 1024 * 1024;
@@ -67,9 +69,9 @@ impl SearchIndexAdapter {
         document_id: u64,
         base_revision: u64,
         query: &str,
-        scope: crate::types::SearchScope,
+        scope: SearchScope,
         current_sheet_index: Option<usize>,
-    ) -> Result<crate::types::SearchResponse, crate::error::AppError> {
+    ) -> Result<SearchOutcome, crate::error::AppError> {
         crate::adapters::search_query_adapter::do_search(
             self.scheduler.source.as_ref(),
             document_id,
@@ -339,9 +341,9 @@ impl SearchQueryPort for SearchIndexAdapter {
         document_id: u64,
         base_revision: u64,
         query: &str,
-        scope: crate::types::SearchScope,
+        scope: SearchScope,
         current_sheet_index: Option<usize>,
-    ) -> Result<crate::types::SearchResponse, crate::error::AppError> {
+    ) -> Result<SearchOutcome, crate::error::AppError> {
         SearchIndexAdapter::search(
             self,
             document_id,
@@ -945,10 +947,10 @@ mod tests {
     use crate::document_data::{DocumentData, DocumentSheet};
     use crate::domain::CellNumber;
     use crate::domain::EditorCommand;
+    use crate::domain::SearchScope;
     use crate::error::AppError;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentRepository;
-    use crate::types::SearchScope;
 
     struct TestContext {
         documents: ActiveDocumentRepository,

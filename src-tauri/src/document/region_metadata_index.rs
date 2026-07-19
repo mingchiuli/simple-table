@@ -2,13 +2,25 @@ use crate::document_data::{CellFormat, CellStyle, DocumentData, DocumentSheet, M
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
-use crate::types::{
-    CellFormatProjection, CellStyleProjection, MergeRange as WireMergeRange, SheetRegion,
-    SheetRegionMetadata,
-};
 
 const TILE_ROWS: usize = 128;
 const TILE_COLUMNS: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentRegion {
+    pub sheet_index: usize,
+    pub row_start: usize,
+    pub row_end: usize,
+    pub col_start: usize,
+    pub col_end: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DocumentRegionMetadata {
+    pub merges: Vec<MergeRange>,
+    pub cell_formats: HashMap<String, CellFormat>,
+    pub cell_styles: HashMap<String, CellStyle>,
+}
 
 #[derive(Default)]
 pub(crate) struct RegionMetadataIndex {
@@ -65,21 +77,13 @@ impl RegionMetadataIndex {
     pub(crate) fn project(
         &self,
         file_data: &DocumentData,
-        region: &SheetRegion,
-    ) -> SheetRegionMetadata {
+        region: &DocumentRegion,
+    ) -> DocumentRegionMetadata {
         if region.row_start >= region.row_end || region.col_start >= region.col_end {
-            return SheetRegionMetadata {
-                merges: Vec::new(),
-                cell_formats: HashMap::new(),
-                cell_styles: HashMap::new(),
-            };
+            return DocumentRegionMetadata::default();
         }
         let Some(sheet) = file_data.sheets.get(region.sheet_index) else {
-            return SheetRegionMetadata {
-                merges: Vec::new(),
-                cell_formats: HashMap::new(),
-                cell_styles: HashMap::new(),
-            };
+            return DocumentRegionMetadata::default();
         };
         let Some(index) = self.sheets.get(region.sheet_index) else {
             return SheetMetadataIndex::from_sheet(sheet).project(sheet, region);
@@ -106,14 +110,9 @@ impl SheetMetadataIndex {
         }
     }
 
-    fn project(&self, sheet: &DocumentSheet, region: &SheetRegion) -> SheetRegionMetadata {
-        SheetRegionMetadata {
-            merges: self
-                .merges
-                .query(region)
-                .into_iter()
-                .map(project_merge_range)
-                .collect(),
+    fn project(&self, sheet: &DocumentSheet, region: &DocumentRegion) -> DocumentRegionMetadata {
+        DocumentRegionMetadata {
+            merges: self.merges.query(region),
             cell_formats: self
                 .format_keys
                 .keys_in_region(region)
@@ -123,7 +122,7 @@ impl SheetMetadataIndex {
                         .cell_formats
                         .get(key)
                         .cloned()
-                        .map(|value| (key.to_string(), project_cell_format(value)))
+                        .map(|value| (key.to_string(), value))
                 })
                 .collect(),
             cell_styles: self
@@ -135,7 +134,7 @@ impl SheetMetadataIndex {
                         .cell_styles
                         .get(key)
                         .cloned()
-                        .map(|value| (key.to_string(), project_cell_style(value)))
+                        .map(|value| (key.to_string(), value))
                 })
                 .collect(),
         }
@@ -168,7 +167,10 @@ impl CellKeyBuckets {
         Self { buckets }
     }
 
-    fn keys_in_region<'a>(&'a self, region: &'a SheetRegion) -> impl Iterator<Item = &'a str> + 'a {
+    fn keys_in_region<'a>(
+        &'a self,
+        region: &'a DocumentRegion,
+    ) -> impl Iterator<Item = &'a str> + 'a {
         let row_buckets = bucket_range(region.row_start, region.row_end, TILE_ROWS);
         let col_buckets = bucket_range(region.col_start, region.col_end, TILE_COLUMNS);
         row_buckets.flat_map(move |row_bucket| {
@@ -208,7 +210,7 @@ impl MergeIntervalIndex {
         }
     }
 
-    fn query(&self, region: &SheetRegion) -> Vec<MergeRange> {
+    fn query(&self, region: &DocumentRegion) -> Vec<MergeRange> {
         let mut merges = Vec::new();
         if let Some(root) = &self.root {
             root.query(region, &mut merges);
@@ -256,7 +258,7 @@ impl MergeIntervalNode {
         }))
     }
 
-    fn query(&self, region: &SheetRegion, output: &mut Vec<MergeRange>) {
+    fn query(&self, region: &DocumentRegion, output: &mut Vec<MergeRange>) {
         if region.row_end <= self.center {
             for merge in self
                 .by_start
@@ -296,7 +298,11 @@ impl MergeIntervalNode {
     }
 }
 
-fn push_if_columns_overlap(merge: &MergeRange, region: &SheetRegion, output: &mut Vec<MergeRange>) {
+fn push_if_columns_overlap(
+    merge: &MergeRange,
+    region: &DocumentRegion,
+    output: &mut Vec<MergeRange>,
+) {
     if (merge.start_col as usize) < region.col_end && merge.end_col as usize >= region.col_start {
         output.push(merge.clone());
     }
@@ -306,34 +312,6 @@ fn bucket_range(start: usize, end: usize, size: usize) -> std::ops::RangeInclusi
     let first = start / size;
     let last = end.saturating_sub(1).max(start) / size;
     first..=last
-}
-
-fn project_merge_range(value: MergeRange) -> WireMergeRange {
-    WireMergeRange {
-        start_row: value.start_row,
-        start_col: value.start_col,
-        end_row: value.end_row,
-        end_col: value.end_col,
-    }
-}
-
-fn project_cell_format(value: CellFormat) -> CellFormatProjection {
-    CellFormatProjection {
-        number_format: value.number_format,
-        style_id: value.style_id,
-    }
-}
-
-fn project_cell_style(value: CellStyle) -> CellStyleProjection {
-    CellStyleProjection {
-        font_color: value.font_color,
-        background_color: value.background_color,
-        bold: value.bold,
-        italic: value.italic,
-        horizontal_align: value.horizontal_align,
-        vertical_align: value.vertical_align,
-        number_format: value.number_format,
-    }
 }
 
 #[cfg(test)]
@@ -370,7 +348,7 @@ mod tests {
         let index = RegionMetadataIndex::from_file_data(&file_data);
         let metadata = index.project(
             &file_data,
-            &SheetRegion {
+            &DocumentRegion {
                 sheet_index: 0,
                 row_start: 128,
                 row_end: 256,
@@ -379,10 +357,7 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            metadata.merges,
-            vec![project_merge_range(merge(100, 40, 140, 42))]
-        );
+        assert_eq!(metadata.merges, vec![merge(100, 40, 140, 42)]);
         assert_eq!(
             metadata.cell_formats.keys().collect::<Vec<_>>(),
             vec!["AG129"]
@@ -416,7 +391,7 @@ mod tests {
 
         let metadata = index.project(
             &file_data,
-            &SheetRegion {
+            &DocumentRegion {
                 sheet_index: 0,
                 row_start: 128,
                 row_end: 256,

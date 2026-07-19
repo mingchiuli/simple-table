@@ -2,13 +2,13 @@ use crate::document_data::DocumentData;
 use formualizer_parse::parser::ReferenceType;
 
 use crate::document::backing::workbook_state::StructurePatchDiagnostics;
-use crate::domain::{AppliedOperation, DocumentCellChange};
+use crate::domain::{AppliedOperation, CellValue, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::engine::FormulaRuntime;
 use crate::formula::sheet_name::sheet_names_equal;
-use crate::types::{CellValue, FormulaDiagnostics, FormulaStatus};
+use crate::formula::status::{FormulaDiagnostics, FormulaStatus};
 
 pub(crate) struct FormulaCoordinator {
     runtime: FormulaRuntime,
@@ -607,7 +607,7 @@ fn append_unique_changes(target: &mut Vec<DocumentCellChange>, changes: Vec<Docu
 mod tests {
     use super::*;
     use crate::document_data::DocumentSheet;
-    use crate::types::CellValue;
+    use crate::domain::CellValue;
 
     fn sheet(name: &str, rows: Vec<Vec<CellValue>>) -> DocumentSheet {
         DocumentSheet {

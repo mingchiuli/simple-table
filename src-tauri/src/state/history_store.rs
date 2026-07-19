@@ -1,10 +1,21 @@
 use crate::document::document_memento::DocumentMemento;
-use crate::types::HistoryStatus;
 use std::collections::VecDeque;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;
 pub(crate) const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_SINGLE_HISTORY_ENTRY_BYTES: usize = MAX_HISTORY_BYTES / 2;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HistoryStatus {
+    pub is_truncated: bool,
+    pub reason: Option<String>,
+    pub undo_entries: usize,
+    pub redo_entries: usize,
+    pub undo_estimated_bytes: usize,
+    pub redo_estimated_bytes: usize,
+    pub max_history_bytes: usize,
+    pub max_single_entry_bytes: usize,
+}
 
 pub(crate) struct HistoryEntry {
     pub(crate) memento: DocumentMemento,

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::application::search_ports::SearchQueryPort;
+use crate::domain::{SearchOutcome, SearchScope};
 use crate::error::AppError;
-use crate::types::{SearchResponse, SearchScope};
 
 #[derive(Clone)]
 pub struct SearchService {
@@ -21,7 +21,7 @@ impl SearchService {
         query: &str,
         scope: SearchScope,
         current_sheet_index: Option<usize>,
-    ) -> Result<SearchResponse, AppError> {
+    ) -> Result<SearchOutcome, AppError> {
         self.query.search(
             document_id,
             base_revision,

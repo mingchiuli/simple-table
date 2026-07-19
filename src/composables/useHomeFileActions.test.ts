@@ -15,6 +15,7 @@ import {
   type RecentFile,
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
+import { openDocumentSession } from '@/test/documentSessionTestDriver';
 
 const openProtocolMocks = vi.hoisted(() => ({
   prepareNewFile: vi.fn(),
@@ -157,7 +158,7 @@ describe("useHomeFileActions", () => {
   it("keeps the previous document when new workbook initialization fails", async () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
-    documentSessionStore.openDocumentResponse(openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(api.prepareNewFile).mockRejectedValue(new Error("init failed"));
 
     const actions = useHomeFileActions({ navigateToTable: vi.fn() });

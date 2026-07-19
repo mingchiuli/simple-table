@@ -5,4 +5,5 @@ pub mod index;
 pub mod reference_rewrite;
 pub mod registry;
 pub mod sheet_name;
+pub(crate) mod status;
 pub mod value_codec;

@@ -1,8 +1,10 @@
+use crate::document::region_metadata_index::DocumentRegion;
 use crate::document_data::{
     CellFormat, CellStyle, DocumentSheet, SheetExtent as DocumentSheetExtent,
 };
 use crate::error::AppError;
 use crate::ops::patch_projector::editor_state_info;
+use crate::protocol_projection;
 use crate::state::editor_state::EditorState;
 use crate::types::{
     CellFormatProjection, CellStyleProjection, DocumentManifest, EditorSessionInfo,
@@ -20,8 +22,8 @@ pub(crate) fn editor_session_info(editor_state: &EditorState) -> EditorSessionIn
     EditorSessionInfo {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
-        formula_status: editor_state.formula_status().bounded(100),
-        capabilities: editor_state.capabilities(),
+        formula_status: protocol_projection::formula_status(editor_state.formula_status(), 100),
+        capabilities: protocol_projection::workbook_capabilities(editor_state.capabilities()),
         editor_state: editor_state_info(editor_state),
     }
 }
@@ -81,7 +83,14 @@ pub(crate) fn snapshot_sheet_region(
             "sheet region exceeds the current sheet extent".to_string(),
         ));
     }
-    let metadata = editor_state.region_metadata(&region);
+    let metadata =
+        protocol_projection::region_metadata(editor_state.region_metadata(&DocumentRegion {
+            sheet_index: region.sheet_index,
+            row_start: region.row_start,
+            row_end: region.row_end,
+            col_start: region.col_start,
+            col_end: region.col_end,
+        }));
     let cells = project_region_cells(sheet, &region);
     let merge_anchor_cells = project_merge_anchor_cells(sheet, &region, &metadata.merges);
     Ok(SheetRegionProjectionResponse {

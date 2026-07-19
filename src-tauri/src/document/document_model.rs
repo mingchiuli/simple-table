@@ -1,5 +1,6 @@
 use crate::document::backing::document_body::BodySheetShape;
 use crate::document::backing::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
+use crate::document::capabilities::{SheetCapabilities, WorkbookCapabilities};
 use crate::document::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
     FileStructureMemento, LayoutMemento, ProjectionSheetSnapshot, RichProjectionMemento,
@@ -12,13 +13,14 @@ use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreRe
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::document_transaction::DocumentTransaction;
 use crate::document::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
-use crate::document::region_metadata_index::RegionMetadataIndex;
+use crate::document::region_metadata_index::{
+    DocumentRegion, DocumentRegionMetadata, RegionMetadataIndex,
+};
 use crate::document_data::{DocumentData, DocumentSheet};
-use crate::domain::{AppliedOperation, DocumentCellChange, ResolvedCellEdit};
+use crate::domain::{AppliedOperation, CellValue, DocumentCellChange, ResolvedCellEdit};
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
-use crate::types::FormulaStatus;
-use crate::types::{CellValue, SheetCapabilities, WorkbookCapabilities};
+use crate::formula::status::FormulaStatus;
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use umya_spreadsheet::Workbook;
@@ -109,10 +111,7 @@ impl SpreadsheetDocument {
             )
     }
 
-    pub fn region_metadata(
-        &self,
-        region: &crate::types::SheetRegion,
-    ) -> crate::types::SheetRegionMetadata {
+    pub fn region_metadata(&self, region: &DocumentRegion) -> DocumentRegionMetadata {
         self.region_metadata.project(&self.projection, region)
     }
 

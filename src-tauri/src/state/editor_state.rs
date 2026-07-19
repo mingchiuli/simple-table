@@ -1,13 +1,16 @@
+use crate::document::capabilities::WorkbookCapabilities;
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_restore::DocumentRestoreResult;
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
+use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
 use crate::document_data::{DocumentData, SheetExtent};
 use crate::domain::{
     AppliedOperation, DocumentCellChange, EditorCommand, SearchIndexWork, SearchScanCursor,
     SearchTextChunk,
 };
 use crate::error::AppError;
+use crate::formula::status::FormulaStatus;
 use crate::resource_limits::ResourceLedger;
 #[cfg(test)]
 use crate::state::content_hash::ContentHash;
@@ -17,13 +20,12 @@ use crate::state::history_restore_transaction::{
     HistoryRestoreDirection, HistoryRestoreTransaction,
 };
 use crate::state::history_store::{
-    HistoryEntry, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES, RetiredHistoryEntries,
+    HistoryEntry, HistoryStatus, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES,
+    RetiredHistoryEntries,
 };
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_document::collect_sheet_search_text_chunk;
-use crate::types::HistoryStatus;
-use crate::types::{FormulaStatus, WorkbookCapabilities};
 use std::collections::HashSet;
 #[cfg(test)]
 use umya_spreadsheet::Workbook;
@@ -292,10 +294,7 @@ impl EditorState {
         self.resources.sheet_extent(sheet_index)
     }
 
-    pub fn region_metadata(
-        &self,
-        region: &crate::types::SheetRegion,
-    ) -> crate::types::SheetRegionMetadata {
+    pub fn region_metadata(&self, region: &DocumentRegion) -> DocumentRegionMetadata {
         self.document.region_metadata(region)
     }
 
@@ -567,9 +566,9 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+    use crate::document::region_metadata_index::DocumentRegion;
     use crate::document::test_support::read_file_with_workbook_from_bytes;
     use crate::domain::{CellNumber, CellValue, EditorCommand};
-    use crate::types::{CellFormatProjection, SheetRegion};
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
     fn assert_incremental_content_hash_is_current(state: &EditorState) {
@@ -842,9 +841,9 @@ mod tests {
         assert!(region_formats(&state, 2).contains_key("A3"));
     }
 
-    fn region_formats(state: &EditorState, row: usize) -> HashMap<String, CellFormatProjection> {
+    fn region_formats(state: &EditorState, row: usize) -> HashMap<String, CellFormat> {
         state
-            .region_metadata(&SheetRegion {
+            .region_metadata(&DocumentRegion {
                 sheet_index: 0,
                 row_start: row,
                 row_end: row + 1,

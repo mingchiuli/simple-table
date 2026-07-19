@@ -1,4 +1,5 @@
 pub(crate) mod backing;
+pub(crate) mod capabilities;
 pub mod document_memento;
 pub mod document_memento_budget;
 pub mod document_model;
