@@ -5,6 +5,8 @@ use crate::application::runtime::ApplicationRuntime;
 #[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
+use crate::protocol_projection;
+#[cfg(target_os = "ios")]
 use crate::types::{PickedFileInfo, PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "ios")]
 use tauri::{AppHandle, State};
@@ -82,6 +84,7 @@ pub async fn prepare_open_file_ios(
                 .prepare_open_file_mobile(&app, &path)
         })
         .await
+        .map(protocol_projection::prepared_open_document)
 }
 
 /// iOS: create a new sandbox save target that must be adopted by save_file_ios or discarded.
@@ -127,6 +130,7 @@ pub async fn save_file_ios(
             )
         })
         .await
+        .map(protocol_projection::saved_document_response)
 }
 
 /// iOS: export a sandboxed file to a user-selected destination.

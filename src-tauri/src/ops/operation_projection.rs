@@ -1,15 +1,50 @@
 use crate::document_data::DocumentData;
-use crate::domain::{AppliedOperation, OperationPatchProjector};
-use crate::types::{
-    AppliedOperationResult, CellChange, CellValue, ColumnChange, ColumnWidthChange, RowChange,
-    RowHeightChange, SheetCellChange, SheetLayoutProjection, SheetManifest,
-};
+use crate::domain::{AppliedOperation, CellValue, OperationPatchProjector};
+use crate::projection_model::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
+
+#[derive(Clone, Debug)]
+pub enum ProjectedOperation {
+    SetCell {
+        sheet_index: usize,
+        row: usize,
+        col: usize,
+        value: CellValue,
+    },
+    SetCells {
+        changes: Vec<ProjectedCellChange>,
+    },
+    AddRow {
+        sheet_index: usize,
+        row_index: usize,
+    },
+    DeleteRow {
+        sheet_index: usize,
+        row_index: usize,
+    },
+    AddColumn {
+        sheet_index: usize,
+        col_index: usize,
+    },
+    DeleteColumn {
+        sheet_index: usize,
+        column_index: usize,
+    },
+    SetColumnWidth,
+    SetRowHeight,
+    AddSheet {
+        sheet_index: usize,
+        sheet: SheetManifestSnapshot,
+    },
+    DeleteSheet {
+        sheet_index: usize,
+    },
+}
 
 impl OperationPatchProjector<'_> {
     pub fn projected_result_from_current_file(
         &self,
         file_data: &DocumentData,
-    ) -> AppliedOperationResult {
+    ) -> ProjectedOperation {
         match self.operation {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -17,25 +52,23 @@ impl OperationPatchProjector<'_> {
                 col,
                 new_value,
                 ..
-            } => AppliedOperationResult::SetCell {
+            } => ProjectedOperation::SetCell {
                 sheet_index: *sheet_index,
-                cell: CellChange {
-                    row: *row,
-                    col: *col,
-                    value: file_data
-                        .sheets
-                        .get(*sheet_index)
-                        .and_then(|sheet| sheet.rows.get(*row))
-                        .and_then(|row_data| row_data.get(*col))
-                        .cloned()
-                        .unwrap_or_else(|| new_value.clone()),
-                },
+                row: *row,
+                col: *col,
+                value: file_data
+                    .sheets
+                    .get(*sheet_index)
+                    .and_then(|sheet| sheet.rows.get(*row))
+                    .and_then(|row_data| row_data.get(*col))
+                    .cloned()
+                    .unwrap_or_else(|| new_value.clone()),
             },
-            AppliedOperation::SetCells { changes } => AppliedOperationResult::SetCells {
+            AppliedOperation::SetCells { changes } => ProjectedOperation::SetCells {
                 changes: changes
                     .iter()
                     .map(|change| {
-                        SheetCellChange::new(
+                        ProjectedCellChange::new(
                             change.sheet_index,
                             change.row,
                             change.col,
@@ -50,50 +83,20 @@ impl OperationPatchProjector<'_> {
                     })
                     .collect(),
             },
-            AppliedOperation::SetColumnWidth {
-                sheet_index,
-                col_index,
-                new_width,
-                ..
-            } => AppliedOperationResult::SetColumnWidth {
-                sheet_index: *sheet_index,
-                column: ColumnWidthChange {
-                    col_index: *col_index,
-                    width: *new_width,
-                },
-            },
-            AppliedOperation::SetRowHeight {
-                sheet_index,
-                row_index,
-                new_height,
-                ..
-            } => AppliedOperationResult::SetRowHeight {
-                sheet_index: *sheet_index,
-                row: RowHeightChange {
-                    row_index: *row_index,
-                    height: *new_height,
-                },
-            },
+            AppliedOperation::SetColumnWidth { .. } => ProjectedOperation::SetColumnWidth,
+            AppliedOperation::SetRowHeight { .. } => ProjectedOperation::SetRowHeight,
             AppliedOperation::AddRow {
                 sheet_index,
                 row_index,
                 ..
-            } => AppliedOperationResult::AddRow {
+            } => ProjectedOperation::AddRow {
                 sheet_index: *sheet_index,
-                row: RowChange {
-                    index: *row_index,
-                    values: file_data
-                        .sheets
-                        .get(*sheet_index)
-                        .and_then(|sheet| sheet.rows.get(*row_index))
-                        .cloned()
-                        .unwrap_or_default(),
-                },
+                row_index: *row_index,
             },
             AppliedOperation::DeleteRow {
                 sheet_index,
                 row_index,
-            } => AppliedOperationResult::DeleteRow {
+            } => ProjectedOperation::DeleteRow {
                 sheet_index: *sheet_index,
                 row_index: *row_index,
             },
@@ -101,25 +104,14 @@ impl OperationPatchProjector<'_> {
                 sheet_index,
                 col_index,
                 ..
-            } => AppliedOperationResult::AddColumn {
+            } => ProjectedOperation::AddColumn {
                 sheet_index: *sheet_index,
-                column: ColumnChange { index: *col_index },
-                col_data: file_data
-                    .sheets
-                    .get(*sheet_index)
-                    .map(|sheet| {
-                        sheet
-                            .rows
-                            .iter()
-                            .map(|row| row.get(*col_index).cloned().unwrap_or(CellValue::Null))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                col_index: *col_index,
             },
             AppliedOperation::DeleteColumn {
                 sheet_index,
                 col_index,
-            } => AppliedOperationResult::DeleteColumn {
+            } => ProjectedOperation::DeleteColumn {
                 sheet_index: *sheet_index,
                 column_index: *col_index,
             },
@@ -128,35 +120,29 @@ impl OperationPatchProjector<'_> {
                 name,
                 row_count,
                 column_count,
-            } => AppliedOperationResult::AddSheet {
+            } => ProjectedOperation::AddSheet {
                 sheet_index: *sheet_index,
                 sheet: file_data
                     .sheets
                     .get(*sheet_index)
-                    .map(|sheet| SheetManifest {
+                    .map(|sheet| SheetManifestSnapshot {
                         name: sheet.name.clone(),
-                        extent: {
-                            let extent = sheet.extent();
-                            crate::types::SheetExtent {
-                                row_count: extent.row_count,
-                                column_count: extent.column_count,
-                            }
-                        },
-                        layout: SheetLayoutProjection {
+                        extent: sheet.extent(),
+                        layout: SheetLayoutSnapshot {
                             column_widths: sheet.column_widths.clone().unwrap_or_default(),
                             row_heights: sheet.row_heights.clone().unwrap_or_default(),
                         },
                     })
-                    .unwrap_or_else(|| SheetManifest {
+                    .unwrap_or_else(|| SheetManifestSnapshot {
                         name: name.clone(),
-                        extent: crate::types::SheetExtent {
+                        extent: crate::document_data::SheetExtent {
                             row_count: *row_count,
                             column_count: *column_count,
                         },
-                        layout: SheetLayoutProjection::default(),
+                        layout: SheetLayoutSnapshot::default(),
                     }),
             },
-            AppliedOperation::DeleteSheet { sheet_index } => AppliedOperationResult::DeleteSheet {
+            AppliedOperation::DeleteSheet { sheet_index } => ProjectedOperation::DeleteSheet {
                 sheet_index: *sheet_index,
             },
         }

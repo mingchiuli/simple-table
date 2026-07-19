@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
+use crate::adapters::search_index_runtime::SearchIndexRuntime;
 use crate::adapters::search_index_store::{SearchQueryPlan, SearchSheetIndex};
-use crate::application::search_ports::SearchDocumentSourcePort;
+use crate::application::search_ports::{SearchDocumentSourcePort, SearchQueryPort};
 use crate::domain::{SearchHit, SearchOutcome, SearchScanCursor, SearchScope};
 use crate::editor_protocol::MAX_SEARCH_RESPONSE_BYTES;
 use crate::error::AppError;
@@ -9,6 +12,36 @@ pub(crate) const MAX_SEARCH_RESULT_SNIPPET_BYTES: usize = 512;
 const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
 const MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SEARCH_SCAN_CHUNK_CELLS: usize = 32_768;
+
+#[derive(Clone)]
+pub struct SearchQueryAdapter {
+    runtime: Arc<SearchIndexRuntime>,
+}
+
+impl SearchQueryAdapter {
+    pub(crate) fn new(runtime: Arc<SearchIndexRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl SearchQueryPort for SearchQueryAdapter {
+    fn search(
+        &self,
+        document_id: u64,
+        base_revision: u64,
+        query: &str,
+        scope: SearchScope,
+        current_sheet_index: Option<usize>,
+    ) -> Result<SearchOutcome, AppError> {
+        self.runtime.search(
+            document_id,
+            base_revision,
+            query,
+            scope,
+            current_sheet_index,
+        )
+    }
+}
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {

@@ -16,6 +16,7 @@ import type {
   SearchScope,
   LoadedSheetSlot,
 } from "@/types";
+import { searchOutcomeState } from '@/application/editorRuntimeProtocol';
 import { workbookSheetCapabilities } from "@/types";
 import { appErrorMessage } from "@/utils/appError";
 
@@ -157,7 +158,7 @@ export function useEditorCommands({
         ),
       });
       if (response) {
-        searchSessionCoordinator.applySearchResults(requestId, response);
+        searchSessionCoordinator.applySearchOutcome(requestId, searchOutcomeState(response));
       }
     } catch (error) {
       ElMessage.error(`Search failed: ${appErrorMessage(error)}`);

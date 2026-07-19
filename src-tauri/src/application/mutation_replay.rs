@@ -5,11 +5,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::domain::CellValue;
 use crate::error::AppError;
-use crate::ops::patch_projector::finalize_mutation_response;
-use crate::types::{
-    EditorMutationResponse, EditorPatch, MutationResultLookup, ResyncRequiredPatch,
-};
+use crate::projection_model::{MutationLookup, MutationOutcome, MutationPatch};
 
 const MAX_REPLAY_ENTRIES: usize = 128;
 const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
@@ -23,7 +21,7 @@ struct ReplayEntry {
     document_id: u64,
     command_id: String,
     fingerprint: RequestFingerprint,
-    response: Arc<EditorMutationResponse>,
+    response: Arc<MutationOutcome>,
     bytes: usize,
 }
 
@@ -54,8 +52,8 @@ pub(crate) fn run<P: Serialize>(
     command_id: &str,
     command_name: &str,
     payload: &P,
-    execute: impl FnOnce() -> Result<EditorMutationResponse, AppError>,
-) -> Result<EditorMutationResponse, AppError> {
+    execute: impl FnOnce() -> Result<MutationOutcome, AppError>,
+) -> Result<MutationOutcome, AppError> {
     validate_command_id(command_id)?;
     let fingerprint = request_fingerprint(base_revision, command_name, payload)?;
     let reservation = match reserve(coordinator, document_id, command_id, fingerprint)? {
@@ -63,12 +61,12 @@ pub(crate) fn run<P: Serialize>(
         ReservationResult::Execute(reservation) => reservation,
     };
 
-    let result = execute().map(finalize_mutation_response);
+    let result = execute();
     reservation.finish(result)
 }
 
 enum ReservationResult {
-    Replay(Arc<EditorMutationResponse>),
+    Replay(Arc<MutationOutcome>),
     Execute(InFlightReservation),
 }
 
@@ -83,12 +81,13 @@ struct InFlightReservation {
 impl InFlightReservation {
     fn finish(
         mut self,
-        result: Result<EditorMutationResponse, AppError>,
-    ) -> Result<EditorMutationResponse, AppError> {
+        result: Result<MutationOutcome, AppError>,
+    ) -> Result<MutationOutcome, AppError> {
         let prepared = result
             .as_ref()
             .ok()
             .and_then(|response| prepare_replay_response(&self.command_id, response));
+        let replayed_response = prepared.as_ref().map(|prepared| prepared.response.clone());
         let mut cache = lock_cache(&self.coordinator)?;
         if let Some(prepared) =
             prepared.filter(|_| !cache.retired_documents.contains(&self.document_id))
@@ -105,7 +104,10 @@ impl InFlightReservation {
         finish_retirement(&mut cache, self.document_id);
         self.finished = true;
         self.coordinator.completed.notify_all();
-        result
+        match (result, replayed_response) {
+            (Ok(_), Some(response)) => Ok(response),
+            (result, _) => result,
+        }
     }
 }
 
@@ -212,22 +214,20 @@ fn insert_response(
 }
 
 struct PreparedReplayResponse {
-    response: EditorMutationResponse,
+    response: MutationOutcome,
     bytes: usize,
 }
 
 fn prepare_replay_response(
     command_id: &str,
-    response: &EditorMutationResponse,
+    response: &MutationOutcome,
 ) -> Option<PreparedReplayResponse> {
-    let original_bytes = serde_json::to_vec(response).map_or(usize::MAX, |value| value.len());
+    let original_bytes = estimated_mutation_outcome_bytes(response);
     let (response, response_bytes) = if original_bytes <= MAX_REPLAY_BYTES {
         (response.clone(), original_bytes)
     } else {
         let response = compact_replay_response(response);
-        let bytes = serde_json::to_vec(&response)
-            .map(|value| value.len())
-            .unwrap_or(MAX_REPLAY_BYTES.saturating_add(1));
+        let bytes = estimated_mutation_outcome_bytes(&response);
         (response, bytes)
     };
     let bytes = response_bytes
@@ -237,13 +237,9 @@ fn prepare_replay_response(
     (bytes <= MAX_REPLAY_BYTES).then_some(PreparedReplayResponse { response, bytes })
 }
 
-fn compact_replay_response(response: &EditorMutationResponse) -> EditorMutationResponse {
+fn compact_replay_response(response: &MutationOutcome) -> MutationOutcome {
     let mut compact = response.clone();
-    compact.patches = vec![EditorPatch::ResyncRequired {
-        patch: ResyncRequiredPatch {
-            reason: "mutation response exceeded replay budget".to_string(),
-        },
-    }];
+    compact.require_resync("mutation response exceeded replay budget");
     compact
 }
 
@@ -276,7 +272,7 @@ pub(crate) fn get(
     coordinator: &MutationReplayCoordinator,
     document_id: u64,
     command_id: &str,
-) -> Result<MutationResultLookup, AppError> {
+) -> Result<MutationLookup, AppError> {
     validate_command_id(command_id)?;
     let cache = lock_cache(coordinator)?;
     if cache
@@ -284,16 +280,76 @@ pub(crate) fn get(
         .iter()
         .any(|entry| entry.document_id == document_id && entry.command_id == command_id)
     {
-        return Ok(MutationResultLookup::pending());
+        return Ok(MutationLookup::pending());
     }
     let response =
         find_entry(&cache, document_id, command_id).map(|entry| Arc::clone(&entry.response));
     drop(cache);
-    Ok(
-        response.map_or_else(MutationResultLookup::missing, |response| {
-            MutationResultLookup::completed((*response).clone())
-        }),
-    )
+    Ok(response.map_or_else(MutationLookup::missing, |response| {
+        MutationLookup::completed((*response).clone())
+    }))
+}
+
+fn estimated_mutation_outcome_bytes(response: &MutationOutcome) -> usize {
+    let patch_bytes = response
+        .patches
+        .iter()
+        .map(|patch| match patch {
+            MutationPatch::Cells { changes } => changes
+                .iter()
+                .map(|change| {
+                    96usize
+                        .saturating_add(change.display.as_ref().map_or(0, String::len))
+                        .saturating_add(estimated_cell_value_bytes(&change.value))
+                })
+                .sum(),
+            MutationPatch::SheetInserted { sheet, .. } => sheet.name.len().saturating_mul(6) + 256,
+            MutationPatch::SheetsReplaced { sheets, .. } => sheets
+                .iter()
+                .map(|sheet| sheet.name.len().saturating_mul(6) + 256)
+                .sum(),
+            MutationPatch::ResyncRequired { reason } => reason.len().saturating_mul(6) + 64,
+            MutationPatch::Layout {
+                column_widths,
+                row_heights,
+                ..
+            } => column_widths
+                .len()
+                .saturating_add(row_heights.len())
+                .saturating_mul(48),
+            MutationPatch::SheetDeleted { .. }
+            | MutationPatch::SheetInvalidated { .. }
+            | MutationPatch::RowInserted { .. }
+            | MutationPatch::RowDeleted { .. }
+            | MutationPatch::ColumnInserted { .. }
+            | MutationPatch::ColumnDeleted { .. } => 96,
+        })
+        .sum::<usize>();
+    std::mem::size_of::<MutationOutcome>()
+        .saturating_add(patch_bytes)
+        .saturating_add(2048)
+}
+
+fn estimated_cell_value_bytes(value: &CellValue) -> usize {
+    match value {
+        CellValue::Null => 8,
+        CellValue::String(value) => value.len().saturating_mul(6).saturating_add(16),
+        CellValue::Number(_) | CellValue::Boolean(_) => 32,
+        CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } => formula
+            .len()
+            .saturating_mul(6)
+            .saturating_add(estimated_cell_value_bytes(cached_value))
+            .saturating_add(
+                error
+                    .as_ref()
+                    .map_or(0, |value| value.len().saturating_mul(6)),
+            )
+            .saturating_add(64),
+    }
 }
 
 fn find_entry<'a>(
@@ -389,14 +445,15 @@ fn wait_for_completion<'a>(
 mod tests {
     use super::*;
     use crate::document_data::DocumentData;
-    use crate::ops::patch_projector::status_mutation_response;
+    use crate::ops::patch_projector::status_mutation_outcome;
+    use crate::projection_model::MutationLookupStatus;
     use crate::state::editor_state::EditorState;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
     use std::time::Duration;
 
-    fn response() -> EditorMutationResponse {
+    fn response() -> MutationOutcome {
         let state = EditorState::with_workbook(
             DocumentData {
                 path: String::new(),
@@ -405,7 +462,7 @@ mod tests {
             },
             None,
         );
-        status_mutation_response(&state)
+        status_mutation_outcome(&state)
     }
 
     #[test]
@@ -426,6 +483,50 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert_eq!(first.revision, second.revision);
         retire_document(&coordinator, 91);
+    }
+
+    #[test]
+    fn first_and_replayed_results_share_the_same_replay_budget_projection() {
+        use crate::projection_model::{MutationPatch, SheetLayoutSnapshot, SheetManifestSnapshot};
+
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
+        let calls = AtomicUsize::new(0);
+        let oversized_response = || {
+            let mut outcome = response();
+            outcome.patches = vec![MutationPatch::SheetsReplaced {
+                start_index: 0,
+                sheets: vec![SheetManifestSnapshot {
+                    name: "x".repeat(MAX_REPLAY_BYTES),
+                    extent: Default::default(),
+                    layout: SheetLayoutSnapshot::default(),
+                }],
+            }];
+            outcome
+        };
+
+        let first = run(&coordinator, 99, 0, "large", "replace", &(), || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(oversized_response())
+        })
+        .expect("first mutation");
+        let replayed = run(&coordinator, 99, 0, "large", "replace", &(), || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(oversized_response())
+        })
+        .expect("replayed mutation");
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            first.patches.as_slice(),
+            [MutationPatch::ResyncRequired { reason }]
+                if reason == "mutation response exceeded replay budget"
+        ));
+        assert!(matches!(
+            replayed.patches.as_slice(),
+            [MutationPatch::ResyncRequired { reason }]
+                if reason == "mutation response exceeded replay budget"
+        ));
+        retire_document(&coordinator, 99);
     }
 
     #[test]
@@ -526,7 +627,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("unrelated query should not block")
             .expect("query succeeds");
-        assert_eq!(result.status, crate::types::MutationResultStatus::Missing);
+        assert_eq!(result.status, MutationLookupStatus::Missing);
 
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
@@ -562,11 +663,11 @@ mod tests {
         started.wait();
 
         let lookup = get(&coordinator, document_id, "running").expect("query result");
-        assert_eq!(lookup.status, crate::types::MutationResultStatus::Pending);
+        assert_eq!(lookup.status, MutationLookupStatus::Pending);
         release.wait();
         assert!(mutation.join().expect("mutation caller").is_ok());
         let lookup = get(&coordinator, document_id, "running").expect("completed query result");
-        assert_eq!(lookup.status, crate::types::MutationResultStatus::Completed);
+        assert_eq!(lookup.status, MutationLookupStatus::Completed);
         assert!(lookup.response.is_some());
         retire_document(&coordinator, document_id);
     }

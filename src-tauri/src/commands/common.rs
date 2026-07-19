@@ -2,7 +2,6 @@
 
 use super::{CommandExecutionRuntime, CommandU64};
 use crate::adapters::recent_file_adapter;
-use crate::application::editor_command_service::EditorSessionInfo;
 use crate::application::runtime::ApplicationRuntime;
 use crate::application::{
     document_open_service, document_query_service, document_service, editor_command_service,
@@ -12,10 +11,10 @@ use crate::protocol_projection;
 use crate::recent::{AddRecentFileRequest, RecentFile};
 use crate::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
 use crate::types::{
-    DesktopOpenFileInfo, DocumentCapabilities, EditorMutationResponse, MutationResultLookup,
-    NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument, SavedDocumentResponse,
-    SearchResponse, SearchScope, SetCellRequest, SheetRegion, SheetRegionProjectionResponse,
-    SpreadsheetFormatOptions,
+    DesktopOpenFileInfo, DocumentCapabilities, EditorMutationResponse, EditorSessionInfo,
+    MutationResultLookup, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
+    SavedDocumentResponse, SearchResponse, SearchScope, SetCellRequest, SheetRegion,
+    SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::{AppHandle, State};
 
@@ -206,6 +205,7 @@ pub async fn prepare_open_file_desktop(
         .file()
         .run(move || runtime.document_files().prepare_open_file(&path))
         .await
+        .map(protocol_projection::prepared_open_document)
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
@@ -222,6 +222,7 @@ pub async fn prepare_recent_file_desktop(
         .file()
         .run(move || runtime.document_files().prepare_recent_file(&app, &id))
         .await
+        .map(protocol_projection::prepared_open_document)
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -270,6 +271,7 @@ pub async fn save_file_desktop(
                 .save_file(&path, document_id.get(), base_revision.get())
         })
         .await
+        .map(protocol_projection::saved_document_response)
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
@@ -307,6 +309,7 @@ pub async fn prepare_new_file(
         .file()
         .run(move || document_open_service::prepare_new_file(runtime.document_opens()))
         .await
+        .map(protocol_projection::prepared_open_document)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -329,6 +332,7 @@ pub async fn commit_prepared_document(
             )
         })
         .await
+        .map(protocol_projection::open_document_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -356,6 +360,7 @@ pub async fn get_active_document(
         .projection()
         .run(move || document_query_service::active_document_response(runtime.document_queries()))
         .await
+        .map(|snapshot| snapshot.map(protocol_projection::open_document_response))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -369,6 +374,7 @@ pub fn get_mutation_result(
         document_id.get(),
         &command_id,
     )
+    .map(protocol_projection::mutation_lookup)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -391,6 +397,7 @@ pub async fn get_current_document_projection(
             )
         })
         .await
+        .map(protocol_projection::open_document_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -402,17 +409,27 @@ pub async fn get_sheet_region_projection(
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
     let runtime = runtime.inner().clone();
-    executions
+    let snapshot = executions
         .projection()
         .run(move || {
             document_query_service::sheet_region_projection_for_command(
                 runtime.document_queries(),
                 document_id.get(),
                 base_revision.get(),
-                region,
+                crate::document::region_metadata_index::DocumentRegion {
+                    sheet_index: region.sheet_index,
+                    row_start: region.row_start,
+                    row_end: region.row_end,
+                    col_start: region.col_start,
+                    col_end: region.col_end,
+                },
             )
         })
-        .await
+        .await?;
+    protocol_projection::sheet_region_response(
+        snapshot,
+        crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -444,6 +461,7 @@ pub fn get_document_capabilities(
         document_id.get(),
         base_revision.get(),
     )
+    .map(protocol_projection::document_capabilities)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -459,11 +477,12 @@ pub fn get_native_save_plan(
         base_revision.get(),
         &target_path_or_name,
     )
+    .map(protocol_projection::native_save_plan)
 }
 
 #[tauri::command]
 pub fn get_spreadsheet_format_options() -> SpreadsheetFormatOptions {
-    document_query_service::format_options()
+    protocol_projection::spreadsheet_format_options(document_query_service::format_options())
 }
 
 // ==================== Editor Operations ====================
@@ -479,6 +498,7 @@ pub fn get_editor_state(
         document_id.map(CommandU64::get),
         base_revision.map(CommandU64::get),
     )
+    .map(|snapshot| snapshot.map(protocol_projection::editor_session))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -501,6 +521,7 @@ pub async fn undo(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -523,6 +544,7 @@ pub async fn redo(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 // ==================== Cell Operations ====================
@@ -556,6 +578,7 @@ pub async fn set_cell(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -568,7 +591,16 @@ pub async fn set_cells(
     changes: SetCellBatch,
 ) -> Result<EditorMutationResponse, AppError> {
     let runtime = runtime.inner().clone();
-    let changes = changes.into_inner();
+    let changes = changes
+        .into_inner()
+        .into_iter()
+        .map(|change| crate::domain::CellEditInput {
+            sheet_index: change.sheet_index,
+            row: change.row,
+            col: change.col,
+            text: change.text,
+        })
+        .collect();
     executions
         .mutation()
         .run(move || {
@@ -581,6 +613,7 @@ pub async fn set_cells(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -607,6 +640,7 @@ pub async fn add_row(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -633,6 +667,7 @@ pub async fn delete_row(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -659,6 +694,7 @@ pub async fn add_column(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -685,6 +721,7 @@ pub async fn delete_column(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -713,6 +750,7 @@ pub async fn set_column_width(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -741,6 +779,7 @@ pub async fn set_row_height(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 // ==================== Sheet Operations ====================
@@ -765,6 +804,7 @@ pub async fn add_sheet(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -789,6 +829,7 @@ pub async fn delete_sheet(
             )
         })
         .await
+        .map(protocol_projection::mutation_response)
 }
 
 // ==================== Search Operations ====================

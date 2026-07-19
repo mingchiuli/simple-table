@@ -1,4 +1,4 @@
-import type { EditorPatch } from "@/types";
+import type { SelectionTransform } from '@/types/editorRuntime';
 
 type CellPosition = { row: number; col: number };
 
@@ -82,44 +82,44 @@ export const useEditorSelectionStore = defineStore("editorSelection", {
       this.cellEditorValue = editorValueFor(savedCell);
       this.autoScroll = true;
     },
-    applyEditorPatches(patches: EditorPatch[] | undefined) {
-      for (const patch of patches ?? []) {
-        switch (patch.type) {
-          case "SheetInserted":
-            this.shiftSheetSelectionsOnInsert(patch.data.patch.sheetIndex);
+    applySelectionTransforms(transforms: SelectionTransform[]) {
+      for (const transform of transforms) {
+        switch (transform.type) {
+          case 'sheetInserted':
+            this.shiftSheetSelectionsOnInsert(transform.sheetIndex);
             break;
-          case "SheetDeleted":
-            this.shiftSheetSelectionsOnDelete(patch.data.patch.sheetIndex);
+          case 'sheetDeleted':
+            this.shiftSheetSelectionsOnDelete(transform.sheetIndex);
             break;
-          case "SheetsReplaced":
-            this.clearSelectionsFromSheet(patch.data.patch.startIndex);
+          case 'sheetsReplaced':
+            this.clearSelectionsFromSheet(transform.startIndex);
             break;
-          case "RowInserted":
+          case 'rowInserted':
             this.shiftRowSelectionsOnInsert(
-              patch.data.patch.sheetIndex,
-              patch.data.patch.rowIndex,
-              patch.data.patch.count
+              transform.sheetIndex,
+              transform.rowIndex,
+              transform.count,
             );
             break;
-          case "RowDeleted":
+          case 'rowDeleted':
             this.shiftRowSelectionsOnDelete(
-              patch.data.patch.sheetIndex,
-              patch.data.patch.rowIndex,
-              patch.data.patch.count
+              transform.sheetIndex,
+              transform.rowIndex,
+              transform.count,
             );
             break;
-          case "ColumnInserted":
+          case 'columnInserted':
             this.shiftColumnSelectionsOnInsert(
-              patch.data.patch.sheetIndex,
-              patch.data.patch.colIndex,
-              patch.data.patch.count
+              transform.sheetIndex,
+              transform.colIndex,
+              transform.count,
             );
             break;
-          case "ColumnDeleted":
+          case 'columnDeleted':
             this.shiftColumnSelectionsOnDelete(
-              patch.data.patch.sheetIndex,
-              patch.data.patch.colIndex,
-              patch.data.patch.count
+              transform.sheetIndex,
+              transform.colIndex,
+              transform.count,
             );
             break;
           default:

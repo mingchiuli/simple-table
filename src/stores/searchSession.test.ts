@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useSearchSessionStore } from "@/stores/searchSession";
 import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
-import type { SearchResponse, SearchResult } from "@/types";
+import type { RuntimeSearchResult, SearchOutcomeStateInput } from '@/types/editorRuntime';
 
-function result(value: string): SearchResult {
+function result(value: string): RuntimeSearchResult {
   return {
     sheetIndex: 0,
     sheetName: "Sheet1",
@@ -15,7 +15,7 @@ function result(value: string): SearchResult {
   };
 }
 
-function response(value: string, truncated = false): SearchResponse {
+function response(value: string, truncated = false): SearchOutcomeStateInput {
   return { results: [result(value)], truncated };
 }
 
@@ -30,11 +30,11 @@ describe("searchSession store", () => {
     const first = coordinator.beginSearch("old");
     const second = coordinator.beginSearch("new");
 
-    expect(coordinator.applySearchResults(first, response("old"))).toBe(false);
+    expect(coordinator.applySearchOutcome(first, response("old"))).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.isSearching).toBe(true);
 
-    expect(coordinator.applySearchResults(second, response("new", true))).toBe(true);
+    expect(coordinator.applySearchOutcome(second, response("new", true))).toBe(true);
     expect(store.searchResults.map((item) => item.value)).toEqual(["new"]);
     expect(store.searchResultsTruncated).toBe(true);
     expect(store.isSearching).toBe(false);
@@ -47,7 +47,7 @@ describe("searchSession store", () => {
 
     coordinator.clearSearch();
 
-    expect(coordinator.applySearchResults(requestId, response("value"))).toBe(false);
+    expect(coordinator.applySearchOutcome(requestId, response("value"))).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.searchQuery).toBe("");
     expect(store.isSearching).toBe(false);
@@ -57,7 +57,7 @@ describe("searchSession store", () => {
     const store = useSearchSessionStore();
     const coordinator = useSearchSessionCoordinator();
     const first = coordinator.beginSearch("old");
-    coordinator.applySearchResults(first, response("old", true));
+    coordinator.applySearchOutcome(first, response("old", true));
 
     coordinator.beginSearch("new");
 
@@ -76,7 +76,7 @@ describe("searchSession store", () => {
     coordinator.restoreSnapshot(snapshot);
 
     expect(store.isSearching).toBe(false);
-    expect(coordinator.applySearchResults(requestId, response("late"))).toBe(false);
+    expect(coordinator.applySearchOutcome(requestId, response("late"))).toBe(false);
   });
 
   it("keeps request tokens out of serializable UI state", () => {

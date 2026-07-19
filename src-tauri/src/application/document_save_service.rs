@@ -7,11 +7,11 @@ use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::application::{document_format_policy, document_projection};
 use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::error::AppError;
+use crate::projection_model::{SavedDocumentIdentity, SavedDocumentOutcome};
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
     state::{ActiveDocumentRepository, DocumentHandle},
 };
-use crate::types::{SavedDocumentIdentity, SavedDocumentResponse};
 
 #[derive(Clone)]
 pub struct DocumentSaveService {
@@ -151,7 +151,7 @@ pub fn commit_current_file_save<F>(
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
-) -> Result<SavedDocumentResponse, AppError>
+) -> Result<SavedDocumentOutcome, AppError>
 where
     F: FnOnce() -> Result<(), AppError>,
 {
@@ -172,7 +172,7 @@ fn commit_current_file_save_with_registry<F>(
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
-) -> Result<SavedDocumentResponse, AppError>
+) -> Result<SavedDocumentOutcome, AppError>
 where
     F: FnOnce() -> Result<(), AppError>,
 {
@@ -218,10 +218,10 @@ where
     let (document_id, response, retired) = {
         let mut editor_state = handle.write()?;
         let retired = editor_state.finish_save_commit(lease, document, clear_history)?;
-        let response = SavedDocumentResponse {
+        let response = SavedDocumentOutcome {
             document: Some(document_projection::document_manifest(&editor_state)),
             identity: None,
-            editor_session: document_projection::editor_session_info(&editor_state),
+            editor_session: document_projection::editor_session_snapshot(&editor_state),
         };
         (editor_state.document_id(), response, retired)
     };
@@ -257,7 +257,7 @@ fn commit_current_file_save_without_reparse<F>(
     output_name: String,
     saved_extension: String,
     commit_write: F,
-) -> Result<SavedDocumentResponse, AppError>
+) -> Result<SavedDocumentOutcome, AppError>
 where
     F: FnOnce() -> Result<(), AppError>,
 {
@@ -281,13 +281,13 @@ where
             output_name,
             clear_history,
         )?;
-        let response = SavedDocumentResponse {
+        let response = SavedDocumentOutcome {
             document: None,
             identity: Some(SavedDocumentIdentity {
                 path: editor_state.file_data().path.clone(),
                 file_name: editor_state.file_data().file_name.clone(),
             }),
-            editor_session: document_projection::editor_session_info(&editor_state),
+            editor_session: document_projection::editor_session_snapshot(&editor_state),
         };
         (response, retired)
     };

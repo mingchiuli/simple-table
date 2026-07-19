@@ -1,127 +1,76 @@
+use std::collections::{BTreeSet, HashMap};
+
 use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
-use crate::document_data::{CellFormat, CellStyle, DocumentData};
-use crate::domain::DocumentCellChange;
-use crate::editor_protocol::{EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES};
-use crate::protocol_projection;
-use crate::state::editor_state::EditorState;
-use crate::types::EditorStateInfo;
-use crate::types::{
-    AppliedOperationResult, CellFormatProjection, CellStyleProjection, ColumnDeletedPatch,
-    ColumnInsertedPatch, EditorMutationResponse, EditorPatch, LayoutPatch, ResyncRequiredPatch,
-    RowDeletedPatch, RowInsertedPatch, SheetCellChange, SheetDeletedPatch, SheetExtent,
-    SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest,
-    SheetsReplacedPatch,
+use crate::document_data::{DocumentData, SheetExtent};
+use crate::domain::{CellValue, DocumentCellChange};
+use crate::ops::operation_projection::ProjectedOperation;
+use crate::projection_model::{
+    EditorSessionSnapshot, EditorStateSnapshot, MutationOutcome, MutationPatch,
+    ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot,
 };
-use std::collections::BTreeSet;
-use std::io::Write;
+use crate::state::editor_state::EditorState;
 
 const MAX_CELL_CHANGES_PER_RESPONSE: usize = 4_096;
 const MAX_CELL_PATCH_BYTES_PER_RESPONSE: usize = 2 * 1024 * 1024;
 
-pub fn editor_state_info(editor_state: &EditorState) -> EditorStateInfo {
-    EditorStateInfo {
+pub fn editor_state_snapshot(editor_state: &EditorState) -> EditorStateSnapshot {
+    EditorStateSnapshot {
         can_undo: editor_state.can_undo(),
         can_redo: editor_state.can_redo(),
         is_dirty: editor_state.is_dirty(),
-        history: protocol_projection::history_status(editor_state.history_status()),
+        history: editor_state.history_status(),
     }
 }
 
-pub fn mutation_response(
+pub fn mutation_outcome(
     editor_state: &EditorState,
-    patches: Vec<EditorPatch>,
-) -> EditorMutationResponse {
+    patches: Vec<MutationPatch>,
+) -> MutationOutcome {
     let patches = bounded_patches(
         editor_state.file_data(),
         project_patch_display_formats(editor_state.file_data(), patches),
     );
-    EditorMutationResponse {
-        protocol_version: EDITOR_MUTATION_PROTOCOL_VERSION,
+    MutationOutcome {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
-        formula_status: protocol_projection::formula_status(editor_state.formula_status(), 100),
-        capabilities: protocol_projection::workbook_capabilities(editor_state.capabilities()),
-        editor_state: editor_state_info(editor_state),
-        patches,
-        sheet_extents: Some(
-            editor_state
-                .sheet_extents()
-                .into_iter()
-                .map(|extent| SheetExtent {
-                    row_count: extent.row_count,
-                    column_count: extent.column_count,
-                })
-                .collect(),
-        ),
-    }
-}
-
-pub(crate) fn finalize_mutation_response(
-    mut response: EditorMutationResponse,
-) -> EditorMutationResponse {
-    if serialized_response_bytes(&response)
-        .is_some_and(|bytes| bytes <= MAX_MUTATION_RESPONSE_BYTES)
-    {
-        return response;
-    }
-    response.patches = vec![EditorPatch::ResyncRequired {
-        patch: ResyncRequiredPatch {
-            reason: "mutation response exceeded the response byte limit".to_string(),
+        session: EditorSessionSnapshot {
+            document_id: editor_state.document_id(),
+            revision: editor_state.revision(),
+            formula_status: editor_state.formula_status(),
+            capabilities: editor_state.capabilities(),
+            editor_state: editor_state_snapshot(editor_state),
         },
-    }];
-    response
-}
-
-fn serialized_response_bytes(response: &EditorMutationResponse) -> Option<usize> {
-    let mut writer = CountingWriter::default();
-    serde_json::to_writer(&mut writer, response).ok()?;
-    Some(writer.bytes)
-}
-
-#[derive(Default)]
-struct CountingWriter {
-    bytes: usize,
-}
-
-impl Write for CountingWriter {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.bytes = self.bytes.saturating_add(buffer.len());
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+        patches,
+        sheet_extents: Some(editor_state.sheet_extents()),
     }
 }
 
-pub fn resync_required_mutation_response(
+pub fn resync_required_mutation_outcome(
     editor_state: &EditorState,
     reason: impl Into<String>,
-) -> EditorMutationResponse {
-    mutation_response(
+) -> MutationOutcome {
+    mutation_outcome(
         editor_state,
-        vec![EditorPatch::ResyncRequired {
-            patch: ResyncRequiredPatch {
-                reason: reason.into(),
-            },
+        vec![MutationPatch::ResyncRequired {
+            reason: reason.into(),
         }],
     )
 }
 
-pub fn status_mutation_response(editor_state: &EditorState) -> EditorMutationResponse {
-    mutation_response(editor_state, Vec::new())
+pub fn status_mutation_outcome(editor_state: &EditorState) -> MutationOutcome {
+    mutation_outcome(editor_state, Vec::new())
 }
 
-pub fn cell_delta_mutation_response(
+pub fn cell_delta_mutation_outcome(
     editor_state: &EditorState,
-    cell_changes: Vec<SheetCellChange>,
-) -> EditorMutationResponse {
-    mutation_response(
+    cell_changes: Vec<ProjectedCellChange>,
+) -> MutationOutcome {
+    mutation_outcome(
         editor_state,
         if cell_changes.is_empty() {
             Vec::new()
         } else {
-            vec![EditorPatch::Cells {
+            vec![MutationPatch::Cells {
                 changes: cell_changes,
             }]
         },
@@ -129,17 +78,23 @@ pub fn cell_delta_mutation_response(
 }
 
 pub(crate) fn complete_cell_changes(
-    operation: &AppliedOperationResult,
+    operation: &ProjectedOperation,
     cell_changes: Vec<DocumentCellChange>,
-) -> Vec<SheetCellChange> {
-    let mut cell_changes = wire_cell_changes(cell_changes);
-    if let AppliedOperationResult::SetCell { sheet_index, cell } = operation {
+) -> Vec<ProjectedCellChange> {
+    let mut cell_changes = projected_cell_changes(cell_changes);
+    if let ProjectedOperation::SetCell {
+        sheet_index,
+        row,
+        col,
+        value,
+    } = operation
+    {
         push_cell_change_if_missing(
             &mut cell_changes,
-            SheetCellChange::new(*sheet_index, cell.row, cell.col, cell.value.clone()),
+            ProjectedCellChange::new(*sheet_index, *row, *col, value.clone()),
         );
     }
-    if let AppliedOperationResult::SetCells { changes } = operation {
+    if let ProjectedOperation::SetCells { changes } = operation {
         for change in changes {
             push_cell_change_if_missing(&mut cell_changes, change.clone());
         }
@@ -147,42 +102,51 @@ pub(crate) fn complete_cell_changes(
     cell_changes
 }
 
-pub fn layout_mutation_response(
+pub fn layout_mutation_outcome(
     editor_state: &EditorState,
-    patch: LayoutPatch,
-) -> EditorMutationResponse {
-    mutation_response(editor_state, vec![EditorPatch::Layout { patch }])
+    sheet_index: usize,
+    column_widths: HashMap<usize, Option<u32>>,
+    row_heights: HashMap<usize, Option<u32>>,
+) -> MutationOutcome {
+    mutation_outcome(
+        editor_state,
+        vec![MutationPatch::Layout {
+            sheet_index,
+            column_widths,
+            row_heights,
+        }],
+    )
 }
 
-pub fn structural_delta_mutation_response(
+pub fn structural_delta_mutation_outcome(
     editor_state: &EditorState,
-    operation: &AppliedOperationResult,
+    operation: &ProjectedOperation,
     cell_changes: Vec<DocumentCellChange>,
-) -> EditorMutationResponse {
-    let cell_changes = wire_cell_changes(cell_changes);
+) -> MutationOutcome {
+    let cell_changes = projected_cell_changes(cell_changes);
     let mut patches = structural_patches(editor_state.file_data(), operation);
 
     if !cell_changes.is_empty() {
-        patches.push(EditorPatch::Cells {
+        patches.push(MutationPatch::Cells {
             changes: cell_changes,
         });
     }
 
-    mutation_response(editor_state, patches)
+    mutation_outcome(editor_state, patches)
 }
 
-pub fn restore_mutation_response(
+pub fn restore_mutation_outcome(
     editor_state: &EditorState,
     restore: Option<DocumentRestoreResult>,
-) -> EditorMutationResponse {
+) -> MutationOutcome {
     let Some(restore) = restore else {
-        return resync_required_mutation_response(
+        return resync_required_mutation_outcome(
             editor_state,
             "restore completed without patch details",
         );
     };
 
-    mutation_response(
+    mutation_outcome(
         editor_state,
         restore
             .changes
@@ -192,173 +156,149 @@ pub fn restore_mutation_response(
     )
 }
 
-fn restore_change_patch(change: DocumentRestoreChange) -> EditorPatch {
+fn restore_change_patch(change: DocumentRestoreChange) -> MutationPatch {
     match change {
-        DocumentRestoreChange::Cells(changes) => EditorPatch::Cells {
-            changes: wire_cell_changes(changes),
+        DocumentRestoreChange::Cells(changes) => MutationPatch::Cells {
+            changes: projected_cell_changes(changes),
         },
         DocumentRestoreChange::Layout {
             sheet_index,
             column_widths,
             row_heights,
-        } => EditorPatch::Layout {
-            patch: LayoutPatch {
-                sheet_index,
-                column_widths,
-                row_heights,
-            },
+        } => MutationPatch::Layout {
+            sheet_index,
+            column_widths,
+            row_heights,
         },
         DocumentRestoreChange::RowInserted {
             sheet_index,
             row_index,
             count,
-        } => EditorPatch::RowInserted {
-            patch: RowInsertedPatch {
-                sheet_index,
-                row_index,
-                count,
-            },
+        } => MutationPatch::RowInserted {
+            sheet_index,
+            row_index,
+            count,
         },
         DocumentRestoreChange::RowDeleted {
             sheet_index,
             row_index,
             count,
-        } => EditorPatch::RowDeleted {
-            patch: RowDeletedPatch {
-                sheet_index,
-                row_index,
-                count,
-            },
+        } => MutationPatch::RowDeleted {
+            sheet_index,
+            row_index,
+            count,
         },
         DocumentRestoreChange::ColumnInserted {
             sheet_index,
             col_index,
             count,
-        } => EditorPatch::ColumnInserted {
-            patch: ColumnInsertedPatch {
-                sheet_index,
-                col_index,
-                count,
-            },
+        } => MutationPatch::ColumnInserted {
+            sheet_index,
+            col_index,
+            count,
         },
         DocumentRestoreChange::ColumnDeleted {
             sheet_index,
             col_index,
             count,
-        } => EditorPatch::ColumnDeleted {
-            patch: ColumnDeletedPatch {
-                sheet_index,
-                col_index,
-                count,
-            },
+        } => MutationPatch::ColumnDeleted {
+            sheet_index,
+            col_index,
+            count,
         },
         DocumentRestoreChange::SheetsReplaced {
             start_index,
             sheets,
-        } => EditorPatch::SheetsReplaced {
-            patch: SheetsReplacedPatch {
-                start_index,
-                sheets: sheets
-                    .into_iter()
-                    .map(|sheet| SheetManifest {
-                        name: sheet.name,
-                        extent: SheetExtent {
-                            row_count: sheet.row_count,
-                            column_count: sheet.column_count,
-                        },
-                        layout: SheetLayoutProjection {
-                            column_widths: sheet.column_widths,
-                            row_heights: sheet.row_heights,
-                        },
-                    })
-                    .collect(),
-            },
+        } => MutationPatch::SheetsReplaced {
+            start_index,
+            sheets: sheets
+                .into_iter()
+                .map(|sheet| SheetManifestSnapshot {
+                    name: sheet.name,
+                    extent: SheetExtent {
+                        row_count: sheet.row_count,
+                        column_count: sheet.column_count,
+                    },
+                    layout: SheetLayoutSnapshot {
+                        column_widths: sheet.column_widths,
+                        row_heights: sheet.row_heights,
+                    },
+                })
+                .collect(),
         },
-        DocumentRestoreChange::SheetInvalidated { sheet_index } => EditorPatch::SheetInvalidated {
-            patch: SheetInvalidatedPatch { sheet_index },
-        },
-        DocumentRestoreChange::ResyncRequired { reason } => EditorPatch::ResyncRequired {
-            patch: ResyncRequiredPatch { reason },
-        },
+        DocumentRestoreChange::SheetInvalidated { sheet_index } => {
+            MutationPatch::SheetInvalidated { sheet_index }
+        }
+        DocumentRestoreChange::ResyncRequired { reason } => {
+            MutationPatch::ResyncRequired { reason }
+        }
     }
 }
 
 pub fn structural_patches(
     _file_data: &DocumentData,
-    operation: &AppliedOperationResult,
-) -> Vec<EditorPatch> {
+    operation: &ProjectedOperation,
+) -> Vec<MutationPatch> {
     match operation {
-        AppliedOperationResult::AddRow { sheet_index, row } => vec![EditorPatch::RowInserted {
-            patch: RowInsertedPatch {
-                sheet_index: *sheet_index,
-                row_index: row.index,
-                count: 1,
-            },
-        }],
-        AppliedOperationResult::DeleteRow {
+        ProjectedOperation::AddRow {
             sheet_index,
             row_index,
-        } => vec![EditorPatch::RowDeleted {
-            patch: RowDeletedPatch {
-                sheet_index: *sheet_index,
-                row_index: *row_index,
-                count: 1,
-            },
+        } => vec![MutationPatch::RowInserted {
+            sheet_index: *sheet_index,
+            row_index: *row_index,
+            count: 1,
         }],
-        AppliedOperationResult::AddColumn {
+        ProjectedOperation::DeleteRow {
             sheet_index,
-            column,
-            ..
-        } => vec![EditorPatch::ColumnInserted {
-            patch: ColumnInsertedPatch {
-                sheet_index: *sheet_index,
-                col_index: column.index,
-                count: 1,
-            },
+            row_index,
+        } => vec![MutationPatch::RowDeleted {
+            sheet_index: *sheet_index,
+            row_index: *row_index,
+            count: 1,
         }],
-        AppliedOperationResult::DeleteColumn {
+        ProjectedOperation::AddColumn {
+            sheet_index,
+            col_index,
+        } => vec![MutationPatch::ColumnInserted {
+            sheet_index: *sheet_index,
+            col_index: *col_index,
+            count: 1,
+        }],
+        ProjectedOperation::DeleteColumn {
             sheet_index,
             column_index,
-        } => vec![EditorPatch::ColumnDeleted {
-            patch: ColumnDeletedPatch {
-                sheet_index: *sheet_index,
-                col_index: *column_index,
-                count: 1,
-            },
+        } => vec![MutationPatch::ColumnDeleted {
+            sheet_index: *sheet_index,
+            col_index: *column_index,
+            count: 1,
         }],
-        AppliedOperationResult::AddSheet { sheet_index, sheet } => {
-            vec![EditorPatch::SheetInserted {
-                patch: SheetInsertedPatch {
-                    sheet_index: *sheet_index,
-                    sheet: sheet.clone(),
-                },
+        ProjectedOperation::AddSheet { sheet_index, sheet } => {
+            vec![MutationPatch::SheetInserted {
+                sheet_index: *sheet_index,
+                sheet: sheet.clone(),
             }]
         }
-        AppliedOperationResult::DeleteSheet { sheet_index, .. } => {
-            vec![EditorPatch::SheetDeleted {
-                patch: SheetDeletedPatch {
-                    sheet_index: *sheet_index,
-                },
+        ProjectedOperation::DeleteSheet { sheet_index } => {
+            vec![MutationPatch::SheetDeleted {
+                sheet_index: *sheet_index,
             }]
         }
-        AppliedOperationResult::SetCell { .. }
-        | AppliedOperationResult::SetCells { .. }
-        | AppliedOperationResult::SetColumnWidth { .. }
-        | AppliedOperationResult::SetRowHeight { .. } => Vec::new(),
+        ProjectedOperation::SetCell { .. }
+        | ProjectedOperation::SetCells { .. }
+        | ProjectedOperation::SetColumnWidth
+        | ProjectedOperation::SetRowHeight => Vec::new(),
     }
 }
 
-fn bounded_patches(file_data: &DocumentData, patches: Vec<EditorPatch>) -> Vec<EditorPatch> {
+fn bounded_patches(file_data: &DocumentData, patches: Vec<MutationPatch>) -> Vec<MutationPatch> {
     let mut cell_change_count = 0usize;
     let mut estimated_bytes = 0usize;
     for patch in &patches {
-        if let EditorPatch::Cells { changes } = patch {
+        if let MutationPatch::Cells { changes } = patch {
             cell_change_count = cell_change_count.saturating_add(changes.len());
             for change in changes {
-                estimated_bytes = estimated_bytes.saturating_add(
-                    serde_json::to_vec(change)
-                        .map_or(MAX_CELL_PATCH_BYTES_PER_RESPONSE + 1, |v| v.len()),
-                );
+                estimated_bytes =
+                    estimated_bytes.saturating_add(estimated_cell_change_bytes(change));
                 if estimated_bytes > MAX_CELL_PATCH_BYTES_PER_RESPONSE {
                     break;
                 }
@@ -375,7 +315,7 @@ fn bounded_patches(file_data: &DocumentData, patches: Vec<EditorPatch>) -> Vec<E
     let mut bounded = Vec::new();
     for patch in patches {
         match patch {
-            EditorPatch::Cells { changes } => {
+            MutationPatch::Cells { changes } => {
                 invalidated.extend(changes.into_iter().map(|change| change.sheet_index));
             }
             other => bounded.push(other),
@@ -385,21 +325,19 @@ fn bounded_patches(file_data: &DocumentData, patches: Vec<EditorPatch>) -> Vec<E
     bounded.extend(
         invalidated
             .into_iter()
-            .map(|sheet_index| EditorPatch::SheetInvalidated {
-                patch: SheetInvalidatedPatch { sheet_index },
-            }),
+            .map(|sheet_index| MutationPatch::SheetInvalidated { sheet_index }),
     );
     bounded
 }
 
 fn project_patch_display_formats(
     file_data: &DocumentData,
-    patches: Vec<EditorPatch>,
-) -> Vec<EditorPatch> {
+    patches: Vec<MutationPatch>,
+) -> Vec<MutationPatch> {
     patches
         .into_iter()
         .map(|patch| match patch {
-            EditorPatch::Cells { changes } => EditorPatch::Cells {
+            MutationPatch::Cells { changes } => MutationPatch::Cells {
                 changes: changes
                     .into_iter()
                     .map(|change| {
@@ -407,12 +345,10 @@ fn project_patch_display_formats(
                         let display = sheet
                             .map(|sheet| sheet.cell_display_text(change.row, change.col))
                             .unwrap_or_else(|| change.value.to_display_string());
-                        let format = sheet
-                            .and_then(|sheet| sheet.cell_format_at(change.row, change.col))
-                            .map(project_cell_format);
-                        let style = sheet
-                            .and_then(|sheet| sheet.cell_style_at(change.row, change.col))
-                            .map(project_cell_style);
+                        let format =
+                            sheet.and_then(|sheet| sheet.cell_format_at(change.row, change.col));
+                        let style =
+                            sheet.and_then(|sheet| sheet.cell_style_at(change.row, change.col));
                         change.with_display_projection(display, format, style)
                     })
                     .collect(),
@@ -422,26 +358,10 @@ fn project_patch_display_formats(
         .collect()
 }
 
-fn project_cell_format(value: CellFormat) -> CellFormatProjection {
-    CellFormatProjection {
-        number_format: value.number_format,
-        style_id: value.style_id,
-    }
-}
-
-fn project_cell_style(value: CellStyle) -> CellStyleProjection {
-    CellStyleProjection {
-        font_color: value.font_color,
-        background_color: value.background_color,
-        bold: value.bold,
-        italic: value.italic,
-        horizontal_align: value.horizontal_align,
-        vertical_align: value.vertical_align,
-        number_format: value.number_format,
-    }
-}
-
-fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: SheetCellChange) {
+fn push_cell_change_if_missing(
+    cell_changes: &mut Vec<ProjectedCellChange>,
+    change: ProjectedCellChange,
+) {
     if !cell_changes.iter().any(|existing| {
         existing.sheet_index == change.sheet_index
             && existing.row == change.row
@@ -451,20 +371,51 @@ fn push_cell_change_if_missing(cell_changes: &mut Vec<SheetCellChange>, change: 
     }
 }
 
-fn wire_cell_changes(changes: Vec<DocumentCellChange>) -> Vec<SheetCellChange> {
+fn projected_cell_changes(changes: Vec<DocumentCellChange>) -> Vec<ProjectedCellChange> {
     changes
         .into_iter()
         .map(|change| {
-            SheetCellChange::new(change.sheet_index, change.row, change.col, change.value)
+            ProjectedCellChange::new(change.sheet_index, change.row, change.col, change.value)
         })
         .collect()
+}
+
+fn estimated_cell_change_bytes(change: &ProjectedCellChange) -> usize {
+    96usize
+        .saturating_add(change.display.as_ref().map_or(0, String::len))
+        .saturating_add(change.format.as_ref().map_or(0, |format| {
+            format.number_format.as_ref().map_or(0, String::len)
+                + format.style_id.as_ref().map_or(0, String::len)
+        }))
+        .saturating_add(estimated_cell_value_bytes(&change.value))
+}
+
+fn estimated_cell_value_bytes(value: &CellValue) -> usize {
+    match value {
+        CellValue::Null | CellValue::Number(_) | CellValue::Boolean(_) => 32,
+        CellValue::String(value) => value.len().saturating_mul(6).saturating_add(32),
+        CellValue::Formula {
+            formula,
+            cached_value,
+            error,
+        } => formula
+            .len()
+            .saturating_mul(6)
+            .saturating_add(
+                error
+                    .as_ref()
+                    .map_or(0, |value| value.len().saturating_mul(6)),
+            )
+            .saturating_add(estimated_cell_value_bytes(cached_value))
+            .saturating_add(64),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::document_data::DocumentSheet;
-    use crate::types::{CellValue, SheetExtent, SheetManifest, SheetsReplacedPatch};
+    use crate::editor_protocol::MAX_MUTATION_RESPONSE_BYTES;
     use std::collections::HashMap;
 
     #[test]
@@ -478,17 +429,14 @@ mod tests {
             None,
         );
         let changes = (0..=MAX_CELL_CHANGES_PER_RESPONSE)
-            .map(|row| SheetCellChange::new(0, row, 0, CellValue::Null))
+            .map(|row| ProjectedCellChange::new(0, row, 0, CellValue::Null))
             .collect();
 
-        let response = finalize_mutation_response(mutation_response(
-            &state,
-            vec![EditorPatch::Cells { changes }],
-        ));
+        let response = mutation_outcome(&state, vec![MutationPatch::Cells { changes }]);
 
         assert!(matches!(
             response.patches.as_slice(),
-            [EditorPatch::SheetInvalidated { patch }] if patch.sheet_index == 0
+            [MutationPatch::SheetInvalidated { sheet_index }] if *sheet_index == 0
         ));
     }
 
@@ -502,21 +450,18 @@ mod tests {
             },
             None,
         );
-        let changes = vec![SheetCellChange::new(
+        let changes = vec![ProjectedCellChange::new(
             0,
             0,
             0,
             CellValue::String("x".repeat(MAX_CELL_PATCH_BYTES_PER_RESPONSE + 1)),
         )];
 
-        let response = finalize_mutation_response(mutation_response(
-            &state,
-            vec![EditorPatch::Cells { changes }],
-        ));
+        let response = mutation_outcome(&state, vec![MutationPatch::Cells { changes }]);
 
         assert!(matches!(
             response.patches.as_slice(),
-            [EditorPatch::SheetInvalidated { patch }] if patch.sheet_index == 0
+            [MutationPatch::SheetInvalidated { sheet_index }] if *sheet_index == 0
         ));
     }
 
@@ -538,22 +483,21 @@ mod tests {
             None,
         );
 
-        let response = finalize_mutation_response(mutation_response(
+        let response = mutation_outcome(
             &state,
-            vec![EditorPatch::RowInserted {
-                patch: RowInsertedPatch {
-                    sheet_index: 0,
-                    row_index: 10,
-                    count: 1,
-                },
+            vec![MutationPatch::RowInserted {
+                sheet_index: 0,
+                row_index: 10,
+                count: 1,
             }],
-        ));
+        );
 
         assert!(matches!(
             response.patches.as_slice(),
-            [EditorPatch::RowInserted { .. }]
+            [MutationPatch::RowInserted { .. }]
         ));
-        assert!(serialized_response_bytes(&response).unwrap() < 64 * 1024);
+        let wire = crate::protocol_projection::mutation_response(response);
+        assert!(serde_json::to_vec(&wire).unwrap().len() < 64 * 1024);
     }
 
     #[test]
@@ -566,24 +510,23 @@ mod tests {
             },
             None,
         );
-        let response = finalize_mutation_response(mutation_response(
+        let response = mutation_outcome(
             &state,
-            vec![EditorPatch::SheetsReplaced {
-                patch: SheetsReplacedPatch {
-                    start_index: 0,
-                    sheets: vec![SheetManifest {
-                        name: "x".repeat(MAX_MUTATION_RESPONSE_BYTES + 1),
-                        extent: SheetExtent::default(),
-                        layout: SheetLayoutProjection::default(),
-                    }],
-                },
+            vec![MutationPatch::SheetsReplaced {
+                start_index: 0,
+                sheets: vec![SheetManifestSnapshot {
+                    name: "x".repeat(MAX_MUTATION_RESPONSE_BYTES + 1),
+                    extent: SheetExtent::default(),
+                    layout: SheetLayoutSnapshot::default(),
+                }],
             }],
-        ));
+        );
+        let response = crate::protocol_projection::mutation_response(response);
 
         assert!(matches!(
             response.patches.as_slice(),
-            [EditorPatch::ResyncRequired { .. }]
+            [crate::types::EditorPatch::ResyncRequired { .. }]
         ));
-        assert!(serialized_response_bytes(&response).unwrap() <= MAX_MUTATION_RESPONSE_BYTES);
+        assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_MUTATION_RESPONSE_BYTES);
     }
 }

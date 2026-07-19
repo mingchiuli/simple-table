@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::types::SpreadsheetFormatOptions;
+use crate::projection_model::SpreadsheetFormatOptions;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpreadsheetFileFormat {

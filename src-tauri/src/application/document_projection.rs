@@ -1,16 +1,11 @@
 use crate::document::region_metadata_index::DocumentRegion;
-use crate::document_data::{
-    CellFormat, CellStyle, DocumentSheet, SheetExtent as DocumentSheetExtent,
-};
+use crate::document_data::{DocumentSheet, MergeRange, SheetExtent};
 use crate::error::AppError;
-use crate::ops::patch_projector::editor_state_info;
-use crate::protocol_projection;
-use crate::state::editor_state::EditorState;
-use crate::types::{
-    CellFormatProjection, CellStyleProjection, DocumentManifest, EditorSessionInfo,
-    OpenDocumentResponse, SheetExtent, SheetLayoutProjection, SheetManifest, SheetRegion,
-    SheetRegionProjectionResponse,
+use crate::projection_model::{
+    DocumentManifestSnapshot, EditorSessionSnapshot, EditorStateSnapshot, OpenDocumentSnapshot,
+    ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot, SheetRegionSnapshot,
 };
+use crate::state::editor_state::EditorState;
 
 const INITIAL_REGION_ROWS: usize = 128;
 const INITIAL_REGION_COLUMNS: usize = 32;
@@ -18,48 +13,53 @@ const MAX_REGION_CELLS: usize = 65_536;
 pub(crate) const MAX_REGION_ROWS: usize = 1_024;
 const MAX_REGION_COLUMNS: usize = 512;
 
-pub(crate) fn editor_session_info(editor_state: &EditorState) -> EditorSessionInfo {
-    EditorSessionInfo {
+pub(crate) fn editor_session_snapshot(editor_state: &EditorState) -> EditorSessionSnapshot {
+    EditorSessionSnapshot {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
-        formula_status: protocol_projection::formula_status(editor_state.formula_status(), 100),
-        capabilities: protocol_projection::workbook_capabilities(editor_state.capabilities()),
-        editor_state: editor_state_info(editor_state),
+        formula_status: editor_state.formula_status(),
+        capabilities: editor_state.capabilities(),
+        editor_state: EditorStateSnapshot {
+            can_undo: editor_state.can_undo(),
+            can_redo: editor_state.can_redo(),
+            is_dirty: editor_state.is_dirty(),
+            history: editor_state.history_status(),
+        },
     }
 }
 
-pub(crate) fn open_document_response_snapshot(editor_state: &EditorState) -> OpenDocumentResponse {
-    open_document_response_snapshot_for_sheet(editor_state, 0)
+pub(crate) fn open_document_snapshot(editor_state: &EditorState) -> OpenDocumentSnapshot {
+    open_document_snapshot_for_sheet(editor_state, 0)
 }
 
-pub(crate) fn open_document_response_snapshot_for_sheet(
+pub(crate) fn open_document_snapshot_for_sheet(
     editor_state: &EditorState,
     preferred_sheet_index: usize,
-) -> OpenDocumentResponse {
+) -> OpenDocumentSnapshot {
     let initial_region = editor_state
         .sheet_extent(preferred_sheet_index)
         .map(|extent| initial_sheet_region(preferred_sheet_index, &extent))
         .and_then(|region| snapshot_sheet_region(editor_state, region).ok());
-    OpenDocumentResponse {
+    OpenDocumentSnapshot {
         document: document_manifest(editor_state),
-        editor_session: editor_session_info(editor_state),
+        editor_session: editor_session_snapshot(editor_state),
         initial_region,
     }
 }
 
-pub(crate) fn document_manifest(editor_state: &EditorState) -> DocumentManifest {
+pub(crate) fn document_manifest(editor_state: &EditorState) -> DocumentManifestSnapshot {
     let source = editor_state.file_data();
     let extents = editor_state.sheet_extents();
-    DocumentManifest {
+    DocumentManifestSnapshot {
         path: source.path.clone(),
         file_name: source.file_name.clone(),
         sheets: source
             .sheets
             .iter()
             .zip(extents)
-            .map(|(sheet, extent)| SheetManifest {
+            .map(|(sheet, extent)| SheetManifestSnapshot {
                 name: sheet.name.clone(),
-                extent: project_sheet_extent(extent),
+                extent,
                 layout: sheet_layout_projection(sheet),
             })
             .collect(),
@@ -68,8 +68,8 @@ pub(crate) fn document_manifest(editor_state: &EditorState) -> DocumentManifest 
 
 pub(crate) fn snapshot_sheet_region(
     editor_state: &EditorState,
-    region: SheetRegion,
-) -> Result<SheetRegionProjectionResponse, AppError> {
+    region: DocumentRegion,
+) -> Result<SheetRegionSnapshot, AppError> {
     let sheet = editor_state
         .file_data()
         .sheets
@@ -83,28 +83,20 @@ pub(crate) fn snapshot_sheet_region(
             "sheet region exceeds the current sheet extent".to_string(),
         ));
     }
-    let metadata =
-        protocol_projection::region_metadata(editor_state.region_metadata(&DocumentRegion {
-            sheet_index: region.sheet_index,
-            row_start: region.row_start,
-            row_end: region.row_end,
-            col_start: region.col_start,
-            col_end: region.col_end,
-        }));
+    let metadata = editor_state.region_metadata(&region);
     let cells = project_region_cells(sheet, &region);
     let merge_anchor_cells = project_merge_anchor_cells(sheet, &region, &metadata.merges);
-    Ok(SheetRegionProjectionResponse {
+    Ok(SheetRegionSnapshot {
         document_id: editor_state.document_id(),
         revision: editor_state.revision(),
         region,
         cells,
         merge_anchor_cells,
         metadata,
-        estimated_bytes: None,
     })
 }
 
-pub(crate) fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError> {
+pub(crate) fn validate_sheet_region(region: &DocumentRegion) -> Result<(), AppError> {
     if region.row_start > region.row_end || region.col_start > region.col_end {
         return Err(AppError::DocumentStateInvalid(
             "invalid sheet region bounds".to_string(),
@@ -136,8 +128,8 @@ pub(crate) fn validate_sheet_region(region: &SheetRegion) -> Result<(), AppError
     Ok(())
 }
 
-fn initial_sheet_region(sheet_index: usize, extent: &DocumentSheetExtent) -> SheetRegion {
-    SheetRegion {
+fn initial_sheet_region(sheet_index: usize, extent: &SheetExtent) -> DocumentRegion {
+    DocumentRegion {
         sheet_index,
         row_start: 0,
         row_end: extent.row_count.min(INITIAL_REGION_ROWS),
@@ -146,8 +138,8 @@ fn initial_sheet_region(sheet_index: usize, extent: &DocumentSheetExtent) -> She
     }
 }
 
-fn sheet_layout_projection(sheet: &DocumentSheet) -> SheetLayoutProjection {
-    SheetLayoutProjection {
+fn sheet_layout_projection(sheet: &DocumentSheet) -> SheetLayoutSnapshot {
+    SheetLayoutSnapshot {
         column_widths: sheet.column_widths.clone().unwrap_or_default(),
         row_heights: sheet.row_heights.clone().unwrap_or_default(),
     }
@@ -155,9 +147,9 @@ fn sheet_layout_projection(sheet: &DocumentSheet) -> SheetLayoutProjection {
 
 pub(crate) fn project_merge_anchor_cells(
     sheet: &DocumentSheet,
-    region: &SheetRegion,
-    merges: &[crate::types::MergeRange],
-) -> Vec<crate::types::SheetCellChange> {
+    region: &DocumentRegion,
+    merges: &[MergeRange],
+) -> Vec<ProjectedCellChange> {
     let mut anchors = std::collections::BTreeSet::new();
     for merge in merges {
         let row = merge.start_row as usize;
@@ -180,21 +172,20 @@ pub(crate) fn project_merge_anchor_cells(
                 .get(row)
                 .and_then(|row_data| row_data.get(col))
                 .cloned()
-                .unwrap_or(crate::types::CellValue::Null);
-            crate::types::SheetCellChange::new(region.sheet_index, row, col, value)
-                .with_display_projection(
-                    sheet.cell_display_text(row, col),
-                    sheet.cell_format_at(row, col).map(project_cell_format),
-                    sheet.cell_style_at(row, col).map(project_cell_style),
-                )
+                .unwrap_or(crate::domain::CellValue::Null);
+            ProjectedCellChange::new(region.sheet_index, row, col, value).with_display_projection(
+                sheet.cell_display_text(row, col),
+                sheet.cell_format_at(row, col),
+                sheet.cell_style_at(row, col),
+            )
         })
         .collect()
 }
 
 pub(crate) fn project_region_cells(
     sheet: &DocumentSheet,
-    region: &SheetRegion,
-) -> Vec<crate::types::SheetCellChange> {
+    region: &DocumentRegion,
+) -> Vec<ProjectedCellChange> {
     let mut cells = Vec::new();
     for row_index in region.row_start..region.row_end {
         let Some(row) = sheet.rows.get(row_index) else {
@@ -207,49 +198,14 @@ pub(crate) fn project_region_cells(
             .skip(region.col_start)
         {
             cells.push(
-                crate::types::SheetCellChange::new(
-                    region.sheet_index,
-                    row_index,
-                    col_index,
-                    value.clone(),
-                )
-                .with_display_projection(
-                    sheet.cell_display_text(row_index, col_index),
-                    sheet
-                        .cell_format_at(row_index, col_index)
-                        .map(project_cell_format),
-                    sheet
-                        .cell_style_at(row_index, col_index)
-                        .map(project_cell_style),
-                ),
+                ProjectedCellChange::new(region.sheet_index, row_index, col_index, value.clone())
+                    .with_display_projection(
+                        sheet.cell_display_text(row_index, col_index),
+                        sheet.cell_format_at(row_index, col_index),
+                        sheet.cell_style_at(row_index, col_index),
+                    ),
             );
         }
     }
     cells
-}
-
-fn project_sheet_extent(value: DocumentSheetExtent) -> SheetExtent {
-    SheetExtent {
-        row_count: value.row_count,
-        column_count: value.column_count,
-    }
-}
-
-pub(crate) fn project_cell_format(value: CellFormat) -> CellFormatProjection {
-    CellFormatProjection {
-        number_format: value.number_format,
-        style_id: value.style_id,
-    }
-}
-
-pub(crate) fn project_cell_style(value: CellStyle) -> CellStyleProjection {
-    CellStyleProjection {
-        font_color: value.font_color,
-        background_color: value.background_color,
-        bold: value.bold,
-        italic: value.italic,
-        horizontal_align: value.horizontal_align,
-        vertical_align: value.vertical_align,
-        number_format: value.number_format,
-    }
 }

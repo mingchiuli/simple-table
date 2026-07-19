@@ -1,31 +1,25 @@
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
-use crate::ops::patch_projector::{editor_state_info, restore_mutation_response};
-use crate::protocol_projection;
+use crate::ops::patch_projector::{editor_state_snapshot, restore_mutation_outcome};
+use crate::projection_model::EditorSessionSnapshot;
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::EditorSessionInfo;
 
 /// 获取编辑器状态（包含能否撤销/重做）
 pub fn do_get_editor_state(
     registry: &ActiveDocumentRepository,
     document_id: Option<u64>,
     base_revision: Option<u64>,
-) -> Result<Option<EditorSessionInfo>, AppError> {
+) -> Result<Option<EditorSessionSnapshot>, AppError> {
     match (document_id, base_revision) {
         (Some(document_id), Some(base_revision)) => {
             let handle = registry.read_handle(document_id)?;
             let editor_state = handle.read_for_command(document_id, base_revision)?;
-            Ok(Some(EditorSessionInfo {
+            Ok(Some(EditorSessionSnapshot {
                 document_id: editor_state.document_id(),
                 revision: editor_state.revision(),
-                formula_status: protocol_projection::formula_status(
-                    editor_state.formula_status(),
-                    100,
-                ),
-                capabilities: protocol_projection::workbook_capabilities(
-                    editor_state.capabilities(),
-                ),
-                editor_state: editor_state_info(&editor_state),
+                formula_status: editor_state.formula_status(),
+                capabilities: editor_state.capabilities(),
+                editor_state: editor_state_snapshot(&editor_state),
             }))
         }
         (None, None) => Ok(None),
@@ -45,7 +39,7 @@ pub fn do_undo(
     let (response, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.undo()? {
-            let response = restore_mutation_response(&editor_state, result.restore);
+            let response = restore_mutation_outcome(&editor_state, result.restore);
             (
                 MutationExecution::new(response, result.search_index_work),
                 result.retired,
@@ -69,7 +63,7 @@ pub fn do_redo(
     let (response, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         if let Some(result) = editor_state.redo()? {
-            let response = restore_mutation_response(&editor_state, result.restore);
+            let response = restore_mutation_outcome(&editor_state, result.restore);
             (
                 MutationExecution::new(response, result.search_index_work),
                 result.retired,
@@ -87,8 +81,8 @@ pub fn do_redo(
 mod tests {
     use super::*;
     use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::domain::CellValue;
     use crate::state::editor_state::EditorState;
-    use crate::types::CellValue;
 
     fn make_registry() -> ActiveDocumentRepository {
         let editor = EditorState::with_workbook(

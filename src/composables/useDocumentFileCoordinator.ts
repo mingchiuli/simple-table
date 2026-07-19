@@ -59,6 +59,7 @@ export function useDocumentFileCoordinator({
     prepareNewFile: () => api.prepareNewFile(),
     commitPreparedDocument: (prepared, expectedContext) =>
       api.commitPreparedDocument(prepared.token, expectedContext),
+    openedDocumentId: (opened) => opened.editorSession.documentId,
     abortPreparedDocument: (prepared) => api.abortPreparedDocument(prepared.token),
     closeDocument: (documentId) => api.closeCurrentDocument(documentId),
     saveFile: (path, context) => saveFile(path, context),

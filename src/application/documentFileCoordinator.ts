@@ -3,10 +3,9 @@ import type {
   DocumentProjection,
   EditorCommandContext,
   NativeSavePlan,
-  OpenDocumentResponse,
   PreparedOpenDocument,
   RecentFile,
-  SavedDocumentResponse,
+  U64String,
 } from '@/types';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 
@@ -50,7 +49,7 @@ export type SaveFileOutcome =
 
 export type ExportFileOutcome = 'none' | 'exported';
 
-export type DocumentFileCoordinatorPorts = {
+export type DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument> = {
   getFileData: () => DocumentProjection | null;
   getCommandContext: () => EditorCommandContext | null;
   getCurrentFilePath: () => string | null;
@@ -71,13 +70,14 @@ export type DocumentFileCoordinatorPorts = {
   commitPreparedDocument: (
     prepared: PreparedOpenDocument,
     expectedContext: EditorCommandContext | null
-  ) => Promise<OpenDocumentResponse>;
+  ) => Promise<OpenedDocument>;
+  openedDocumentId: (opened: OpenedDocument) => U64String;
   abortPreparedDocument: (prepared: PreparedOpenDocument) => Promise<void>;
   closeDocument: (documentId: EditorCommandContext['documentId']) => Promise<void>;
   saveFile: (
     path: string,
     context: EditorCommandContext
-  ) => Promise<SavedDocumentResponse>;
+  ) => Promise<SavedDocument>;
   exportFile: (defaultName: string, context: EditorCommandContext) => Promise<string | null>;
   nativeSavePlan: (
     context: EditorCommandContext,
@@ -91,10 +91,10 @@ export type DocumentFileCoordinatorPorts = {
     defaultName: string,
     action: (location: ReservedSaveLocation) => Promise<T>
   ) => Promise<T | null>;
-  openDocumentResponse: (response: OpenDocumentResponse, path: string | null) => void;
+  openDocumentResponse: (response: OpenedDocument, path: string | null) => void;
   applySavedDocumentResponse: (
     context: EditorCommandContext,
-    response: SavedDocumentResponse,
+    response: SavedDocument,
     path: string,
     preferredSheetIndex: number
   ) => boolean;
@@ -107,7 +107,9 @@ function keepGoing() {
   return true;
 }
 
-export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPorts) {
+export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
+  ports: DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument>,
+) {
   async function loadFileFromPath(
     filePath: string,
     shouldContinue: ContinuationGuard = keepGoing
@@ -132,7 +134,7 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
           const opened = await commitPreparedDocument(prepared, expectedContext);
           if (!shouldContinue()) {
             try {
-              await ports.closeDocument(opened.editorSession.documentId);
+              await ports.closeDocument(ports.openedDocumentId(opened));
               replacement.commit();
               ports.clearDocument();
             } catch (error) {
@@ -330,7 +332,7 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
   async function commitPreparedDocument(
     prepared: PreparedOpenDocument,
     expectedContext: EditorCommandContext | null,
-  ): Promise<OpenDocumentResponse> {
+  ): Promise<OpenedDocument> {
     try {
       return await ports.commitPreparedDocument(prepared, expectedContext);
     } catch (error) {
@@ -350,7 +352,7 @@ export function createDocumentFileCoordinator(ports: DocumentFileCoordinatorPort
   function applySavedResponse(
     path: string,
     context: EditorCommandContext,
-    saved: SavedDocumentResponse
+    saved: SavedDocument
   ): SaveFileOutcome {
     if (!ports.applySavedDocumentResponse(
       context,

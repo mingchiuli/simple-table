@@ -10,7 +10,6 @@ pub(crate) mod document_work_budget_port;
 pub mod editor_command_service;
 pub(crate) mod mutation_replay;
 pub(crate) mod prepared_document_repository;
-pub(crate) mod response_budget;
 pub mod runtime;
 pub(crate) mod search_ports;
 pub mod search_service;

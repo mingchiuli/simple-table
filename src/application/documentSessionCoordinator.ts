@@ -3,13 +3,10 @@ import type {
   DocumentSessionLifecycle,
   EditorCommandContext,
   EditorMutationResponse,
-  EditorPatch,
   EditorSessionInfo,
-  FormulaStatus,
   OpenDocumentResponse,
   SavedDocumentResponse,
   U64String,
-  WorkbookCapabilities,
 } from '@/types';
 import { isNextU64 } from '@/utils/u64';
 import { createDocumentSessionRuntime } from '@/application/documentSessionRuntime';
@@ -25,11 +22,20 @@ import {
   staleMutationIdentity,
   type DocumentProtocolState,
 } from '@/application/documentSessionProtocol';
+import {
+  editorSessionStatusState,
+  editorStatusState,
+  selectionTransforms,
+} from '@/application/editorRuntimeProtocol';
 import type {
   DocumentIdentityStateInput,
   DocumentMutationStateInput,
   DocumentSessionStateInput,
 } from '@/types/documentRuntime';
+import type {
+  DocumentStatusStateInput,
+  SelectionTransform,
+} from '@/types/editorRuntime';
 
 export type MutationApplyResult = {
   data: DocumentProjection | null;
@@ -73,16 +79,14 @@ export type DocumentSessionCoordinatorPorts<
   status: {
     clearPendingContentChange(): void;
     reset(): void;
-    applyEditorSession(info: EditorSessionInfo | null | undefined): void;
-    applyRuntimeStatus(formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities): void;
-    applyEditorState(state: EditorMutationResponse['editorState']): void;
+    applyStatusState(state: DocumentStatusStateInput | null | undefined): void;
     captureSnapshot(): StatusSnapshot;
     restoreSnapshot(snapshot: StatusSnapshot): void;
   };
   selection: {
     reset(): void;
     clearSelection(): void;
-    applyEditorPatches(patches: EditorPatch[] | undefined): void;
+    applySelectionTransforms(transforms: SelectionTransform[]): void;
     clampToSheetData(
       sheetCount: number,
       containsCell: (sheetIndex: number, row: number, col: number) => boolean,
@@ -148,7 +152,7 @@ export function createDocumentSessionCoordinator<
     selection.reset();
     search.reset();
     status.reset();
-    status.applyEditorSession(response.editorSession);
+    status.applyStatusState(editorSessionStatusState(response.editorSession));
   }
 
   function recoverActiveDocumentResponse(
@@ -159,7 +163,7 @@ export function createDocumentSessionCoordinator<
     if (!state) return false;
     document.replaceSessionState(state);
     regions.reset();
-    status.applyEditorSession(response.editorSession);
+    status.applyStatusState(editorSessionStatusState(response.editorSession));
     clampSelectionToProjection();
     search.clearSearch();
     return true;
@@ -177,7 +181,7 @@ export function createDocumentSessionCoordinator<
     );
     pending.reset();
     status.clearPendingContentChange();
-    status.applyEditorSession(response.editorSession);
+    status.applyStatusState(editorSessionStatusState(response.editorSession));
     clampSelectionToProjection();
     search.reset();
   }
@@ -201,7 +205,7 @@ export function createDocumentSessionCoordinator<
     regions.reset();
     pending.reset();
     status.clearPendingContentChange();
-    status.applyEditorSession(response.editorSession);
+    status.applyStatusState(editorSessionStatusState(response.editorSession));
     clampSelectionToProjection();
     search.reset();
     return true;
@@ -235,7 +239,7 @@ export function createDocumentSessionCoordinator<
     const projectionAdvanced = isNextU64(response.revision, previousRevision);
     if (projectionAdvanced) regions.reset();
     if (projectionAdvanced) {
-      selection.applyEditorPatches(response.patches);
+      selection.applySelectionTransforms(selectionTransforms(response.patches));
       clampSelectionToProjection();
     }
     if (result.resyncRequired || mutationInvalidatesSearch(response)) {
@@ -251,7 +255,7 @@ export function createDocumentSessionCoordinator<
       }
       document.replaceProjection(responseProjection(projection), preferredSheetIndex);
       regions.reset();
-      status.applyEditorSession(projection.editorSession);
+      status.applyStatusState(editorSessionStatusState(projection.editorSession));
       clampSelectionToProjection();
     } catch (error) {
       if (document.matchesCommandContext(resyncContext)) {
@@ -294,7 +298,7 @@ export function createDocumentSessionCoordinator<
       if (!document.matchesCommandContext(context)) return;
       document.replaceProjection(responseProjection(projection), preferredSheetIndex);
       regions.reset();
-      status.applyEditorSession(projection.editorSession);
+      status.applyStatusState(editorSessionStatusState(projection.editorSession));
       clampSelectionToProjection();
       search.clearSearch();
       applyEditorSessionForContext(context, session);
@@ -328,7 +332,7 @@ export function createDocumentSessionCoordinator<
     const result = editorSessionIdentity(protocolState(), info);
     if (!result) return;
     document.applyEditorSessionIdentity(result.state, result.revisionAdvanced);
-    status.applyEditorSession(info);
+    status.applyStatusState(editorSessionStatusState(info));
     if (result.revisionAdvanced) {
       regions.reset();
       search.clearSearch();
@@ -336,8 +340,9 @@ export function createDocumentSessionCoordinator<
   }
 
   function applyResponseStatus(response: EditorMutationResponse) {
-    status.applyRuntimeStatus(response.formulaStatus, response.capabilities);
-    status.applyEditorState(response.editorState);
+    status.applyStatusState(
+      editorStatusState(response.editorState, response.formulaStatus, response.capabilities),
+    );
   }
 
   function clampSelectionToProjection() {

@@ -5,6 +5,8 @@ use crate::application::runtime::ApplicationRuntime;
 #[cfg(target_os = "android")]
 use crate::error::AppError;
 #[cfg(target_os = "android")]
+use crate::protocol_projection;
+#[cfg(target_os = "android")]
 use crate::types::{PickedFileInfo, PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "android")]
 use tauri::{AppHandle, State};
@@ -82,6 +84,7 @@ pub async fn prepare_open_file_android(
                 .prepare_open_file_mobile(&app, &path)
         })
         .await
+        .map(protocol_projection::prepared_open_document)
 }
 
 /// Android: generate file bytes and write them to the sandbox path.
@@ -107,6 +110,7 @@ pub async fn save_file_android(
             )
         })
         .await
+        .map(protocol_projection::saved_document_response)
 }
 
 /// Android: export a sandboxed file to a user-selected destination.

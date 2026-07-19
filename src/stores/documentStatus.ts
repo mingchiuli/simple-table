@@ -1,20 +1,24 @@
-import { defaultHistoryStatus, defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
+import {
+  defaultHistoryStatus,
+  defaultWorkbookCapabilities,
+  readyFormulaStatus,
+} from '@/types/editorRuntime';
 import type {
-  EditorSessionInfo,
-  EditorStateInfo,
-  FormulaStatus,
-  HistoryStatus,
-  WorkbookCapabilities,
-} from "@/types";
+  DocumentStatusStateInput,
+  EditorStateStateInput,
+  RuntimeFormulaStatus,
+  RuntimeHistoryStatus,
+  RuntimeWorkbookCapabilities,
+} from '@/types/editorRuntime';
 
 export type DocumentStatusSnapshot = {
   canUndo: boolean;
   canRedo: boolean;
   isContentDirty: boolean;
   hasPendingContentChange: boolean;
-  formulaStatus: FormulaStatus;
-  capabilities: WorkbookCapabilities;
-  history: HistoryStatus;
+  formulaStatus: RuntimeFormulaStatus;
+  capabilities: RuntimeWorkbookCapabilities;
+  history: RuntimeHistoryStatus;
 };
 
 export const useDocumentStatusStore = defineStore("documentStatus", {
@@ -23,31 +27,38 @@ export const useDocumentStatusStore = defineStore("documentStatus", {
     canRedo: false,
     isContentDirty: false,
     hasPendingContentChange: false,
-    formulaStatus: readyFormulaStatus() as FormulaStatus,
-    capabilities: defaultWorkbookCapabilities() as WorkbookCapabilities,
-    history: defaultHistoryStatus() as HistoryStatus,
+    formulaStatus: readyFormulaStatus() as RuntimeFormulaStatus,
+    capabilities: defaultWorkbookCapabilities() as RuntimeWorkbookCapabilities,
+    history: defaultHistoryStatus() as RuntimeHistoryStatus,
   }),
   getters: {
     hasUnsavedChanges: (state) => state.isContentDirty || state.hasPendingContentChange,
   },
   actions: {
-    applyEditorState(state: EditorStateInfo | null | undefined) {
+    applyEditorState(state: EditorStateStateInput | null | undefined) {
       this.canUndo = state?.canUndo ?? false;
       this.canRedo = state?.canRedo ?? false;
-      this.isContentDirty = state?.isDirty ?? false;
+      this.isContentDirty = state?.isContentDirty ?? false;
       this.history = state?.history ?? defaultHistoryStatus();
     },
-    applyRuntimeStatus(formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities) {
+    applyRuntimeStatus(
+      formulaStatus: RuntimeFormulaStatus,
+      capabilities: RuntimeWorkbookCapabilities,
+    ) {
       this.formulaStatus = formulaStatus;
       this.capabilities = capabilities;
     },
-    applyEditorSession(info: EditorSessionInfo | null | undefined) {
-      if (!info) {
+    applyStatusState(state: DocumentStatusStateInput | null | undefined) {
+      if (!state) {
         this.reset();
         return;
       }
-      this.applyRuntimeStatus(info.formulaStatus, info.capabilities);
-      this.applyEditorState(info.editorState);
+      this.canUndo = state.canUndo;
+      this.canRedo = state.canRedo;
+      this.isContentDirty = state.isContentDirty;
+      this.formulaStatus = state.formulaStatus;
+      this.capabilities = state.capabilities;
+      this.history = state.history;
     },
     captureSnapshot(): DocumentStatusSnapshot {
       return {

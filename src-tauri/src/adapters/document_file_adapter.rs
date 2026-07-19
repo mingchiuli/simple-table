@@ -8,13 +8,13 @@ use crate::io::platform::desktop::{self, DesktopFileRuntime};
 use crate::io::platform::mobile;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 use crate::io::platform::mobile::MobileFileRuntime;
+use crate::projection_model::{PreparedOpenDocument, SavedDocumentOutcome};
 #[cfg(desktop)]
 use crate::recent::store::RecentStore;
 #[cfg(desktop)]
 use crate::types::DesktopOpenFileInfo;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::types::PickedFileInfo;
-use crate::types::{PreparedOpenDocument, SavedDocumentResponse};
 
 #[derive(Clone)]
 pub struct DocumentFileAdapter {
@@ -100,7 +100,7 @@ impl DocumentFileAdapter {
         path: &str,
         document_id: u64,
         base_revision: u64,
-    ) -> Result<SavedDocumentResponse, AppError> {
+    ) -> Result<SavedDocumentOutcome, AppError> {
         save_file_desktop(
             &self.saves,
             &self.desktop_files,
@@ -212,7 +212,7 @@ impl DocumentFileAdapter {
         path: &str,
         document_id: u64,
         base_revision: u64,
-    ) -> Result<SavedDocumentResponse, AppError> {
+    ) -> Result<SavedDocumentOutcome, AppError> {
         save_file_mobile(
             &self.saves,
             &self.mobile_files,
@@ -304,7 +304,7 @@ pub fn save_file_desktop(
     path: &str,
     document_id: u64,
     base_revision: u64,
-) -> Result<SavedDocumentResponse, AppError> {
+) -> Result<SavedDocumentOutcome, AppError> {
     use std::path::Path;
 
     use crate::io::atomic_file::{
@@ -376,7 +376,7 @@ pub fn save_file_mobile(
     path: &str,
     document_id: u64,
     base_revision: u64,
-) -> Result<SavedDocumentResponse, AppError> {
+) -> Result<SavedDocumentOutcome, AppError> {
     use std::path::Path;
 
     use crate::io::atomic_file::{

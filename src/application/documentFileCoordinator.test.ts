@@ -54,12 +54,14 @@ function savePlan(overrides: Partial<NativeSavePlan> = {}): NativeSavePlan {
   };
 }
 
-function createPorts(overrides: Partial<DocumentFileCoordinatorPorts> = {}) {
+type TestPorts = DocumentFileCoordinatorPorts<OpenDocumentResponse, SavedDocumentResponse>;
+
+function createPorts(overrides: Partial<TestPorts> = {}) {
   const replacement = {
     commit: vi.fn(),
     cancel: vi.fn(),
   };
-  const ports: DocumentFileCoordinatorPorts = {
+  const ports: TestPorts = {
     getFileData: () => projection(),
     getCommandContext: () => context,
     getCurrentFilePath: () => '/tmp/book.xlsx',
@@ -80,6 +82,7 @@ function createPorts(overrides: Partial<DocumentFileCoordinatorPorts> = {}) {
     prepareRecentFile: vi.fn().mockResolvedValue({ token: 'recent' }),
     prepareNewFile: vi.fn().mockResolvedValue({ token: 'new' }),
     commitPreparedDocument: vi.fn().mockResolvedValue({} as OpenDocumentResponse),
+    openedDocumentId: (opened) => opened.editorSession.documentId,
     abortPreparedDocument: vi.fn().mockResolvedValue(undefined),
     closeDocument: vi.fn().mockResolvedValue(undefined),
     saveFile: vi.fn().mockResolvedValue({} as SavedDocumentResponse),

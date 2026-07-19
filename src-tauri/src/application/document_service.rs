@@ -1,13 +1,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::application::document_projection;
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
 use crate::application::search_ports::SearchIndexMaintenancePort;
-use crate::application::{document_projection, response_budget};
 use crate::error::AppError;
+use crate::projection_model::OpenDocumentSnapshot;
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::OpenDocumentResponse;
 pub(crate) type PreparedSourceAdopter =
     Arc<dyn Fn(Option<&Path>, &str) -> Result<(), AppError> + Send + Sync>;
 
@@ -69,7 +69,7 @@ pub fn commit_prepared_document(
     token: &str,
     expected_document_id: Option<u64>,
     expected_revision: Option<u64>,
-) -> Result<OpenDocumentResponse, AppError> {
+) -> Result<OpenDocumentSnapshot, AppError> {
     let checkout = service.prepared_documents().checkout(token)?;
     let replacement = service
         .documents()
@@ -86,9 +86,7 @@ pub fn commit_prepared_document(
 
     let response = {
         let editor_state = active_handle.read()?;
-        response_budget::finalize_open_document_response(
-            document_projection::open_document_response_snapshot(&editor_state),
-        )
+        document_projection::open_document_snapshot(&editor_state)
     };
 
     if let Some(previous_document_id) = previous_document

@@ -1,51 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
-import type { EditorPatch } from "@/types";
+import type { SelectionTransform } from '@/types/editorRuntime';
 
-function rowDeleted(sheetIndex: number, rowIndex: number, count: number): EditorPatch {
-  return {
-    type: "RowDeleted",
-    data: {
-      patch: {
-        sheetIndex,
-        rowIndex,
-        count,
-      },
-    },
-  };
+function rowDeleted(sheetIndex: number, rowIndex: number, count: number): SelectionTransform {
+  return { type: 'rowDeleted', sheetIndex, rowIndex, count };
 }
 
-function sheetInserted(sheetIndex: number): EditorPatch {
-  return {
-    type: "SheetInserted",
-    data: {
-      patch: {
-        sheetIndex,
-        sheet: {
-          name: "Inserted",
-          extent: { rowCount: 0, columnCount: 0 },
-          layout: { columnWidths: {}, rowHeights: {} },
-        },
-      },
-    },
-  };
+function sheetInserted(sheetIndex: number): SelectionTransform {
+  return { type: 'sheetInserted', sheetIndex };
 }
 
-function sheetsReplaced(startIndex: number): EditorPatch {
-  return {
-    type: "SheetsReplaced",
-    data: {
-      patch: {
-        startIndex,
-        sheets: [{
-          name: "Replacement",
-          extent: { rowCount: 0, columnCount: 0 },
-          layout: { columnWidths: {}, rowHeights: {} },
-        }],
-      },
-    },
-  };
+function sheetsReplaced(startIndex: number): SelectionTransform {
+  return { type: 'sheetsReplaced', startIndex };
 }
 
 describe("editorSelection store", () => {
@@ -57,7 +24,7 @@ describe("editorSelection store", () => {
     const store = useEditorSelectionStore();
     store.sheetSelectedCells[1] = { row: 4, col: 2 };
 
-    store.applyEditorPatches([rowDeleted(1, 1, 2)]);
+    store.applySelectionTransforms([rowDeleted(1, 1, 2)]);
 
     expect(store.sheetSelectedCells[1]).toEqual({ row: 2, col: 2 });
   });
@@ -97,7 +64,7 @@ describe("editorSelection store", () => {
     store.sheetSelectedCells[1] = { row: 0, col: 0 };
     store.sheetSelectedCells[2] = { row: 1, col: 1 };
 
-    store.applyEditorPatches([sheetInserted(1)]);
+    store.applySelectionTransforms([sheetInserted(1)]);
 
     expect(store.currentSheetIndex).toBe(3);
     expect(store.sheetSelectedCells[2]).toEqual({ row: 0, col: 0 });
@@ -111,7 +78,7 @@ describe("editorSelection store", () => {
     store.sheetSelectedCells[0] = { row: 0, col: 0 };
     store.sheetSelectedCells[2] = { row: 1, col: 1 };
 
-    store.applyEditorPatches([sheetsReplaced(1)]);
+    store.applySelectionTransforms([sheetsReplaced(1)]);
 
     expect(store.selectedCell).toBeNull();
     expect(store.sheetSelectedCells[0]).toEqual({ row: 0, col: 0 });

@@ -25,6 +25,17 @@ function rejectMatches(files, patterns, boundary) {
   }
 }
 
+function rejectRustProductionMatches(files, patterns, boundary) {
+  for (const file of files) {
+    const source = readFileSync(file, 'utf8').split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/)[0];
+    for (const pattern of patterns) {
+      if (pattern.test(source)) {
+        violations.push(`${relative(projectRoot, file)} violates ${boundary}: ${pattern}`);
+      }
+    }
+  }
+}
+
 rejectMatches(
   sourceFiles(join(projectRoot, 'src', 'stores'), '.ts'),
   [
@@ -40,6 +51,20 @@ rejectMatches(
     /\bset(?:Timeout|Interval)\s*\(/,
   ],
   'the synchronous side-effect-free Store boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'stores', 'documentStatus.ts'),
+    join(projectRoot, 'src', 'stores', 'searchSession.ts'),
+    join(projectRoot, 'src', 'stores', 'editorSelection.ts'),
+  ],
+  [
+    /['"]@\/types['"]/,
+    /['"]@\/types\/generated['"]/,
+    /\b(?:EditorPatch|EditorSessionInfo|EditorStateInfo|SearchResponse)\b/,
+  ],
+  'the generated-protocol-independent frontend Store boundary',
 );
 
 for (const file of sourceFiles(join(projectRoot, 'src', 'stores'), '.ts')) {
@@ -79,6 +104,31 @@ rejectMatches(
     /crate::state(?:::|\b)/,
   ],
   'the runtime-independent Rust contract boundary',
+);
+
+rejectRustProductionMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs'),
+  [/crate::types(?:::|\b)/, /crate::protocol_projection(?:::|\b)/],
+  'the internal-outcome-only Rust application boundary',
+);
+
+rejectRustProductionMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'ops'), '.rs'),
+  [/crate::types(?:::|\b)/, /crate::protocol_projection(?:::|\b)/],
+  'the internal-mutation-outcome Rust operation boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'projection_model'), '.rs'),
+  [
+    /crate::types(?:::|\b)/,
+    /\bserde(?:::|\b)/,
+    /\bserde_json(?:::|\b)/,
+    /\bts_rs\b/,
+    /\bSerialize\b/,
+    /\bDeserialize\b/,
+  ],
+  'the serialization-independent Rust projection model boundary',
 );
 
 rejectMatches(
@@ -459,9 +509,50 @@ rejectMatches(
     /['"]@\/platform(?:\/|['"])/,
     /['"]@\/stores(?:\/|['"])/,
     /['"]@tauri-apps\//,
+    /\bOpenDocumentResponse\b/,
+    /\bSavedDocumentResponse\b/,
   ],
   'the port-driven document file coordinator boundary',
 );
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'searchSessionCoordinator.ts')],
+  [/\bSearchResponse\b/, /['"]@\/types\/generated['"]/, /['"]@\/types['"]/],
+  'the runtime-search-outcome frontend coordinator boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_adapter.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_adapter.rs'),
+  ],
+  [/std::thread/, /\bCondvar\b/, /\bIndexJob\b/, /\bIndexSchedulerState\b/],
+  'the worker-runtime-independent search port adapter boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_adapter.rs')],
+  [/impl\s+SearchIndexMaintenancePort\b/],
+  'the query-only search adapter boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_adapter.rs')],
+  [/impl\s+SearchQueryPort\b/],
+  'the maintenance-only search adapter boundary',
+);
+
+const searchRuntimeSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_runtime.rs'),
+  'utf8',
+);
+for (const requirement of [/JoinHandle/, /shutdown\.store/, /\.join\s*\(\)/]) {
+  if (!requirement.test(searchRuntimeSource)) {
+    violations.push(
+      `src-tauri/src/adapters/search_index_runtime.rs violates the deterministically-owned search worker boundary: ${requirement}`,
+    );
+  }
+}
 
 rejectMatches(
   [

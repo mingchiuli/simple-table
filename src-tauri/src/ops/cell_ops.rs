@@ -3,12 +3,18 @@ use crate::domain::{SearchCellIndexUpdate, SearchIndexWork};
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::{
-    cell_delta_mutation_response, complete_cell_changes, layout_mutation_response,
-    resync_required_mutation_response, status_mutation_response,
-    structural_delta_mutation_response,
+    cell_delta_mutation_outcome, complete_cell_changes, layout_mutation_outcome,
+    resync_required_mutation_outcome, status_mutation_outcome, structural_delta_mutation_outcome,
 };
+use crate::projection_model::ProjectedCellChange;
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::{LayoutPatch, SheetCellChange};
+use std::collections::HashMap;
+
+struct LayoutMutation {
+    sheet_index: usize,
+    column_widths: HashMap<usize, Option<u32>>,
+    row_heights: HashMap<usize, Option<u32>>,
+}
 
 pub fn do_set_cell(
     registry: &ActiveDocumentRepository,
@@ -209,12 +215,12 @@ fn execute_cell_delta(
             let changes = complete_cell_changes(&projected, result.cell_changes);
             let search_index_work = search_index_work_for_changes(&editor_state, &changes);
             MutationExecution::new(
-                cell_delta_mutation_response(&editor_state, changes),
+                cell_delta_mutation_outcome(&editor_state, changes),
                 search_index_work,
             )
         } else {
             MutationExecution::new(
-                status_mutation_response(&editor_state),
+                status_mutation_outcome(&editor_state),
                 SearchIndexWork::None,
             )
         };
@@ -241,7 +247,7 @@ fn execute_structural_command(
                     .patch_projector()
                     .projected_result_from_current_file(editor_state.file_data());
                 MutationExecution::new(
-                    structural_delta_mutation_response(
+                    structural_delta_mutation_outcome(
                         &editor_state,
                         &projected,
                         result.cell_changes,
@@ -250,7 +256,7 @@ fn execute_structural_command(
                 )
             }
             None => MutationExecution::new(
-                resync_required_mutation_response(
+                resync_required_mutation_outcome(
                     &editor_state,
                     "structure edit completed without an operation result",
                 ),
@@ -269,16 +275,21 @@ fn execute_layout(
     document_id: u64,
     base_revision: u64,
     command: EditorCommand,
-    patch: LayoutPatch,
+    patch: LayoutMutation,
 ) -> Result<MutationExecution, AppError> {
     let handle = mutation_handle(registry, document_id)?;
     let (execution, retired) = {
         let mut editor_state = handle.write_for_command(document_id, base_revision)?;
         let result = editor_state.execute(command)?;
         let response = if result.operation.is_some() {
-            layout_mutation_response(&editor_state, patch)
+            layout_mutation_outcome(
+                &editor_state,
+                patch.sheet_index,
+                patch.column_widths,
+                patch.row_heights,
+            )
         } else {
-            status_mutation_response(&editor_state)
+            status_mutation_outcome(&editor_state)
         };
         (
             MutationExecution::new(response, result.search_index_work),
@@ -291,7 +302,7 @@ fn execute_layout(
 
 fn search_index_work_for_changes(
     editor_state: &crate::state::editor_state::EditorState,
-    changes: &[SheetCellChange],
+    changes: &[ProjectedCellChange],
 ) -> SearchIndexWork {
     let updates = changes
         .iter()
@@ -321,16 +332,16 @@ fn mutation_handle(
     registry.mutation_handle(document_id)
 }
 
-fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutPatch {
-    LayoutPatch {
+fn column_width_patch(sheet_index: usize, col_index: usize, width: Option<u32>) -> LayoutMutation {
+    LayoutMutation {
         sheet_index,
         column_widths: [(col_index, width)].into_iter().collect(),
         row_heights: Default::default(),
     }
 }
 
-fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -> LayoutPatch {
-    LayoutPatch {
+fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -> LayoutMutation {
+    LayoutMutation {
         sheet_index,
         column_widths: Default::default(),
         row_heights: [(row_index, height)].into_iter().collect(),
@@ -342,9 +353,9 @@ mod tests {
     use super::*;
     use crate::document_data::{CellFormat, DocumentData, DocumentSheet, RichMetadata};
     use crate::domain::{CellNumber, CellValue};
+    use crate::projection_model::MutationPatch;
     use crate::state::editor_state::EditorState;
     use crate::state::state::ActiveDocumentRepository;
-    use crate::types::EditorPatch;
     use std::collections::HashMap;
 
     fn make_registry() -> ActiveDocumentRepository {
@@ -437,11 +448,11 @@ mod tests {
         let (document_id, revision) = command_session(&registry);
         let add_row_response = do_add_row(&registry, document_id, revision, 0, 1).expect("add row");
         assert!(matches!(
-            add_row_response.patches.first(),
-            Some(EditorPatch::RowInserted { patch })
-                if patch.sheet_index == 0 && patch.row_index == 1 && patch.count == 1
+            add_row_response.outcome.patches.first(),
+            Some(MutationPatch::RowInserted { sheet_index, row_index, count })
+                if *sheet_index == 0 && *row_index == 1 && *count == 1
         ));
-        assert_eq!(add_row_response.patches.len(), 1);
+        assert_eq!(add_row_response.outcome.patches.len(), 1);
         assert_eq!(
             add_row_response.search_index_work,
             SearchIndexWork::RebuildAll
@@ -452,11 +463,11 @@ mod tests {
         let add_column_response =
             do_add_column(&registry, document_id, revision, 0, 1).expect("add column");
         assert!(matches!(
-            add_column_response.patches.first(),
-            Some(EditorPatch::ColumnInserted { patch })
-                if patch.sheet_index == 0 && patch.col_index == 1 && patch.count == 1
+            add_column_response.outcome.patches.first(),
+            Some(MutationPatch::ColumnInserted { sheet_index, col_index, count })
+                if *sheet_index == 0 && *col_index == 1 && *count == 1
         ));
-        assert_eq!(add_column_response.patches.len(), 1);
+        assert_eq!(add_column_response.outcome.patches.len(), 1);
         assert_eq!(
             add_column_response.search_index_work,
             SearchIndexWork::RebuildAll
@@ -470,8 +481,8 @@ mod tests {
         let response = do_set_cell(&registry, document_id, revision, 0, 0, 0, "A1".to_string())
             .expect("set same cell");
 
-        assert_eq!(response.revision, 0);
-        assert!(response.patches.is_empty());
+        assert_eq!(response.outcome.revision, 0);
+        assert!(response.outcome.patches.is_empty());
     }
 
     #[test]
@@ -500,7 +511,7 @@ mod tests {
         )
         .expect("batch edit");
 
-        let Some(EditorPatch::Cells { changes }) = response.patches.first() else {
+        let Some(MutationPatch::Cells { changes }) = response.outcome.patches.first() else {
             panic!("expected cell patch");
         };
         assert_eq!(changes.len(), 1);
@@ -542,8 +553,8 @@ mod tests {
         )
         .expect("batch edit");
 
-        assert_eq!(response.revision, revision);
-        assert!(response.patches.is_empty());
+        assert_eq!(response.outcome.revision, revision);
+        assert!(response.outcome.patches.is_empty());
         let handle = registry.active_handle().unwrap().unwrap();
         let editor = handle.read().unwrap();
         assert_eq!(
@@ -559,8 +570,8 @@ mod tests {
         let response = do_set_column_width(&registry, document_id, revision, 0, 0, None)
             .expect("clear default width");
 
-        assert_eq!(response.revision, 0);
-        assert!(response.patches.is_empty());
+        assert_eq!(response.outcome.revision, 0);
+        assert!(response.outcome.patches.is_empty());
     }
 
     #[test]
@@ -593,15 +604,17 @@ mod tests {
 
         assert!(
             !response
+                .outcome
                 .patches
                 .iter()
-                .any(|patch| matches!(patch, EditorPatch::ResyncRequired { .. }))
+                .any(|patch| matches!(patch, MutationPatch::ResyncRequired { .. }))
         );
         assert!(
             response
+                .outcome
                 .patches
                 .iter()
-                .any(|patch| matches!(patch, EditorPatch::Cells { .. }))
+                .any(|patch| matches!(patch, MutationPatch::Cells { .. }))
         );
     }
 
@@ -611,7 +624,10 @@ mod tests {
         let (document_id, revision) = command_session(&registry);
         let response = do_set_cell(&registry, document_id, revision, 0, 0, 0, "0.5".to_string())
             .expect("set formatted cell");
-        let json = serde_json::to_value(response.response).expect("serialize response");
+        let json = serde_json::to_value(crate::protocol_projection::mutation_response(
+            response.outcome,
+        ))
+        .expect("serialize response");
 
         assert!(json.get("searchIndexUpdate").is_none());
         assert_eq!(json["documentId"], document_id.to_string());

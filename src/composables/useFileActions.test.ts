@@ -528,7 +528,7 @@ describe("useFileActions", () => {
       statusStore.applyEditorState({
         canUndo: true,
         canRedo: false,
-        isDirty: true,
+        isContentDirty: true,
         history: defaultHistoryStatus(),
       });
       return true;
@@ -555,7 +555,7 @@ describe("useFileActions", () => {
     statusStore.applyEditorState({
       canUndo: true,
       canRedo: false,
-      isDirty: true,
+      isContentDirty: true,
       history: defaultHistoryStatus(),
     });
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
@@ -594,7 +594,7 @@ describe("useFileActions", () => {
       statusStore.applyEditorState({
         canUndo: true,
         canRedo: false,
-        isDirty: true,
+        isContentDirty: true,
         history: defaultHistoryStatus(),
       });
       return true;
@@ -656,7 +656,7 @@ describe("useFileActions", () => {
     statusStore.applyEditorState({
       canUndo: true,
       canRedo: false,
-      isDirty: true,
+      isContentDirty: true,
       history: defaultHistoryStatus(),
     });
     documentSessionStore.projectionStale = true;

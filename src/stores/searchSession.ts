@@ -1,8 +1,12 @@
-import type { SearchResponse, SearchResult, SearchSessionSnapshot } from "@/types";
+import type {
+  RuntimeSearchResult,
+  SearchOutcomeStateInput,
+  SearchSessionSnapshot,
+} from '@/types/editorRuntime';
 
 export const useSearchSessionStore = defineStore("searchSession", {
   state: () => ({
-    searchResults: [] as SearchResult[],
+    searchResults: [] as RuntimeSearchResult[],
     searchResultsTruncated: false,
     searchQuery: "",
     isSearching: false,
@@ -14,9 +18,9 @@ export const useSearchSessionStore = defineStore("searchSession", {
       this.searchResultsTruncated = false;
       this.isSearching = true;
     },
-    applySearchResults(response: SearchResponse) {
-      this.searchResults = response.results;
-      this.searchResultsTruncated = response.truncated;
+    applySearchOutcome(outcome: SearchOutcomeStateInput) {
+      this.searchResults = outcome.results;
+      this.searchResultsTruncated = outcome.truncated;
       this.isSearching = false;
     },
     finishSearch() {

@@ -90,14 +90,16 @@ insertion, while an injected `DocumentCodecPort` owns format preflight, parsing,
 and `EditorState` construction. The opaque decode plan retains validated codec
 preflight state so XLSX archives are not scanned twice. Mobile prepared-source
 adoption is injected as a semantic lifecycle port at the composition root. The
-application query service
-only coordinates consistent repository reads. Manifest/region/session assembly
-lives in `document_projection`, serialized response limits live in
-`response_budget`, and native-save capability policy lives in
-`document_format_policy`. Pure file-format policy lives in the top-level
-`document_format` module. Application production modules other than the
-composition root cannot import `io`; the I/O layer cannot depend on
-`application`, `commands`, `ops`, or `state`.
+application query service only coordinates consistent repository reads.
+Manifest, region, and session assembly lives in `document_projection`, which
+returns serialization-independent values from `projection_model`. Exact wire
+response limits and all DTO construction live in the top-level
+`protocol_projection` module at the command boundary. Native-save capability
+policy lives in `document_format_policy`, while pure file-format policy lives in
+the top-level `document_format` module. Application production modules other
+than the composition root cannot import `io`; application and operation modules
+cannot import protocol DTOs or the outward protocol mapper. The I/O layer cannot
+depend on `application`, `commands`, `ops`, or `state`.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
 applied operations, and their lightweight impact/projection views. Domain
@@ -119,8 +121,11 @@ projection and workbook adapters construct their own representations.
 Formula diagnostics and runtime status, workbook and Sheet capabilities,
 history status, and region metadata are also internal semantic models. The
 document, formula, and state modules cannot import `types`. The top-level
-`protocol_projection` module is their explicit outward wire mapper, so serde
-and TypeScript DTO changes cannot propagate into the document aggregate.
+`projection_model` module owns serialization-independent application snapshots
+and mutation outcomes. The top-level `protocol_projection` module is their
+explicit outward wire mapper, so serde and TypeScript DTO changes cannot
+propagate into the document aggregate, operation handlers, or application
+services.
 
 The Rust `document` module is the physical aggregate boundary. It owns
 `SpreadsheetDocument`, transactions, mementos, formula coordination, save
@@ -144,9 +149,10 @@ file generation.
 
 Document execution returns internal `AppliedOperation`, `DocumentCellChange`,
 and `DocumentRestoreChange` values. The document, formula, memento, and state
-layers cannot construct mutation protocol DTOs. `ops::patch_projector` is the
-single mapper from those internal outcomes to `AppliedOperationResult`,
-`SheetCellChange`, and `EditorPatch` wire values.
+layers cannot construct mutation protocol DTOs. `ops::patch_projector` maps
+operation effects to internal `MutationOutcome` and `MutationPatch` values;
+`protocol_projection` is the only mapper from those outcomes to
+`EditorMutationResponse`, `SheetCellChange`, and `EditorPatch` wire values.
 
 Rust `types` is a runtime-independent protocol boundary. Session DTOs such as
 `EditorSessionInfo`, `EditorStateInfo`, and `HistoryStatus` live there rather
@@ -171,10 +177,12 @@ modules, never on the query service.
 - `EditorState` is authoritative for content, revision, history, dirty state,
   formula state, and capabilities. It contains no search engine, index writer,
   index freshness state, worker, or scheduler.
-- The search adapter owns derived Tantivy indexes in a separate registry keyed
-  by document ID and source revision. A revision mismatch makes an index
-  unavailable before queued index work runs; search then uses the authoritative
-  bounded document scan.
+- `SearchIndexRuntime` owns derived Tantivy indexes, scheduling state, fallback
+  scan admission, and worker handles. Separate query and maintenance adapters
+  expose `SearchQueryPort` and `SearchIndexMaintenancePort` over that shared
+  runtime. Dropping the runtime signals shutdown, wakes workers, and joins every
+  owned thread. A revision mismatch makes an index unavailable before queued
+  index work runs; search then uses the authoritative bounded document scan.
 - The active-document registry owns only the current `Arc<DocumentHandle>` and
   replacement lease. Each handle owns a separate `RwLock<EditorState>`, so a
   mutation or projection releases the registry lock before accessing document
@@ -198,11 +206,12 @@ modules, never on the query service.
   The composable composition layer exposes a combined facade. Business Stores
   must not instantiate or mutate one another.
 - Backend open, save, mutation, and editor-session responses are interpreted by
-  the pure `documentSessionProtocol` application module. It owns protocol
+  pure application protocol modules. `documentSessionProtocol` owns protocol
   version checks, document/revision admission, patch application, and resync
-  decisions. `documentSession` accepts only runtime state inputs and cannot
-  import response DTOs, generated protocol constants, or projection patch
-  interpreters.
+  decisions. `editorRuntimeProtocol` normalizes status, capabilities, history,
+  search outcomes, and selection transforms. Document, status, search, and
+  selection Stores accept only runtime state inputs and cannot import response
+  DTOs, generated protocol constants, or projection patch interpreters.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
   is the backend dirty flag OR pending frontend content. Store dictionaries are
   JSON-serializable records; large pending dictionaries remain raw and expose
@@ -261,13 +270,17 @@ JavaScript `number`.
 Cell patches are capped at 4,096 changes and an estimated 2 MiB per response.
 Larger recalculations are represented as per-Sheet invalidations. Formula status
 exposes complete counts but at most 100 diagnostic samples per response.
-The complete serialized mutation response is capped at 3 MiB. Size counting and
-oversized-response replacement with `ResyncRequired` happen at the replay
-boundary after the document lock is released and before the response is stored
-or returned through IPC.
+The complete serialized mutation response is capped at 3 MiB. Mutation replay
+stores an internal `MutationOutcome` under a conservative resident-memory
+budget. Exact serialized-byte counting and oversized-response replacement with
+`ResyncRequired` happen in `protocol_projection` after the document lock is
+released and immediately before the DTO crosses the command boundary. First
+execution and replay pass through the same mapper and therefore produce the
+same admitted wire response.
 
-Oversized replay responses are stored as compact `ResyncRequired` results at the
-committed revision, preserving idempotency without retaining a second large body.
+Outcomes above the replay journal's resident-memory budget are stored as compact
+`ResyncRequired` results at the committed revision, preserving idempotency
+without retaining a second large body.
 Request fingerprints are streamed into fixed-size SHA-256 digests, so replay
 entries never retain serialized mutation payloads. The replay coordinator lock
 protects only reservation and queue accounting; mutation execution, response
@@ -291,15 +304,18 @@ complete queue. Active and queued requests are limited to 8,192 changes and
 before it can replace an accepted draft.
 
 Search scheduling metadata is internal to Rust and must not be serialized in
-`EditorMutationResponse`. Operations return a `MutationExecution` containing a
-wire response and separate `SearchIndexWork`. The application schedules that
-work only on first execution, while mutation replay stores only the response.
+`EditorMutationResponse`. Operations return a `MutationExecution` containing an
+internal mutation outcome and separate `SearchIndexWork`. The application
+schedules that work only on first execution, while mutation replay stores only
+the internal outcome.
 `SearchIndexWork` is an internal domain contract. `SearchService` depends only
 on `SearchQueryPort`. Save, mutation, and lifecycle workflows depend separately
 on `SearchIndexMaintenancePort`, so they cannot invoke the search use case and
-tests do not implement unrelated query behavior. Worker threads, query plans, queue coalescing,
-resident indexes, memory reservations, and Tantivy updates live in the outer
-search-index adapter. The adapter reads canonical content only through
+tests do not implement unrelated query behavior. Query plans and fallback
+scanning live in the query adapter. Worker threads, queue coalescing, resident
+indexes, memory reservations, and Tantivy updates live in the shared outer
+`SearchIndexRuntime`; the maintenance adapter exposes only scheduling and
+cancellation. The runtime reads canonical content only through
 `SearchDocumentSourcePort`. Search scheduling cannot inspect frontend
 `EditorPatch` DTOs.
 
@@ -502,8 +518,8 @@ merges use a row interval tree. Region projection therefore examines only
 intersecting buckets and intervals. Structural commits and history restores
 rebuild the index at the transaction boundary.
 
-The search adapter retains at most four Tantivy indexes and 64 MiB of measured
-resident index memory for the active document. Each index accounts for its live
+The shared search-index runtime retains at most four Tantivy indexes and 64 MiB
+of measured resident index memory for the active document. Each index accounts for its live
 RAM-directory files, writer arena, and index structure rather than a fixed
 per-index estimate. Incremental commits
 recheck the byte budget and evict the oldest resident index when necessary.
@@ -511,7 +527,7 @@ Search fallback scans through a cursor with chunks capped at 8 MiB of generated
 text and 32,768 visited cells. Each chunk is copied while holding only the
 document read lock and is consumed before the next chunk, so fallback never
 retains both a complete Sheet snapshot and a complete search-text snapshot. A
-24 MiB reservation owned by the application-scoped search-index adapter covers
+24 MiB reservation owned by the application-scoped search-index runtime covers
 fallback scan memory. Search commands have one category execution slot and two
 category admission slots, and also participate in the shared command budget. A
 fallback queues one missing Sheet index per search so repeated searches

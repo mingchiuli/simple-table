@@ -7,10 +7,8 @@ use crate::domain::CellEditInput;
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::{cell_ops, editor_ops};
+use crate::projection_model::{EditorSessionSnapshot, MutationLookup, MutationOutcome};
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::{EditorMutationResponse, MutationResultLookup, SetCellRequest};
-
-pub use crate::types::EditorSessionInfo;
 
 #[derive(Clone)]
 pub struct EditorCommandService {
@@ -56,7 +54,7 @@ pub fn get_editor_state(
     service: &EditorCommandService,
     document_id: Option<u64>,
     base_revision: Option<u64>,
-) -> Result<Option<EditorSessionInfo>, AppError> {
+) -> Result<Option<EditorSessionSnapshot>, AppError> {
     editor_ops::do_get_editor_state(service.documents(), document_id, base_revision)
 }
 
@@ -64,7 +62,7 @@ pub fn get_mutation_result(
     service: &EditorCommandService,
     document_id: u64,
     command_id: &str,
-) -> Result<MutationResultLookup, AppError> {
+) -> Result<MutationLookup, AppError> {
     mutation_replay::get(service.mutation_replays(), document_id, command_id)
 }
 
@@ -73,7 +71,7 @@ pub fn undo(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -90,7 +88,7 @@ pub fn redo(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -111,7 +109,7 @@ pub fn set_cell(
     row: usize,
     col: usize,
     text: String,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     let payload = (sheet_index, row, col, &text);
     run_mutation(
         service,
@@ -139,24 +137,26 @@ pub fn set_cells(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-    changes: Vec<SetCellRequest>,
-) -> Result<EditorMutationResponse, AppError> {
-    let edits: Vec<_> = changes
+    edits: Vec<CellEditInput>,
+) -> Result<MutationOutcome, AppError> {
+    let fingerprint_payload = edits
         .iter()
-        .map(|change| CellEditInput {
-            sheet_index: change.sheet_index,
-            row: change.row,
-            col: change.col,
-            text: change.text.clone(),
+        .map(|change| {
+            (
+                change.sheet_index,
+                change.row,
+                change.col,
+                change.text.as_str(),
+            )
         })
-        .collect();
+        .collect::<Vec<_>>();
     run_mutation(
         service,
         document_id,
         base_revision,
         command_id,
         "set_cells",
-        &changes,
+        &fingerprint_payload,
         |registry| cell_ops::do_set_cells(registry, document_id, base_revision, edits.clone()),
     )
 }
@@ -168,7 +168,7 @@ pub fn add_row(
     command_id: &str,
     sheet_index: usize,
     row_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -189,7 +189,7 @@ pub fn delete_row(
     command_id: &str,
     sheet_index: usize,
     row_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -210,7 +210,7 @@ pub fn add_column(
     command_id: &str,
     sheet_index: usize,
     col_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -231,7 +231,7 @@ pub fn delete_column(
     command_id: &str,
     sheet_index: usize,
     col_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -253,7 +253,7 @@ pub fn set_column_width(
     sheet_index: usize,
     col_index: usize,
     width: Option<u32>,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -282,7 +282,7 @@ pub fn set_row_height(
     sheet_index: usize,
     row_index: usize,
     height: Option<u32>,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -308,7 +308,7 @@ pub fn add_sheet(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -326,7 +326,7 @@ pub fn delete_sheet(
     base_revision: u64,
     command_id: &str,
     sheet_index: usize,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
@@ -346,7 +346,7 @@ fn run_mutation<P: Serialize>(
     command_name: &str,
     payload: &P,
     execute: impl FnOnce(&ActiveDocumentRepository) -> Result<MutationExecution, AppError>,
-) -> Result<EditorMutationResponse, AppError> {
+) -> Result<MutationOutcome, AppError> {
     mutation_replay::run(
         service.mutation_replays(),
         document_id,
@@ -356,13 +356,13 @@ fn run_mutation<P: Serialize>(
         payload,
         || {
             let execution = execute(service.documents())?;
-            let revision = execution.response.revision;
+            let revision = execution.outcome.revision;
             service.search_indexes().schedule_work(
                 document_id,
                 revision,
                 execution.search_index_work,
             );
-            Ok(execution.response)
+            Ok(execution.outcome)
         },
     )
 }

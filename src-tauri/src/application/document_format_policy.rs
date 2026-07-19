@@ -1,13 +1,11 @@
+use crate::document::capabilities::WorkbookCapabilities;
 use crate::document_format::{
     default_spreadsheet_extension, export_extensions, extension_of, spreadsheet_format_options,
     supported_extension_from_name,
 };
 use crate::error::AppError;
-use crate::protocol_projection;
+use crate::projection_model::{DocumentCapabilities, NativeSavePlan, SpreadsheetFormatOptions};
 use crate::state::editor_state::EditorState;
-use crate::types::{
-    DocumentCapabilities, NativeSavePlan, SpreadsheetFormatOptions, WorkbookCapabilities,
-};
 
 const LOSSY_CSV_SAVE_REASON: &str = "Saving a non-CSV document as CSV would discard sheets, formulas, or formatting; use Export instead.";
 
@@ -17,7 +15,7 @@ pub(crate) fn document_capabilities(editor_state: &EditorState) -> DocumentCapab
     capabilities_for_source(
         file.file_name.as_str(),
         current_path,
-        protocol_projection::workbook_capabilities(editor_state.capabilities()),
+        editor_state.capabilities(),
     )
 }
 
@@ -31,7 +29,7 @@ pub(crate) fn native_save_plan(
     let native_save_allowed = native_extension.is_some();
     let export_extension =
         export_extension(target_path_or_name).unwrap_or_else(|| source_format.clone());
-    let mut workbook = protocol_projection::workbook_capabilities(editor_state.capabilities());
+    let mut workbook = editor_state.capabilities();
     workbook.save.can_native_save = native_save_allowed && workbook.save.can_native_save;
     if let Some(reason) = native_save_target_block_reason(editor_state, target_path_or_name) {
         workbook.save.can_native_save = false;

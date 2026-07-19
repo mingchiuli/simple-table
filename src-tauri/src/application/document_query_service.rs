@@ -1,29 +1,24 @@
-use crate::application::{document_format_policy, document_projection, response_budget};
+use crate::application::{document_format_policy, document_projection};
+use crate::document::region_metadata_index::DocumentRegion;
 use crate::document_data::DocumentData;
 use crate::error::AppError;
-#[cfg(test)]
-use crate::protocol_projection;
-use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
-use crate::types::{
-    DocumentCapabilities, NativeSavePlan, OpenDocumentResponse, SheetRegion,
-    SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+use crate::projection_model::{
+    DocumentCapabilities, NativeSavePlan, OpenDocumentSnapshot, SheetRegionSnapshot,
+    SpreadsheetFormatOptions,
 };
+use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 
 #[cfg(test)]
 use crate::application::document_format_policy::ensure_native_save_target_allowed;
 #[cfg(test)]
 use crate::application::document_projection::{
-    MAX_REGION_ROWS, open_document_response_snapshot, project_merge_anchor_cells,
-    project_region_cells, snapshot_sheet_region, validate_sheet_region,
+    MAX_REGION_ROWS, open_document_snapshot, project_merge_anchor_cells, project_region_cells,
+    snapshot_sheet_region, validate_sheet_region,
 };
 #[cfg(test)]
-use crate::application::response_budget::{
-    MAX_REGION_RESPONSE_BYTES, finalize_open_document_response, finalize_region_response,
-};
+use crate::document::capabilities::WorkbookCapabilities;
 #[cfg(test)]
 use crate::state::editor_state::EditorState;
-#[cfg(test)]
-use crate::types::WorkbookCapabilities;
 
 #[derive(Clone, Default)]
 pub struct DocumentQueryService {
@@ -43,14 +38,12 @@ impl DocumentQueryService {
 /// Restores the frontend after its service state was lost while the Rust process stayed alive.
 pub fn active_document_response(
     service: &DocumentQueryService,
-) -> Result<Option<OpenDocumentResponse>, AppError> {
+) -> Result<Option<OpenDocumentSnapshot>, AppError> {
     let handle = service.documents().active_handle()?;
     handle
         .map(|handle| {
             let editor_state = handle.read()?;
-            Ok(response_budget::finalize_open_document_response(
-                document_projection::open_document_response_snapshot(&editor_state),
-            ))
+            Ok(document_projection::open_document_snapshot(&editor_state))
         })
         .transpose()
 }
@@ -75,35 +68,31 @@ pub fn current_document_projection_for_command(
     document_id: u64,
     base_revision: u64,
     preferred_sheet_index: usize,
-) -> Result<OpenDocumentResponse, AppError> {
+) -> Result<OpenDocumentSnapshot, AppError> {
     let handle = document_handle_for_read(service.documents(), document_id)?;
     let response = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        document_projection::open_document_response_snapshot_for_sheet(
-            &editor_state,
-            preferred_sheet_index,
-        )
+        document_projection::open_document_snapshot_for_sheet(&editor_state, preferred_sheet_index)
     };
-    Ok(response_budget::finalize_open_document_response(response))
+    Ok(response)
 }
 
 pub fn sheet_region_projection_for_command(
     service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
-    region: SheetRegion,
-) -> Result<SheetRegionProjectionResponse, AppError> {
+    region: DocumentRegion,
+) -> Result<SheetRegionSnapshot, AppError> {
     document_projection::validate_sheet_region(&region)?;
-    let response = sheet_region_snapshot_for_command(service, document_id, base_revision, region)?;
-    response_budget::finalize_region_response(response, response_budget::MAX_REGION_RESPONSE_BYTES)
+    sheet_region_snapshot_for_command(service, document_id, base_revision, region)
 }
 
 fn sheet_region_snapshot_for_command(
     service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
-    region: SheetRegion,
-) -> Result<SheetRegionProjectionResponse, AppError> {
+    region: DocumentRegion,
+) -> Result<SheetRegionSnapshot, AppError> {
     sheet_region_snapshot_from_registry(service.documents(), document_id, base_revision, region)
 }
 
@@ -111,8 +100,8 @@ fn sheet_region_snapshot_from_registry(
     registry: &ActiveDocumentRepository,
     document_id: u64,
     base_revision: u64,
-    region: SheetRegion,
-) -> Result<SheetRegionProjectionResponse, AppError> {
+    region: DocumentRegion,
+) -> Result<SheetRegionSnapshot, AppError> {
     let handle = document_handle_for_read(registry, document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
     document_projection::snapshot_sheet_region(&editor_state, region)
@@ -189,7 +178,7 @@ fn active_workbook_capabilities(
             _ => active_file.file_name == file_name,
         };
         if matches {
-            return protocol_projection::workbook_capabilities(editor_state.capabilities());
+            return editor_state.capabilities();
         }
     }
     WorkbookCapabilities::default()
@@ -261,7 +250,7 @@ mod tests {
             None,
         );
 
-        let response = finalize_open_document_response(open_document_response_snapshot(&state));
+        let response = open_document_snapshot(&state);
 
         assert_eq!(response.document.sheets[0].name, "First");
         assert_eq!(response.document.sheets[1].name, "Second");
@@ -273,11 +262,11 @@ mod tests {
                 .map(|sheet| sheet.extent)
                 .collect::<Vec<_>>(),
             vec![
-                crate::types::SheetExtent {
+                crate::document_data::SheetExtent {
                     row_count: 1,
                     column_count: 1,
                 },
-                crate::types::SheetExtent {
+                crate::document_data::SheetExtent {
                     row_count: 1,
                     column_count: 1,
                 },
@@ -303,7 +292,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let region = SheetRegion {
+        let region = DocumentRegion {
             sheet_index: 0,
             row_start: 1,
             row_end: 2,
@@ -331,19 +320,20 @@ mod tests {
             },
             None,
         );
-        let response = finalize_region_response(
-            snapshot_sheet_region(
-                &state,
-                SheetRegion {
-                    sheet_index: 0,
-                    row_start: 0,
-                    row_end: 1,
-                    col_start: 0,
-                    col_end: 1,
-                },
-            )
-            .expect("region snapshot"),
-            MAX_REGION_RESPONSE_BYTES,
+        let snapshot = snapshot_sheet_region(
+            &state,
+            DocumentRegion {
+                sheet_index: 0,
+                row_start: 0,
+                row_end: 1,
+                col_start: 0,
+                col_end: 1,
+            },
+        )
+        .expect("region snapshot");
+        let response = crate::protocol_projection::sheet_region_response(
+            snapshot,
+            crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES,
         )
         .expect("region response");
         let serialized_bytes = serde_json::to_vec(&response)
@@ -351,10 +341,19 @@ mod tests {
             .len();
 
         assert_eq!(response.estimated_bytes, Some(serialized_bytes));
-        let mut unbounded = response;
-        unbounded.estimated_bytes = None;
+        let unbounded = snapshot_sheet_region(
+            &state,
+            DocumentRegion {
+                sheet_index: 0,
+                row_start: 0,
+                row_end: 1,
+                col_start: 0,
+                col_end: 1,
+            },
+        )
+        .expect("region snapshot");
         assert!(matches!(
-            finalize_region_response(unbounded, 1),
+            crate::protocol_projection::sheet_region_response(unbounded, 1),
             Err(AppError::RegionResponseTooLarge {
                 maximum_bytes: 1,
                 ..
@@ -384,7 +383,7 @@ mod tests {
             &registry,
             document_id,
             revision,
-            SheetRegion {
+            DocumentRegion {
                 sheet_index: 0,
                 row_start: 0,
                 row_end: 1,
@@ -395,8 +394,11 @@ mod tests {
         .expect("region snapshot");
         assert!(registry.is_write_available_for_test());
 
-        let response =
-            finalize_region_response(snapshot, MAX_REGION_RESPONSE_BYTES).expect("sized response");
+        let response = crate::protocol_projection::sheet_region_response(
+            snapshot,
+            crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES,
+        )
+        .expect("sized response");
         assert!(response.estimated_bytes.is_some());
     }
 
@@ -412,7 +414,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let region = SheetRegion {
+        let region = DocumentRegion {
             sheet_index: 0,
             row_start: 128,
             row_end: 141,
@@ -424,19 +426,9 @@ mod tests {
             file_name: "merge.xlsx".to_string(),
             sheets: vec![sheet.clone()],
         };
-        let metadata = crate::protocol_projection::region_metadata(
+        let metadata =
             crate::document::region_metadata_index::RegionMetadataIndex::from_file_data(&file_data)
-                .project(
-                    &file_data,
-                    &DocumentRegion {
-                        sheet_index: region.sheet_index,
-                        row_start: region.row_start,
-                        row_end: region.row_end,
-                        col_start: region.col_start,
-                        col_end: region.col_end,
-                    },
-                ),
-        );
+                .project(&file_data, &region);
         let anchors = project_merge_anchor_cells(&sheet, &region, &metadata.merges);
 
         assert_eq!(anchors.len(), 1);
@@ -447,7 +439,7 @@ mod tests {
 
     #[test]
     fn region_projection_rejects_degenerate_oversized_dimensions() {
-        let region = SheetRegion {
+        let region = DocumentRegion {
             sheet_index: 0,
             row_start: 0,
             row_end: MAX_REGION_ROWS + 1,

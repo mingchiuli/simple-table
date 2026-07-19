@@ -1,8 +1,11 @@
-import type { SearchResponse, SearchSessionSnapshot } from '@/types';
+import type {
+  SearchOutcomeStateInput,
+  SearchSessionSnapshot,
+} from '@/types/editorRuntime';
 
 export type SearchSessionPort = {
   beginSearch(query: string): void;
-  applySearchResults(response: SearchResponse): void;
+  applySearchOutcome(outcome: SearchOutcomeStateInput): void;
   finishSearch(): void;
   clearSearch(): void;
   captureSnapshot(): SearchSessionSnapshot;
@@ -18,9 +21,9 @@ export function createSearchSessionCoordinator(session: SearchSessionPort) {
     return requestId;
   }
 
-  function applySearchResults(token: number, response: SearchResponse): boolean {
+  function applySearchOutcome(token: number, outcome: SearchOutcomeStateInput): boolean {
     if (token !== requestId) return false;
-    session.applySearchResults(response);
+    session.applySearchOutcome(outcome);
     return true;
   }
 
@@ -48,7 +51,7 @@ export function createSearchSessionCoordinator(session: SearchSessionPort) {
 
   return {
     beginSearch,
-    applySearchResults,
+    applySearchOutcome,
     finishSearch,
     clearSearch,
     reset,

@@ -6,10 +6,10 @@ use crate::application::document_codec_port::{DocumentCodecPort, OpenDocumentSou
 use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
 use crate::document_format::default_spreadsheet_extension;
 use crate::error::AppError;
+use crate::projection_model::PreparedOpenDocument;
 use crate::resource_limits::validate_file_data;
 use crate::state::editor_state::EditorState;
 use crate::state::state::ActiveDocumentRepository;
-use crate::types::PreparedOpenDocument;
 
 #[derive(Clone)]
 pub struct DocumentOpenService {
@@ -87,7 +87,7 @@ fn blank_file_data() -> DocumentData {
         file_name: format!("untitled.{}", default_spreadsheet_extension()),
         sheets: vec![DocumentSheet {
             name: "Sheet1".to_string(),
-            rows: vec![vec![crate::types::CellValue::Null; 5]; 5],
+            rows: vec![vec![crate::domain::CellValue::Null; 5]; 5],
             ..Default::default()
         }],
     }
@@ -119,7 +119,7 @@ fn active_document_resource_bytes(service: &DocumentOpenService) -> Result<usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CellValue;
+    use crate::domain::CellValue;
 
     struct TestCodec;
     struct TestDecodePlan;

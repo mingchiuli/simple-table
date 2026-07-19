@@ -528,16 +528,6 @@ pub struct WorkbookCapabilities {
     pub sheets: Vec<SheetCapabilities>,
 }
 
-/// 单元格变化
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct CellChange {
-    pub row: usize,
-    pub col: usize,
-    pub value: CellValue,
-}
-
 /// 带 sheet 的单元格变化，用于高频编辑的增量响应。
 #[derive(Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -604,116 +594,6 @@ impl Serialize for SheetCellChange {
         )?;
         state.end()
     }
-}
-
-/// 行变化
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RowChange {
-    pub index: usize,
-    pub values: Vec<CellValue>,
-}
-
-/// 列变化
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[ts(rename_all = "camelCase")]
-pub struct ColumnChange {
-    pub index: usize,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct ColumnWidthChange {
-    #[serde(rename = "colIndex")]
-    pub col_index: usize,
-    pub width: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RowHeightChange {
-    #[serde(rename = "rowIndex")]
-    pub row_index: usize,
-    pub height: Option<u32>,
-}
-
-// ==================== Applied Operation Result ====================
-
-/// Internal result produced after an editor operation has been applied.
-#[derive(Serialize, Deserialize, TS, Clone, Debug)]
-#[serde(tag = "type", content = "data")]
-#[ts(tag = "type", content = "data")]
-pub enum AppliedOperationResult {
-    /// 单元格修改
-    #[serde(rename = "SetCell")]
-    SetCell {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        cell: CellChange,
-    },
-    #[serde(rename = "SetCells")]
-    SetCells { changes: Vec<SheetCellChange> },
-    /// 添加行
-    #[serde(rename = "AddRow")]
-    AddRow {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        row: RowChange,
-    },
-    /// 删除行
-    #[serde(rename = "DeleteRow")]
-    DeleteRow {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        #[serde(rename = "rowIndex")]
-        row_index: usize,
-    },
-    /// 添加列
-    #[serde(rename = "AddColumn")]
-    AddColumn {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        column: ColumnChange,
-        /// 添加的列数据（用于撤销时恢复）
-        #[serde(rename = "colData")]
-        col_data: Vec<CellValue>,
-    },
-    /// 删除列
-    #[serde(rename = "DeleteColumn")]
-    DeleteColumn {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        #[serde(rename = "columnIndex")]
-        column_index: usize,
-    },
-    #[serde(rename = "SetColumnWidth")]
-    SetColumnWidth {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        column: ColumnWidthChange,
-    },
-    #[serde(rename = "SetRowHeight")]
-    SetRowHeight {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        row: RowHeightChange,
-    },
-    /// 添加 Sheet
-    #[serde(rename = "AddSheet")]
-    AddSheet {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-        sheet: SheetManifest,
-    },
-    /// 删除 Sheet
-    #[serde(rename = "DeleteSheet")]
-    DeleteSheet {
-        #[serde(rename = "sheetIndex")]
-        sheet_index: usize,
-    },
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -894,27 +774,4 @@ pub struct MutationResultLookup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub response: Option<EditorMutationResponse>,
-}
-
-impl MutationResultLookup {
-    pub fn pending() -> Self {
-        Self {
-            status: MutationResultStatus::Pending,
-            response: None,
-        }
-    }
-
-    pub fn completed(response: EditorMutationResponse) -> Self {
-        Self {
-            status: MutationResultStatus::Completed,
-            response: Some(response),
-        }
-    }
-
-    pub fn missing() -> Self {
-        Self {
-            status: MutationResultStatus::Missing,
-            response: None,
-        }
-    }
 }

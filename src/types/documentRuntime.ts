@@ -3,7 +3,6 @@ import type {
   CellValue,
   EditorCommandContext,
   ReadOnlyRichProjection,
-  SearchResult,
   SheetExtent,
   SheetRegion,
   SheetRegionMetadata,
@@ -90,11 +89,4 @@ export type DocumentMutationStateInput = {
 export type DocumentIdentityStateInput = {
   documentId: U64String;
   revision: U64String;
-};
-
-export type SearchSessionSnapshot = {
-  searchResults: SearchResult[];
-  searchResultsTruncated: boolean;
-  searchQuery: string;
-  isSearching: boolean;
 };
