@@ -9,7 +9,10 @@ import type {
   U64String,
 } from '@/types';
 import { isNextU64 } from '@/utils/u64';
-import { createDocumentSessionRuntime } from '@/application/documentSessionRuntime';
+import {
+  createDocumentSessionRuntime,
+  type DocumentMutationLease,
+} from '@/application/documentSessionRuntime';
 import {
   editorSessionIdentity,
   hasSupportedMutationProtocol,
@@ -406,14 +409,14 @@ export function createDocumentSessionCoordinator<
 
   function enqueueDocumentMutation<T>(
     documentId: U64String,
-    task: (context: EditorCommandContext) => Promise<T>,
+    task: (context: EditorCommandContext, lease: DocumentMutationLease) => Promise<T>,
   ): Promise<T | undefined> {
-    return sessionRuntime.enqueueMutation(async () => {
+    return sessionRuntime.enqueueMutation(async (lease) => {
       if (document.projectionStale) {
         throw new Error('Document projection is stale; refresh the document before editing.');
       }
       const context = document.commandContextForDocument(documentId);
-      return context ? task(context) : undefined;
+      return context && lease.isCurrent() ? task(context, lease) : undefined;
     });
   }
 

@@ -1,4 +1,4 @@
-import type { UpdateInfo, UpdatePlatform } from '@/types';
+import type { MobileUpdateState, UpdatePlatform } from '@/types/updateRuntime';
 import { appErrorMessage } from '@/utils/appError';
 
 export type DesktopDownloadEvent =
@@ -15,15 +15,17 @@ export type UpdatePort = {
   getVersion(): Promise<string>;
   platform(): string;
   checkDesktop(): Promise<DesktopUpdateHandle | null>;
-  checkMobile(currentVersion: string): Promise<UpdateInfo | null>;
+  checkMobile(currentVersion: string): Promise<MobileUpdateState | null>;
   openUrl(url: string): Promise<void>;
-  relaunch(): Promise<void>;
-  requestExit(relaunchApplication: () => Promise<void>): Promise<boolean>;
+};
+
+export type UpdateExitPort = {
+  requestRelaunch(): Promise<boolean>;
 };
 
 type UpdateCheckResult =
   | { platform: 'desktop'; appVersion: string; update: DesktopUpdateHandle | null }
-  | { platform: 'mobile'; appVersion: string; update: UpdateInfo | null };
+  | { platform: 'mobile'; appVersion: string; update: MobileUpdateState | null };
 
 type UpdateRuntime = {
   currentVersionPromise: Promise<string> | null;
@@ -36,7 +38,7 @@ type UpdateRuntime = {
 export type UpdateSessionPort = {
   status: string;
   currentVersion: string;
-  mobileUpdateInfo: UpdateInfo | null;
+  mobileUpdateInfo: MobileUpdateState | null;
   isDesktop: boolean;
   isAndroid: boolean;
   setPlatform(platform: UpdatePlatform): void;
@@ -44,7 +46,7 @@ export type UpdateSessionPort = {
   setErrorMessage(message: string): void;
   beginCheck(): void;
   applyDesktopCheck(appVersion: string, updateVersion: string | null): void;
-  applyMobileCheck(appVersion: string, update: UpdateInfo | null): void;
+  applyMobileCheck(appVersion: string, update: MobileUpdateState | null): void;
   beginDownload(): void;
   setDownloadTotal(total: number): void;
   addDownloadedBytes(bytes: number): void;
@@ -55,7 +57,11 @@ export type UpdateSessionPort = {
 
 export type UpdateCoordinator = ReturnType<typeof createUpdateCoordinator>;
 
-export function createUpdateCoordinator(store: UpdateSessionPort, port: UpdatePort) {
+export function createUpdateCoordinator(
+  store: UpdateSessionPort,
+  port: UpdatePort,
+  exit: UpdateExitPort,
+) {
   const runtime: UpdateRuntime = {
     currentVersionPromise: null,
     updateCheckPromise: null,
@@ -144,7 +150,7 @@ export function createUpdateCoordinator(store: UpdateSessionPort, port: UpdatePo
 
   async function relaunchWhenReady(token: number) {
     if (!isCurrentOperation(token)) return;
-    await port.requestExit(port.relaunch);
+    await exit.requestRelaunch();
   }
 
   async function handleMobileUpdate() {

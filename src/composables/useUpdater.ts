@@ -3,7 +3,7 @@ import { computed, onMounted } from 'vue';
 import { useUpdateCoordinator } from '@/composables/useUpdateCoordinator';
 import { useUpdateSessionStore } from '@/stores/updateSession';
 
-export type { UpdateInfo } from '@/types';
+export type { MobileUpdateState as UpdateInfo } from '@/types/updateRuntime';
 export type { UpdateStatus } from '@/stores/updateSession';
 
 export function useUpdater() {

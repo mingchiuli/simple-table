@@ -1,29 +1,69 @@
 export type ApplicationExitGuard = () => Promise<boolean>;
-export type ExitAction = () => Promise<void>;
+export type ApplicationExitIntent = 'close' | 'relaunch';
 
-const exitGuards = new Set<ApplicationExitGuard>();
-let activeExitRequest: Promise<boolean> | null = null;
+export type ApplicationExitResult =
+  | { status: 'cancelled' }
+  | { status: 'executed'; intent: ApplicationExitIntent };
 
-export function registerApplicationExitGuard(guard: ApplicationExitGuard): () => void {
-  exitGuards.add(guard);
-  return () => exitGuards.delete(guard);
-}
+export type ApplicationExitExecutor = {
+  execute(intent: ApplicationExitIntent): Promise<void>;
+};
 
-export function requestApplicationExit(exit: ExitAction): Promise<boolean> {
-  if (activeExitRequest) return activeExitRequest;
+type ActiveExitRequest = {
+  intent: ApplicationExitIntent;
+  actionStarted: boolean;
+  promise: Promise<ApplicationExitResult>;
+};
 
-  activeExitRequest = runApplicationExit(exit).finally(() => {
-    activeExitRequest = null;
-  });
-  return activeExitRequest;
-}
+export type ApplicationExitCoordinator = ReturnType<typeof createApplicationExitCoordinator>;
 
-async function runApplicationExit(exit: ExitAction): Promise<boolean> {
-  const guards = Array.from(exitGuards).reverse();
-  for (const guard of guards) {
-    if (!(await guard())) return false;
+export function createApplicationExitCoordinator(executor: ApplicationExitExecutor) {
+  const exitGuards = new Set<ApplicationExitGuard>();
+  let activeRequest: ActiveExitRequest | null = null;
+
+  function registerGuard(guard: ApplicationExitGuard): () => void {
+    exitGuards.add(guard);
+    return () => exitGuards.delete(guard);
   }
 
-  await exit();
-  return true;
+  function requestExit(intent: ApplicationExitIntent): Promise<ApplicationExitResult> {
+    if (activeRequest) {
+      if (!activeRequest.actionStarted) {
+        activeRequest.intent = preferredIntent(activeRequest.intent, intent);
+      }
+      return activeRequest.promise;
+    }
+
+    const request: ActiveExitRequest = {
+      intent,
+      actionStarted: false,
+      promise: Promise.resolve({ status: 'cancelled' }),
+    };
+    request.promise = runExitRequest(request).finally(() => {
+      if (activeRequest === request) activeRequest = null;
+    });
+    activeRequest = request;
+    return request.promise;
+  }
+
+  async function runExitRequest(request: ActiveExitRequest): Promise<ApplicationExitResult> {
+    const guards = Array.from(exitGuards).reverse();
+    for (const guard of guards) {
+      if (!(await guard())) return { status: 'cancelled' };
+    }
+
+    request.actionStarted = true;
+    const intent = request.intent;
+    await executor.execute(intent);
+    return { status: 'executed', intent };
+  }
+
+  return { registerGuard, requestExit };
+}
+
+function preferredIntent(
+  current: ApplicationExitIntent,
+  requested: ApplicationExitIntent,
+): ApplicationExitIntent {
+  return current === 'relaunch' || requested === 'relaunch' ? 'relaunch' : 'close';
 }

@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createUpdateCoordinator,
+  type UpdateExitPort,
   type UpdatePort,
   type UpdateSessionPort,
 } from '@/application/updateCoordinator';
-import type { UpdateInfo, UpdatePlatform } from '@/types';
+import type { MobileUpdateState, UpdatePlatform } from '@/types/updateRuntime';
 
 class TestUpdateSession implements UpdateSessionPort {
   status = 'idle';
   currentVersion = '';
-  mobileUpdateInfo: UpdateInfo | null = null;
+  mobileUpdateInfo: MobileUpdateState | null = null;
   updatePlatform: UpdatePlatform = 'desktop';
   updateVersion: string | null = null;
   downloaded = 0;
@@ -28,7 +29,7 @@ class TestUpdateSession implements UpdateSessionPort {
     this.updateVersion = updateVersion;
     this.status = updateVersion ? 'available' : 'no-update';
   }
-  applyMobileCheck(appVersion: string, update: UpdateInfo | null) {
+  applyMobileCheck(appVersion: string, update: MobileUpdateState | null) {
     this.currentVersion = appVersion;
     this.mobileUpdateInfo = update;
     this.status = update ? 'available' : 'no-update';
@@ -44,11 +45,7 @@ class TestUpdateSession implements UpdateSessionPort {
 describe('updateCoordinator', () => {
   it('runs desktop update work entirely through injected ports', async () => {
     const session = new TestUpdateSession();
-    const relaunch = vi.fn(async () => undefined);
-    const requestExit = vi.fn(async (action: () => Promise<void>) => {
-      await action();
-      return true;
-    });
+    const requestRelaunch = vi.fn(async () => true);
     const port: UpdatePort = {
       getVersion: async () => '1.0.0',
       platform: () => 'macos',
@@ -62,10 +59,9 @@ describe('updateCoordinator', () => {
       }),
       checkMobile: async () => null,
       openUrl: async () => undefined,
-      relaunch,
-      requestExit,
     };
-    const coordinator = createUpdateCoordinator(session, port);
+    const exit: UpdateExitPort = { requestRelaunch };
+    const coordinator = createUpdateCoordinator(session, port, exit);
 
     await coordinator.checkForUpdate();
     await coordinator.downloadAndInstall();
@@ -75,7 +71,6 @@ describe('updateCoordinator', () => {
     expect(session.total).toBe(8);
     expect(session.downloaded).toBe(8);
     expect(session.status).toBe('ready');
-    expect(requestExit).toHaveBeenCalledOnce();
-    expect(relaunch).toHaveBeenCalledOnce();
+    expect(requestRelaunch).toHaveBeenCalledOnce();
   });
 });

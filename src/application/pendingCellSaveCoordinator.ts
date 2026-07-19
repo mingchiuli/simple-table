@@ -19,6 +19,7 @@ export type PendingCellSavePort = {
 export function createPendingCellSaveCoordinator(store: PendingCellSavePort) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSavePromise: Promise<boolean> | null = null;
+  let pendingSaveGeneration: number | null = null;
   let generation = 0;
   let autosaveSuspendCount = 0;
   let lastCallbacks: PendingCellSaveCallbacks | null = null;
@@ -48,9 +49,18 @@ export function createPendingCellSaveCoordinator(store: PendingCellSavePort) {
 
     store.setPhase('saving');
     const saveGeneration = generation;
-    pendingSavePromise = saveQueuedBatch(callbacks, saveGeneration).finally(() => {
-      if (saveGeneration !== generation) return;
-      pendingSavePromise = null;
+    const savePromise = saveQueuedBatch(callbacks, saveGeneration);
+    pendingSavePromise = savePromise;
+    pendingSaveGeneration = saveGeneration;
+    void savePromise.finally(() => {
+      if (pendingSavePromise === savePromise) {
+        pendingSavePromise = null;
+        pendingSaveGeneration = null;
+      }
+      if (saveGeneration !== generation) {
+        resumeCurrentGenerationSaveIfNeeded();
+        return;
+      }
       if (store.hasQueuedSaves && !debounceTimer) {
         startPendingSave(callbacks);
         return;
@@ -149,13 +159,15 @@ export function createPendingCellSaveCoordinator(store: PendingCellSavePort) {
 
     while (true) {
       if (pendingSavePromise) {
+        const saveGeneration = pendingSaveGeneration;
         const saved = await pendingSavePromise;
-        if (!saved) return false;
+        if (!saved && saveGeneration === generation) return false;
       } else if (store.hasQueuedSaves) {
         startPendingSave(callbacks);
         if (!pendingSavePromise) return false;
+        const saveGeneration = pendingSaveGeneration;
         const saved = await pendingSavePromise;
-        if (!saved) return false;
+        if (!saved && saveGeneration === generation) return false;
       }
 
       if (debounceTimer) clearDebounceTimer();
@@ -177,10 +189,20 @@ export function createPendingCellSaveCoordinator(store: PendingCellSavePort) {
   function reset() {
     generation += 1;
     clearDebounceTimer();
-    pendingSavePromise = null;
     autosaveSuspendCount = 0;
     lastCallbacks = null;
     store.reset();
+  }
+
+  function resumeCurrentGenerationSaveIfNeeded() {
+    if (
+      pendingSavePromise
+      || autosaveSuspendCount > 0
+      || debounceTimer
+      || !store.hasQueuedSaves
+      || !lastCallbacks
+    ) return;
+    startPendingSave(lastCallbacks);
   }
 
   function clearDebounceTimer() {

@@ -1,15 +1,15 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { platform } from '@tauri-apps/plugin-os';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
-import { requestApplicationExit } from '@/application/applicationExitCoordinator';
 import type {
   DesktopDownloadEvent,
   DesktopUpdateHandle,
   UpdatePort,
 } from '@/application/updateCoordinator';
 import { invokeCommand } from '@/tauriInvoke';
+import type { UpdateInfo } from '@/types/generated';
+import type { MobileUpdateState } from '@/types/updateRuntime';
 
 export const tauriUpdatePort: UpdatePort = {
   getVersion,
@@ -25,12 +25,21 @@ export const tauriUpdatePort: UpdatePort = {
       }),
     };
   },
-  checkMobile: (currentVersion) =>
-    invokeCommand('check_update_mobile', { currentVersion }),
+  async checkMobile(currentVersion) {
+    const response = await invokeCommand('check_update_mobile', { currentVersion });
+    return response ? mobileUpdateState(response) : null;
+  },
   openUrl,
-  relaunch,
-  requestExit: requestApplicationExit,
 };
+
+function mobileUpdateState(response: UpdateInfo): MobileUpdateState {
+  return {
+    version: response.version,
+    tagName: response.tagName,
+    releaseUrl: response.releaseUrl,
+    apkUrl: response.apkUrl,
+  };
+}
 
 type TauriDownloadEvent =
   | { event: 'Started'; data: { contentLength?: number } }

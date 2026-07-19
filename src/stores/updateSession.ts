@@ -1,4 +1,4 @@
-import type { UpdateInfo, UpdatePlatform } from '@/types';
+import type { MobileUpdateState, UpdatePlatform } from '@/types/updateRuntime';
 
 export type UpdateStatus =
   | 'idle'
@@ -25,7 +25,7 @@ export const useUpdateSessionStore = defineStore('updateSession', {
   state: () => ({
     status: 'idle' as UpdateStatus,
     desktopUpdateVersion: null as string | null,
-    mobileUpdateInfo: null as UpdateInfo | null,
+    mobileUpdateInfo: null as MobileUpdateState | null,
     downloadProgress: emptyProgress(),
     errorMessage: null as string | null,
     currentVersion: '',
@@ -69,7 +69,7 @@ export const useUpdateSessionStore = defineStore('updateSession', {
       this.status = updateVersion ? 'available' : 'no-update';
     },
 
-    applyMobileCheck(appVersion: string, update: UpdateInfo | null) {
+    applyMobileCheck(appVersion: string, update: MobileUpdateState | null) {
       this.currentVersion = appVersion;
       this.mobileUpdateInfo = update;
       this.desktopUpdateVersion = null;

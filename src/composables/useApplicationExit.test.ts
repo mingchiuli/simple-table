@@ -1,9 +1,6 @@
-import { effectScope } from "vue";
-import { describe, expect, it, vi } from "vitest";
-import {
-  requestApplicationExit,
-  useApplicationExitGuard,
-} from "@/composables/useApplicationExit";
+import { describe, expect, it, vi } from 'vitest';
+
+import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -13,42 +10,42 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-describe("application exit coordination", () => {
-  it("does not run the exit action when a guard rejects the request", async () => {
-    const scope = effectScope();
-    scope.run(() => {
-      useApplicationExitGuard(vi.fn().mockResolvedValue(false));
-    });
-    const exit = vi.fn().mockResolvedValue(undefined);
+describe('application exit coordination', () => {
+  it('does not execute an exit intent when a guard rejects the request', async () => {
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createApplicationExitCoordinator({ execute });
+    coordinator.registerGuard(vi.fn().mockResolvedValue(false));
 
-    try {
-      await expect(requestApplicationExit(exit)).resolves.toBe(false);
-      expect(exit).not.toHaveBeenCalled();
-    } finally {
-      scope.stop();
-    }
+    await expect(coordinator.requestExit('close')).resolves.toEqual({ status: 'cancelled' });
+    expect(execute).not.toHaveBeenCalled();
   });
 
-  it("coalesces concurrent exit requests", async () => {
+  it('upgrades a concurrent close request to the higher-priority relaunch intent', async () => {
     const releaseGuard = deferred<boolean>();
-    const scope = effectScope();
-    scope.run(() => {
-      useApplicationExitGuard(() => releaseGuard.promise);
-    });
-    const firstExit = vi.fn().mockResolvedValue(undefined);
-    const secondExit = vi.fn().mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createApplicationExitCoordinator({ execute });
+    coordinator.registerGuard(() => releaseGuard.promise);
 
-    try {
-      const first = requestApplicationExit(firstExit);
-      const second = requestApplicationExit(secondExit);
-      releaseGuard.resolve(true);
+    const close = coordinator.requestExit('close');
+    const relaunch = coordinator.requestExit('relaunch');
+    releaseGuard.resolve(true);
 
-      await expect(first).resolves.toBe(true);
-      await expect(second).resolves.toBe(true);
-      expect(firstExit).toHaveBeenCalledTimes(1);
-      expect(secondExit).not.toHaveBeenCalled();
-    } finally {
-      scope.stop();
-    }
+    await expect(close).resolves.toEqual({ status: 'executed', intent: 'relaunch' });
+    await expect(relaunch).resolves.toEqual({ status: 'executed', intent: 'relaunch' });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith('relaunch');
+  });
+
+  it('owns guards and active requests independently per coordinator instance', async () => {
+    const firstExecute = vi.fn().mockResolvedValue(undefined);
+    const secondExecute = vi.fn().mockResolvedValue(undefined);
+    const first = createApplicationExitCoordinator({ execute: firstExecute });
+    const second = createApplicationExitCoordinator({ execute: secondExecute });
+    first.registerGuard(vi.fn().mockResolvedValue(false));
+
+    await expect(first.requestExit('close')).resolves.toEqual({ status: 'cancelled' });
+    await expect(second.requestExit('close')).resolves.toEqual({ status: 'executed', intent: 'close' });
+    expect(firstExecute).not.toHaveBeenCalled();
+    expect(secondExecute).toHaveBeenCalledOnce();
   });
 });

@@ -5,6 +5,10 @@ export type DocumentSessionRuntimeState = {
   readonly editorCommandDepth: number;
 };
 
+export type DocumentMutationLease = {
+  isCurrent(): boolean;
+};
+
 export function createDocumentSessionRuntime(
   state: DocumentSessionRuntimeState,
   beginEditorCommand: () => boolean,
@@ -30,7 +34,9 @@ export function createDocumentSessionRuntime(
     return new Promise((resolve) => interactionIdleWaiters.push(resolve));
   }
 
-  function enqueueMutation<T>(task: () => Promise<T>): Promise<T | undefined> {
+  function enqueueMutation<T>(
+    task: (lease: DocumentMutationLease) => Promise<T>,
+  ): Promise<T | undefined> {
     const taskGeneration = generation;
     const previous = tail ?? Promise.resolve();
     const run = previous.then(
@@ -51,7 +57,6 @@ export function createDocumentSessionRuntime(
 
   function reset() {
     generation += 1;
-    tail = null;
     resolveIdleWaitersIfInteractionIdle();
   }
 
@@ -59,8 +64,19 @@ export function createDocumentSessionRuntime(
     resolveIdleWaitersIfInteractionIdle();
   }
 
-  function runForGeneration<T>(taskGeneration: number, task: () => Promise<T>) {
-    return generation === taskGeneration ? task() : Promise.resolve(undefined);
+  async function runForGeneration<T>(
+    taskGeneration: number,
+    task: (lease: DocumentMutationLease) => Promise<T>,
+  ): Promise<T | undefined> {
+    const lease = { isCurrent: () => generation === taskGeneration };
+    if (!lease.isCurrent()) return undefined;
+    try {
+      const result = await task(lease);
+      return lease.isCurrent() ? result : undefined;
+    } catch (error) {
+      if (lease.isCurrent()) throw error;
+      return undefined;
+    }
   }
 
   function resolveIdleWaitersIfInteractionIdle() {

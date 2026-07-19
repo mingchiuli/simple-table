@@ -1,24 +1,35 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { onMounted, onScopeDispose } from "vue";
-import {
-  registerApplicationExitGuard,
-  requestApplicationExit,
-  type ApplicationExitGuard,
-} from "@/application/applicationExitCoordinator";
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { inject, onMounted, onScopeDispose, type InjectionKey } from 'vue';
 
-export { requestApplicationExit };
+import type {
+  ApplicationExitCoordinator,
+  ApplicationExitGuard,
+} from '@/application/applicationExitCoordinator';
+
+export const applicationExitCoordinatorKey: InjectionKey<ApplicationExitCoordinator> = Symbol(
+  'applicationExitCoordinator',
+);
+
+export function useApplicationExitCoordinator(): ApplicationExitCoordinator {
+  const coordinator = inject(applicationExitCoordinatorKey);
+  if (!coordinator) {
+    throw new Error('Application exit coordinator is not provided');
+  }
+  return coordinator;
+}
 
 export function useApplicationExitGuard(guard: ApplicationExitGuard) {
-  const unregister = registerApplicationExitGuard(guard);
+  const unregister = useApplicationExitCoordinator().registerGuard(guard);
   onScopeDispose(unregister);
 }
 
 export function useWindowCloseGuard() {
+  const coordinator = useApplicationExitCoordinator();
   let disposed = false;
   let unlisten: (() => void) | null = null;
 
   onMounted(async () => {
-    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
       return;
     }
 
@@ -27,9 +38,9 @@ export function useWindowCloseGuard() {
       const registeredUnlisten = await appWindow.onCloseRequested(async (event) => {
         event.preventDefault();
         try {
-          await requestApplicationExit(() => appWindow.destroy());
+          await coordinator.requestExit('close');
         } catch (error) {
-          console.error("Failed to close the application:", error);
+          console.error('Failed to close the application:', error);
         }
       });
       if (disposed) {
@@ -38,7 +49,7 @@ export function useWindowCloseGuard() {
         unlisten = registeredUnlisten;
       }
     } catch (error) {
-      console.error("Failed to register the application close guard:", error);
+      console.error('Failed to register the application close guard:', error);
     }
   });
 

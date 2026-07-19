@@ -187,6 +187,12 @@ concurrent-check admission per `ApplicationRuntime`. Only the command boundary
 maps the internal update snapshot to `UpdateInfo`; update commands cannot invoke
 infrastructure directly.
 
+The frontend update adapter maps `UpdateInfo` immediately into
+`MobileUpdateState`. The update coordinator and Store use only that internal
+runtime model. Tauri update transport and application-exit coordination are
+separate ports assembled by the composable composition layer; the update
+platform adapter cannot import or select application exit policy.
+
 ## State Ownership
 
 - `EditorState` is authoritative for content, revision, history, dirty state,
@@ -241,6 +247,15 @@ infrastructure directly.
 - Search request tokens and pending-cell debounce/save state are likewise owned
   by application coordinators. Composables cache one coordinator per Pinia
   instance and adapt its synchronous Store port.
+- Resetting a frontend document generation invalidates queued work but never
+  removes an already-started mutation or cell save from its tracked Promise
+  chain. New-generation work waits for that chain to drain, and mutation leases
+  reject stale post-await commits before they can update the active projection.
+- The frontend composition root owns one `ApplicationExitCoordinator` instance.
+  Window close and update relaunch requests carry explicit intents through the
+  same guard pipeline; concurrent requests resolve to a deterministic intent,
+  with relaunch taking priority before execution starts. Platform modules
+  provide close and relaunch primitives but do not own exit policy.
 - `documentFileCoordinator` owns new-document creation, selected/recent/path
   opening, prepared-document commit/abort, route-load cancellation, save,
   export, and close compensation as a port-driven application workflow. Vue

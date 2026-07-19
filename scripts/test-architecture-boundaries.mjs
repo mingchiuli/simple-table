@@ -67,6 +67,19 @@ rejectMatches(
   'the generated-protocol-independent frontend Store boundary',
 );
 
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'stores', 'updateSession.ts'),
+    join(projectRoot, 'src', 'application', 'updateCoordinator.ts'),
+  ],
+  [
+    /['"]@\/types['"]/,
+    /['"]@\/types\/generated['"]/,
+    /\bUpdateInfo\b/,
+  ],
+  'the internal-model-only frontend update boundary',
+);
+
 for (const file of sourceFiles(join(projectRoot, 'src', 'stores'), '.ts')) {
   const source = readFileSync(file, 'utf8');
   const state = source.match(/state\s*:\s*\(\)\s*=>\s*\(\{([\s\S]*?)\}\),\s*(?:getters|actions)\s*:/)?.[1];
@@ -336,6 +349,45 @@ rejectMatches(
 );
 
 rejectMatches(
+  [join(projectRoot, 'src', 'application', 'applicationExitCoordinator.ts')],
+  [
+    /^const\s+exitGuards\b/m,
+    /^let\s+activeExitRequest\b/m,
+    /\bExitAction\b/,
+  ],
+  'the instance-owned intent-based frontend exit boundary',
+);
+
+const frontendMainSource = readFileSync(join(projectRoot, 'src', 'main.ts'), 'utf8');
+for (const requirement of [
+  /\bcreateApplicationExitCoordinator\b/,
+  /\.provide\s*\(\s*applicationExitCoordinatorKey\b/,
+]) {
+  if (!requirement.test(frontendMainSource)) {
+    violations.push(
+      `src/main.ts violates the composition-root-owned frontend exit boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [join(projectRoot, 'src', 'platform', 'updatePort.ts')],
+  [
+    /applicationExitCoordinator/,
+    /['"]@tauri-apps\/plugin-process['"]/,
+    /\brequestExit\b/,
+    /\brelaunch\b/,
+  ],
+  'the update-transport-only frontend platform boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'updateCoordinator.ts')],
+  [/relaunchApplication/, /requestExit\s*\(/],
+  'the narrow frontend update exit-port boundary',
+);
+
+rejectMatches(
   [
     join(projectRoot, 'src-tauri', 'src', 'state', 'state.rs'),
     join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs'),
@@ -458,6 +510,18 @@ rejectMatches(
     /\bloadRegionBlock\b/,
   ],
   'the region-loading-independent document session transaction boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'documentSessionRuntime.ts')],
+  [/function\s+reset\s*\(\)\s*\{[^}]*\btail\s*=\s*null/s],
+  'the drain-preserving frontend mutation reset boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'pendingCellSaveCoordinator.ts')],
+  [/function\s+reset\s*\(\)\s*\{[^}]*\bpendingSavePromise\s*=\s*null/s],
+  'the drain-preserving frontend pending-save reset boundary',
 );
 
 rejectMatches(

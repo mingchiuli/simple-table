@@ -71,8 +71,9 @@ export function useDocumentCommandBus() {
 
     try {
       if (!(await flushPendingChanges())) return;
-      await documentSessionCoordinator.enqueueDocumentMutation(initialContext.documentId, async (context) => {
+      await documentSessionCoordinator.enqueueDocumentMutation(initialContext.documentId, async (context, lease) => {
         const execution = await mutationProtocol.execute(action, context);
+        if (!lease.isCurrent()) return;
         if (execution.status === 'recovered') {
           runAfterApplied(afterApplied);
           return;
@@ -80,11 +81,12 @@ export function useDocumentCommandBus() {
         const response = execution.response;
         try {
           const result = await applyMutationResponse(response);
-          if (result.applied) runAfterApplied(afterApplied);
+          if (lease.isCurrent() && result.applied) runAfterApplied(afterApplied);
         } catch (error) {
+          if (!lease.isCurrent()) return;
           if (!documentSessionCoordinator.markProjectionStaleFromMutationResponse(response)) return;
           if (await refreshAfterMutationError(true)) {
-            runAfterApplied(afterApplied);
+            if (lease.isCurrent()) runAfterApplied(afterApplied);
           } else {
             ElMessage.error(
               `Change was applied, but the editor could not refresh: ${appErrorMessage(error)}`
@@ -107,8 +109,9 @@ export function useDocumentCommandBus() {
     action,
     onRefreshFailed,
   }: BackgroundMutationOptions): Promise<void> {
-    await documentSessionCoordinator.enqueueDocumentMutation(documentId, async (context) => {
+    await documentSessionCoordinator.enqueueDocumentMutation(documentId, async (context, lease) => {
       const execution = await mutationProtocol.execute(action, context);
+      if (!lease.isCurrent()) return;
       if (execution.status === 'recovered') return;
       const response = execution.response;
       try {
@@ -117,6 +120,7 @@ export function useDocumentCommandBus() {
           throw new Error('Mutation response was not applied to the active document');
         }
       } catch (error) {
+        if (!lease.isCurrent()) return;
         if (!documentSessionCoordinator.markProjectionStaleFromMutationResponse(response)) return;
         if (!(await refreshAfterMutationError(true))) onRefreshFailed?.(error);
       }

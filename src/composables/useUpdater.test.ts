@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { effectScope } from "vue";
+import { createApp, effectScope, type App } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useUpdater, type UpdateInfo } from "@/composables/useUpdater";
-import { useApplicationExitGuard } from "@/composables/useApplicationExit";
+import {
+  applicationExitCoordinatorKey,
+  useApplicationExitGuard,
+} from "@/composables/useApplicationExit";
+import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
 
 const tauriMocks = vi.hoisted(() => ({
   check: vi.fn(),
@@ -13,6 +17,8 @@ const tauriMocks = vi.hoisted(() => ({
   platform: vi.fn(),
   getVersion: vi.fn(),
 }));
+
+let testApp: App;
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
   check: tauriMocks.check,
@@ -75,6 +81,12 @@ describe("useUpdater", () => {
     tauriMocks.check.mockResolvedValue(null);
     tauriMocks.relaunch.mockResolvedValue(undefined);
     tauriMocks.openUrl.mockResolvedValue(undefined);
+    testApp = createApp({});
+    testApp.provide(applicationExitCoordinatorKey, createApplicationExitCoordinator({
+      execute: async (intent) => {
+        if (intent === 'relaunch') await tauriMocks.relaunch();
+      },
+    }));
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
@@ -83,7 +95,7 @@ describe("useUpdater", () => {
   });
 
   it("passes the resolved app version to mobile update checks", async () => {
-    const updater = useUpdater();
+    const updater = mountUpdater();
 
     await updater.checkForUpdate();
 
@@ -96,8 +108,8 @@ describe("useUpdater", () => {
   it("coalesces concurrent update checks", async () => {
     const pendingCheck = deferred<UpdateInfo | null>();
     tauriMocks.invoke.mockReturnValue(pendingCheck.promise);
-    const updater = useUpdater();
-    const remountedUpdater = useUpdater();
+    const updater = mountUpdater();
+    const remountedUpdater = mountUpdater();
 
     const first = updater.checkForUpdate();
     const second = remountedUpdater.checkForUpdate();
@@ -116,7 +128,7 @@ describe("useUpdater", () => {
   it("ignores mobile update check results after reset", async () => {
     const pendingCheck = deferred<UpdateInfo | null>();
     tauriMocks.invoke.mockReturnValue(pendingCheck.promise);
-    const updater = useUpdater();
+    const updater = mountUpdater();
 
     const checkPromise = updater.checkForUpdate();
     await flushPromises();
@@ -131,7 +143,7 @@ describe("useUpdater", () => {
   it("ignores app version load failures after reset", async () => {
     const pendingVersion = deferred<string>();
     tauriMocks.getVersion.mockReturnValue(pendingVersion.promise);
-    const updater = useUpdater();
+    const updater = mountUpdater();
 
     const checkPromise = updater.checkForUpdate();
     await flushPromises();
@@ -148,7 +160,7 @@ describe("useUpdater", () => {
     const update = { version: "0.12.0" } as Update;
     const pendingCheck = deferred<Update | null>();
     tauriMocks.check.mockReturnValue(pendingCheck.promise);
-    const updater = useUpdater();
+    const updater = mountUpdater();
 
     const checkPromise = updater.checkForUpdate();
     await flushPromises();
@@ -173,8 +185,8 @@ describe("useUpdater", () => {
       }),
     } as unknown as Update;
     tauriMocks.check.mockResolvedValue(update);
-    const updater = useUpdater();
-    const remountedUpdater = useUpdater();
+    const updater = mountUpdater();
+    const remountedUpdater = mountUpdater();
     await updater.checkForUpdate();
 
     const downloadPromise = updater.downloadAndInstall();
@@ -207,11 +219,11 @@ describe("useUpdater", () => {
       }),
     } as unknown as Update;
     const scope = effectScope();
-    scope.run(() => {
+    testApp.runWithContext(() => scope.run(() => {
       useApplicationExitGuard(vi.fn().mockResolvedValue(false));
-    });
+    }));
     tauriMocks.check.mockResolvedValue(update);
-    const updater = useUpdater();
+    const updater = mountUpdater();
     await updater.checkForUpdate();
 
     try {
@@ -232,7 +244,7 @@ describe("useUpdater", () => {
       downloadAndInstall: vi.fn(),
     } as unknown as Update;
     tauriMocks.check.mockResolvedValue(update);
-    const updater = useUpdater();
+    const updater = mountUpdater();
     await updater.checkForUpdate();
     updater.status.value = "ready";
 
@@ -245,7 +257,7 @@ describe("useUpdater", () => {
   it("ignores mobile update launch failures after reset", async () => {
     const pendingOpen = deferred<void>();
     tauriMocks.openUrl.mockReturnValue(pendingOpen.promise);
-    const updater = useUpdater();
+    const updater = mountUpdater();
     updater.mobileUpdateInfo.value = mobileUpdateInfo();
 
     const openPromise = updater.handleMobileUpdate();
@@ -259,7 +271,7 @@ describe("useUpdater", () => {
   });
 
   it("opens generated camelCase mobile update URLs", async () => {
-    const updater = useUpdater();
+    const updater = mountUpdater();
     updater.mobileUpdateInfo.value = mobileUpdateInfo();
 
     await updater.handleMobileUpdate();
@@ -267,3 +279,7 @@ describe("useUpdater", () => {
     expect(tauriMocks.openUrl).toHaveBeenCalledWith("https://example.com/app.apk");
   });
 });
+
+function mountUpdater() {
+  return testApp.runWithContext(() => useUpdater());
+}
