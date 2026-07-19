@@ -8,4 +8,5 @@ pub(crate) mod search_index_runtime;
 pub(crate) mod search_index_scheduler;
 pub(crate) mod search_index_store;
 pub(crate) mod search_query_adapter;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 pub mod update_adapter;

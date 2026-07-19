@@ -2,6 +2,8 @@ use crate::application::document_codec_port::OpenDocumentSource;
 use crate::application::document_open_service::{self, DocumentOpenService};
 use crate::application::document_save_service::{self, DocumentSaveService};
 use crate::error::AppError;
+#[cfg(any(desktop, target_os = "android", target_os = "ios"))]
+use crate::io::open_file_input::OpenFileSelection;
 #[cfg(desktop)]
 use crate::io::platform::desktop::{self, DesktopFileRuntime};
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -11,10 +13,6 @@ use crate::io::platform::mobile::MobileFileRuntime;
 use crate::projection_model::{PreparedOpenDocument, SavedDocumentOutcome};
 #[cfg(desktop)]
 use crate::recent::store::RecentStore;
-#[cfg(desktop)]
-use crate::types::DesktopOpenFileInfo;
-#[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::types::PickedFileInfo;
 
 #[derive(Clone)]
 pub struct DocumentFileAdapter {
@@ -57,7 +55,7 @@ impl DocumentFileAdapter {
     pub fn pick_open_file(
         &self,
         app: &tauri::AppHandle,
-    ) -> Result<Option<DesktopOpenFileInfo>, AppError> {
+    ) -> Result<Option<OpenFileSelection>, AppError> {
         desktop::pick_open_file(&self.desktop_files, app)
     }
 
@@ -130,7 +128,7 @@ impl DocumentFileAdapter {
     pub fn pick_open_file_android(
         &self,
         app: &tauri::AppHandle,
-    ) -> Result<Option<PickedFileInfo>, AppError> {
+    ) -> Result<Option<OpenFileSelection>, AppError> {
         crate::io::platform::android::pick_file_info(&self.mobile_files, app)
     }
 
@@ -138,7 +136,7 @@ impl DocumentFileAdapter {
     pub fn pick_open_file_ios(
         &self,
         app: &tauri::AppHandle,
-    ) -> Result<Option<PickedFileInfo>, AppError> {
+    ) -> Result<Option<OpenFileSelection>, AppError> {
         crate::io::platform::ios::pick_file_info(&self.mobile_files, app)
     }
 
@@ -272,7 +270,12 @@ pub fn prepare_recent_file_desktop(
     app: &tauri::AppHandle,
     id: &str,
 ) -> Result<PreparedOpenDocument, AppError> {
-    let input = crate::io::platform::desktop::read_recent_file(recent_files, app, id)?;
+    let recent = recent_files
+        .get_all(app)?
+        .into_iter()
+        .find(|file| file.id == id)
+        .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
+    let input = crate::io::platform::desktop::read_file_trusted(&recent.path)?;
     document_open_service::prepare_open_input(service, into_open_document_source(input))
 }
 

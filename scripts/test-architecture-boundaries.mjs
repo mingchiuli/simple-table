@@ -95,6 +95,12 @@ rejectMatches(
 );
 
 rejectMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'io'), '.rs'),
+  [/crate::types(?:::|\b)/, /crate::recent(?:::|\b)/],
+  'the protocol-and-recent-independent Rust I/O boundary',
+);
+
+rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
   [
     /crate::application(?:::|\b)/,
@@ -116,6 +122,15 @@ rejectRustProductionMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'ops'), '.rs'),
   [/crate::types(?:::|\b)/, /crate::protocol_projection(?:::|\b)/],
   'the internal-mutation-outcome Rust operation boundary',
+);
+
+rejectRustProductionMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'application', 'editor_command_service.rs'),
+  ],
+  [/\bserde(?:::|\b)/, /\bserde_json(?:::|\b)/, /\bSerialize\b/, /\bDeserialize\b/],
+  'the semantic-mutation-fingerprint application boundary',
 );
 
 rejectMatches(
@@ -550,6 +565,43 @@ for (const requirement of [/JoinHandle/, /shutdown\.store/, /\.join\s*\(\)/]) {
   if (!requirement.test(searchRuntimeSource)) {
     violations.push(
       `src-tauri/src/adapters/search_index_runtime.rs violates the deterministically-owned search worker boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'commands', 'mobile.rs')],
+  [/crate::adapters::update_adapter/, /crate::update(?:::|\b)/],
+  'the application-service-mediated mobile update command boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'update_service.rs')],
+  [
+    /crate::types(?:::|\b)/,
+    /\breqwest(?:::|\b)/,
+    /\bserde(?:::|\b)/,
+    /\bserde_json(?:::|\b)/,
+    /\bAtomicBool\b/,
+    /\bOnceLock\b/,
+  ],
+  'the provider-and-transport-independent update application boundary',
+);
+
+rejectRustProductionMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'adapters', 'update_adapter.rs')],
+  [/crate::types(?:::|\b)/, /static\s+UPDATE/, /\bOnceLock\b/],
+  'the instance-owned update infrastructure boundary',
+);
+
+const applicationRuntimeSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'runtime.rs'),
+  'utf8',
+);
+for (const requirement of [/\bUpdateService\b/, /\bupdate_queries\b/]) {
+  if (!requirement.test(applicationRuntimeSource)) {
+    violations.push(
+      `src-tauri/src/application/runtime.rs violates the explicitly-owned update runtime boundary: ${requirement}`,
     );
   }
 }

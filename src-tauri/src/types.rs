@@ -18,6 +18,7 @@ pub use formula::*;
 pub use projection::*;
 pub use search::*;
 pub use types::*;
+#[allow(unused_imports)]
 pub use update::*;
 
 pub(crate) mod u64_string {

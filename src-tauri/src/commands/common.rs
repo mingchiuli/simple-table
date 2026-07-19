@@ -183,6 +183,7 @@ pub async fn pick_open_file_desktop(
         .file()
         .run(move || runtime.document_files().pick_open_file(&app))
         .await
+        .map(|selection| selection.map(protocol_projection::desktop_open_file_info))
 }
 
 /// Desktop: 释放已选择但没有被读取的文件路径授权。

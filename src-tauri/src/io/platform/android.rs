@@ -8,8 +8,8 @@ use crate::document_format::{
     supported_extension_or_default,
 };
 use crate::error::AppError;
+use crate::io::open_file_input::OpenFileSelection;
 use crate::io::transient_files::TransientFilePurpose;
-use crate::types::PickedFileInfo;
 use tauri::AppHandle;
 use tauri_plugin_fs::FilePath;
 
@@ -34,7 +34,7 @@ fn display_name_from_path(path: &FilePath) -> String {
 pub fn pick_file_info(
     runtime: &MobileFileRuntime,
     app: &AppHandle,
-) -> Result<Option<PickedFileInfo>, AppError> {
+) -> Result<Option<OpenFileSelection>, AppError> {
     use tauri_plugin_dialog::{DialogExt, PickerMode};
 
     let source = match app
@@ -73,7 +73,7 @@ pub fn pick_file_info(
 
     let path = sandbox_path.to_string_lossy().to_string();
 
-    Ok(Some(PickedFileInfo {
+    Ok(Some(OpenFileSelection {
         path,
         original_path,
         file_name,

@@ -1,8 +1,8 @@
 use crate::document_data::{DocumentData, DocumentSheet};
+use crate::domain::CellValue;
 use crate::error::AppError;
 use crate::io::codec::reader::read_worksheet;
 use crate::io::codec::writer::coordinate;
-use crate::types::CellValue;
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub(crate) struct ProjectionMapper;

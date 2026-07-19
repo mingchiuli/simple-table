@@ -13,3 +13,7 @@ pub(crate) mod prepared_document_repository;
 pub mod runtime;
 pub(crate) mod search_ports;
 pub mod search_service;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) mod update_port;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub mod update_service;

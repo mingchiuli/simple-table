@@ -1,7 +1,8 @@
-use serde::Serialize;
 use std::sync::Arc;
 
-use crate::application::mutation_replay::{self, MutationReplayCoordinator};
+use crate::application::mutation_replay::{
+    self, MutationReplayCoordinator, MutationRequestIdentity,
+};
 use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::domain::CellEditInput;
 use crate::error::AppError;
@@ -77,8 +78,7 @@ pub fn undo(
         document_id,
         base_revision,
         command_id,
-        "undo",
-        &(),
+        MutationRequestIdentity::Undo,
         |registry| editor_ops::do_undo(registry, document_id, base_revision),
     )
 }
@@ -94,8 +94,7 @@ pub fn redo(
         document_id,
         base_revision,
         command_id,
-        "redo",
-        &(),
+        MutationRequestIdentity::Redo,
         |registry| editor_ops::do_redo(registry, document_id, base_revision),
     )
 }
@@ -110,14 +109,17 @@ pub fn set_cell(
     col: usize,
     text: String,
 ) -> Result<MutationOutcome, AppError> {
-    let payload = (sheet_index, row, col, &text);
     run_mutation(
         service,
         document_id,
         base_revision,
         command_id,
-        "set_cell",
-        &payload,
+        MutationRequestIdentity::SetCell {
+            sheet_index,
+            row,
+            col,
+            text: &text,
+        },
         |registry| {
             cell_ops::do_set_cell(
                 registry,
@@ -139,24 +141,12 @@ pub fn set_cells(
     command_id: &str,
     edits: Vec<CellEditInput>,
 ) -> Result<MutationOutcome, AppError> {
-    let fingerprint_payload = edits
-        .iter()
-        .map(|change| {
-            (
-                change.sheet_index,
-                change.row,
-                change.col,
-                change.text.as_str(),
-            )
-        })
-        .collect::<Vec<_>>();
     run_mutation(
         service,
         document_id,
         base_revision,
         command_id,
-        "set_cells",
-        &fingerprint_payload,
+        MutationRequestIdentity::SetCells { edits: &edits },
         |registry| cell_ops::do_set_cells(registry, document_id, base_revision, edits.clone()),
     )
 }
@@ -174,8 +164,10 @@ pub fn add_row(
         document_id,
         base_revision,
         command_id,
-        "add_row",
-        &(sheet_index, row_index),
+        MutationRequestIdentity::AddRow {
+            sheet_index,
+            row_index,
+        },
         |registry| {
             cell_ops::do_add_row(registry, document_id, base_revision, sheet_index, row_index)
         },
@@ -195,8 +187,10 @@ pub fn delete_row(
         document_id,
         base_revision,
         command_id,
-        "delete_row",
-        &(sheet_index, row_index),
+        MutationRequestIdentity::DeleteRow {
+            sheet_index,
+            row_index,
+        },
         |registry| {
             cell_ops::do_delete_row(registry, document_id, base_revision, sheet_index, row_index)
         },
@@ -216,8 +210,10 @@ pub fn add_column(
         document_id,
         base_revision,
         command_id,
-        "add_column",
-        &(sheet_index, col_index),
+        MutationRequestIdentity::AddColumn {
+            sheet_index,
+            col_index,
+        },
         |registry| {
             cell_ops::do_add_column(registry, document_id, base_revision, sheet_index, col_index)
         },
@@ -237,8 +233,10 @@ pub fn delete_column(
         document_id,
         base_revision,
         command_id,
-        "delete_column",
-        &(sheet_index, col_index),
+        MutationRequestIdentity::DeleteColumn {
+            sheet_index,
+            col_index,
+        },
         |registry| {
             cell_ops::do_delete_column(registry, document_id, base_revision, sheet_index, col_index)
         },
@@ -259,8 +257,11 @@ pub fn set_column_width(
         document_id,
         base_revision,
         command_id,
-        "set_column_width",
-        &(sheet_index, col_index, width),
+        MutationRequestIdentity::SetColumnWidth {
+            sheet_index,
+            col_index,
+            width,
+        },
         |registry| {
             cell_ops::do_set_column_width(
                 registry,
@@ -288,8 +289,11 @@ pub fn set_row_height(
         document_id,
         base_revision,
         command_id,
-        "set_row_height",
-        &(sheet_index, row_index, height),
+        MutationRequestIdentity::SetRowHeight {
+            sheet_index,
+            row_index,
+            height,
+        },
         |registry| {
             cell_ops::do_set_row_height(
                 registry,
@@ -314,8 +318,7 @@ pub fn add_sheet(
         document_id,
         base_revision,
         command_id,
-        "add_sheet",
-        &(),
+        MutationRequestIdentity::AddSheet,
         |registry| cell_ops::do_add_sheet(registry, document_id, base_revision),
     )
 }
@@ -332,19 +335,17 @@ pub fn delete_sheet(
         document_id,
         base_revision,
         command_id,
-        "delete_sheet",
-        &sheet_index,
+        MutationRequestIdentity::DeleteSheet { sheet_index },
         |registry| cell_ops::do_delete_sheet(registry, document_id, base_revision, sheet_index),
     )
 }
 
-fn run_mutation<P: Serialize>(
+fn run_mutation(
     service: &EditorCommandService,
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-    command_name: &str,
-    payload: &P,
+    request: MutationRequestIdentity<'_>,
     execute: impl FnOnce(&ActiveDocumentRepository) -> Result<MutationExecution, AppError>,
 ) -> Result<MutationOutcome, AppError> {
     mutation_replay::run(
@@ -352,8 +353,7 @@ fn run_mutation<P: Serialize>(
         document_id,
         base_revision,
         command_id,
-        command_name,
-        payload,
+        request,
         || {
             let execution = execute(service.documents())?;
             let revision = execution.outcome.revision;

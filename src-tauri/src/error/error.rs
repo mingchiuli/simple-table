@@ -25,6 +25,10 @@ pub enum AppError {
     #[error("Another prepared document is still active")]
     PreparedDocumentConflict,
     #[error("Update check failed: {0}")]
+    #[cfg_attr(
+        not(any(target_os = "android", target_os = "ios", test)),
+        allow(dead_code)
+    )]
     UpdateError(String),
 
     // 状态操作

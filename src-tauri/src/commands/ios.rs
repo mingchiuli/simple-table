@@ -24,6 +24,7 @@ pub async fn pick_open_file_ios(
         .file()
         .run(move || runtime.document_files().pick_open_file_ios(&app))
         .await
+        .map(|selection| selection.map(protocol_projection::picked_file_info))
 }
 
 /// iOS: remove a picked file that was imported but never opened as the active document.

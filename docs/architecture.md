@@ -100,6 +100,10 @@ the top-level `document_format` module. Application production modules other
 than the composition root cannot import `io`; application and operation modules
 cannot import protocol DTOs or the outward protocol mapper. The I/O layer cannot
 depend on `application`, `commands`, `ops`, or `state`.
+Platform I/O returns serialization-independent file selections and byte inputs;
+it cannot import RPC DTOs or the recent-file repository. Recent-file identifier
+resolution belongs to the outer file adapter, and the command boundary maps
+internal selections to desktop or mobile response DTOs.
 
 `domain::editor_operation` owns the editor command vocabulary, canonical
 applied operations, and their lightweight impact/projection views. Domain
@@ -116,6 +120,10 @@ mapped to `CellEditInput` at the application boundary. Domain commands cannot
 depend on serde/JSON values, RPC requests, mutation responses, patches,
 TypeScript generation, or Tauri types. `CellNumber` admits only finite integer
 or floating-point values; the wire serializer alone maps those values to JSON.
+A mutation replay key is built from a closed internal command-identity enum
+using explicit fixed-width and length-prefixed hashing. Application replay and
+editor-command services cannot use serde or JSON to define idempotency, so wire
+format changes cannot alter request identity.
 A new-Sheet operation carries only domain initialization data;
 projection and workbook adapters construct their own representations.
 Formula diagnostics and runtime status, workbook and Sheet capabilities,
@@ -171,6 +179,13 @@ file adapters compose those primitives with prepared save work and managed
 mobile-document adoption; the I/O layer must not call back into the application
 layer. The save service depends directly on projection and format-policy
 modules, never on the query service.
+
+Mobile update checking is a port-driven application service. Version comparison
+and trusted-release policy live in `application::update_service`; the reqwest
+adapter privately decodes provider responses and owns its client and
+concurrent-check admission per `ApplicationRuntime`. Only the command boundary
+maps the internal update snapshot to `UpdateInfo`; update commands cannot invoke
+infrastructure directly.
 
 ## State Ownership
 

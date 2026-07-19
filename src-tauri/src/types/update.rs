@@ -13,17 +13,3 @@ pub struct UpdateInfo {
     pub release_url: String,
     pub apk_url: Option<String>,
 }
-
-/// GitHub Release API 响应结构
-#[derive(Debug, Deserialize)]
-pub struct GitHubRelease {
-    pub tag_name: String,
-    pub assets: Vec<GitHubAsset>,
-}
-
-/// GitHub Release Asset 结构
-#[derive(Debug, Deserialize)]
-pub struct GitHubAsset {
-    pub name: String,
-    pub browser_download_url: String,
-}

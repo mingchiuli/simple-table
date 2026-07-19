@@ -8,6 +8,10 @@ use crate::editor_protocol::{
 };
 use crate::error::AppError;
 use crate::formula::status as formula_status;
+#[cfg(any(desktop, target_os = "android", target_os = "ios"))]
+use crate::io::open_file_input::OpenFileSelection;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::projection_model::MobileUpdateSnapshot;
 use crate::projection_model::{
     DocumentCapabilities, DocumentManifestSnapshot, EditorSessionSnapshot, EditorStateSnapshot,
     MutationLookup, MutationLookupStatus, MutationOutcome, MutationPatch, NativeSavePlan,
@@ -17,6 +21,33 @@ use crate::projection_model::{
 use crate::state::history_store::HistoryStatus as StateHistoryStatus;
 use crate::types;
 use std::io::Write;
+
+#[cfg(desktop)]
+pub(crate) fn desktop_open_file_info(value: OpenFileSelection) -> types::DesktopOpenFileInfo {
+    types::DesktopOpenFileInfo {
+        path: value.path,
+        file_name: value.file_name,
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn picked_file_info(value: OpenFileSelection) -> types::PickedFileInfo {
+    types::PickedFileInfo {
+        path: value.path,
+        original_path: value.original_path,
+        file_name: value.file_name,
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn mobile_update_info(value: MobileUpdateSnapshot) -> types::UpdateInfo {
+    types::UpdateInfo {
+        version: value.version,
+        tag_name: value.tag_name,
+        release_url: value.release_url,
+        apk_url: value.apk_url,
+    }
+}
 
 pub(crate) fn formula_status(
     value: formula_status::FormulaStatus,
@@ -537,6 +568,19 @@ impl Write for CountingWriter {
 mod tests {
     use super::*;
     use crate::domain::SearchHit;
+
+    #[cfg(desktop)]
+    #[test]
+    fn desktop_file_selection_projection_drops_internal_source_metadata() {
+        let projected = desktop_open_file_info(OpenFileSelection {
+            path: "/tmp/imported.xlsx".to_string(),
+            original_path: "file:///external/book.xlsx".to_string(),
+            file_name: "book.xlsx".to_string(),
+        });
+
+        assert_eq!(projected.path, "/tmp/imported.xlsx");
+        assert_eq!(projected.file_name, "book.xlsx");
+    }
 
     #[test]
     fn search_projection_enforces_the_serialized_response_budget() {

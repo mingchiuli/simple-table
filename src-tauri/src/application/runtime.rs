@@ -8,6 +8,8 @@ use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSou
 use crate::adapters::search_index_adapter::SearchIndexMaintenanceAdapter;
 use crate::adapters::search_index_runtime::SearchIndexRuntime;
 use crate::adapters::search_query_adapter::SearchQueryAdapter;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+use crate::adapters::update_adapter::UpdateReleaseAdapter;
 use crate::application::document_open_service::DocumentOpenService;
 use crate::application::document_query_service::DocumentQueryService;
 use crate::application::document_save_service::DocumentSaveService;
@@ -16,6 +18,8 @@ use crate::application::editor_command_service::EditorCommandService;
 use crate::application::mutation_replay::MutationReplayCoordinator;
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
 use crate::application::search_service::SearchService;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+use crate::application::update_service::UpdateService;
 #[cfg(desktop)]
 use crate::io::platform::desktop::DesktopFileRuntime;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -32,6 +36,8 @@ pub struct ApplicationRuntime {
     search_queries: SearchService,
     document_files: DocumentFileAdapter,
     recent_files: RecentFileAdapter,
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    update_queries: UpdateService,
 }
 
 impl Default for ApplicationRuntime {
@@ -47,6 +53,8 @@ impl Default for ApplicationRuntime {
         let codec = Arc::new(DocumentCodecAdapter);
         let work_budget = Arc::new(DocumentWorkBudgetAdapter::default());
         let recent_files = RecentStore::default();
+        #[cfg(any(target_os = "android", target_os = "ios", test))]
+        let update_queries = UpdateService::new(Arc::new(UpdateReleaseAdapter::default()));
         #[cfg(desktop)]
         let desktop_files = DesktopFileRuntime::default();
         #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -111,6 +119,8 @@ impl Default for ApplicationRuntime {
                 #[cfg(any(target_os = "android", target_os = "ios"))]
                 mobile_files.clone(),
             ),
+            #[cfg(any(target_os = "android", target_os = "ios", test))]
+            update_queries,
         }
     }
 }
@@ -143,6 +153,11 @@ impl ApplicationRuntime {
     pub(crate) fn document_files(&self) -> &DocumentFileAdapter {
         &self.document_files
     }
+
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    pub(crate) fn update_queries(&self) -> &UpdateService {
+        &self.update_queries
+    }
 }
 
 #[cfg(test)]
@@ -170,6 +185,11 @@ mod tests {
                 .is_isolated_from(second.document_opens())
         );
         assert!(first.recent_files().is_isolated_from(second.recent_files()));
+        assert!(
+            first
+                .update_queries()
+                .is_isolated_from(second.update_queries())
+        );
         assert!(
             first
                 .document_files()

@@ -5,9 +5,7 @@ use crate::document_format::{
 use crate::error::AppError;
 use crate::io::atomic_file::write_file_atomically;
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
-use crate::io::open_file_input::OpenFileInput;
-use crate::recent::store::RecentStore;
-use crate::types::DesktopOpenFileInfo;
+use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::ErrorKind;
@@ -100,7 +98,7 @@ pub fn authorize_open_target(runtime: &DesktopFileRuntime, target: &str) {
 pub fn pick_open_file(
     runtime: &DesktopFileRuntime,
     app: &AppHandle,
-) -> Result<Option<DesktopOpenFileInfo>, AppError> {
+) -> Result<Option<OpenFileSelection>, AppError> {
     use tauri_plugin_dialog::DialogExt;
 
     let Some(path) = app
@@ -116,7 +114,11 @@ pub fn pick_open_file(
     authorize_open_path(runtime, &path);
     let path = path.to_string_lossy().to_string();
     let file_name = file_name_from_path_like(&path, "unknown");
-    Ok(Some(DesktopOpenFileInfo { path, file_name }))
+    Ok(Some(OpenFileSelection {
+        original_path: path.clone(),
+        path,
+        file_name,
+    }))
 }
 
 pub fn read_open_file(runtime: &DesktopFileRuntime, path: &str) -> Result<OpenFileInput, AppError> {
@@ -131,20 +133,7 @@ pub fn read_open_file(runtime: &DesktopFileRuntime, path: &str) -> Result<OpenFi
     read_file_trusted(path)
 }
 
-pub fn read_recent_file(
-    recent_files: &RecentStore,
-    app: &AppHandle,
-    id: &str,
-) -> Result<OpenFileInput, AppError> {
-    let recent = recent_files
-        .get_all(app)?
-        .into_iter()
-        .find(|file| file.id == id)
-        .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
-    read_file_trusted(&recent.path)
-}
-
-fn read_file_trusted(path: &str) -> Result<OpenFileInput, AppError> {
+pub(crate) fn read_file_trusted(path: &str) -> Result<OpenFileInput, AppError> {
     let metadata = fs::metadata(path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => AppError::FileNotFound(path.to_string()),
         _ => AppError::ReadError(e.to_string()),

@@ -16,7 +16,6 @@ mod recent;
 mod resource_limits;
 mod state;
 mod types;
-mod update;
 mod utils;
 
 #[cfg(target_os = "android")]
