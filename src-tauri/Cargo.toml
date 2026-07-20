@@ -45,7 +45,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.13", features = ["stream"] }
 
 [dev-dependencies]
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 quote = "1"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
