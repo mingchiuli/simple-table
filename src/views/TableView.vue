@@ -110,13 +110,14 @@ const {
   handleSaveFile,
   handleExportFile,
   closeCurrentDocument,
+  confirmApplicationExit,
   handleBack,
 } = useFileActions({
   fileData,
   flushPendingCellChanges,
 });
 
-useApplicationExitGuard(() => closeCurrentDocument({ waitForIdle: true }));
+useApplicationExitGuard(() => confirmApplicationExit({ waitForIdle: true }));
 
 function routeFilePath(): string | null {
   const value = route.query.file;

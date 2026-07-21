@@ -12,6 +12,8 @@ import {
   type RecentFile,
 } from '@/types';
 import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
+import { createDocumentRoutePreparationScheduler } from '@/application/documentRoutePreparationScheduler';
 
 const context: EditorCommandContext = {
   documentId: '1',
@@ -23,6 +25,41 @@ const selection = {
   fileName: 'imported.xlsx',
   originalPath: 'content://picked',
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
+async function flushPromises() {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+function controlledCancellation() {
+  let cancelled = false;
+  const handlers = new Set<() => void>();
+  return {
+    signal: {
+      isCancelled: () => cancelled,
+      onCancel(handler: () => void) {
+        if (cancelled) {
+          handler();
+          return () => undefined;
+        }
+        handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    } satisfies OperationCancellationSignal,
+    cancel() {
+      cancelled = true;
+      for (const handler of handlers) handler();
+      handlers.clear();
+    },
+  };
+}
 
 function projection(fileName = 'book.xlsx'): DocumentProjection {
   return {
@@ -107,15 +144,46 @@ describe('documentFileCoordinator', () => {
       return { token: 'stale' };
     });
     const { ports, replacement } = createPorts({ prepareOpenFile });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const routePreparations = createDocumentRoutePreparationScheduler();
+    const coordinator = createDocumentFileCoordinator(ports, routePreparations);
+    const cancellation: OperationCancellationSignal = {
+      isCancelled: () => !current,
+      onCancel: () => () => undefined,
+    };
 
     await expect(
-      coordinator.loadFileFromPath('/tmp/stale.xlsx', () => current)
+      coordinator.loadFileFromPath('/tmp/stale.xlsx', cancellation)
     ).resolves.toBe(false);
 
     expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'stale' });
     expect(ports.commitPreparedDocument).not.toHaveBeenCalled();
     expect(replacement.cancel).toHaveBeenCalledOnce();
+  });
+
+  it('releases a cancelled route load while draining preparation before the next one', async () => {
+    const firstPrepare = deferred<{ token: string }>();
+    const prepareOpenFile = vi.fn()
+      .mockReturnValueOnce(firstPrepare.promise)
+      .mockResolvedValueOnce({ token: 'latest' });
+    const { ports } = createPorts({ prepareOpenFile });
+    const routePreparations = createDocumentRoutePreparationScheduler();
+    const coordinator = createDocumentFileCoordinator(ports, routePreparations);
+    const firstCancellation = controlledCancellation();
+
+    const first = coordinator.loadFileFromPath('/tmp/slow.xlsx', firstCancellation.signal);
+    await flushPromises();
+    firstCancellation.cancel();
+    await expect(first).resolves.toBe(false);
+
+    const remountedCoordinator = createDocumentFileCoordinator(ports, routePreparations);
+    const latest = remountedCoordinator.loadFileFromPath('/tmp/latest.xlsx');
+    await flushPromises();
+    expect(prepareOpenFile).toHaveBeenCalledTimes(1);
+
+    firstPrepare.resolve({ token: 'slow' });
+    await expect(latest).resolves.toBe(true);
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'slow' });
+    expect(prepareOpenFile).toHaveBeenNthCalledWith(2, '/tmp/latest.xlsx');
   });
 
   it('returns a stale outcome when a physical save cannot update the active projection', async () => {
@@ -155,6 +223,24 @@ describe('documentFileCoordinator', () => {
 
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.clearDocument).not.toHaveBeenCalled();
+  });
+
+  it('confirms application exit without closing or clearing the document', async () => {
+    const { ports, replacement } = createPorts();
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.confirmApplicationExit({ waitForIdle: true })).resolves.toBe(true);
+
+    expect(replacement.cancel).toHaveBeenCalledOnce();
+    expect(replacement.commit).not.toHaveBeenCalled();
+    expect(ports.closeDocument).not.toHaveBeenCalled();
+    expect(ports.clearDocument).not.toHaveBeenCalled();
+    expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
+      'closing',
+      'Failed to prepare application exit',
+      expect.any(Function),
+      { waitForIdle: true },
+    );
   });
 
   it('aborts a prepared document when commit fails', async () => {

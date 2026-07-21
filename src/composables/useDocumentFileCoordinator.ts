@@ -2,6 +2,10 @@ import type { ComputedRef } from 'vue';
 
 import * as api from '@/api';
 import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
+import {
+  createDocumentRoutePreparationScheduler,
+  type DocumentRoutePreparationScheduler,
+} from '@/application/documentRoutePreparationScheduler';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import {
   runtimeDocumentCapabilities,
@@ -31,6 +35,8 @@ type UseDocumentFileCoordinatorOptions = {
   flushPendingCellChanges?: () => Promise<boolean>;
 };
 
+const routePreparationSchedulers = new WeakMap<object, DocumentRoutePreparationScheduler>();
+
 export function useDocumentFileCoordinator({
   fileData,
   flushPendingCellChanges,
@@ -49,6 +55,11 @@ export function useDocumentFileCoordinator({
     getSpreadsheetFormatOptions: async () =>
       runtimeSpreadsheetFormatOptions(await api.getSpreadsheetFormatOptions()),
   });
+  let routePreparations = routePreparationSchedulers.get(document);
+  if (!routePreparations) {
+    routePreparations = createDocumentRoutePreparationScheduler();
+    routePreparationSchedulers.set(document, routePreparations);
+  }
 
   return createDocumentFileCoordinator({
     getFileData: () => fileData?.value ?? document.data,
@@ -89,5 +100,5 @@ export function useDocumentFileCoordinator({
     clearDocument: () => session.clearDocument(),
     queueRecentFileEntryUpdate,
     reportCleanupError: (message, error) => console.warn(`${message}:`, error),
-  });
+  }, routePreparations);
 }

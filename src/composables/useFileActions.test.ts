@@ -17,6 +17,7 @@ import {
   type PreparedOpenDocument,
 } from "@/types";
 import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import {
   openResponseFromFileData,
   savedResponseFromFileData,
@@ -180,6 +181,29 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function controlledCancellation() {
+  let cancelled = false;
+  const handlers = new Set<() => void>();
+  return {
+    signal: {
+      isCancelled: () => cancelled,
+      onCancel(handler: () => void) {
+        if (cancelled) {
+          handler();
+          return () => undefined;
+        }
+        handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    } satisfies OperationCancellationSignal,
+    cancel() {
+      cancelled = true;
+      for (const handler of handlers) handler();
+      handlers.clear();
+    },
+  };
+}
+
 async function flushPromises() {
   for (let i = 0; i < 8; i += 1) {
     await Promise.resolve();
@@ -232,22 +256,23 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const pendingPrepare = deferred<PreparedOpenDocument>();
-    let shouldContinue = true;
+    const cancellation = controlledCancellation();
     vi.mocked(platform.prepareOpenFile).mockReturnValue(pendingPrepare.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
     const loadPromise = actions.loadFileFromPath(
       "/tmp/stale.xlsx",
-      () => shouldContinue
+      cancellation.signal,
     );
 
     await flushPromises();
     expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/stale.xlsx");
 
-    shouldContinue = false;
-    pendingPrepare.resolve(preparedOpen("stale-token"));
-
+    cancellation.cancel();
     await expect(loadPromise).resolves.toBe(false);
+    pendingPrepare.resolve(preparedOpen("stale-token"));
+    await flushPromises();
+
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.currentFilePath).toBeNull();
     expect(api.commitPreparedDocument).not.toHaveBeenCalled();
@@ -255,40 +280,30 @@ describe("useFileActions", () => {
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
   });
 
-  it("holds the loading lifecycle until a cancelled in-flight prepare settles", async () => {
+  it("releases the loading lifecycle while a cancelled prepare drains", async () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const pendingPrepare = deferred<PreparedOpenDocument>();
-    const cancelHandlers: Array<() => void> = [];
-    let shouldContinue = true;
-    const guard = (() => shouldContinue) as (() => boolean) & {
-      onCancel: (handler: () => void) => () => void;
-    };
-    guard.onCancel = (handler) => {
-      cancelHandlers.push(handler);
-      return () => undefined;
-    };
+    const cancellation = controlledCancellation();
     vi.mocked(platform.prepareOpenFile).mockReturnValue(pendingPrepare.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
-    const loadPromise = actions.loadFileFromPath("/tmp/slow.xlsx", guard);
+    const loadPromise = actions.loadFileFromPath("/tmp/slow.xlsx", cancellation.signal);
 
     await flushPromises();
 
     expect(documentSessionStore.lifecycle).toBe("loading");
     expect(documentSessionStore.isInteractionLocked).toBe(true);
 
-    shouldContinue = false;
-    for (const handler of cancelHandlers) {
-      handler();
-    }
+    cancellation.cancel();
+    await expect(loadPromise).resolves.toBe(false);
 
-    expect(documentSessionStore.lifecycle).toBe("loading");
-    expect(documentSessionStore.isInteractionLocked).toBe(true);
+    expect(documentSessionStore.lifecycle).toBe("idle");
+    expect(documentSessionStore.isInteractionLocked).toBe(false);
 
     pendingPrepare.resolve(preparedOpen("slow-token"));
-    await expect(loadPromise).resolves.toBe(false);
+    await flushPromises();
     expect(documentSessionStore.lifecycle).toBe("idle");
     expect(documentSessionStore.isInteractionLocked).toBe(false);
     expect(documentSessionStore.documentId).toBeNull();
@@ -303,26 +318,15 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const pendingCommit = deferred<OpenDocumentResponse>();
-    let shouldContinue = true;
-    const cancelHandlers = new Set<() => void>();
-    const guard = (() => shouldContinue) as (() => boolean) & {
-      onCancel: (handler: () => void) => () => void;
-    };
-    guard.onCancel = (handler) => {
-      cancelHandlers.add(handler);
-      return () => cancelHandlers.delete(handler);
-    };
+    const cancellation = controlledCancellation();
     vi.mocked(platform.prepareOpenFile).mockResolvedValue(preparedOpen("committing-token"));
     vi.mocked(api.commitPreparedDocument).mockReturnValue(pendingCommit.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
-    const loadPromise = actions.loadFileFromPath("/tmp/committing.xlsx", guard);
+    const loadPromise = actions.loadFileFromPath("/tmp/committing.xlsx", cancellation.signal);
     await waitForCondition(() => vi.mocked(api.commitPreparedDocument).mock.calls.length > 0);
 
-    shouldContinue = false;
-    for (const handler of cancelHandlers) {
-      handler();
-    }
+    cancellation.cancel();
     expect(documentSessionStore.lifecycle).toBe("loading");
 
     pendingCommit.resolve(openedResponse("committing.xlsx", 2));
@@ -338,15 +342,7 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
     const pendingCommit = deferred<OpenDocumentResponse>();
-    let shouldContinue = true;
-    const cancelHandlers = new Set<() => void>();
-    const guard = (() => shouldContinue) as (() => boolean) & {
-      onCancel: (handler: () => void) => () => void;
-    };
-    guard.onCancel = (handler) => {
-      cancelHandlers.add(handler);
-      return () => cancelHandlers.delete(handler);
-    };
+    const cancellation = controlledCancellation();
     openDocumentSession(
       documentSessionStore,
       openedResponse("current.xlsx", 1),
@@ -358,17 +354,14 @@ describe("useFileActions", () => {
     vi.mocked(api.commitPreparedDocument).mockReturnValue(pendingCommit.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
-    const loadPromise = actions.loadFileFromPath("/tmp/replacement.xlsx", guard);
+    const loadPromise = actions.loadFileFromPath("/tmp/replacement.xlsx", cancellation.signal);
     await waitForCondition(() => vi.mocked(api.commitPreparedDocument).mock.calls.length > 0);
 
     expect(api.commitPreparedDocument).toHaveBeenCalledWith("replacement-token", {
       documentId: '1',
       baseRevision: '0',
     });
-    shouldContinue = false;
-    for (const handler of cancelHandlers) {
-      handler();
-    }
+    cancellation.cancel();
     pendingCommit.resolve(openedResponse("replacement.xlsx", 2));
 
     await expect(loadPromise).resolves.toBe(false);
@@ -384,29 +377,19 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const pendingPrepare = deferred<PreparedOpenDocument>();
-    const cancelHandlers: Array<() => void> = [];
-    let shouldContinue = true;
-    const guard = (() => shouldContinue) as (() => boolean) & {
-      onCancel: (handler: () => void) => () => void;
-    };
-    guard.onCancel = (handler) => {
-      cancelHandlers.push(handler);
-      return () => undefined;
-    };
+    const cancellation = controlledCancellation();
     vi.mocked(platform.prepareOpenFile).mockReturnValue(pendingPrepare.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
-    const loadPromise = actions.loadFileFromPath("/tmp/stale-error.xlsx", guard);
+    const loadPromise = actions.loadFileFromPath("/tmp/stale-error.xlsx", cancellation.signal);
 
     await flushPromises();
 
-    shouldContinue = false;
-    for (const handler of cancelHandlers) {
-      handler();
-    }
-    pendingPrepare.reject(new Error("stale read failed"));
-
+    cancellation.cancel();
     await expect(loadPromise).resolves.toBe(false);
+    pendingPrepare.reject(new Error("stale read failed"));
+    await flushPromises();
+
     expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.lifecycle).toBe("idle");

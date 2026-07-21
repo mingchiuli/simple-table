@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRouteDocumentLoadCoordinator } from '@/application/routeDocumentLoadCoordinator';
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -41,12 +42,12 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(secondLoad).not.toHaveBeenCalled();
   });
 
-  it('passes a continuation guard to in-flight route file loads', async () => {
+  it('passes a cancellation signal to in-flight route file loads', async () => {
     let routeFilePath: string | null = '/tmp/current.xlsx';
-    const routeGuard: { current?: () => boolean } = {};
+    const routeSignal: { current?: OperationCancellationSignal } = {};
     const releaseLoad = deferred<boolean>();
-    const loadFileFromPath = vi.fn((_filePath: string, guard: () => boolean) => {
-      routeGuard.current = guard;
+    const loadFileFromPath = vi.fn((_filePath: string, signal: OperationCancellationSignal) => {
+      routeSignal.current = signal;
       return releaseLoad.promise;
     });
     const coordinator = createCoordinator({
@@ -57,9 +58,9 @@ describe('routeDocumentLoadCoordinator', () => {
     coordinator.enqueue('/tmp/current.xlsx');
     await flushPromises();
 
-    expect(routeGuard.current?.()).toBe(true);
+    expect(routeSignal.current?.isCancelled()).toBe(false);
     routeFilePath = '/tmp/next.xlsx';
-    expect(routeGuard.current?.()).toBe(false);
+    expect(routeSignal.current?.isCancelled()).toBe(true);
 
     releaseLoad.resolve(false);
     await flushPromises();
@@ -68,10 +69,8 @@ describe('routeDocumentLoadCoordinator', () => {
   it('notifies in-flight route file loads synchronously when cancelled', async () => {
     let cancelled = false;
     const releaseLoad = deferred<boolean>();
-    const loadFileFromPath = vi.fn((_filePath: string, guard: {
-      onCancel: (handler: () => void) => void;
-    }) => {
-      guard.onCancel(() => {
+    const loadFileFromPath = vi.fn((_filePath: string, signal: OperationCancellationSignal) => {
+      signal.onCancel(() => {
         cancelled = true;
       });
       return releaseLoad.promise;
@@ -158,8 +157,8 @@ describe('routeDocumentLoadCoordinator', () => {
       getRouteFilePath: () => routeFilePath,
       reportError,
       loadFileFromPath: vi.fn()
-        .mockImplementationOnce((_path, guard) => {
-          guard.onCancel(() => {
+        .mockImplementationOnce((_path, signal: OperationCancellationSignal) => {
+          signal.onCancel(() => {
             throw new Error('cancellation failed');
           });
           return releaseFirst.promise;

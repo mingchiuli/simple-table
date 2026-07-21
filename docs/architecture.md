@@ -296,7 +296,10 @@ consume that envelope and cannot depend on generated response declarations.
   Window close and update relaunch requests carry explicit intents through the
   same guard pipeline; concurrent requests resolve to a deterministic intent,
   with relaunch taking priority before execution starts. Platform modules
-  provide close and relaunch primitives but do not own exit policy.
+  provide close and relaunch primitives but do not own exit policy. Exit guards
+  only flush, wait, and confirm; they never close the backend document or clear
+  the frontend projection before the platform exit succeeds. Route leave keeps
+  the separate destructive document-close workflow.
 - `documentFileCoordinator` owns new-document creation, selected/recent/path
   opening, prepared-document commit/abort, save, export, and close compensation
   as a port-driven application workflow. `routeDocumentLoadCoordinator` owns
@@ -495,8 +498,12 @@ runtime estimate retains the preflight parse estimate as a lower bound, because
 third-party workbook state may contain memory that the canonical projection
 cannot inspect directly. Expired, aborted, or rejected prepared states are
 detached under the prepared-store lock and released after the lock is dropped.
-Explicit abort runs on the bounded blocking executor. Route cancellation must
-keep the loading lifecycle reserved until the in-flight prepare settles.
+Explicit abort runs on the bounded blocking executor. Route loads receive an
+explicit cancellation signal. Cancellation releases the obsolete frontend
+lifecycle immediately, while the single-slot preparation queue drains the
+already-started parse and aborts any late prepared token before starting the
+next parse. This keeps latest-route ownership responsive without racing two
+preparations against the backend repository.
 
 The prepared-document repository lives in the application layer because its
 entries own complete `EditorState` values. It does not inspect the
@@ -555,6 +562,12 @@ block whose resident estimate exceeds 16 MiB, and treats the admitted child
 blocks as combined coverage. The ordinary cache target is 16 MiB; pinned
 visible blocks form a separate hard bound of eight resident-admitted blocks so
 visibility cannot turn the cache into an unbounded exception.
+
+Region responses also acquire an instance-owned staging lease before they are
+retained in a fragment array. All active loads share a 20 MiB resident and
+32 MiB wire staging budget, and each task releases its lease after commit,
+cancellation, or failure. The Store cache limit therefore does not leave an
+unbounded pre-commit memory window when several tiles fragment concurrently.
 
 Tile alignment, oversized-response subdivision, fragment deadlines, and
 aggregate fragment budgets live in `documentRegionRepository`. The document
@@ -683,8 +696,11 @@ canceling the picker flow revokes it explicitly.
 
 Frontend route-driven opening is an application-owned latest-only worker. At
 most one file load is active and one pending route is retained; a newer route
-cancels the active continuation and replaces the pending route instead of
-extending a Promise chain. The route composable only adapts route observation,
+cancels the active `OperationCancellationSignal` and replaces the pending route
+instead of extending a Promise chain. A Store-scoped application preparation
+runtime survives route-component remounts; obsolete preparation drains through
+its bounded serial tail and owns late-token abort without keeping the obsolete
+route lifecycle active. The route composable only adapts route observation,
 error reporting, and leave confirmation to that coordinator.
 
 Mobile imported selections and reserved save locations are likewise one-shot.

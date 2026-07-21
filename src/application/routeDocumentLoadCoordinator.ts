@@ -1,13 +1,11 @@
-export type RouteContinuationGuard = (() => boolean) & {
-  onCancel: (handler: () => void) => () => void;
-};
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
 
 export type RouteDocumentLoadPorts = {
   getRouteFilePath: () => string | null;
   getCurrentFilePath: () => string | null;
   loadFileFromPath: (
     filePath: string,
-    shouldContinue: RouteContinuationGuard,
+    cancellation: OperationCancellationSignal,
   ) => Promise<boolean>;
   refreshEditorState: () => Promise<void>;
   reportError: (error: unknown) => void;
@@ -91,9 +89,9 @@ export function createRouteDocumentLoadCoordinator({
     if (filePath === lastLoadedRouteFilePath && getCurrentFilePath() === filePath) {
       return;
     }
-    const guard = createContinuationGuard(filePath, generation);
+    const cancellation = createCancellationSignal(filePath, generation);
     try {
-      if ((await loadFileFromPath(filePath, guard)) && guard()) {
+      if ((await loadFileFromPath(filePath, cancellation)) && !cancellation.isCancelled()) {
         lastLoadedRouteFilePath = filePath;
       }
     } finally {
@@ -107,24 +105,23 @@ export function createRouteDocumentLoadCoordinator({
     return generation === routeLoadGeneration && filePath === getRouteFilePath();
   }
 
-  function createContinuationGuard(
+  function createCancellationSignal(
     filePath: string,
     generation: number,
-  ): RouteContinuationGuard {
-    const guard = (() => isCurrentRouteFileLoad(filePath, generation)) as RouteContinuationGuard;
+  ): OperationCancellationSignal {
     const handlers = new Set<() => void>();
     activeCancellation = { generation, handlers };
-    guard.onCancel = (handler) => {
-      if (!guard()) {
-        notifyCancellation(handler);
-        return () => undefined;
-      }
-      handlers.add(handler);
-      return () => {
-        handlers.delete(handler);
-      };
+    return {
+      isCancelled: () => !isCurrentRouteFileLoad(filePath, generation),
+      onCancel(handler) {
+        if (!isCurrentRouteFileLoad(filePath, generation)) {
+          notifyCancellation(handler);
+          return () => undefined;
+        }
+        handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
     };
-    return guard;
   }
 
   function notifyCancellation(handler: () => void) {

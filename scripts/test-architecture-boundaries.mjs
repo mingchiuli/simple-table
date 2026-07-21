@@ -826,6 +826,7 @@ for (const requirement of [
   /\bMAX_DOCUMENT_RESPONSE_BYTES\b/,
   /\bMAX_DOCUMENT_MANIFEST_RESIDENT_BYTES\b/,
   /\bMAX_DOCUMENT_PROJECTION_RESIDENT_BYTES\b/,
+  /\bMAX_REGION_STAGING_WIRE_BYTES\b/,
   /\bMAX_DOCUMENT_WIRE_BYTES\b/,
   /\bPROTOCOL_SHEET_REGION_TILE_ROWS\b/,
   /\bPROTOCOL_SHEET_REGION_TILE_COLUMNS\b/,
@@ -874,6 +875,78 @@ for (const requirement of [
       `src/components/TableEditor.vue violates the generated layout policy boundary: ${requirement}`,
     );
   }
+}
+
+const operationCancellationSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'operationCancellation.ts'),
+  'utf8',
+);
+for (const requirement of [/\bOperationCancellationSignal\b/, /\bisCancelled\b/, /\bonCancel\b/]) {
+  if (!requirement.test(operationCancellationSource)) {
+    violations.push(
+      `src/application/operationCancellation.ts violates the explicit operation cancellation boundary: ${requirement}`,
+    );
+  }
+}
+
+const documentFileCoordinatorSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentFileCoordinator.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /routePreparations\.run\s*\(/,
+  /\bconfirmApplicationExit\b/,
+]) {
+  if (!requirement.test(documentFileCoordinatorSource)) {
+    violations.push(
+      `src/application/documentFileCoordinator.ts violates the drain-preserving route cancellation and non-destructive exit boundary: ${requirement}`,
+    );
+  }
+}
+
+const routePreparationSchedulerSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentRoutePreparationScheduler.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\blet\s+tail\s*:/,
+  /cancellation\.onCancel\s*\(/,
+  /tail\s*=\s*prepared\.then\s*\(/,
+]) {
+  if (!requirement.test(routePreparationSchedulerSource)) {
+    violations.push(
+      `src/application/documentRoutePreparationScheduler.ts violates the drain-preserving route preparation boundary: ${requirement}`,
+    );
+  }
+}
+
+const useDocumentFileCoordinatorSource = readFileSync(
+  join(projectRoot, 'src', 'composables', 'useDocumentFileCoordinator.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /new\s+WeakMap\s*</,
+  /\broutePreparationSchedulers\b/,
+  /\bcreateDocumentRoutePreparationScheduler\b/,
+]) {
+  if (!requirement.test(useDocumentFileCoordinatorSource)) {
+    violations.push(
+      `src/composables/useDocumentFileCoordinator.ts violates the Store-scoped route preparation runtime boundary: ${requirement}`,
+    );
+  }
+}
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'documentFileCoordinator.ts')],
+  [/\bContinuationGuard\b/, /shouldContinue\s*:\s*ContinuationGuard/],
+  'the explicit operation cancellation signal boundary',
+);
+
+const tableViewSource = readFileSync(join(projectRoot, 'src', 'views', 'TableView.vue'), 'utf8');
+if (!/useApplicationExitGuard\s*\(\s*\(\)\s*=>\s*confirmApplicationExit\b/.test(tableViewSource)) {
+  violations.push('src/views/TableView.vue violates the non-destructive application exit guard boundary');
+}
+if (/useApplicationExitGuard\s*\(\s*\(\)\s*=>\s*closeCurrentDocument\b/.test(tableViewSource)) {
+  violations.push('src/views/TableView.vue closes the document before platform exit succeeds');
 }
 
 rejectMatches(
@@ -1051,6 +1124,14 @@ const documentSessionSource = readFileSync(
   join(projectRoot, 'src', 'stores', 'documentSession.ts'),
   'utf8',
 );
+const documentRegionStagingBudgetSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentRegionStagingBudget.ts'),
+  'utf8',
+);
+const documentRegionLoadSchedulerSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentRegionLoadScheduler.ts'),
+  'utf8',
+);
 for (const [file, source, requirements] of [
   [
     'src/types/documentRuntime.ts',
@@ -1068,12 +1149,34 @@ for (const [file, source, requirements] of [
     ],
   ],
   ['src/stores/documentSession.ts', documentSessionSource, [/\bblock\.residentBytes\b/]],
+  [
+    'src/application/documentRegionStagingBudget.ts',
+    documentRegionStagingBudgetSource,
+    [
+      /\bMAX_DOCUMENT_PROJECTION_RESIDENT_BYTES\b/,
+      /\bMAX_REGION_STAGING_WIRE_BYTES\b/,
+      /\bRegionStagingLease\b/,
+    ],
+  ],
+  [
+    'src/application/documentRegionLoadScheduler.ts',
+    documentRegionLoadSchedulerSource,
+    [/\bstagingBudget\.acquire\s*\(\)/, /\bstaging\.release\s*\(\)/],
+  ],
 ]) {
   for (const requirement of requirements) {
     if (!requirement.test(source)) {
       violations.push(`${file} violates the separate wire/resident region budget boundary: ${requirement}`);
     }
   }
+}
+
+if (!/staging\.reserve\s*\(\s*block\.residentBytes\s*,\s*block\.wireBytes\s*\)/.test(
+  documentRegionRepositorySource,
+)) {
+  violations.push(
+    'src/application/documentRegionRepository.ts violates the global pre-commit region staging budget boundary',
+  );
 }
 
 rejectMatches(

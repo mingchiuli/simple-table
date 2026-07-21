@@ -1,3 +1,6 @@
+import { createDocumentRegionStagingBudget } from '@/application/documentRegionStagingBudget';
+import type { RegionStagingLease } from '@/application/documentRegionStagingBudget';
+
 export type RegionLoadPriority = 'required' | 'viewport';
 
 type QueuedLoad = {
@@ -5,7 +8,7 @@ type QueuedLoad = {
   viewportGeneration: number | null;
   priority: RegionLoadPriority;
   key: string;
-  run: (isCurrent: () => boolean) => Promise<boolean>;
+  run: (isCurrent: () => boolean, staging: RegionStagingLease) => Promise<boolean>;
   resolve: (value: boolean) => void;
   reject: (error: unknown) => void;
 };
@@ -19,6 +22,7 @@ const MAX_CONCURRENT_REGION_LOADS = 4;
 const MAX_ADMITTED_REGION_LOADS = 16;
 
 export function createDocumentRegionLoadScheduler() {
+  const stagingBudget = createDocumentRegionStagingBudget();
   let generation = 0;
   let viewportGeneration = 0;
   let activeLoads = 0;
@@ -46,7 +50,7 @@ export function createDocumentRegionLoadScheduler() {
 
   function scheduleRegionLoad(
     key: string,
-    run: (isCurrent: () => boolean) => Promise<boolean>,
+    run: (isCurrent: () => boolean, staging: RegionStagingLease) => Promise<boolean>,
     options: { priority?: RegionLoadPriority; viewportGeneration?: number } = {}
   ): Promise<boolean> {
     const existing = loads.get(key);
@@ -130,19 +134,21 @@ export function createDocumentRegionLoadScheduler() {
       }
       record.state = 'active';
       activeLoads += 1;
+      const staging = stagingBudget.acquire();
       const isCurrent = () => {
         if (load.generation !== generation) return false;
         if (loads.get(load.key) !== record) return false;
         return load.priority !== 'viewport'
           || load.viewportGeneration === viewportGeneration;
       };
-      void load.run(isCurrent).then(
+      void load.run(isCurrent, staging).then(
         (value) => load.resolve(load.generation === generation && value),
         (error) => {
           if (isCurrent()) load.reject(error);
           else load.resolve(false);
         }
       ).finally(() => {
+        staging.release();
         activeLoads = Math.max(0, activeLoads - 1);
         pumpQueue();
       });

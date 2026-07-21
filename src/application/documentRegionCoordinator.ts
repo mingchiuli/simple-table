@@ -10,6 +10,7 @@ import {
   SHEET_REGION_TILE_COLUMNS,
   SHEET_REGION_TILE_ROWS,
 } from '@/protocol/editorResourcePolicy';
+import { RegionStagingLimitError } from '@/application/documentRegionStagingBudget';
 import type {
   DocumentRegionProjection,
   EditorCommandContext,
@@ -97,17 +98,19 @@ export function createDocumentRegionCoordinator(document: DocumentRegionPort) {
     if (document.touchLoadedRegion(region)) return Promise.resolve(true);
     return loads.scheduleRegionLoad(
       regionLoadKey(context, region),
-      async (isCurrent) => {
+      async (isCurrent, staging) => {
         let blocks: SheetRegionBlock[];
         try {
           blocks = await loadRegionBlocks(
             context,
             region,
             fetchProjection,
+            staging,
             () => isCurrent() && document.matchesCommandContext(context),
           );
         } catch (error) {
           if (!document.matchesCommandContext(context)) return false;
+          if (error instanceof RegionStagingLimitError) return false;
           throw error;
         }
         if (!isCurrent() || !document.matchesCommandContext(context)) return false;
