@@ -36,6 +36,9 @@ flowchart TB
 Frontend platform adapters select desktop, Android, or iOS file operations.
 Business mutations remain platform-independent and go through the common Rust
 operation layer.
+Frontend component barrels are public package entry points for external
+consumers. Components inside the same package import siblings directly, so an
+entry point cannot form a cycle through one of the modules it exports.
 
 Tauri command modules are transport adapters. They own bounded wire
 deserialization and executor selection, then delegate to application services
@@ -273,7 +276,10 @@ consume that envelope and cannot depend on generated response declarations.
   workflow. `useDocumentCommandBus` caches one semantic facade per document
   Store and binds that workflow to backend transport and user notifications.
   Editor feature composables submit semantic commands and cannot construct wire
-  mutation actions or response DTOs.
+  mutation actions or response DTOs. Context-bound editor-state refresh follows
+  the same coordinator path: stale responses are ignored and current-context
+  failures remain observable by the route-load worker. `useDocumentStatus` is a
+  read-only status facade and cannot invoke backend APIs.
 - Resetting a frontend document generation invalidates queued work but never
   removes an already-started mutation or cell save from its tracked Promise
   chain. New-generation work waits for that chain to drain, and mutation leases
@@ -418,9 +424,11 @@ code; command names, arguments, and results are checked against that map.
 Static cross-process policy is also generated from Rust. Mutation protocol
 version, mutation/region response byte limits, and cell mutation count/text
 limits have one Rust source exposed through `editor_protocol`; the search-query
-UTF-8 byte limit follows the same path. Frontend session, region, pending-save,
-and search-input logic import the generated constants instead of repeating
-numeric literals.
+UTF-8 byte limit follows the same path. Sheet-region tile dimensions originate
+in the layer-neutral `resource_limits` module, are re-exported through
+`editor_protocol`, and are generated for frontend region caching. Frontend
+session, region, pending-save, and search-input logic import the generated
+constants instead of repeating numeric literals.
 
 Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary

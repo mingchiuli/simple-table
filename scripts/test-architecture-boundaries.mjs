@@ -68,6 +68,15 @@ rejectMatches(
 );
 
 rejectMatches(
+  sourceFiles(join(projectRoot, 'src', 'components', 'table-grid'), '.vue'),
+  [
+    /['"]@\/components\/table-grid(?:\/index)?['"]/,
+    /['"]\.(?:\/index)?['"]/,
+  ],
+  'the acyclic table-grid internal component boundary',
+);
+
+rejectMatches(
   sourceFiles(join(projectRoot, 'src'), '.ts').filter(
     (file) => relative(projectRoot, file) !== 'src/types/protocol.ts',
   ),
@@ -679,6 +688,21 @@ rejectMatches(
   'the application-owned document command execution boundary',
 );
 
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'useDocumentStatus.ts')],
+  [/['"]@\/api['"]/, /\bgetEditorState\b/, /\brefreshEditorState\b/],
+  'the read-only frontend document status boundary',
+);
+
+for (const [file, requirement] of [
+  ['src/application/documentCommandCoordinator.ts', /\bfunction\s+refreshEditorState\b/],
+  ['src/composables/useDocumentCommandBus.ts', /\brefreshEditorState\b/],
+]) {
+  if (!requirement.test(readFileSync(join(projectRoot, file), 'utf8'))) {
+    violations.push(`${file} violates the application-owned editor state refresh boundary`);
+  }
+}
+
 const routeDocumentLoadCoordinatorSource = readFileSync(
   join(projectRoot, 'src', 'application', 'routeDocumentLoadCoordinator.ts'),
   'utf8',
@@ -715,6 +739,8 @@ for (const requirement of [
   /\bPROTOCOL_MAX_CELL_TEXT_BYTES\b/,
   /\bPROTOCOL_MAX_MUTATION_TEXT_BYTES\b/,
   /\bPROTOCOL_MAX_SEARCH_QUERY_BYTES\b/,
+  /\bPROTOCOL_SHEET_REGION_TILE_ROWS\b/,
+  /\bPROTOCOL_SHEET_REGION_TILE_COLUMNS\b/,
 ]) {
   if (!requirement.test(editorResourcePolicySource)) {
     violations.push(
@@ -728,6 +754,41 @@ rejectMatches(
   [/^const\s+MAX_SET_CELL_CHANGES\b/m],
   'the Rust-owned generated cell mutation resource policy boundary',
 );
+
+rejectMatches(
+  [join(projectRoot, 'src', 'application', 'documentRegionRepository.ts')],
+  [
+    /^(?:export\s+)?const\s+(?:SHEET_REGION_)?TILE_(?:ROWS|COLUMNS)\b/m,
+    /\b(?:128|32)\s+as\s+const\b/,
+  ],
+  'the generated frontend Sheet-region tile policy boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'application', 'document_projection.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'document', 'region_metadata_index.rs'),
+  ],
+  [
+    /^const\s+(?:INITIAL_REGION_ROWS|INITIAL_REGION_COLUMNS|TILE_ROWS|TILE_COLUMNS|SHEET_REGION_TILE_ROWS|SHEET_REGION_TILE_COLUMNS)\b/m,
+  ],
+  'the shared Rust Sheet-region tile policy boundary',
+);
+
+const resourceLimitsSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'resource_limits.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /pub\s+const\s+SHEET_REGION_TILE_ROWS\b/,
+  /pub\s+const\s+SHEET_REGION_TILE_COLUMNS\b/,
+]) {
+  if (!requirement.test(resourceLimitsSource)) {
+    violations.push(
+      `src-tauri/src/resource_limits.rs violates the shared Rust Sheet-region tile policy boundary: ${requirement}`,
+    );
+  }
+}
 
 rejectMatches(
   [join(projectRoot, 'src', 'stores', 'documentSession.ts')],

@@ -47,6 +47,11 @@ export type BackgroundMutationOutcome =
   | { status: 'skipped' }
   | { status: 'refresh-failed'; error: unknown };
 
+export type EditorStateRefreshOutcome =
+  | { status: 'completed' }
+  | { status: 'stale' }
+  | { status: 'failed'; error: unknown };
+
 export type ConsistentReadOptions<T> = {
   flushPendingChanges: () => Promise<boolean>;
   action: (context: EditorCommandContext) => Promise<T>;
@@ -92,6 +97,10 @@ export type DocumentCommandSessionPort = {
     ) => Promise<OpenDocumentResponse>,
     preferredSheetIndex?: number,
   ): Promise<void>;
+  applyEditorSessionForContext(
+    context: EditorCommandContext | null,
+    info: EditorSessionInfo | null | undefined,
+  ): void;
   ensureSheetLoaded(
     sheetIndex: number,
     fetchProjection: FetchRegionProjection,
@@ -245,6 +254,26 @@ export function createDocumentCommandCoordinator({
     }
   }
 
+  async function refreshEditorState(): Promise<EditorStateRefreshOutcome> {
+    const context = document.currentCommandContext();
+    try {
+      const info = await transport.getEditorState(context);
+      if (!refreshContextIsCurrent(context)) return { status: 'stale' };
+      session.applyEditorSessionForContext(context, info);
+      return { status: 'completed' };
+    } catch (error) {
+      return refreshContextIsCurrent(context)
+        ? { status: 'failed', error }
+        : { status: 'stale' };
+    }
+  }
+
+  function refreshContextIsCurrent(context: EditorCommandContext | null): boolean {
+    return context
+      ? document.matchesCommandContext(context)
+      : document.documentId === null;
+  }
+
   async function runConsistentRead<T>({
     flushPendingChanges,
     action,
@@ -331,6 +360,7 @@ export function createDocumentCommandCoordinator({
     runInteractiveMutation,
     runBackgroundMutation,
     refreshAfterMutationError,
+    refreshEditorState,
     ensureSheetLoaded,
     ensureSheetRegionLoaded,
     runConsistentRead,

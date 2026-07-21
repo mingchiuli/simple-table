@@ -1,5 +1,6 @@
 use crate::document::region_metadata_index::DocumentRegion;
 use crate::document_data::{DocumentSheet, MergeRange, SheetExtent};
+use crate::editor_protocol::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
 use crate::error::AppError;
 use crate::projection_model::{
     DocumentManifestSnapshot, EditorSessionSnapshot, EditorStateSnapshot, OpenDocumentSnapshot,
@@ -7,8 +8,6 @@ use crate::projection_model::{
 };
 use crate::state::editor_state::EditorState;
 
-const INITIAL_REGION_ROWS: usize = 128;
-const INITIAL_REGION_COLUMNS: usize = 32;
 const MAX_REGION_CELLS: usize = 65_536;
 pub(crate) const MAX_REGION_ROWS: usize = 1_024;
 const MAX_REGION_COLUMNS: usize = 512;
@@ -132,9 +131,9 @@ fn initial_sheet_region(sheet_index: usize, extent: &SheetExtent) -> DocumentReg
     DocumentRegion {
         sheet_index,
         row_start: 0,
-        row_end: extent.row_count.min(INITIAL_REGION_ROWS),
+        row_end: extent.row_count.min(SHEET_REGION_TILE_ROWS),
         col_start: 0,
-        col_end: extent.column_count.min(INITIAL_REGION_COLUMNS),
+        col_end: extent.column_count.min(SHEET_REGION_TILE_COLUMNS),
     }
 }
 

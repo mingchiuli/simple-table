@@ -5,15 +5,17 @@ import type {
   SheetRegion,
   SheetRegionBlock,
 } from '@/types/documentRuntime';
-import { MAX_REGION_RESPONSE_BYTES } from '@/protocol/editorResourcePolicy';
+import {
+  MAX_REGION_RESPONSE_BYTES,
+  SHEET_REGION_TILE_COLUMNS,
+  SHEET_REGION_TILE_ROWS,
+} from '@/protocol/editorResourcePolicy';
 import { regionBlock, regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 
 const MAX_REGION_FRAGMENT_REQUESTS = 64;
 const MAX_REGION_FRAGMENT_BYTES = 32 * 1024 * 1024;
 const MAX_REGION_LOAD_DURATION_MS = 10_000;
-export const TILE_ROWS = 128;
-export const TILE_COLUMNS = 32;
 
 type RegionProjectionFetcher = (
   context: EditorCommandContext,
@@ -34,21 +36,21 @@ export function tileRegions(region: SheetRegion, extent: SheetExtent): SheetRegi
   if (rowStart === rowEnd || colStart === colEnd) return [];
   const tiles: SheetRegion[] = [];
   for (
-    let row = Math.floor(rowStart / TILE_ROWS) * TILE_ROWS;
+    let row = Math.floor(rowStart / SHEET_REGION_TILE_ROWS) * SHEET_REGION_TILE_ROWS;
     row < rowEnd;
-    row += TILE_ROWS
+    row += SHEET_REGION_TILE_ROWS
   ) {
     for (
-      let col = Math.floor(colStart / TILE_COLUMNS) * TILE_COLUMNS;
+      let col = Math.floor(colStart / SHEET_REGION_TILE_COLUMNS) * SHEET_REGION_TILE_COLUMNS;
       col < colEnd;
-      col += TILE_COLUMNS
+      col += SHEET_REGION_TILE_COLUMNS
     ) {
       tiles.push({
         sheetIndex: region.sheetIndex,
         rowStart: row,
-        rowEnd: Math.min(row + TILE_ROWS, extent.rowCount),
+        rowEnd: Math.min(row + SHEET_REGION_TILE_ROWS, extent.rowCount),
         colStart: col,
-        colEnd: Math.min(col + TILE_COLUMNS, extent.columnCount),
+        colEnd: Math.min(col + SHEET_REGION_TILE_COLUMNS, extent.columnCount),
       });
     }
   }

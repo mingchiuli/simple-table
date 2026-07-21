@@ -15,6 +15,8 @@ pub const MAX_LAYOUT_OVERRIDES: usize = 100_000;
 pub const MAX_CELL_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATION_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PROJECTED_TEXT_BYTES: usize = 64 * 1024 * 1024;
+pub const SHEET_REGION_TILE_ROWS: usize = 128;
+pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 
 #[derive(Clone)]
 pub struct ResourceLedger {

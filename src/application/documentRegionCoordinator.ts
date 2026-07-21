@@ -5,9 +5,11 @@ import {
 import {
   loadRegionBlocks,
   tileRegions,
-  TILE_COLUMNS,
-  TILE_ROWS,
 } from '@/application/documentRegionRepository';
+import {
+  SHEET_REGION_TILE_COLUMNS,
+  SHEET_REGION_TILE_ROWS,
+} from '@/protocol/editorResourcePolicy';
 import type {
   DocumentRegionProjection,
   EditorCommandContext,
@@ -54,9 +56,9 @@ export function createDocumentRegionCoordinator(document: DocumentRegionPort) {
     return ensureSheetRegionLoaded({
       sheetIndex,
       rowStart: 0,
-      rowEnd: Math.min(TILE_ROWS, slot.extent.rowCount),
+      rowEnd: Math.min(SHEET_REGION_TILE_ROWS, slot.extent.rowCount),
       colStart: 0,
-      colEnd: Math.min(TILE_COLUMNS, slot.extent.columnCount),
+      colEnd: Math.min(SHEET_REGION_TILE_COLUMNS, slot.extent.columnCount),
     }, fetchProjection);
   }
 

@@ -47,6 +47,7 @@ function setup() {
     applied: true,
   });
   const refreshAfterMutationFailure = vi.fn().mockResolvedValue(undefined);
+  const applyEditorSessionForContext = vi.fn();
   const session: DocumentCommandSessionPort = {
     beginEditorCommand: () => release,
     enqueueDocumentMutation: async (_documentId, task) =>
@@ -56,6 +57,7 @@ function setup() {
     applyMutationResponseWithResync,
     markProjectionStaleFromMutationResponse: () => true,
     refreshAfterMutationFailure,
+    applyEditorSessionForContext,
     ensureSheetLoaded: async () => true,
     ensureSheetRegionLoaded: async () => true,
   };
@@ -78,9 +80,13 @@ function setup() {
   });
   return {
     coordinator,
+    context,
+    document,
     release,
     applyMutationResponseWithResync,
     refreshAfterMutationFailure,
+    applyEditorSessionForContext,
+    transport,
   };
 }
 
@@ -116,5 +122,35 @@ describe('document command coordinator', () => {
     expect(outcome).toEqual({ status: 'failed', error: commandError });
     expect(refreshAfterMutationFailure).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('applies editor state only to the context that requested it', async () => {
+    const { coordinator, context, applyEditorSessionForContext } = setup();
+
+    const outcome = await coordinator.refreshEditorState();
+
+    expect(outcome).toEqual({ status: 'completed' });
+    expect(applyEditorSessionForContext).toHaveBeenCalledWith(context, null);
+  });
+
+  it('reports an editor state transport failure for the current context', async () => {
+    const { coordinator, transport, applyEditorSessionForContext } = setup();
+    const error = new Error('status unavailable');
+    transport.getEditorState = vi.fn().mockRejectedValue(error);
+
+    const outcome = await coordinator.refreshEditorState();
+
+    expect(outcome).toEqual({ status: 'failed', error });
+    expect(applyEditorSessionForContext).not.toHaveBeenCalled();
+  });
+
+  it('ignores an editor state response after the document context changes', async () => {
+    const { coordinator, document, applyEditorSessionForContext } = setup();
+    document.matchesCommandContext = () => false;
+
+    const outcome = await coordinator.refreshEditorState();
+
+    expect(outcome).toEqual({ status: 'stale' });
+    expect(applyEditorSessionForContext).not.toHaveBeenCalled();
   });
 });

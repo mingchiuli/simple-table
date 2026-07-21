@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDocumentRegionCoordinator } from '@/application/documentRegionCoordinator';
+import {
+  SHEET_REGION_TILE_COLUMNS,
+  SHEET_REGION_TILE_ROWS,
+} from '@/protocol/editorResourcePolicy';
 import { defaultRichProjection } from '@/types';
 import type {
   DocumentRegionProjection,
@@ -35,6 +39,32 @@ describe('documentRegionCoordinator', () => {
     expect(loaded).toBe(true);
     expect(committed).toHaveLength(1);
     expect(committed[0]?.region).toEqual(region);
+  });
+
+  it('uses the generated region tile policy for initial sheet loads', async () => {
+    const fetchProjection = vi.fn(async (_context, region: SheetRegion) => response(region));
+    const coordinator = createDocumentRegionCoordinator({
+      activateResidentSheet: () => true,
+      loadedSheet: () => loadedSheet({
+        rowCount: SHEET_REGION_TILE_ROWS + 1,
+        columnCount: SHEET_REGION_TILE_COLUMNS + 1,
+      }),
+      currentCommandContext: () => context,
+      matchesCommandContext: () => true,
+      pinRegionBlocksForLoad: () => undefined,
+      touchLoadedRegion: () => false,
+      commitLoadedRegionBlocks: () => true,
+      isSheetRegionLoaded: () => true,
+    });
+
+    await expect(coordinator.ensureSheetLoaded(0, fetchProjection)).resolves.toBe(true);
+    expect(fetchProjection).toHaveBeenCalledWith(context, {
+      sheetIndex: 0,
+      rowStart: 0,
+      rowEnd: SHEET_REGION_TILE_ROWS,
+      colStart: 0,
+      colEnd: SHEET_REGION_TILE_COLUMNS,
+    });
   });
 
   it('invalidates an in-flight region request when the document session resets', async () => {
@@ -88,11 +118,13 @@ function sheetRegion(): SheetRegion {
   return { sheetIndex: 0, rowStart: 0, rowEnd: 1, colStart: 0, colEnd: 1 };
 }
 
-function loadedSheet(): LoadedSheetSlot {
+function loadedSheet(
+  extent = { rowCount: 1, columnCount: 1 },
+): LoadedSheetSlot {
   return {
     state: 'loaded',
     name: 'Sheet1',
-    extent: { rowCount: 1, columnCount: 1 },
+    extent,
     layout: { columnWidths: {}, rowHeights: {} },
     blocks: [],
     metadata: { merges: [], rich: defaultRichProjection() },

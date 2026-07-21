@@ -104,6 +104,21 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(loadFileFromPath).toHaveBeenCalledTimes(1);
   });
 
+  it('reports editor state refresh failures for routes without a file', async () => {
+    const error = new Error('status unavailable');
+    const reportError = vi.fn();
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => null,
+      refreshEditorState: vi.fn().mockRejectedValue(error),
+      reportError,
+    });
+
+    coordinator.enqueue(null);
+    await flushPromises();
+
+    expect(reportError).toHaveBeenCalledWith(error);
+  });
+
   it('retains only the latest route while a load is in flight', async () => {
     let routeFilePath: string | null = '/tmp/first.xlsx';
     const releaseFirst = deferred<boolean>();

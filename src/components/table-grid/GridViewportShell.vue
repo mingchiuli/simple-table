@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { GridCellsLayer, GridHeaders, MergeCellsLayer, ResizeLayer } from "@/components/table-grid";
+import GridCellsLayer from './GridCellsLayer.vue';
+import GridHeaders from './GridHeaders.vue';
+import MergeCellsLayer from './MergeCellsLayer.vue';
+import ResizeLayer from './ResizeLayer.vue';
 import type { ColumnResizeHandle, GridItem, RowResizeHandle } from "@/table-geometry/gridGeometry";
 import type { CellItem, ColumnItem, MergeOverlayCell } from "@/table-geometry/useGridGeometry";
 import type { CellValue } from "@/types";

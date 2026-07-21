@@ -68,7 +68,6 @@ const {
   formulaStatus,
   capabilities,
   history,
-  refreshEditorState,
 } = useDocumentStatus();
 
 const isFileLoading = computed(() => documentSessionStore.lifecycle === 'loading');
@@ -131,7 +130,7 @@ const routeFileLoader = useRouteFileLoader({
   getRouteFilePath: routeFilePath,
   getCurrentFilePath: () => documentSessionStore.currentFilePath,
   loadFileFromPath,
-  refreshEditorState,
+  refreshEditorState: commandBus.refreshEditorState,
 });
 
 onBeforeRouteLeave(createRouteLeaveHandler({

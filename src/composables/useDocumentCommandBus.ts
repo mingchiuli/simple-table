@@ -234,6 +234,11 @@ function createDocumentCommandBus(document: ReturnType<typeof useDocumentSession
     }
   }
 
+  async function refreshEditorState(): Promise<void> {
+    const outcome = await coordinator.refreshEditorState();
+    if (outcome.status === 'failed') throw outcome.error;
+  }
+
   function prepareConsistentContext(
     flushPendingChanges: () => Promise<boolean>,
   ): Promise<EditorCommandContext | undefined> {
@@ -254,6 +259,7 @@ function createDocumentCommandBus(document: ReturnType<typeof useDocumentSession
     setCells,
     search,
     refreshAfterMutationError: coordinator.refreshAfterMutationError,
+    refreshEditorState,
     ensureSheetLoaded,
     ensureSheetRegionLoaded,
     prepareConsistentContext,

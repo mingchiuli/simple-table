@@ -7,7 +7,7 @@ use ts_rs::{Config, TS};
 use crate::editor_protocol::{
     EDITOR_MUTATION_PROTOCOL_VERSION, MAX_CELL_TEXT_BYTES, MAX_MUTATION_RESPONSE_BYTES,
     MAX_MUTATION_TEXT_BYTES, MAX_SEARCH_QUERY_BYTES, MAX_SET_CELL_CHANGES,
-    MAX_SHEET_REGION_RESPONSE_BYTES,
+    MAX_SHEET_REGION_RESPONSE_BYTES, SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS,
 };
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::types::{
@@ -41,6 +41,12 @@ pub fn generated_typescript_contract() -> String {
     ));
     output.push_str(&format!(
         "export const MAX_SHEET_REGION_RESPONSE_BYTES = {MAX_SHEET_REGION_RESPONSE_BYTES} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const SHEET_REGION_TILE_ROWS = {SHEET_REGION_TILE_ROWS} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const SHEET_REGION_TILE_COLUMNS = {SHEET_REGION_TILE_COLUMNS} as const;\n\n"
     ));
     output.push_str(&format!(
         "export const MAX_SEARCH_QUERY_BYTES = {MAX_SEARCH_QUERY_BYTES} as const;\n\n"

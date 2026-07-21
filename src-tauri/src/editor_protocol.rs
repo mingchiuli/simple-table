@@ -1,6 +1,8 @@
 /// Static editor protocol policy shared by Rust execution and generated
 /// TypeScript consumers.
-pub use crate::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
+pub use crate::resource_limits::{
+    MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES, SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS,
+};
 
 pub const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 4;
 pub const MAX_MUTATION_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
