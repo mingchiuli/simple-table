@@ -22,6 +22,9 @@ pub const MAX_MUTATION_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PROJECTED_TEXT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_METADATA_STRING_BYTES: usize = 1024 * 1024;
 pub const MAX_PROJECTED_METADATA_TEXT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_DOCUMENT_PATH_BYTES: usize = 64 * 1024;
+pub const MAX_FILE_NAME_BYTES: usize = 4 * 1024;
+pub const MAX_SHEET_NAME_BYTES: usize = 4 * 1024;
 pub const SHEET_REGION_TILE_ROWS: usize = 128;
 pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 
@@ -190,6 +193,7 @@ pub fn validate_row_height(height: Option<u32>) -> Result<(), AppError> {
 }
 
 pub fn validate_file_data(file_data: &DocumentData) -> Result<(), AppError> {
+    validate_document_identity(&file_data.path, &file_data.file_name)?;
     ensure_limit(
         "workbook sheets",
         file_data.sheets.len(),
@@ -197,6 +201,11 @@ pub fn validate_file_data(file_data: &DocumentData) -> Result<(), AppError> {
     )?;
     let usage = projection_usage(file_data)?;
     validate_usage(usage)
+}
+
+pub fn validate_document_identity(path: &str, file_name: &str) -> Result<(), AppError> {
+    ensure_limit("document path bytes", path.len(), MAX_DOCUMENT_PATH_BYTES)?;
+    ensure_limit("file name bytes", file_name.len(), MAX_FILE_NAME_BYTES)
 }
 
 #[cfg(test)]
@@ -329,6 +338,7 @@ pub fn validate_added_sheet(file_data: &DocumentData, sheet_name: &str) -> Resul
         file_data.sheets.len().saturating_add(1),
         MAX_WORKBOOK_SHEETS,
     )?;
+    ensure_limit("sheet name bytes", sheet_name.len(), MAX_SHEET_NAME_BYTES)?;
     ensure_limit(
         "metadata string bytes",
         sheet_name.len(),
@@ -419,6 +429,7 @@ fn projection_usage(file_data: &DocumentData) -> Result<ProjectionUsage, AppErro
             .saturating_add(file_data.file_name.len()),
     };
     for sheet in &file_data.sheets {
+        ensure_limit("sheet name bytes", sheet.name.len(), MAX_SHEET_NAME_BYTES)?;
         ensure_limit("rows per sheet", sheet.rows.len(), MAX_ROWS_PER_SHEET)?;
         usage.total_rows = checked_add(usage.total_rows, sheet.rows.len(), "rows")?;
         for row in &sheet.rows {
@@ -699,6 +710,33 @@ mod tests {
         let error = validate_file_data(&file_data).expect_err("oversized hyperlink");
 
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn rejects_identity_and_sheet_names_outside_manifest_limits() {
+        let mut file_data = DocumentData {
+            path: "x".repeat(MAX_DOCUMENT_PATH_BYTES + 1),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![DocumentSheet::default()],
+        };
+        assert!(matches!(
+            validate_file_data(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+
+        file_data.path.clear();
+        file_data.file_name = "x".repeat(MAX_FILE_NAME_BYTES + 1);
+        assert!(matches!(
+            validate_file_data(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+
+        file_data.file_name = "book.xlsx".to_string();
+        file_data.sheets[0].name = "x".repeat(MAX_SHEET_NAME_BYTES + 1);
+        assert!(matches!(
+            validate_file_data(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
     }
 
     #[test]

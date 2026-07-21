@@ -4,6 +4,7 @@ export type U64String = `${bigint}`;
 
 export const EDITOR_MUTATION_PROTOCOL_VERSION = 4 as const;
 export const MAX_MUTATION_RESPONSE_BYTES = 3145728 as const;
+export const MAX_DOCUMENT_RESPONSE_BYTES = 20971520 as const;
 export const MAX_SHEET_REGION_RESPONSE_BYTES = 16777216 as const;
 
 export const SHEET_REGION_TILE_ROWS = 128 as const;

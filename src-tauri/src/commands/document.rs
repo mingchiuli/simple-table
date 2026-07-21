@@ -19,23 +19,33 @@ pub async fn get_active_document(
     let runtime = runtime.inner().clone();
     executions
         .projection()
-        .run(move || document_query_service::active_document_response(runtime.document_queries()))
+        .run(move || {
+            document_query_service::active_document_response(runtime.document_queries())?
+                .map(protocol_projection::open_document_response)
+                .transpose()
+        })
         .await
-        .map(|snapshot| snapshot.map(protocol_projection::open_document_response))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_mutation_result(
+pub async fn get_mutation_result(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     command_id: String,
 ) -> Result<MutationResultLookup, AppError> {
-    editor_command_service::get_mutation_result(
-        runtime.editor_commands(),
-        document_id.get(),
-        &command_id,
-    )
-    .map(protocol_projection::mutation_lookup)
+    let runtime = runtime.inner().clone();
+    executions
+        .query()
+        .run(move || {
+            editor_command_service::get_mutation_result(
+                runtime.editor_commands(),
+                document_id.get(),
+                &command_id,
+            )
+            .map(protocol_projection::mutation_lookup)
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -50,15 +60,15 @@ pub async fn get_current_document_projection(
     executions
         .projection()
         .run(move || {
-            document_query_service::current_document_projection_for_command(
+            let snapshot = document_query_service::current_document_projection_for_command(
                 runtime.document_queries(),
                 document_id.get(),
                 base_revision.get(),
                 preferred_sheet_index,
-            )
+            )?;
+            protocol_projection::open_document_response(snapshot)
         })
         .await
-        .map(protocol_projection::open_document_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -70,10 +80,10 @@ pub async fn get_sheet_region_projection(
     region: SheetRegion,
 ) -> Result<SheetRegionProjectionResponse, AppError> {
     let runtime = runtime.inner().clone();
-    let snapshot = executions
+    executions
         .projection()
         .run(move || {
-            document_query_service::sheet_region_projection_for_command(
+            let snapshot = document_query_service::sheet_region_projection_for_command(
                 runtime.document_queries(),
                 document_id.get(),
                 base_revision.get(),
@@ -84,13 +94,13 @@ pub async fn get_sheet_region_projection(
                     col_start: region.col_start,
                     col_end: region.col_end,
                 },
+            )?;
+            protocol_projection::sheet_region_response(
+                snapshot,
+                crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES,
             )
         })
-        .await?;
-    protocol_projection::sheet_region_response(
-        snapshot,
-        crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES,
-    )
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -112,33 +122,47 @@ pub async fn close_current_document(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_document_capabilities(
+pub async fn get_document_capabilities(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
 ) -> Result<DocumentCapabilities, AppError> {
-    document_query_service::document_capabilities_for_command(
-        runtime.document_queries(),
-        document_id.get(),
-        base_revision.get(),
-    )
-    .map(protocol_projection::document_capabilities)
+    let runtime = runtime.inner().clone();
+    executions
+        .query()
+        .run(move || {
+            document_query_service::document_capabilities_for_command(
+                runtime.document_queries(),
+                document_id.get(),
+                base_revision.get(),
+            )
+            .map(protocol_projection::document_capabilities)
+        })
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_native_save_plan(
+pub async fn get_native_save_plan(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
     base_revision: CommandU64,
     target_path_or_name: String,
 ) -> Result<NativeSavePlan, AppError> {
-    document_query_service::native_save_plan_for_command(
-        runtime.document_queries(),
-        document_id.get(),
-        base_revision.get(),
-        &target_path_or_name,
-    )
-    .map(protocol_projection::native_save_plan)
+    let runtime = runtime.inner().clone();
+    executions
+        .query()
+        .run(move || {
+            document_query_service::native_save_plan_for_command(
+                runtime.document_queries(),
+                document_id.get(),
+                base_revision.get(),
+                &target_path_or_name,
+            )
+            .map(protocol_projection::native_save_plan)
+        })
+        .await
 }
 
 #[tauri::command]

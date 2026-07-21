@@ -54,9 +54,13 @@ releasing the old document. Neither the document model nor the I/O layer may
 depend on command modules.
 
 `CommandExecutionRuntime` is a second Tauri-managed composition object for
-transport admission. It explicitly owns file, mutation, projection, search,
-and recent-file executors over one shared process budget. Command executors
-cannot be located through static `OnceLock` values.
+transport admission. It explicitly owns file, mutation, projection, query,
+search, and recent-file executors over one shared process budget. Locking
+document queries are asynchronous command adapters and use the bounded query
+executor rather than running on a Tauri async-runtime thread. An execution
+permit covers both the internal operation and outward DTO projection, including
+exact serialized-byte admission. Command executors cannot be located through
+static `OnceLock` values.
 
 `ApplicationRuntime` is the backend composition root managed by Tauri. It
 constructs narrow document-query, document-open, document-lifecycle,
@@ -236,7 +240,11 @@ consume that envelope and cannot depend on generated response declarations.
 - `documentSession` stores a `DocumentProjection` made of explicit `SheetSlot`
   values. Every Sheet owns a stable sparse layout index from its manifest.
   Loaded Sheets additionally own bounded cell blocks and render-only metadata.
-  Cell-block eviction cannot change row or column geometry.
+  Cell-block eviction cannot change row or column geometry. Stable manifest
+  strings and sparse layout keys have a separate resident-byte estimate and
+  count together with region blocks against the total frontend projection
+  budget. Pinning protects normal cache residency, but cannot override that
+  hard byte limit.
 - `documentSession` owns only serializable document projection, revision,
   lifecycle flags, and region LRU/pin state. `documentSessionCoordinator` is the
   application transaction boundary for document, status, selection, search,
@@ -653,12 +661,12 @@ history resources after leaving the registry critical section.
 
 All blocking command categories share an explicit runtime budget of three
 executing and sixteen admitted commands. Category limits remain narrower: file
-2/8, mutation 1/8, projection 2/8, search 1/2, and recent-file 1/3
+2/8, mutation 1/8, projection 2/8, query 2/8, search 1/2, and recent-file 1/3
 (execution/admission). A request must acquire both shared and category admission
 before it can wait for execution. Tauri async runtime threads do not perform
-those synchronous workloads directly, saturation cannot create an unbounded
-semaphore wait queue, and separate category limits cannot overcommit the shared
-blocking pool.
+those synchronous workloads directly. Response projection remains inside the
+same permit, saturation cannot create an unbounded semaphore wait queue, and
+separate category limits cannot overcommit the shared blocking pool.
 
 Frontend recent-file updates use a latest-only worker shared by all composable
 instances. At most one update is active and one latest request is pending;
@@ -731,10 +739,15 @@ not priced differently depending on which owner retains it.
 
 Rust still owns the complete workbook and computes mutations, dirty hashing,
 formula recalculation, undo/redo, and search across all Sheets. No command
-returns the complete frontend document projection. History, prepared bytes,
-layout entries, replay bytes, region size, response size, resident Sheets,
-region blocks, block bytes, diagnostics, indexes, and request concurrency are
-correctness constraints.
+returns the complete frontend document projection. Open and saved-document
+responses have a 20 MiB whole-response wire limit; an open response drops its
+optional initial region before rejecting a manifest that still cannot fit.
+Document identity, Sheet-name, and layout-entry input limits keep the required
+manifest independently bounded. The frontend separately caps the stable
+manifest at 16 MiB and the manifest plus resident region blocks at 20 MiB.
+History, prepared bytes, layout entries, replay bytes, region size, response
+size, resident Sheets, region blocks, block bytes, diagnostics, indexes, and
+request concurrency are correctness constraints.
 
 Revision capacity is checked before document, history, dirty, or save state is
 changed. Document, save-lease, and search-generation identifiers use nonzero

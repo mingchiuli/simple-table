@@ -13,7 +13,10 @@ import type {
 import { isCellLoaded, loadedSheetMetadata, sheetCell } from '@/projection/documentProjection';
 import { blankCell } from '@/utils/cellValue';
 import { isReactive } from 'vue';
-import { MAX_REGION_BLOCK_RESIDENT_BYTES } from '@/protocol/editorResourcePolicy';
+import {
+  MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES,
+  MAX_REGION_BLOCK_RESIDENT_BYTES,
+} from '@/protocol/editorResourcePolicy';
 import {
   applyDocumentMutation,
   openDocumentSession,
@@ -61,6 +64,31 @@ describe('documentSession sparse projection', () => {
     const block = store.loadedSheet(0)?.blocks[0];
     expect(block?.wireBytes).toBe(15 * 1024 * 1024);
     expect(block?.residentBytes).toBeLessThan(MAX_REGION_BLOCK_RESIDENT_BYTES);
+  });
+
+  it('charges stable layout indexes against the total projection budget', () => {
+    const store = useDocumentSessionStore();
+    const response = openResponse();
+    response.document.sheets[0]!.layout.columnWidths = Object.fromEntries(
+      Array.from({ length: 80_000 }, (_, index) => [index, 120]),
+    );
+    openDocumentSession(store, response);
+    const region = { sheetIndex: 0, rowStart: 128, rowEnd: 256, colStart: 0, colEnd: 32 };
+    const block = {
+      key: '0:128:256:0:32',
+      region,
+      cells: {},
+      mergeAnchorCells: {},
+      metadata: { merges: [], cellFormats: {}, cellStyles: {} },
+      wireBytes: 1,
+      residentBytes: 15 * 1024 * 1024,
+    };
+
+    expect(store.manifestResidentBytes).toBeGreaterThan(5 * 1024 * 1024);
+    store.pinRegionBlocksForLoad([region]);
+    expect(store.commitLoadedRegionBlocks(store.requireCommandContext(), region, [block])).toBe(false);
+    expect(store.loadedSheet(0)?.blocks).toHaveLength(0);
+    expect(store.manifestResidentBytes).toBeLessThan(MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES);
   });
 
   it('loads a high row without allocating intermediate row arrays', async () => {
@@ -407,6 +435,26 @@ describe('documentSession sparse projection', () => {
     const after = loadedSheetMetadata(store.loadedSheet(0)!);
     expect(after.merges).toBe(before.merges);
     expect(after.rich).toBe(before.rich);
+  });
+
+  it('remeasures region resident bytes after cell patches', () => {
+    const store = useDocumentSessionStore();
+    openDocumentSession(store, openResponse());
+    const before = store.loadedSheet(0)!.blocks[0]!.residentBytes;
+
+    applyDocumentMutation(store, mutation({
+      type: 'Cells',
+      data: {
+        changes: [{
+          sheetIndex: 0,
+          row: 0,
+          col: 0,
+          value: { ...blankCell(), display: 'x'.repeat(8_192) },
+        }],
+      },
+    }));
+
+    expect(store.loadedSheet(0)!.blocks[0]!.residentBytes).toBeGreaterThan(before);
   });
 
   it('enforces the region byte budget after a mutation resync', async () => {

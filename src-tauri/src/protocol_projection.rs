@@ -3,8 +3,8 @@ use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetad
 use crate::document_data::{CellFormat, CellStyle, MergeRange, SheetExtent};
 use crate::domain::SearchOutcome;
 use crate::editor_protocol::{
-    EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES, MAX_SEARCH_RESPONSE_BYTES,
-    MAX_SHEET_REGION_RESPONSE_BYTES,
+    EDITOR_MUTATION_PROTOCOL_VERSION, MAX_DOCUMENT_RESPONSE_BYTES, MAX_MUTATION_RESPONSE_BYTES,
+    MAX_SEARCH_RESPONSE_BYTES, MAX_SHEET_REGION_RESPONSE_BYTES,
 };
 use crate::error::AppError;
 use crate::formula::status as formula_status;
@@ -221,7 +221,16 @@ fn editor_state(value: EditorStateSnapshot) -> types::EditorStateInfo {
     }
 }
 
-pub(crate) fn open_document_response(value: OpenDocumentSnapshot) -> types::OpenDocumentResponse {
+pub(crate) fn open_document_response(
+    value: OpenDocumentSnapshot,
+) -> Result<types::OpenDocumentResponse, AppError> {
+    bound_open_document_response(
+        project_open_document_response(value),
+        MAX_DOCUMENT_RESPONSE_BYTES,
+    )
+}
+
+fn project_open_document_response(value: OpenDocumentSnapshot) -> types::OpenDocumentResponse {
     types::OpenDocumentResponse {
         document: document_manifest(value.document),
         editor_session: editor_session(value.editor_session),
@@ -231,15 +240,44 @@ pub(crate) fn open_document_response(value: OpenDocumentSnapshot) -> types::Open
     }
 }
 
-pub(crate) fn saved_document_response(value: SavedDocumentOutcome) -> types::SavedDocumentResponse {
-    types::SavedDocumentResponse {
+fn bound_open_document_response(
+    mut response: types::OpenDocumentResponse,
+    maximum_bytes: usize,
+) -> Result<types::OpenDocumentResponse, AppError> {
+    if serialized_json_bytes(&response)? <= maximum_bytes {
+        return Ok(response);
+    }
+    response.initial_region = None;
+    ensure_document_response_is_bounded(&response, maximum_bytes)?;
+    Ok(response)
+}
+
+pub(crate) fn saved_document_response(
+    value: SavedDocumentOutcome,
+) -> Result<types::SavedDocumentResponse, AppError> {
+    let response = types::SavedDocumentResponse {
         document: value.document.map(document_manifest),
         identity: value.identity.map(|identity| types::SavedDocumentIdentity {
             path: identity.path,
             file_name: identity.file_name,
         }),
         editor_session: editor_session(value.editor_session),
+    };
+    ensure_document_response_is_bounded(&response, MAX_DOCUMENT_RESPONSE_BYTES)?;
+    Ok(response)
+}
+
+fn ensure_document_response_is_bounded(
+    response: &impl serde::Serialize,
+    maximum_bytes: usize,
+) -> Result<(), AppError> {
+    let bytes = serialized_json_bytes(response)?;
+    if bytes > maximum_bytes {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "document response is {bytes} bytes, maximum is {maximum_bytes} bytes"
+        )));
     }
+    Ok(())
 }
 
 pub(crate) fn sheet_region_response(
@@ -567,7 +605,10 @@ impl Write for CountingWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::document_projection;
+    use crate::document_data::{DocumentData, DocumentSheet};
     use crate::domain::SearchHit;
+    use crate::state::editor_state::EditorState;
 
     #[cfg(desktop)]
     #[test]
@@ -602,5 +643,34 @@ mod tests {
 
         assert!(response.truncated);
         assert!(serialized_json_bytes(&response).unwrap() <= MAX_SEARCH_RESPONSE_BYTES);
+    }
+
+    #[test]
+    fn open_response_drops_the_optional_region_before_exceeding_its_total_budget() {
+        let state = EditorState::new(DocumentData {
+            path: "/tmp/book.xlsx".to_string(),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![DocumentSheet {
+                rows: vec![vec![crate::domain::CellValue::String("value".to_string())]],
+                ..Default::default()
+            }],
+        });
+        let response =
+            project_open_document_response(document_projection::open_document_snapshot(&state));
+        assert!(response.initial_region.is_some());
+        let mut manifest_only = response.clone();
+        manifest_only.initial_region = None;
+        let manifest_bytes = serialized_json_bytes(&manifest_only).unwrap();
+        assert!(serialized_json_bytes(&response).unwrap() > manifest_bytes);
+
+        let bounded = bound_open_document_response(response, manifest_bytes)
+            .expect("manifest-only response fits");
+
+        assert!(bounded.initial_region.is_none());
+        assert!(serialized_json_bytes(&bounded).unwrap() <= manifest_bytes);
+        assert!(matches!(
+            bound_open_document_response(manifest_only, manifest_bytes - 1),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
     }
 }

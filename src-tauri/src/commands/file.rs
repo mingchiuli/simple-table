@@ -21,9 +21,11 @@ pub async fn pick_open_file_desktop(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || runtime.document_files().pick_open_file(&app))
+        .run_mapped(
+            move || runtime.document_files().pick_open_file(&app),
+            |selection| selection.map(protocol_projection::desktop_open_file_info),
+        )
         .await
-        .map(|selection| selection.map(protocol_projection::desktop_open_file_info))
 }
 
 /// Desktop: 释放已选择但没有被读取的文件路径授权。
@@ -44,9 +46,11 @@ pub async fn prepare_open_file_desktop(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || runtime.document_files().prepare_open_file(&path))
+        .run_mapped(
+            move || runtime.document_files().prepare_open_file(&path),
+            protocol_projection::prepared_open_document,
+        )
         .await
-        .map(protocol_projection::prepared_open_document)
 }
 
 /// Desktop: 通过最近文件 id 读取后端 recent store 中的路径。
@@ -61,9 +65,11 @@ pub async fn prepare_recent_file_desktop(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || runtime.document_files().prepare_recent_file(&app, &id))
+        .run_mapped(
+            move || runtime.document_files().prepare_recent_file(&app, &id),
+            protocol_projection::prepared_open_document,
+        )
         .await
-        .map(protocol_projection::prepared_open_document)
 }
 
 /// Desktop: 后端选择保存路径并授权随后保存。
@@ -106,13 +112,15 @@ pub async fn save_file_desktop(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || {
-            runtime
-                .document_files()
-                .save_file(&path, document_id.get(), base_revision.get())
-        })
+        .run_fallibly_mapped(
+            move || {
+                runtime
+                    .document_files()
+                    .save_file(&path, document_id.get(), base_revision.get())
+            },
+            protocol_projection::saved_document_response,
+        )
         .await
-        .map(protocol_projection::saved_document_response)
 }
 
 /// Desktop: 导出当前内容到指定路径，不改变当前编辑文档身份。
@@ -148,9 +156,11 @@ pub async fn prepare_new_file(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || document_open_service::prepare_new_file(runtime.document_opens()))
+        .run_mapped(
+            move || document_open_service::prepare_new_file(runtime.document_opens()),
+            protocol_projection::prepared_open_document,
+        )
         .await
-        .map(protocol_projection::prepared_open_document)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -164,16 +174,18 @@ pub async fn commit_prepared_document(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            document_service::commit_prepared_document(
-                runtime.document_lifecycle(),
-                &token,
-                expected_document_id.map(CommandU64::get),
-                expected_revision.map(CommandU64::get),
-            )
-        })
+        .run_fallibly_mapped(
+            move || {
+                document_service::commit_prepared_document(
+                    runtime.document_lifecycle(),
+                    &token,
+                    expected_document_id.map(CommandU64::get),
+                    expected_revision.map(CommandU64::get),
+                )
+            },
+            protocol_projection::open_document_response,
+        )
         .await
-        .map(protocol_projection::open_document_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]

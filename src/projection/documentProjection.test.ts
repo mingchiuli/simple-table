@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { applyProjectionPatches } from '@/projection/documentProjection';
+import {
+  applyProjectionPatches,
+  estimateDocumentManifestResidentBytes,
+} from '@/projection/documentProjection';
 import type { CellValue, DocumentProjection, EditorPatch, SheetRegionBlock } from '@/types';
 import { defaultRichProjection } from '@/types';
 import { blankCell } from '@/utils/cellValue';
@@ -84,6 +87,18 @@ describe('documentProjection patch reduction', () => {
     expect(result.data?.sheets[0].state).toBe('loaded');
     if (result.data?.sheets[0].state !== 'loaded') throw new Error('Expected loaded sheet');
     expect(result.data.sheets[0].blocks).toHaveLength(0);
+  });
+
+  it('accounts for stable layout index keys in manifest resident memory', () => {
+    const data = projection([]);
+    data.sheets[0]!.layout.columnWidths = { 1: 120, 100_000: 240 };
+
+    const bytes = estimateDocumentManifestResidentBytes(data);
+
+    expect(bytes).toBeGreaterThan(2 * 64);
+    expect(bytes).toBeGreaterThan(
+      estimateDocumentManifestResidentBytes({ ...data, sheets: [] }),
+    );
   });
 });
 

@@ -11,6 +11,7 @@ pub use crate::resource_limits::{
 
 pub const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 4;
 pub const MAX_MUTATION_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
+pub const MAX_DOCUMENT_RESPONSE_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_SHEET_REGION_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 4 * 1024;

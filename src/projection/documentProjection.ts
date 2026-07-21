@@ -44,6 +44,24 @@ export function createDocumentProjection(
   return { path: manifest.path, fileName: manifest.fileName, sheets };
 }
 
+export function estimateDocumentManifestResidentBytes(data: DocumentProjection): number {
+  return 256
+    + utf16Bytes(data.path)
+    + utf16Bytes(data.fileName)
+    + data.sheets.reduce((bytes, sheet) => bytes
+      + 192
+      + utf16Bytes(sheet.name)
+      + estimateLayoutIndexBytes(sheet.layout.columnWidths)
+      + estimateLayoutIndexBytes(sheet.layout.rowHeights), 0);
+}
+
+function estimateLayoutIndexBytes(values: Record<number, number>): number {
+  return Object.keys(values).reduce(
+    (bytes, key) => bytes + 64 + utf16Bytes(key),
+    0,
+  );
+}
+
 export function applyProjectionPatches(
   data: DocumentProjection | null,
   patches: EditorPatch[] | undefined,
@@ -401,10 +419,14 @@ function applyCellChanges(
       }
       if (!cells && !mergeAnchorCells) return block;
       sheetChanged = true;
-      return {
+      const projected = {
         ...block,
         cells: cells ?? block.cells,
         mergeAnchorCells: mergeAnchorCells ?? block.mergeAnchorCells,
+      };
+      return {
+        ...projected,
+        residentBytes: estimateRegionResidentBytes(projected),
       };
     });
     if (!sheetChanged) continue;

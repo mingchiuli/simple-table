@@ -10,17 +10,26 @@ use crate::types::{EditorMutationResponse, EditorSessionInfo};
 use tauri::State;
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_editor_state(
+pub async fn get_editor_state(
     runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
     document_id: Option<CommandU64>,
     base_revision: Option<CommandU64>,
 ) -> Result<Option<EditorSessionInfo>, AppError> {
-    editor_command_service::get_editor_state(
-        runtime.editor_commands(),
-        document_id.map(CommandU64::get),
-        base_revision.map(CommandU64::get),
-    )
-    .map(|snapshot| snapshot.map(protocol_projection::editor_session))
+    let runtime = runtime.inner().clone();
+    executions
+        .query()
+        .run_mapped(
+            move || {
+                editor_command_service::get_editor_state(
+                    runtime.editor_commands(),
+                    document_id.map(CommandU64::get),
+                    base_revision.map(CommandU64::get),
+                )
+            },
+            |snapshot| snapshot.map(protocol_projection::editor_session),
+        )
+        .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -34,16 +43,18 @@ pub async fn undo(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::undo(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::undo(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -57,16 +68,18 @@ pub async fn redo(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::redo(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::redo(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -85,20 +98,22 @@ pub async fn set_cell(
     let text = text.into_inner();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::set_cell(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                row,
-                col,
-                text,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::set_cell(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    row,
+                    col,
+                    text,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -123,17 +138,19 @@ pub async fn set_cells(
         .collect();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::set_cells(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                changes,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::set_cells(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    changes,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -149,18 +166,20 @@ pub async fn add_row(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::add_row(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                row_index,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::add_row(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    row_index,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -176,18 +195,20 @@ pub async fn delete_row(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::delete_row(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                row_index,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::delete_row(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    row_index,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -203,18 +224,20 @@ pub async fn add_column(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::add_column(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                col_index,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::add_column(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    col_index,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -230,18 +253,20 @@ pub async fn delete_column(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::delete_column(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                col_index,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::delete_column(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    col_index,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -258,19 +283,21 @@ pub async fn set_column_width(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::set_column_width(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                col_index,
-                width,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::set_column_width(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    col_index,
+                    width,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -287,19 +314,21 @@ pub async fn set_row_height(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::set_row_height(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-                row_index,
-                height,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::set_row_height(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                    row_index,
+                    height,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -313,16 +342,18 @@ pub async fn add_sheet(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::add_sheet(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::add_sheet(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -337,15 +368,17 @@ pub async fn delete_sheet(
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            editor_command_service::delete_sheet(
-                runtime.editor_commands(),
-                document_id.get(),
-                base_revision.get(),
-                &command_id,
-                sheet_index,
-            )
-        })
+        .run_mapped(
+            move || {
+                editor_command_service::delete_sheet(
+                    runtime.editor_commands(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &command_id,
+                    sheet_index,
+                )
+            },
+            protocol_projection::mutation_response,
+        )
         .await
-        .map(protocol_projection::mutation_response)
 }

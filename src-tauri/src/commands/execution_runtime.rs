@@ -12,6 +12,8 @@ const MAX_CONCURRENT_MUTATIONS: usize = 1;
 const MAX_ADMITTED_MUTATIONS: usize = 8;
 const MAX_CONCURRENT_PROJECTIONS: usize = 2;
 const MAX_ADMITTED_PROJECTIONS: usize = 8;
+const MAX_CONCURRENT_QUERIES: usize = 2;
+const MAX_ADMITTED_QUERIES: usize = 8;
 const MAX_CONCURRENT_SEARCHES: usize = 1;
 const MAX_ADMITTED_SEARCHES: usize = 2;
 const MAX_CONCURRENT_RECENT_COMMANDS: usize = 1;
@@ -83,6 +85,30 @@ impl BoundedBlockingExecutor {
         })?
     }
 
+    pub(crate) async fn run_mapped<T, U, F, M>(&self, task: F, project: M) -> Result<U, AppError>
+    where
+        T: Send + 'static,
+        U: Send + 'static,
+        F: FnOnce() -> Result<T, AppError> + Send + 'static,
+        M: FnOnce(T) -> U + Send + 'static,
+    {
+        self.run(move || task().map(project)).await
+    }
+
+    pub(crate) async fn run_fallibly_mapped<T, U, F, M>(
+        &self,
+        task: F,
+        project: M,
+    ) -> Result<U, AppError>
+    where
+        T: Send + 'static,
+        U: Send + 'static,
+        F: FnOnce() -> Result<T, AppError> + Send + 'static,
+        M: FnOnce(T) -> Result<U, AppError> + Send + 'static,
+    {
+        self.run(move || task().and_then(project)).await
+    }
+
     fn try_admit(&self) -> Result<CommandAdmission, AppError> {
         let category = Arc::clone(&self.admission)
             .try_acquire_owned()
@@ -115,6 +141,7 @@ pub struct CommandExecutionRuntime {
     file: Arc<BoundedBlockingExecutor>,
     mutation: Arc<BoundedBlockingExecutor>,
     projection: Arc<BoundedBlockingExecutor>,
+    query: Arc<BoundedBlockingExecutor>,
     search: Arc<BoundedBlockingExecutor>,
     recent: Arc<BoundedBlockingExecutor>,
 }
@@ -144,6 +171,12 @@ impl Default for CommandExecutionRuntime {
                 MAX_CONCURRENT_PROJECTIONS,
                 MAX_ADMITTED_PROJECTIONS,
             )),
+            query: Arc::new(BoundedBlockingExecutor::new(
+                Arc::clone(&shared),
+                "document query",
+                MAX_CONCURRENT_QUERIES,
+                MAX_ADMITTED_QUERIES,
+            )),
             search: Arc::new(BoundedBlockingExecutor::new(
                 Arc::clone(&shared),
                 "document search",
@@ -171,6 +204,10 @@ impl CommandExecutionRuntime {
 
     pub(crate) fn projection(&self) -> &BoundedBlockingExecutor {
         &self.projection
+    }
+
+    pub(crate) fn query(&self) -> &BoundedBlockingExecutor {
+        &self.query
     }
 
     pub(crate) fn search(&self) -> &BoundedBlockingExecutor {
@@ -243,10 +280,47 @@ mod tests {
     }
 
     #[test]
+    fn response_projection_remains_inside_the_execution_permit() {
+        tauri::async_runtime::block_on(async {
+            let shared = Arc::new(SharedCommandBudget::new(2, 4));
+            let executor = Arc::new(BoundedBlockingExecutor::new(shared, "mapped", 1, 2));
+            let active = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+
+            let tasks = (0..2)
+                .map(|_| {
+                    let executor = Arc::clone(&executor);
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&peak);
+                    tauri::async_runtime::spawn(async move {
+                        executor
+                            .run_mapped(
+                                || Ok(()),
+                                move |()| {
+                                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                                    peak.fetch_max(current, Ordering::SeqCst);
+                                    std::thread::sleep(Duration::from_millis(20));
+                                    active.fetch_sub(1, Ordering::SeqCst);
+                                },
+                            )
+                            .await
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            for task in tasks {
+                task.await.expect("join").expect("command");
+            }
+            assert_eq!(peak.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
     fn command_execution_runtimes_are_isolated() {
         let first = CommandExecutionRuntime::default();
         let second = CommandExecutionRuntime::default();
         assert!(!Arc::ptr_eq(&first.file, &second.file));
         assert!(!Arc::ptr_eq(&first.mutation, &second.mutation));
+        assert!(!Arc::ptr_eq(&first.query, &second.query));
     }
 }

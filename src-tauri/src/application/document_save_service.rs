@@ -8,6 +8,7 @@ use crate::application::{document_format_policy, document_projection};
 use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::error::AppError;
 use crate::projection_model::{SavedDocumentIdentity, SavedDocumentOutcome};
+use crate::resource_limits::validate_document_identity;
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
     state::{ActiveDocumentRepository, DocumentHandle},
@@ -187,6 +188,7 @@ where
     let extension = extension_of(&output_name)
         .or_else(|| extension_of(&path))
         .unwrap_or_else(default_extension_string);
+    validate_document_identity(&path, &output_name)?;
     if finish_without_reparse {
         return commit_current_file_save_without_reparse(
             search_indexes,

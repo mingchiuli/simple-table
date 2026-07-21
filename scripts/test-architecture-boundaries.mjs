@@ -383,6 +383,90 @@ rejectMatches(
   'the explicitly-owned command execution runtime boundary',
 );
 
+const commandExecutionRuntimeSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'commands', 'execution_runtime.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /query:\s*Arc<BoundedBlockingExecutor>/,
+  /pub\(crate\)\s+async\s+fn\s+run_mapped\b/,
+  /pub\(crate\)\s+async\s+fn\s+run_fallibly_mapped\b/,
+]) {
+  if (!requirement.test(commandExecutionRuntimeSource)) {
+    violations.push(
+      `src-tauri/src/commands/execution_runtime.rs violates the permit-scoped response projection boundary: ${requirement}`,
+    );
+  }
+}
+
+const lockingQueryCommandSources = [
+  join(projectRoot, 'src-tauri', 'src', 'commands', 'document.rs'),
+  join(projectRoot, 'src-tauri', 'src', 'commands', 'editor.rs'),
+];
+rejectRustProductionMatches(
+  lockingQueryCommandSources,
+  [/pub\s+fn\s+(?:get_editor_state|get_mutation_result|get_document_capabilities|get_native_save_plan)\s*\(/],
+  'the bounded asynchronous document query boundary',
+);
+const lockingQueryCommandSource = lockingQueryCommandSources
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n');
+for (const command of [
+  'get_editor_state',
+  'get_mutation_result',
+  'get_document_capabilities',
+  'get_native_save_plan',
+]) {
+  const requirement = new RegExp(
+    `pub\\s+async\\s+fn\\s+${command}\\b[\\s\\S]*?\\.query\\(\\)\\s*\\.(?:run|run_mapped)\\(`,
+  );
+  if (!requirement.test(lockingQueryCommandSource)) {
+    violations.push(
+      `Rust locking query command ${command} violates the bounded asynchronous document query boundary`,
+    );
+  }
+}
+
+rejectRustProductionMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs'),
+  [/\.await\s*(?:\?|;)?\s*\.map\s*\(\s*protocol_projection::/],
+  'the permit-scoped outward protocol projection boundary',
+);
+
+const protocolProjectionSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'protocol_projection.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /open_document_response[\s\S]*MAX_DOCUMENT_RESPONSE_BYTES/,
+  /saved_document_response[\s\S]*MAX_DOCUMENT_RESPONSE_BYTES/,
+  /response\.initial_region\s*=\s*None/,
+  /serialized_json_bytes\s*\(\s*&?response\s*\)/,
+]) {
+  if (!requirement.test(protocolProjectionSource)) {
+    violations.push(
+      `src-tauri/src/protocol_projection.rs violates the bounded whole-document response boundary: ${requirement}`,
+    );
+  }
+}
+
+const boundedDocumentSessionSource = readFileSync(
+  join(projectRoot, 'src', 'stores', 'documentSession.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\bmanifestResidentBytes\b/,
+  /\bestimateDocumentManifestResidentBytes\b/,
+  /\bMAX_DOCUMENT_MANIFEST_RESIDENT_BYTES\b/,
+  /manifestResidentBytes\s*\+\s*totalBytes\(\)\s*>\s*MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES/,
+]) {
+  if (!requirement.test(boundedDocumentSessionSource)) {
+    violations.push(
+      `src/stores/documentSession.ts violates the bounded frontend document projection boundary: ${requirement}`,
+    );
+  }
+}
+
 if (sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs')
   .some((file) => relative(projectRoot, file) === 'src-tauri/src/commands/common.rs')) {
   violations.push(
@@ -739,12 +823,16 @@ for (const requirement of [
   /\bPROTOCOL_MAX_CELL_TEXT_BYTES\b/,
   /\bPROTOCOL_MAX_MUTATION_TEXT_BYTES\b/,
   /\bPROTOCOL_MAX_SEARCH_QUERY_BYTES\b/,
+  /\bMAX_DOCUMENT_RESPONSE_BYTES\b/,
+  /\bMAX_DOCUMENT_MANIFEST_RESIDENT_BYTES\b/,
+  /\bMAX_DOCUMENT_PROJECTION_RESIDENT_BYTES\b/,
+  /\bMAX_DOCUMENT_WIRE_BYTES\b/,
   /\bPROTOCOL_SHEET_REGION_TILE_ROWS\b/,
   /\bPROTOCOL_SHEET_REGION_TILE_COLUMNS\b/,
 ]) {
   if (!requirement.test(editorResourcePolicySource)) {
     violations.push(
-      `src/protocol/editorResourcePolicy.ts violates the generated frontend cell mutation resource policy boundary: ${requirement}`,
+      `src/protocol/editorResourcePolicy.ts violates the generated frontend editor resource policy boundary: ${requirement}`,
     );
   }
 }

@@ -11,9 +11,14 @@ import type {
   SheetRegionBlock,
   U64String,
 } from '@/types/documentRuntime';
-import { MAX_RESIDENT_REGION_BYTES } from '@/protocol/editorResourcePolicy';
+import {
+  MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES,
+  MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES,
+  MAX_RESIDENT_REGION_BYTES,
+} from '@/protocol/editorResourcePolicy';
 import {
   createLoadedSheetSlot,
+  estimateDocumentManifestResidentBytes,
   isRegionLoaded,
   regionCoveringBlockKeys,
   regionKey,
@@ -47,6 +52,7 @@ export type DocumentSessionSnapshot = {
   lifecycle: DocumentSessionLifecycle;
   editorCommandDepth: number;
   projectionStale: boolean;
+  manifestResidentBytes: number;
   residentSheetOrder: number[];
   regionLru: string[];
   pinnedRegionBlocks: string[];
@@ -65,6 +71,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     lifecycle: 'idle' as DocumentSessionLifecycle,
     editorCommandDepth: 0,
     projectionStale: false,
+    manifestResidentBytes: 0,
     residentSheetOrder: [] as number[],
     regionLru: [] as string[],
     pinnedRegionBlocks: [] as string[],
@@ -115,7 +122,9 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     },
     replaceProjection(data: DocumentProjection, protectedSheetIndex = 0) {
       resetRegionState(this);
+      const manifestResidentBytes = admittedManifestResidentBytes(data);
       this.data = markProjectionCellIndexesRaw(data);
+      this.manifestResidentBytes = manifestResidentBytes;
       this.residentSheetOrder = this.loadedSheetIndexes;
       this.projectionStale = false;
       reconcileRegionBlocks(this, currentRegionBlockKeys(this.data));
@@ -144,9 +153,12 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     },
     updateIdentity(path: string | null, fileName: string) {
       if (this.data) {
-        this.data = { ...this.data, path: path ?? this.data.path, fileName };
+        const data = { ...this.data, path: path ?? this.data.path, fileName };
+        this.manifestResidentBytes = admittedManifestResidentBytes(data);
+        this.data = data;
       }
       this.currentFilePath = path;
+      this.enforceRegionBlockBudget(0);
     },
     clearDocument() {
       resetRegionState(this);
@@ -156,6 +168,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.revision = ZERO_U64;
       this.editorCommandDepth = 0;
       this.projectionStale = false;
+      this.manifestResidentBytes = 0;
       this.residentSheetOrder = [];
       this.lifecycle = 'idle';
     },
@@ -163,13 +176,17 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       state: DocumentMutationStateInput,
       protectedSheetIndex = 0
     ): MutationApplyResult {
+      const data = markProjectionCellIndexesRaw(state.data);
+      const manifestResidentBytes = data ? admittedManifestResidentBytes(data) : 0;
       this.documentId = state.documentId;
       this.revision = state.revision;
-      this.data = markProjectionCellIndexesRaw(state.data);
+      this.data = data;
+      this.manifestResidentBytes = manifestResidentBytes;
       reconcileRegionBlocks(this, this.data?.sheets.flatMap((sheet) =>
         sheet.state === 'loaded' ? sheet.blocks.map((block) => block.key) : []
       ) ?? []);
       this.reconcileResidentSheets(protectedSheetIndex);
+      this.enforceRegionBlockBudget(protectedSheetIndex);
       if (state.resyncRequired) this.projectionStale = true;
       return { data: this.data, resyncRequired: state.resyncRequired, applied: true };
     },
@@ -267,13 +284,23 @@ export const useDocumentSessionStore = defineStore('documentSession', {
           : 0),
         0
       );
-      while (totalBlocks() > MAX_RESIDENT_BLOCKS || totalBytes() > MAX_RESIDENT_BLOCK_BYTES) {
+      while (
+        totalBlocks() > MAX_RESIDENT_BLOCKS
+        || totalBytes() > MAX_RESIDENT_BLOCK_BYTES
+        || this.manifestResidentBytes + totalBytes() > MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES
+      ) {
         const blockOwners = new Map<string, number>();
         for (const [sheetIndex, slot] of sheets.entries()) {
           if (slot.state !== 'loaded') continue;
           for (const block of slot.blocks) blockOwners.set(block.key, sheetIndex);
         }
-        const candidateKey = oldestEvictableRegionBlock(this, new Set(blockOwners.keys()));
+        const candidateKeys = new Set(blockOwners.keys());
+        const exceedsHardByteBudget = totalBytes() > MAX_RESIDENT_BLOCK_BYTES
+          || this.manifestResidentBytes + totalBytes() > MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES;
+        const candidateKey = oldestEvictableRegionBlock(this, candidateKeys)
+          ?? (exceedsHardByteBudget
+            ? this.regionLru.find((key) => candidateKeys.has(key))
+            : undefined);
         const candidateSheet = candidateKey === undefined ? undefined : blockOwners.get(candidateKey);
         if (candidateKey === undefined || candidateSheet === undefined) break;
         const slot = sheets[candidateSheet];
@@ -343,6 +370,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
         lifecycle: this.lifecycle,
         editorCommandDepth: this.editorCommandDepth,
         projectionStale: this.projectionStale,
+        manifestResidentBytes: this.manifestResidentBytes,
         residentSheetOrder: [...this.residentSheetOrder],
         regionLru: [...this.regionLru],
         pinnedRegionBlocks: [...this.pinnedRegionBlocks],
@@ -356,12 +384,23 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.lifecycle = snapshot.lifecycle;
       this.editorCommandDepth = snapshot.editorCommandDepth;
       this.projectionStale = snapshot.projectionStale;
+      this.manifestResidentBytes = snapshot.manifestResidentBytes;
       this.residentSheetOrder = [...snapshot.residentSheetOrder];
       this.regionLru = [...snapshot.regionLru];
       this.pinnedRegionBlocks = [...snapshot.pinnedRegionBlocks];
     },
   },
 });
+
+function admittedManifestResidentBytes(data: DocumentProjection): number {
+  const bytes = estimateDocumentManifestResidentBytes(data);
+  if (bytes > MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES) {
+    throw new Error(
+      `Document manifest requires ${bytes} resident bytes; maximum is ${MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES}`,
+    );
+  }
+  return bytes;
+}
 
 function currentRegionBlockKeys(data: DocumentProjection | null): string[] {
   return data?.sheets.flatMap((slot) => slot.state === 'loaded'

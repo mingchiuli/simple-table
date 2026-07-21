@@ -22,9 +22,11 @@ pub async fn pick_open_file_android(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || runtime.document_files().pick_open_file_android(&app))
+        .run_mapped(
+            move || runtime.document_files().pick_open_file_android(&app),
+            |selection| selection.map(protocol_projection::picked_file_info),
+        )
         .await
-        .map(|selection| selection.map(protocol_projection::picked_file_info))
 }
 
 /// Android: remove a picked file that was imported but never opened as the active document.
@@ -79,13 +81,15 @@ pub async fn prepare_open_file_android(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || {
-            runtime
-                .document_files()
-                .prepare_open_file_mobile(&app, &path)
-        })
+        .run_mapped(
+            move || {
+                runtime
+                    .document_files()
+                    .prepare_open_file_mobile(&app, &path)
+            },
+            protocol_projection::prepared_open_document,
+        )
         .await
-        .map(protocol_projection::prepared_open_document)
 }
 
 /// Android: generate file bytes and write them to the sandbox path.
@@ -102,16 +106,18 @@ pub async fn save_file_android(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || {
-            runtime.document_files().save_file_mobile(
-                &app,
-                &path,
-                document_id.get(),
-                base_revision.get(),
-            )
-        })
+        .run_fallibly_mapped(
+            move || {
+                runtime.document_files().save_file_mobile(
+                    &app,
+                    &path,
+                    document_id.get(),
+                    base_revision.get(),
+                )
+            },
+            protocol_projection::saved_document_response,
+        )
         .await
-        .map(protocol_projection::saved_document_response)
 }
 
 /// Android: export a sandboxed file to a user-selected destination.
