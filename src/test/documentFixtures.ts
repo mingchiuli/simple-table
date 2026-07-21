@@ -1,12 +1,14 @@
 import type {
   CellValue,
-  EditorSessionInfo,
   MergeRange,
-  OpenDocumentResponse,
   ReadOnlyRichProjection,
+} from '@/types';
+import type {
+  EditorSessionInfo,
+  OpenDocumentResponse,
   SavedDocumentResponse,
   SheetRegionProjectionResponse,
-} from '@/types';
+} from '@/types/protocol';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
 
 export type SheetData = {

@@ -8,7 +8,7 @@ import type {
   EditorMutationResponse,
   MutationResultLookup,
   OpenDocumentResponse,
-} from '@/types';
+} from '@/types/protocol';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
 
 describe('document mutation protocol', () => {

@@ -3,7 +3,7 @@ import {
   openSessionState,
   type DocumentProtocolState,
 } from '@/application/documentSessionProtocol';
-import type { EditorMutationResponse, OpenDocumentResponse } from '@/types/generated';
+import type { EditorMutationResponse, OpenDocumentResponse } from '@/types/protocol';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 
 type DocumentSessionStore = ReturnType<typeof useDocumentSessionStore>;

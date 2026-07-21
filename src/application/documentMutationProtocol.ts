@@ -1,11 +1,13 @@
 import type {
   EditorCommandContext,
-  EditorMutationResponse,
   MutationCommandContext,
+  U64String,
+} from '@/types/documentRuntime';
+import type {
+  EditorMutationResponse,
   MutationResultLookup,
   OpenDocumentResponse,
-  U64String,
-} from '@/types';
+} from '@/types/protocol';
 import { compareU64 } from '@/utils/u64';
 
 type MutationAction = (

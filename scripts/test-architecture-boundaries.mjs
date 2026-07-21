@@ -45,6 +45,8 @@ rejectMatches(
     /['"]@\/composables(?:\/|['"])/,
     /['"]@\/application(?:\/|['"])/,
     /['"]@tauri-apps\//,
+    /['"]@\/types['"]/,
+    /['"]@\/types\/(?:generated|protocol)['"]/,
     /\basync\b/,
     /new\s+Promise\b/,
     /new\s+WeakMap\b/,
@@ -52,6 +54,71 @@ rejectMatches(
   ],
   'the synchronous side-effect-free Store boundary',
 );
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src', 'application'), '.ts'),
+  [/['"]@\/types['"]/],
+  'the explicit frontend application type boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'types', 'index.ts')],
+  [/generated/, /['"]\.\/protocol['"]/],
+  'the runtime-only frontend type barrel boundary',
+);
+
+rejectMatches(
+  sourceFiles(join(projectRoot, 'src'), '.ts').filter(
+    (file) => relative(projectRoot, file) !== 'src/types/protocol.ts',
+  ),
+  [/['"]@\/types\/generated['"]/, /['"]\.\/generated['"]/],
+  'the single-entry frontend generated protocol boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'types', 'documentRuntime.ts'),
+    join(projectRoot, 'src', 'types', 'pendingCellSave.ts'),
+    join(projectRoot, 'src', 'types', 'recentFileRuntime.ts'),
+    join(projectRoot, 'src', 'types', 'fileRuntime.ts'),
+    join(projectRoot, 'src', 'projection', 'documentProjection.ts'),
+  ],
+  [
+    /['"]@\/types\/(?:generated|protocol)['"]/,
+    /['"]\.\/generated['"]/,
+    /\b(?:OpenDocumentResponse|SheetRegionProjectionResponse|EditorMutationResponse)\b/,
+  ],
+  'the generated-protocol-independent frontend runtime model boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'useRecentFileUpdates.ts')],
+  [
+    /new\s+WeakMap\b/,
+    /\bRecentFileUpdateScheduler\b/,
+    /\bstartRecentFileUpdateWorker\b/,
+    /\brunRecentFileUpdateWorker\b/,
+    /\bactive\s*:\s*Promise/,
+    /\bpending\s*:/,
+  ],
+  'the application-owned recent-file scheduling boundary',
+);
+
+const recentFilesServiceSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'recentFilesService.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\bactiveTracking\b/,
+  /\bpendingTracking\b/,
+  /\bqueueRecentFileEntryUpdate\b/,
+]) {
+  if (!requirement.test(recentFilesServiceSource)) {
+    violations.push(
+      `src/application/recentFilesService.ts violates the application-owned recent-file scheduling boundary: ${requirement}`,
+    );
+  }
+}
 
 rejectMatches(
   [

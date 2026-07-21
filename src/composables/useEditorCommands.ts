@@ -9,13 +9,13 @@ import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
 import type {
-    DocumentProjection,
-    EditorMutationResponse,
-    MutationCommandContext,
+  DocumentProjection,
+  MutationCommandContext,
   SearchResult,
   SearchScope,
   LoadedSheetSlot,
 } from "@/types";
+import type { EditorMutationResponse } from '@/types/protocol';
 import { searchOutcomeState } from '@/application/editorRuntimeProtocol';
 import { workbookSheetCapabilities } from "@/types";
 import { appErrorMessage } from "@/utils/appError";

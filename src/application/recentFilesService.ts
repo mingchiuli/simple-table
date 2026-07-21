@@ -1,20 +1,18 @@
-import type { EditorCommandContext, RecentFile } from '@/types';
+import type { EditorCommandContext } from '@/types/documentRuntime';
+import type { RecentFile } from '@/types/recentFileRuntime';
 
 export type RecentFilesPort = {
   getRecentFiles(): Promise<RecentFile[]>;
   removeRecentFile(id: string): Promise<void>;
+  addRecentFileWithThumbnail(
+    context: EditorCommandContext,
+    originalPath?: string,
+  ): Promise<void>;
 };
 
 export type RecentFilesState = {
   replaceFiles(files: RecentFile[]): void;
   setLoading(loading: boolean): void;
-};
-
-export type RecentFileTrackingPort = {
-  addRecentFileWithThumbnail(
-    context: EditorCommandContext,
-    originalPath?: string,
-  ): Promise<RecentFile>;
 };
 
 export type RecentFileTrackingRequest = {
@@ -25,18 +23,22 @@ export type RecentFileTrackingRequest = {
 type RecentFilesRuntime = {
   loadRequestId: number;
   activeLoadCount: number;
+  activeTracking: Promise<void> | null;
+  pendingTracking: RecentFileTrackingRequest | null;
 };
 
 export type RecentFilesService = ReturnType<typeof createRecentFilesService>;
-export type RecentFileTrackingService = ReturnType<typeof createRecentFileTrackingService>;
 
 export function createRecentFilesService(
   store: RecentFilesState,
   port: RecentFilesPort,
+  reportFailure: (error: unknown) => void = () => undefined,
 ) {
   const runtime: RecentFilesRuntime = {
     loadRequestId: 0,
     activeLoadCount: 0,
+    activeTracking: null,
+    pendingTracking: null,
   };
 
   async function load() {
@@ -55,40 +57,59 @@ export function createRecentFilesService(
     }
   }
 
+  async function refresh(): Promise<boolean> {
+    try {
+      await load();
+      return true;
+    } catch (error) {
+      safeReportFailure(error);
+      return false;
+    }
+  }
+
   async function remove(id: string) {
     await port.removeRecentFile(id);
     await load();
   }
 
-  return { load, remove };
-}
-
-export function createRecentFileTrackingService(
-  port: RecentFileTrackingPort,
-  reportFailure: (error: unknown) => void,
-) {
-  async function tryAddRecentFileWithThumbnail({
-    originalPath,
-    context,
-  }: RecentFileTrackingRequest): Promise<boolean> {
-    try {
-      await port.addRecentFileWithThumbnail(context, originalPath);
-      return true;
-    } catch (error) {
-      reportFailure(error);
-      return false;
-    }
+  function queueRecentFileEntryUpdate(request: RecentFileTrackingRequest) {
+    runtime.pendingTracking = request;
+    startTrackingWorker();
   }
 
-  async function tryRefreshRecentFiles(refresh: () => Promise<void>): Promise<boolean> {
-    try {
+  function startTrackingWorker() {
+    if (runtime.activeTracking) return;
+    const worker = runTrackingWorker().catch(safeReportFailure);
+    runtime.activeTracking = worker;
+    void worker.finally(() => {
+      if (runtime.activeTracking === worker) runtime.activeTracking = null;
+      if (runtime.pendingTracking) startTrackingWorker();
+    });
+  }
+
+  async function runTrackingWorker() {
+    while (true) {
+      while (runtime.pendingTracking) {
+        const request = runtime.pendingTracking;
+        runtime.pendingTracking = null;
+        try {
+          await port.addRecentFileWithThumbnail(request.context, request.originalPath);
+        } catch (error) {
+          safeReportFailure(error);
+        }
+      }
       await refresh();
-      return true;
-    } catch (error) {
-      reportFailure(error);
-      return false;
+      if (!runtime.pendingTracking) return;
     }
   }
 
-  return { tryAddRecentFileWithThumbnail, tryRefreshRecentFiles };
+  function safeReportFailure(error: unknown) {
+    try {
+      reportFailure(error);
+    } catch {
+      // Failure reporting must not reject a background metadata worker.
+    }
+  }
+
+  return { load, refresh, remove, queueRecentFileEntryUpdate };
 }

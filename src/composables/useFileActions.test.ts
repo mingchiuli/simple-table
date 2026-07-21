@@ -14,10 +14,9 @@ import {
   type CellValue,
   type DocumentCapabilities,
   type NativeSavePlan,
-  type OpenDocumentResponse,
   type PreparedOpenDocument,
-  type SavedDocumentResponse,
 } from "@/types";
+import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
 import {
   openResponseFromFileData,
   savedResponseFromFileData,
@@ -57,6 +56,7 @@ vi.mock("@/api", () => ({
   }),
   getDocumentCapabilities: vi.fn(),
   getRecentFiles: vi.fn().mockResolvedValue([]),
+  removeRecentFile: vi.fn().mockResolvedValue(undefined),
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
     id: "recent",
     path: "/tmp/next.xlsx",

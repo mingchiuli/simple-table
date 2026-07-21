@@ -41,6 +41,7 @@ describe("recentFiles store", () => {
     const service = createRecentFilesService(store, {
       getRecentFiles,
       removeRecentFile: vi.fn(),
+      addRecentFileWithThumbnail: vi.fn(),
     });
 
     const first = service.load();
@@ -71,6 +72,7 @@ describe("recentFiles store", () => {
     const service = createRecentFilesService(store, {
       getRecentFiles,
       removeRecentFile: vi.fn(),
+      addRecentFileWithThumbnail: vi.fn(),
     });
 
     const first = service.load();
@@ -96,6 +98,7 @@ describe("recentFiles store", () => {
     const service = createRecentFilesService(store, {
       getRecentFiles,
       removeRecentFile,
+      addRecentFileWithThumbnail: vi.fn(),
     });
 
     await service.remove("deleted");

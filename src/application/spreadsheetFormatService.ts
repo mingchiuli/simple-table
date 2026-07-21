@@ -1,4 +1,4 @@
-import type { SpreadsheetFormatOptions } from "@/types";
+import type { SpreadsheetFormatOptions } from '@/types/fileRuntime';
 import { createAsyncCache } from "@/utils/asyncCache";
 
 export type SpreadsheetFormatPort = {

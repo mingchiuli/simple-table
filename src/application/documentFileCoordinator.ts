@@ -1,12 +1,14 @@
 import type {
-  DocumentCapabilities,
   DocumentProjection,
   EditorCommandContext,
+  U64String,
+} from '@/types/documentRuntime';
+import type {
+  DocumentCapabilities,
   NativeSavePlan,
   PreparedOpenDocument,
-  RecentFile,
-  U64String,
-} from '@/types';
+} from '@/types/fileRuntime';
+import type { RecentFile } from '@/types/recentFileRuntime';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 
 type DocumentLifecycle = 'loading' | 'saving' | 'closing';

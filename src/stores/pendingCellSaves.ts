@@ -1,10 +1,10 @@
 import type {
   CellSaveRequest,
   CellSaveState,
-  CellValue,
   PendingCellSavePhase,
   QueueDraftResult,
-} from "@/types";
+} from '@/types/pendingCellSave';
+import type { CellValue } from '@/types/documentRuntime';
 import { cellToEditorString } from "@/utils/cellValue";
 import { utf8ByteLength } from "@/utils/utf8";
 import { markRaw } from "vue";
@@ -15,7 +15,7 @@ export type {
   PendingCellSaveCallbacks,
   PendingCellSavePhase,
   QueueDraftResult,
-} from '@/types';
+} from '@/types/pendingCellSave';
 export const MAX_CELL_CHANGES_PER_BATCH = 4_096;
 export const MAX_CELL_TEXT_BYTES = 4 * 1024 * 1024;
 export const MAX_BATCH_TEXT_BYTES = 8 * 1024 * 1024;

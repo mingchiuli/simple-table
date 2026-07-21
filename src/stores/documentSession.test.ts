@@ -7,7 +7,7 @@ import type {
   EditorMutationResponse,
   OpenDocumentResponse,
   SheetRegionProjectionResponse,
-} from '@/types';
+} from '@/types/protocol';
 import { isCellLoaded, loadedSheetMetadata, sheetCell } from '@/projection/documentProjection';
 import { blankCell } from '@/utils/cellValue';
 import { isReactive } from 'vue';

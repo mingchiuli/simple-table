@@ -11,7 +11,7 @@ import type {
   SheetRegion,
   SheetRegionBlock,
   SheetRegionMetadata,
-  SheetRegionProjectionResponse,
+  SheetRegionProjection,
   SheetSlot,
 } from '@/types';
 import { defaultRichProjection } from '@/types';
@@ -23,7 +23,7 @@ export type ProjectionPatchResult = {
 
 export function createDocumentProjection(
   manifest: DocumentManifest,
-  initialRegion?: SheetRegionProjectionResponse
+  initialRegion?: SheetRegionProjection
 ): DocumentProjection {
   const sheets: SheetSlot[] = manifest.sheets.map((sheet, index) => {
     if (initialRegion?.region.sheetIndex === index) {
@@ -162,7 +162,7 @@ export function applyProjectionPatches(
   };
 }
 
-export function regionBlock(response: SheetRegionProjectionResponse): SheetRegionBlock {
+export function regionBlock(response: SheetRegionProjection): SheetRegionBlock {
   return {
     key: regionKey(response.region),
     region: response.region,
@@ -177,7 +177,7 @@ export function regionBlock(response: SheetRegionProjectionResponse): SheetRegio
   };
 }
 
-function estimateRegionBytes(response: SheetRegionProjectionResponse): number {
+function estimateRegionBytes(response: SheetRegionProjection): number {
   const metadata = response.metadata;
   return 512
     + response.cells.length * 256

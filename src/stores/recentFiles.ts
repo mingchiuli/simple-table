@@ -1,4 +1,4 @@
-import type { RecentFile } from "@/types";
+import type { RecentFile } from '@/types/recentFileRuntime';
 
 export const useRecentFilesStore = defineStore("recentFiles", {
   state: () => ({

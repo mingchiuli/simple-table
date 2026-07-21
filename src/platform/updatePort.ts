@@ -8,7 +8,7 @@ import type {
   UpdatePort,
 } from '@/application/updateCoordinator';
 import { invokeCommand } from '@/tauriInvoke';
-import type { UpdateInfo } from '@/types/generated';
+import type { UpdateInfo } from '@/types/protocol';
 import type { MobileUpdateState } from '@/types/updateRuntime';
 
 export const tauriUpdatePort: UpdatePort = {

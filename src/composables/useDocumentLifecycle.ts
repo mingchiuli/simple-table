@@ -1,5 +1,5 @@
 import { ElMessage } from "element-plus";
-import type { DocumentSessionLifecycle } from '@/types';
+import type { DocumentSessionLifecycle } from '@/types/documentRuntime';
 import { appErrorMessage } from "@/utils/appError";
 import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 

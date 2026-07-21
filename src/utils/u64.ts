@@ -1,4 +1,4 @@
-import type { U64String } from '@/types';
+import type { U64String } from '@/types/documentRuntime';
 
 export const ZERO_U64: U64String = '0';
 const U64_MAX = 18_446_744_073_709_551_615n;

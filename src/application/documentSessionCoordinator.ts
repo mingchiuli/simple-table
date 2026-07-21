@@ -2,12 +2,14 @@ import type {
   DocumentProjection,
   DocumentSessionLifecycle,
   EditorCommandContext,
+  U64String,
+} from '@/types/documentRuntime';
+import type {
   EditorMutationResponse,
   EditorSessionInfo,
   OpenDocumentResponse,
   SavedDocumentResponse,
-  U64String,
-} from '@/types';
+} from '@/types/protocol';
 import { isNextU64 } from '@/utils/u64';
 import {
   createDocumentSessionRuntime,

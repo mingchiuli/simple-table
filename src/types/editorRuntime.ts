@@ -89,6 +89,11 @@ export type RuntimeSearchResult = {
   cellPosition: string;
 };
 
+export type SearchResult = RuntimeSearchResult;
+export type SearchScope = 'currentSheet' | 'allSheets';
+export type FormulaStatus = RuntimeFormulaStatus;
+export type HistoryStatus = RuntimeHistoryStatus;
+
 export type SearchOutcomeStateInput = {
   results: RuntimeSearchResult[];
   truncated: boolean;

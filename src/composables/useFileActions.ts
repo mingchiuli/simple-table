@@ -2,7 +2,7 @@ import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 
 import { useDocumentFileCoordinator } from '@/composables/useDocumentFileCoordinator';
-import type { DocumentProjection } from '@/types';
+import type { DocumentProjection } from '@/types/documentRuntime';
 import { appErrorMessage } from '@/utils/appError';
 
 type UseFileActionsOptions = {

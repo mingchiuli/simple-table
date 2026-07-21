@@ -11,7 +11,7 @@ import type {
   SheetRegionBlock,
   U64String,
 } from '@/types/documentRuntime';
-import { MAX_RESIDENT_REGION_BYTES } from '@/types/documentRuntime';
+import { MAX_RESIDENT_REGION_BYTES } from '@/protocol/editorResourcePolicy';
 import {
   createLoadedSheetSlot,
   isRegionLoaded,

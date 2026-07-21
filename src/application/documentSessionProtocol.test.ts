@@ -12,9 +12,8 @@ import {
   defaultRichProjection,
   defaultWorkbookCapabilities,
   readyFormulaStatus,
-  type EditorMutationResponse,
-  type EditorSessionInfo,
 } from '@/types';
+import type { EditorMutationResponse, EditorSessionInfo } from '@/types/protocol';
 import { openResponseFromFileData } from '@/test/documentFixtures';
 
 describe('documentSessionProtocol', () => {

@@ -6,11 +6,11 @@ import { createDocumentMutationProtocol } from '@/application/documentMutationPr
 import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import type {
   EditorCommandContext,
-  EditorMutationResponse,
   MutationCommandContext,
   SheetRegion,
   U64String,
-} from '@/types';
+} from '@/types/documentRuntime';
+import type { EditorMutationResponse } from '@/types/protocol';
 import { appErrorMessage } from '@/utils/appError';
 import type { RegionLoadPriority } from '@/application/documentRegionLoadScheduler';
 

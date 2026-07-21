@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import * as api from "@/api";
 import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
 import { useDocumentSessionStore } from "@/stores/documentSession";
-import type { OpenDocumentResponse } from "@/types";
+import type { OpenDocumentResponse } from '@/types/protocol';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';

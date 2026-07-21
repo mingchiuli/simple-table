@@ -10,7 +10,7 @@ import {
 } from '@/stores/pendingCellSaves';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
 import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
-import type { CellValue, DocumentProjection } from '@/types';
+import type { CellValue, DocumentProjection } from '@/types/documentRuntime';
 import { blankCell, cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
 import { sheetCell } from '@/projection/documentProjection';

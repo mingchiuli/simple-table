@@ -7,8 +7,8 @@ import type {
   LoadedSheetSlot,
   SheetRegion,
   SheetRegionBlock,
-  SheetRegionProjectionResponse,
 } from '@/types';
+import type { SheetRegionProjectionResponse } from '@/types/protocol';
 
 const context: EditorCommandContext = { documentId: '1', baseRevision: '0' };
 

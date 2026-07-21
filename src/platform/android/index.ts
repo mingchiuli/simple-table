@@ -1,6 +1,7 @@
 import { invokeCommand } from '@/tauriInvoke';
 import type { OpenFileSelection, PlatformAPI } from '../types';
-import type { EditorCommandContext, PreparedOpenDocument } from "@/types";
+import type { EditorCommandContext } from '@/types/documentRuntime';
+import type { PreparedOpenDocument } from '@/types/fileRuntime';
 
 export const androidFileOps = {
   /** Android: 后端用官方 dialog/fs 导入到 App 沙盒，不解析、不替换后端活动文档 */

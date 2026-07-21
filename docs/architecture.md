@@ -193,6 +193,15 @@ runtime model. Tauri update transport and application-exit coordination are
 separate ports assembled by the composable composition layer; the update
 platform adapter cannot import or select application exit policy.
 
+Frontend generated declarations are reachable only through the explicit
+`types/protocol` entry. The general `types` barrel exports runtime models only,
+so importing `@/types` cannot silently introduce an RPC DTO into an application
+service or Store. Document manifests, cell values, region metadata, mutation
+patches, file capabilities, and recent-file records cross explicit protocol
+mappers before entering runtime state. Projection reducers and pending-edit
+state depend only on those frontend-owned models and never retain response
+objects received from Tauri.
+
 ## State Ownership
 
 - `EditorState` is authoritative for content, revision, history, dirty state,
@@ -244,6 +253,11 @@ platform adapter cannot import or select application exit policy.
   composables. Request concurrency and side effects belong to application
   services such as `recentFilesService` and `updateCoordinator`; both expose
   injectable ports for deterministic tests.
+- `recentFilesService` owns load ordering, active-load accounting, latest-only
+  metadata tracking, and post-tracking refresh. Its composable captures the
+  active document context and binds transport/Store ports, but owns no worker or
+  request queue. Generated recent-file records are mapped before the service or
+  Store sees them.
 - Search request tokens and pending-cell debounce/save state are likewise owned
   by application coordinators. Composables cache one coordinator per Pinia
   instance and adapt its synchronous Store port.
@@ -395,6 +409,11 @@ constants instead of repeating numeric literals.
 Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary
 rejects JSON numbers. Revisions use checked increments and can never wrap.
+
+Frontend transport and protocol-mapping modules import those declarations from
+`src/types/protocol.ts`. Runtime models cannot re-export or alias generated DTOs;
+wire-to-runtime conversion copies nested cells, metadata, layouts, and patch
+payloads so protocol object ownership ends at the mapper.
 
 Creating a blank document is a zero-argument backend command. Rust owns the
 default file format, Sheet name, dimensions, and initial cells; the frontend

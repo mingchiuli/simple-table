@@ -3,7 +3,9 @@
  */
 import { getPlatform } from '@/platform/runtime';
 import type { PlatformAPI, OpenFileSelection } from './types';
-import type { EditorCommandContext, PreparedOpenDocument, RecentFile } from '@/types';
+import type { EditorCommandContext } from '@/types/documentRuntime';
+import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import type { RecentFile } from '@/types/recentFileRuntime';
 import { createAsyncCache } from '@/utils/asyncCache';
 
 async function loadPlatformAPI(): Promise<PlatformAPI> {

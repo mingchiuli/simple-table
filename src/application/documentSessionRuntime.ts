@@ -1,4 +1,4 @@
-import type { DocumentSessionLifecycle } from '@/types';
+import type { DocumentSessionLifecycle } from '@/types/documentRuntime';
 
 export type DocumentSessionRuntimeState = {
   readonly lifecycle: DocumentSessionLifecycle;

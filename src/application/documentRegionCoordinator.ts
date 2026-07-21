@@ -13,8 +13,8 @@ import type {
   LoadedSheetSlot,
   SheetRegion,
   SheetRegionBlock,
-  SheetRegionProjectionResponse,
-} from '@/types';
+} from '@/types/documentRuntime';
+import type { SheetRegionProjectionResponse } from '@/types/protocol';
 
 export type FetchRegionProjection = (
   context: EditorCommandContext,

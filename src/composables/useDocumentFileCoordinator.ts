@@ -3,6 +3,11 @@ import type { ComputedRef } from 'vue';
 import * as api from '@/api';
 import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
+import {
+  runtimeDocumentCapabilities,
+  runtimeNativeSavePlan,
+  runtimeSpreadsheetFormatOptions,
+} from '@/application/fileProtocol';
 import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
@@ -19,7 +24,7 @@ import {
 } from '@/platform';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
-import type { DocumentProjection } from '@/types';
+import type { DocumentProjection } from '@/types/documentRuntime';
 
 type UseDocumentFileCoordinatorOptions = {
   fileData?: ComputedRef<DocumentProjection | null>;
@@ -40,7 +45,10 @@ export function useDocumentFileCoordinator({
   const { runDocumentLifecycle } = useDocumentLifecycle();
   const { withReservedSaveLocation } = useSaveLocation();
   const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
-  const spreadsheetFormats = createSpreadsheetFormatService(api);
+  const spreadsheetFormats = createSpreadsheetFormatService({
+    getSpreadsheetFormatOptions: async () =>
+      runtimeSpreadsheetFormatOptions(await api.getSpreadsheetFormatOptions()),
+  });
 
   return createDocumentFileCoordinator({
     getFileData: () => fileData?.value ?? document.data,
@@ -64,8 +72,10 @@ export function useDocumentFileCoordinator({
     closeDocument: (documentId) => api.closeCurrentDocument(documentId),
     saveFile: (path, context) => saveFile(path, context),
     exportFile: (defaultName, context) => exportFile(defaultName, context),
-    nativeSavePlan: (context, target) => api.getNativeSavePlan(context, target),
-    documentCapabilities: (context) => api.getDocumentCapabilities(context),
+    nativeSavePlan: async (context, target) =>
+      runtimeNativeSavePlan(await api.getNativeSavePlan(context, target)),
+    documentCapabilities: async (context) =>
+      runtimeDocumentCapabilities(await api.getDocumentCapabilities(context)),
     defaultSpreadsheetExtension: spreadsheetFormats.defaultSpreadsheetExtension,
     withReservedSaveLocation,
     openDocumentResponse: (response, path) => session.openDocumentResponse(response, path),

@@ -16,9 +16,9 @@ import type {
   SheetRegion,
   SheetRegionProjectionResponse,
   U64String,
-  MutationCommandContext,
   MutationResultLookup,
-} from "@/types";
+} from '@/types/protocol';
+import type { MutationCommandContext } from '@/types/documentRuntime';
 
 export async function prepareNewFile(): Promise<PreparedOpenDocument> {
   return invokeCommand("prepare_new_file", {});

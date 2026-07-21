@@ -1,4 +1,4 @@
-import type { CellKind, CellValue, ScalarCellValue } from "@/types";
+import type { CellKind, CellValue, ScalarCellValue } from '@/types/documentRuntime';
 
 export function blankCell(): CellValue {
   return {

@@ -4,10 +4,10 @@
 
 import type {
   EditorCommandContext,
-  PreparedOpenDocument,
-  RecentFile,
-  SavedDocumentResponse,
-} from "@/types";
+} from '@/types/documentRuntime';
+import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import type { RecentFile } from '@/types/recentFileRuntime';
+import type { SavedDocumentResponse } from '@/types/protocol';
 
 export type OpenFileSelection = {
   path: string;

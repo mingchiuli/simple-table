@@ -1,12 +1,18 @@
 import { applyProjectionPatches, createDocumentProjection } from '@/projection/documentProjection';
-import { EDITOR_MUTATION_PROTOCOL_VERSION } from '@/types/generated';
+import {
+  runtimeDocumentManifest,
+  runtimeEditorPatches,
+  runtimeRegionProjection,
+  runtimeSheetExtents,
+} from '@/application/documentProjectionProtocol';
+import { EDITOR_MUTATION_PROTOCOL_VERSION } from '@/types/protocol';
 import type {
   EditorCommandContext,
   EditorMutationResponse,
   EditorSessionInfo,
   OpenDocumentResponse,
   SavedDocumentResponse,
-} from '@/types/generated';
+} from '@/types/protocol';
 import type {
   DocumentIdentityStateInput,
   DocumentMutationStateInput,
@@ -33,7 +39,10 @@ export function openSessionState(
   preferredSheetIndex = response.initialRegion?.region.sheetIndex ?? 0,
 ): DocumentSessionStateInput {
   return {
-    data: createDocumentProjection(response.document, response.initialRegion),
+    data: createDocumentProjection(
+      runtimeDocumentManifest(response.document),
+      response.initialRegion ? runtimeRegionProjection(response.initialRegion) : undefined,
+    ),
     currentFilePath: path !== null ? path : response.document.path || null,
     documentId: response.editorSession.documentId,
     revision: response.editorSession.revision,
@@ -54,7 +63,10 @@ export function recoveredSessionState(
     || compareU64(response.editorSession.revision, current.revision) < 0
   ) return null;
   return {
-    data: createDocumentProjection(response.document, response.initialRegion),
+    data: createDocumentProjection(
+      runtimeDocumentManifest(response.document),
+      response.initialRegion ? runtimeRegionProjection(response.initialRegion) : undefined,
+    ),
     currentFilePath: response.document.path || current.currentFilePath,
     documentId: response.editorSession.documentId,
     revision: response.editorSession.revision,
@@ -75,7 +87,7 @@ export function savedSessionState(
     throw new Error('Saved document response did not include manifest or identity data');
   }
   const data = response.document
-    ? createDocumentProjection(response.document)
+    ? createDocumentProjection(runtimeDocumentManifest(response.document))
     : {
         ...current.data!,
         path: response.identity!.path,
@@ -138,14 +150,17 @@ export function interpretMutationResponse(
 
   const projection = applyProjectionPatches(
     current.data,
-    response.patches,
-    response.sheetExtents,
+    runtimeEditorPatches(response.patches),
+    runtimeSheetExtents(response.sheetExtents),
   );
   return acceptedMutation(projection.data, response, projection.resyncRequired);
 }
 
 export function responseProjection(response: OpenDocumentResponse): DocumentProjection {
-  return createDocumentProjection(response.document, response.initialRegion);
+  return createDocumentProjection(
+    runtimeDocumentManifest(response.document),
+    response.initialRegion ? runtimeRegionProjection(response.initialRegion) : undefined,
+  );
 }
 
 export function staleMutationIdentity(

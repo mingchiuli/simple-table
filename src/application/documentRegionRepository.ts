@@ -3,9 +3,10 @@ import type {
   SheetExtent,
   SheetRegion,
   SheetRegionBlock,
-  SheetRegionProjectionResponse,
-} from '@/types';
-import { MAX_SHEET_REGION_RESPONSE_BYTES } from '@/types';
+} from '@/types/documentRuntime';
+import type { SheetRegionProjectionResponse } from '@/types/protocol';
+import { MAX_REGION_RESPONSE_BYTES } from '@/protocol/editorResourcePolicy';
+import { runtimeRegionProjection } from '@/application/documentProjectionProtocol';
 import { regionBlock, regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 
@@ -91,8 +92,8 @@ async function fetchRegionBlocks(
       response.documentId !== context.documentId
       || response.revision !== context.baseRevision
     ) return [];
-    const block = regionBlock(response);
-    if (block.estimatedBytes > MAX_SHEET_REGION_RESPONSE_BYTES) return [];
+    const block = regionBlock(runtimeRegionProjection(response));
+    if (block.estimatedBytes > MAX_REGION_RESPONSE_BYTES) return [];
     budget.loadedBytes += block.estimatedBytes;
     if (budget.loadedBytes > MAX_REGION_FRAGMENT_BYTES) {
       throw new RegionLoadLimitError(

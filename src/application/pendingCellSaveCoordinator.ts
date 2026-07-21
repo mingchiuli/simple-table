@@ -2,7 +2,7 @@ import type {
   CellSaveRequest,
   PendingCellSaveCallbacks,
   PendingCellSavePhase,
-} from '@/types';
+} from '@/types/pendingCellSave';
 
 export type PendingCellSavePort = {
   readonly hasQueuedSaves: boolean;

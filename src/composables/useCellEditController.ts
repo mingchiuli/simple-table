@@ -9,7 +9,8 @@ import {
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { CellSaveRequest } from '@/types';
 import type { ComputedRef, Ref } from 'vue';
-import type { DocumentProjection, LoadedSheetSlot, SetCellRequest } from '@/types';
+import type { DocumentProjection, LoadedSheetSlot } from '@/types';
+import type { SetCellRequest } from '@/types/protocol';
 import { isCellLoaded, sheetCell } from '@/projection/documentProjection';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';

@@ -9,10 +9,9 @@ import {
   type DocumentProjection,
   type EditorCommandContext,
   type NativeSavePlan,
-  type OpenDocumentResponse,
   type RecentFile,
-  type SavedDocumentResponse,
 } from '@/types';
+import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
 
 const context: EditorCommandContext = {
   documentId: '1',

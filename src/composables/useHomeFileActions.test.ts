@@ -11,9 +11,9 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
-  type OpenDocumentResponse,
   type RecentFile,
 } from "@/types";
+import type { OpenDocumentResponse } from '@/types/protocol';
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
 

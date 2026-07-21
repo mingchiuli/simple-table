@@ -5,7 +5,7 @@ import type {
   FormulaStatus,
   SearchResponse,
   WorkbookCapabilities,
-} from '@/types/generated';
+} from '@/types/protocol';
 import type {
   DocumentStatusStateInput,
   RuntimeFormulaStatus,
@@ -78,7 +78,7 @@ function runtimeFormulaStatus(status: FormulaStatus): RuntimeFormulaStatus {
     : { state: 'ready', diagnostics };
 }
 
-function runtimeWorkbookCapabilities(
+export function runtimeWorkbookCapabilities(
   capabilities: WorkbookCapabilities,
 ): RuntimeWorkbookCapabilities {
   return {

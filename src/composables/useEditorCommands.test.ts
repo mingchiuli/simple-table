@@ -11,10 +11,9 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
-  type EditorMutationResponse,
-  type OpenDocumentResponse,
   type SearchResult,
 } from "@/types";
+import type { EditorMutationResponse, OpenDocumentResponse } from '@/types/protocol';
 import {
   openResponseFromFileData,
   type FileData,

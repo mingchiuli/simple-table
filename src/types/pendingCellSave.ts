@@ -1,4 +1,4 @@
-import type { CellValue } from './generated';
+import type { CellValue } from './documentRuntime';
 
 export type CellSaveRequest = {
   sheetIndex: number;

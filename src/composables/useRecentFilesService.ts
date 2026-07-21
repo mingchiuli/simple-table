@@ -1,25 +1,28 @@
 import * as api from '@/api';
 import {
-  createRecentFileTrackingService,
   createRecentFilesService,
-  type RecentFileTrackingService,
   type RecentFilesService,
 } from '@/application/recentFilesService';
+import { runtimeRecentFile } from '@/application/recentFileProtocol';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 
-export type BoundRecentFilesService = RecentFilesService & RecentFileTrackingService;
+const services = new WeakMap<object, RecentFilesService>();
 
-const services = new WeakMap<object, BoundRecentFilesService>();
-
-export function useRecentFilesService(): BoundRecentFilesService {
+export function useRecentFilesService(): RecentFilesService {
   const store = useRecentFilesStore();
   let service = services.get(store);
   if (!service) {
-    const files = createRecentFilesService(store, api);
-    const tracking = createRecentFileTrackingService(api, (error) => {
-      console.warn('Failed to update recent file metadata', error);
-    });
-    service = { ...files, ...tracking };
+    service = createRecentFilesService(
+      store,
+      {
+        getRecentFiles: async () => (await api.getRecentFiles()).map(runtimeRecentFile),
+        removeRecentFile: api.removeRecentFile,
+        addRecentFileWithThumbnail: async (context, originalPath) => {
+          runtimeRecentFile(await api.addRecentFileWithThumbnail(context, originalPath));
+        },
+      },
+      (error) => console.warn('Failed to update recent file metadata', error),
+    );
     services.set(store, service);
   }
   return service;

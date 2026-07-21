@@ -2,9 +2,9 @@ import { invokeCommand } from '@/tauriInvoke';
 import type { OpenFileSelection, PlatformAPI } from '../types';
 import type {
   EditorCommandContext,
-  PreparedOpenDocument,
-  RecentFile,
-} from "@/types";
+} from '@/types/documentRuntime';
+import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import type { RecentFile } from '@/types/recentFileRuntime';
 
 export const desktopFileOps = {
   /** Desktop: 后端选择文件路径并授权随后读取，不在前端直接使用 dialog/fs 插件。 */

@@ -22,6 +22,7 @@ vi.mock("@/api", () => ({
     storageType: "desktopPath",
   }),
   getRecentFiles: vi.fn().mockResolvedValue([]),
+  removeRecentFile: vi.fn().mockResolvedValue(undefined),
 }));
 
 async function flushPromises() {

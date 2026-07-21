@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { TauriCommandMap } from '@/types';
+import type { TauriCommandMap } from '@/types/protocol';
 import { assertU64String } from '@/utils/u64';
 
 export function invokeCommand<K extends keyof TauriCommandMap>(

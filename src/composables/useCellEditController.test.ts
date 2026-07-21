@@ -11,9 +11,8 @@ import {
   defaultWorkbookCapabilities,
   readyFormulaStatus,
   type CellValue,
-  type EditorMutationResponse,
-  type EditorSessionInfo,
 } from "@/types";
+import type { EditorMutationResponse, EditorSessionInfo } from '@/types/protocol';
 import {
   openResponseFromFileData,
   type FileData,
