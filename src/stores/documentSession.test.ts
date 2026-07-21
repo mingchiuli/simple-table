@@ -13,6 +13,7 @@ import type {
 import { isCellLoaded, loadedSheetMetadata, sheetCell } from '@/projection/documentProjection';
 import { blankCell } from '@/utils/cellValue';
 import { isReactive } from 'vue';
+import { MAX_REGION_BLOCK_RESIDENT_BYTES } from '@/protocol/editorResourcePolicy';
 import {
   applyDocumentMutation,
   openDocumentSession,
@@ -43,11 +44,23 @@ describe('documentSession sparse projection', () => {
   it('charges the initial region against the resident byte budget', () => {
     const store = useDocumentSessionStore();
     const response = openResponse();
-    response.initialRegion!.estimatedBytes = 16 * 1024 * 1024 + 1;
+    response.initialRegion!.cells[0]!.value.display = 'x'.repeat(8 * 1024 * 1024 + 1);
 
     openDocumentSession(store, response);
 
     expect(store.loadedSheet(0)?.blocks).toHaveLength(0);
+  });
+
+  it('does not treat wire response bytes as resident cache bytes', () => {
+    const store = useDocumentSessionStore();
+    const response = openResponse();
+    response.initialRegion!.estimatedBytes = 15 * 1024 * 1024;
+
+    openDocumentSession(store, response);
+
+    const block = store.loadedSheet(0)?.blocks[0];
+    expect(block?.wireBytes).toBe(15 * 1024 * 1024);
+    expect(block?.residentBytes).toBeLessThan(MAX_REGION_BLOCK_RESIDENT_BYTES);
   });
 
   it('loads a high row without allocating intermediate row arrays', async () => {
@@ -92,6 +105,34 @@ describe('documentSession sparse projection', () => {
       async () => runtimeDocumentRegionProjection(response),
     )).toBe(false);
     expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
+  });
+
+  it('subdivides a wire-valid region that exceeds the runtime resident budget', async () => {
+    const store = useDocumentSessionStore();
+    openDocumentSession(store, openResponse());
+    const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
+    let requests = 0;
+    const fetch = async (_context: unknown, region: typeof requested) => {
+      requests += 1;
+      const runtime = runtimeDocumentRegionProjection(regionResponse(
+        region.sheetIndex,
+        region.rowStart,
+        region.rowEnd,
+        region.colStart,
+        region.colEnd,
+        `row-${region.rowStart}`,
+      ));
+      if (region.rowEnd - region.rowStart > 64) {
+        runtime.block.residentBytes = MAX_REGION_BLOCK_RESIDENT_BYTES + 1;
+      }
+      return runtime;
+    };
+
+    await expect(
+      useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch),
+    ).resolves.toBe(true);
+    expect(requests).toBe(3);
+    expect(store.loadedSheet(0)?.blocks).toHaveLength(3);
   });
 
   it('subdivides oversized region responses and reuses the combined coverage', async () => {
@@ -374,7 +415,7 @@ describe('documentSession sparse projection', () => {
     const refreshed = openResponse();
     refreshed.editorSession = session('1');
     refreshed.initialRegion!.revision = '1';
-    refreshed.initialRegion!.estimatedBytes = 16 * 1024 * 1024 + 1;
+    refreshed.initialRegion!.cells[0]!.value.display = 'x'.repeat(8 * 1024 * 1024 + 1);
 
     await useDocumentSessionCoordinator().applyMutationResponseWithResync(mutation({
       type: 'ResyncRequired',

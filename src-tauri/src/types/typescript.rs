@@ -5,9 +5,11 @@ use syn::{FnArg, GenericArgument, Item, PathArguments, ReturnType, Type};
 use ts_rs::{Config, TS};
 
 use crate::editor_protocol::{
-    EDITOR_MUTATION_PROTOCOL_VERSION, MAX_CELL_TEXT_BYTES, MAX_MUTATION_RESPONSE_BYTES,
-    MAX_MUTATION_TEXT_BYTES, MAX_SEARCH_QUERY_BYTES, MAX_SET_CELL_CHANGES,
-    MAX_SHEET_REGION_RESPONSE_BYTES, SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS,
+    DEFAULT_COLUMN_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX, EDITOR_MUTATION_PROTOCOL_VERSION,
+    MAX_CELL_TEXT_BYTES, MAX_COLUMN_WIDTH_PX, MAX_MUTATION_RESPONSE_BYTES, MAX_MUTATION_TEXT_BYTES,
+    MAX_ROW_HEIGHT_PX, MAX_SEARCH_QUERY_BYTES, MAX_SET_CELL_CHANGES,
+    MAX_SHEET_REGION_RESPONSE_BYTES, MIN_INTERACTIVE_COLUMN_WIDTH_PX,
+    MIN_INTERACTIVE_ROW_HEIGHT_PX, SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS,
 };
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::types::{
@@ -47,6 +49,24 @@ pub fn generated_typescript_contract() -> String {
     ));
     output.push_str(&format!(
         "export const SHEET_REGION_TILE_COLUMNS = {SHEET_REGION_TILE_COLUMNS} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const DEFAULT_COLUMN_WIDTH_PX = {DEFAULT_COLUMN_WIDTH_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const DEFAULT_ROW_HEIGHT_PX = {DEFAULT_ROW_HEIGHT_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MIN_INTERACTIVE_COLUMN_WIDTH_PX = {MIN_INTERACTIVE_COLUMN_WIDTH_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MIN_INTERACTIVE_ROW_HEIGHT_PX = {MIN_INTERACTIVE_ROW_HEIGHT_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_COLUMN_WIDTH_PX = {MAX_COLUMN_WIDTH_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_ROW_HEIGHT_PX = {MAX_ROW_HEIGHT_PX} as const;\n\n"
     ));
     output.push_str(&format!(
         "export const MAX_SEARCH_QUERY_BYTES = {MAX_SEARCH_QUERY_BYTES} as const;\n\n"

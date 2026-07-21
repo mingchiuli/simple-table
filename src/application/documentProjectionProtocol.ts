@@ -17,6 +17,7 @@ import type {
   SheetRegionMetadata,
   SheetRegionProjection,
 } from '@/types/documentRuntime';
+import { regionBlock } from '@/projection/documentProjection';
 
 export function runtimeDocumentManifest(
   manifest: ProtocolDocumentManifest,
@@ -46,7 +47,7 @@ export function runtimeRegionProjection(
       value: runtimeCellValue(change.value),
     })),
     metadata: runtimeRegionMetadata(response.metadata),
-    estimatedBytes: response.estimatedBytes,
+    wireBytes: response.estimatedBytes,
   };
 }
 
@@ -56,7 +57,7 @@ export function runtimeDocumentRegionProjection(
   return {
     documentId: response.documentId,
     revision: response.revision,
-    projection: runtimeRegionProjection(response),
+    block: regionBlock(runtimeRegionProjection(response)),
   };
 }
 

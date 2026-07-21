@@ -6,6 +6,7 @@ import {
   SHEET_REGION_TILE_ROWS,
 } from '@/protocol/editorResourcePolicy';
 import { defaultRichProjection } from '@/types';
+import { regionBlock } from '@/projection/documentProjection';
 import type {
   DocumentRegionProjection,
   EditorCommandContext,
@@ -135,12 +136,12 @@ function response(region: SheetRegion): DocumentRegionProjection {
   return {
     documentId: context.documentId,
     revision: context.baseRevision,
-    projection: {
+    block: regionBlock({
       region,
       cells: [],
       mergeAnchorCells: [],
       metadata: { merges: [], cellFormats: {}, cellStyles: {} },
-      estimatedBytes: 1,
-    },
+      wireBytes: 1,
+    }),
   };
 }

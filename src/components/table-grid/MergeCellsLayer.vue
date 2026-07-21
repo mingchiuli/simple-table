@@ -57,12 +57,10 @@ const emit = defineEmits<{
       :cell-style="mergeCell.style"
       :draft-value="mergeCell.draftValue"
       :selected="false"
-      :row-height="mergeCell.height"
     />
     <EditableCell
       v-else
       :auto-focus="isManualClick"
-      :min-height="mergeCell.height"
       :model-value="editingValue[getKey(mergeCell.rowIndex, mergeCell.colIndex)] ?? getDisplayValue(mergeCell.rowIndex, mergeCell.colIndex, mergeCell.value)"
       @update:model-value="(value: string) => emit('input', mergeCell.rowIndex, mergeCell.colIndex, value)"
       @commit="emit('commit', mergeCell.rowIndex, mergeCell.colIndex, editingValue[getKey(mergeCell.rowIndex, mergeCell.colIndex)] ?? getDisplayValue(mergeCell.rowIndex, mergeCell.colIndex, mergeCell.value))"

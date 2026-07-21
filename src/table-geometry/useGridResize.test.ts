@@ -189,6 +189,40 @@ describe("useGridResize", () => {
     expect(resize.resizingRow.value).toBeNull();
   });
 
+  it("rounds protocol dimensions and clamps them to the configured maximum", () => {
+    const documentMock = createDocumentMock();
+    vi.stubGlobal("document", documentMock);
+    let columnWidth = 120;
+    const commitColumnWidth = vi.fn();
+    const resize = useGridResize({
+      headerHeight: 50,
+      minColumnWidth: 56,
+      minRowHeight: 36,
+      maxColumnWidth: 150,
+      maxRowHeight: 200,
+      scrollLeft: ref(0),
+      scrollTop: ref(0),
+      getColumnWidth: () => columnWidth,
+      getRowHeight: () => 72,
+      getColumnOffset: () => 0,
+      getRowOffset: () => 0,
+      setColumnWidth: vi.fn((_index: number, width: number) => {
+        columnWidth = width;
+      }),
+      setRowHeight: vi.fn(),
+      commitColumnWidth,
+      commitRowHeight: vi.fn(),
+    });
+
+    resize.startColumnResize(mouseEvent(100.2), 0, 120);
+    documentMock.dispatch("mousemove", { clientX: 111.1 });
+    expect(columnWidth).toBe(131);
+    documentMock.dispatch("mousemove", { clientX: 1_000.8 });
+    documentMock.dispatch("mouseup");
+
+    expect(commitColumnWidth).toHaveBeenCalledWith(0, 150);
+  });
+
   it("clears preview state after a committed resize", () => {
     const documentMock = createDocumentMock();
     vi.stubGlobal("document", documentMock);

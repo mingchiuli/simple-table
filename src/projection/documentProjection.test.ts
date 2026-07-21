@@ -117,6 +117,7 @@ function block(
     cells,
     mergeAnchorCells: {},
     metadata: { merges: [], cellFormats: {}, cellStyles: {} },
-    estimatedBytes: 1,
+    wireBytes: 1,
+    residentBytes: 1,
   };
 }

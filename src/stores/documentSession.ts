@@ -263,7 +263,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       );
       const totalBytes = () => sheets.reduce(
         (total, slot) => total + (slot.state === 'loaded'
-          ? slot.blocks.reduce((bytes, block) => bytes + block.estimatedBytes, 0)
+          ? slot.blocks.reduce((bytes, block) => bytes + block.residentBytes, 0)
           : 0),
         0
       );

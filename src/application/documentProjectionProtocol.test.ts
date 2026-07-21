@@ -72,6 +72,7 @@ describe('document projection protocol', () => {
       region: { sheetIndex: 0, rowStart: 0, rowEnd: 1, colStart: 0, colEnd: 1 },
       cells: [],
       metadata: {},
+      estimatedBytes: 64,
     };
 
     const runtime = runtimeDocumentRegionProjection(protocol);
@@ -79,7 +80,9 @@ describe('document projection protocol', () => {
 
     expect(runtime.documentId).toBe('7');
     expect(runtime.revision).toBe('9');
-    expect(runtime.projection.region.rowEnd).toBe(1);
+    expect(runtime.block.region.rowEnd).toBe(1);
+    expect(runtime.block.wireBytes).toBeGreaterThan(0);
+    expect(runtime.block.residentBytes).toBeGreaterThan(runtime.block.wireBytes);
   });
 
   it('maps mutation patch payloads without retaining wire objects', () => {

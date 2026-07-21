@@ -8,10 +8,8 @@ const props = withDefaults(defineProps<{
   cellStyle?: CellStyleProjection;
   draftValue?: string;
   selected?: boolean;
-  rowHeight?: number;
 }>(), {
   selected: false,
-  rowHeight: 72,
 });
 
 const displayValue = computed(() => {
@@ -23,9 +21,8 @@ const valueKind = computed(() => {
   return cellKind(props.value);
 });
 
-const height = computed(() => `${Math.max(36, props.rowHeight)}px`);
 const cellViewStyle = computed(() => ({
-  height: height.value,
+  height: '100%',
   color: normalizeColor(props.cellStyle?.fontColor),
   backgroundColor: normalizeColor(props.cellStyle?.backgroundColor),
   fontWeight: props.cellStyle?.bold ? "700" : undefined,

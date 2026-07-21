@@ -7,6 +7,8 @@ type UseGridResizeOptions = {
   headerHeight: number;
   minColumnWidth: number;
   minRowHeight: number;
+  maxColumnWidth?: number;
+  maxRowHeight?: number;
   scrollLeft: Ref<number>;
   scrollTop: Ref<number>;
   getColumnWidth: (colIndex: number) => number;
@@ -26,6 +28,8 @@ export function useGridResize({
   headerHeight,
   minColumnWidth,
   minRowHeight,
+  maxColumnWidth = Number.MAX_SAFE_INTEGER,
+  maxRowHeight = Number.MAX_SAFE_INTEGER,
   scrollLeft,
   scrollTop,
   getColumnWidth,
@@ -87,14 +91,14 @@ export function useGridResize({
 
     if (resizingColumn.value !== null) {
       const delta = getClientX(event) - startX.value;
-      const nextWidth = Math.max(minColumnWidth, startWidth.value + delta);
+      const nextWidth = clampPixelSize(startWidth.value + delta, minColumnWidth, maxColumnWidth);
       setColumnWidth(resizingColumn.value, nextWidth);
       resizeLineX.value = getColumnOffset(resizingColumn.value) + nextWidth - scrollLeft.value;
     }
 
     if (resizingRow.value !== null) {
       const delta = getClientY(event) - startY.value;
-      const nextHeight = Math.max(minRowHeight, startHeight.value + delta);
+      const nextHeight = clampPixelSize(startHeight.value + delta, minRowHeight, maxRowHeight);
       setRowHeight(resizingRow.value, nextHeight);
       resizeLineY.value = headerHeight + getRowOffset(resizingRow.value) + nextHeight - scrollTop.value;
     }
@@ -263,4 +267,8 @@ function getClientY(event: MouseEvent | TouchEvent): number {
 
 function isPromiseLike(value: unknown): value is Promise<void> {
   return !!value && typeof (value as { then?: unknown }).then === "function";
+}
+
+function clampPixelSize(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
 }

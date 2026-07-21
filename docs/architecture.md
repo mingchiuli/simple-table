@@ -428,7 +428,12 @@ UTF-8 byte limit follows the same path. Sheet-region tile dimensions originate
 in the layer-neutral `resource_limits` module, are re-exported through
 `editor_protocol`, and are generated for frontend region caching. Frontend
 session, region, pending-save, and search-input logic import the generated
-constants instead of repeating numeric literals.
+constants instead of repeating numeric literals. Persisted row-height and
+column-width defaults and bounds originate in `document_layout_policy` and
+follow the same generated path. The backend validates imported layout maps and
+every layout mutation against the persisted domain bounds. The frontend adds
+the stricter interactive minimums but cannot invent a value outside the backend
+domain.
 
 Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary
@@ -477,11 +482,13 @@ preflight validates archive
 structure and estimates parse memory from CSV input bytes or XLSX compressed
 plus expanded bytes. That estimate must fit both the prepared-document and
 combined active/prepared budgets; it is never clamped down to the budget. The
-completed document's resident estimate is checked again after parsing. Expired,
-aborted, or rejected prepared states are detached under the prepared-store lock
-and released after the lock is dropped. Explicit abort runs on the bounded
-blocking executor. Route cancellation must keep the loading lifecycle reserved
-until the in-flight prepare settles.
+completed document's resident estimate is checked again after parsing. Its
+runtime estimate retains the preflight parse estimate as a lower bound, because
+third-party workbook state may contain memory that the canonical projection
+cannot inspect directly. Expired, aborted, or rejected prepared states are
+detached under the prepared-store lock and released after the lock is dropped.
+Explicit abort runs on the bounded blocking executor. Route cancellation must
+keep the loading lifecycle reserved until the in-flight prepare settles.
 
 The prepared-document repository lives in the application layer because its
 entries own complete `EditorState` values. It does not inspect the
@@ -531,11 +538,15 @@ loads for the current generation are limited to 16. A new viewport generation re
 cover the visible area, while explicit Sheet loads and search-result navigation
 can evict queued viewport work. The initial region is a normal 128 x 32 tile and
 participates in the same LRU and byte budget. Rust caps each serialized region
-response at 16 MiB and reports its measured size; the frontend rejects blocks
-above that contract, subdivides only the dedicated oversized-region error, and
-treats multiple child blocks as combined coverage. The ordinary cache target is
-16 MiB; pinned visible blocks form a separate hard bound of eight 16 MiB blocks
-so visibility cannot turn the cache into an unbounded exception.
+response at 16 MiB and reports its measured wire size. The protocol mapper
+separately estimates the resident JavaScript block, including UTF-16 strings,
+record keys, cell objects, formats, and styles. Fragment admission and aggregate
+load limits use wire bytes; LRU accounting and pin limits use resident bytes.
+The repository subdivides either an oversized wire response or a wire-valid
+block whose resident estimate exceeds 16 MiB, and treats the admitted child
+blocks as combined coverage. The ordinary cache target is 16 MiB; pinned
+visible blocks form a separate hard bound of eight resident-admitted blocks so
+visibility cannot turn the cache into an unbounded exception.
 
 Tile alignment, oversized-response subdivision, fragment deadlines, and
 aggregate fragment budgets live in `documentRegionRepository`. The document
@@ -711,7 +722,12 @@ interrupt an active download or discard its progress.
 
 `ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
 validate against cached workbook totals and refresh only affected Sheets,
-instead of scanning the entire workbook for every mutation.
+instead of scanning the entire workbook for every mutation. It accounts for
+the exact UTF-8 bytes of Sheet names, format/style strings, freeze-pane values,
+hyperlink targets and tooltips, in addition to entry counts, and caps both an
+individual metadata string and the workbook metadata total. Active document
+and history estimates share `document_resource_estimator`, so the same value is
+not priced differently depending on which owner retains it.
 
 Rust still owns the complete workbook and computes mutations, dirty hashing,
 formula recalculation, undo/redo, and search across all Sheets. No command

@@ -4,6 +4,8 @@ mod commands;
 mod document;
 mod document_data;
 mod document_format;
+mod document_layout_policy;
+mod document_resource_estimator;
 mod domain;
 mod editor_protocol;
 mod error;

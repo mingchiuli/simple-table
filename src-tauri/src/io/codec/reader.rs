@@ -6,14 +6,13 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::document_format::SpreadsheetFileFormat;
+use crate::document_layout_policy::DEFAULT_ROW_HEIGHT_PX;
 use crate::domain::{CellNumber, CellValue};
 use crate::error::AppError;
 use crate::io::input_limits::{
     MAX_XLSX_ARCHIVE_ENTRIES, MAX_XLSX_UNCOMPRESSED_BYTES, validate_input_size,
 };
-use crate::io::layout_units::{
-    DEFAULT_ROW_HEIGHT_PX, excel_column_width_to_px, is_default_column_width, points_to_px,
-};
+use crate::io::layout_units::{excel_column_width_to_px, is_default_column_width, points_to_px};
 use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::resource_limits::{
     MAX_DENSE_CELL_SLOTS, MAX_ROWS_PER_SHEET, MAX_TOTAL_ROWS, MAX_WORKBOOK_SHEETS,

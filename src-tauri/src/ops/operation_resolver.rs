@@ -6,7 +6,9 @@ use crate::domain::{
     AppliedOperation, CellValue, EditorCommand, ResolvedCellEdit, parse_cell_text,
 };
 use crate::error::AppError;
-use crate::resource_limits::{ResourceLedger, validate_added_sheet};
+use crate::resource_limits::{
+    ResourceLedger, validate_added_sheet, validate_column_width, validate_row_height,
+};
 
 impl EditorCommand {
     #[cfg(test)]
@@ -174,6 +176,7 @@ impl EditorCommand {
                 col_index,
                 width,
             } => {
+                validate_column_width(width)?;
                 let sheet = require_sheet(file_data, sheet_index)?;
                 let extent = SheetMutationExtent::from_sheet(sheet);
                 if col_index >= extent.resizable_columns() {
@@ -199,6 +202,7 @@ impl EditorCommand {
                 row_index,
                 height,
             } => {
+                validate_row_height(height)?;
                 let sheet = require_sheet(file_data, sheet_index)?;
                 let extent = SheetMutationExtent::from_sheet(sheet);
                 if row_index >= extent.resizable_rows() {
@@ -217,11 +221,11 @@ impl EditorCommand {
                 })
             }
             EditorCommand::AddSheet { name } => {
-                validate_added_sheet(file_data)?;
                 let sheet_index = file_data.sheets.len();
                 let sheet_name = name
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| format!("Sheet{}", sheet_index + 1));
+                validate_added_sheet(file_data, &sheet_name)?;
                 Ok(AppliedOperation::AddSheet {
                     sheet_index,
                     name: sheet_name,
@@ -417,6 +421,37 @@ mod tests {
             ),
             "column extent should include hyperlink/style-only columns"
         );
+    }
+
+    #[test]
+    fn layout_mutations_reject_dimensions_outside_the_domain_policy() {
+        let file_data = DocumentData {
+            path: String::new(),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![DocumentSheet {
+                rows: vec![vec![CellValue::Null]],
+                ..Default::default()
+            }],
+        };
+
+        assert!(matches!(
+            EditorCommand::SetColumnWidth {
+                sheet_index: 0,
+                col_index: 0,
+                width: Some(0),
+            }
+            .resolve(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+        assert!(matches!(
+            EditorCommand::SetRowHeight {
+                sheet_index: 0,
+                row_index: 0,
+                height: Some(crate::document_layout_policy::MAX_ROW_HEIGHT_PX + 1),
+            }
+            .resolve(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
     }
 
     #[test]

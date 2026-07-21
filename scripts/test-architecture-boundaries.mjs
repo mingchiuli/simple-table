@@ -749,6 +749,60 @@ for (const requirement of [
   }
 }
 
+const editorLayoutPolicySource = readFileSync(
+  join(projectRoot, 'src', 'protocol', 'editorLayoutPolicy.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\bDEFAULT_COLUMN_WIDTH_PX\b/,
+  /\bDEFAULT_ROW_HEIGHT_PX\b/,
+  /\bMIN_INTERACTIVE_COLUMN_WIDTH_PX\b/,
+  /\bMIN_INTERACTIVE_ROW_HEIGHT_PX\b/,
+  /\bMAX_COLUMN_WIDTH_PX\b/,
+  /\bMAX_ROW_HEIGHT_PX\b/,
+]) {
+  if (!requirement.test(editorLayoutPolicySource)) {
+    violations.push(
+      `src/protocol/editorLayoutPolicy.ts violates the Rust-owned generated layout policy boundary: ${requirement}`,
+    );
+  }
+}
+
+const tableEditorSource = readFileSync(
+  join(projectRoot, 'src', 'components', 'TableEditor.vue'),
+  'utf8',
+);
+for (const requirement of [
+  /['"]@\/protocol\/editorLayoutPolicy['"]/,
+  /\bDEFAULT_GRID_COLUMN_WIDTH\b/,
+  /\bDEFAULT_GRID_ROW_HEIGHT\b/,
+  /\bMIN_GRID_COLUMN_WIDTH\b/,
+  /\bMIN_GRID_ROW_HEIGHT\b/,
+  /\bMAX_GRID_COLUMN_WIDTH\b/,
+  /\bMAX_GRID_ROW_HEIGHT\b/,
+]) {
+  if (!requirement.test(tableEditorSource)) {
+    violations.push(
+      `src/components/TableEditor.vue violates the generated layout policy boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'components', 'TableEditor.vue'),
+    join(projectRoot, 'src', 'components', 'cell', 'CellView.vue'),
+    join(projectRoot, 'src', 'components', 'cell', 'EditableCell.vue'),
+  ],
+  [
+    /^const\s+(?:DEFAULT|MIN|MAX)_(?:ROW_HEIGHT|COLUMN_WIDTH)\b/m,
+    /rowHeight\s*:\s*72\b/,
+    /minHeight\s*:\s*72\b/,
+    /Math\.max\(\s*36\b/,
+  ],
+  'the Rust-owned generated layout policy boundary',
+);
+
 rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'commands', 'input.rs')],
   [/^const\s+MAX_SET_CELL_CHANGES\b/m],
@@ -788,6 +842,167 @@ for (const requirement of [
       `src-tauri/src/resource_limits.rs violates the shared Rust Sheet-region tile policy boundary: ${requirement}`,
     );
   }
+}
+
+const documentLayoutPolicySource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'document_layout_policy.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /pub\s+const\s+DEFAULT_COLUMN_WIDTH_PX\b/,
+  /pub\s+const\s+DEFAULT_ROW_HEIGHT_PX\b/,
+  /pub\s+const\s+MIN_COLUMN_WIDTH_PX\b/,
+  /pub\s+const\s+MAX_COLUMN_WIDTH_PX\b/,
+  /pub\s+const\s+MIN_ROW_HEIGHT_PX\b/,
+  /pub\s+const\s+MAX_ROW_HEIGHT_PX\b/,
+  /pub\s+const\s+MIN_INTERACTIVE_COLUMN_WIDTH_PX\b/,
+  /pub\s+const\s+MIN_INTERACTIVE_ROW_HEIGHT_PX\b/,
+  /pub\s+fn\s+is_supported_column_width\b/,
+  /pub\s+fn\s+is_supported_row_height\b/,
+]) {
+  if (!requirement.test(documentLayoutPolicySource)) {
+    violations.push(
+      `src-tauri/src/document_layout_policy.rs violates the canonical layout policy boundary: ${requirement}`,
+    );
+  }
+}
+
+for (const requirement of [
+  /pub\s+fn\s+validate_column_width\b/,
+  /pub\s+fn\s+validate_row_height\b/,
+  /validate_column_width\(Some\(\*width\)\)/,
+  /validate_row_height\(Some\(\*height\)\)/,
+  /\bmetadata_text_bytes\b/,
+  /\bMAX_METADATA_STRING_BYTES\b/,
+  /\bMAX_PROJECTED_METADATA_TEXT_BYTES\b/,
+  /\bsheet_metadata_text_usage\b/,
+  /pub\s+fn\s+refresh_identity\b/,
+]) {
+  if (!requirement.test(resourceLimitsSource)) {
+    violations.push(
+      `src-tauri/src/resource_limits.rs violates the canonical document resource policy boundary: ${requirement}`,
+    );
+  }
+}
+
+const operationResolverSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'ops', 'operation_resolver.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /validate_column_width\(width\)\?/,
+  /validate_row_height\(height\)\?/,
+  /validate_added_sheet\(file_data,\s*&sheet_name\)\?/,
+]) {
+  if (!requirement.test(operationResolverSource)) {
+    violations.push(
+      `src-tauri/src/ops/operation_resolver.rs violates the mutation resource policy boundary: ${requirement}`,
+    );
+  }
+}
+
+const documentResourceEstimatorSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'document_resource_estimator.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /fn\s+document_metadata_text_usage\b/,
+  /fn\s+sheet_metadata_text_usage\b/,
+  /fn\s+estimate_sheet_data_bytes\b/,
+  /fn\s+estimate_cell_value_bytes\b/,
+  /fn\s+estimate_rich_metadata_bytes\b/,
+]) {
+  if (!requirement.test(documentResourceEstimatorSource)) {
+    violations.push(
+      `src-tauri/src/document_resource_estimator.rs violates the shared resource estimator boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectRustProductionMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'document'), '.rs'),
+  [
+    /fn\s+estimate_sheet_data_bytes\b/,
+    /fn\s+estimate_cell_value_bytes\b/,
+    /fn\s+estimate_rich_metadata_bytes\b/,
+  ],
+  'the shared document resource estimator boundary',
+);
+
+for (const [file, requirements] of [
+  [
+    'src-tauri/src/state/editor_state.rs',
+    [
+      /\bresource_estimate_floor\b/,
+      /\.max\(self\.resource_estimate_floor\)/,
+      /\.refresh_identity\(self\.document\.projection\(\)\)/,
+    ],
+  ],
+  [
+    'src-tauri/src/application/document_open_service.rs',
+    [/\bestimated_parse_bytes\b/, /\.with_resource_estimate_floor\(estimated_parse_bytes\)/],
+  ],
+]) {
+  const source = readFileSync(join(projectRoot, file), 'utf8');
+  for (const requirement of requirements) {
+    if (!requirement.test(source)) {
+      violations.push(`${file} violates the retained parse resource estimate boundary: ${requirement}`);
+    }
+  }
+}
+
+const documentRuntimeSource = readFileSync(
+  join(projectRoot, 'src', 'types', 'documentRuntime.ts'),
+  'utf8',
+);
+const documentRegionRepositorySource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentRegionRepository.ts'),
+  'utf8',
+);
+const documentSessionSource = readFileSync(
+  join(projectRoot, 'src', 'stores', 'documentSession.ts'),
+  'utf8',
+);
+for (const [file, source, requirements] of [
+  [
+    'src/types/documentRuntime.ts',
+    documentRuntimeSource,
+    [/\bwireBytes:\s*number\b/, /\bresidentBytes:\s*number\b/, /\bblock:\s*SheetRegionBlock\b/],
+  ],
+  [
+    'src/application/documentRegionRepository.ts',
+    documentRegionRepositorySource,
+    [
+      /\bblock\.wireBytes\b/,
+      /\bblock\.residentBytes\b/,
+      /\bMAX_REGION_RESPONSE_BYTES\b/,
+      /\bMAX_REGION_BLOCK_RESIDENT_BYTES\b/,
+    ],
+  ],
+  ['src/stores/documentSession.ts', documentSessionSource, [/\bblock\.residentBytes\b/]],
+]) {
+  for (const requirement of requirements) {
+    if (!requirement.test(source)) {
+      violations.push(`${file} violates the separate wire/resident region budget boundary: ${requirement}`);
+    }
+  }
+}
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'types', 'documentRuntime.ts'),
+    join(projectRoot, 'src', 'projection', 'documentProjection.ts'),
+    join(projectRoot, 'src', 'application', 'documentRegionRepository.ts'),
+    join(projectRoot, 'src', 'stores', 'documentSession.ts'),
+  ],
+  [/\bestimatedBytes\b/],
+  'the separate wire/resident region budget boundary',
+);
+
+if (/MAX_RESIDENT_REGION_BYTES\s*=\s*MAX_SHEET_REGION_RESPONSE_BYTES/.test(editorResourcePolicySource)) {
+  violations.push(
+    'src/protocol/editorResourcePolicy.ts violates the independent frontend resident-memory policy boundary',
+  );
 }
 
 rejectMatches(

@@ -163,21 +163,25 @@ export function applyProjectionPatches(
 }
 
 export function regionBlock(response: SheetRegionProjection): SheetRegionBlock {
-  return {
+  const cells: Record<string, CellValue> = {};
+  for (const cell of response.cells) cells[cellKey(cell.row, cell.col)] = cell.value;
+  const mergeAnchorCells: Record<string, CellValue> = {};
+  for (const cell of response.mergeAnchorCells ?? []) {
+    mergeAnchorCells[cellKey(cell.row, cell.col)] = cell.value;
+  }
+  const metadata = normalizeMetadata(response.metadata);
+  const block = {
     key: regionKey(response.region),
     region: response.region,
-    cells: Object.fromEntries(
-      response.cells.map((cell) => [cellKey(cell.row, cell.col), cell.value])
-    ),
-    mergeAnchorCells: Object.fromEntries(
-      (response.mergeAnchorCells ?? []).map((cell) => [cellKey(cell.row, cell.col), cell.value])
-    ),
-    metadata: normalizeMetadata(response.metadata),
-    estimatedBytes: response.estimatedBytes ?? estimateRegionBytes(response),
+    cells,
+    mergeAnchorCells,
+    metadata,
+    wireBytes: response.wireBytes ?? estimateRegionWireBytes(response),
   };
+  return { ...block, residentBytes: estimateRegionResidentBytes(block) };
 }
 
-function estimateRegionBytes(response: SheetRegionProjection): number {
+function estimateRegionWireBytes(response: SheetRegionProjection): number {
   const metadata = response.metadata;
   return 512
     + response.cells.length * 256
@@ -185,6 +189,71 @@ function estimateRegionBytes(response: SheetRegionProjection): number {
     + (metadata.merges?.length ?? 0) * 64
     + Object.keys(metadata.cellFormats ?? {}).length * 256
     + Object.keys(metadata.cellStyles ?? {}).length * 512;
+}
+
+type ResidentRegionBlock = Omit<SheetRegionBlock, 'residentBytes'>;
+
+function estimateRegionResidentBytes(block: ResidentRegionBlock): number {
+  return 512
+    + estimateCellIndexBytes(block.cells)
+    + estimateCellIndexBytes(block.mergeAnchorCells)
+    + block.metadata.merges.length * 64
+    + estimateObjectIndexBytes(block.metadata.cellFormats, estimateCellFormatBytes)
+    + estimateObjectIndexBytes(block.metadata.cellStyles, estimateCellStyleBytes);
+}
+
+function estimateCellIndexBytes(values: Record<string, CellValue>): number {
+  return Object.entries(values).reduce(
+    (bytes, [key, value]) => bytes + 48 + utf16Bytes(key) + estimateCellValueBytes(value),
+    0,
+  );
+}
+
+function estimateObjectIndexBytes<T>(
+  values: Record<string, T>,
+  estimateValue: (value: T) => number,
+): number {
+  return Object.entries(values).reduce(
+    (bytes, [key, value]) => bytes + 48 + utf16Bytes(key) + estimateValue(value),
+    0,
+  );
+}
+
+function estimateCellValueBytes(value: CellValue, depth = 0): number {
+  if (depth >= 16) return 256;
+  let bytes = 128 + utf16Bytes(value.kind) + utf16Bytes(value.display);
+  if (typeof value.raw === 'string') bytes += utf16Bytes(value.raw);
+  if (value.formula) {
+    bytes += 96
+      + utf16Bytes(value.formula.formula)
+      + utf16Bytes(value.formula.error ?? '')
+      + estimateCellValueBytes(value.formula.cachedValue, depth + 1);
+  }
+  if (value.format) bytes += estimateCellFormatBytes(value.format);
+  return bytes;
+}
+
+function estimateCellFormatBytes(value: { numberFormat?: string | null; styleId?: string | null }) {
+  return 64 + utf16Bytes(value.numberFormat ?? '') + utf16Bytes(value.styleId ?? '');
+}
+
+function estimateCellStyleBytes(value: {
+  fontColor?: string | null;
+  backgroundColor?: string | null;
+  horizontalAlign?: string | null;
+  verticalAlign?: string | null;
+  numberFormat?: string | null;
+}) {
+  return 96
+    + utf16Bytes(value.fontColor ?? '')
+    + utf16Bytes(value.backgroundColor ?? '')
+    + utf16Bytes(value.horizontalAlign ?? '')
+    + utf16Bytes(value.verticalAlign ?? '')
+    + utf16Bytes(value.numberFormat ?? '');
+}
+
+function utf16Bytes(value: string): number {
+  return value.length * 2;
 }
 
 export function sheetCell(

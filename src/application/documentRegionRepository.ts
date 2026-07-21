@@ -7,10 +7,11 @@ import type {
 } from '@/types/documentRuntime';
 import {
   MAX_REGION_RESPONSE_BYTES,
+  MAX_REGION_BLOCK_RESIDENT_BYTES,
   SHEET_REGION_TILE_COLUMNS,
   SHEET_REGION_TILE_ROWS,
 } from '@/protocol/editorResourcePolicy';
-import { regionBlock, regionKey } from '@/projection/documentProjection';
+import { regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 
 const MAX_REGION_FRAGMENT_REQUESTS = 64;
@@ -24,7 +25,7 @@ type RegionProjectionFetcher = (
 
 type RegionLoadBudget = {
   remainingRequests: number;
-  loadedBytes: number;
+  loadedWireBytes: number;
   deadline: number;
 };
 
@@ -69,7 +70,7 @@ export function loadRegionBlocks(
     fetchProjection,
     {
       remainingRequests: MAX_REGION_FRAGMENT_REQUESTS,
-      loadedBytes: 0,
+      loadedWireBytes: 0,
       deadline: Date.now() + MAX_REGION_LOAD_DURATION_MS,
     },
     isCurrent
@@ -88,40 +89,47 @@ async function fetchRegionBlocks(
   try {
     const response = await fetchProjection(context, region);
     ensureRegionLoadCanContinue(budget, isCurrent);
-    if (regionKey(response.projection.region) !== regionKey(region)) return [];
+    if (regionKey(response.block.region) !== regionKey(region)) return [];
     if (
       response.documentId !== context.documentId
       || response.revision !== context.baseRevision
     ) return [];
-    const block = regionBlock(response.projection);
-    if (block.estimatedBytes > MAX_REGION_RESPONSE_BYTES) return [];
-    budget.loadedBytes += block.estimatedBytes;
-    if (budget.loadedBytes > MAX_REGION_FRAGMENT_BYTES) {
+    const block = response.block;
+    if (block.wireBytes > MAX_REGION_RESPONSE_BYTES) return [];
+    budget.loadedWireBytes += block.wireBytes;
+    if (budget.loadedWireBytes > MAX_REGION_FRAGMENT_BYTES) {
       throw new RegionLoadLimitError(
         `Region fragments exceed the ${MAX_REGION_FRAGMENT_BYTES} byte load budget`
       );
+    }
+    if (block.residentBytes > MAX_REGION_BLOCK_RESIDENT_BYTES) {
+      const split = splitRegion(region);
+      if (!split) {
+        throw new RegionLoadLimitError(
+          `Region block exceeds the ${MAX_REGION_BLOCK_RESIDENT_BYTES} byte resident budget`
+        );
+      }
+      return fetchSplitRegionBlocks(context, split, fetchProjection, budget, isCurrent);
     }
     return [block];
   } catch (error) {
     if (!isAppErrorCode(error, 'region_response_too_large')) throw error;
     const split = splitRegion(region);
     if (!split) throw error;
-    const first = await fetchRegionBlocks(
-      context,
-      split[0],
-      fetchProjection,
-      budget,
-      isCurrent
-    );
-    const second = await fetchRegionBlocks(
-      context,
-      split[1],
-      fetchProjection,
-      budget,
-      isCurrent
-    );
-    return [...first, ...second];
+    return fetchSplitRegionBlocks(context, split, fetchProjection, budget, isCurrent);
   }
+}
+
+async function fetchSplitRegionBlocks(
+  context: EditorCommandContext,
+  split: [SheetRegion, SheetRegion],
+  fetchProjection: RegionProjectionFetcher,
+  budget: RegionLoadBudget,
+  isCurrent: () => boolean,
+): Promise<SheetRegionBlock[]> {
+  const first = await fetchRegionBlocks(context, split[0], fetchProjection, budget, isCurrent);
+  const second = await fetchRegionBlocks(context, split[1], fetchProjection, budget, isCurrent);
+  return [...first, ...second];
 }
 
 function ensureRegionLoadCanContinue(budget: RegionLoadBudget, isCurrent: () => boolean) {

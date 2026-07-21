@@ -53,6 +53,7 @@ pub struct EditorState {
     history: HistoryStore,
     dirty: DirtyTracker,
     resources: ResourceLedger,
+    resource_estimate_floor: usize,
     save_commit: Option<SaveCommitLease>,
 }
 
@@ -97,8 +98,14 @@ impl EditorState {
             history: HistoryStore::default(),
             dirty,
             resources,
+            resource_estimate_floor: 0,
             save_commit: None,
         }
+    }
+
+    pub(crate) fn with_resource_estimate_floor(mut self, estimated_bytes: usize) -> Self {
+        self.resource_estimate_floor = estimated_bytes;
+        self
     }
 
     #[cfg(test)]
@@ -116,6 +123,7 @@ impl EditorState {
             return;
         }
         self.document.update_identity(path, file_name);
+        self.resources.refresh_identity(self.document.projection());
     }
 
     #[cfg(test)]
@@ -243,6 +251,7 @@ impl EditorState {
 
         self.save_commit = None;
         self.document.update_identity(path, file_name);
+        self.resources.refresh_identity(self.document.projection());
         let previous_history = clear_history.then(|| std::mem::take(&mut self.history));
         self.bump_revision()?;
         self.mark_saved();
@@ -303,6 +312,7 @@ impl EditorState {
             .estimated_bytes()
             .saturating_add(self.document.estimated_runtime_bytes())
             .saturating_add(self.history.estimated_bytes())
+            .max(self.resource_estimate_floor)
     }
 
     pub fn transaction_failure(&self) -> Option<&str> {

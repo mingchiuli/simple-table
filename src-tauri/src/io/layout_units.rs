@@ -1,5 +1,4 @@
-pub const DEFAULT_COLUMN_WIDTH_PX: u32 = 120;
-pub const DEFAULT_ROW_HEIGHT_PX: u32 = 72;
+use crate::document_layout_policy::{DEFAULT_COLUMN_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX};
 
 const EXCEL_DEFAULT_COLUMN_WIDTH: f64 = 8.38;
 

@@ -136,13 +136,13 @@ export type SheetRegionProjection = {
   cells: SheetCellChange[];
   mergeAnchorCells: SheetCellChange[];
   metadata: SheetRegionMetadata;
-  estimatedBytes?: number;
+  wireBytes?: number;
 };
 
 export type DocumentRegionProjection = {
   documentId: U64String;
   revision: U64String;
-  projection: SheetRegionProjection;
+  block: SheetRegionBlock;
 };
 
 export type LayoutPatch = {
@@ -203,7 +203,8 @@ export type SheetRegionBlock = {
   cells: Record<string, CellValue>;
   mergeAnchorCells: Record<string, CellValue>;
   metadata: SheetRegionMetadata;
-  estimatedBytes: number;
+  wireBytes: number;
+  residentBytes: number;
 };
 
 export type UnloadedSheetSlot = {

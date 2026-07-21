@@ -1,11 +1,12 @@
-use crate::document_data::{
-    CellFormat, CellStyle, DocumentSheet, Drawing, FreezePane, Hyperlink, MergeRange, RichMetadata,
-};
+use crate::document_data::{DocumentSheet, MergeRange, RichMetadata};
 use std::collections::{HashMap, HashSet};
 
 use crate::document::backing::document_body::BodyStructureMemento;
 use crate::document::backing::rich_projection::{
     RichProjectionScope, filter_rich_projection, restore_rich_projection_scope,
+};
+use crate::document_resource_estimator::{
+    estimate_cell_value_bytes, estimate_rich_metadata_bytes, estimate_sheet_data_bytes,
 };
 use crate::domain::{CellValue, DocumentCellChange, cell_key::parse_cell_key};
 
@@ -239,7 +240,7 @@ impl RichProjectionMemento {
     }
 
     fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() + estimate_sheet_rich_projection_bytes(&self.projection)
+        std::mem::size_of::<Self>() + estimate_rich_metadata_bytes(&self.projection)
     }
 }
 
@@ -314,134 +315,4 @@ fn push_unique_position_2d(
 
 fn estimate_sheet_cell_change_bytes(change: &DocumentCellChange) -> usize {
     std::mem::size_of::<DocumentCellChange>() + estimate_cell_value_bytes(&change.value)
-}
-
-fn estimate_sheet_data_bytes(sheet: &DocumentSheet) -> usize {
-    std::mem::size_of::<DocumentSheet>()
-        + sheet.name.len()
-        + sheet
-            .rows
-            .iter()
-            .map(|row| {
-                std::mem::size_of::<Vec<CellValue>>()
-                    + row.iter().map(estimate_cell_value_bytes).sum::<usize>()
-            })
-            .sum::<usize>()
-        + sheet.merges.len() * std::mem::size_of::<MergeRange>()
-        + sheet
-            .column_widths
-            .as_ref()
-            .map(|widths| widths.len() * 24)
-            .unwrap_or_default()
-        + sheet
-            .row_heights
-            .as_ref()
-            .map(|heights| heights.len() * 24)
-            .unwrap_or_default()
-        + estimate_sheet_rich_projection_bytes(&sheet.rich)
-}
-
-fn estimate_sheet_rich_projection_bytes(rich: &RichMetadata) -> usize {
-    std::mem::size_of::<RichMetadata>()
-        + rich
-            .cell_formats
-            .iter()
-            .map(|(cell, format)| cell.len() + estimate_cell_format_projection_bytes(format))
-            .sum::<usize>()
-        + rich
-            .cell_styles
-            .iter()
-            .map(|(cell, style)| cell.len() + estimate_cell_style_projection_bytes(style))
-            .sum::<usize>()
-        + rich.hidden_rows.len() * std::mem::size_of::<usize>()
-        + rich.hidden_columns.len() * std::mem::size_of::<usize>()
-        + rich
-            .freeze_pane
-            .as_ref()
-            .map(estimate_freeze_pane_projection_bytes)
-            .unwrap_or_default()
-        + rich
-            .hyperlinks
-            .iter()
-            .map(|(cell, hyperlink)| cell.len() + estimate_hyperlink_projection_bytes(hyperlink))
-            .sum::<usize>()
-        + rich.drawings.len() * std::mem::size_of::<Drawing>()
-}
-
-fn estimate_cell_format_projection_bytes(format: &CellFormat) -> usize {
-    std::mem::size_of::<CellFormat>()
-        + format
-            .number_format
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-        + format
-            .style_id
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-}
-
-fn estimate_cell_style_projection_bytes(style: &CellStyle) -> usize {
-    style
-        .font_color
-        .as_ref()
-        .map(String::len)
-        .unwrap_or_default()
-        + style
-            .background_color
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-        + style
-            .horizontal_align
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-        + style
-            .vertical_align
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-        + style
-            .number_format
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-        + std::mem::size_of::<CellStyle>()
-}
-
-fn estimate_freeze_pane_projection_bytes(freeze_pane: &FreezePane) -> usize {
-    std::mem::size_of::<FreezePane>()
-        + freeze_pane.top_left_cell.len()
-        + freeze_pane.active_pane.len()
-        + freeze_pane.state.len()
-}
-
-fn estimate_hyperlink_projection_bytes(hyperlink: &Hyperlink) -> usize {
-    std::mem::size_of::<Hyperlink>()
-        + hyperlink.url.len()
-        + hyperlink
-            .tooltip
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default()
-}
-
-fn estimate_cell_value_bytes(cell: &CellValue) -> usize {
-    match cell {
-        CellValue::Null | CellValue::Boolean(_) => std::mem::size_of::<CellValue>(),
-        CellValue::String(value) => std::mem::size_of::<CellValue>() + value.len(),
-        CellValue::Number(value) => std::mem::size_of::<CellValue>() + value.to_string().len(),
-        CellValue::Formula {
-            formula,
-            cached_value,
-            error,
-        } => {
-            std::mem::size_of::<CellValue>()
-                + formula.len()
-                + estimate_cell_value_bytes(cached_value)
-                + error.as_ref().map(String::len).unwrap_or_default()
-        }
-    }
 }

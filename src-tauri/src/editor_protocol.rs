@@ -1,3 +1,8 @@
+#[allow(unused_imports)]
+pub use crate::document_layout_policy::{
+    DEFAULT_COLUMN_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX, MAX_COLUMN_WIDTH_PX, MAX_ROW_HEIGHT_PX,
+    MIN_INTERACTIVE_COLUMN_WIDTH_PX, MIN_INTERACTIVE_ROW_HEIGHT_PX,
+};
 /// Static editor protocol policy shared by Rust execution and generated
 /// TypeScript consumers.
 pub use crate::resource_limits::{

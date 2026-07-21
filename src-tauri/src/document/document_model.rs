@@ -17,6 +17,7 @@ use crate::document::region_metadata_index::{
     DocumentRegion, DocumentRegionMetadata, RegionMetadataIndex,
 };
 use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_resource_estimator::estimate_document_metadata_bytes;
 use crate::domain::{AppliedOperation, CellValue, DocumentCellChange, ResolvedCellEdit};
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
@@ -100,8 +101,14 @@ impl SpreadsheetDocument {
     }
 
     pub fn estimated_runtime_bytes(&self) -> usize {
+        let retained_workbook_metadata = self
+            .body
+            .is_excel_backed()
+            .then(|| estimate_document_metadata_bytes(&self.projection))
+            .unwrap_or_default();
         self.body
             .estimated_bytes()
+            .saturating_add(retained_workbook_metadata)
             .saturating_add(self.formulas.estimated_bytes(&self.projection))
             .saturating_add(self.region_metadata.estimated_bytes())
             .saturating_add(

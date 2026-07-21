@@ -59,11 +59,14 @@ pub fn prepare_open_input(
 ) -> Result<PreparedOpenDocument, AppError> {
     let source_path = PathBuf::from(&source.path);
     let plan = service.codec().plan_open(&source)?;
+    let estimated_parse_bytes = plan.estimated_parse_bytes();
     let reservation = service.prepared_documents().reserve_for_parse_bytes(
-        plan.estimated_parse_bytes(),
+        estimated_parse_bytes,
         active_document_resource_bytes(service)?,
     )?;
-    let editor_state = plan.decode(source)?;
+    let editor_state = plan
+        .decode(source)?
+        .with_resource_estimate_floor(estimated_parse_bytes);
 
     prepare_editor_state(service, editor_state, Some(source_path), reservation)
 }
@@ -126,7 +129,7 @@ mod tests {
 
     impl crate::application::document_codec_port::DocumentDecodePlan for TestDecodePlan {
         fn estimated_parse_bytes(&self) -> usize {
-            1024
+            2 * 1024 * 1024
         }
 
         fn decode(self: Box<Self>, source: OpenDocumentSource) -> Result<EditorState, AppError> {
@@ -197,6 +200,7 @@ mod tests {
             response.editor_state.file_data().sheets[0].rows[0][0],
             CellValue::String("decoded through port".to_string())
         );
+        assert!(response.editor_state.estimated_resource_bytes() >= 2 * 1024 * 1024);
     }
 
     #[test]

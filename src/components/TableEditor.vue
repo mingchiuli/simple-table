@@ -9,15 +9,19 @@ import { useGridViewport } from '@/table-geometry/useGridViewport';
 import { useTableInteractionController } from '@/table-geometry/useTableInteractionController';
 import { createSheetViewportModel } from '@/table-geometry/sheetViewportModel';
 import type { SheetExtent } from '@/table-geometry/sheetExtent';
+import {
+  DEFAULT_GRID_COLUMN_WIDTH,
+  DEFAULT_GRID_ROW_HEIGHT,
+  MAX_GRID_COLUMN_WIDTH,
+  MAX_GRID_ROW_HEIGHT,
+  MIN_GRID_COLUMN_WIDTH,
+  MIN_GRID_ROW_HEIGHT,
+} from '@/protocol/editorLayoutPolicy';
 
 const { isTouchDevice } = usePlatform();
 
-const DEFAULT_ROW_HEIGHT = 72;
-const DEFAULT_COLUMN_WIDTH = 120;
 const HEADER_HEIGHT = 50;
 const ROW_HEADER_WIDTH = 60;
-const MIN_COLUMN_WIDTH = 56;
-const MIN_ROW_HEIGHT = 36;
 const OVERSCAN_PX = 240;
 
 const props = defineProps<{
@@ -106,8 +110,8 @@ const {
   scrollTop,
   rowHeaderWidth: ROW_HEADER_WIDTH,
   headerHeight: HEADER_HEIGHT,
-  defaultColumnWidth: DEFAULT_COLUMN_WIDTH,
-  defaultRowHeight: DEFAULT_ROW_HEIGHT,
+  defaultColumnWidth: DEFAULT_GRID_COLUMN_WIDTH,
+  defaultRowHeight: DEFAULT_GRID_ROW_HEIGHT,
   overscanPx: OVERSCAN_PX,
   getDraftValue,
 });
@@ -178,8 +182,10 @@ const {
 } = useGridResize({
   canResize: computed(() => props.canResizeRowsColumns ?? true),
   headerHeight: HEADER_HEIGHT,
-  minColumnWidth: MIN_COLUMN_WIDTH,
-  minRowHeight: MIN_ROW_HEIGHT,
+  minColumnWidth: MIN_GRID_COLUMN_WIDTH,
+  minRowHeight: MIN_GRID_ROW_HEIGHT,
+  maxColumnWidth: MAX_GRID_COLUMN_WIDTH,
+  maxRowHeight: MAX_GRID_ROW_HEIGHT,
   scrollLeft,
   scrollTop,
   getColumnWidth,

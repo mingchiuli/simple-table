@@ -3,10 +3,8 @@ const modelValue = defineModel<string>({ required: true });
 
 const props = withDefaults(defineProps<{
   autoFocus?: boolean;
-  minHeight?: number;
 }>(), {
   autoFocus: true,
-  minHeight: 72,
 });
 
 const emit = defineEmits<{
@@ -64,7 +62,6 @@ onMounted(focusWithoutScroll);
     v-model="modelValue"
     class="cell-textarea"
     spellcheck="false"
-    :style="{ height: `${Math.max(36, minHeight)}px` }"
     @keydown="handleKeydown"
     @blur="handleBlur"
   />

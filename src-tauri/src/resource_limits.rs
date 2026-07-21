@@ -1,6 +1,11 @@
 use crate::document_data::{DocumentData, DocumentSheet, SheetExtent};
 use std::collections::HashMap;
 
+use crate::document_layout_policy::{
+    MAX_COLUMN_WIDTH_PX, MAX_ROW_HEIGHT_PX, MIN_COLUMN_WIDTH_PX, MIN_ROW_HEIGHT_PX,
+    is_supported_column_width, is_supported_row_height,
+};
+use crate::document_resource_estimator::{document_metadata_text_usage, sheet_metadata_text_usage};
 use crate::domain::CellValue;
 use crate::domain::cell_key::parse_cell_key;
 use crate::error::AppError;
@@ -15,6 +20,8 @@ pub const MAX_LAYOUT_OVERRIDES: usize = 100_000;
 pub const MAX_CELL_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATION_TEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PROJECTED_TEXT_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_METADATA_STRING_BYTES: usize = 1024 * 1024;
+pub const MAX_PROJECTED_METADATA_TEXT_BYTES: usize = 32 * 1024 * 1024;
 pub const SHEET_REGION_TILE_ROWS: usize = 128;
 pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 
@@ -22,6 +29,7 @@ pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 pub struct ResourceLedger {
     sheets: Vec<SheetResourceUsage>,
     total: ProjectionUsage,
+    identity_metadata_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -33,12 +41,23 @@ struct SheetResourceUsage {
 impl ResourceLedger {
     pub fn from_file_data(file_data: &DocumentData) -> Self {
         let sheets: Vec<_> = file_data.sheets.iter().map(sheet_resource_usage).collect();
-        let total = sheets
+        let mut total = sheets
             .iter()
             .fold(ProjectionUsage::default(), |total, sheet| {
                 total + sheet.usage
             });
-        Self { sheets, total }
+        let identity_metadata_bytes = file_data
+            .path
+            .len()
+            .saturating_add(file_data.file_name.len());
+        total.metadata_text_bytes = total
+            .metadata_text_bytes
+            .saturating_add(identity_metadata_bytes);
+        Self {
+            sheets,
+            total,
+            identity_metadata_bytes,
+        }
     }
 
     pub fn sheet_extents(&self) -> Vec<SheetExtent> {
@@ -78,6 +97,19 @@ impl ResourceLedger {
 
     pub fn replace_all(&mut self, file_data: &DocumentData) {
         *self = Self::from_file_data(file_data);
+    }
+
+    pub fn refresh_identity(&mut self, file_data: &DocumentData) {
+        let next = file_data
+            .path
+            .len()
+            .saturating_add(file_data.file_name.len());
+        self.total.metadata_text_bytes = self
+            .total
+            .metadata_text_bytes
+            .saturating_sub(self.identity_metadata_bytes)
+            .saturating_add(next);
+        self.identity_metadata_bytes = next;
     }
 
     pub fn validate_cell_changes<'a>(
@@ -131,6 +163,30 @@ impl ResourceLedger {
             .get(sheet_index)
             .map(|sheet| sheet.usage.estimated_bytes())
     }
+}
+
+pub fn validate_column_width(width: Option<u32>) -> Result<(), AppError> {
+    let Some(width) = width else {
+        return Ok(());
+    };
+    if is_supported_column_width(width) {
+        return Ok(());
+    }
+    Err(limit_error(format!(
+        "column width must be between {MIN_COLUMN_WIDTH_PX} and {MAX_COLUMN_WIDTH_PX} pixels"
+    )))
+}
+
+pub fn validate_row_height(height: Option<u32>) -> Result<(), AppError> {
+    let Some(height) = height else {
+        return Ok(());
+    };
+    if is_supported_row_height(height) {
+        return Ok(());
+    }
+    Err(limit_error(format!(
+        "row height must be between {MIN_ROW_HEIGHT_PX} and {MAX_ROW_HEIGHT_PX} pixels"
+    )))
 }
 
 pub fn validate_file_data(file_data: &DocumentData) -> Result<(), AppError> {
@@ -211,6 +267,7 @@ fn validate_cell_changes_with_usage<'a>(
         rich_entries: usage.rich_entries,
         layout_entries: usage.layout_entries,
         text_bytes,
+        metadata_text_bytes: usage.metadata_text_bytes,
     })
 }
 
@@ -229,6 +286,7 @@ fn validate_added_row_with_usage(
         rich_entries: usage.rich_entries,
         layout_entries: usage.layout_entries,
         text_bytes: usage.text_bytes,
+        metadata_text_bytes: usage.metadata_text_bytes,
     })
 }
 
@@ -261,14 +319,27 @@ fn validate_added_column_with_usage(
         rich_entries: usage.rich_entries,
         layout_entries: usage.layout_entries,
         text_bytes: usage.text_bytes,
+        metadata_text_bytes: usage.metadata_text_bytes,
     })
 }
 
-pub fn validate_added_sheet(file_data: &DocumentData) -> Result<(), AppError> {
+pub fn validate_added_sheet(file_data: &DocumentData, sheet_name: &str) -> Result<(), AppError> {
     ensure_limit(
         "workbook sheets",
         file_data.sheets.len().saturating_add(1),
         MAX_WORKBOOK_SHEETS,
+    )?;
+    ensure_limit(
+        "metadata string bytes",
+        sheet_name.len(),
+        MAX_METADATA_STRING_BYTES,
+    )?;
+    ensure_limit(
+        "metadata text bytes",
+        document_metadata_text_usage(file_data)
+            .total_bytes
+            .saturating_add(sheet_name.len()),
+        MAX_PROJECTED_METADATA_TEXT_BYTES,
     )
 }
 
@@ -292,6 +363,7 @@ struct ProjectionUsage {
     rich_entries: usize,
     layout_entries: usize,
     text_bytes: usize,
+    metadata_text_bytes: usize,
 }
 
 impl std::ops::Add for ProjectionUsage {
@@ -304,6 +376,9 @@ impl std::ops::Add for ProjectionUsage {
             rich_entries: self.rich_entries.saturating_add(right.rich_entries),
             layout_entries: self.layout_entries.saturating_add(right.layout_entries),
             text_bytes: self.text_bytes.saturating_add(right.text_bytes),
+            metadata_text_bytes: self
+                .metadata_text_bytes
+                .saturating_add(right.metadata_text_bytes),
         }
     }
 }
@@ -318,17 +393,30 @@ impl std::ops::Sub for ProjectionUsage {
             rich_entries: self.rich_entries.saturating_sub(right.rich_entries),
             layout_entries: self.layout_entries.saturating_sub(right.layout_entries),
             text_bytes: self.text_bytes.saturating_sub(right.text_bytes),
+            metadata_text_bytes: self
+                .metadata_text_bytes
+                .saturating_sub(right.metadata_text_bytes),
         }
     }
 }
 
 fn projection_usage(file_data: &DocumentData) -> Result<ProjectionUsage, AppError> {
+    let document_metadata = document_metadata_text_usage(file_data);
+    ensure_limit(
+        "metadata string bytes",
+        document_metadata.maximum_string_bytes,
+        MAX_METADATA_STRING_BYTES,
+    )?;
     let mut usage = ProjectionUsage {
         dense_slots: 0,
         total_rows: 0,
         rich_entries: 0,
         layout_entries: 0,
         text_bytes: 0,
+        metadata_text_bytes: file_data
+            .path
+            .len()
+            .saturating_add(file_data.file_name.len()),
     };
     for sheet in &file_data.sheets {
         ensure_limit("rows per sheet", sheet.rows.len(), MAX_ROWS_PER_SHEET)?;
@@ -350,6 +438,7 @@ fn projection_usage(file_data: &DocumentData) -> Result<ProjectionUsage, AppErro
 fn sheet_resource_usage(sheet: &DocumentSheet) -> SheetResourceUsage {
     let dense_slots = sheet.rows.iter().map(Vec::len).sum();
     let text_bytes = sheet.rows.iter().flatten().map(cell_text_bytes).sum();
+    let metadata_text_bytes = sheet_metadata_text_usage(sheet).total_bytes;
     let rich_entries = sheet.merges.len()
         + sheet.column_widths.as_ref().map_or(0, HashMap::len)
         + sheet.row_heights.as_ref().map_or(0, HashMap::len)
@@ -367,6 +456,7 @@ fn sheet_resource_usage(sheet: &DocumentSheet) -> SheetResourceUsage {
             layout_entries: sheet.column_widths.as_ref().map_or(0, HashMap::len)
                 + sheet.row_heights.as_ref().map_or(0, HashMap::len),
             text_bytes,
+            metadata_text_bytes,
         },
         extent: sheet.extent(),
     }
@@ -376,15 +466,28 @@ fn validate_sheet_metadata(
     sheet: &DocumentSheet,
     usage: &mut ProjectionUsage,
 ) -> Result<(), AppError> {
+    let metadata = sheet_metadata_text_usage(sheet);
+    ensure_limit(
+        "metadata string bytes",
+        metadata.maximum_string_bytes,
+        MAX_METADATA_STRING_BYTES,
+    )?;
+    usage.metadata_text_bytes = checked_add(
+        usage.metadata_text_bytes,
+        metadata.total_bytes,
+        "metadata text bytes",
+    )?;
     for merge in &sheet.merges {
         validate_position(merge.start_row as usize, merge.start_col as usize)?;
         validate_position(merge.end_row as usize, merge.end_col as usize)?;
     }
-    for index in sheet.column_widths.iter().flat_map(|values| values.keys()) {
+    for (index, width) in sheet.column_widths.iter().flat_map(|values| values.iter()) {
         validate_position(0, *index)?;
+        validate_column_width(Some(*width))?;
     }
-    for index in sheet.row_heights.iter().flat_map(|values| values.keys()) {
+    for (index, height) in sheet.row_heights.iter().flat_map(|values| values.iter()) {
         validate_position(*index, 0)?;
+        validate_row_height(Some(*height))?;
     }
     for index in &sheet.rich.hidden_rows {
         validate_position(*index, 0)?;
@@ -447,7 +550,12 @@ fn validate_usage(usage: ProjectionUsage) -> Result<(), AppError> {
         usage.layout_entries,
         MAX_LAYOUT_OVERRIDES,
     )?;
-    ensure_limit("text bytes", usage.text_bytes, MAX_PROJECTED_TEXT_BYTES)
+    ensure_limit("text bytes", usage.text_bytes, MAX_PROJECTED_TEXT_BYTES)?;
+    ensure_limit(
+        "metadata text bytes",
+        usage.metadata_text_bytes,
+        MAX_PROJECTED_METADATA_TEXT_BYTES,
+    )
 }
 
 impl ProjectionUsage {
@@ -462,6 +570,7 @@ impl ProjectionUsage {
                     .saturating_mul(std::mem::size_of::<Vec<CellValue>>()),
             )
             .saturating_add(self.rich_entries.saturating_mul(96))
+            .saturating_add(self.metadata_text_bytes)
     }
 }
 
@@ -556,10 +665,60 @@ mod tests {
             rich_entries: 0,
             layout_entries: 0,
             text_bytes: MAX_PROJECTED_TEXT_BYTES + 1,
+            metadata_text_bytes: 0,
         })
         .expect_err("projected text budget");
 
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+
+        let metadata_error = validate_usage(ProjectionUsage {
+            metadata_text_bytes: MAX_PROJECTED_METADATA_TEXT_BYTES + 1,
+            ..ProjectionUsage::default()
+        })
+        .expect_err("projected metadata text budget");
+
+        assert!(matches!(metadata_error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn rejects_oversized_metadata_strings_even_with_few_entries() {
+        let mut file_data = DocumentData {
+            path: String::new(),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![DocumentSheet::default()],
+        };
+        file_data.sheets[0].rich.hyperlinks.insert(
+            "A1".to_string(),
+            crate::document_data::Hyperlink {
+                url: "x".repeat(MAX_METADATA_STRING_BYTES + 1),
+                tooltip: None,
+                location: false,
+            },
+        );
+
+        let error = validate_file_data(&file_data).expect_err("oversized hyperlink");
+
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn rejects_layout_dimensions_outside_the_document_policy() {
+        let mut file_data = DocumentData {
+            path: String::new(),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![DocumentSheet::default()],
+        };
+        file_data.sheets[0].column_widths = Some(HashMap::from([(0, 0)]));
+        assert!(matches!(
+            validate_file_data(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+
+        file_data.sheets[0].column_widths = Some(HashMap::from([(0, MAX_COLUMN_WIDTH_PX + 1)]));
+        assert!(matches!(
+            validate_file_data(&file_data),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
     }
 
     #[test]
@@ -582,5 +741,21 @@ mod tests {
                 column_count: 1,
             })
         );
+    }
+
+    #[test]
+    fn resource_ledger_refreshes_identity_bytes_without_rebuilding_sheets() {
+        let mut file_data = DocumentData {
+            path: String::new(),
+            file_name: "book.xlsx".to_string(),
+            sheets: vec![DocumentSheet::default()],
+        };
+        let mut ledger = ResourceLedger::from_file_data(&file_data);
+        let before = ledger.estimated_bytes();
+
+        file_data.path = "x".repeat(4_096);
+        ledger.refresh_identity(&file_data);
+
+        assert!(ledger.estimated_bytes() >= before + 4_096);
     }
 }
