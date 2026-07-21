@@ -10,6 +10,7 @@ import type {
 import type {
   CellValue,
   DocumentManifest,
+  DocumentRegionProjection,
   EditorPatch,
   SheetExtent,
   SheetManifest,
@@ -46,6 +47,16 @@ export function runtimeRegionProjection(
     })),
     metadata: runtimeRegionMetadata(response.metadata),
     estimatedBytes: response.estimatedBytes,
+  };
+}
+
+export function runtimeDocumentRegionProjection(
+  response: SheetRegionProjectionResponse,
+): DocumentRegionProjection {
+  return {
+    documentId: response.documentId,
+    revision: response.revision,
+    projection: runtimeRegionProjection(response),
   };
 }
 

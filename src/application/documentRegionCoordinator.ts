@@ -9,17 +9,17 @@ import {
   TILE_ROWS,
 } from '@/application/documentRegionRepository';
 import type {
+  DocumentRegionProjection,
   EditorCommandContext,
   LoadedSheetSlot,
   SheetRegion,
   SheetRegionBlock,
 } from '@/types/documentRuntime';
-import type { SheetRegionProjectionResponse } from '@/types/protocol';
 
 export type FetchRegionProjection = (
   context: EditorCommandContext,
   region: SheetRegion,
-) => Promise<SheetRegionProjectionResponse>;
+) => Promise<DocumentRegionProjection>;
 
 export type DocumentRegionPort = {
   activateResidentSheet(sheetIndex: number, protectedSheetIndex?: number): boolean;
@@ -109,6 +109,7 @@ export function createDocumentRegionCoordinator(document: DocumentRegionPort) {
           throw error;
         }
         if (!isCurrent() || !document.matchesCommandContext(context)) return false;
+        if (!blocks.length) return false;
         return document.commitLoadedRegionBlocks(context, region, blocks);
       },
       options,

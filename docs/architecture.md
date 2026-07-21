@@ -201,6 +201,9 @@ patches, file capabilities, and recent-file records cross explicit protocol
 mappers before entering runtime state. Projection reducers and pending-edit
 state depend only on those frontend-owned models and never retain response
 objects received from Tauri.
+Region response mapping also preserves document identity and revision in a
+frontend-owned envelope. Region scheduling, fragmentation, and cache admission
+consume that envelope and cannot depend on generated response declarations.
 
 ## State Ownership
 
@@ -271,11 +274,12 @@ objects received from Tauri.
   with relaunch taking priority before execution starts. Platform modules
   provide close and relaunch primitives but do not own exit policy.
 - `documentFileCoordinator` owns new-document creation, selected/recent/path
-  opening, prepared-document commit/abort, route-load cancellation, save,
-  export, and close compensation as a port-driven application workflow. Vue
-  composables adapt Stores, platform APIs, lifecycle guards, router navigation,
-  and user notifications to that workflow; application modules do not import
-  composables or UI libraries.
+  opening, prepared-document commit/abort, save, export, and close compensation
+  as a port-driven application workflow. `routeDocumentLoadCoordinator` owns
+  latest-only route scheduling and cancellation, and delegates accepted paths to
+  that file workflow. Vue composables adapt Stores, platform APIs, lifecycle
+  guards, router navigation, and user notifications; application modules do not
+  import composables or UI libraries.
 - Generic frontend utilities are pure and side-effect free. Backend format and
   recent-file workflows are port-driven application services. Composables bind
   those ports to the backend API, Pinia, platform adapters, and Element Plus;
@@ -402,9 +406,10 @@ Rust `ts-rs` declarations and the `TauriCommandMap` are emitted together into
 code; command names, arguments, and results are checked against that map.
 
 Static cross-process policy is also generated from Rust. Mutation protocol
-version and mutation/region response byte limits have one source in
-`editor_protocol`; frontend session and region logic imports the generated
-constants instead of repeating numeric literals.
+version, mutation/region response byte limits, and cell mutation count/text
+limits have one Rust source exposed through `editor_protocol`; frontend session,
+region, and pending-save logic imports the generated constants instead of
+repeating numeric literals.
 
 Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary
@@ -638,10 +643,11 @@ entries, authorizations expire after 30 minutes, and repeated authorization
 refreshes the eviction order. Preparing or saving consumes the capability;
 canceling the picker flow revokes it explicitly.
 
-Frontend route-driven opening is a latest-only worker. At most one file load is
-active and one pending route is retained; a newer route cancels the active
-continuation and replaces the pending route instead of extending a Promise
-chain.
+Frontend route-driven opening is an application-owned latest-only worker. At
+most one file load is active and one pending route is retained; a newer route
+cancels the active continuation and replaces the pending route instead of
+extending a Promise chain. The route composable only adapts route observation,
+error reporting, and leave confirmation to that coordinator.
 
 Mobile imported selections and reserved save locations are likewise one-shot.
 Their registries are independently limited to 64 entries per purpose and expire

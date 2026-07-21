@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import {
   MAX_BATCH_TEXT_BYTES,
+  MAX_CELL_CHANGES_PER_BATCH,
   MAX_PENDING_CELL_CHANGES,
   MAX_CELL_TEXT_BYTES,
   MAX_PENDING_TEXT_BYTES,
@@ -79,7 +80,7 @@ describe("pendingCellSaves store", () => {
   it("commits oversized pending changes as consecutive bounded batches", async () => {
     const store = usePendingCellSavesStore();
     const committedBatchSizes: number[] = [];
-    for (let row = 0; row <= 4_096; row += 1) {
+    for (let row = 0; row <= MAX_CELL_CHANGES_PER_BATCH; row += 1) {
       store.queueSave(`0,${row},0`, {
         sheetIndex: 0,
         row,
@@ -97,7 +98,7 @@ describe("pendingCellSaves store", () => {
     });
 
     expect(flushed).toBe(true);
-    expect(committedBatchSizes).toEqual([4_096, 1]);
+    expect(committedBatchSizes).toEqual([MAX_CELL_CHANGES_PER_BATCH, 1]);
     expect(store.isIdle()).toBe(true);
   });
 

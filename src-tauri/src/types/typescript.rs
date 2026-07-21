@@ -5,7 +5,8 @@ use syn::{FnArg, GenericArgument, Item, PathArguments, ReturnType, Type};
 use ts_rs::{Config, TS};
 
 use crate::editor_protocol::{
-    EDITOR_MUTATION_PROTOCOL_VERSION, MAX_MUTATION_RESPONSE_BYTES, MAX_SHEET_REGION_RESPONSE_BYTES,
+    EDITOR_MUTATION_PROTOCOL_VERSION, MAX_CELL_TEXT_BYTES, MAX_MUTATION_RESPONSE_BYTES,
+    MAX_MUTATION_TEXT_BYTES, MAX_SET_CELL_CHANGES, MAX_SHEET_REGION_RESPONSE_BYTES,
 };
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::types::{
@@ -39,6 +40,15 @@ pub fn generated_typescript_contract() -> String {
     ));
     output.push_str(&format!(
         "export const MAX_SHEET_REGION_RESPONSE_BYTES = {MAX_SHEET_REGION_RESPONSE_BYTES} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_SET_CELL_CHANGES = {MAX_SET_CELL_CHANGES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_CELL_TEXT_BYTES = {MAX_CELL_TEXT_BYTES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_MUTATION_TEXT_BYTES = {MAX_MUTATION_TEXT_BYTES} as const;\n\n"
     ));
 
     push_decl::<ScalarCellValue>(&mut output, &cfg);

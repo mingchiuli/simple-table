@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   runtimeDocumentManifest,
+  runtimeDocumentRegionProjection,
   runtimeEditorPatches,
   runtimeRegionProjection,
 } from '@/application/documentProjectionProtocol';
@@ -62,6 +63,23 @@ describe('document projection protocol', () => {
     expect(runtime.mergeAnchorCells).toEqual([]);
     expect(runtime.cells[0].value.display).toBe('1');
     expect(runtime.cells[0].value.formula?.cachedValue.display).toBe('1');
+  });
+
+  it('maps the region identity into a runtime-owned envelope', () => {
+    const protocol: SheetRegionProjectionResponse = {
+      documentId: '7',
+      revision: '9',
+      region: { sheetIndex: 0, rowStart: 0, rowEnd: 1, colStart: 0, colEnd: 1 },
+      cells: [],
+      metadata: {},
+    };
+
+    const runtime = runtimeDocumentRegionProjection(protocol);
+    protocol.region.rowEnd = 2;
+
+    expect(runtime.documentId).toBe('7');
+    expect(runtime.revision).toBe('9');
+    expect(runtime.projection.region.rowEnd).toBe(1);
   });
 
   it('maps mutation patch payloads without retaining wire objects', () => {

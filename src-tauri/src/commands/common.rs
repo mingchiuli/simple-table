@@ -6,10 +6,10 @@ use crate::application::runtime::ApplicationRuntime;
 use crate::application::{
     document_open_service, document_query_service, document_service, editor_command_service,
 };
+use crate::editor_protocol::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES, MAX_SET_CELL_CHANGES};
 use crate::error::AppError;
 use crate::protocol_projection;
 use crate::recent::{AddRecentFileRequest, RecentFile};
-use crate::resource_limits::{MAX_CELL_TEXT_BYTES, MAX_MUTATION_TEXT_BYTES};
 use crate::types::{
     DesktopOpenFileInfo, DocumentCapabilities, EditorMutationResponse, EditorSessionInfo,
     MutationResultLookup, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
@@ -17,8 +17,6 @@ use crate::types::{
     SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::{AppHandle, State};
-
-const MAX_SET_CELL_CHANGES: usize = 4_096;
 
 #[derive(Debug)]
 pub(crate) struct BoundedCellText(String);

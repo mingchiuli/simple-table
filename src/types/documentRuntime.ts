@@ -139,6 +139,12 @@ export type SheetRegionProjection = {
   estimatedBytes?: number;
 };
 
+export type DocumentRegionProjection = {
+  documentId: U64String;
+  revision: U64String;
+  projection: SheetRegionProjection;
+};
+
 export type LayoutPatch = {
   sheetIndex: number;
   columnWidths?: Record<number, number | null>;

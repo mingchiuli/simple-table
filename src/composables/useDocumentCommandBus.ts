@@ -3,6 +3,7 @@ import * as api from '@/api';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import { createDocumentMutationProtocol } from '@/application/documentMutationProtocol';
+import { runtimeDocumentRegionProjection } from '@/application/documentProjectionProtocol';
 import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import type {
   EditorCommandContext,
@@ -198,7 +199,7 @@ export function useDocumentCommandBus() {
       await documentSessionCoordinator.waitForMutations();
       return await documentSessionCoordinator.ensureSheetLoaded(
         sheetIndex,
-        api.getSheetRegionProjection
+        fetchRegionProjection
       );
     } catch (error) {
       ElMessage.error(`Failed to load sheet: ${appErrorMessage(error)}`);
@@ -216,7 +217,7 @@ export function useDocumentCommandBus() {
       await documentSessionCoordinator.waitForMutations();
       return await documentSessionCoordinator.ensureSheetRegionLoaded(
         region,
-        api.getSheetRegionProjection,
+        fetchRegionProjection,
         options
       );
     } catch (error) {
@@ -234,6 +235,10 @@ export function useDocumentCommandBus() {
         `Change was applied, but the editor UI could not update: ${appErrorMessage(error)}`
       );
     }
+  }
+
+  async function fetchRegionProjection(context: EditorCommandContext, region: SheetRegion) {
+    return runtimeDocumentRegionProjection(await api.getSheetRegionProjection(context, region));
   }
 
   return {

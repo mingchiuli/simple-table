@@ -1,12 +1,11 @@
 import type {
+  DocumentRegionProjection,
   EditorCommandContext,
   SheetExtent,
   SheetRegion,
   SheetRegionBlock,
 } from '@/types/documentRuntime';
-import type { SheetRegionProjectionResponse } from '@/types/protocol';
 import { MAX_REGION_RESPONSE_BYTES } from '@/protocol/editorResourcePolicy';
-import { runtimeRegionProjection } from '@/application/documentProjectionProtocol';
 import { regionBlock, regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 
@@ -19,7 +18,7 @@ export const TILE_COLUMNS = 32;
 type RegionProjectionFetcher = (
   context: EditorCommandContext,
   region: SheetRegion
-) => Promise<SheetRegionProjectionResponse>;
+) => Promise<DocumentRegionProjection>;
 
 type RegionLoadBudget = {
   remainingRequests: number;
@@ -87,12 +86,12 @@ async function fetchRegionBlocks(
   try {
     const response = await fetchProjection(context, region);
     ensureRegionLoadCanContinue(budget, isCurrent);
-    if (regionKey(response.region) !== regionKey(region)) return [];
+    if (regionKey(response.projection.region) !== regionKey(region)) return [];
     if (
       response.documentId !== context.documentId
       || response.revision !== context.baseRevision
     ) return [];
-    const block = regionBlock(runtimeRegionProjection(response));
+    const block = regionBlock(response.projection);
     if (block.estimatedBytes > MAX_REGION_RESPONSE_BYTES) return [];
     budget.loadedBytes += block.estimatedBytes;
     if (budget.loadedBytes > MAX_REGION_FRAGMENT_BYTES) {

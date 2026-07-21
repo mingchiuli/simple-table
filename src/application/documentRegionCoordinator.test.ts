@@ -1,14 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createDocumentRegionCoordinator } from '@/application/documentRegionCoordinator';
 import { defaultRichProjection } from '@/types';
 import type {
+  DocumentRegionProjection,
   EditorCommandContext,
   LoadedSheetSlot,
   SheetRegion,
   SheetRegionBlock,
 } from '@/types';
-import type { SheetRegionProjectionResponse } from '@/types/protocol';
 
 const context: EditorCommandContext = { documentId: '1', baseRevision: '0' };
 
@@ -39,7 +39,7 @@ describe('documentRegionCoordinator', () => {
 
   it('invalidates an in-flight region request when the document session resets', async () => {
     const region = sheetRegion();
-    let resolveResponse!: (response: SheetRegionProjectionResponse) => void;
+    let resolveResponse!: (response: DocumentRegionProjection) => void;
     const coordinator = createDocumentRegionCoordinator({
       activateResidentSheet: () => true,
       loadedSheet: () => loadedSheet(),
@@ -60,6 +60,28 @@ describe('documentRegionCoordinator', () => {
 
     await expect(loading).resolves.toBe(false);
   });
+
+  it('rejects a runtime region envelope for another document revision', async () => {
+    const region = sheetRegion();
+    const commitLoadedRegionBlocks = vi.fn(() => true);
+    const coordinator = createDocumentRegionCoordinator({
+      activateResidentSheet: () => true,
+      loadedSheet: () => loadedSheet(),
+      currentCommandContext: () => context,
+      matchesCommandContext: () => true,
+      pinRegionBlocksForLoad: () => undefined,
+      touchLoadedRegion: () => false,
+      commitLoadedRegionBlocks,
+      isSheetRegionLoaded: () => false,
+    });
+
+    const mismatched = { ...response(region), revision: '1' as const };
+
+    await expect(
+      coordinator.ensureSheetRegionLoaded(region, async () => mismatched),
+    ).resolves.toBe(false);
+    expect(commitLoadedRegionBlocks).not.toHaveBeenCalled();
+  });
 });
 
 function sheetRegion(): SheetRegion {
@@ -77,14 +99,16 @@ function loadedSheet(): LoadedSheetSlot {
   };
 }
 
-function response(region: SheetRegion): SheetRegionProjectionResponse {
+function response(region: SheetRegion): DocumentRegionProjection {
   return {
     documentId: context.documentId,
     revision: context.baseRevision,
-    region,
-    cells: [],
-    mergeAnchorCells: [],
-    metadata: { merges: [], cellFormats: {}, cellStyles: {} },
-    estimatedBytes: 1,
+    projection: {
+      region,
+      cells: [],
+      mergeAnchorCells: [],
+      metadata: { merges: [], cellFormats: {}, cellStyles: {} },
+      estimatedBytes: 1,
+    },
   };
 }

@@ -592,8 +592,13 @@ rejectMatches(
 );
 
 rejectMatches(
-  [join(projectRoot, 'src', 'application', 'documentRegionCoordinator.ts')],
   [
+    join(projectRoot, 'src', 'application', 'documentRegionCoordinator.ts'),
+    join(projectRoot, 'src', 'application', 'documentRegionRepository.ts'),
+  ],
+  [
+    /['"]@\/types\/protocol['"]/,
+    /\bSheetRegionProjectionResponse\b/,
     /\bEditorMutationResponse\b/,
     /\bDocumentSessionLifecycle\b/,
     /\bFormulaStatus\b/,
@@ -601,6 +606,67 @@ rejectMatches(
     /\bSearchSessionSnapshot\b/,
   ],
   'the narrow frontend document region coordinator boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'useRouteFileLoader.ts')],
+  [
+    /\brouteLoadGeneration\b/,
+    /\bpendingLoad\b/,
+    /\bworkerRunning\b/,
+    /\bactiveCancellation\b/,
+    /\bRouteContinuationGuard\b/,
+  ],
+  'the application-owned route document load scheduling boundary',
+);
+
+const routeDocumentLoadCoordinatorSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'routeDocumentLoadCoordinator.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\brouteLoadGeneration\b/,
+  /\bpendingLoad\b/,
+  /\bworkerRunning\b/,
+  /\bactiveCancellation\b/,
+]) {
+  if (!requirement.test(routeDocumentLoadCoordinatorSource)) {
+    violations.push(
+      `src/application/routeDocumentLoadCoordinator.ts violates the application-owned route document load scheduling boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [join(projectRoot, 'src', 'stores', 'pendingCellSaves.ts')],
+  [
+    /MAX_CELL_CHANGES_PER_BATCH\s*=\s*4_?096/,
+    /MAX_CELL_TEXT_BYTES\s*=\s*4\s*\*\s*1024\s*\*\s*1024/,
+    /MAX_BATCH_TEXT_BYTES\s*=\s*8\s*\*\s*1024\s*\*\s*1024/,
+  ],
+  'the generated frontend cell mutation resource policy boundary',
+);
+
+const editorResourcePolicySource = readFileSync(
+  join(projectRoot, 'src', 'protocol', 'editorResourcePolicy.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\bMAX_SET_CELL_CHANGES\b/,
+  /\bPROTOCOL_MAX_CELL_TEXT_BYTES\b/,
+  /\bPROTOCOL_MAX_MUTATION_TEXT_BYTES\b/,
+]) {
+  if (!requirement.test(editorResourcePolicySource)) {
+    violations.push(
+      `src/protocol/editorResourcePolicy.ts violates the generated frontend cell mutation resource policy boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'commands', 'common.rs')],
+  [/^const\s+MAX_SET_CELL_CHANGES\b/m],
+  'the Rust-owned generated cell mutation resource policy boundary',
 );
 
 rejectMatches(

@@ -20,7 +20,7 @@ import {
   loadedSheetMetadata,
   sheetCell,
 } from '@/projection/documentProjection';
-import { createRouteFileLoader, createRouteLeaveHandler } from '@/composables/useRouteFileLoader';
+import { createRouteLeaveHandler, useRouteFileLoader } from '@/composables/useRouteFileLoader';
 import { useApplicationExitGuard } from '@/composables/useApplicationExit';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
@@ -127,7 +127,7 @@ function routeFilePath(): string | null {
   return value || null;
 }
 
-const routeFileLoader = createRouteFileLoader({
+const routeFileLoader = useRouteFileLoader({
   getRouteFilePath: routeFilePath,
   getCurrentFilePath: () => documentSessionStore.currentFilePath,
   loadFileFromPath,

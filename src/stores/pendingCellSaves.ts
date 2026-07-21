@@ -8,6 +8,11 @@ import type { CellValue } from '@/types/documentRuntime';
 import { cellToEditorString } from "@/utils/cellValue";
 import { utf8ByteLength } from "@/utils/utf8";
 import { markRaw } from "vue";
+import {
+  MAX_BATCH_TEXT_BYTES,
+  MAX_CELL_CHANGES_PER_BATCH,
+  MAX_CELL_TEXT_BYTES,
+} from '@/protocol/editorResourcePolicy';
 
 export type {
   CellSaveRequest,
@@ -16,9 +21,11 @@ export type {
   PendingCellSavePhase,
   QueueDraftResult,
 } from '@/types/pendingCellSave';
-export const MAX_CELL_CHANGES_PER_BATCH = 4_096;
-export const MAX_CELL_TEXT_BYTES = 4 * 1024 * 1024;
-export const MAX_BATCH_TEXT_BYTES = 8 * 1024 * 1024;
+export {
+  MAX_BATCH_TEXT_BYTES,
+  MAX_CELL_CHANGES_PER_BATCH,
+  MAX_CELL_TEXT_BYTES,
+};
 export const MAX_PENDING_CELL_CHANGES = MAX_CELL_CHANGES_PER_BATCH * 2;
 export const MAX_PENDING_TEXT_BYTES = MAX_BATCH_TEXT_BYTES * 2;
 
