@@ -1,253 +1,261 @@
 import { ElMessage } from 'element-plus';
+
 import * as api from '@/api';
+import {
+  createDocumentCommandCoordinator,
+  type InteractiveMutationOptions,
+} from '@/application/documentCommandCoordinator';
+import type { RegionLoadPriority } from '@/application/documentRegionLoadScheduler';
+import { searchOutcomeState } from '@/application/editorRuntimeProtocol';
+import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
-import { createDocumentMutationProtocol } from '@/application/documentMutationProtocol';
-import { runtimeDocumentRegionProjection } from '@/application/documentProjectionProtocol';
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import type {
   EditorCommandContext,
-  MutationCommandContext,
   SheetRegion,
   U64String,
 } from '@/types/documentRuntime';
-import type { EditorMutationResponse } from '@/types/protocol';
+import type { CellSaveRequest } from '@/types/pendingCellSave';
+import type { SearchOutcomeStateInput, SearchScope } from '@/types/editorRuntime';
 import { appErrorMessage } from '@/utils/appError';
-import type { RegionLoadPriority } from '@/application/documentRegionLoadScheduler';
 
-type InteractiveMutationOptions = {
-  action: (context: MutationCommandContext) => Promise<EditorMutationResponse>;
+type InteractiveCommandOptions = {
   flushPendingChanges: () => Promise<boolean>;
   errorMessage: string;
   refreshProjectionOnError?: boolean;
   afterApplied?: () => void;
 };
 
-type BackgroundMutationOptions = {
-  documentId: U64String;
-  action: (context: MutationCommandContext) => Promise<EditorMutationResponse>;
-  onRefreshFailed?: (error: unknown) => void;
-};
+type DocumentCommandBus = ReturnType<typeof createDocumentCommandBus>;
 
-type ConsistentReadOptions<T> = {
-  flushPendingChanges: () => Promise<boolean>;
-  action: (context: EditorCommandContext) => Promise<T>;
-  lockInteraction?: boolean;
-};
+const commandBuses = new WeakMap<object, DocumentCommandBus>();
 
-export function useDocumentCommandBus() {
-  const documentSessionStore = useDocumentSessionStore();
-  const documentSessionCoordinator = useDocumentSessionCoordinator();
-  const editorSelectionStore = useEditorSelectionStore();
-  const mutationProtocol = createDocumentMutationProtocol({
+export function useDocumentCommandBus(): DocumentCommandBus {
+  const document = useDocumentSessionStore();
+  const existing = commandBuses.get(document);
+  if (existing) return existing;
+
+  const bus = createDocumentCommandBus(document);
+  commandBuses.set(document, bus);
+  return bus;
+}
+
+function createDocumentCommandBus(document: ReturnType<typeof useDocumentSessionStore>) {
+  const session = useDocumentSessionCoordinator();
+  const selection = useEditorSelectionStore();
+  const coordinator = createDocumentCommandCoordinator({
+    document,
+    session,
     transport: {
       getMutationResult: (documentId, commandId) =>
         api.getMutationResult(documentId, commandId),
       getActiveDocument: () => api.getActiveDocument(),
       getCurrentDocumentProjection: (context, preferredSheetIndex) =>
         api.getCurrentDocumentProjection(context, preferredSheetIndex),
+      getEditorState: (context) => api.getEditorState(context),
+      getSheetRegionProjection: (context, region) =>
+        api.getSheetRegionProjection(context, region),
     },
-    recovery: {
-      preferredSheetIndex: () => editorSelectionStore.currentSheetIndex,
-      recoverProjection: (response, preferredSheetIndex) =>
-        documentSessionCoordinator.recoverActiveDocumentResponse(response, preferredSheetIndex),
-    },
-    reportError: (message, error) => console.error(`${message}:`, error),
+    preferredSheetIndex: () => selection.currentSheetIndex,
+    reportDiagnostic: (message, error) => console.error(`${message}:`, error),
   });
 
-  async function runInteractiveMutation({
-    action,
-    flushPendingChanges,
-    errorMessage,
-    refreshProjectionOnError = false,
-    afterApplied,
-  }: InteractiveMutationOptions): Promise<void> {
-    const releaseEditorCommand = documentSessionCoordinator.beginEditorCommand();
-    if (!releaseEditorCommand) return;
-    const initialContext = documentSessionStore.currentCommandContext();
-    if (!initialContext) {
-      releaseEditorCommand();
-      return;
-    }
-
-    try {
-      if (!(await flushPendingChanges())) return;
-      await documentSessionCoordinator.enqueueDocumentMutation(initialContext.documentId, async (context, lease) => {
-        const execution = await mutationProtocol.execute(action, context);
-        if (!lease.isCurrent()) return;
-        if (execution.status === 'recovered') {
-          runAfterApplied(afterApplied);
-          return;
-        }
-        const response = execution.response;
-        try {
-          const result = await applyMutationResponse(response);
-          if (lease.isCurrent() && result.applied) runAfterApplied(afterApplied);
-        } catch (error) {
-          if (!lease.isCurrent()) return;
-          if (!documentSessionCoordinator.markProjectionStaleFromMutationResponse(response)) return;
-          if (await refreshAfterMutationError(true)) {
-            if (lease.isCurrent()) runAfterApplied(afterApplied);
-          } else {
-            ElMessage.error(
-              `Change was applied, but the editor could not refresh: ${appErrorMessage(error)}`
-            );
-          }
-        }
-      });
-    } catch (error) {
-      await refreshAfterMutationError(
-        refreshProjectionOnError || documentSessionStore.projectionStale
-      );
-      ElMessage.error(`${errorMessage}: ${appErrorMessage(error)}`);
-    } finally {
-      releaseEditorCommand();
-    }
-  }
-
-  async function runBackgroundMutation({
-    documentId,
-    action,
-    onRefreshFailed,
-  }: BackgroundMutationOptions): Promise<void> {
-    await documentSessionCoordinator.enqueueDocumentMutation(documentId, async (context, lease) => {
-      const execution = await mutationProtocol.execute(action, context);
-      if (!lease.isCurrent()) return;
-      if (execution.status === 'recovered') return;
-      const response = execution.response;
-      try {
-        const result = await applyMutationResponse(response);
-        if (!result.applied && documentSessionStore.documentId === documentId) {
-          throw new Error('Mutation response was not applied to the active document');
-        }
-      } catch (error) {
-        if (!lease.isCurrent()) return;
-        if (!documentSessionCoordinator.markProjectionStaleFromMutationResponse(response)) return;
-        if (!(await refreshAfterMutationError(true))) onRefreshFailed?.(error);
-      }
+  async function runInteractiveCommand(
+    action: InteractiveMutationOptions['action'],
+    {
+      flushPendingChanges,
+      errorMessage,
+      refreshProjectionOnError,
+      afterApplied,
+    }: InteractiveCommandOptions,
+  ): Promise<void> {
+    const outcome = await coordinator.runInteractiveMutation({
+      action,
+      flushPendingChanges,
+      refreshProjectionOnError,
+      afterApplied,
     });
-  }
-
-  async function refreshAfterMutationError(refreshProjection: boolean): Promise<boolean> {
-    try {
-      await documentSessionCoordinator.refreshAfterMutationFailure(
-        api.getEditorState,
-        refreshProjection && documentSessionStore.data
-          ? api.getCurrentDocumentProjection
-          : undefined,
-        editorSelectionStore.currentSheetIndex
+    if (outcome.status === 'failed') {
+      ElMessage.error(`${errorMessage}: ${appErrorMessage(outcome.error)}`);
+    } else if (outcome.status === 'refresh-failed') {
+      ElMessage.error(
+        `Change was applied, but the editor could not refresh: ${appErrorMessage(outcome.error)}`,
       );
-      return true;
-    } catch (error) {
-      console.error('Failed to refresh document session after mutation error:', error);
-      return false;
+    } else if (outcome.status === 'after-applied-failed') {
+      console.error('Post-mutation UI update failed:', outcome.error);
+      ElMessage.error(
+        `Change was applied, but the editor UI could not update: ${appErrorMessage(outcome.error)}`,
+      );
     }
   }
 
-  async function runConsistentRead<T>({
-    flushPendingChanges,
-    action,
-    lockInteraction = false,
-  }: ConsistentReadOptions<T>): Promise<T | undefined> {
-    const releaseEditorCommand = lockInteraction
-      ? documentSessionCoordinator.beginEditorCommand()
-      : () => undefined;
-    if (!releaseEditorCommand) return undefined;
-    const initialContext = documentSessionStore.currentCommandContext();
-    if (!initialContext) {
-      releaseEditorCommand();
-      return undefined;
-    }
-    try {
-      if (!(await flushPendingChanges())) return undefined;
-      await documentSessionCoordinator.waitForMutations();
-      const context = documentSessionStore.commandContextForDocument(initialContext.documentId);
-      if (!context) return undefined;
-      const result = await action(context);
-      return documentSessionStore.matchesCommandContext(context) ? result : undefined;
-    } finally {
-      releaseEditorCommand();
-    }
-  }
-
-  async function prepareConsistentContext(
-    flushPendingChanges: () => Promise<boolean>
-  ): Promise<EditorCommandContext | undefined> {
-    const initialContext = documentSessionStore.currentCommandContext();
-    if (!initialContext) return undefined;
-    if (!(await flushPendingChanges())) return undefined;
-    await documentSessionCoordinator.waitForMutations();
-    return documentSessionStore.commandContextForDocument(initialContext.documentId) ?? undefined;
-  }
-
-  function applyMutationResponse(response: EditorMutationResponse) {
-    return documentSessionCoordinator.applyMutationResponseWithResync(
-      response,
-      api.getCurrentDocumentProjection,
-      editorSelectionStore.currentSheetIndex
+  function addRow(
+    sheetIndex: number,
+    rowIndex: number,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.addRow(context, sheetIndex, rowIndex),
+      options,
     );
+  }
+
+  function deleteRow(
+    sheetIndex: number,
+    rowIndex: number,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.deleteRow(context, sheetIndex, rowIndex),
+      options,
+    );
+  }
+
+  function addColumn(
+    sheetIndex: number,
+    colIndex: number,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.addColumn(context, sheetIndex, colIndex),
+      options,
+    );
+  }
+
+  function deleteColumn(
+    sheetIndex: number,
+    colIndex: number,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.deleteColumn(context, sheetIndex, colIndex),
+      options,
+    );
+  }
+
+  function addSheet(options: InteractiveCommandOptions) {
+    return runInteractiveCommand((context) => api.addSheet(context), options);
+  }
+
+  function deleteSheet(sheetIndex: number, options: InteractiveCommandOptions) {
+    return runInteractiveCommand((context) => api.deleteSheet(context, sheetIndex), options);
+  }
+
+  function undo(options: InteractiveCommandOptions) {
+    return runInteractiveCommand((context) => api.undo(context), options);
+  }
+
+  function redo(options: InteractiveCommandOptions) {
+    return runInteractiveCommand((context) => api.redo(context), options);
+  }
+
+  function setColumnWidth(
+    sheetIndex: number,
+    colIndex: number,
+    width: number | null,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.setColumnWidth(context, sheetIndex, colIndex, width),
+      options,
+    );
+  }
+
+  function setRowHeight(
+    sheetIndex: number,
+    rowIndex: number,
+    height: number | null,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.setRowHeight(context, sheetIndex, rowIndex, height),
+      options,
+    );
+  }
+
+  async function setCells(
+    documentId: U64String,
+    changes: CellSaveRequest[],
+    onRefreshFailed?: (error: unknown) => void,
+  ): Promise<void> {
+    const payload = changes.map(({ sheetIndex, row, col, value }) => ({
+      sheetIndex,
+      row,
+      col,
+      text: value,
+    }));
+    const outcome = await coordinator.runBackgroundMutation({
+      documentId,
+      action: (context) => api.setCells(context, payload),
+    });
+    if (outcome.status === 'refresh-failed') onRefreshFailed?.(outcome.error);
+  }
+
+  async function search(
+    query: string,
+    scope: SearchScope,
+    currentSheetIndex: number,
+    flushPendingChanges: () => Promise<boolean>,
+  ): Promise<SearchOutcomeStateInput | undefined> {
+    const response = await coordinator.runConsistentRead({
+      flushPendingChanges,
+      lockInteraction: true,
+      action: (context) => api.search(
+        context,
+        query,
+        scope,
+        scope === 'currentSheet' ? currentSheetIndex : null,
+      ),
+    });
+    return response ? searchOutcomeState(response) : undefined;
   }
 
   async function ensureSheetLoaded(
     sheetIndex: number,
-    flushPendingChanges: () => Promise<boolean>
+    flushPendingChanges: () => Promise<boolean>,
   ): Promise<boolean> {
-    const releaseEditorCommand = documentSessionCoordinator.beginEditorCommand();
-    if (!releaseEditorCommand) return false;
     try {
-      if (!(await flushPendingChanges())) return false;
-      await documentSessionCoordinator.waitForMutations();
-      return await documentSessionCoordinator.ensureSheetLoaded(
-        sheetIndex,
-        fetchRegionProjection
-      );
+      return await coordinator.ensureSheetLoaded(sheetIndex, flushPendingChanges);
     } catch (error) {
       ElMessage.error(`Failed to load sheet: ${appErrorMessage(error)}`);
       return false;
-    } finally {
-      releaseEditorCommand();
     }
   }
 
   async function ensureSheetRegionLoaded(
     region: SheetRegion,
-    options: { priority?: RegionLoadPriority } = {}
+    options: { priority?: RegionLoadPriority } = {},
   ): Promise<boolean> {
     try {
-      await documentSessionCoordinator.waitForMutations();
-      return await documentSessionCoordinator.ensureSheetRegionLoaded(
-        region,
-        fetchRegionProjection,
-        options
-      );
+      return await coordinator.ensureSheetRegionLoaded(region, options);
     } catch (error) {
       console.error('Failed to load sheet viewport:', error);
       return false;
     }
   }
 
-  function runAfterApplied(afterApplied: (() => void) | undefined) {
-    try {
-      afterApplied?.();
-    } catch (error) {
-      console.error('Post-mutation UI update failed:', error);
-      ElMessage.error(
-        `Change was applied, but the editor UI could not update: ${appErrorMessage(error)}`
-      );
-    }
-  }
-
-  async function fetchRegionProjection(context: EditorCommandContext, region: SheetRegion) {
-    return runtimeDocumentRegionProjection(await api.getSheetRegionProjection(context, region));
+  function prepareConsistentContext(
+    flushPendingChanges: () => Promise<boolean>,
+  ): Promise<EditorCommandContext | undefined> {
+    return coordinator.prepareConsistentContext(flushPendingChanges);
   }
 
   return {
-    runInteractiveMutation,
-    runBackgroundMutation,
-    refreshAfterMutationError,
+    addRow,
+    deleteRow,
+    addColumn,
+    deleteColumn,
+    addSheet,
+    deleteSheet,
+    undo,
+    redo,
+    setColumnWidth,
+    setRowHeight,
+    setCells,
+    search,
+    refreshAfterMutationError: coordinator.refreshAfterMutationError,
     ensureSheetLoaded,
     ensureSheetRegionLoaded,
-    runConsistentRead,
     prepareConsistentContext,
   };
 }

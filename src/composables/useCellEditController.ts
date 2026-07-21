@@ -1,6 +1,5 @@
 import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import * as api from '@/api';
 import { useCellEditTransactions } from '@/composables/useCellEditTransactions';
 import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import {
@@ -10,7 +9,6 @@ import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { CellSaveRequest } from '@/types';
 import type { ComputedRef, Ref } from 'vue';
 import type { DocumentProjection, LoadedSheetSlot } from '@/types';
-import type { SetCellRequest } from '@/types/protocol';
 import { isCellLoaded, sheetCell } from '@/projection/documentProjection';
 import { cellToEditorString } from '@/utils/cellValue';
 import { getCellKey } from '@/utils/cellKey';
@@ -78,26 +76,20 @@ export function useCellEditController({
     const currentFileData = fileData.value;
     if (!currentFileData) throw new Error('No file is loaded');
 
-    const payload: SetCellRequest[] = changes.map((change) => {
+    for (const change of changes) {
       const sheet = currentFileData.sheets[change.sheetIndex];
       if (!sheet || !isCellLoaded(sheet, change.row, change.col)) {
         throw new Error(`Cell ${change.row},${change.col} is not loaded`);
       }
-      return {
-        sheetIndex: change.sheetIndex,
-        row: change.row,
-        col: change.col,
-        text: change.value,
-      };
-    });
+    }
 
-    await commandBus.runBackgroundMutation({
+    await commandBus.setCells(
       documentId,
-      action: (context) => api.setCells(context, payload),
-      onRefreshFailed: (error) => {
+      changes,
+      (error) => {
         ElMessage.error(`保存已提交，但刷新失败: ${appErrorMessage(error)}`);
       },
-    });
+    );
   }
 
   async function handleCommitFailed(error: unknown) {

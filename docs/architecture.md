@@ -41,6 +41,10 @@ Tauri command modules are transport adapters. They own bounded wire
 deserialization and executor selection, then delegate to application services
 or outer adapters. They cannot import platform I/O or update implementations,
 acquire the active-document registry, or invoke `ops` directly.
+The command surface is separated by use case into file, document-query,
+editor-mutation, search, and recent-file modules. Bounded cell input
+deserialization lives in a command-private input module; command use-case
+modules do not invoke one another.
 Document replacement and close coordination live in the Rust application
 layer, which owns retirement of mutation replay and search-index work before
 releasing the old document. Neither the document model nor the I/O layer may
@@ -264,6 +268,12 @@ consume that envelope and cannot depend on generated response declarations.
 - Search request tokens and pending-cell debounce/save state are likewise owned
   by application coordinators. Composables cache one coordinator per Pinia
   instance and adapt its synchronous Store port.
+- `documentCommandCoordinator` owns interaction leases, mutation serialization,
+  consistent reads, response application, and recovery as a port-driven
+  workflow. `useDocumentCommandBus` caches one semantic facade per document
+  Store and binds that workflow to backend transport and user notifications.
+  Editor feature composables submit semantic commands and cannot construct wire
+  mutation actions or response DTOs.
 - Resetting a frontend document generation invalidates queued work but never
   removes an already-started mutation or cell save from its tracked Promise
   chain. New-generation work waits for that chain to drain, and mutation leases
@@ -407,9 +417,10 @@ code; command names, arguments, and results are checked against that map.
 
 Static cross-process policy is also generated from Rust. Mutation protocol
 version, mutation/region response byte limits, and cell mutation count/text
-limits have one Rust source exposed through `editor_protocol`; frontend session,
-region, and pending-save logic imports the generated constants instead of
-repeating numeric literals.
+limits have one Rust source exposed through `editor_protocol`; the search-query
+UTF-8 byte limit follows the same path. Frontend session, region, pending-save,
+and search-input logic import the generated constants instead of repeating
+numeric literals.
 
 Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
 invoke adapter validates canonical decimal form and the Rust command boundary

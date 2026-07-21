@@ -6,7 +6,8 @@ use ts_rs::{Config, TS};
 
 use crate::editor_protocol::{
     EDITOR_MUTATION_PROTOCOL_VERSION, MAX_CELL_TEXT_BYTES, MAX_MUTATION_RESPONSE_BYTES,
-    MAX_MUTATION_TEXT_BYTES, MAX_SET_CELL_CHANGES, MAX_SHEET_REGION_RESPONSE_BYTES,
+    MAX_MUTATION_TEXT_BYTES, MAX_SEARCH_QUERY_BYTES, MAX_SET_CELL_CHANGES,
+    MAX_SHEET_REGION_RESPONSE_BYTES,
 };
 use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 use crate::types::{
@@ -40,6 +41,9 @@ pub fn generated_typescript_contract() -> String {
     ));
     output.push_str(&format!(
         "export const MAX_SHEET_REGION_RESPONSE_BYTES = {MAX_SHEET_REGION_RESPONSE_BYTES} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_SEARCH_QUERY_BYTES = {MAX_SEARCH_QUERY_BYTES} as const;\n\n"
     ));
     output.push_str(&format!(
         "export const MAX_SET_CELL_CHANGES = {MAX_SET_CELL_CHANGES} as const;\n"
@@ -122,7 +126,11 @@ pub fn generated_typescript_contract() -> String {
 fn push_tauri_command_map(output: &mut String) {
     output.push_str("export type TauriCommandMap = {\n");
     for source in [
-        include_str!("../commands/common.rs"),
+        include_str!("../commands/file.rs"),
+        include_str!("../commands/document.rs"),
+        include_str!("../commands/editor.rs"),
+        include_str!("../commands/search.rs"),
+        include_str!("../commands/recent.rs"),
         include_str!("../commands/android.rs"),
         include_str!("../commands/ios.rs"),
         include_str!("../commands/mobile.rs"),

@@ -1,6 +1,5 @@
 import type { ComputedRef, Ref } from "vue";
 import { ElMessage } from "element-plus";
-import * as api from "@/api";
 import { useDocumentCommandBus } from "@/composables/useDocumentCommandBus";
 import {
   useDocumentSessionStore,
@@ -10,13 +9,10 @@ import { useEditorSelectionStore } from "@/stores/editorSelection";
 import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
 import type {
   DocumentProjection,
-  MutationCommandContext,
   SearchResult,
   SearchScope,
   LoadedSheetSlot,
 } from "@/types";
-import type { EditorMutationResponse } from '@/types/protocol';
-import { searchOutcomeState } from '@/application/editorRuntimeProtocol';
 import { workbookSheetCapabilities } from "@/types";
 import { appErrorMessage } from "@/utils/appError";
 
@@ -43,38 +39,38 @@ export function useEditorCommands({
   const searchSessionCoordinator = useSearchSessionCoordinator();
   const commandBus = useDocumentCommandBus();
 
-  function runEditorMutation(
-    action: (context: MutationCommandContext) => Promise<EditorMutationResponse>,
+  function mutationOptions(
     errorMessage: string,
     options: {
       refreshProjectionOnError?: boolean;
       afterApplied?: () => void;
     } = {}
   ) {
-    return commandBus.runInteractiveMutation({
-      action,
+    return {
       flushPendingChanges: flushPendingCellChanges,
       errorMessage,
       ...options,
-    });
+    };
   }
 
   async function handleAddRow() {
     if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
     const rowIndex = currentSheet.value.extent.rowCount;
-    await runEditorMutation(
-      (context) => api.addRow(context, sheetIndex, rowIndex),
-      "Failed to add row"
+    await commandBus.addRow(
+      sheetIndex,
+      rowIndex,
+      mutationOptions("Failed to add row"),
     );
   }
 
   async function handleDeleteRow(index: number) {
     if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("rows")) return;
     const sheetIndex = currentSheetIndex.value;
-    await runEditorMutation(
-      (context) => api.deleteRow(context, sheetIndex, index),
-      "Failed to delete row"
+    await commandBus.deleteRow(
+      sheetIndex,
+      index,
+      mutationOptions("Failed to delete row"),
     );
   }
 
@@ -82,32 +78,32 @@ export function useEditorCommands({
     if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
     const colIndex = selectedCell.value?.col ?? currentSheet.value.extent.columnCount;
-    await runEditorMutation(
-      (context) => api.addColumn(context, sheetIndex, colIndex),
-      "Failed to add column"
+    await commandBus.addColumn(
+      sheetIndex,
+      colIndex,
+      mutationOptions("Failed to add column"),
     );
   }
 
   async function handleDeleteColumn(index: number) {
     if (isEditorCommandBlocked() || !currentSheet.value || !ensureStructureEditingAllowed("columns")) return;
     const sheetIndex = currentSheetIndex.value;
-    await runEditorMutation(
-      (context) => api.deleteColumn(context, sheetIndex, index),
-      "Failed to delete column"
+    await commandBus.deleteColumn(
+      sheetIndex,
+      index,
+      mutationOptions("Failed to delete column"),
     );
   }
 
   async function handleAddSheet() {
     if (isEditorCommandBlocked() || !fileData.value || !ensureStructureEditingAllowed("sheets")) return;
     const newSheetIndex = fileData.value.sheets.length;
-    await runEditorMutation(
-      (context) => api.addSheet(context),
-      "Failed to add sheet",
-      {
+    await commandBus.addSheet(
+      mutationOptions("Failed to add sheet", {
         afterApplied: () => {
           editorSelectionStore.activateSheet(newSheetIndex);
         },
-      }
+      }),
     );
   }
 
@@ -119,9 +115,9 @@ export function useEditorCommands({
     }
 
     const deletedIndex = currentSheetIndex.value;
-    await runEditorMutation(
-      (context) => api.deleteSheet(context, deletedIndex),
-      "Failed to delete sheet"
+    await commandBus.deleteSheet(
+      deletedIndex,
+      mutationOptions("Failed to delete sheet"),
     );
   }
 
@@ -135,30 +131,26 @@ export function useEditorCommands({
 
   async function handleUndo() {
     if (isEditorCommandBlocked() || !documentStatusStore.canUndo) return;
-    await runEditorMutation((context) => api.undo(context), "Failed to undo");
+    await commandBus.undo(mutationOptions("Failed to undo"));
   }
 
   async function handleRedo() {
     if (isEditorCommandBlocked() || !documentStatusStore.canRedo) return;
-    await runEditorMutation((context) => api.redo(context), "Failed to redo");
+    await commandBus.redo(mutationOptions("Failed to redo"));
   }
 
   async function handleSearch(query: string, scope: SearchScope) {
     if (!fileData.value || isEditorCommandBlocked()) return;
     const requestId = searchSessionCoordinator.beginSearch(query);
     try {
-      const response = await commandBus.runConsistentRead({
-        flushPendingChanges: flushPendingCellChanges,
-        lockInteraction: true,
-        action: (context) => api.search(
-          context,
-          query,
-          scope,
-          scope === "currentSheet" ? currentSheetIndex.value : null
-        ),
-      });
-      if (response) {
-        searchSessionCoordinator.applySearchOutcome(requestId, searchOutcomeState(response));
+      const outcome = await commandBus.search(
+        query,
+        scope,
+        currentSheetIndex.value,
+        flushPendingCellChanges,
+      );
+      if (outcome) {
+        searchSessionCoordinator.applySearchOutcome(requestId, outcome);
       }
     } catch (error) {
       ElMessage.error(`Search failed: ${appErrorMessage(error)}`);
@@ -197,20 +189,22 @@ export function useEditorCommands({
   async function handleColumnResize(colIndex: number, width: number) {
     if (!fileData.value || isEditorCommandBlocked() || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
-    await runEditorMutation(
-      (context) => api.setColumnWidth(context, sheetIndex, colIndex, width),
-      "Failed to resize column",
-      { refreshProjectionOnError: true }
+    await commandBus.setColumnWidth(
+      sheetIndex,
+      colIndex,
+      width,
+      mutationOptions("Failed to resize column", { refreshProjectionOnError: true }),
     );
   }
 
   async function handleRowResize(rowIndex: number, height: number) {
     if (!fileData.value || isEditorCommandBlocked() || !ensureResizeAllowed()) return;
     const sheetIndex = currentSheetIndex.value;
-    await runEditorMutation(
-      (context) => api.setRowHeight(context, sheetIndex, rowIndex, height),
-      "Failed to resize row",
-      { refreshProjectionOnError: true }
+    await commandBus.setRowHeight(
+      sheetIndex,
+      rowIndex,
+      height,
+      mutationOptions("Failed to resize row", { refreshProjectionOnError: true }),
     );
   }
 

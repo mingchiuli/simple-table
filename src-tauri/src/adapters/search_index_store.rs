@@ -12,6 +12,7 @@ use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
 use crate::domain::SearchCellText;
+use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;
 use crate::error::AppError;
 #[cfg(test)]
 use crate::types::CellValue;
@@ -19,7 +20,6 @@ use crate::types::CellValue;
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEX_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const MAX_SEARCH_QUERY_BYTES: usize = 4 * 1024;
 pub(crate) const MAX_SEARCH_QUERY_TERMS: usize = 64;
 
 struct SchemaFields {

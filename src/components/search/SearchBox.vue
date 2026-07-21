@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Search } from '@element-plus/icons-vue';
+import { MAX_SEARCH_QUERY_BYTES } from '@/protocol/editorResourcePolicy';
 import type { SearchScope } from '@/types';
 import { truncateUtf8 } from '@/utils/utf8';
 
-const MAX_SEARCH_QUERY_BYTES = 4 * 1024;
-const MAX_SEARCH_QUERY_CHARACTERS = 4 * 1024;
+const MAX_SEARCH_QUERY_CHARACTERS = MAX_SEARCH_QUERY_BYTES;
 
 const props = defineProps<{
   isSearching: boolean;

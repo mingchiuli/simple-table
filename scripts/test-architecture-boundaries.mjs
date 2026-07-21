@@ -374,6 +374,31 @@ rejectMatches(
   'the explicitly-owned command execution runtime boundary',
 );
 
+if (sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs')
+  .some((file) => relative(projectRoot, file) === 'src-tauri/src/commands/common.rs')) {
+  violations.push(
+    'src-tauri/src/commands/common.rs violates the use-case-segregated Rust command boundary',
+  );
+}
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'commands', 'input.rs')],
+  [/\#\[tauri::command/],
+  'the input-deserialization-only Rust command boundary',
+);
+
+rejectMatches(
+  [
+    join(projectRoot, 'src-tauri', 'src', 'commands', 'document.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'commands', 'editor.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'commands', 'file.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'commands', 'recent.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'commands', 'search.rs'),
+  ],
+  [/super::(?:document|editor|file|recent|search)(?:::|\b)/],
+  'the independent Rust command use-case module boundary',
+);
+
 rejectMatches(
   [
     ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'state'), '.rs'),
@@ -620,6 +645,40 @@ rejectMatches(
   'the application-owned route document load scheduling boundary',
 );
 
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'composables', 'useEditorCommands.ts'),
+    join(projectRoot, 'src', 'composables', 'useCellEditController.ts'),
+  ],
+  [
+    /['"]@\/api['"]/,
+    /['"]@\/types\/protocol['"]/,
+    /\b(?:EditorMutationResponse|SetCellRequest|MutationCommandContext)\b/,
+  ],
+  'the semantic frontend document command facade boundary',
+);
+
+const documentCommandBusSource = readFileSync(
+  join(projectRoot, 'src', 'composables', 'useDocumentCommandBus.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /new\s+WeakMap\b/,
+  /\bcreateDocumentCommandCoordinator\b/,
+]) {
+  if (!requirement.test(documentCommandBusSource)) {
+    violations.push(
+      `src/composables/useDocumentCommandBus.ts violates the single-instance semantic command facade boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'useDocumentCommandBus.ts')],
+  [/\bcreateDocumentMutationProtocol\b/],
+  'the application-owned document command execution boundary',
+);
+
 const routeDocumentLoadCoordinatorSource = readFileSync(
   join(projectRoot, 'src', 'application', 'routeDocumentLoadCoordinator.ts'),
   'utf8',
@@ -655,6 +714,7 @@ for (const requirement of [
   /\bMAX_SET_CELL_CHANGES\b/,
   /\bPROTOCOL_MAX_CELL_TEXT_BYTES\b/,
   /\bPROTOCOL_MAX_MUTATION_TEXT_BYTES\b/,
+  /\bPROTOCOL_MAX_SEARCH_QUERY_BYTES\b/,
 ]) {
   if (!requirement.test(editorResourcePolicySource)) {
     violations.push(
@@ -664,7 +724,7 @@ for (const requirement of [
 }
 
 rejectMatches(
-  [join(projectRoot, 'src-tauri', 'src', 'commands', 'common.rs')],
+  [join(projectRoot, 'src-tauri', 'src', 'commands', 'input.rs')],
   [/^const\s+MAX_SET_CELL_CHANGES\b/m],
   'the Rust-owned generated cell mutation resource policy boundary',
 );
@@ -819,6 +879,18 @@ rejectMatches(
   ],
   [/16\s*\*\s*1024\s*\*\s*1024/],
   'the generated Sheet-region response policy boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'components', 'search', 'SearchBox.vue')],
+  [/const\s+MAX_SEARCH_QUERY_BYTES\b/, /4\s*\*\s*1024/],
+  'the generated search-query resource policy boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_store.rs')],
+  [/const\s+MAX_SEARCH_QUERY_BYTES\b/],
+  'the editor-protocol-owned search-query resource policy boundary',
 );
 
 rejectMatches(

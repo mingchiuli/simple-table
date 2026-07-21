@@ -319,13 +319,24 @@ fn estimated_search_hit_bytes(result: &SearchHit) -> usize {
 #[cfg(test)]
 mod query_limit_tests {
     use super::*;
-    use crate::adapters::search_index_store::{MAX_SEARCH_QUERY_BYTES, MAX_SEARCH_QUERY_TERMS};
+    use crate::adapters::search_index_store::MAX_SEARCH_QUERY_TERMS;
+    use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;
 
     #[test]
     fn search_query_rejects_oversized_text_before_accessing_the_document() {
         let error = SearchQueryPlan::try_new(&"x".repeat(MAX_SEARCH_QUERY_BYTES + 1))
             .expect_err("oversized search query");
 
+        assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
+    }
+
+    #[test]
+    fn search_query_limit_is_measured_in_utf8_bytes() {
+        let accepted = "界".repeat(MAX_SEARCH_QUERY_BYTES / "界".len());
+        assert!(SearchQueryPlan::try_new(&accepted).is_ok());
+
+        let rejected = format!("{accepted}界");
+        let error = SearchQueryPlan::try_new(&rejected).expect_err("oversized UTF-8 query");
         assert!(matches!(error, AppError::ResourceLimitExceeded(_)));
     }
 
