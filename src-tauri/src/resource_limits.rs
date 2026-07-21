@@ -27,6 +27,11 @@ pub const MAX_FILE_NAME_BYTES: usize = 4 * 1024;
 pub const MAX_SHEET_NAME_BYTES: usize = 4 * 1024;
 pub const SHEET_REGION_TILE_ROWS: usize = 128;
 pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
+pub const MAX_PREPARED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_SAVE_SOURCE_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_GENERATED_FILE_BYTES: usize = 192 * 1024 * 1024;
+pub const MAX_DOCUMENT_WORKING_SET_BYTES: usize = 832 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ResourceLedger {
@@ -206,6 +211,28 @@ pub fn validate_file_data(file_data: &DocumentData) -> Result<(), AppError> {
 pub fn validate_document_identity(path: &str, file_name: &str) -> Result<(), AppError> {
     ensure_limit("document path bytes", path.len(), MAX_DOCUMENT_PATH_BYTES)?;
     ensure_limit("file name bytes", file_name.len(), MAX_FILE_NAME_BYTES)
+}
+
+pub fn validate_prepared_document_bytes(estimated_bytes: usize) -> Result<(), AppError> {
+    if estimated_bytes > MAX_PREPARED_DOCUMENT_BYTES {
+        return Err(limit_error(format!(
+            "prepared document parse requires an estimated {estimated_bytes} bytes, maximum is {MAX_PREPARED_DOCUMENT_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_active_and_prepared_document_bytes(
+    active_bytes: usize,
+    prepared_bytes: usize,
+) -> Result<(), AppError> {
+    let peak_bytes = active_bytes.saturating_add(prepared_bytes);
+    if peak_bytes > MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES {
+        return Err(limit_error(format!(
+            "active and prepared documents require an estimated {peak_bytes} bytes, maximum is {MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

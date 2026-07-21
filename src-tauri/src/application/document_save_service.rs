@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::application::document_codec_port::DocumentCodecPort;
+use crate::application::document_codec_port::{DocumentCodecPort, SavedDocumentDecodePlan};
 use crate::application::document_encode_port::DocumentEncodePort;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::search_ports::SearchIndexMaintenancePort;
@@ -8,7 +8,9 @@ use crate::application::{document_format_policy, document_projection};
 use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::error::AppError;
 use crate::projection_model::{SavedDocumentIdentity, SavedDocumentOutcome};
-use crate::resource_limits::validate_document_identity;
+use crate::resource_limits::{
+    MAX_GENERATED_FILE_BYTES, validate_document_identity, validate_prepared_document_bytes,
+};
 use crate::state::{
     editor_state::{EditorState, SaveCommitLease},
     state::{ActiveDocumentRepository, DocumentHandle},
@@ -81,6 +83,7 @@ pub struct PreparedDocumentSave {
     pub output_name: String,
     pub bytes: Vec<u8>,
     pub finish_without_reparse: bool,
+    saved_decode_plan: Option<Box<dyn SavedDocumentDecodePlan>>,
     _work: Option<Box<dyn DocumentWorkLease>>,
 }
 
@@ -91,15 +94,18 @@ pub fn prepare_current_file_export(
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentExport, AppError> {
     let handle = document_handle_for_read(service.documents(), document_id)?;
-    let (snapshot, work) = {
+    let (snapshot, source_bytes, mut work) = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
+        let source_bytes = editor_state.estimated_resource_bytes();
         let work = service
             .work_budget()
-            .reserve_save(document_id, editor_state.estimated_resource_bytes())?;
+            .reserve_save(document_id, source_bytes, source_bytes)?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
-        (snapshot, work)
+        (snapshot, source_bytes, work)
     };
+    work.set_work_bytes(source_bytes.saturating_add(MAX_GENERATED_FILE_BYTES))?;
     let (_, bytes) = service.encoder().encode(&snapshot, target_path_or_name)?;
+    work.set_work_bytes(source_bytes.saturating_add(bytes.len()))?;
     Ok(PreparedDocumentExport {
         bytes,
         _work: Some(work),
@@ -112,7 +118,7 @@ pub fn prepare_current_file_save(
     base_revision: u64,
     target_path_or_name: &str,
 ) -> Result<PreparedDocumentSave, AppError> {
-    let (snapshot, work) = {
+    let (snapshot, source_bytes, mut work) = {
         let handle = document_handle_for_read(service.documents(), document_id)?;
         let editor_state = handle.read_for_command(document_id, base_revision)?;
         document_format_policy::ensure_native_save_target_allowed(
@@ -124,23 +130,41 @@ pub fn prepare_current_file_save(
                 "save is already in progress".to_string(),
             ));
         }
+        let source_bytes = editor_state.estimated_resource_bytes();
         let work = service
             .work_budget()
-            .reserve_save(document_id, editor_state.estimated_resource_bytes())?;
+            .reserve_save(document_id, source_bytes, source_bytes)?;
         let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
-        (snapshot, work)
+        (snapshot, source_bytes, work)
     };
 
+    work.set_work_bytes(source_bytes.saturating_add(MAX_GENERATED_FILE_BYTES))?;
     let (output_name, bytes) = service.encoder().encode(&snapshot, target_path_or_name)?;
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
         .unwrap_or_else(default_extension_string);
+    let finish_without_reparse = is_xlsx_extension(&target_extension) && snapshot.is_excel_backed();
+    let saved_decode_plan = if finish_without_reparse {
+        work.set_work_bytes(source_bytes.saturating_add(bytes.len()))?;
+        None
+    } else {
+        let plan = service.codec().plan_saved(&target_extension, &bytes)?;
+        let estimated_parse_bytes = plan.estimated_parse_bytes();
+        validate_prepared_document_bytes(estimated_parse_bytes)?;
+        work.set_work_bytes(
+            source_bytes
+                .saturating_add(bytes.len())
+                .saturating_add(estimated_parse_bytes),
+        )?;
+        Some(plan)
+    };
     Ok(PreparedDocumentSave {
         document_id,
         revision: base_revision,
         output_name,
         bytes,
-        finish_without_reparse: is_xlsx_extension(&target_extension) && snapshot.is_excel_backed(),
+        finish_without_reparse,
+        saved_decode_plan,
         _work: Some(work),
     })
 }
@@ -159,7 +183,6 @@ where
     commit_current_file_save_with_registry(
         service.search_indexes(),
         service.documents(),
-        service.codec(),
         path,
         prepared,
         commit_write,
@@ -169,7 +192,6 @@ where
 fn commit_current_file_save_with_registry<F>(
     search_indexes: &dyn SearchIndexMaintenancePort,
     registry: &ActiveDocumentRepository,
-    codec: &dyn DocumentCodecPort,
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
@@ -183,6 +205,7 @@ where
         output_name,
         bytes,
         finish_without_reparse,
+        saved_decode_plan,
         _work,
     } = prepared;
     let extension = extension_of(&output_name)
@@ -202,7 +225,10 @@ where
         );
     }
 
-    let document = codec.decode_saved(&extension, bytes, path.clone(), output_name)?;
+    let decode_plan = saved_decode_plan.ok_or_else(|| {
+        AppError::Internal("prepared save is missing its decode plan".to_string())
+    })?;
+    let document = decode_plan.decode(bytes, path.clone(), output_name)?;
     let saved_extension = extension_of(&document.projection().file_name)
         .or_else(|| extension_of(&document.projection().path));
     let (handle, lease, clear_history) =
@@ -355,8 +381,6 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct TestCodec;
-
     #[derive(Default)]
     struct RecordingSearchPort {
         scheduled: Mutex<Vec<(u64, u64, SearchIndexWork)>>,
@@ -373,26 +397,6 @@ mod tests {
         }
 
         fn cancel_document_jobs(&self, _document_id: u64) {}
-    }
-
-    impl DocumentCodecPort for TestCodec {
-        fn plan_open(
-            &self,
-            _source: &crate::application::document_codec_port::OpenDocumentSource,
-        ) -> Result<Box<dyn crate::application::document_codec_port::DocumentDecodePlan>, AppError>
-        {
-            unreachable!("save-service tests do not open files")
-        }
-
-        fn decode_saved(
-            &self,
-            _extension: &str,
-            _bytes: Vec<u8>,
-            _path: String,
-            _file_name: String,
-        ) -> Result<crate::document::document_model::SpreadsheetDocument, AppError> {
-            unreachable!("native XLSX test saves do not require reparsing")
-        }
     }
 
     fn test_registry() -> (ActiveDocumentRepository, u64, u64) {
@@ -418,6 +422,7 @@ mod tests {
             output_name: "saved.xlsx".to_string(),
             bytes: Vec::new(),
             finish_without_reparse: true,
+            saved_decode_plan: None,
             _work: None,
         }
     }
@@ -430,7 +435,6 @@ mod tests {
         let error = commit_current_file_save_with_registry(
             &search_indexes,
             &registry,
-            &TestCodec,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision),
             || Err(AppError::WriteError("injected write failure".to_string())),
@@ -453,7 +457,6 @@ mod tests {
         let response = commit_current_file_save_with_registry(
             search_port.as_ref(),
             &registry,
-            &TestCodec,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision),
             || {
@@ -481,7 +484,6 @@ mod tests {
         let result = commit_current_file_save_with_registry(
             &search_indexes,
             &registry,
-            &TestCodec,
             "/tmp/saved.xlsx".to_string(),
             prepared_for_test(document_id, revision + 1),
             || {

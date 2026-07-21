@@ -1,13 +1,17 @@
 import type { OperationCancellationSignal } from '@/application/operationCancellation';
 
-export type DocumentRoutePreparationScheduler = ReturnType<
-  typeof createDocumentRoutePreparationScheduler
+export type DocumentPreparationCoordinator = ReturnType<
+  typeof createDocumentPreparationCoordinator
 >;
 
-export function createDocumentRoutePreparationScheduler() {
+export function createDocumentPreparationCoordinator() {
   let tail: Promise<void> = Promise.resolve();
 
-  async function run<T>(
+  function run<T>(prepare: () => Promise<T>): Promise<T> {
+    return enqueue(prepare);
+  }
+
+  async function runCancellable<T>(
     prepare: () => Promise<T>,
     cancellation: OperationCancellationSignal,
     discard: (result: T) => Promise<void>,
@@ -23,7 +27,7 @@ export function createDocumentRoutePreparationScheduler() {
       notifyCancellation();
     });
 
-    const prepared = tail.then(async () => {
+    const prepared = enqueue(async () => {
       if (cancelled) return undefined;
       try {
         const result = await prepare();
@@ -35,10 +39,6 @@ export function createDocumentRoutePreparationScheduler() {
         throw error;
       }
     });
-    tail = prepared.then(
-      () => undefined,
-      () => undefined,
-    );
 
     try {
       const outcome = await Promise.race([
@@ -51,5 +51,14 @@ export function createDocumentRoutePreparationScheduler() {
     }
   }
 
-  return { run };
+  function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = tail.then(task);
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  return { run, runCancellable };
 }

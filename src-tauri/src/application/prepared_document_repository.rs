@@ -4,13 +4,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::application::document_work_budget_port::DocumentWorkLease;
 use crate::error::AppError;
-use crate::resource_limits::ResourceLedger;
+use crate::resource_limits::{
+    ResourceLedger, validate_active_and_prepared_document_bytes, validate_prepared_document_bytes,
+};
 use crate::state::editor_state::EditorState;
 
 pub(crate) struct PreparedDocument {
     pub(crate) editor_state: EditorState,
     pub(crate) source_path: Option<PathBuf>,
+    _work: Option<Box<dyn DocumentWorkLease>>,
 }
 
 #[derive(Default)]
@@ -135,8 +139,6 @@ impl PreparedDocumentStore {
 }
 
 const MAX_PREPARED_DOCUMENTS: usize = 1;
-const MAX_PREPARED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
-const MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Default)]
@@ -237,12 +239,13 @@ impl PreparedDocumentRepository {
         &self,
         file_data: &DocumentData,
         active_document_bytes: usize,
-    ) -> Result<PrepareReservation, AppError> {
+    ) -> Result<(PrepareReservation, usize), AppError> {
         let estimated_bytes = ResourceLedger::from_file_data(file_data)
             .estimated_bytes()
             .saturating_mul(2);
         validate_prepared_document_bytes(estimated_bytes)?;
         self.reserve_prepare(estimated_bytes, active_document_bytes)
+            .map(|reservation| (reservation, estimated_bytes))
     }
 
     fn reserve_prepare(
@@ -250,7 +253,7 @@ impl PreparedDocumentRepository {
         estimated_bytes: usize,
         active_document_bytes: usize,
     ) -> Result<PrepareReservation, AppError> {
-        validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
+        validate_active_and_prepared_document_bytes(active_document_bytes, estimated_bytes)?;
         let (result, retired) = {
             let mut store = self
                 .store
@@ -268,20 +271,12 @@ impl PreparedDocumentRepository {
     }
 }
 
-fn validate_prepared_document_bytes(estimated_bytes: usize) -> Result<(), AppError> {
-    if estimated_bytes > MAX_PREPARED_DOCUMENT_BYTES {
-        return Err(AppError::ResourceLimitExceeded(format!(
-            "prepared document parse requires an estimated {estimated_bytes} bytes, maximum is {MAX_PREPARED_DOCUMENT_BYTES}"
-        )));
-    }
-    Ok(())
-}
-
 impl PreparedDocumentRepository {
     pub(crate) fn replace(
         &self,
         editor_state: EditorState,
         source_path: Option<PathBuf>,
+        work: Box<dyn DocumentWorkLease>,
         mut reservation: PrepareReservation,
         active_document_bytes: usize,
     ) -> Result<String, AppError> {
@@ -291,8 +286,9 @@ impl PreparedDocumentRepository {
         let prepared = PreparedDocument {
             editor_state,
             source_path,
+            _work: Some(work),
         };
-        validate_combined_document_bytes_for_active(active_document_bytes, estimated_bytes)?;
+        validate_active_and_prepared_document_bytes(active_document_bytes, estimated_bytes)?;
         let (result, retired) = {
             let mut store = self
                 .store
@@ -307,19 +303,6 @@ impl PreparedDocumentRepository {
         result?;
         Ok(token)
     }
-}
-
-fn validate_combined_document_bytes_for_active(
-    active_bytes: usize,
-    prepared_bytes: usize,
-) -> Result<(), AppError> {
-    let peak_bytes = active_bytes.saturating_add(prepared_bytes);
-    if peak_bytes > MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES {
-        return Err(AppError::ResourceLimitExceeded(format!(
-            "active and prepared documents require an estimated {peak_bytes} bytes, maximum is {MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES}"
-        )));
-    }
-    Ok(())
 }
 
 impl PreparedDocumentRepository {
@@ -381,6 +364,9 @@ impl PreparedDocumentRepository {
 mod tests {
     use super::*;
     use crate::document_data::DocumentSheet;
+    use crate::resource_limits::{
+        MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, MAX_PREPARED_DOCUMENT_BYTES,
+    };
 
     fn prepared(name: &str) -> PreparedDocument {
         PreparedDocument {
@@ -393,6 +379,7 @@ mod tests {
                 None,
             ),
             source_path: None,
+            _work: None,
         }
     }
 
@@ -522,14 +509,14 @@ mod tests {
     #[test]
     fn combined_budget_uses_the_supplied_active_document_estimate() {
         assert!(
-            validate_combined_document_bytes_for_active(
+            validate_active_and_prepared_document_bytes(
                 MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES - 1,
                 1,
             )
             .is_ok()
         );
         assert!(matches!(
-            validate_combined_document_bytes_for_active(MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, 1,),
+            validate_active_and_prepared_document_bytes(MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, 1,),
             Err(AppError::ResourceLimitExceeded(_))
         ));
     }

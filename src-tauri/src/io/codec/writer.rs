@@ -8,10 +8,10 @@ use crate::document_format::{
 use crate::domain::CellValue;
 use crate::error::AppError;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
+use crate::resource_limits::MAX_GENERATED_FILE_BYTES;
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
 
 const DEFAULT_SHEET_NAME: &str = "Sheet1";
-pub(crate) const MAX_GENERATED_FILE_BYTES: usize = 192 * 1024 * 1024;
 
 struct LimitedBuffer {
     bytes: Vec<u8>,

@@ -13,17 +13,25 @@ pub(crate) trait DocumentDecodePlan: Send {
     fn decode(self: Box<Self>, source: OpenDocumentSource) -> Result<EditorState, AppError>;
 }
 
+pub(crate) trait SavedDocumentDecodePlan: Send {
+    fn estimated_parse_bytes(&self) -> usize;
+    fn decode(
+        self: Box<Self>,
+        bytes: Vec<u8>,
+        path: String,
+        file_name: String,
+    ) -> Result<SpreadsheetDocument, AppError>;
+}
+
 pub(crate) trait DocumentCodecPort: Send + Sync {
     fn plan_open(
         &self,
         source: &OpenDocumentSource,
     ) -> Result<Box<dyn DocumentDecodePlan>, AppError>;
 
-    fn decode_saved(
+    fn plan_saved(
         &self,
         extension: &str,
-        bytes: Vec<u8>,
-        path: String,
-        file_name: String,
-    ) -> Result<SpreadsheetDocument, AppError>;
+        bytes: &[u8],
+    ) -> Result<Box<dyn SavedDocumentDecodePlan>, AppError>;
 }

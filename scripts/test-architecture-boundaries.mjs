@@ -543,6 +543,22 @@ rejectMatches(
   'the instance-owned intent-based frontend exit boundary',
 );
 
+const applicationExitCoordinatorSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'applicationExitCoordinator.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /\bApplicationExitPreparation\b/,
+  /await\s+executor\.execute\(intent\)[\s\S]*commitPreparations\(preparations\)/,
+  /catch\s*\(error\)\s*\{[\s\S]*rollbackPreparations\(preparations\)/,
+]) {
+  if (!requirement.test(applicationExitCoordinatorSource)) {
+    violations.push(
+      `src/application/applicationExitCoordinator.ts violates the two-phase exit preparation boundary: ${requirement}`,
+    );
+  }
+}
+
 const frontendMainSource = readFileSync(join(projectRoot, 'src', 'main.ts'), 'utf8');
 for (const requirement of [
   /\bcreateApplicationExitCoordinator\b/,
@@ -894,28 +910,30 @@ const documentFileCoordinatorSource = readFileSync(
   'utf8',
 );
 for (const requirement of [
-  /routePreparations\.run\s*\(/,
-  /\bconfirmApplicationExit\b/,
+  /preparations\.runCancellable\s*\(/,
+  /preparations\.run\s*\(/,
+  /\bprepareApplicationExit\b/,
 ]) {
   if (!requirement.test(documentFileCoordinatorSource)) {
     violations.push(
-      `src/application/documentFileCoordinator.ts violates the drain-preserving route cancellation and non-destructive exit boundary: ${requirement}`,
+      `src/application/documentFileCoordinator.ts violates the shared preparation and two-phase exit boundary: ${requirement}`,
     );
   }
 }
 
-const routePreparationSchedulerSource = readFileSync(
-  join(projectRoot, 'src', 'application', 'documentRoutePreparationScheduler.ts'),
+const documentPreparationCoordinatorSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentPreparationCoordinator.ts'),
   'utf8',
 );
 for (const requirement of [
   /\blet\s+tail\s*:/,
   /cancellation\.onCancel\s*\(/,
-  /tail\s*=\s*prepared\.then\s*\(/,
+  /function\s+enqueue\b/,
+  /tail\s*=\s*result\.then\s*\(/,
 ]) {
-  if (!requirement.test(routePreparationSchedulerSource)) {
+  if (!requirement.test(documentPreparationCoordinatorSource)) {
     violations.push(
-      `src/application/documentRoutePreparationScheduler.ts violates the drain-preserving route preparation boundary: ${requirement}`,
+      `src/application/documentPreparationCoordinator.ts violates the drain-preserving shared preparation boundary: ${requirement}`,
     );
   }
 }
@@ -926,12 +944,12 @@ const useDocumentFileCoordinatorSource = readFileSync(
 );
 for (const requirement of [
   /new\s+WeakMap\s*</,
-  /\broutePreparationSchedulers\b/,
-  /\bcreateDocumentRoutePreparationScheduler\b/,
+  /\bpreparationCoordinators\b/,
+  /\bcreateDocumentPreparationCoordinator\b/,
 ]) {
   if (!requirement.test(useDocumentFileCoordinatorSource)) {
     violations.push(
-      `src/composables/useDocumentFileCoordinator.ts violates the Store-scoped route preparation runtime boundary: ${requirement}`,
+      `src/composables/useDocumentFileCoordinator.ts violates the Store-scoped document preparation runtime boundary: ${requirement}`,
     );
   }
 }
@@ -942,8 +960,8 @@ rejectMatches(
 );
 
 const tableViewSource = readFileSync(join(projectRoot, 'src', 'views', 'TableView.vue'), 'utf8');
-if (!/useApplicationExitGuard\s*\(\s*\(\)\s*=>\s*confirmApplicationExit\b/.test(tableViewSource)) {
-  violations.push('src/views/TableView.vue violates the non-destructive application exit guard boundary');
+if (!/useApplicationExitGuard\s*\(\s*\(\)\s*=>\s*prepareApplicationExit\b/.test(tableViewSource)) {
+  violations.push('src/views/TableView.vue violates the two-phase application exit guard boundary');
 }
 if (/useApplicationExitGuard\s*\(\s*\(\)\s*=>\s*closeCurrentDocument\b/.test(tableViewSource)) {
   violations.push('src/views/TableView.vue closes the document before platform exit succeeds');
@@ -997,12 +1015,84 @@ const resourceLimitsSource = readFileSync(
 for (const requirement of [
   /pub\s+const\s+SHEET_REGION_TILE_ROWS\b/,
   /pub\s+const\s+SHEET_REGION_TILE_COLUMNS\b/,
+  /pub\s+const\s+MAX_PREPARED_DOCUMENT_BYTES\b/,
+  /pub\s+const\s+MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES\b/,
+  /pub\s+const\s+MAX_SAVE_SOURCE_BYTES\b/,
+  /pub\s+const\s+MAX_GENERATED_FILE_BYTES\b/,
+  /pub\s+const\s+MAX_DOCUMENT_WORKING_SET_BYTES\b/,
+  /pub\s+fn\s+validate_prepared_document_bytes\b/,
+  /pub\s+fn\s+validate_active_and_prepared_document_bytes\b/,
 ]) {
   if (!requirement.test(resourceLimitsSource)) {
     violations.push(
       `src-tauri/src/resource_limits.rs violates the shared Rust Sheet-region tile policy boundary: ${requirement}`,
     );
   }
+}
+
+const documentWorkBudgetSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'adapters', 'document_work_budget_adapter.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /\breservations:\s*HashMap\b/,
+  /fn\s+reserve_preparation\b/,
+  /fn\s+reserve_save\b/,
+  /fn\s+set_work_bytes\b/,
+  /\bMAX_DOCUMENT_WORKING_SET_BYTES\b/,
+]) {
+  if (!requirement.test(documentWorkBudgetSource)) {
+    violations.push(
+      `src-tauri/src/adapters/document_work_budget_adapter.rs violates the shared document working-set budget boundary: ${requirement}`,
+    );
+  }
+}
+
+const documentOpenServiceSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'document_open_service.rs'),
+  'utf8',
+);
+for (const requirement of [/\.reserve_preparation\s*\(/, /work\.set_work_bytes\s*\(/]) {
+  if (!requirement.test(documentOpenServiceSource)) {
+    violations.push(
+      `src-tauri/src/application/document_open_service.rs violates the shared preparation work budget boundary: ${requirement}`,
+    );
+  }
+}
+
+const documentSaveServiceSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'document_save_service.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /\.reserve_save\s*\(/,
+  /work\.set_work_bytes\s*\(/,
+  /\bMAX_GENERATED_FILE_BYTES\b/,
+  /\.plan_saved\s*\(/,
+]) {
+  if (!requirement.test(documentSaveServiceSource)) {
+    violations.push(
+      `src-tauri/src/application/document_save_service.rs violates the shared save working-set budget boundary: ${requirement}`,
+    );
+  }
+}
+
+const preparedDocumentRepositorySource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'prepared_document_repository.rs'),
+  'utf8',
+);
+if (!/\b_work:\s*Option<Box<dyn\s+DocumentWorkLease>>/.test(preparedDocumentRepositorySource)) {
+  violations.push(
+    'src-tauri/src/application/prepared_document_repository.rs does not retain its document work lease',
+  );
+}
+
+const documentWorkRuntimeSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'runtime.rs'),
+  'utf8',
+);
+if (!/DocumentOpenService::new\([\s\S]*work_budget\.clone\(\)[\s\S]*DocumentSaveService::new\([\s\S]*work_budget/m.test(documentWorkRuntimeSource)) {
+  violations.push('src-tauri/src/application/runtime.rs does not share one document work budget across open and save services');
 }
 
 const documentLayoutPolicySource = readFileSync(

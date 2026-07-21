@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
 
+function preparation() {
+  return {
+    commit: vi.fn(),
+    rollback: vi.fn(),
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((promiseResolve) => {
@@ -14,7 +21,7 @@ describe('application exit coordination', () => {
   it('does not execute an exit intent when a guard rejects the request', async () => {
     const execute = vi.fn().mockResolvedValue(undefined);
     const coordinator = createApplicationExitCoordinator({ execute });
-    coordinator.registerGuard(vi.fn().mockResolvedValue(false));
+    coordinator.registerGuard(vi.fn().mockResolvedValue(null));
 
     await expect(coordinator.requestExit('close')).resolves.toEqual({ status: 'cancelled' });
     expect(execute).not.toHaveBeenCalled();
@@ -24,7 +31,8 @@ describe('application exit coordination', () => {
     const releaseGuard = deferred<boolean>();
     const execute = vi.fn().mockResolvedValue(undefined);
     const coordinator = createApplicationExitCoordinator({ execute });
-    coordinator.registerGuard(() => releaseGuard.promise);
+    const guardPreparation = preparation();
+    coordinator.registerGuard(async () => (await releaseGuard.promise) ? guardPreparation : null);
 
     const close = coordinator.requestExit('close');
     const relaunch = coordinator.requestExit('relaunch');
@@ -34,6 +42,8 @@ describe('application exit coordination', () => {
     await expect(relaunch).resolves.toEqual({ status: 'executed', intent: 'relaunch' });
     expect(execute).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledWith('relaunch');
+    expect(guardPreparation.commit).toHaveBeenCalledOnce();
+    expect(guardPreparation.rollback).not.toHaveBeenCalled();
   });
 
   it('owns guards and active requests independently per coordinator instance', async () => {
@@ -41,11 +51,50 @@ describe('application exit coordination', () => {
     const secondExecute = vi.fn().mockResolvedValue(undefined);
     const first = createApplicationExitCoordinator({ execute: firstExecute });
     const second = createApplicationExitCoordinator({ execute: secondExecute });
-    first.registerGuard(vi.fn().mockResolvedValue(false));
+    first.registerGuard(vi.fn().mockResolvedValue(null));
 
     await expect(first.requestExit('close')).resolves.toEqual({ status: 'cancelled' });
     await expect(second.requestExit('close')).resolves.toEqual({ status: 'executed', intent: 'close' });
     expect(firstExecute).not.toHaveBeenCalled();
     expect(secondExecute).toHaveBeenCalledOnce();
+  });
+
+  it('keeps exit preparations active until execution succeeds', async () => {
+    const execution = deferred<void>();
+    const guardPreparation = preparation();
+    const coordinator = createApplicationExitCoordinator({
+      execute: vi.fn(() => execution.promise),
+    });
+    coordinator.registerGuard(vi.fn().mockResolvedValue(guardPreparation));
+
+    const exit = coordinator.requestExit('close');
+    await Promise.resolve();
+
+    expect(guardPreparation.commit).not.toHaveBeenCalled();
+    expect(guardPreparation.rollback).not.toHaveBeenCalled();
+
+    execution.resolve();
+    await expect(exit).resolves.toEqual({ status: 'executed', intent: 'close' });
+    expect(guardPreparation.commit).toHaveBeenCalledOnce();
+    expect(guardPreparation.rollback).not.toHaveBeenCalled();
+  });
+
+  it('rolls back prepared guards in reverse order when execution fails', async () => {
+    const order: string[] = [];
+    const coordinator = createApplicationExitCoordinator({
+      execute: vi.fn().mockRejectedValue(new Error('destroy failed')),
+    });
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: () => order.push('first-commit'),
+      rollback: () => order.push('first-rollback'),
+    }));
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: () => order.push('second-commit'),
+      rollback: () => order.push('second-rollback'),
+    }));
+
+    await expect(coordinator.requestExit('close')).rejects.toThrow('destroy failed');
+
+    expect(order).toEqual(['first-rollback', 'second-rollback']);
   });
 });

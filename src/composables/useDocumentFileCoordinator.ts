@@ -3,9 +3,9 @@ import type { ComputedRef } from 'vue';
 import * as api from '@/api';
 import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
 import {
-  createDocumentRoutePreparationScheduler,
-  type DocumentRoutePreparationScheduler,
-} from '@/application/documentRoutePreparationScheduler';
+  createDocumentPreparationCoordinator,
+  type DocumentPreparationCoordinator,
+} from '@/application/documentPreparationCoordinator';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import {
   runtimeDocumentCapabilities,
@@ -35,7 +35,7 @@ type UseDocumentFileCoordinatorOptions = {
   flushPendingCellChanges?: () => Promise<boolean>;
 };
 
-const routePreparationSchedulers = new WeakMap<object, DocumentRoutePreparationScheduler>();
+const preparationCoordinators = new WeakMap<object, DocumentPreparationCoordinator>();
 
 export function useDocumentFileCoordinator({
   fileData,
@@ -55,10 +55,10 @@ export function useDocumentFileCoordinator({
     getSpreadsheetFormatOptions: async () =>
       runtimeSpreadsheetFormatOptions(await api.getSpreadsheetFormatOptions()),
   });
-  let routePreparations = routePreparationSchedulers.get(document);
-  if (!routePreparations) {
-    routePreparations = createDocumentRoutePreparationScheduler();
-    routePreparationSchedulers.set(document, routePreparations);
+  let preparations = preparationCoordinators.get(document);
+  if (!preparations) {
+    preparations = createDocumentPreparationCoordinator();
+    preparationCoordinators.set(document, preparations);
   }
 
   return createDocumentFileCoordinator({
@@ -100,5 +100,5 @@ export function useDocumentFileCoordinator({
     clearDocument: () => session.clearDocument(),
     queueRecentFileEntryUpdate,
     reportCleanupError: (message, error) => console.warn(`${message}:`, error),
-  }, routePreparations);
+  }, preparations);
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::application::document_codec_port::{DocumentCodecPort, OpenDocumentSource};
+use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
 use crate::document_format::default_spreadsheet_extension;
 use crate::error::AppError;
@@ -16,6 +17,7 @@ pub struct DocumentOpenService {
     documents: ActiveDocumentRepository,
     prepared_documents: PreparedDocumentRepository,
     codec: Arc<dyn DocumentCodecPort>,
+    work_budget: Arc<dyn DocumentWorkBudgetPort>,
 }
 
 impl DocumentOpenService {
@@ -23,11 +25,13 @@ impl DocumentOpenService {
         documents: ActiveDocumentRepository,
         prepared_documents: PreparedDocumentRepository,
         codec: Arc<dyn DocumentCodecPort>,
+        work_budget: Arc<dyn DocumentWorkBudgetPort>,
     ) -> Self {
         Self {
             documents,
             prepared_documents,
             codec,
+            work_budget,
         }
     }
 
@@ -43,6 +47,10 @@ impl DocumentOpenService {
         self.codec.as_ref()
     }
 
+    fn work_budget(&self) -> &dyn DocumentWorkBudgetPort {
+        self.work_budget.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !self.documents.is_same_instance(&other.documents)
@@ -50,6 +58,7 @@ impl DocumentOpenService {
                 .prepared_documents
                 .is_same_instance(&other.prepared_documents)
             && !Arc::ptr_eq(&self.codec, &other.codec)
+            && !Arc::ptr_eq(&self.work_budget, &other.work_budget)
     }
 }
 
@@ -60,24 +69,34 @@ pub fn prepare_open_input(
     let source_path = PathBuf::from(&source.path);
     let plan = service.codec().plan_open(&source)?;
     let estimated_parse_bytes = plan.estimated_parse_bytes();
-    let reservation = service.prepared_documents().reserve_for_parse_bytes(
-        estimated_parse_bytes,
-        active_document_resource_bytes(service)?,
-    )?;
+    let active_document_bytes = active_document_resource_bytes(service)?;
+    let reservation = service
+        .prepared_documents()
+        .reserve_for_parse_bytes(estimated_parse_bytes, active_document_bytes)?;
+    let mut work = service
+        .work_budget()
+        .reserve_preparation(active_document_bytes, estimated_parse_bytes)?;
     let editor_state = plan
         .decode(source)?
         .with_resource_estimate_floor(estimated_parse_bytes);
+    work.set_work_bytes(editor_state.estimated_resource_bytes())?;
 
-    prepare_editor_state(service, editor_state, Some(source_path), reservation)
+    prepare_editor_state(service, editor_state, Some(source_path), reservation, work)
 }
 
 pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDocument, AppError> {
     let file_data = blank_file_data();
     validate_file_data(&file_data)?;
-    let reservation = service
+    let active_document_bytes = active_document_resource_bytes(service)?;
+    let (reservation, estimated_prepared_bytes) = service
         .prepared_documents()
-        .reserve_for_file_data(&file_data, active_document_resource_bytes(service)?)?;
-    prepare_editor_state(service, EditorState::new(file_data), None, reservation)
+        .reserve_for_file_data(&file_data, active_document_bytes)?;
+    let mut work = service
+        .work_budget()
+        .reserve_preparation(active_document_bytes, estimated_prepared_bytes)?;
+    let editor_state = EditorState::new(file_data);
+    work.set_work_bytes(editor_state.estimated_resource_bytes())?;
+    prepare_editor_state(service, editor_state, None, reservation, work)
 }
 
 pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Result<(), AppError> {
@@ -101,10 +120,12 @@ fn prepare_editor_state(
     editor_state: EditorState,
     source_path: Option<PathBuf>,
     reservation: prepared_document_repository::PrepareReservation,
+    work: Box<dyn DocumentWorkLease>,
 ) -> Result<PreparedOpenDocument, AppError> {
     let token = service.prepared_documents().replace(
         editor_state,
         source_path,
+        work,
         reservation,
         active_document_resource_bytes(service)?,
     )?;
@@ -126,6 +147,33 @@ mod tests {
 
     struct TestCodec;
     struct TestDecodePlan;
+    struct TestWorkBudget;
+    struct TestWorkLease;
+
+    impl DocumentWorkLease for TestWorkLease {
+        fn set_work_bytes(&mut self, _work_bytes: usize) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    impl DocumentWorkBudgetPort for TestWorkBudget {
+        fn reserve_preparation(
+            &self,
+            _active_document_bytes: usize,
+            _estimated_work_bytes: usize,
+        ) -> Result<Box<dyn DocumentWorkLease>, AppError> {
+            Ok(Box::new(TestWorkLease))
+        }
+
+        fn reserve_save(
+            &self,
+            _document_id: u64,
+            _active_document_bytes: usize,
+            _estimated_source_bytes: usize,
+        ) -> Result<Box<dyn DocumentWorkLease>, AppError> {
+            unreachable!("open-service tests do not save files")
+        }
+    }
 
     impl crate::application::document_codec_port::DocumentDecodePlan for TestDecodePlan {
         fn estimated_parse_bytes(&self) -> usize {
@@ -160,13 +208,14 @@ mod tests {
             Ok(Box::new(TestDecodePlan))
         }
 
-        fn decode_saved(
+        fn plan_saved(
             &self,
             _extension: &str,
-            _bytes: Vec<u8>,
-            _path: String,
-            _file_name: String,
-        ) -> Result<crate::document::document_model::SpreadsheetDocument, AppError> {
+            _bytes: &[u8],
+        ) -> Result<
+            Box<dyn crate::application::document_codec_port::SavedDocumentDecodePlan>,
+            AppError,
+        > {
             unreachable!("open-service tests do not reparse saved files")
         }
     }
@@ -176,6 +225,7 @@ mod tests {
             ActiveDocumentRepository::default(),
             PreparedDocumentRepository::default(),
             Arc::new(TestCodec),
+            Arc::new(TestWorkBudget),
         )
     }
 

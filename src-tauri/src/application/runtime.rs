@@ -59,8 +59,12 @@ impl Default for ApplicationRuntime {
         let desktop_files = DesktopFileRuntime::default();
         #[cfg(any(target_os = "android", target_os = "ios", test))]
         let mobile_files = MobileFileRuntime::default();
-        let document_opens =
-            DocumentOpenService::new(documents.clone(), prepared_documents.clone(), codec.clone());
+        let document_opens = DocumentOpenService::new(
+            documents.clone(),
+            prepared_documents.clone(),
+            codec.clone(),
+            work_budget.clone(),
+        );
         let document_queries = DocumentQueryService::new(documents.clone());
         let document_saves = DocumentSaveService::new(
             documents.clone(),

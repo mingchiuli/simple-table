@@ -180,8 +180,9 @@ module cannot depend on application, state, operations, or I/O modules.
 
 Save and export orchestration live in `application::document_save_service`.
 That service owns revision validation, save leases, state commit, and post-save
-index scheduling. Save admission is obtained through `DocumentWorkBudgetPort`,
-and optional reparse goes through the same `DocumentCodecPort` used by open.
+index scheduling. Open preparation and save admission use one runtime-owned
+`DocumentWorkBudgetPort`. Optional save reparse uses a preflight decode plan
+from the same `DocumentCodecPort` used by open.
 Byte generation is a separate `DocumentEncodePort`; the document save snapshot
 exposes an immutable encoding source but never invokes an I/O writer itself.
 Platform I/O modules
@@ -297,14 +298,19 @@ consume that envelope and cannot depend on generated response declarations.
   same guard pipeline; concurrent requests resolve to a deterministic intent,
   with relaunch taking priority before execution starts. Platform modules
   provide close and relaunch primitives but do not own exit policy. Exit guards
-  only flush, wait, and confirm; they never close the backend document or clear
-  the frontend projection before the platform exit succeeds. Route leave keeps
-  the separate destructive document-close workflow.
+  return two-phase preparation leases after flushing, waiting, and confirming.
+  Those leases keep autosave suspended through platform execution, commit only
+  after a successful close or relaunch, and roll back in reverse order if a
+  guard vetoes or platform execution fails. Guards never close the backend
+  document or clear the frontend projection before platform exit succeeds.
+  Route leave keeps the separate destructive document-close workflow.
 - `documentFileCoordinator` owns new-document creation, selected/recent/path
   opening, prepared-document commit/abort, save, export, and close compensation
   as a port-driven application workflow. `routeDocumentLoadCoordinator` owns
   latest-only route scheduling and cancellation, and delegates accepted paths to
-  that file workflow. Vue composables adapt Stores, platform APIs, lifecycle
+  that file workflow. A Store-scoped `documentPreparationCoordinator` serializes
+  route, picker, recent-file, and new-document preparation through one drain-
+  preserving tail. Vue composables adapt Stores, platform APIs, lifecycle
   guards, router navigation, and user notifications; application modules do not
   import composables or UI libraries.
 - Generic frontend utilities are pure and side-effect free. Backend format and
@@ -502,15 +508,18 @@ Explicit abort runs on the bounded blocking executor. Route loads receive an
 explicit cancellation signal. Cancellation releases the obsolete frontend
 lifecycle immediately, while the single-slot preparation queue drains the
 already-started parse and aborts any late prepared token before starting the
-next parse. This keeps latest-route ownership responsive without racing two
-preparations against the backend repository.
+next preparation. Picker, recent-file, and new-document preparations use the
+same queue, so releasing a cancelled route lifecycle cannot race another
+preparation against the backend repository.
 
 The prepared-document repository lives in the application layer because its
 entries own complete `EditorState` values. It does not inspect the
 active-document registry. Its document-preparation caller supplies the active
 resource estimate before reserve and insert, so the caller owns the
 combined-budget policy while the repository owns only token capacity, TTL,
-checkout, and retirement.
+checkout, and retirement. Each parsing reservation is transferred into the
+prepared entry and remains charged to the runtime working-set ledger until
+commit, abort, or expiry.
 
 Saving follows this order:
 
@@ -531,8 +540,13 @@ Closing or replacing an active document while a save lease is held is invalid.
 Save and export snapshot generation has a runtime-owned RAII work reservation
 that starts before the projection can be cloned and remains held through the
 temporary write, reparse, and commit or export write. Only one such job may run
-at a time, its estimated source is capped at 256 MiB, and XLSX/CSV writers use a
-limited output buffer capped at 192 MiB.
+at a time, its estimated source is capped at 256 MiB, and XLSX/CSV writers
+use a limited output buffer capped at 192 MiB. Open preparation and save/export
+reservations share one 832 MiB peak ledger that includes the observed active
+document estimate and all admitted transient work. Save encoding reserves the
+maximum output buffer before allocation, then shrinks to actual output bytes.
+Formats that require rebinding retain a preflight parse estimate and decode
+plan, so reparse memory is admitted before third-party decoding begins.
 
 ## Resource Boundaries
 
@@ -698,7 +712,8 @@ Frontend route-driven opening is an application-owned latest-only worker. At
 most one file load is active and one pending route is retained; a newer route
 cancels the active `OperationCancellationSignal` and replaces the pending route
 instead of extending a Promise chain. A Store-scoped application preparation
-runtime survives route-component remounts; obsolete preparation drains through
+runtime survives route-component remounts and is shared by every route, picker,
+recent-file, and new-document preparation. Obsolete preparation drains through
 its bounded serial tail and owns late-token abort without keeping the obsolete
 route lifecycle active. The route composable only adapts route observation,
 error reporting, and leave confirmation to that coordinator.

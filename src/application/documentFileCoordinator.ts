@@ -15,9 +15,10 @@ import {
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
 import {
-  createDocumentRoutePreparationScheduler,
-  type DocumentRoutePreparationScheduler,
-} from '@/application/documentRoutePreparationScheduler';
+  createDocumentPreparationCoordinator,
+  type DocumentPreparationCoordinator,
+} from '@/application/documentPreparationCoordinator';
+import type { ApplicationExitPreparation } from '@/application/applicationExitCoordinator';
 
 type DocumentLifecycle = 'loading' | 'saving' | 'closing';
 type DocumentLifecycleStatus = 'completed' | 'failed' | 'skipped';
@@ -111,7 +112,7 @@ export type DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument> = {
 
 export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
   ports: DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument>,
-  routePreparations: DocumentRoutePreparationScheduler = createDocumentRoutePreparationScheduler(),
+  preparations: DocumentPreparationCoordinator = createDocumentPreparationCoordinator(),
 ) {
   async function loadFileFromPath(
     filePath: string,
@@ -128,7 +129,7 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
         try {
           if (cancellation.isCancelled()) return;
           const expectedContext = ports.getCommandContext();
-          const prepared = await routePreparations.run(
+          const prepared = await preparations.runCancellable(
             () => ports.prepareOpenFile(filePath),
             cancellation,
             abortPreparedDocumentQuietly,
@@ -279,22 +280,24 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     return lifecycleStatus !== 'skipped' && closed;
   }
 
-  async function confirmApplicationExit(
+  async function prepareApplicationExit(
     options: { waitForIdle?: boolean } = {},
-  ): Promise<boolean> {
-    let confirmed = false;
+  ): Promise<ApplicationExitPreparation | null> {
+    let preparation: ApplicationExitPreparation | null = null;
     const lifecycleStatus = await ports.runDocumentLifecycle(
       'closing',
       'Failed to prepare application exit',
       async () => {
         const replacement = await ports.beginDocumentReplacement();
         if (!replacement) return;
-        replacement.cancel();
-        confirmed = true;
+        preparation = {
+          commit: () => replacement.commit(),
+          rollback: () => replacement.cancel(),
+        };
       },
       { waitForIdle: options.waitForIdle },
     );
-    return lifecycleStatus !== 'skipped' && confirmed;
+    return lifecycleStatus === 'completed' ? preparation : null;
   }
 
   async function openSelectedFile(selection: OpenFileSelection): Promise<boolean> {
@@ -305,7 +308,7 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
       replacement = await ports.beginDocumentReplacement();
       if (!replacement) return false;
       const expectedContext = ports.getCommandContext();
-      const prepared = await ports.prepareOpenFile(selection.path);
+      const prepared = await preparations.run(() => ports.prepareOpenFile(selection.path));
       const opened = await commitPreparedDocument(prepared, expectedContext);
       discardSelection = false;
       replacement.commit();
@@ -342,7 +345,7 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     if (!replacement) return false;
     try {
       const expectedContext = ports.getCommandContext();
-      const prepared = await prepare();
+      const prepared = await preparations.run(prepare);
       const opened = await commitPreparedDocument(prepared, expectedContext);
       replacement.commit();
       ports.openDocumentResponse(opened, path);
@@ -415,6 +418,6 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     saveCurrentFile,
     exportCurrentFile,
     closeCurrentDocument,
-    confirmApplicationExit,
+    prepareApplicationExit,
   };
 }

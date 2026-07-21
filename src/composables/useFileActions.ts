@@ -57,7 +57,7 @@ export function useFileActions({
     handleSaveFile,
     handleExportFile,
     closeCurrentDocument: fileCoordinator.closeCurrentDocument,
-    confirmApplicationExit: fileCoordinator.confirmApplicationExit,
+    prepareApplicationExit: fileCoordinator.prepareApplicationExit,
     handleBack,
   };
 }

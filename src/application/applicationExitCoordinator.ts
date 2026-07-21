@@ -1,4 +1,9 @@
-export type ApplicationExitGuard = () => Promise<boolean>;
+export type ApplicationExitPreparation = {
+  commit(): void;
+  rollback(): void;
+};
+
+export type ApplicationExitGuard = () => Promise<ApplicationExitPreparation | null>;
 export type ApplicationExitIntent = 'close' | 'relaunch';
 
 export type ApplicationExitResult =
@@ -48,17 +53,44 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
 
   async function runExitRequest(request: ActiveExitRequest): Promise<ApplicationExitResult> {
     const guards = Array.from(exitGuards).reverse();
+    const preparations: ApplicationExitPreparation[] = [];
     for (const guard of guards) {
-      if (!(await guard())) return { status: 'cancelled' };
+      try {
+        const preparation = await guard();
+        if (!preparation) {
+          rollbackPreparations(preparations);
+          return { status: 'cancelled' };
+        }
+        preparations.push(preparation);
+      } catch (error) {
+        rollbackPreparations(preparations);
+        throw error;
+      }
     }
 
     request.actionStarted = true;
     const intent = request.intent;
-    await executor.execute(intent);
+    try {
+      await executor.execute(intent);
+    } catch (error) {
+      rollbackPreparations(preparations);
+      throw error;
+    }
+    commitPreparations(preparations);
     return { status: 'executed', intent };
   }
 
   return { registerGuard, requestExit };
+}
+
+function commitPreparations(preparations: ApplicationExitPreparation[]) {
+  for (const preparation of preparations) preparation.commit();
+}
+
+function rollbackPreparations(preparations: ApplicationExitPreparation[]) {
+  for (let index = preparations.length - 1; index >= 0; index -= 1) {
+    preparations[index]?.rollback();
+  }
 }
 
 function preferredIntent(

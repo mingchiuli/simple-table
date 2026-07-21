@@ -41,7 +41,7 @@ impl InputFilePreflight {
 const CSV_PARSE_MEMORY_MULTIPLIER: usize = 3;
 const XLSX_UNCOMPRESSED_MEMORY_MULTIPLIER: usize = 3;
 
-/// 从已读取的文件字节解析 DocumentData，并在 Excel 格式下保留原始 umya Workbook。
+#[cfg(test)]
 pub fn read_file_with_workbook_from_bytes(
     extension: &str,
     bytes: Vec<u8>,

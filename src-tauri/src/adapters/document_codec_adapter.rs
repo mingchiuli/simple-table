@@ -1,5 +1,5 @@
 use crate::application::document_codec_port::{
-    DocumentCodecPort, DocumentDecodePlan, OpenDocumentSource,
+    DocumentCodecPort, DocumentDecodePlan, OpenDocumentSource, SavedDocumentDecodePlan,
 };
 use crate::application::document_encode_port::DocumentEncodePort;
 use crate::document::backing::document_body::SpreadsheetDocumentBody;
@@ -8,8 +8,7 @@ use crate::document::document_save::{DocumentSaveEncoding, SpreadsheetDocumentSa
 use crate::document_format::{file_name_from_path_like, open_extension_from_path_name_or_bytes};
 use crate::error::AppError;
 use crate::io::codec::reader::{
-    InputFilePreflight, preflight_input_file, read_file_with_workbook_from_bytes,
-    read_file_with_workbook_from_preflight,
+    InputFilePreflight, preflight_input_file, read_file_with_workbook_from_preflight,
 };
 use crate::io::codec::writer;
 use crate::state::editor_state::EditorState;
@@ -18,6 +17,10 @@ use crate::state::editor_state::EditorState;
 pub(crate) struct DocumentCodecAdapter;
 
 struct IoDocumentDecodePlan {
+    preflight: InputFilePreflight,
+}
+
+struct IoSavedDocumentDecodePlan {
     preflight: InputFilePreflight,
 }
 
@@ -40,6 +43,24 @@ impl DocumentDecodePlan for IoDocumentDecodePlan {
         Ok(EditorState::from_document(
             SpreadsheetDocument::from_backing(result.file_data, body),
         ))
+    }
+}
+
+impl SavedDocumentDecodePlan for IoSavedDocumentDecodePlan {
+    fn estimated_parse_bytes(&self) -> usize {
+        self.preflight.estimated_parse_bytes()
+    }
+
+    fn decode(
+        self: Box<Self>,
+        bytes: Vec<u8>,
+        path: String,
+        file_name: String,
+    ) -> Result<SpreadsheetDocument, AppError> {
+        let result =
+            read_file_with_workbook_from_preflight(self.preflight, bytes, path, file_name)?;
+        let body = SpreadsheetDocumentBody::from_projection(&result.file_data, result.workbook);
+        Ok(SpreadsheetDocument::from_backing(result.file_data, body))
     }
 }
 
@@ -75,16 +96,14 @@ impl DocumentCodecPort for DocumentCodecAdapter {
         }))
     }
 
-    fn decode_saved(
+    fn plan_saved(
         &self,
         extension: &str,
-        bytes: Vec<u8>,
-        path: String,
-        file_name: String,
-    ) -> Result<SpreadsheetDocument, AppError> {
-        let result = read_file_with_workbook_from_bytes(extension, bytes, path, file_name)?;
-        let body = SpreadsheetDocumentBody::from_projection(&result.file_data, result.workbook);
-        Ok(SpreadsheetDocument::from_backing(result.file_data, body))
+        bytes: &[u8],
+    ) -> Result<Box<dyn SavedDocumentDecodePlan>, AppError> {
+        Ok(Box::new(IoSavedDocumentDecodePlan {
+            preflight: preflight_input_file(extension, bytes)?,
+        }))
     }
 }
 
@@ -130,5 +149,22 @@ mod tests {
 
         assert_eq!(output_name, "export.csv");
         assert_eq!(String::from_utf8(bytes).expect("UTF-8 CSV"), "encoded\n");
+    }
+
+    #[test]
+    fn saved_document_decode_reuses_its_preflight_plan() {
+        let adapter = DocumentCodecAdapter;
+        let bytes = b"name,score\nalice,42".to_vec();
+        let plan = adapter.plan_saved("csv", &bytes).expect("plan saved CSV");
+
+        assert_eq!(plan.estimated_parse_bytes(), bytes.len() * 3);
+        let document = plan
+            .decode(bytes, "/tmp/saved.csv".to_string(), "saved.csv".to_string())
+            .expect("decode saved CSV");
+
+        assert_eq!(
+            document.projection().sheets[0].rows[1][1],
+            CellValue::Number(42.into())
+        );
     }
 }
