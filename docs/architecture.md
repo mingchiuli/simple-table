@@ -150,7 +150,10 @@ The Rust `document` module is the physical aggregate boundary. It owns
 `SpreadsheetDocument`, transactions, mementos, formula coordination, save
 snapshots, region metadata, and the concrete workbook backing that participates
 in those invariants. Format-specific backing code is isolated under
-`document::backing`; the rest of the aggregate cannot import `io`.
+`document::backing`. The aggregate declares `WorkbookBackingPort` for projection
+refresh, consistency checks, cell writes, Sheet synchronization, and layout-unit
+conversion. The I/O projection codec implements that port; no production module
+under `document` may import `io`.
 Canonical editable content lives in the serialization-independent
 `document_data::DocumentData` and `DocumentSheet` model. These types have no
 `serde` or `ts-rs` implementation and are not emitted to TypeScript. Merge,
@@ -278,12 +281,16 @@ consume that envelope and cannot depend on generated response declarations.
   request queue. Generated recent-file records are mapped before the service or
   Store sees them.
 - Search request tokens and pending-cell debounce/save state are likewise owned
-  by application coordinators. Composables cache one coordinator per Pinia
-  instance and adapt its synchronous Store port.
+  by application coordinators. The composition root creates one
+  `DocumentWorkspaceRuntime` per Pinia document Store. That runtime owns the
+  session, region, pending-save, search, command-bus, and document-preparation
+  coordinators. Feature composables are thin accessors and cannot create their
+  own document-scoped coordinator caches.
 - `documentCommandCoordinator` owns interaction leases, mutation serialization,
   consistent reads, response application, and recovery as a port-driven
-  workflow. `useDocumentCommandBus` caches one semantic facade per document
-  Store and binds that workflow to backend transport and user notifications.
+  workflow. The workspace-owned command bus binds that workflow to backend
+  transport and user notifications; `useDocumentCommandBus` only exposes the
+  already assembled facade.
   Editor feature composables submit semantic commands and cannot construct wire
   mutation actions or response DTOs. Context-bound editor-state refresh follows
   the same coordinator path: stale responses are ignored and current-context
@@ -785,6 +792,14 @@ changed. Document, save-lease, and search-generation identifiers use nonzero
 random `u64` values rather than wrapping counters.
 
 ## Verification
+
+Frontend dependency boundaries are checked from a TypeScript AST dependency
+graph. The checker parses TypeScript and Vue SFC scripts, resolves aliases,
+relative paths, re-exports, and literal dynamic imports, then applies layer rules
+to normalized module paths. Regex checks remain only for local semantic
+invariants that are not dependency relationships. Rust production boundaries
+exclude explicitly test-only support modules but do not exempt workbook backing
+from the `document -> io` prohibition.
 
 Contract changes require both generated TypeScript and Rust serialization tests.
 Run the following command to intentionally update the generated contract, then

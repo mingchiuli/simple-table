@@ -2,20 +2,15 @@ import type { ComputedRef } from 'vue';
 
 import * as api from '@/api';
 import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
-import {
-  createDocumentPreparationCoordinator,
-  type DocumentPreparationCoordinator,
-} from '@/application/documentPreparationCoordinator';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import {
   runtimeDocumentCapabilities,
   runtimeNativeSavePlan,
   runtimeSpreadsheetFormatOptions,
 } from '@/application/fileProtocol';
-import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
+import { useDocumentWorkspaceRuntime } from '@/composables/documentWorkspaceRuntime';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
 import { useSaveLocation } from '@/composables/useSaveLocation';
 import {
@@ -35,16 +30,15 @@ type UseDocumentFileCoordinatorOptions = {
   flushPendingCellChanges?: () => Promise<boolean>;
 };
 
-const preparationCoordinators = new WeakMap<object, DocumentPreparationCoordinator>();
-
 export function useDocumentFileCoordinator({
   fileData,
   flushPendingCellChanges,
 }: UseDocumentFileCoordinatorOptions = {}) {
   const document = useDocumentSessionStore();
-  const session = useDocumentSessionCoordinator();
+  const workspace = useDocumentWorkspaceRuntime();
+  const session = workspace.session;
   const selection = useEditorSelectionStore();
-  const commandBus = useDocumentCommandBus();
+  const commandBus = workspace.commandBus;
   const { beginDocumentReplacement } = useDocumentReplacementGuard({
     flushPendingCellChanges,
   });
@@ -55,12 +49,6 @@ export function useDocumentFileCoordinator({
     getSpreadsheetFormatOptions: async () =>
       runtimeSpreadsheetFormatOptions(await api.getSpreadsheetFormatOptions()),
   });
-  let preparations = preparationCoordinators.get(document);
-  if (!preparations) {
-    preparations = createDocumentPreparationCoordinator();
-    preparationCoordinators.set(document, preparations);
-  }
-
   return createDocumentFileCoordinator({
     getFileData: () => fileData?.value ?? document.data,
     getCommandContext: () => document.currentCommandContext(),
@@ -100,5 +88,5 @@ export function useDocumentFileCoordinator({
     clearDocument: () => session.clearDocument(),
     queueRecentFileEntryUpdate,
     reportCleanupError: (message, error) => console.warn(`${message}:`, error),
-  }, preparations);
+  }, workspace.preparations);
 }

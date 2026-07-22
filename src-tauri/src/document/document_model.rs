@@ -50,7 +50,7 @@ pub struct SpreadsheetDocument {
 
 impl SpreadsheetDocument {
     pub fn new(projection: DocumentData) -> Self {
-        let body = SpreadsheetDocumentBody::from_projection(&projection, None);
+        let body = SpreadsheetDocumentBody::from_projection(&projection);
         Self::from_backing(projection, body)
     }
 
@@ -79,7 +79,13 @@ impl SpreadsheetDocument {
 
     #[cfg(test)]
     pub(crate) fn with_workbook(projection: DocumentData, workbook: Option<Workbook>) -> Self {
-        let body = SpreadsheetDocumentBody::from_projection(&projection, workbook);
+        let body = match workbook {
+            Some(workbook) => SpreadsheetDocumentBody::from_workbook(
+                workbook,
+                crate::document::test_support::workbook_backing_port(),
+            ),
+            None => SpreadsheetDocumentBody::from_projection(&projection),
+        };
         Self::from_backing(projection, body)
     }
 

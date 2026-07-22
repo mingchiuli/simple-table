@@ -60,5 +60,9 @@ export function createDocumentPreparationCoordinator() {
     return result;
   }
 
-  return { run, runCancellable };
+  function waitForIdle(): Promise<void> {
+    return tail;
+  }
+
+  return { run, runCancellable, waitForIdle };
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::application::document_codec_port::{
     DocumentCodecPort, DocumentDecodePlan, OpenDocumentSource, SavedDocumentDecodePlan,
 };
@@ -5,13 +7,16 @@ use crate::application::document_encode_port::DocumentEncodePort;
 use crate::document::backing::document_body::SpreadsheetDocumentBody;
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_save::{DocumentSaveEncoding, SpreadsheetDocumentSaveSnapshot};
+use crate::document_data::DocumentData;
 use crate::document_format::{file_name_from_path_like, open_extension_from_path_name_or_bytes};
 use crate::error::AppError;
 use crate::io::codec::reader::{
     InputFilePreflight, preflight_input_file, read_file_with_workbook_from_preflight,
 };
 use crate::io::codec::writer;
+use crate::io::projection_codec::WorkbookProjectionCodec;
 use crate::state::editor_state::EditorState;
+use umya_spreadsheet::Workbook;
 
 #[derive(Default)]
 pub(crate) struct DocumentCodecAdapter;
@@ -22,6 +27,15 @@ struct IoDocumentDecodePlan {
 
 struct IoSavedDocumentDecodePlan {
     preflight: InputFilePreflight,
+}
+
+fn document_body(projection: &DocumentData, workbook: Option<Workbook>) -> SpreadsheetDocumentBody {
+    match workbook {
+        Some(workbook) => {
+            SpreadsheetDocumentBody::from_workbook(workbook, Arc::new(WorkbookProjectionCodec))
+        }
+        None => SpreadsheetDocumentBody::from_projection(projection),
+    }
 }
 
 impl DocumentDecodePlan for IoDocumentDecodePlan {
@@ -39,7 +53,7 @@ impl DocumentDecodePlan for IoDocumentDecodePlan {
             source.path,
             resolved_file_name,
         )?;
-        let body = SpreadsheetDocumentBody::from_projection(&result.file_data, result.workbook);
+        let body = document_body(&result.file_data, result.workbook);
         Ok(EditorState::from_document(
             SpreadsheetDocument::from_backing(result.file_data, body),
         ))
@@ -59,7 +73,7 @@ impl SavedDocumentDecodePlan for IoSavedDocumentDecodePlan {
     ) -> Result<SpreadsheetDocument, AppError> {
         let result =
             read_file_with_workbook_from_preflight(self.preflight, bytes, path, file_name)?;
-        let body = SpreadsheetDocumentBody::from_projection(&result.file_data, result.workbook);
+        let body = document_body(&result.file_data, result.workbook);
         Ok(SpreadsheetDocument::from_backing(result.file_data, body))
     }
 }

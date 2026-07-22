@@ -7,6 +7,10 @@ import { createApp } from "vue";
 import App from "@/App.vue";
 import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
 import { applicationExitCoordinatorKey } from '@/composables/useApplicationExit';
+import {
+  createDocumentWorkspaceRuntime,
+  documentWorkspaceRuntimeKey,
+} from '@/composables/documentWorkspaceRuntime';
 import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
 import { tauriApplicationExitExecutor } from '@/platform/applicationExitPort';
 import router from "@/router";
@@ -19,7 +23,9 @@ const applicationExitCoordinator = createApplicationExitCoordinator(
 
 app.use(pinia);
 app.use(router);
+const documentWorkspaceRuntime = createDocumentWorkspaceRuntime();
 app.provide(applicationExitCoordinatorKey, applicationExitCoordinator);
+app.provide(documentWorkspaceRuntimeKey, documentWorkspaceRuntime);
 
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {

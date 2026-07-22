@@ -2,6 +2,7 @@ use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
 use crate::document::backing::document_body::BodySheetShape;
+use crate::document::backing::workbook_port::WorkbookBackingPort;
 use crate::document::capabilities::{
     SheetCapabilities, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
     WorkbookStructureCapabilities,
@@ -13,8 +14,6 @@ use crate::formula::reference_rewrite::{
     StructureShift, adjust_explicit_sheet_name_case_mismatched_references,
     adjust_formula_references, invalidate_deleted_sheet_references,
 };
-use crate::io::codec::writer::{sync_sheet_from_sheet_data, write_cell};
-use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -39,6 +38,7 @@ pub fn patch_after_operation(
     file_data: &mut DocumentData,
     operation: &AppliedOperation,
     cell_changes: &[DocumentCellChange],
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<(), AppError> {
     match operation {
         AppliedOperation::SetCell {
@@ -47,8 +47,8 @@ pub fn patch_after_operation(
             col,
             ..
         } => {
-            patch_cell(workbook, file_data, *sheet_index, *row, *col)?;
-            patch_cell_changes(workbook, file_data, cell_changes)?;
+            patch_cell(workbook, file_data, *sheet_index, *row, *col, backing)?;
+            patch_cell_changes(workbook, file_data, cell_changes, backing)?;
         }
         AppliedOperation::SetCells { changes } => {
             for change in changes {
@@ -58,9 +58,10 @@ pub fn patch_after_operation(
                     change.sheet_index,
                     change.row,
                     change.col,
+                    backing,
                 )?;
             }
-            patch_cell_changes(workbook, file_data, cell_changes)?;
+            patch_cell_changes(workbook, file_data, cell_changes, backing)?;
         }
         AppliedOperation::AddRow { .. }
         | AppliedOperation::DeleteRow { .. }
@@ -75,7 +76,7 @@ pub fn patch_after_operation(
             ..
         } => {
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
-                patch_column_width(worksheet, *col_index, *new_width);
+                patch_column_width(worksheet, *col_index, *new_width, backing);
             }
         }
         AppliedOperation::SetRowHeight {
@@ -85,7 +86,7 @@ pub fn patch_after_operation(
             ..
         } => {
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
-                patch_row_height(worksheet, *row_index, *new_height);
+                patch_row_height(worksheet, *row_index, *new_height, backing);
             }
         }
     }
@@ -97,6 +98,7 @@ pub fn apply_structure_operation(
     workbook: &mut Workbook,
     operation: &AppliedOperation,
     ast_service: &mut FormulaAstService,
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<StructurePatchDiagnostics, AppError> {
     let unsupported = unsupported_operation_features(workbook, operation, &[]);
     if !unsupported.is_empty() {
@@ -209,7 +211,7 @@ pub fn apply_structure_operation(
                 rows: vec![vec![CellValue::Null; *column_count]; *row_count],
                 ..Default::default()
             };
-            insert_sheet(workbook, *sheet_index, &sheet_data)?;
+            insert_sheet(workbook, *sheet_index, &sheet_data, backing)?;
         }
         AppliedOperation::DeleteSheet { sheet_index } => {
             diagnostics.skipped_formula_reference_rewrites +=
@@ -649,8 +651,9 @@ pub fn patch_formula_changes(
     workbook: &mut Workbook,
     file_data: &mut DocumentData,
     cell_changes: &[DocumentCellChange],
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<(), AppError> {
-    patch_cell_changes(workbook, file_data, cell_changes)
+    patch_cell_changes(workbook, file_data, cell_changes, backing)
 }
 
 pub fn patch_layout_dimensions(
@@ -658,13 +661,14 @@ pub fn patch_layout_dimensions(
     sheet_index: usize,
     column_widths: &HashMap<usize, Option<u32>>,
     row_heights: &HashMap<usize, Option<u32>>,
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<(), AppError> {
     if let Some(worksheet) = sheet_mut(workbook, sheet_index)? {
         for (col_index, width) in column_widths {
-            patch_column_width(worksheet, *col_index, *width);
+            patch_column_width(worksheet, *col_index, *width, backing);
         }
         for (row_index, height) in row_heights {
-            patch_row_height(worksheet, *row_index, *height);
+            patch_row_height(worksheet, *row_index, *height, backing);
         }
     }
     Ok(())
@@ -709,6 +713,7 @@ fn patch_cell_changes(
     workbook: &mut Workbook,
     file_data: &mut DocumentData,
     cell_changes: &[DocumentCellChange],
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<(), AppError> {
     for change in cell_changes {
         patch_cell(
@@ -717,6 +722,7 @@ fn patch_cell_changes(
             change.sheet_index,
             change.row,
             change.col,
+            backing,
         )?;
     }
     Ok(())
@@ -822,6 +828,7 @@ fn patch_cell(
     sheet_index: usize,
     row: usize,
     col: usize,
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<(), AppError> {
     let Some(cell_value) = file_data
         .sheets
@@ -833,18 +840,23 @@ fn patch_cell(
     };
 
     if let Some(worksheet) = sheet_mut(workbook, sheet_index)? {
-        write_cell(worksheet, row as u32 + 1, col as u32 + 1, cell_value);
+        backing.write_cell(worksheet, row as u32 + 1, col as u32 + 1, cell_value);
     }
     Ok(())
 }
 
-fn patch_column_width(worksheet: &mut Worksheet, col_index: usize, width: Option<u32>) {
+fn patch_column_width(
+    worksheet: &mut Worksheet,
+    col_index: usize,
+    width: Option<u32>,
+    backing: &dyn WorkbookBackingPort,
+) {
     let col_num = col_index as u32 + 1;
     match width {
         Some(width) => {
             worksheet
                 .column_dimension_by_number_mut(col_num)
-                .set_width(px_to_excel_column_width(width));
+                .set_width(backing.column_width_from_pixels(width));
         }
         None => {
             worksheet
@@ -854,13 +866,18 @@ fn patch_column_width(worksheet: &mut Worksheet, col_index: usize, width: Option
     }
 }
 
-fn patch_row_height(worksheet: &mut Worksheet, row_index: usize, height: Option<u32>) {
+fn patch_row_height(
+    worksheet: &mut Worksheet,
+    row_index: usize,
+    height: Option<u32>,
+    backing: &dyn WorkbookBackingPort,
+) {
     let row_num = row_index as u32 + 1;
     match height {
         Some(height) => {
             worksheet
                 .row_dimension_mut(row_num)
-                .set_height(px_to_points(height));
+                .set_height(backing.row_height_from_pixels(height));
         }
         None => {
             worksheet.row_dimensions_to_hashmap_mut().remove(&row_num);
@@ -872,6 +889,7 @@ fn insert_sheet(
     workbook: &mut Workbook,
     sheet_index: usize,
     sheet_data: &DocumentSheet,
+    backing: &dyn WorkbookBackingPort,
 ) -> Result<(), AppError> {
     let sheet_name = if sheet_data.name.is_empty() {
         format!("Sheet{}", sheet_index + 1)
@@ -894,7 +912,7 @@ fn insert_sheet(
     let worksheet = workbook
         .sheet_mut(sheet_index)
         .map_err(|e| AppError::WriteError(e.to_string()))?;
-    sync_sheet_from_sheet_data(worksheet, sheet_data)
+    backing.sync_sheet(worksheet, sheet_data)
 }
 
 fn remove_sheet(workbook: &mut Workbook, sheet_index: usize) -> Result<(), AppError> {

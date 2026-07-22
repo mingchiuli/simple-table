@@ -1,6 +1,7 @@
 use crate::document_data::DocumentData;
 use std::{collections::BTreeSet, sync::Arc};
 
+use crate::document::backing::workbook_port::WorkbookBackingPort;
 use crate::document::backing::workbook_state::{self, StructurePatchDiagnostics};
 use crate::document::capabilities::{
     SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
@@ -10,9 +11,6 @@ use crate::document_format::{SpreadsheetFileFormat, extension_of};
 use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
-#[cfg(test)]
-use crate::io::codec::writer;
-use crate::io::projection_codec::WorkbookProjectionCodec;
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {
@@ -23,6 +21,7 @@ pub enum SpreadsheetDocumentBody {
 
 pub struct ExcelDocumentBody {
     workbook: Arc<Workbook>,
+    backing: Arc<dyn WorkbookBackingPort>,
 }
 
 fn excel_workbook(body: &ExcelDocumentBody) -> &Workbook {
@@ -74,14 +73,19 @@ impl BodyStructureMemento {
 }
 
 impl SpreadsheetDocumentBody {
-    pub fn from_projection(projection: &DocumentData, workbook: Option<Workbook>) -> Self {
-        match workbook {
-            Some(workbook) => Self::Excel(ExcelDocumentBody {
-                workbook: Arc::new(workbook),
-            }),
-            None if is_csv_document(projection) => Self::Csv,
-            None => Self::GeneratedWorkbook,
+    pub fn from_projection(projection: &DocumentData) -> Self {
+        if is_csv_document(projection) {
+            Self::Csv
+        } else {
+            Self::GeneratedWorkbook
         }
+    }
+
+    pub fn from_workbook(workbook: Workbook, backing: Arc<dyn WorkbookBackingPort>) -> Self {
+        Self::Excel(ExcelDocumentBody {
+            workbook: Arc::new(workbook),
+            backing,
+        })
     }
 
     pub fn estimated_bytes(&self) -> usize {
@@ -201,6 +205,7 @@ impl SpreadsheetDocumentBody {
         let body = match self {
             Self::Excel(body) => Self::Excel(ExcelDocumentBody {
                 workbook: Arc::clone(&body.workbook),
+                backing: Arc::clone(&body.backing),
             }),
             Self::Csv => Self::Csv,
             Self::GeneratedWorkbook => Self::GeneratedWorkbook,
@@ -214,21 +219,15 @@ impl SpreadsheetDocumentBody {
         projection: &DocumentData,
         target_path_or_name: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
-        match SpreadsheetFileFormat::from_path_or_default(target_path_or_name) {
-            Some(SpreadsheetFileFormat::Xlsx) => match self {
-                Self::Excel(body) => writer::generate_excel_bytes_from_workbook_for_target(
-                    excel_workbook(body),
-                    target_path_or_name,
-                ),
-                Self::Csv | Self::GeneratedWorkbook => {
-                    writer::generate_file_bytes_for_target(projection, target_path_or_name)
-                }
-            },
-            Some(SpreadsheetFileFormat::Csv) => {
-                writer::generate_file_bytes_for_target(projection, target_path_or_name)
-            }
-            None => Err(AppError::UnsupportedFormat),
-        }
+        let workbook = match self {
+            Self::Excel(body) => Some(excel_workbook(body)),
+            Self::Csv | Self::GeneratedWorkbook => None,
+        };
+        crate::document::test_support::generate_file_bytes_for_target(
+            workbook,
+            projection,
+            target_path_or_name,
+        )
     }
 
     pub fn apply_structure_operation(
@@ -243,14 +242,16 @@ impl SpreadsheetDocumentBody {
 
         match self {
             Self::Excel(body) => {
+                let backing = Arc::clone(&body.backing);
                 let diagnostics = workbook_state::apply_structure_operation(
                     excel_workbook_mut(body),
                     operation,
                     ast_service,
+                    backing.as_ref(),
                 )?;
-                WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
-                WorkbookProjectionCodec::sync_merge_ranges(excel_workbook_mut(body), projection)?;
-                WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
+                backing.refresh_projection(excel_workbook(body), projection);
+                backing.sync_merge_ranges(excel_workbook_mut(body), projection)?;
+                backing.refresh_projection(excel_workbook(body), projection);
                 Ok(Some(BodyStructureOperationResult { diagnostics }))
             }
             Self::Csv | Self::GeneratedWorkbook => {
@@ -270,12 +271,16 @@ impl SpreadsheetDocumentBody {
     ) -> Result<(), AppError> {
         match self {
             Self::Excel(_) if operation.impact().is_structure_change() => Ok(()),
-            Self::Excel(body) => workbook_state::patch_after_operation(
-                excel_workbook_mut(body),
-                projection,
-                operation,
-                cell_changes,
-            ),
+            Self::Excel(body) => {
+                let backing = Arc::clone(&body.backing);
+                workbook_state::patch_after_operation(
+                    excel_workbook_mut(body),
+                    projection,
+                    operation,
+                    cell_changes,
+                    backing.as_ref(),
+                )
+            }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
@@ -286,11 +291,15 @@ impl SpreadsheetDocumentBody {
         cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
         match self {
-            Self::Excel(body) => workbook_state::patch_formula_changes(
-                excel_workbook_mut(body),
-                projection,
-                cell_changes,
-            ),
+            Self::Excel(body) => {
+                let backing = Arc::clone(&body.backing);
+                workbook_state::patch_formula_changes(
+                    excel_workbook_mut(body),
+                    projection,
+                    cell_changes,
+                    backing.as_ref(),
+                )
+            }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
@@ -302,12 +311,16 @@ impl SpreadsheetDocumentBody {
         row_heights: &std::collections::HashMap<usize, Option<u32>>,
     ) -> Result<(), AppError> {
         match self {
-            Self::Excel(body) => workbook_state::patch_layout_dimensions(
-                excel_workbook_mut(body),
-                sheet_index,
-                column_widths,
-                row_heights,
-            ),
+            Self::Excel(body) => {
+                let backing = Arc::clone(&body.backing);
+                workbook_state::patch_layout_dimensions(
+                    excel_workbook_mut(body),
+                    sheet_index,
+                    column_widths,
+                    row_heights,
+                    backing.as_ref(),
+                )
+            }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
@@ -323,7 +336,8 @@ impl SpreadsheetDocumentBody {
 
     pub fn refresh_projection_from_workbook(&self, projection: &mut DocumentData) {
         if let Self::Excel(body) = self {
-            WorkbookProjectionCodec::refresh_projection(excel_workbook(body), projection);
+            body.backing
+                .refresh_projection(excel_workbook(body), projection);
         }
     }
 
@@ -332,9 +346,9 @@ impl SpreadsheetDocumentBody {
         projection: &DocumentData,
     ) -> Result<(), AppError> {
         match self {
-            Self::Excel(body) => {
-                WorkbookProjectionCodec::validate(excel_workbook(body), projection)
-            }
+            Self::Excel(body) => body
+                .backing
+                .validate_projection(excel_workbook(body), projection),
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
@@ -344,9 +358,9 @@ impl SpreadsheetDocumentBody {
         projection: &DocumentData,
     ) -> Result<(), AppError> {
         match self {
-            Self::Excel(body) => {
-                WorkbookProjectionCodec::validate(excel_workbook(body), projection)
-            }
+            Self::Excel(body) => body
+                .backing
+                .validate_projection(excel_workbook(body), projection),
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
     }
@@ -356,11 +370,12 @@ impl SpreadsheetDocumentBody {
         projection: &DocumentData,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) -> Result<(), AppError> {
+        let sheet_indexes = sheet_indexes.into_iter().collect::<Vec<_>>();
         match self {
-            Self::Excel(body) => WorkbookProjectionCodec::validate_sheets(
+            Self::Excel(body) => body.backing.validate_projection_sheets(
                 excel_workbook(body),
                 projection,
-                sheet_indexes,
+                &sheet_indexes,
             ),
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }

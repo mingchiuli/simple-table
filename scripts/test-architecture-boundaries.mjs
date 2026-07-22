@@ -1,6 +1,8 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { extname, join, relative } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseVueSfc } from '@vue/compiler-sfc';
+import * as ts from 'typescript';
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 const violations = [];
@@ -34,6 +36,174 @@ function rejectRustProductionMatches(files, patterns, boundary) {
       }
     }
   }
+}
+
+const frontendRoot = join(projectRoot, 'src');
+const frontendFiles = [
+  ...sourceFiles(frontendRoot, '.ts'),
+  ...sourceFiles(frontendRoot, '.vue'),
+];
+const frontendDependencies = new Map(
+  frontendFiles.map((file) => [file, moduleDependencies(file)]),
+);
+
+function moduleDependencies(file) {
+  return moduleDependenciesFromSource(file, frontendScriptSource(file));
+}
+
+function moduleDependenciesFromSource(file, source) {
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const dependencies = [];
+
+  function visit(node) {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      && node.moduleSpecifier
+      && ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      dependencies.push(resolveFrontendDependency(file, node.moduleSpecifier.text));
+    } else if (
+      ts.isCallExpression(node)
+      && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments.length === 1
+      && ts.isStringLiteralLike(node.arguments[0])
+    ) {
+      dependencies.push(resolveFrontendDependency(file, node.arguments[0].text));
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(parsed);
+  return dependencies;
+}
+
+function frontendScriptSource(file) {
+  const source = readFileSync(file, 'utf8');
+  if (extname(file) !== '.vue') return source;
+  const { descriptor, errors } = parseVueSfc(source, { filename: file });
+  if (errors.length > 0) {
+    violations.push(`${relative(projectRoot, file)} could not be parsed as a Vue SFC`);
+  }
+  return [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join('\n');
+}
+
+function resolveFrontendDependency(fromFile, specifier) {
+  if (!specifier.startsWith('@/') && !specifier.startsWith('.')) {
+    return { specifier, external: true, path: null };
+  }
+  const unresolved = specifier.startsWith('@/')
+    ? resolve(frontendRoot, specifier.slice(2))
+    : resolve(dirname(fromFile), specifier);
+  const candidates = extname(unresolved)
+    ? [unresolved]
+    : [
+        `${unresolved}.ts`,
+        `${unresolved}.vue`,
+        join(unresolved, 'index.ts'),
+        join(unresolved, 'index.vue'),
+        unresolved,
+      ];
+  return {
+    specifier,
+    external: false,
+    path: candidates.find(existsSync) ?? unresolved,
+  };
+}
+
+function rejectFrontendDependencies(files, forbidden, boundary) {
+  for (const file of files) {
+    for (const dependency of frontendDependencies.get(file) ?? []) {
+      if (forbidden(dependency)) {
+        const target = dependency.path
+          ? relative(projectRoot, dependency.path)
+          : dependency.specifier;
+        violations.push(
+          `${relative(projectRoot, file)} violates ${boundary}: ${dependency.specifier} -> ${target}`,
+        );
+      }
+    }
+  }
+}
+
+function isFrontendPath(dependency, path) {
+  return dependency.path === join(frontendRoot, path);
+}
+
+function isFrontendDirectory(dependency, directory) {
+  const root = `${join(frontendRoot, directory)}/`;
+  return dependency.path?.startsWith(root) ?? false;
+}
+
+function isExternalPackage(dependency, packageName) {
+  return dependency.external
+    && (dependency.specifier === packageName || dependency.specifier.startsWith(`${packageName}/`));
+}
+
+const storeFiles = sourceFiles(join(frontendRoot, 'stores'), '.ts');
+rejectFrontendDependencies(
+  storeFiles,
+  (dependency) =>
+    isFrontendPath(dependency, 'api.ts')
+    || isFrontendPath(dependency, 'tauriInvoke.ts')
+    || isFrontendPath(dependency, 'types/index.ts')
+    || isFrontendPath(dependency, 'types/generated.ts')
+    || isFrontendPath(dependency, 'types/protocol.ts')
+    || isFrontendDirectory(dependency, 'platform')
+    || isFrontendDirectory(dependency, 'composables')
+    || isFrontendDirectory(dependency, 'application')
+    || isExternalPackage(dependency, '@tauri-apps'),
+  'the resolved synchronous side-effect-free Store dependency boundary',
+);
+
+const applicationFiles = sourceFiles(join(frontendRoot, 'application'), '.ts');
+rejectFrontendDependencies(
+  applicationFiles,
+  (dependency) =>
+    isFrontendPath(dependency, 'types/index.ts')
+    || isFrontendPath(dependency, 'api.ts')
+    || isFrontendPath(dependency, 'tauriInvoke.ts')
+    || isFrontendDirectory(dependency, 'stores')
+    || isFrontendDirectory(dependency, 'composables')
+    || isFrontendDirectory(dependency, 'platform')
+    || ['element-plus', 'vue-router', 'pinia', 'vue', '@tauri-apps'].some((packageName) =>
+      isExternalPackage(dependency, packageName)),
+  'the resolved UI-independent frontend application boundary',
+);
+
+rejectFrontendDependencies(
+  [join(frontendRoot, 'types', 'index.ts')],
+  (dependency) =>
+    isFrontendPath(dependency, 'types/generated.ts')
+    || isFrontendPath(dependency, 'types/protocol.ts'),
+  'the resolved runtime-only frontend type barrel boundary',
+);
+
+rejectFrontendDependencies(
+  frontendFiles.filter((file) => file !== join(frontendRoot, 'types', 'protocol.ts')),
+  (dependency) => isFrontendPath(dependency, 'types/generated.ts'),
+  'the resolved single-entry frontend generated protocol boundary',
+);
+
+rejectFrontendDependencies(
+  sourceFiles(join(frontendRoot, 'components', 'table-grid'), '.vue'),
+  (dependency) => isFrontendPath(dependency, 'components/table-grid/index.ts'),
+  'the resolved acyclic table-grid component boundary',
+);
+
+const dependencyParserProbe = moduleDependenciesFromSource(
+  join(frontendRoot, 'application', '__architecture_probe__.ts'),
+  `
+    import '../stores/documentSession';
+    export { useDocumentSessionStore } from '@/stores/documentSession';
+    void import('../stores/documentSession');
+  `,
+);
+if (
+  dependencyParserProbe.length !== 3
+  || dependencyParserProbe.some((dependency) =>
+    !isFrontendPath(dependency, 'stores/documentSession.ts'))
+) {
+  violations.push('architecture dependency parser does not normalize relative, aliased, and dynamic imports');
 }
 
 rejectMatches(
@@ -351,12 +521,11 @@ rejectMatches(
 );
 
 rejectMatches(
-  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'document'), '.rs').filter((file) => {
-    const path = relative(projectRoot, file);
-    return !path.includes('/backing/') && !path.endsWith('/test_support.rs');
-  }),
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'document'), '.rs').filter(
+    (file) => !relative(projectRoot, file).endsWith('/test_support.rs'),
+  ),
   [/crate::io(?:::|\b)/],
-  'the backing-mediated Rust document dependency boundary',
+  'the port-mediated Rust document backing boundary',
 );
 
 rejectMatches(
@@ -563,6 +732,8 @@ const frontendMainSource = readFileSync(join(projectRoot, 'src', 'main.ts'), 'ut
 for (const requirement of [
   /\bcreateApplicationExitCoordinator\b/,
   /\.provide\s*\(\s*applicationExitCoordinatorKey\b/,
+  /\bcreateDocumentWorkspaceRuntime\b/,
+  /\.provide\s*\(\s*documentWorkspaceRuntimeKey\b/,
 ]) {
   if (!requirement.test(frontendMainSource)) {
     violations.push(
@@ -767,20 +938,40 @@ rejectMatches(
   'the semantic frontend document command facade boundary',
 );
 
-const documentCommandBusSource = readFileSync(
-  join(projectRoot, 'src', 'composables', 'useDocumentCommandBus.ts'),
+const documentWorkspaceRuntimeSource = readFileSync(
+  join(projectRoot, 'src', 'composables', 'documentWorkspaceRuntime.ts'),
   'utf8',
 );
 for (const requirement of [
   /new\s+WeakMap\b/,
-  /\bcreateDocumentCommandCoordinator\b/,
+  /\bcreateDocumentSessionCoordinator\b/,
+  /\bcreateDocumentRegionCoordinator\b/,
+  /\bcreatePendingCellSaveCoordinator\b/,
+  /\bcreateSearchSessionCoordinator\b/,
+  /\bcreateDocumentCommandBus\b/,
+  /\bcreateDocumentPreparationCoordinator\b/,
+  /sessionWorkflow\.waitForMutations\s*\(/,
+  /pendingCellSaves\.waitForInFlightSave\s*\(/,
+  /preparations\.waitForIdle\s*\(/,
 ]) {
-  if (!requirement.test(documentCommandBusSource)) {
+  if (!requirement.test(documentWorkspaceRuntimeSource)) {
     violations.push(
-      `src/composables/useDocumentCommandBus.ts violates the single-instance semantic command facade boundary: ${requirement}`,
+      `src/composables/documentWorkspaceRuntime.ts violates the explicit document workspace ownership boundary: ${requirement}`,
     );
   }
 }
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'composables', 'useDocumentCommandBus.ts'),
+    join(projectRoot, 'src', 'composables', 'useDocumentSessionCoordinator.ts'),
+    join(projectRoot, 'src', 'composables', 'usePendingCellSaveCoordinator.ts'),
+    join(projectRoot, 'src', 'composables', 'useSearchSessionCoordinator.ts'),
+    join(projectRoot, 'src', 'composables', 'useDocumentFileCoordinator.ts'),
+  ],
+  [/new\s+WeakMap\b/],
+  'the centralized frontend document workspace ownership boundary',
+);
 
 rejectMatches(
   [join(projectRoot, 'src', 'composables', 'useDocumentCommandBus.ts')],
@@ -796,7 +987,7 @@ rejectMatches(
 
 for (const [file, requirement] of [
   ['src/application/documentCommandCoordinator.ts', /\bfunction\s+refreshEditorState\b/],
-  ['src/composables/useDocumentCommandBus.ts', /\brefreshEditorState\b/],
+  ['src/composables/documentCommandBusAdapter.ts', /\brefreshEditorState\b/],
 ]) {
   if (!requirement.test(readFileSync(join(projectRoot, file), 'utf8'))) {
     violations.push(`${file} violates the application-owned editor state refresh boundary`);
@@ -930,6 +1121,7 @@ for (const requirement of [
   /cancellation\.onCancel\s*\(/,
   /function\s+enqueue\b/,
   /tail\s*=\s*result\.then\s*\(/,
+  /function\s+waitForIdle\b/,
 ]) {
   if (!requirement.test(documentPreparationCoordinatorSource)) {
     violations.push(
@@ -943,13 +1135,12 @@ const useDocumentFileCoordinatorSource = readFileSync(
   'utf8',
 );
 for (const requirement of [
-  /new\s+WeakMap\s*</,
-  /\bpreparationCoordinators\b/,
-  /\bcreateDocumentPreparationCoordinator\b/,
+  /\buseDocumentWorkspaceRuntime\b/,
+  /workspace\.preparations\b/,
 ]) {
   if (!requirement.test(useDocumentFileCoordinatorSource)) {
     violations.push(
-      `src/composables/useDocumentFileCoordinator.ts violates the Store-scoped document preparation runtime boundary: ${requirement}`,
+      `src/composables/useDocumentFileCoordinator.ts violates the workspace-owned document preparation boundary: ${requirement}`,
     );
   }
 }
