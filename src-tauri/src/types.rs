@@ -1,21 +1,20 @@
 #![allow(clippy::module_inception)]
 
-pub(crate) mod display;
+mod cell;
 pub mod editor_command;
 pub mod editor_session;
 pub mod formula;
-pub mod projection;
 pub mod search;
 pub mod types;
 #[cfg(test)]
 pub mod typescript;
 pub mod update;
 
+#[allow(unused_imports)]
+pub use cell::*;
 pub use editor_command::*;
 pub use editor_session::*;
 pub use formula::*;
-#[cfg(test)]
-pub use projection::*;
 pub use search::*;
 pub use types::*;
 #[allow(unused_imports)]

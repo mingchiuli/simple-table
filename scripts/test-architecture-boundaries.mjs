@@ -571,17 +571,9 @@ for (const file of rustApplicationFiles) {
   );
 }
 
-const rustAcyclicArchitectureFiles = new Set([
-  join(rustRoot, 'runtime.rs'),
-  ...rustApplicationFiles,
-  ...sourceFiles(join(rustRoot, 'adapters'), '.rs'),
-  ...sourceFiles(join(rustRoot, 'document'), '.rs'),
-  ...sourceFiles(join(rustRoot, 'io'), '.rs'),
-]);
 for (const cycle of rustDependencyCycles()) {
-  if (!cycle.some((file) => rustAcyclicArchitectureFiles.has(file))) continue;
   violations.push(
-    `Rust architecture module dependency cycle: ${cycle
+    `Rust production module dependency cycle: ${cycle
       .map((file) => relative(projectRoot, file))
       .join(' -> ')}`,
   );
@@ -905,7 +897,7 @@ rejectMatches(
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
-  [/\bDocumentData\b/, /\bDocumentSheet\b/],
+  [/crate::document_data(?:::|\b)/, /\bDocumentData\b/, /\bDocumentSheet\b/],
   'the projection-only Rust protocol model boundary',
 );
 
@@ -1041,8 +1033,8 @@ rejectRustProductionMatches(
   'the permit-scoped outward protocol projection boundary',
 );
 
-const protocolProjectionSource = readFileSync(
-  join(projectRoot, 'src-tauri', 'src', 'protocol_projection.rs'),
+const documentProtocolProjectionSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'protocol_projection', 'document.rs'),
   'utf8',
 );
 for (const requirement of [
@@ -1051,12 +1043,30 @@ for (const requirement of [
   /response\.initial_region\s*=\s*None/,
   /serialized_json_bytes\s*\(\s*&?response\s*\)/,
 ]) {
-  if (!requirement.test(protocolProjectionSource)) {
+  if (!requirement.test(documentProtocolProjectionSource)) {
     violations.push(
-      `src-tauri/src/protocol_projection.rs violates the bounded whole-document response boundary: ${requirement}`,
+      `src-tauri/src/protocol_projection/document.rs violates the bounded whole-document response boundary: ${requirement}`,
     );
   }
 }
+
+rejectMatches(
+  [join(rustRoot, 'protocol_projection.rs')],
+  [/^use\s+crate::/m, /^(?:pub(?:\(crate\))?\s+)?fn\s+/m],
+  'the declaration-only Rust protocol projection facade boundary',
+);
+
+rejectMatches(
+  [
+    join(rustRoot, 'protocol_projection', 'document.rs'),
+    join(rustRoot, 'protocol_projection', 'editor.rs'),
+    join(rustRoot, 'protocol_projection', 'file.rs'),
+    join(rustRoot, 'protocol_projection', 'search.rs'),
+    join(rustRoot, 'protocol_projection', 'update.rs'),
+  ],
+  [/super::(?:document|editor|file|search|update)(?:::|\b)/],
+  'the feature-isolated Rust protocol projection boundary',
+);
 
 const boundedDocumentSessionSource = readFileSync(
   join(projectRoot, 'src', 'stores', 'documentSession.ts'),

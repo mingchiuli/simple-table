@@ -11,11 +11,11 @@ use tantivy::tokenizer::{LowerCaser, TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
 use tantivy_jieba::JiebaTokenizer;
 
+#[cfg(test)]
+use crate::domain::CellValue;
 use crate::domain::SearchCellText;
 use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;
 use crate::error::AppError;
-#[cfg(test)]
-use crate::types::CellValue;
 
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;

@@ -650,7 +650,7 @@ fn limit_error(message: String) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CellValue;
+    use crate::domain::CellValue;
 
     #[test]
     fn rejects_remote_cell_targets_before_projection_growth() {

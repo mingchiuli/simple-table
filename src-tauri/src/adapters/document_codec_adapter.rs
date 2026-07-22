@@ -125,7 +125,7 @@ impl DocumentCodecPort for DocumentCodecAdapter {
 mod tests {
     use super::*;
     use crate::document_data::{DocumentData, DocumentSheet};
-    use crate::types::CellValue;
+    use crate::domain::CellValue;
 
     #[test]
     fn extensionless_csv_source_is_decoded_through_the_port() {

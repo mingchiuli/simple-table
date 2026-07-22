@@ -155,7 +155,9 @@ history status, and region metadata are also internal semantic models. The
 document, formula, and state modules cannot import `types`. The top-level
 `projection_model` module owns serialization-independent application snapshots
 and mutation outcomes. The top-level `protocol_projection` module is their
-explicit outward wire mapper, so serde and TypeScript DTO changes cannot
+explicit outward wire mapper. Its document, editor, search, file, and update
+submodules map only their own feature, while shared cell, status, and response-size
+helpers remain dependency leaves. Serde and TypeScript DTO changes cannot
 propagate into the document aggregate, operation handlers, or application
 services.
 
@@ -171,6 +173,9 @@ Operation commit and rollback are private `SpreadsheetDocument` behavior rather
 than a sibling module that reaches back into the aggregate. Shared workbook patch
 shapes and diagnostics live in a neutral backing contract, so the document body
 may delegate to workbook state without workbook state depending on the body.
+Undo and redo restoration are private `EditorState` behavior: document restore,
+rollback, history movement, dirty/resource refresh, and revision advancement are
+committed by the session aggregate rather than a sibling transaction object.
 Canonical editable content lives in the serialization-independent
 `document_data::DocumentData` and `DocumentSheet` model. These types have no
 `serde` or `ts-rs` implementation and are not emitted to TypeScript. Merge,
@@ -198,7 +203,11 @@ operation effects to internal `MutationOutcome` and `MutationPatch` values;
 Rust `types` is a runtime-independent protocol boundary. Session DTOs such as
 `EditorSessionInfo`, `EditorStateInfo`, and `HistoryStatus` live there rather
 than in `state`. Its display projection is an internal wire serializer; the
-module cannot depend on application, state, operations, or I/O modules.
+module cannot depend on application, state, operations, or I/O modules. Wire cell
+values are owned wrappers around domain cell values; JSON and TypeScript behavior
+is implemented on those wrappers and never globally attached to the domain type.
+All production Rust modules participate in the architecture dependency graph and
+module cycles are rejected regardless of which feature contains them.
 
 Save and export orchestration live in `application::document_save_service`.
 That service owns revision validation, save leases, state commit, and post-save

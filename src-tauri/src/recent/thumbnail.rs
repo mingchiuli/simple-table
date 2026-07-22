@@ -4,7 +4,7 @@ use std::io::Cursor;
 use base64::Engine;
 use image::{ImageBuffer, Rgba};
 
-use crate::types::CellValue;
+use crate::domain::CellValue;
 
 const THUMBNAIL_WIDTH: u32 = 200;
 const CELL_WIDTH: u32 = 40;

@@ -1,4 +1,5 @@
 use crate::document::capabilities::WorkbookCapabilities;
+use crate::document::document_memento::{DocumentMemento, DocumentMementoSide};
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_restore::DocumentRestoreResult;
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
@@ -16,9 +17,6 @@ use crate::resource_limits::ResourceLedger;
 use crate::state::content_hash::ContentHash;
 use crate::state::dirty_tracker::DirtyTracker;
 use crate::state::editor_session::EditorSession;
-use crate::state::history_restore_transaction::{
-    HistoryRestoreDirection, HistoryRestoreTransaction,
-};
 use crate::state::history_store::{
     HistoryEntry, HistoryStatus, HistoryStore, MAX_SINGLE_HISTORY_ENTRY_BYTES,
     RetiredHistoryEntries,
@@ -44,6 +42,12 @@ pub struct SaveCommitLease {
     document_id: u64,
     revision: u64,
     token: u64,
+}
+
+#[derive(Clone, Copy)]
+enum HistoryRestoreDirection {
+    Undo,
+    Redo,
 }
 
 /// 编辑器状态管理器
@@ -420,56 +424,65 @@ impl EditorState {
 
     /// 撤销上一个操作
     pub fn undo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
-        self.ensure_not_saving()?;
-        self.ensure_transaction_available()?;
-        self.ensure_revision_available()?;
-        if let Some((restore, retired_history)) = HistoryRestoreTransaction::new(
-            &mut self.document,
-            &mut self.history,
-            &mut self.dirty,
-            HistoryRestoreDirection::Undo,
-        )
-        .commit()?
-        {
-            self.resources.replace_all(self.document.projection());
-            self.bump_revision()?;
-            Ok(Some(ExecutedOperation {
-                operation: None,
-                cell_changes: Vec::new(),
-                restore: Some(restore),
-                search_index_work: SearchIndexWork::RebuildAll,
-                retired: RetiredEditorResources::from_history_entries(retired_history),
-            }))
-        } else {
-            Ok(None)
-        }
+        self.restore_history(HistoryRestoreDirection::Undo)
     }
 
     /// 重做上一个被撤销的操作
     pub fn redo(&mut self) -> Result<Option<ExecutedOperation>, AppError> {
+        self.restore_history(HistoryRestoreDirection::Redo)
+    }
+
+    fn restore_history(
+        &mut self,
+        direction: HistoryRestoreDirection,
+    ) -> Result<Option<ExecutedOperation>, AppError> {
         self.ensure_not_saving()?;
         self.ensure_transaction_available()?;
         self.ensure_revision_available()?;
-        if let Some((restore, retired_history)) = HistoryRestoreTransaction::new(
-            &mut self.document,
-            &mut self.history,
-            &mut self.dirty,
-            HistoryRestoreDirection::Redo,
-        )
-        .commit()?
-        {
-            self.resources.replace_all(self.document.projection());
-            self.bump_revision()?;
-            Ok(Some(ExecutedOperation {
-                operation: None,
-                cell_changes: Vec::new(),
-                restore: Some(restore),
-                search_index_work: SearchIndexWork::RebuildAll,
-                retired: RetiredEditorResources::from_history_entries(retired_history),
-            }))
-        } else {
-            Ok(None)
-        }
+        let entry = match direction {
+            HistoryRestoreDirection::Undo => self.history.peek_undo(),
+            HistoryRestoreDirection::Redo => self.history.peek_redo(),
+        };
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        let (target, rollback) = history_restore_sides(&entry.memento, direction);
+        let restore = match self.document.restore_memento_side(target) {
+            Ok(restore) => restore,
+            Err(error) => {
+                rollback_failed_history_restore(&mut self.document, rollback, &error)?;
+                return Err(error);
+            }
+        };
+
+        self.dirty
+            .apply_history_restore(target, rollback, self.document.projection());
+        let retired_history = match direction {
+            HistoryRestoreDirection::Undo => {
+                let entry = self
+                    .history
+                    .pop_undo()
+                    .expect("undo entry exists until history restore commits");
+                self.history.push_redo(entry)
+            }
+            HistoryRestoreDirection::Redo => {
+                let entry = self
+                    .history
+                    .pop_redo()
+                    .expect("redo entry exists until history restore commits");
+                self.history.push_undo(entry)
+            }
+        };
+        self.resources.replace_all(self.document.projection());
+        self.bump_revision()?;
+
+        Ok(Some(ExecutedOperation {
+            operation: None,
+            cell_changes: Vec::new(),
+            restore: Some(restore),
+            search_index_work: SearchIndexWork::RebuildAll,
+            retired: RetiredEditorResources::from_history_entries(retired_history),
+        }))
     }
 
     #[cfg(test)]
@@ -530,6 +543,37 @@ impl EditorState {
             )));
         }
         Ok(())
+    }
+}
+
+fn rollback_failed_history_restore(
+    document: &mut SpreadsheetDocument,
+    rollback: &DocumentMementoSide,
+    restore_error: &AppError,
+) -> Result<(), AppError> {
+    match document.restore_memento_side(rollback) {
+        Ok(_) => Ok(()),
+        Err(rollback_error) => {
+            let operation_error = restore_error.to_string();
+            let rollback_error = rollback_error.to_string();
+            document.mark_transaction_failed(format!(
+                "history restore failed ({operation_error}) and rollback failed ({rollback_error})"
+            ));
+            Err(AppError::TransactionRollbackFailed {
+                operation_error,
+                rollback_error,
+            })
+        }
+    }
+}
+
+fn history_restore_sides(
+    memento: &DocumentMemento,
+    direction: HistoryRestoreDirection,
+) -> (&DocumentMementoSide, &DocumentMementoSide) {
+    match direction {
+        HistoryRestoreDirection::Undo => (&memento.before, &memento.after),
+        HistoryRestoreDirection::Redo => (&memento.after, &memento.before),
     }
 }
 

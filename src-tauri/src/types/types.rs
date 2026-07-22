@@ -1,10 +1,8 @@
-use crate::domain::normalize_formula_text;
-pub use crate::domain::{CellNumber, CellValue};
-use crate::types::projection::CellValueProjection;
+use crate::domain::CellValue as DomainCellValue;
+use crate::types::cell::{CellFormatProjection, CellValue, CellValueProjection};
 use crate::types::{EditorSessionInfo, EditorStateInfo, FormulaStatus};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use ts_rs::TS;
 
@@ -23,143 +21,6 @@ pub struct PickedFileInfo {
 pub struct DesktopOpenFileInfo {
     pub path: String,
     pub file_name: String,
-}
-
-// JavaScript 安全整数范围: -(2^53 - 1) 到 (2^53 - 1)
-const JS_MAX_SAFE_INTEGER: i64 = 9007199254740991;
-const JS_MIN_SAFE_INTEGER: i64 = -9007199254740991;
-
-#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct CellFormatProjection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub number_format: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style_id: Option<String>,
-}
-
-impl CellValue {
-    pub(crate) fn raw_json_value(&self) -> Value {
-        match self {
-            CellValue::Null => Value::Null,
-            CellValue::String(value) => Value::String(value.clone()),
-            CellValue::Number(value) => {
-                if let Some(i) = value.as_i64()
-                    && !(JS_MIN_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&i)
-                {
-                    return Value::String(i.to_string());
-                }
-                value.as_i64().map_or_else(
-                    || {
-                        serde_json::Number::from_f64(value.as_f64())
-                            .map(Value::Number)
-                            .unwrap_or(Value::Null)
-                    },
-                    |value| Value::Number(value.into()),
-                )
-            }
-            CellValue::Boolean(value) => Value::Bool(*value),
-            CellValue::Formula { cached_value, .. } => cached_value.raw_json_value(),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for CellValue {
-    fn deserialize<D>(deserializer: D) -> Result<CellValue, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // 使用 serde_json::Value 反序列化，然后转换
-        let value = Value::deserialize(deserializer)?;
-        match value {
-            Value::Null => Ok(CellValue::Null),
-            Value::Bool(b) => Ok(CellValue::Boolean(b)),
-            Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(CellValue::Number(CellNumber::from(i)))
-                } else if let Some(f) = n.as_f64() {
-                    CellNumber::from_f64(f)
-                        .map(CellValue::Number)
-                        .ok_or_else(|| serde::de::Error::custom("cell number must be finite"))
-                } else {
-                    // 解析失败，尝试作为字符串
-                    Ok(CellValue::String(n.to_string()))
-                }
-            }
-            Value::String(s) => {
-                // JS 端传入 string 时表示用户明确要保留文本语义，
-                // 例如邮编/编号 "007" 或超过 JS 安全整数范围的值。
-                Ok(CellValue::String(s))
-            }
-            Value::Object(mut object) => {
-                if object.get("type").and_then(Value::as_str) == Some("cell") {
-                    let formula = object.remove("formula");
-                    if let Some(Value::Object(mut formula)) = formula {
-                        let formula_text = formula
-                            .remove("formula")
-                            .and_then(|value| value.as_str().map(ToOwned::to_owned))
-                            .unwrap_or_default();
-                        let cached_value = formula
-                            .remove("cachedValue")
-                            .or_else(|| formula.remove("cached_value"))
-                            .or_else(|| object.remove("raw"))
-                            .map(CellValue::deserialize)
-                            .transpose()
-                            .map_err(serde::de::Error::custom)?
-                            .unwrap_or(CellValue::Null);
-                        let error = formula
-                            .remove("error")
-                            .and_then(|value| value.as_str().map(ToOwned::to_owned));
-
-                        return Ok(CellValue::Formula {
-                            formula: normalize_formula_text(formula_text),
-                            cached_value: Box::new(cached_value),
-                            error,
-                        });
-                    }
-
-                    return object
-                        .remove("raw")
-                        .map(CellValue::deserialize)
-                        .transpose()
-                        .map_err(serde::de::Error::custom)?
-                        .map(Ok)
-                        .unwrap_or(Ok(CellValue::Null));
-                }
-
-                if object.get("type").and_then(Value::as_str) == Some("formula") {
-                    let formula = object
-                        .remove("formula")
-                        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-                        .unwrap_or_default();
-                    let cached_value = object
-                        .remove("cachedValue")
-                        .or_else(|| object.remove("cached_value"))
-                        .map(CellValue::deserialize)
-                        .transpose()
-                        .map_err(serde::de::Error::custom)?
-                        .unwrap_or(CellValue::Null);
-                    let error = object
-                        .remove("error")
-                        .and_then(|value| value.as_str().map(ToOwned::to_owned));
-
-                    Ok(CellValue::Formula {
-                        formula: normalize_formula_text(formula),
-                        cached_value: Box::new(cached_value),
-                        error,
-                    })
-                } else {
-                    // 不支持的对象类型，转为字符串
-                    Ok(CellValue::String(Value::Object(object).to_string()))
-                }
-            }
-            Value::Array(_) => {
-                // 不支持的类型，转为字符串
-                Ok(CellValue::String(value.to_string()))
-            }
-        }
-    }
 }
 
 /// 合并范围
@@ -552,12 +413,12 @@ pub struct SheetCellChange {
 }
 
 impl SheetCellChange {
-    pub fn new(sheet_index: usize, row: usize, col: usize, value: CellValue) -> Self {
+    pub fn new(sheet_index: usize, row: usize, col: usize, value: DomainCellValue) -> Self {
         Self {
             sheet_index,
             row,
             col,
-            value,
+            value: value.into(),
             display: None,
             format: None,
             style: None,
@@ -590,7 +451,7 @@ impl Serialize for SheetCellChange {
         state.serialize_field("col", &self.col)?;
         state.serialize_field(
             "value",
-            &CellValueProjection::new(&self.value, self.display_format.clone()),
+            &CellValueProjection::new(self.value.as_domain(), self.display_format.clone()),
         )?;
         state.end()
     }
