@@ -23,7 +23,7 @@ pub async fn pick_open_file_ios(
     executions
         .file()
         .run_mapped(
-            move || runtime.document_files().pick_open_file_ios(&app),
+            move || runtime.platform_files().pick_open_file_ios(&app),
             |selection| selection.map(protocol_projection::picked_file_info),
         )
         .await
@@ -43,7 +43,7 @@ pub async fn discard_open_file_selection_ios(
         .file()
         .run(move || {
             runtime
-                .document_files()
+                .platform_files()
                 .discard_open_file_selection_mobile(&app, &path)
         })
         .await
@@ -63,7 +63,7 @@ pub async fn discard_save_location_ios(
         .file()
         .run(move || {
             runtime
-                .document_files()
+                .platform_files()
                 .discard_save_location_mobile(&app, &path)
         })
         .await
@@ -83,9 +83,8 @@ pub async fn prepare_open_file_ios(
         .file()
         .run_mapped(
             move || {
-                runtime
-                    .document_files()
-                    .prepare_open_file_mobile(&app, &path)
+                let source = runtime.platform_files().mobile_open_source(app, path);
+                runtime.document_files().prepare_open(source)
             },
             protocol_projection::prepared_open_document,
         )
@@ -106,7 +105,7 @@ pub async fn pick_save_location_ios(
         .file()
         .run(move || {
             runtime
-                .document_files()
+                .platform_files()
                 .pick_save_location_ios(&app, &default_name)
         })
         .await
@@ -128,12 +127,10 @@ pub async fn save_file_ios(
         .file()
         .run_fallibly_mapped(
             move || {
-                runtime.document_files().save_file_mobile(
-                    &app,
-                    &path,
-                    document_id.get(),
-                    base_revision.get(),
-                )
+                let target = runtime.platform_files().mobile_save_target(app, path)?;
+                runtime
+                    .document_files()
+                    .save(target, document_id.get(), base_revision.get())
             },
             protocol_projection::saved_document_response,
         )
@@ -155,12 +152,16 @@ pub async fn export_file_ios(
     executions
         .file()
         .run(move || {
-            runtime.document_files().export_file_mobile(
-                &app,
-                &default_name,
-                document_id.get(),
-                base_revision.get(),
-            )
+            let Some(target) = runtime
+                .platform_files()
+                .pick_mobile_export_target(&app, &default_name)?
+            else {
+                return Ok(None);
+            };
+            runtime
+                .document_files()
+                .export(target, document_id.get(), base_revision.get())
+                .map(Some)
         })
         .await
 }

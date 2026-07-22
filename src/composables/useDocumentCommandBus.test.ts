@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
-import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 const apiMocks = vi.hoisted(() => ({
   getEditorState: vi.fn(),
@@ -14,19 +17,21 @@ vi.mock('element-plus', () => ({
 vi.mock('@/api', () => apiMocks);
 
 describe('useDocumentCommandBus', () => {
+  let workspace: DocumentWorkspaceTestContext;
+
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
     apiMocks.getEditorState.mockReset().mockResolvedValue(null);
   });
 
-  it('returns one command facade per Pinia document session', () => {
-    const first = useDocumentCommandBus();
-    expect(useDocumentCommandBus()).toBe(first);
+  it('keeps command facades scoped to their explicit document runtime', () => {
+    const first = workspace.runtime.commandBus;
 
     setActivePinia(createPinia());
+    const secondWorkspace = createDocumentWorkspaceTestContext();
 
-    const second = useDocumentCommandBus();
-    expect(useDocumentCommandBus()).toBe(second);
+    const second = secondWorkspace.runtime.commandBus;
     expect(second).not.toBe(first);
   });
 
@@ -34,6 +39,6 @@ describe('useDocumentCommandBus', () => {
     const error = new Error('status unavailable');
     apiMocks.getEditorState.mockRejectedValue(error);
 
-    await expect(useDocumentCommandBus().refreshEditorState()).rejects.toBe(error);
+    await expect(workspace.runtime.commandBus.refreshEditorState()).rejects.toBe(error);
   });
 });

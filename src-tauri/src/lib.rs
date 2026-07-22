@@ -64,7 +64,7 @@ pub fn run() {
             // File path is passed as argv[1], emit event for frontend to handle
             if argv.len() > 1 {
                 let runtime = app.state::<runtime::ApplicationRuntime>();
-                runtime.document_files().authorize_open_target(&argv[1]);
+                runtime.platform_files().authorize_open_target(&argv[1]);
                 if let Err(e) = app.emit("deep-link-received", argv[1].clone()) {
                     eprintln!("Failed to emit deep link: {}", e);
                 }
@@ -82,23 +82,23 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.setup(|app| {
-            let document_files = app
+            let platform_files = app
                 .state::<runtime::ApplicationRuntime>()
-                .document_files()
+                .platform_files()
                 .clone();
             for arg in std::env::args().skip(1) {
-                document_files.authorize_open_target(&arg);
+                platform_files.authorize_open_target(&arg);
             }
 
             use tauri_plugin_deep_link::DeepLinkExt;
             if let Ok(Some(urls)) = app.deep_link().get_current()
                 && let Some(url) = urls.first()
             {
-                document_files.authorize_open_target(url.as_str());
+                platform_files.authorize_open_target(url.as_str());
             }
             app.deep_link().on_open_url(move |event| {
                 if let Some(url) = event.urls().first() {
-                    document_files.authorize_open_target(url.as_str());
+                    platform_files.authorize_open_target(url.as_str());
                 }
             });
             Ok(())
@@ -111,7 +111,7 @@ pub fn run() {
         builder = builder.setup(|app| {
             let runtime = app.state::<runtime::ApplicationRuntime>();
             runtime
-                .document_files()
+                .platform_files()
                 .reconcile_transient_files(app.handle())?;
             Ok(())
         });

@@ -7,6 +7,10 @@ import type { OpenDocumentResponse } from '@/types/protocol';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 vi.mock("@/api", () => ({
   getActiveDocument: vi.fn(),
@@ -42,15 +46,18 @@ function activeDocument(): OpenDocumentResponse {
 }
 
 describe("restoreActiveDocument", () => {
+  let workspace: DocumentWorkspaceTestContext;
+
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
     vi.resetAllMocks();
   });
 
   it("hydrates a frontend session from the active backend document", async () => {
     vi.mocked(api.getActiveDocument).mockResolvedValue(activeDocument());
 
-    await expect(restoreActiveDocument()).resolves.toBe(true);
+    await expect(restoreActiveDocument(workspace.runtime)).resolves.toBe(true);
 
     const store = useDocumentSessionStore();
     expect(store.documentId).toBe('9');
@@ -59,17 +66,16 @@ describe("restoreActiveDocument", () => {
   });
 
   it("does not replace an already initialized frontend session", async () => {
-    const store = useDocumentSessionStore();
-    openDocumentSession(store, activeDocument(), "/tmp/recovered.xlsx");
+    openDocumentSession(workspace.runtime, activeDocument(), "/tmp/recovered.xlsx");
 
-    await expect(restoreActiveDocument()).resolves.toBe(false);
+    await expect(restoreActiveDocument(workspace.runtime)).resolves.toBe(false);
     expect(api.getActiveDocument).not.toHaveBeenCalled();
   });
 
   it("leaves the frontend empty when the backend has no active document", async () => {
     vi.mocked(api.getActiveDocument).mockResolvedValue(null);
 
-    await expect(restoreActiveDocument()).resolves.toBe(false);
+    await expect(restoreActiveDocument(workspace.runtime)).resolves.toBe(false);
 
     const store = useDocumentSessionStore();
     expect(store.data).toBeNull();

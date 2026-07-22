@@ -1,9 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computed } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useFileActions } from "@/composables/useFileActions";
 import { useDocumentSessionStore } from "@/stores/documentSession";
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
 import {
@@ -25,6 +24,12 @@ import {
   type SheetData,
 } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
+import {
+  createApplicationWorkspaceTestContext,
+  type ApplicationWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
+
+let workspace: ApplicationWorkspaceTestContext;
 
 const routerMocks = vi.hoisted(() => ({
   push: vi.fn(),
@@ -220,24 +225,27 @@ async function waitForCondition(condition: () => boolean) {
 
 function mountActions(flushPendingCellChanges: () => Promise<boolean>) {
   const documentSessionStore = useDocumentSessionStore();
-  return useFileActions({
+  return workspace.run(() => useFileActions({
     fileData: computed(() => documentSessionStore.data),
     flushPendingCellChanges,
-  });
+  }));
 }
 
 describe("useFileActions", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createApplicationWorkspaceTestContext();
     vi.clearAllMocks();
   });
+
+  afterEach(() => workspace.application.dispose());
 
   it("does not ask to discard when file picking is cancelled", async () => {
     const platform = await import("@/platform");
     const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(platform.pickOpenFile).mockResolvedValue(null);
 
     const actions = mountActions(flushPendingCellChanges);
@@ -344,7 +352,7 @@ describe("useFileActions", () => {
     const pendingCommit = deferred<OpenDocumentResponse>();
     const cancellation = controlledCancellation();
     openDocumentSession(
-      documentSessionStore,
+      workspace.runtime,
       openedResponse("current.xlsx", 1),
       "/tmp/current.xlsx"
     );
@@ -399,7 +407,7 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    useDocumentSessionCoordinator().beginLifecycle('saving');
+    workspace.runtime.session.beginLifecycle('saving');
     mockPreparedOpen(openedResponse("queued.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
@@ -410,7 +418,7 @@ describe("useFileActions", () => {
     expect(platform.prepareOpenFile).not.toHaveBeenCalled();
     expect(documentSessionStore.lifecycle).toBe("saving");
 
-    useDocumentSessionCoordinator().endLifecycle('saving');
+    workspace.runtime.session.endLifecycle('saving');
 
     await expect(loadPromise).resolves.toBe(true);
     expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
@@ -421,7 +429,7 @@ describe("useFileActions", () => {
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    const releaseEditorCommand = useDocumentSessionCoordinator().beginEditorCommand();
+    const releaseEditorCommand = workspace.runtime.session.beginEditorCommand();
     mockPreparedOpen(openedResponse("queued.xlsx", 2));
 
     const actions = mountActions(flushPendingCellChanges);
@@ -500,7 +508,7 @@ describe("useFileActions", () => {
     const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(false);
     vi.mocked(platform.pickOpenFile).mockResolvedValue({
       path: "/tmp/next.xlsx",
@@ -534,7 +542,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     statusStore.applyEditorState({
       canUndo: true,
       canRedo: false,
@@ -565,7 +573,7 @@ describe("useFileActions", () => {
     const unsavedChanges = await import("@/composables/unsavedChangesDialog");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
     vi.mocked(platform.pickOpenFile).mockResolvedValue({
       path: "/tmp/next.xlsx",
@@ -605,7 +613,7 @@ describe("useFileActions", () => {
       fileName: "broken.xlsx",
       originalPath: "content://broken",
     };
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     statusStore.markPendingContentChange();
     pendingCellSavesStore.applyDraft(
       "0,0,0",
@@ -635,7 +643,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     statusStore.applyEditorState({
       canUndo: true,
       canRedo: false,
@@ -661,7 +669,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     const pendingClose = deferred<void>();
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(api.closeCurrentDocument).mockReturnValue(pendingClose.promise);
 
     const actions = mountActions(flushPendingCellChanges);
@@ -686,8 +694,8 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
-    expect(useDocumentSessionCoordinator().beginLifecycle('saving')).toBe(true);
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    expect(workspace.runtime.session.beginLifecycle('saving')).toBe(true);
 
     const actions = mountActions(flushPendingCellChanges);
     const closePromise = actions.closeCurrentDocument({ waitForIdle: true });
@@ -695,7 +703,7 @@ describe("useFileActions", () => {
     await flushPromises();
     expect(api.closeCurrentDocument).not.toHaveBeenCalled();
 
-    useDocumentSessionCoordinator().endLifecycle('saving');
+    workspace.runtime.session.endLifecycle('saving');
 
     await expect(closePromise).resolves.toBe(true);
     expect(api.closeCurrentDocument).toHaveBeenCalledWith('1');
@@ -708,7 +716,7 @@ describe("useFileActions", () => {
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     const pendingNavigation = deferred<void>();
     let backResolved = false;
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     routerMocks.push.mockReturnValue(pendingNavigation.promise);
 
     const actions = mountActions(flushPendingCellChanges);
@@ -734,7 +742,7 @@ describe("useFileActions", () => {
     const elementPlus = await import("element-plus");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     routerMocks.push.mockRejectedValue(new Error("navigation failed"));
 
     const actions = mountActions(flushPendingCellChanges);
@@ -755,7 +763,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const savePath = "/tmp/reserved.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, newUntitledResponse(1), null);
+    openDocumentSession(workspace.runtime, newUntitledResponse(1), null);
     vi.mocked(api.getNativeSavePlan)
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan({
@@ -779,7 +787,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const savePath = "/tmp/saved.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, newUntitledResponse(1), null);
+    openDocumentSession(workspace.runtime, newUntitledResponse(1), null);
     vi.mocked(api.getNativeSavePlan)
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan());
@@ -806,7 +814,7 @@ describe("useFileActions", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const savePath = "/tmp/saved-without-name.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, newUntitledResponse(1), null);
+    openDocumentSession(workspace.runtime, newUntitledResponse(1), null);
     vi.mocked(api.getNativeSavePlan)
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan());
@@ -848,7 +856,7 @@ describe("useFileActions", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const existingPath = "/tmp/current.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), existingPath);
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), existingPath);
     vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
     vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("current.xlsx", existingPath, 1));
     vi.mocked(api.addRecentFileWithThumbnail).mockRejectedValueOnce(
@@ -885,7 +893,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const existingPath = "/tmp/current.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), existingPath);
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), existingPath);
     documentSessionStore.revision = '3';
     documentSessionStore.projectionStale = true;
     vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
@@ -919,7 +927,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const savePath = "/tmp/stale-response.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, newUntitledResponse(1), null);
+    openDocumentSession(workspace.runtime, newUntitledResponse(1), null);
     vi.mocked(api.getNativeSavePlan)
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan());
@@ -951,7 +959,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const existingPath = "/tmp/current.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), existingPath);
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), existingPath);
     vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
     vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("current.xlsx", existingPath, 2));
 
@@ -977,7 +985,7 @@ describe("useFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     const savePath = "/tmp/write-failed.xlsx";
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    openDocumentSession(documentSessionStore, newUntitledResponse(1), null);
+    openDocumentSession(workspace.runtime, newUntitledResponse(1), null);
     vi.mocked(api.getNativeSavePlan)
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan());

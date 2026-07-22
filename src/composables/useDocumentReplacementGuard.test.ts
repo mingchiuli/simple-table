@@ -3,9 +3,6 @@ import { createPinia, setActivePinia } from "pinia";
 import { useDocumentReplacementGuard } from "@/composables/useDocumentReplacementGuard";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
-import { useDocumentSessionStore } from "@/stores/documentSession";
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
-import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -15,6 +12,16 @@ import {
 } from "@/types";
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
+
+let workspace: DocumentWorkspaceTestContext;
+
+function replacementGuard() {
+  return workspace.run(() => useDocumentReplacementGuard());
+}
 
 const unsavedChanges = vi.hoisted(() => ({
   confirmDiscardUnsavedChanges: vi.fn(),
@@ -53,7 +60,7 @@ function openTestDocument(documentId: number | string = '1') {
       },
     };
   openDocumentSession(
-    useDocumentSessionStore(),
+    workspace.runtime,
     openResponseFromFileData(fileData, editorSession),
     "/tmp/book.xlsx"
   );
@@ -68,7 +75,7 @@ function queueDraftWithAutosave(committed: string[]) {
     value: "draft",
     oldValue: text("old"),
   });
-  usePendingCellSaveCoordinator().schedulePendingSave(
+  workspace.runtime.pendingCellSaves.schedulePendingSave(
     {
       commitBatch: async (changes) => {
         committed.push(changes[0].value);
@@ -99,6 +106,7 @@ function deferred<T = void>() {
 describe("useDocumentReplacementGuard", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -114,7 +122,7 @@ describe("useDocumentReplacementGuard", () => {
     statusStore.markPendingContentChange();
     unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
 
-    const replacement = await useDocumentReplacementGuard().beginDocumentReplacement();
+    const replacement = await replacementGuard().beginDocumentReplacement();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(replacement).not.toBeNull();
@@ -139,7 +147,7 @@ describe("useDocumentReplacementGuard", () => {
       })
     );
 
-    const replacementPromise = useDocumentReplacementGuard().beginDocumentReplacement();
+    const replacementPromise = replacementGuard().beginDocumentReplacement();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
@@ -159,7 +167,7 @@ describe("useDocumentReplacementGuard", () => {
     statusStore.markPendingContentChange();
     unsavedChanges.confirmDiscardUnsavedChanges.mockRejectedValue(new Error("dialog failed"));
 
-    await expect(useDocumentReplacementGuard().beginDocumentReplacement()).rejects.toThrow(
+    await expect(replacementGuard().beginDocumentReplacement()).rejects.toThrow(
       "dialog failed"
     );
     await vi.advanceTimersByTimeAsync(100);
@@ -174,13 +182,13 @@ describe("useDocumentReplacementGuard", () => {
     statusStore.markPendingContentChange();
     unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
 
-    const replacement = await useDocumentReplacementGuard().beginDocumentReplacement();
+    const replacement = await replacementGuard().beginDocumentReplacement();
     replacement?.commit();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
     expect(statusStore.hasPendingContentChange).toBe(false);
-    expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
+    expect(workspace.runtime.pendingCellSaves.hasPendingWork()).toBe(false);
   });
 
   it("waits for active document mutations before allowing confirmed discard replacement", async () => {
@@ -190,13 +198,13 @@ describe("useDocumentReplacementGuard", () => {
     unsavedChanges.confirmDiscardUnsavedChanges.mockResolvedValue(true);
     let releaseMutation!: () => void;
     let replacementResolved = false;
-    void useDocumentSessionCoordinator().enqueueDocumentMutation('1', async () => {
+    void workspace.runtime.session.enqueueDocumentMutation('1', async () => {
       await new Promise<void>((resolve) => {
         releaseMutation = resolve;
       });
     });
 
-    const replacementPromise = useDocumentReplacementGuard()
+    const replacementPromise = replacementGuard()
       .beginDocumentReplacement()
       .then((replacement) => {
         replacementResolved = true;
@@ -231,11 +239,11 @@ describe("useDocumentReplacementGuard", () => {
       value: "draft",
       oldValue: text("old"),
     });
-    usePendingCellSaveCoordinator().startPendingSave({
+    workspace.runtime.pendingCellSaves.startPendingSave({
       commitBatch: async () => {
         saveStarted = true;
         await enqueueGate.promise;
-        await useDocumentSessionCoordinator().enqueueDocumentMutation('1', async () => {
+        await workspace.runtime.session.enqueueDocumentMutation('1', async () => {
           await mutationGate.promise;
         });
       },
@@ -245,7 +253,7 @@ describe("useDocumentReplacementGuard", () => {
 
     expect(saveStarted).toBe(true);
 
-    const replacementPromise = useDocumentReplacementGuard()
+    const replacementPromise = replacementGuard()
       .beginDocumentReplacement()
       .then((replacement) => {
         replacementResolved = true;

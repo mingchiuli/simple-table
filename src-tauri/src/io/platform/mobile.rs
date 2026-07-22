@@ -49,6 +49,19 @@ impl MobileFileRuntime {
         &self.managed_documents
     }
 
+    pub(crate) fn begin_transient_document_adoption(
+        &self,
+        target: &Path,
+        file_name: &str,
+    ) -> Result<managed_documents::ManagedDocumentAdoption, AppError> {
+        managed_documents::begin_transient_document_adoption(
+            &self.managed_documents,
+            Arc::clone(&self.transient_files),
+            target,
+            file_name,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !Arc::ptr_eq(&self.storage_directory, &other.storage_directory)

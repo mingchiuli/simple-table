@@ -3,7 +3,9 @@ use crate::io::atomic_file::write_file_atomically;
 use crate::io::marker_store::{
     bounded_directory_entries, read_marker_bytes, validate_marker_field,
 };
-use crate::io::transient_files::{TransientFileRegistry, clear_persistent_marker};
+use crate::io::transient_files::{
+    TransientFileEntry, TransientFileRegistry, clear_persistent_marker,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -41,18 +43,112 @@ struct PersistentManagedDocument {
     adopted_at_millis: i64,
 }
 
-pub(crate) fn adopt_transient_document(
+pub(crate) struct ManagedDocumentAdoption {
+    catalog: ManagedDocumentCatalog,
+    transient_files: Arc<TransientFileRegistry>,
+    target: PathBuf,
+    transient_entry: Option<TransientFileEntry>,
+    previous_managed_marker: Option<Vec<u8>>,
+    committed: bool,
+}
+
+impl ManagedDocumentAdoption {
+    pub(crate) fn commit(mut self) {
+        if self.transient_entry.is_some() {
+            clear_persistent_marker(&self.target);
+        }
+        self.committed = true;
+    }
+
+    fn rollback(&mut self) -> Result<(), AppError> {
+        let Some(entry) = self.transient_entry.take() else {
+            return Ok(());
+        };
+        let marker_result = restore_managed_marker(
+            &self.catalog,
+            &self.target,
+            self.previous_managed_marker.as_deref(),
+        );
+        let registry_result = self
+            .transient_files
+            .restore_after_failed_adoption(self.target.clone(), entry);
+        marker_result.and(registry_result)
+    }
+}
+
+impl Drop for ManagedDocumentAdoption {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.rollback();
+        }
+    }
+}
+
+pub(crate) fn begin_transient_document_adoption(
     catalog: &ManagedDocumentCatalog,
-    transient_files: &TransientFileRegistry,
+    transient_files: Arc<TransientFileRegistry>,
     target: &Path,
     file_name: &str,
-) -> Result<bool, AppError> {
-    if !transient_files.contains(target)? {
-        return Ok(false);
+) -> Result<ManagedDocumentAdoption, AppError> {
+    let transient_entry = transient_files.take_for_adoption(target)?;
+    let previous_managed_marker = match transient_entry {
+        Some(_) => match marker_path(target).and_then(|path| read_optional_marker_bytes(&path)) {
+            Ok(marker) => marker,
+            Err(error) => {
+                if let Some(entry) = transient_entry {
+                    let _ =
+                        transient_files.restore_after_failed_adoption(target.to_path_buf(), entry);
+                }
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+    if transient_entry.is_some()
+        && let Err(error) = persist_managed_document(catalog, target, file_name, None, None, true)
+    {
+        if let Some(entry) = transient_entry {
+            let _ = transient_files.restore_after_failed_adoption(target.to_path_buf(), entry);
+        }
+        return Err(error);
     }
-    persist_managed_document(catalog, target, file_name, None, None, true)?;
-    transient_files.adopt_if_registered(target)?;
-    Ok(true)
+    Ok(ManagedDocumentAdoption {
+        catalog: catalog.clone(),
+        transient_files,
+        target: target.to_path_buf(),
+        transient_entry,
+        previous_managed_marker,
+        committed: false,
+    })
+}
+
+fn read_optional_marker_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AppError::ReadError(format!(
+            "Failed to snapshot managed document marker: {error}"
+        ))),
+    }
+}
+
+fn restore_managed_marker(
+    catalog: &ManagedDocumentCatalog,
+    target: &Path,
+    previous: Option<&[u8]>,
+) -> Result<(), AppError> {
+    let _guard = transaction_lock(catalog)?;
+    let path = marker_path(target)?;
+    match previous {
+        Some(bytes) => write_file_atomically(&path, bytes),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(AppError::WriteError(format!(
+                "Failed to roll back managed document marker: {error}"
+            ))),
+        },
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -408,9 +504,9 @@ mod tests {
     }
 
     #[test]
-    fn adopting_transient_document_persists_catalog_before_clearing_transient_marker() {
+    fn dropped_adoption_restores_transient_ownership_and_managed_marker() {
         let catalog = ManagedDocumentCatalog::default();
-        let transient_files = TransientFileRegistry::default();
+        let transient_files = Arc::new(TransientFileRegistry::default());
         let dir = TestDir::new("adoption");
         let target = dir.0.join("imported.xlsx");
         fs::write(&target, b"workbook").expect("transient file");
@@ -426,12 +522,53 @@ mod tests {
         )
         .expect("transient marker");
 
-        assert!(
-            adopt_transient_document(&catalog, &transient_files, &target, "Imported.xlsx")
-                .expect("managed adoption")
-        );
+        let adoption = begin_transient_document_adoption(
+            &catalog,
+            Arc::clone(&transient_files),
+            &target,
+            "Imported.xlsx",
+        )
+        .expect("managed adoption");
+        assert!(!transient_files.contains(&target).unwrap());
+        assert_eq!(managed_documents(&catalog, &dir.0).unwrap().len(), 1);
+
+        drop(adoption);
+
+        assert!(transient_files.contains(&target).unwrap());
+        assert!(crate::io::transient_files::persistent_marker_exists_for_test(&target));
+        assert!(managed_documents(&catalog, &dir.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn committed_adoption_keeps_managed_ownership_and_clears_transient_marker() {
+        let catalog = ManagedDocumentCatalog::default();
+        let transient_files = Arc::new(TransientFileRegistry::default());
+        let dir = TestDir::new("adoption-commit");
+        let target = dir.0.join("imported.xlsx");
+        fs::write(&target, b"workbook").expect("transient file");
+        transient_files
+            .register(
+                target.clone(),
+                crate::io::transient_files::TransientFilePurpose::OpenSelection,
+            )
+            .expect("transient registration");
+        crate::io::transient_files::write_persistent_marker(
+            &target,
+            crate::io::transient_files::TransientFilePurpose::OpenSelection,
+        )
+        .expect("transient marker");
+
+        begin_transient_document_adoption(
+            &catalog,
+            Arc::clone(&transient_files),
+            &target,
+            "Imported.xlsx",
+        )
+        .expect("managed adoption")
+        .commit();
 
         assert!(!transient_files.contains(&target).unwrap());
+        assert!(!crate::io::transient_files::persistent_marker_exists_for_test(&target));
         assert_eq!(managed_documents(&catalog, &dir.0).unwrap().len(), 1);
     }
 

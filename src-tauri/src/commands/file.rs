@@ -22,7 +22,7 @@ pub async fn pick_open_file_desktop(
     executions
         .file()
         .run_mapped(
-            move || runtime.document_files().pick_open_file(&app),
+            move || runtime.platform_files().pick_open_file(&app),
             |selection| selection.map(protocol_projection::desktop_open_file_info),
         )
         .await
@@ -32,7 +32,7 @@ pub async fn pick_open_file_desktop(
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub fn discard_open_file_selection_desktop(runtime: State<'_, ApplicationRuntime>, path: String) {
-    runtime.document_files().discard_open_file_selection(&path)
+    runtime.platform_files().discard_open_file_selection(&path)
 }
 
 /// Desktop: 从后端已授权路径读取并解析文件。
@@ -47,7 +47,10 @@ pub async fn prepare_open_file_desktop(
     executions
         .file()
         .run_mapped(
-            move || runtime.document_files().prepare_open_file(&path),
+            move || {
+                let source = runtime.platform_files().open_source(path);
+                runtime.document_files().prepare_open(source)
+            },
             protocol_projection::prepared_open_document,
         )
         .await
@@ -66,7 +69,10 @@ pub async fn prepare_recent_file_desktop(
     executions
         .file()
         .run_mapped(
-            move || runtime.document_files().prepare_recent_file(&app, &id),
+            move || {
+                let source = runtime.platform_files().recent_open_source(app, id);
+                runtime.document_files().prepare_open(source)
+            },
             protocol_projection::prepared_open_document,
         )
         .await
@@ -86,7 +92,7 @@ pub async fn pick_save_location_desktop(
         .file()
         .run(move || {
             runtime
-                .document_files()
+                .platform_files()
                 .pick_save_location(&app, &default_name)
         })
         .await
@@ -96,7 +102,7 @@ pub async fn pick_save_location_desktop(
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
 pub fn discard_save_location_desktop(runtime: State<'_, ApplicationRuntime>, path: String) {
-    runtime.document_files().discard_save_location(&path)
+    runtime.platform_files().discard_save_location(&path)
 }
 
 /// Desktop: 生成文件字节并写入路径
@@ -114,9 +120,10 @@ pub async fn save_file_desktop(
         .file()
         .run_fallibly_mapped(
             move || {
+                let target = runtime.platform_files().save_target(path);
                 runtime
                     .document_files()
-                    .save_file(&path, document_id.get(), base_revision.get())
+                    .save(target, document_id.get(), base_revision.get())
             },
             protocol_projection::saved_document_response,
         )
@@ -138,12 +145,16 @@ pub async fn export_file_desktop(
     executions
         .file()
         .run(move || {
-            runtime.document_files().export_file(
-                &app,
-                &default_name,
-                document_id.get(),
-                base_revision.get(),
-            )
+            let Some(target) = runtime
+                .platform_files()
+                .pick_export_target(&app, &default_name)?
+            else {
+                return Ok(None);
+            };
+            runtime
+                .document_files()
+                .export(target, document_id.get(), base_revision.get())
+                .map(Some)
         })
         .await
 }
@@ -157,7 +168,7 @@ pub async fn prepare_new_file(
     executions
         .file()
         .run_mapped(
-            move || document_open_service::prepare_new_file(runtime.document_opens()),
+            move || runtime.document_files().prepare_new(),
             protocol_projection::prepared_open_document,
         )
         .await

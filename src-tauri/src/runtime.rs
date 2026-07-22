@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::adapters::document_codec_adapter::DocumentCodecAdapter;
-use crate::adapters::document_file_adapter::DocumentFileAdapter;
+use crate::adapters::document_file_adapter::PlatformFileAdapter;
 use crate::adapters::document_work_budget_adapter::DocumentWorkBudgetAdapter;
 use crate::adapters::recent_file_adapter::RecentFileAdapter;
 use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
@@ -10,6 +10,7 @@ use crate::adapters::search_index_runtime::SearchIndexRuntime;
 use crate::adapters::search_query_adapter::SearchQueryAdapter;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 use crate::adapters::update_adapter::UpdateReleaseAdapter;
+use crate::application::document_file_workflow::DocumentFileWorkflowService;
 use crate::application::document_open_service::DocumentOpenService;
 use crate::application::document_query_service::DocumentQueryService;
 use crate::application::document_save_service::DocumentSaveService;
@@ -34,7 +35,8 @@ pub struct ApplicationRuntime {
     document_lifecycle: DocumentLifecycleService,
     editor_commands: EditorCommandService,
     search_queries: SearchService,
-    document_files: DocumentFileAdapter,
+    document_files: DocumentFileWorkflowService,
+    platform_files: Arc<PlatformFileAdapter>,
     recent_files: RecentFileAdapter,
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     update_queries: UpdateService,
@@ -73,37 +75,16 @@ impl Default for ApplicationRuntime {
             codec,
             work_budget,
         );
-        #[cfg(any(target_os = "android", target_os = "ios", test))]
-        let prepared_source_adopter = {
-            let mobile_files = mobile_files.clone();
-            Arc::new(
-                move |source_path: Option<&std::path::Path>, file_name: &str| {
-                    if let Some(source_path) = source_path {
-                        crate::io::managed_documents::adopt_transient_document(
-                            mobile_files.managed_documents(),
-                            mobile_files.transient_files(),
-                            source_path,
-                            file_name,
-                        )?;
-                    }
-                    Ok(())
-                },
-            ) as crate::application::document_service::PreparedSourceAdopter
-        };
-        #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
-        let prepared_source_adopter =
-            Arc::new(|_source_path: Option<&std::path::Path>, _file_name: &str| Ok(()))
-                as crate::application::document_service::PreparedSourceAdopter;
-        let document_files = DocumentFileAdapter::new(
-            document_opens.clone(),
-            document_saves.clone(),
+        let platform_files = Arc::new(PlatformFileAdapter::new(
             #[cfg(desktop)]
             recent_files.clone(),
             #[cfg(desktop)]
             desktop_files,
             #[cfg(any(target_os = "android", target_os = "ios", test))]
             mobile_files.clone(),
-        );
+        ));
+        let document_files =
+            DocumentFileWorkflowService::new(document_opens.clone(), document_saves);
         Self {
             document_queries: document_queries.clone(),
             document_opens: document_opens.clone(),
@@ -112,11 +93,12 @@ impl Default for ApplicationRuntime {
                 prepared_documents,
                 Arc::clone(&mutation_replays),
                 search_indexes.clone(),
-                prepared_source_adopter,
+                platform_files.clone(),
             ),
             editor_commands: EditorCommandService::new(documents, mutation_replays, search_indexes),
             search_queries,
             document_files,
+            platform_files,
             recent_files: RecentFileAdapter::new(
                 document_queries,
                 recent_files.clone(),
@@ -154,8 +136,12 @@ impl ApplicationRuntime {
         &self.recent_files
     }
 
-    pub(crate) fn document_files(&self) -> &DocumentFileAdapter {
+    pub(crate) fn document_files(&self) -> &DocumentFileWorkflowService {
         &self.document_files
+    }
+
+    pub(crate) fn platform_files(&self) -> &PlatformFileAdapter {
+        &self.platform_files
     }
 
     #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -198,6 +184,11 @@ mod tests {
             first
                 .document_files()
                 .is_isolated_from(second.document_files())
+        );
+        assert!(
+            first
+                .platform_files()
+                .is_isolated_from(second.platform_files())
         );
     }
 }

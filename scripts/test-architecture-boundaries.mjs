@@ -990,6 +990,71 @@ rejectMatches(
 );
 
 rejectMatches(
+  [join(rustRoot, 'adapters', 'document_file_adapter.rs')],
+  [
+    /\bDocumentOpenService\b/,
+    /\bDocumentSaveService\b/,
+    /\bDocumentLifecycleService\b/,
+    /document_open_service::/,
+    /document_save_service::/,
+  ],
+  'the infrastructure-only platform file adapter boundary',
+);
+
+const documentFileWorkflowSource = readFileSync(
+  join(rustRoot, 'application', 'document_file_workflow.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /trait\s+DocumentOpenSourcePort\b/,
+  /trait\s+DocumentSaveTargetPort\b/,
+  /trait\s+DocumentExportTargetPort\b/,
+  /trait\s+StagedDocumentWrite\b/,
+  /target\.ensure_authorized\s*\(/,
+  /target\.stage\s*\(/,
+  /move\s*\|\|\s*staged\.commit\s*\(/,
+]) {
+  if (!requirement.test(documentFileWorkflowSource)) {
+    violations.push(
+      `src-tauri/src/application/document_file_workflow.rs violates the application-owned file workflow boundary: ${requirement}`,
+    );
+  }
+}
+
+const documentLifecycleSource = readFileSync(
+  join(rustRoot, 'application', 'document_service.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /begin_prepared_source_adoption\s*\([\s\S]*replacement\.finish\s*\([\s\S]*source_adoption\.commit\s*\(/,
+  /Arc\s*<\s*dyn\s+PreparedSourceAdoptionPort\s*>/,
+]) {
+  if (!requirement.test(documentLifecycleSource)) {
+    violations.push(
+      `src-tauri/src/application/document_service.rs violates the transactional prepared-source adoption boundary: ${requirement}`,
+    );
+  }
+}
+
+const managedDocumentsSource = readFileSync(
+  join(rustRoot, 'io', 'managed_documents.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /struct\s+ManagedDocumentAdoption\b/,
+  /impl\s+Drop\s+for\s+ManagedDocumentAdoption\b/,
+  /if\s*!self\.committed\s*\{[\s\S]*self\.rollback\s*\(/,
+  /fn\s+commit\s*\(mut\s+self\)/,
+  /restore_after_failed_adoption\s*\(/,
+]) {
+  if (!requirement.test(managedDocumentsSource)) {
+    violations.push(
+      `src-tauri/src/io/managed_documents.rs violates the rollback-capable transient adoption boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
   [/\bSearchIndexWork\b/, /\bSearchIndexUpdatePlan\b/],
   'the wire-only Rust response contract boundary',
@@ -1499,7 +1564,6 @@ const documentWorkspaceRuntimeSource = readFileSync(
   'utf8',
 );
 for (const requirement of [
-  /new\s+WeakMap\b/,
   /\bcreateDocumentSessionCoordinator\b/,
   /\bcreateDocumentRegionCoordinator\b/,
   /\bcreatePendingCellSaveCoordinator\b/,
@@ -1510,6 +1574,8 @@ for (const requirement of [
   /pendingCellSaves\.waitForInFlightSave\s*\(/,
   /preparations\.waitForIdle\s*\(/,
   /regions\.waitForIdle\s*\(/,
+  /\bhasInjectionContext\s*\(/,
+  /inject\s*\(\s*documentWorkspaceRuntimeKey\b/,
 ]) {
   if (!requirement.test(documentWorkspaceRuntimeSource)) {
     violations.push(
@@ -1517,13 +1583,17 @@ for (const requirement of [
     );
   }
 }
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'documentWorkspaceRuntime.ts')],
+  [/new\s+WeakMap\b/, /return\s+createDocumentWorkspaceRuntime\s*\(\s*\)/],
+  'the composition-root-owned document workspace runtime boundary',
+);
 
 const applicationWorkspaceRuntimeSource = readFileSync(
   join(projectRoot, 'src', 'composables', 'applicationWorkspaceRuntime.ts'),
   'utf8',
 );
 for (const requirement of [
-  /new\s+WeakMap\b/,
   /\bcreateDocumentWorkspaceRuntime\b/,
   /\bcreateRecentFilesService\b/,
   /\bcreateUpdateCoordinator\b/,
@@ -1531,6 +1601,8 @@ for (const requirement of [
   /document\.dispose\s*\(/,
   /recentFiles\.dispose\s*\(/,
   /updateCoordinator\?\.dispose\s*\(/,
+  /\bhasInjectionContext\s*\(/,
+  /inject\s*\(\s*applicationWorkspaceRuntimeKey\b/,
 ]) {
   if (!requirement.test(applicationWorkspaceRuntimeSource)) {
     violations.push(
@@ -1538,6 +1610,11 @@ for (const requirement of [
     );
   }
 }
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'applicationWorkspaceRuntime.ts')],
+  [/new\s+WeakMap\b/, /return\s+createApplicationWorkspaceRuntime\s*\(\s*\)/],
+  'the composition-root-owned application workspace runtime boundary',
+);
 
 rejectMatches(
   [

@@ -1,11 +1,10 @@
 import * as api from "@/api";
-import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
-import { useDocumentSessionStore } from "@/stores/documentSession";
+import type { DocumentWorkspaceRuntime } from '@/composables/documentWorkspaceRuntime';
 
-export async function restoreActiveDocument(): Promise<boolean> {
-  const documentSessionStore = useDocumentSessionStore();
-  const documentSessionCoordinator = useDocumentSessionCoordinator();
-  if (documentSessionStore.data || documentSessionStore.documentId !== null) {
+export async function restoreActiveDocument(
+  workspace: DocumentWorkspaceRuntime,
+): Promise<boolean> {
+  if (workspace.document.data || workspace.document.documentId !== null) {
     return false;
   }
 
@@ -14,7 +13,7 @@ export async function restoreActiveDocument(): Promise<boolean> {
     return false;
   }
 
-  documentSessionCoordinator.openDocumentResponse(
+  workspace.session.openDocumentResponse(
     activeDocument,
     activeDocument.document.path || null
   );

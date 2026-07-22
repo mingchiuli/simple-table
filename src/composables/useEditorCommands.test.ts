@@ -4,7 +4,6 @@ import { createPinia, setActivePinia, storeToRefs } from "pinia";
 import { useEditorCommands } from "@/composables/useEditorCommands";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useEditorSelectionStore } from "@/stores/editorSelection";
-import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -24,6 +23,12 @@ import {
   applyDocumentMutation,
   openDocumentSession,
 } from '@/test/documentSessionTestDriver';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
+
+let workspace: DocumentWorkspaceTestContext;
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -98,7 +103,7 @@ function setupCommands(
   overrides: { currentSheetIndex?: Ref<number> } = {}
 ) {
   const documentSessionStore = useDocumentSessionStore();
-  const documentSessionCoordinator = useDocumentSessionCoordinator();
+  const documentSessionCoordinator = workspace.runtime.session;
   documentSessionCoordinator.openDocumentResponse(openedResponse(), "/tmp/book.xlsx");
   const selectionStore = useEditorSelectionStore();
   const { currentSheetIndex, selectedCell } = storeToRefs(selectionStore);
@@ -114,14 +119,14 @@ function setupCommands(
     applied: true,
   }));
 
-  const commands = useEditorCommands({
+  const commands = workspace.run(() => useEditorCommands({
     fileData,
     currentSheet,
     currentSheetIndex: activeSheetIndex,
     selectedCell,
     flushPendingCellChanges,
     editorValueForCell: () => "",
-  });
+  }));
 
   return {
     commands,
@@ -148,6 +153,7 @@ function deferred<T>() {
 describe("useEditorCommands", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
     vi.clearAllMocks();
   });
 
@@ -203,7 +209,7 @@ describe("useEditorCommands", () => {
     let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
     const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
       openDocumentSession(
-        documentSessionStore,
+        workspace.runtime,
         openedResponse(2, "next.xlsx"),
         "/tmp/next.xlsx",
       );
@@ -224,7 +230,7 @@ describe("useEditorCommands", () => {
     let documentSessionStore!: ReturnType<typeof useDocumentSessionStore>;
     const flushPendingCellChanges = vi.fn().mockImplementation(async () => {
       openDocumentSession(
-        documentSessionStore,
+        workspace.runtime,
         openedResponse(2, "next.xlsx"),
         "/tmp/next.xlsx",
       );
@@ -456,7 +462,7 @@ describe("useEditorCommands", () => {
       });
     vi.mocked(api.addSheet).mockResolvedValue(mutationResponse({ revision: '1' }));
     setup.applyMutationResponse.mockImplementation(async (response) => {
-      return applyDocumentMutation(setup.documentSessionStore, response);
+      return applyDocumentMutation(workspace.runtime, response);
     });
 
     await setup.commands.handleAddSheet();

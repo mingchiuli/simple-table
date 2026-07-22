@@ -6,28 +6,45 @@ import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
 import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 describe('documentWorkspaceRuntime', () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  let workspace: DocumentWorkspaceTestContext;
 
-  it('owns every document-scoped coordinator as one runtime', () => {
-    const runtime = createDocumentWorkspaceRuntime();
-
-    expect(createDocumentWorkspaceRuntime()).toBe(runtime);
-    expect(useDocumentSessionCoordinator()).toBe(runtime.session);
-    expect(useDocumentCommandBus()).toBe(runtime.commandBus);
-    expect(usePendingCellSaveCoordinator()).toBe(runtime.pendingCellSaves);
-    expect(useSearchSessionCoordinator()).toBe(runtime.search);
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
   });
 
-  it('creates an isolated runtime for a different Pinia document store', () => {
+  it('owns every document-scoped coordinator as one runtime', () => {
+    const { runtime } = workspace;
+
+    expect(createDocumentWorkspaceRuntime()).not.toBe(runtime);
+    workspace.run(() => {
+      expect(useDocumentSessionCoordinator()).toBe(runtime.session);
+      expect(useDocumentCommandBus()).toBe(runtime.commandBus);
+      expect(usePendingCellSaveCoordinator()).toBe(runtime.pendingCellSaves);
+      expect(useSearchSessionCoordinator()).toBe(runtime.search);
+    });
+  });
+
+  it('creates isolated runtimes even for the same Pinia document store', () => {
     const first = createDocumentWorkspaceRuntime();
-    setActivePinia(createPinia());
     const second = createDocumentWorkspaceRuntime();
 
     expect(second).not.toBe(first);
+    expect(second.document).toBe(first.document);
     expect(second.session).not.toBe(first.session);
     expect(second.preparations).not.toBe(first.preparations);
+  });
+
+  it('rejects coordinator access outside the application injection context', () => {
+    expect(() => useDocumentSessionCoordinator()).toThrow(
+      'Document workspace runtime must be provided by the application root',
+    );
   });
 
   it('drains document preparation before releasing the runtime', async () => {
@@ -46,6 +63,6 @@ describe('documentWorkspaceRuntime', () => {
     releasePreparation();
     await Promise.all([preparation, disposal]);
 
-    expect(createDocumentWorkspaceRuntime()).not.toBe(runtime);
+    await expect(runtime.dispose()).resolves.toBeUndefined();
   });
 });

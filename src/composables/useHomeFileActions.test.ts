@@ -1,10 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useHomeFileActions } from "@/composables/useHomeFileActions";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { useDocumentStatusStore } from "@/stores/documentStatus";
 import { usePendingCellSavesStore } from "@/stores/pendingCellSaves";
-import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -16,6 +15,16 @@ import {
 import type { OpenDocumentResponse } from '@/types/protocol';
 import { openResponseFromFileData } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
+import {
+  createApplicationWorkspaceTestContext,
+  type ApplicationWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
+
+let workspace: ApplicationWorkspaceTestContext;
+
+function homeFileActions(options: Parameters<typeof useHomeFileActions>[0]) {
+  return workspace.run(() => useHomeFileActions(options));
+}
 
 const openProtocolMocks = vi.hoisted(() => ({
   prepareNewFile: vi.fn(),
@@ -134,8 +143,11 @@ async function flushPromises() {
 describe("useHomeFileActions", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createApplicationWorkspaceTestContext();
     vi.clearAllMocks();
   });
+
+  afterEach(() => workspace.application.dispose());
 
   it("creates a new workbook through the document session boundary", async () => {
     const api = await import("@/api");
@@ -143,7 +155,7 @@ describe("useHomeFileActions", () => {
     const navigateToTable = vi.fn();
     mockPreparedNew(openedResponse("untitled.xlsx", 1));
 
-    const actions = useHomeFileActions({ navigateToTable });
+    const actions = homeFileActions({ navigateToTable });
 
     await actions.handleNewFile();
 
@@ -158,10 +170,10 @@ describe("useHomeFileActions", () => {
   it("keeps the previous document when new workbook initialization fails", async () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
-    openDocumentSession(documentSessionStore, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(api.prepareNewFile).mockRejectedValue(new Error("init failed"));
 
-    const actions = useHomeFileActions({ navigateToTable: vi.fn() });
+    const actions = homeFileActions({ navigateToTable: vi.fn() });
 
     await actions.handleNewFile();
 
@@ -185,7 +197,7 @@ describe("useHomeFileActions", () => {
       value: "draft",
       oldValue: text("old"),
     });
-    usePendingCellSaveCoordinator().schedulePendingSave(
+    workspace.runtime.pendingCellSaves.schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -198,7 +210,7 @@ describe("useHomeFileActions", () => {
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
 
     try {
-      const actions = useHomeFileActions({ navigateToTable: vi.fn() });
+      const actions = homeFileActions({ navigateToTable: vi.fn() });
 
       await actions.handleNewFile();
       await vi.advanceTimersByTimeAsync(100);
@@ -215,7 +227,7 @@ describe("useHomeFileActions", () => {
     const documentSessionStore = useDocumentSessionStore();
     documentSessionStore.beginLifecycle("saving");
 
-    const actions = useHomeFileActions({ navigateToTable: vi.fn() });
+    const actions = homeFileActions({ navigateToTable: vi.fn() });
 
     expect(actions.isBusy.value).toBe(true);
     await actions.handleNewFile();
@@ -229,7 +241,7 @@ describe("useHomeFileActions", () => {
     const navigateToTable = vi.fn();
     mockPreparedRecent(openedResponse("recent.xlsx", 2));
 
-    const actions = useHomeFileActions({ navigateToTable });
+    const actions = homeFileActions({ navigateToTable });
 
     await actions.handleOpenRecent(recentFile());
     await flushPromises();
@@ -258,7 +270,7 @@ describe("useHomeFileActions", () => {
     });
     mockPreparedSelection(openedResponse("relocated.xlsx", 3));
 
-    const actions = useHomeFileActions({ navigateToTable });
+    const actions = homeFileActions({ navigateToTable });
 
     await actions.handleOpenRecent(stale);
     await flushPromises();
@@ -279,7 +291,7 @@ describe("useHomeFileActions", () => {
       new Error("Unsupported file format")
     );
 
-    const actions = useHomeFileActions({ navigateToTable });
+    const actions = homeFileActions({ navigateToTable });
 
     await actions.handleOpenRecent(recentFile());
     await flushPromises();

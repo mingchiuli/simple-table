@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useDocumentSessionStore } from "@/stores/documentSession";
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -21,15 +24,18 @@ function deferred<T>() {
 }
 
 describe("useDocumentLifecycle", () => {
+  let workspace: DocumentWorkspaceTestContext;
+
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
     vi.clearAllMocks();
   });
 
   it("runs an action under a document lifecycle and releases it afterwards", async () => {
     const store = useDocumentSessionStore();
     const action = vi.fn().mockResolvedValue(undefined);
-    const { runDocumentLifecycle } = useDocumentLifecycle();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("completed");
 
@@ -40,9 +46,9 @@ describe("useDocumentLifecycle", () => {
   it("does not run an action when another lifecycle is active", async () => {
     const store = useDocumentSessionStore();
     const action = vi.fn();
-    const { runDocumentLifecycle } = useDocumentLifecycle();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
-    useDocumentSessionCoordinator().beginLifecycle('saving');
+    workspace.runtime.session.beginLifecycle('saving');
 
     await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("skipped");
 
@@ -53,7 +59,7 @@ describe("useDocumentLifecycle", () => {
   it("shows an error and releases lifecycle when the action fails", async () => {
     const elementPlus = await import("element-plus");
     const store = useDocumentSessionStore();
-    const { runDocumentLifecycle } = useDocumentLifecycle();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     await expect(
       runDocumentLifecycle("saving", "Save failed", async () => {
@@ -67,9 +73,9 @@ describe("useDocumentLifecycle", () => {
 
   it("waits for the active lifecycle when requested", async () => {
     const store = useDocumentSessionStore();
-    const coordinator = useDocumentSessionCoordinator();
+    const coordinator = workspace.runtime.session;
     const action = vi.fn().mockResolvedValue(undefined);
-    const { runDocumentLifecycle } = useDocumentLifecycle();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     coordinator.beginLifecycle('saving');
     const runPromise = runDocumentLifecycle("loading", "Failed", action, {
@@ -88,9 +94,9 @@ describe("useDocumentLifecycle", () => {
 
   it("cancels a waiting lifecycle when its continuation guard expires", async () => {
     const store = useDocumentSessionStore();
-    const coordinator = useDocumentSessionCoordinator();
+    const coordinator = workspace.runtime.session;
     const action = vi.fn().mockResolvedValue(undefined);
-    const { runDocumentLifecycle } = useDocumentLifecycle();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
     let shouldContinue = true;
 
     coordinator.beginLifecycle('saving');
@@ -111,7 +117,7 @@ describe("useDocumentLifecycle", () => {
   it("does not end a later lifecycle after an action released its own lifecycle early", async () => {
     const store = useDocumentSessionStore();
     const work = deferred<void>();
-    const { runDocumentLifecycle } = useDocumentLifecycle();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     const runPromise = runDocumentLifecycle("loading", "Failed", async ({ release }) => {
       release();
@@ -120,7 +126,7 @@ describe("useDocumentLifecycle", () => {
     await Promise.resolve();
 
     expect(store.lifecycle).toBe("idle");
-    expect(useDocumentSessionCoordinator().beginLifecycle('saving')).toBe(true);
+    expect(workspace.runtime.session.beginLifecycle('saving')).toBe(true);
 
     work.resolve();
     await expect(runPromise).resolves.toBe("completed");

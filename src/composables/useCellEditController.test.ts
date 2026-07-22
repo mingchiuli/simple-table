@@ -19,7 +19,10 @@ import {
   type SheetData,
 } from "@/test/documentFixtures";
 import { sheetCell } from "@/projection/documentProjection";
-import { useDocumentSessionCoordinator } from "@/composables/useDocumentSessionCoordinator";
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 vi.mock("element-plus", () => ({
   ElMessage: {
@@ -85,8 +88,11 @@ function mutationResponse(partial: Partial<EditorMutationResponse> = {}): Editor
 }
 
 describe("useCellEditController", () => {
+  let workspace: DocumentWorkspaceTestContext;
+
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
     vi.clearAllMocks();
   });
 
@@ -95,7 +101,7 @@ describe("useCellEditController", () => {
     const elementPlus = await import("element-plus");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    const documentSessionCoordinator = useDocumentSessionCoordinator();
+    const documentSessionCoordinator = workspace.runtime.session;
     documentSessionCoordinator.openDocumentResponse(
       openResponseFromFileData(fileData("old"), editorSession(0)),
       "/tmp/book.xlsx"
@@ -112,14 +118,14 @@ describe("useCellEditController", () => {
       const file = computed(() => documentSessionStore.data);
       const currentSheet = computed(() => documentSessionStore.loadedSheet(0));
       const selectedCell = ref({ row: 0, col: 0 });
-      return useCellEditController({
+      return workspace.run(() => useCellEditController({
         fileData: file,
         currentSheet,
         currentSheetIndex: ref(0),
         selectedCell,
         cellEditorValue: ref(""),
         canEditCells: computed(() => true),
-      });
+      }));
     });
 
     if (!controller) {
@@ -151,7 +157,7 @@ describe("useCellEditController", () => {
     const elementPlus = await import("element-plus");
     const documentSessionStore = useDocumentSessionStore();
     const statusStore = useDocumentStatusStore();
-    const documentSessionCoordinator = useDocumentSessionCoordinator();
+    const documentSessionCoordinator = workspace.runtime.session;
     documentSessionCoordinator.openDocumentResponse(
       openResponseFromFileData(fileData("old"), editorSession(0)),
       "/tmp/book.xlsx"
@@ -169,14 +175,14 @@ describe("useCellEditController", () => {
       const file = computed(() => documentSessionStore.data);
       const currentSheet = computed(() => documentSessionStore.loadedSheet(0));
       const selectedCell = ref({ row: 0, col: 0 });
-      return useCellEditController({
+      return workspace.run(() => useCellEditController({
         fileData: file,
         currentSheet,
         currentSheetIndex: ref(0),
         selectedCell,
         cellEditorValue: ref(""),
         canEditCells: computed(() => true),
-      });
+      }));
     });
 
     if (!controller) {

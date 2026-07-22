@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useDocumentSessionStore } from '@/stores/documentSession';
-import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 import { runtimeDocumentRegionProjection } from '@/application/documentProjectionProtocol';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
 import type { DocumentRegionProjection } from '@/types';
@@ -22,13 +21,22 @@ import {
   documentRegionCache,
   openDocumentSession,
 } from '@/test/documentSessionTestDriver';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 describe('documentSession sparse projection', () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  let workspace: DocumentWorkspaceTestContext;
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
+  });
 
   it('opens from a manifest and stores only the initial region block', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
 
     expect(store.data?.sheets[0].state).toBe('loaded');
     expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
@@ -38,7 +46,7 @@ describe('documentSession sparse projection', () => {
 
   it('keeps loaded region blocks JSON serializable', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
 
     const serialized = JSON.parse(JSON.stringify(store.$state));
     expect(serialized.data.sheets[0].blocks[0].cells['0:0'].display).toBe('A1');
@@ -50,7 +58,7 @@ describe('documentSession sparse projection', () => {
     const response = openResponse();
     response.initialRegion!.cells[0]!.value.display = 'x'.repeat(8 * 1024 * 1024 + 1);
 
-    openDocumentSession(store, response);
+    openDocumentSession(workspace.runtime, response);
 
     expect(store.loadedSheet(0)?.blocks).toHaveLength(0);
   });
@@ -60,7 +68,7 @@ describe('documentSession sparse projection', () => {
     const response = openResponse();
     response.initialRegion!.wireBytes = 15 * 1024 * 1024;
 
-    openDocumentSession(store, response);
+    openDocumentSession(workspace.runtime, response);
 
     const block = store.loadedSheet(0)?.blocks[0];
     expect(block?.wireBytes).toBe(15 * 1024 * 1024);
@@ -73,7 +81,7 @@ describe('documentSession sparse projection', () => {
     response.document.sheets[0]!.layout.columnWidths = Object.fromEntries(
       Array.from({ length: 80_000 }, (_, index) => [index, 120]),
     );
-    openDocumentSession(store, response);
+    openDocumentSession(workspace.runtime, response);
     const region = { sheetIndex: 0, rowStart: 128, rowEnd: 256, colStart: 0, colEnd: 32 };
     const block = {
       key: '0:128:256:0:32',
@@ -86,7 +94,7 @@ describe('documentSession sparse projection', () => {
     };
 
     expect(store.manifestResidentBytes).toBeGreaterThan(5 * 1024 * 1024);
-    const cache = documentRegionCache(store);
+    const cache = documentRegionCache(workspace.runtime);
     cache.pinRegionBlocksForLoad([region]);
     expect(cache.commitLoadedRegionBlocks(store.requireCommandContext(), region, [block])).toBe(false);
     expect(store.loadedSheet(0)?.blocks).toHaveLength(0);
@@ -95,10 +103,10 @@ describe('documentSession sparse projection', () => {
 
   it('loads a high row without allocating intermediate row arrays', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const response = regionResponse(0, 199_936, 200_000, 0, 32, 'far');
 
-    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
+    expect(await workspace.runtime.session.ensureSheetRegionLoaded(
       response.region,
       async () => runtimeDocumentRegionProjection(response),
     )).toBe(true);
@@ -107,8 +115,7 @@ describe('documentSession sparse projection', () => {
   });
 
   it('deduplicates concurrent tile requests', async () => {
-    const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const response = regionResponse(0, 128, 256, 0, 32, 'tile');
     let requests = 0;
     const fetch = async () => {
@@ -118,19 +125,19 @@ describe('documentSession sparse projection', () => {
     };
 
     await Promise.all([
-      useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, fetch),
-      useDocumentSessionCoordinator().ensureSheetRegionLoaded(response.region, fetch),
+      workspace.runtime.session.ensureSheetRegionLoaded(response.region, fetch),
+      workspace.runtime.session.ensureSheetRegionLoaded(response.region, fetch),
     ]);
     expect(requests).toBe(1);
   });
 
   it('rejects a region block larger than the backend response contract', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const response = regionResponse(0, 128, 256, 0, 32, 'oversized');
     response.wireBytes = 16 * 1024 * 1024 + 1;
 
-    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
+    expect(await workspace.runtime.session.ensureSheetRegionLoaded(
       response.region,
       async () => runtimeDocumentRegionProjection(response),
     )).toBe(false);
@@ -139,7 +146,7 @@ describe('documentSession sparse projection', () => {
 
   it('subdivides a wire-valid region that exceeds the runtime resident budget', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
     let requests = 0;
     const fetch = async (_context: unknown, region: typeof requested) => {
@@ -159,7 +166,7 @@ describe('documentSession sparse projection', () => {
     };
 
     await expect(
-      useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch),
+      workspace.runtime.session.ensureSheetRegionLoaded(requested, fetch),
     ).resolves.toBe(true);
     expect(requests).toBe(3);
     expect(store.loadedSheet(0)?.blocks).toHaveLength(3);
@@ -167,7 +174,7 @@ describe('documentSession sparse projection', () => {
 
   it('subdivides oversized region responses and reuses the combined coverage', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
     let requests = 0;
     const fetch = async (_context: unknown, region: typeof requested) => {
@@ -188,18 +195,18 @@ describe('documentSession sparse projection', () => {
       ));
     };
 
-    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).toBe(true);
+    expect(await workspace.runtime.session.ensureSheetRegionLoaded(requested, fetch)).toBe(true);
     expect(requests).toBe(3);
     expect(sheetCell(store.data?.sheets[0], 128, 0)?.display).toBe('row-128');
     expect(sheetCell(store.data?.sheets[0], 192, 0)?.display).toBe('row-192');
 
-    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).toBe(true);
+    expect(await workspace.runtime.session.ensureSheetRegionLoaded(requested, fetch)).toBe(true);
     expect(requests).toBe(3);
   });
 
   it('bounds recursive region fragment requests', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
     let requests = 0;
     const fetch = async (_context: unknown, region: typeof requested) => {
@@ -221,7 +228,7 @@ describe('documentSession sparse projection', () => {
       ));
     };
 
-    await expect(useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
+    await expect(workspace.runtime.session.ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
       'more than 64 fragment requests'
     );
     expect(requests).toBe(64);
@@ -230,7 +237,7 @@ describe('documentSession sparse projection', () => {
 
   it('bounds aggregate bytes across split region responses', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
     const fetch = async (_context: unknown, region: typeof requested) => {
       if (region.rowEnd - region.rowStart > 32) {
@@ -251,7 +258,7 @@ describe('documentSession sparse projection', () => {
       return runtimeDocumentRegionProjection(response);
     };
 
-    await expect(useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
+    await expect(workspace.runtime.session.ensureSheetRegionLoaded(requested, fetch)).rejects.toThrow(
       'byte load budget'
     );
     expect(store.loadedSheet(0)?.blocks).toHaveLength(1);
@@ -259,7 +266,7 @@ describe('documentSession sparse projection', () => {
 
   it('stops recursive region requests after the document generation changes', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const requested = regionResponse(0, 128, 256, 0, 32, 'tile').region;
     let resolveChild!: (response: DocumentRegionProjection) => void;
     const child = new Promise<DocumentRegionProjection>((resolve) => {
@@ -279,7 +286,7 @@ describe('documentSession sparse projection', () => {
       return child;
     };
 
-    const loading = useDocumentSessionCoordinator().ensureSheetRegionLoaded(requested, fetch);
+    const loading = workspace.runtime.session.ensureSheetRegionLoaded(requested, fetch);
     while (requests < 2) await Promise.resolve();
     store.clearDocument();
     resolveChild(runtimeDocumentRegionProjection(regionResponse(
@@ -298,10 +305,10 @@ describe('documentSession sparse projection', () => {
 
   it('evicts old region blocks at the per-sheet budget', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     for (let tile = 1; tile <= 10; tile += 1) {
       const response = regionResponse(0, tile * 128, (tile + 1) * 128, 0, 32, `${tile}`);
-      await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
+      await workspace.runtime.session.ensureSheetRegionLoaded(
         response.region,
         async () => runtimeDocumentRegionProjection(response),
       );
@@ -318,7 +325,7 @@ describe('documentSession sparse projection', () => {
     opened.initialRegion!.metadata.merges = [
       { startRow: 0, startCol: 0, endRow: 1, endCol: 1 },
     ];
-    openDocumentSession(store, opened);
+    openDocumentSession(workspace.runtime, opened);
     for (let tile = 1; tile <= 10; tile += 1) {
       const response = regionResponse(0, tile * 128, (tile + 1) * 128, 0, 32, `${tile}`);
       response.metadata.merges = [{
@@ -327,7 +334,7 @@ describe('documentSession sparse projection', () => {
         endRow: tile * 128 + 1,
         endCol: 1,
       }];
-      await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
+      await workspace.runtime.session.ensureSheetRegionLoaded(
         response.region,
         async () => runtimeDocumentRegionProjection(response),
       );
@@ -345,10 +352,10 @@ describe('documentSession sparse projection', () => {
       columnWidths: { 40: 240 },
       rowHeights: { 1000: 96 },
     };
-    openDocumentSession(store, opened);
+    openDocumentSession(workspace.runtime, opened);
     for (let tile = 1; tile <= 10; tile += 1) {
       const response = regionResponse(0, tile * 128, (tile + 1) * 128, 0, 32, `${tile}`);
-      await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
+      await workspace.runtime.session.ensureSheetRegionLoaded(
         response.region,
         async () => runtimeDocumentRegionProjection(response),
       );
@@ -362,7 +369,7 @@ describe('documentSession sparse projection', () => {
 
   it('reads merge anchors that live outside the loaded tile', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const response = regionResponse(0, 128, 256, 0, 32, 'tail');
     response.metadata.merges = [{ startRow: 0, startCol: 0, endRow: 140, endCol: 0 }];
     response.mergeAnchorCells = [{
@@ -371,7 +378,7 @@ describe('documentSession sparse projection', () => {
       col: 0,
       value: { ...blankCell(), display: 'anchor' },
     }];
-    expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
+    expect(await workspace.runtime.session.ensureSheetRegionLoaded(
       response.region,
       async () => runtimeDocumentRegionProjection(response),
     )).toBe(true);
@@ -381,8 +388,8 @@ describe('documentSession sparse projection', () => {
 
   it('invalidates cached blocks for structural patches', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
-    applyDocumentMutation(store, mutation({
+    openDocumentSession(workspace.runtime, openResponse());
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'RowInserted',
       data: { patch: { sheetIndex: 0, rowIndex: 2, count: 1 } },
     }));
@@ -393,8 +400,8 @@ describe('documentSession sparse projection', () => {
 
   it('applies incremental layout patches without invalidating cell blocks', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
-    applyDocumentMutation(store, mutation({
+    openDocumentSession(workspace.runtime, openResponse());
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'Layout',
       data: {
         patch: {
@@ -419,10 +426,10 @@ describe('documentSession sparse projection', () => {
       { startRow: 0, startCol: 0, endRow: 1, endCol: 1 },
     ];
     opened.initialRegion!.metadata.cellStyles = { A1: { bold: true } };
-    openDocumentSession(store, opened);
+    openDocumentSession(workspace.runtime, opened);
     const before = loadedSheetMetadata(store.loadedSheet(0)!);
 
-    applyDocumentMutation(store, mutation({
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'Cells',
       data: {
         changes: [{
@@ -441,10 +448,10 @@ describe('documentSession sparse projection', () => {
 
   it('remeasures region resident bytes after cell patches', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const before = store.loadedSheet(0)!.blocks[0]!.residentBytes;
 
-    applyDocumentMutation(store, mutation({
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'Cells',
       data: {
         changes: [{
@@ -461,13 +468,13 @@ describe('documentSession sparse projection', () => {
 
   it('enforces the region byte budget after a mutation resync', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
+    openDocumentSession(workspace.runtime, openResponse());
     const refreshed = openResponse();
     refreshed.editorSession = session('1');
     refreshed.initialRegion!.revision = '1';
     refreshed.initialRegion!.cells[0]!.value.display = 'x'.repeat(8 * 1024 * 1024 + 1);
 
-    await useDocumentSessionCoordinator().applyMutationResponseWithResync(mutation({
+    await workspace.runtime.session.applyMutationResponseWithResync(mutation({
       type: 'ResyncRequired',
       data: { patch: { reason: 'test' } },
     }), async () => refreshed);
@@ -484,14 +491,14 @@ describe('documentSession sparse projection', () => {
       extent: { rowCount: 10, columnCount: 10 },
       layout: { columnWidths: {}, rowHeights: {} },
     }));
-    openDocumentSession(store, opened);
-    const cache = documentRegionCache(store);
+    openDocumentSession(workspace.runtime, opened);
+    const cache = documentRegionCache(workspace.runtime);
     cache.activateResidentSheet(1);
     cache.activateResidentSheet(2);
     cache.activateResidentSheet(3);
     cache.touchResidentSheet(1);
 
-    applyDocumentMutation(store, mutation(undefined, opened.document.sheets.map((sheet) => (
+    applyDocumentMutation(workspace.runtime, mutation(undefined, opened.document.sheets.map((sheet) => (
       sheet.extent
     ))));
     cache.activateResidentSheet(4);
@@ -508,8 +515,8 @@ describe('documentSession sparse projection', () => {
       extent: { rowCount: 10, columnCount: 10 },
       layout: { columnWidths: {}, rowHeights: {} },
     }));
-    openDocumentSession(store, opened);
-    const cache = documentRegionCache(store);
+    openDocumentSession(workspace.runtime, opened);
+    const cache = documentRegionCache(workspace.runtime);
     cache.activateResidentSheet(1);
     cache.activateResidentSheet(2);
     cache.activateResidentSheet(3);
@@ -522,8 +529,8 @@ describe('documentSession sparse projection', () => {
 
   it('applies layout patches to unloaded sheets', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
-    applyDocumentMutation(store, mutation({
+    openDocumentSession(workspace.runtime, openResponse());
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'Layout',
       data: {
         patch: {
@@ -546,8 +553,8 @@ describe('documentSession sparse projection', () => {
       columnWidths: { 1: 80, 3: 120, 7: 160 },
       rowHeights: { 1: 24, 3: 36, 7: 48 },
     };
-    openDocumentSession(store, opened);
-    applyDocumentMutation(store, mutation({
+    openDocumentSession(workspace.runtime, opened);
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'RowInserted',
       data: { patch: { sheetIndex: 0, rowIndex: 3, count: 2 } },
     }));
@@ -557,7 +564,7 @@ describe('documentSession sparse projection', () => {
       rowHeights: { 1: 24, 5: 36, 9: 48 },
     });
 
-    applyDocumentMutation(store, {
+    applyDocumentMutation(workspace.runtime, {
       ...mutation({
         type: 'ColumnDeleted',
         data: { patch: { sheetIndex: 0, colIndex: 2, count: 3 } },
@@ -572,8 +579,8 @@ describe('documentSession sparse projection', () => {
 
   it('reloads the initial tile when a resident sheet was invalidated', async () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
-    applyDocumentMutation(store, mutation({
+    openDocumentSession(workspace.runtime, openResponse());
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'SheetInvalidated',
       data: { patch: { sheetIndex: 0 } },
     }));
@@ -583,7 +590,7 @@ describe('documentSession sparse projection', () => {
     };
     let requests = 0;
 
-    const loaded = await useDocumentSessionCoordinator().ensureSheetLoaded(0, async () => {
+    const loaded = await workspace.runtime.session.ensureSheetLoaded(0, async () => {
       requests += 1;
       return runtimeDocumentRegionProjection(response);
     });
@@ -595,8 +602,8 @@ describe('documentSession sparse projection', () => {
 
   it('reindexes resident blocks after inserting a sheet', () => {
     const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
-    applyDocumentMutation(store, mutation({
+    openDocumentSession(workspace.runtime, openResponse());
+    applyDocumentMutation(workspace.runtime, mutation({
       type: 'SheetInserted',
       data: {
         patch: {
@@ -621,9 +628,8 @@ describe('documentSession sparse projection', () => {
   });
 
   it('rejects mutation protocol versions other than v4', () => {
-    const store = useDocumentSessionStore();
-    openDocumentSession(store, openResponse());
-    expect(() => applyDocumentMutation(store, {
+    openDocumentSession(workspace.runtime, openResponse());
+    expect(() => applyDocumentMutation(workspace.runtime, {
       ...mutation(),
       protocolVersion: 1 as 4,
     })).toThrow('Unsupported editor mutation protocol');

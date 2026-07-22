@@ -28,7 +28,7 @@ app.provide(documentWorkspaceRuntimeKey, applicationWorkspaceRuntime.document);
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
   try {
-    restoredActiveDocument = await restoreActiveDocument();
+    restoredActiveDocument = await restoreActiveDocument(applicationWorkspaceRuntime.document);
   } catch (error) {
     console.error("Failed to restore the active document:", error);
   }

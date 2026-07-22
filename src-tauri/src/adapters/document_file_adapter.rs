@@ -1,23 +1,27 @@
+use std::path::{Path, PathBuf};
+
 use crate::application::document_codec_port::OpenDocumentSource;
-use crate::application::document_open_service::{self, DocumentOpenService};
-use crate::application::document_save_service::{self, DocumentSaveService};
+use crate::application::document_file_workflow::{
+    DocumentExportTargetPort, DocumentOpenSourcePort, DocumentSaveTargetPort, StagedDocumentWrite,
+};
+use crate::application::prepared_source_port::{
+    NoopPreparedSourceAdoption, PreparedSourceAdoption, PreparedSourceAdoptionPort,
+};
 use crate::error::AppError;
+use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 #[cfg(any(desktop, target_os = "android", target_os = "ios"))]
-use crate::io::open_file_input::OpenFileSelection;
+use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 #[cfg(desktop)]
 use crate::io::platform::desktop::{self, DesktopFileRuntime};
-#[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::io::platform::mobile;
-#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 use crate::io::platform::mobile::MobileFileRuntime;
-use crate::projection_model::{PreparedOpenDocument, SavedDocumentOutcome};
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::io::platform::mobile::{self, MobileFileRuntime};
 #[cfg(desktop)]
 use crate::recent::store::RecentStore;
 
 #[derive(Clone)]
-pub struct DocumentFileAdapter {
-    opens: DocumentOpenService,
-    saves: DocumentSaveService,
+pub struct PlatformFileAdapter {
     #[cfg(desktop)]
     recent_files: RecentStore,
     #[cfg(desktop)]
@@ -26,17 +30,13 @@ pub struct DocumentFileAdapter {
     mobile_files: MobileFileRuntime,
 }
 
-impl DocumentFileAdapter {
+impl PlatformFileAdapter {
     pub(crate) fn new(
-        opens: DocumentOpenService,
-        saves: DocumentSaveService,
         #[cfg(desktop)] recent_files: RecentStore,
         #[cfg(desktop)] desktop_files: DesktopFileRuntime,
         #[cfg(any(target_os = "android", target_os = "ios", test))] mobile_files: MobileFileRuntime,
     ) -> Self {
         Self {
-            opens,
-            saves,
             #[cfg(desktop)]
             recent_files,
             #[cfg(desktop)]
@@ -65,17 +65,26 @@ impl DocumentFileAdapter {
     }
 
     #[cfg(desktop)]
-    pub fn prepare_open_file(&self, path: &str) -> Result<PreparedOpenDocument, AppError> {
-        prepare_open_file_desktop(&self.opens, &self.desktop_files, path)
+    pub(crate) fn open_source(&self, path: String) -> Box<dyn DocumentOpenSourcePort> {
+        let files = self.desktop_files.clone();
+        boxed_open_source(move || desktop::read_open_file(&files, &path))
     }
 
     #[cfg(desktop)]
-    pub fn prepare_recent_file(
+    pub(crate) fn recent_open_source(
         &self,
-        app: &tauri::AppHandle,
-        id: &str,
-    ) -> Result<PreparedOpenDocument, AppError> {
-        prepare_recent_file_desktop(&self.opens, &self.recent_files, app, id)
+        app: tauri::AppHandle,
+        id: String,
+    ) -> Box<dyn DocumentOpenSourcePort> {
+        let recent_files = self.recent_files.clone();
+        boxed_open_source(move || {
+            let recent = recent_files
+                .get_all(&app)?
+                .into_iter()
+                .find(|file| file.id == id)
+                .ok_or_else(|| AppError::FileNotFound(id))?;
+            desktop::read_file_trusted(&recent.path)
+        })
     }
 
     #[cfg(desktop)]
@@ -93,30 +102,31 @@ impl DocumentFileAdapter {
     }
 
     #[cfg(desktop)]
-    pub fn save_file(
-        &self,
-        path: &str,
-        document_id: u64,
-        base_revision: u64,
-    ) -> Result<SavedDocumentOutcome, AppError> {
-        save_file_desktop(
-            &self.saves,
-            &self.desktop_files,
+    pub(crate) fn save_target(&self, path: String) -> Box<dyn DocumentSaveTargetPort> {
+        Box::new(DesktopSaveTarget {
+            files: self.desktop_files.clone(),
             path,
-            document_id,
-            base_revision,
-        )
+        })
     }
 
     #[cfg(desktop)]
-    pub fn export_file(
+    pub(crate) fn pick_export_target(
         &self,
         app: &tauri::AppHandle,
         default_name: &str,
-        document_id: u64,
-        base_revision: u64,
-    ) -> Result<Option<String>, AppError> {
-        export_file_desktop(&self.saves, app, default_name, document_id, base_revision)
+    ) -> Result<Option<Box<dyn DocumentExportTargetPort>>, AppError> {
+        Ok(
+            desktop::pick_export_target(app, default_name)?.map(|target| {
+                let target_path_or_name = target.target_path_or_name.clone();
+                Box::new(ClosureExportTarget {
+                    target_path_or_name,
+                    write: Box::new(move |bytes| {
+                        desktop::write_export_target(&target, bytes)?;
+                        Ok(target.path_string)
+                    }),
+                }) as Box<dyn DocumentExportTargetPort>
+            }),
+        )
     }
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -169,12 +179,13 @@ impl DocumentFileAdapter {
     }
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    pub fn prepare_open_file_mobile(
+    pub(crate) fn mobile_open_source(
         &self,
-        app: &tauri::AppHandle,
-        path: &str,
-    ) -> Result<PreparedOpenDocument, AppError> {
-        prepare_open_file_mobile(&self.opens, &self.mobile_files, app, path)
+        app: tauri::AppHandle,
+        path: String,
+    ) -> Box<dyn DocumentOpenSourcePort> {
+        let files = self.mobile_files.clone();
+        boxed_open_source(move || mobile::read_open_file(&files, &app, &path))
     }
 
     #[cfg(target_os = "android")]
@@ -204,38 +215,38 @@ impl DocumentFileAdapter {
     }
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    pub fn save_file_mobile(
+    pub(crate) fn mobile_save_target(
         &self,
-        app: &tauri::AppHandle,
-        path: &str,
-        document_id: u64,
-        base_revision: u64,
-    ) -> Result<SavedDocumentOutcome, AppError> {
-        save_file_mobile(
-            &self.saves,
-            &self.mobile_files,
-            app,
-            path,
-            document_id,
-            base_revision,
-        )
+        app: tauri::AppHandle,
+        path: String,
+    ) -> Result<Box<dyn DocumentSaveTargetPort>, AppError> {
+        let target =
+            mobile::validated_mobile_files_path(&self.mobile_files, &app, Path::new(&path))?;
+        Ok(Box::new(MobileSaveTarget {
+            files: self.mobile_files.clone(),
+            path: target.to_string_lossy().to_string(),
+            target,
+        }))
     }
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    pub fn export_file_mobile(
+    pub(crate) fn pick_mobile_export_target(
         &self,
         app: &tauri::AppHandle,
         default_name: &str,
-        document_id: u64,
-        base_revision: u64,
-    ) -> Result<Option<String>, AppError> {
-        export_file_mobile(
-            &self.saves,
-            &self.mobile_files,
-            app,
-            default_name,
-            document_id,
-            base_revision,
+    ) -> Result<Option<Box<dyn DocumentExportTargetPort>>, AppError> {
+        let app = app.clone();
+        Ok(
+            mobile::pick_export_target(&app, default_name)?.map(|target| {
+                let target_path_or_name = target.target_path_or_name.clone();
+                Box::new(ClosureExportTarget {
+                    target_path_or_name,
+                    write: Box::new(move |bytes| {
+                        mobile::write_export_target(&app, &target, bytes)?;
+                        Ok(target.destination_string)
+                    }),
+                }) as Box<dyn DocumentExportTargetPort>
+            }),
         )
     }
 
@@ -245,213 +256,196 @@ impl DocumentFileAdapter {
         let desktop_isolated = !self.desktop_files.is_same_instance(&other.desktop_files);
         #[cfg(not(desktop))]
         let desktop_isolated = true;
-        let mobile_isolated = self.mobile_files.is_isolated_from(&other.mobile_files);
-        self.opens.is_isolated_from(&other.opens)
-            && self.saves.is_isolated_from(&other.saves)
-            && desktop_isolated
-            && mobile_isolated
+        desktop_isolated && self.mobile_files.is_isolated_from(&other.mobile_files)
     }
 }
 
-#[cfg(desktop)]
-pub fn prepare_open_file_desktop(
-    service: &DocumentOpenService,
-    files: &crate::io::platform::desktop::DesktopFileRuntime,
-    path: &str,
-) -> Result<PreparedOpenDocument, AppError> {
-    let input = crate::io::platform::desktop::read_open_file(files, path)?;
-    document_open_service::prepare_open_input(service, into_open_document_source(input))
-}
-
-#[cfg(desktop)]
-pub fn prepare_recent_file_desktop(
-    service: &DocumentOpenService,
-    recent_files: &crate::recent::store::RecentStore,
-    app: &tauri::AppHandle,
-    id: &str,
-) -> Result<PreparedOpenDocument, AppError> {
-    let recent = recent_files
-        .get_all(app)?
-        .into_iter()
-        .find(|file| file.id == id)
-        .ok_or_else(|| AppError::FileNotFound(id.to_string()))?;
-    let input = crate::io::platform::desktop::read_file_trusted(&recent.path)?;
-    document_open_service::prepare_open_input(service, into_open_document_source(input))
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn prepare_open_file_mobile(
-    service: &DocumentOpenService,
-    files: &crate::io::platform::mobile::MobileFileRuntime,
-    app: &tauri::AppHandle,
-    path: &str,
-) -> Result<PreparedOpenDocument, AppError> {
-    let input = crate::io::platform::mobile::read_open_file(files, app, path)?;
-    document_open_service::prepare_open_input(service, into_open_document_source(input))
-}
-
-fn into_open_document_source(
-    input: crate::io::open_file_input::OpenFileInput,
-) -> OpenDocumentSource {
-    OpenDocumentSource {
-        path: input.path,
-        bytes: input.bytes,
-        file_name: input.file_name,
-    }
-}
-
-#[cfg(desktop)]
-pub fn save_file_desktop(
-    service: &DocumentSaveService,
-    files: &crate::io::platform::desktop::DesktopFileRuntime,
-    path: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<SavedDocumentOutcome, AppError> {
-    use std::path::Path;
-
-    use crate::io::atomic_file::{
-        cleanup_temp_file, replace_temp_file, write_temp_file_for_target,
-    };
-    use crate::io::platform::desktop;
-
-    let current_path = document_save_service::current_document_path_for_command(
-        service,
-        document_id,
-        base_revision,
-    )?;
-    desktop::ensure_save_path_authorized(files, path, &current_path)?;
-    let prepared = document_save_service::prepare_current_file_save(
-        service,
-        document_id,
-        base_revision,
-        path,
-    )?;
-    let target = Path::new(path);
-    let temp_path = match write_temp_file_for_target(target, &prepared.bytes) {
-        Ok(temp_path) => temp_path,
-        Err(error) => {
-            document_save_service::abort_prepared_file_save(prepared);
-            return Err(error);
+impl PreparedSourceAdoptionPort for PlatformFileAdapter {
+    fn begin_adoption(
+        &self,
+        source_path: Option<&Path>,
+        file_name: &str,
+    ) -> Result<Box<dyn PreparedSourceAdoption>, AppError> {
+        #[cfg(any(target_os = "android", target_os = "ios", test))]
+        {
+            let Some(source_path) = source_path else {
+                return Ok(Box::new(NoopPreparedSourceAdoption));
+            };
+            let adoption = self
+                .mobile_files
+                .begin_transient_document_adoption(source_path, file_name)?;
+            return Ok(Box::new(ManagedPreparedSourceAdoption(Some(adoption))));
         }
-    };
-
-    let result = document_save_service::commit_current_file_save(
-        service,
-        path.to_string(),
-        prepared,
-        || replace_temp_file(&temp_path, target),
-    );
-    if result.is_err() {
-        cleanup_temp_file(&temp_path);
+        #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
+        {
+            let _ = (source_path, file_name);
+            Ok(Box::new(NoopPreparedSourceAdoption))
+        }
     }
-    result
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+struct ManagedPreparedSourceAdoption(Option<crate::io::managed_documents::ManagedDocumentAdoption>);
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+impl PreparedSourceAdoption for ManagedPreparedSourceAdoption {
+    fn commit(mut self: Box<Self>) {
+        if let Some(adoption) = self.0.take() {
+            adoption.commit();
+        }
+    }
+}
+
+#[cfg(any(desktop, target_os = "android", target_os = "ios"))]
+fn boxed_open_source(
+    read: impl FnOnce() -> Result<OpenFileInput, AppError> + Send + 'static,
+) -> Box<dyn DocumentOpenSourcePort> {
+    Box::new(ClosureOpenSource {
+        read: Some(Box::new(read)),
+    })
+}
+
+#[cfg(any(desktop, target_os = "android", target_os = "ios"))]
+struct ClosureOpenSource {
+    read: Option<Box<dyn FnOnce() -> Result<OpenFileInput, AppError> + Send>>,
+}
+
+#[cfg(any(desktop, target_os = "android", target_os = "ios"))]
+impl DocumentOpenSourcePort for ClosureOpenSource {
+    fn read(mut self: Box<Self>) -> Result<OpenDocumentSource, AppError> {
+        let input =
+            self.read.take().ok_or_else(|| {
+                AppError::Internal("open source was already consumed".to_string())
+            })?()?;
+        Ok(OpenDocumentSource {
+            path: input.path,
+            bytes: input.bytes,
+            file_name: input.file_name,
+        })
+    }
 }
 
 #[cfg(desktop)]
-pub fn export_file_desktop(
-    service: &DocumentSaveService,
-    app: &tauri::AppHandle,
-    default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
-    use crate::io::platform::desktop;
-
-    let Some(target) = desktop::pick_export_target(app, default_name)? else {
-        return Ok(None);
-    };
-    let prepared = document_save_service::prepare_current_file_export(
-        service,
-        document_id,
-        base_revision,
-        &target.target_path_or_name,
-    )?;
-    desktop::write_export_target(&target, &prepared.bytes)?;
-    Ok(Some(target.path_string))
+struct DesktopSaveTarget {
+    files: DesktopFileRuntime,
+    path: String,
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn save_file_mobile(
-    service: &DocumentSaveService,
-    files: &crate::io::platform::mobile::MobileFileRuntime,
-    app: &tauri::AppHandle,
-    path: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<SavedDocumentOutcome, AppError> {
-    use std::path::Path;
-
-    use crate::io::atomic_file::{
-        cleanup_temp_file, replace_temp_file, write_temp_file_for_target,
-    };
-    use crate::io::managed_documents;
-    use crate::io::platform::mobile;
-
-    let target = mobile::validated_mobile_files_path(files, app, Path::new(path))?;
-    let current_path = document_save_service::current_document_path_for_command(
-        service,
-        document_id,
-        base_revision,
-    )?;
-    mobile::ensure_save_target_authorized(files, &target, &current_path)?;
-    let target_path = target.to_string_lossy().to_string();
-    let prepared = document_save_service::prepare_current_file_save(
-        service,
-        document_id,
-        base_revision,
-        &target_path,
-    )?;
-    managed_documents::validate_managed_save(
-        files.managed_documents(),
-        &target,
-        prepared.bytes.len() as u64,
-    )?;
-    let temp_path = match write_temp_file_for_target(&target, &prepared.bytes) {
-        Ok(temp_path) => temp_path,
-        Err(error) => {
-            document_save_service::abort_prepared_file_save(prepared);
-            return Err(error);
-        }
-    };
-
-    let managed_file_name = prepared.output_name.clone();
-    let result =
-        document_save_service::commit_current_file_save(service, target_path, prepared, || {
-            replace_temp_file(&temp_path, &target)?;
-            managed_documents::adopt_completed_save(
-                files.managed_documents(),
-                files.transient_files(),
-                &target,
-                &managed_file_name,
-            )
-        });
-    if result.is_err() {
-        cleanup_temp_file(&temp_path);
+#[cfg(desktop)]
+impl DocumentSaveTargetPort for DesktopSaveTarget {
+    fn target_path(&self) -> &str {
+        &self.path
     }
-    result
+
+    fn ensure_authorized(&self, current_document_path: &str) -> Result<(), AppError> {
+        desktop::ensure_save_path_authorized(&self.files, &self.path, current_document_path)
+    }
+
+    fn stage(
+        self: Box<Self>,
+        bytes: &[u8],
+        _output_name: &str,
+    ) -> Result<Box<dyn StagedDocumentWrite>, AppError> {
+        let target = PathBuf::from(&self.path);
+        let temp = write_temp_file_for_target(&target, bytes)?;
+        Ok(Box::new(AtomicStagedWrite { temp, target }))
+    }
+}
+
+struct AtomicStagedWrite {
+    temp: PathBuf,
+    target: PathBuf,
+}
+
+impl StagedDocumentWrite for AtomicStagedWrite {
+    fn commit(self: Box<Self>) -> Result<(), AppError> {
+        replace_temp_file(&self.temp, &self.target)
+    }
+}
+
+impl Drop for AtomicStagedWrite {
+    fn drop(&mut self) {
+        cleanup_temp_file(&self.temp);
+    }
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn export_file_mobile(
-    service: &DocumentSaveService,
-    files: &crate::io::platform::mobile::MobileFileRuntime,
-    app: &tauri::AppHandle,
-    default_name: &str,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<Option<String>, AppError> {
-    use crate::io::platform::mobile;
+struct MobileSaveTarget {
+    files: MobileFileRuntime,
+    path: String,
+    target: PathBuf,
+}
 
-    let Some(target) = mobile::pick_export_target(app, default_name)? else {
-        return Ok(None);
-    };
-    let prepared = document_save_service::prepare_current_file_export(
-        service,
-        document_id,
-        base_revision,
-        &target.target_path_or_name,
-    )?;
-    mobile::write_export_target(app, &target, &prepared.bytes)?;
-    Ok(Some(target.destination_string))
+#[cfg(any(target_os = "android", target_os = "ios"))]
+impl DocumentSaveTargetPort for MobileSaveTarget {
+    fn target_path(&self) -> &str {
+        &self.path
+    }
+
+    fn ensure_authorized(&self, current_document_path: &str) -> Result<(), AppError> {
+        mobile::ensure_save_target_authorized(&self.files, &self.target, current_document_path)
+    }
+
+    fn stage(
+        self: Box<Self>,
+        bytes: &[u8],
+        output_name: &str,
+    ) -> Result<Box<dyn StagedDocumentWrite>, AppError> {
+        crate::io::managed_documents::validate_managed_save(
+            self.files.managed_documents(),
+            &self.target,
+            bytes.len() as u64,
+        )?;
+        let temp = write_temp_file_for_target(&self.target, bytes)?;
+        Ok(Box::new(MobileStagedWrite {
+            files: self.files,
+            temp,
+            target: self.target,
+            output_name: output_name.to_string(),
+        }))
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+struct MobileStagedWrite {
+    files: MobileFileRuntime,
+    temp: PathBuf,
+    target: PathBuf,
+    output_name: String,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+impl StagedDocumentWrite for MobileStagedWrite {
+    fn commit(self: Box<Self>) -> Result<(), AppError> {
+        replace_temp_file(&self.temp, &self.target)?;
+        crate::io::managed_documents::adopt_completed_save(
+            self.files.managed_documents(),
+            self.files.transient_files(),
+            &self.target,
+            &self.output_name,
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+impl Drop for MobileStagedWrite {
+    fn drop(&mut self) {
+        cleanup_temp_file(&self.temp);
+    }
+}
+
+struct ClosureExportTarget {
+    target_path_or_name: String,
+    write: Box<dyn FnOnce(&[u8]) -> Result<String, AppError> + Send>,
+}
+
+impl DocumentExportTargetPort for ClosureExportTarget {
+    fn target_path_or_name(&self) -> &str {
+        &self.target_path_or_name
+    }
+
+    fn write(self: Box<Self>, bytes: &[u8]) -> Result<String, AppError> {
+        (self.write)(bytes)
+    }
 }

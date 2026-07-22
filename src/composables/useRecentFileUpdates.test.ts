@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
-import { useDocumentSessionStore } from "@/stores/documentSession";
 import {
   defaultHistoryStatus,
   defaultRichProjection,
@@ -11,6 +10,12 @@ import {
 } from "@/types";
 import { openResponseFromFileData, type FileData } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
+import {
+  createApplicationWorkspaceTestContext,
+  type ApplicationWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
+
+let workspace: ApplicationWorkspaceTestContext;
 
 vi.mock("@/api", () => ({
   addRecentFileWithThumbnail: vi.fn().mockResolvedValue({
@@ -76,7 +81,7 @@ function openRecentTestDocument(
       },
     };
   openDocumentSession(
-    useDocumentSessionStore(),
+    workspace.runtime,
     openResponseFromFileData(fileData(fileName), editorSession),
     `/tmp/${fileName}`
   );
@@ -85,13 +90,16 @@ function openRecentTestDocument(
 describe("useRecentFileUpdates", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createApplicationWorkspaceTestContext();
     vi.clearAllMocks();
   });
+
+  afterEach(() => workspace.application.dispose());
 
   it("captures the active document context before running background recent updates", async () => {
     const api = await import("@/api");
     openRecentTestDocument("old.xlsx", 1, 3);
-    const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
+    const { queueRecentFileEntryUpdate } = workspace.run(() => useRecentFileUpdates());
 
     queueRecentFileEntryUpdate("/original/old.xlsx");
     openRecentTestDocument("new.xlsx", 2, 0);
@@ -118,7 +126,7 @@ describe("useRecentFileUpdates", () => {
         storageType: "desktopPath",
       });
     openRecentTestDocument("book.xlsx", 1, 3);
-    const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
+    const { queueRecentFileEntryUpdate } = workspace.run(() => useRecentFileUpdates());
 
     queueRecentFileEntryUpdate("/original/first.xlsx");
     for (let index = 0; index < 10_000; index += 1) {

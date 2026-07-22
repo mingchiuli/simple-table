@@ -9,16 +9,22 @@ import {
   PendingCellSaveLimitError,
   usePendingCellSavesStore,
 } from "@/stores/pendingCellSaves";
-import { usePendingCellSaveCoordinator } from '@/composables/usePendingCellSaveCoordinator';
 import type { CellValue } from "@/types";
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 function text(value: string): CellValue {
   return { type: "cell", kind: "text", raw: value, display: value };
 }
 
 describe("pendingCellSaves store", () => {
+  let workspace: DocumentWorkspaceTestContext;
+
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
   });
 
   afterEach(() => {
@@ -90,7 +96,7 @@ describe("pendingCellSaves store", () => {
       });
     }
 
-    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
+    const flushed = await workspace.runtime.pendingCellSaves.flushPendingCellChanges({
       commitBatch: async (changes) => {
         committedBatchSizes.push(changes.length);
       },
@@ -221,7 +227,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    usePendingCellSaveCoordinator().schedulePendingSave(
+    workspace.runtime.pendingCellSaves.schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -254,7 +260,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    usePendingCellSaveCoordinator().schedulePendingSave(
+    workspace.runtime.pendingCellSaves.schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -264,12 +270,12 @@ describe("pendingCellSaves store", () => {
       100
     );
 
-    usePendingCellSaveCoordinator().reset();
+    workspace.runtime.pendingCellSaves.reset();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
     expect(store.phase).toBe("idle");
-    expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
+    expect(workspace.runtime.pendingCellSaves.hasPendingWork()).toBe(false);
   });
 
   it("flushes through the store scheduler and waits for active saves", async () => {
@@ -288,7 +294,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flush = usePendingCellSaveCoordinator().flushPendingCellChanges({
+    const flush = workspace.runtime.pendingCellSaves.flushPendingCellChanges({
       commitBatch: async () => {
         started = true;
         await activeSave;
@@ -317,7 +323,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
+    const flushed = await workspace.runtime.pendingCellSaves.flushPendingCellChanges({
       commitBatch: async () => {
         throw new Error("stale projection");
       },
@@ -347,7 +353,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
+    const flushed = await workspace.runtime.pendingCellSaves.flushPendingCellChanges({
       commitBatch: async () => {
         throw new Error("backend failed");
       },
@@ -360,7 +366,7 @@ describe("pendingCellSaves store", () => {
     try {
       expect(flushed).toBe(false);
       expect(store.hasActiveSaves).toBe(false);
-      expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
+      expect(workspace.runtime.pendingCellSaves.hasPendingWork()).toBe(false);
       expect(store.phase).toBe("failed");
       expect(store.lastError).toContain("refresh failed");
       expect(consoleError).toHaveBeenCalled();
@@ -380,7 +386,7 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const flushed = await usePendingCellSaveCoordinator().flushPendingCellChanges({
+    const flushed = await workspace.runtime.pendingCellSaves.flushPendingCellChanges({
       commitBatch: async () => undefined,
       clearPendingContentChange: () => {
         throw new Error("dirty cleanup failed");
@@ -389,7 +395,7 @@ describe("pendingCellSaves store", () => {
 
     try {
       expect(flushed).toBe(true);
-      expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
+      expect(workspace.runtime.pendingCellSaves.hasPendingWork()).toBe(false);
       expect(store.phase).toBe("idle");
       expect(consoleError).toHaveBeenCalled();
     } finally {
@@ -403,7 +409,7 @@ describe("pendingCellSaves store", () => {
 
     try {
       expect(() =>
-        usePendingCellSaveCoordinator().clearPendingContentChangeIfIdle(() => {
+        workspace.runtime.pendingCellSaves.clearPendingContentChangeIfIdle(() => {
           throw new Error("dirty cleanup failed");
         })
       ).not.toThrow();
@@ -426,8 +432,8 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const resume = usePendingCellSaveCoordinator().suspendAutosave();
-    usePendingCellSaveCoordinator().schedulePendingSave(
+    const resume = workspace.runtime.pendingCellSaves.suspendAutosave();
+    workspace.runtime.pendingCellSaves.schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -460,8 +466,8 @@ describe("pendingCellSaves store", () => {
       oldValue: text("old"),
     });
 
-    const resume = usePendingCellSaveCoordinator().suspendAutosave();
-    usePendingCellSaveCoordinator().schedulePendingSave(
+    const resume = workspace.runtime.pendingCellSaves.suspendAutosave();
+    workspace.runtime.pendingCellSaves.schedulePendingSave(
       {
         commitBatch: async (changes) => {
           committed.push(changes[0].value);
@@ -471,11 +477,11 @@ describe("pendingCellSaves store", () => {
       100
     );
 
-    usePendingCellSaveCoordinator().reset();
+    workspace.runtime.pendingCellSaves.reset();
     resume();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(committed).toEqual([]);
-    expect(usePendingCellSaveCoordinator().hasPendingWork()).toBe(false);
+    expect(workspace.runtime.pendingCellSaves.hasPendingWork()).toBe(false);
   });
 });

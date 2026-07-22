@@ -1,15 +1,15 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::application::document_projection;
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
+use crate::application::prepared_source_port::{
+    PreparedSourceAdoption, PreparedSourceAdoptionPort,
+};
 use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::error::AppError;
 use crate::projection_model::OpenDocumentSnapshot;
 use crate::state::state::ActiveDocumentRepository;
-pub(crate) type PreparedSourceAdopter =
-    Arc<dyn Fn(Option<&Path>, &str) -> Result<(), AppError> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct DocumentLifecycleService {
@@ -17,7 +17,7 @@ pub struct DocumentLifecycleService {
     prepared_documents: PreparedDocumentRepository,
     mutation_replays: Arc<MutationReplayCoordinator>,
     search_indexes: Arc<dyn SearchIndexMaintenancePort>,
-    prepared_source_adopter: PreparedSourceAdopter,
+    prepared_source_adoptions: Arc<dyn PreparedSourceAdoptionPort>,
 }
 
 impl DocumentLifecycleService {
@@ -26,14 +26,14 @@ impl DocumentLifecycleService {
         prepared_documents: PreparedDocumentRepository,
         mutation_replays: Arc<MutationReplayCoordinator>,
         search_indexes: Arc<dyn SearchIndexMaintenancePort>,
-        prepared_source_adopter: PreparedSourceAdopter,
+        prepared_source_adoptions: Arc<dyn PreparedSourceAdoptionPort>,
     ) -> Self {
         Self {
             documents,
             prepared_documents,
             mutation_replays,
             search_indexes,
-            prepared_source_adopter,
+            prepared_source_adoptions,
         }
     }
 
@@ -53,12 +53,13 @@ impl DocumentLifecycleService {
         self.search_indexes.as_ref()
     }
 
-    fn adopt_prepared_source(
+    fn begin_prepared_source_adoption(
         &self,
-        source_path: Option<&Path>,
+        source_path: Option<&std::path::Path>,
         file_name: &str,
-    ) -> Result<(), AppError> {
-        (self.prepared_source_adopter)(source_path, file_name)
+    ) -> Result<Box<dyn PreparedSourceAdoption>, AppError> {
+        self.prepared_source_adoptions
+            .begin_adoption(source_path, file_name)
     }
 }
 
@@ -74,12 +75,13 @@ pub fn commit_prepared_document(
     let replacement = service
         .documents()
         .begin_replacement(expected_document_id, expected_revision)?;
-    service.adopt_prepared_source(
+    let source_adoption = service.begin_prepared_source_adoption(
         checkout.document().source_path.as_deref(),
         &checkout.document().editor_state.file_data().file_name,
     )?;
     let (prepared, _prepared_commit) = checkout.commit();
     let replacement = replacement.finish(prepared.editor_state)?;
+    source_adoption.commit();
     let document_id = replacement.document_id;
     let previous_document = replacement.previous_document;
     let active_handle = replacement.active_handle;

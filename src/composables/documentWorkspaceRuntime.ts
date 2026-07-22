@@ -1,5 +1,4 @@
-import type { InjectionKey } from 'vue';
-import { getCurrentInstance, inject } from 'vue';
+import { hasInjectionContext, inject, type InjectionKey } from 'vue';
 
 import { createDocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
 import { createDocumentRegionCache } from '@/application/documentRegionCache';
@@ -20,24 +19,20 @@ export type DocumentWorkspaceRuntime = ReturnType<typeof buildDocumentWorkspaceR
 export const documentWorkspaceRuntimeKey: InjectionKey<DocumentWorkspaceRuntime> =
   Symbol('document-workspace-runtime');
 
-const runtimes = new WeakMap<object, DocumentWorkspaceRuntime>();
-
 export function createDocumentWorkspaceRuntime(): DocumentWorkspaceRuntime {
   const document = useDocumentSessionStore();
-  const existing = runtimes.get(document);
-  if (existing) return existing;
-
-  const runtime = buildDocumentWorkspaceRuntime(document);
-  runtimes.set(document, runtime);
-  return runtime;
+  return buildDocumentWorkspaceRuntime(document);
 }
 
 export function useDocumentWorkspaceRuntime(): DocumentWorkspaceRuntime {
-  if (getCurrentInstance()) {
-    const provided = inject(documentWorkspaceRuntimeKey, null);
-    if (provided) return provided;
+  if (!hasInjectionContext()) {
+    throw new Error('Document workspace runtime must be provided by the application root');
   }
-  return createDocumentWorkspaceRuntime();
+  const runtime = inject(documentWorkspaceRuntimeKey, null);
+  if (!runtime) {
+    throw new Error('Document workspace runtime must be provided by the application root');
+  }
+  return runtime;
 }
 
 function buildDocumentWorkspaceRuntime(
@@ -76,9 +71,7 @@ function buildDocumentWorkspaceRuntime(
       sessionWorkflow.waitForMutations(),
       pendingCellSaves.waitForInFlightSave(),
       regions.waitForIdle(),
-    ]).then(() => {
-      runtimes.delete(document);
-    });
+    ]).then(() => undefined);
     return disposal;
   }
 

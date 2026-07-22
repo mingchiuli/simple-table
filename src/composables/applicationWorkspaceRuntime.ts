@@ -15,7 +15,6 @@ import {
 } from '@/composables/documentWorkspaceRuntime';
 import { tauriApplicationExitExecutor } from '@/platform/applicationExitPort';
 import { tauriUpdatePort } from '@/platform/updatePort';
-import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import { useUpdateSessionStore } from '@/stores/updateSession';
 import type { ApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
@@ -23,6 +22,7 @@ import { hasInjectionContext, inject, type InjectionKey } from 'vue';
 
 type ApplicationWorkspaceRuntimeOptions = {
   applicationExit?: ApplicationExitCoordinator;
+  document?: DocumentWorkspaceRuntime;
 };
 
 export type ApplicationWorkspaceRuntime = {
@@ -36,18 +36,12 @@ export type ApplicationWorkspaceRuntime = {
 export const applicationWorkspaceRuntimeKey: InjectionKey<ApplicationWorkspaceRuntime> =
   Symbol('application-workspace-runtime');
 
-const runtimes = new WeakMap<object, ApplicationWorkspaceRuntime>();
-
 export function createApplicationWorkspaceRuntime(
   options: ApplicationWorkspaceRuntimeOptions = {},
 ): ApplicationWorkspaceRuntime {
-  const owner = useDocumentSessionStore();
-  const existing = runtimes.get(owner);
-  if (existing) return existing;
-
   const applicationExit = options.applicationExit
     ?? createApplicationExitCoordinator(tauriApplicationExitExecutor);
-  const document = createDocumentWorkspaceRuntime();
+  const document = options.document ?? createDocumentWorkspaceRuntime();
   const recentFiles = createRecentFilesService(
     useRecentFilesStore(),
     {
@@ -85,20 +79,20 @@ export function createApplicationWorkspaceRuntime(
         document.dispose(),
         recentFiles.dispose(),
         updateCoordinator?.dispose() ?? Promise.resolve(),
-      ]).then(() => {
-        runtimes.delete(owner);
-      });
+      ]).then(() => undefined);
       return disposal;
     },
   };
-  runtimes.set(owner, runtime);
   return runtime;
 }
 
 export function useApplicationWorkspaceRuntime(): ApplicationWorkspaceRuntime {
-  if (hasInjectionContext()) {
-    const provided = inject(applicationWorkspaceRuntimeKey, null);
-    if (provided) return provided;
+  if (!hasInjectionContext()) {
+    throw new Error('Application workspace runtime must be provided by the application root');
   }
-  return createApplicationWorkspaceRuntime();
+  const runtime = inject(applicationWorkspaceRuntimeKey, null);
+  if (!runtime) {
+    throw new Error('Application workspace runtime must be provided by the application root');
+  }
+  return runtime;
 }

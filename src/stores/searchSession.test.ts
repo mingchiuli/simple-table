@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useSearchSessionStore } from "@/stores/searchSession";
-import { useSearchSessionCoordinator } from '@/composables/useSearchSessionCoordinator';
 import type { RuntimeSearchResult, SearchOutcomeStateInput } from '@/types/editorRuntime';
+import {
+  createDocumentWorkspaceTestContext,
+  type DocumentWorkspaceTestContext,
+} from '@/test/documentWorkspaceTestContext';
 
 function result(value: string): RuntimeSearchResult {
   return {
@@ -20,13 +23,16 @@ function response(value: string, truncated = false): SearchOutcomeStateInput {
 }
 
 describe("searchSession store", () => {
+  let workspace: DocumentWorkspaceTestContext;
+
   beforeEach(() => {
     setActivePinia(createPinia());
+    workspace = createDocumentWorkspaceTestContext();
   });
 
   it("keeps only the latest search result", () => {
     const store = useSearchSessionStore();
-    const coordinator = useSearchSessionCoordinator();
+    const coordinator = workspace.runtime.search;
     const first = coordinator.beginSearch("old");
     const second = coordinator.beginSearch("new");
 
@@ -42,7 +48,7 @@ describe("searchSession store", () => {
 
   it("invalidates pending searches when clearing", () => {
     const store = useSearchSessionStore();
-    const coordinator = useSearchSessionCoordinator();
+    const coordinator = workspace.runtime.search;
     const requestId = coordinator.beginSearch("value");
 
     coordinator.clearSearch();
@@ -55,7 +61,7 @@ describe("searchSession store", () => {
 
   it("clears old results when a new search starts", () => {
     const store = useSearchSessionStore();
-    const coordinator = useSearchSessionCoordinator();
+    const coordinator = workspace.runtime.search;
     const first = coordinator.beginSearch("old");
     coordinator.applySearchOutcome(first, response("old", true));
 
@@ -69,7 +75,7 @@ describe("searchSession store", () => {
 
   it("restores results without reviving an invalidated in-flight request", () => {
     const store = useSearchSessionStore();
-    const coordinator = useSearchSessionCoordinator();
+    const coordinator = workspace.runtime.search;
     const requestId = coordinator.beginSearch("value");
     const snapshot = coordinator.captureSnapshot();
 
@@ -82,7 +88,7 @@ describe("searchSession store", () => {
   it("keeps request tokens out of serializable UI state", () => {
     const store = useSearchSessionStore();
 
-    useSearchSessionCoordinator().beginSearch("value");
+    workspace.runtime.search.beginSearch("value");
 
     expect(Object.keys(store.$state)).toEqual([
       "searchResults",

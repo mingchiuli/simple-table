@@ -26,7 +26,7 @@ pub enum TransientFilePurpose {
 }
 
 #[derive(Clone, Copy)]
-struct TransientFileEntry {
+pub(crate) struct TransientFileEntry {
     purpose: TransientFilePurpose,
     created_at: Instant,
 }
@@ -135,6 +135,35 @@ impl TransientFileRegistry {
 
     pub fn adopt_if_registered(&self, path: &Path) -> Result<bool, AppError> {
         self.adopt_at(path, Instant::now())
+    }
+
+    pub(crate) fn take_for_adoption(
+        &self,
+        path: &Path,
+    ) -> Result<Option<TransientFileEntry>, AppError> {
+        let (expired, entry) = {
+            let mut paths = self
+                .paths
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
+            let expired = prune_expired(&mut paths, Instant::now());
+            (expired, paths.remove(path))
+        };
+        cleanup_expired(expired);
+        Ok(entry)
+    }
+
+    pub(crate) fn restore_after_failed_adoption(
+        &self,
+        path: PathBuf,
+        entry: TransientFileEntry,
+    ) -> Result<(), AppError> {
+        let mut paths = self
+            .paths
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
+        paths.insert(path, entry);
+        Ok(())
     }
 
     fn adopt_at(&self, path: &Path, now: Instant) -> Result<bool, AppError> {
@@ -320,6 +349,11 @@ pub(crate) fn clear_persistent_marker(target: &Path) {
     if let Ok(marker) = marker_path(target) {
         let _ = fs::remove_file(marker);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn persistent_marker_exists_for_test(target: &Path) -> bool {
+    marker_path(target).is_ok_and(|path| path.exists())
 }
 
 fn marker_path(target: &Path) -> Result<PathBuf, AppError> {
