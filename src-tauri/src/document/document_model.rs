@@ -1,5 +1,5 @@
-use crate::document::backing::document_body::BodySheetShape;
 use crate::document::backing::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
+use crate::document::backing::workbook_patch::WorkbookSheetShape;
 use crate::document::capabilities::{SheetCapabilities, WorkbookCapabilities};
 use crate::document::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
@@ -11,7 +11,6 @@ use crate::document::document_memento_budget;
 use crate::document::document_patches::{CurrentStructureShape, restore_structure_changes};
 use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
-use crate::document::document_transaction::DocumentTransaction;
 use crate::document::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits};
 use crate::document::region_metadata_index::{
     DocumentRegion, DocumentRegionMetadata, RegionMetadataIndex,
@@ -22,7 +21,7 @@ use crate::domain::{AppliedOperation, CellValue, DocumentCellChange, ResolvedCel
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
 use crate::formula::status::FormulaStatus;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(test)]
 use umya_spreadsheet::Workbook;
 
@@ -93,7 +92,7 @@ impl SpreadsheetDocument {
         &self.projection
     }
 
-    pub(in crate::document) fn sheet_count(&self) -> usize {
+    fn sheet_count(&self) -> usize {
         self.projection.sheets.len()
     }
 
@@ -213,7 +212,79 @@ impl SpreadsheetDocument {
         operation: &AppliedOperation,
         rollback: &DocumentMementoSide,
     ) -> Result<DocumentOperationResult, AppError> {
-        DocumentTransaction::new(self, operation, rollback).commit()
+        self.commit_operation(operation, rollback)
+    }
+
+    fn commit_operation(
+        &mut self,
+        operation: &AppliedOperation,
+        rollback: &DocumentMementoSide,
+    ) -> Result<DocumentOperationResult, AppError> {
+        if let Err(error) = self.apply_operation_to_body_and_projection(operation) {
+            self.rollback_operation_after_failure(rollback, &error)?;
+            return Err(error);
+        }
+
+        if let Err(error) = self.patch_workbook_after_operation(operation, &[]) {
+            self.rollback_operation_after_failure(rollback, &error)?;
+            return Err(error);
+        }
+
+        let cell_changes = self.recalculate_after_operation(operation);
+        if !cell_changes.is_empty()
+            && let Err(error) = self.patch_workbook_formula_changes(&cell_changes)
+        {
+            self.rollback_operation_after_failure(rollback, &error)?;
+            return Err(error);
+        }
+
+        if let Err(error) = self.validate_after_operation(operation, &cell_changes) {
+            self.rollback_operation_after_failure(rollback, &error)?;
+            return Err(error);
+        }
+        if operation.impact().is_structure_change() {
+            self.refresh_region_metadata_index();
+        }
+
+        Ok(DocumentOperationResult { cell_changes })
+    }
+
+    fn rollback_operation_after_failure(
+        &mut self,
+        rollback: &DocumentMementoSide,
+        operation_error: &AppError,
+    ) -> Result<(), AppError> {
+        match self.restore_memento_side(rollback) {
+            Ok(_) => Ok(()),
+            Err(rollback_error) => {
+                let operation_error = operation_error.to_string();
+                let rollback_error = rollback_error.to_string();
+                self.mark_transaction_failed(format!(
+                    "operation failed ({operation_error}) and rollback failed ({rollback_error})"
+                ));
+                Err(AppError::TransactionRollbackFailed {
+                    operation_error,
+                    rollback_error,
+                })
+            }
+        }
+    }
+
+    fn validate_after_operation(
+        &self,
+        operation: &AppliedOperation,
+        cell_changes: &[DocumentCellChange],
+    ) -> Result<(), AppError> {
+        if operation.impact().is_structure_change() {
+            self.validate_persisted_projection_consistency()?;
+            return self.validate_projection_consistency();
+        }
+
+        self.validate_projection_sheets(touched_sheet_indexes(
+            operation,
+            cell_changes,
+            self.sheet_count(),
+        ))
     }
 
     pub fn create_memento(
@@ -690,7 +761,7 @@ impl SpreadsheetDocument {
         Ok(DocumentRestoreResult { changes })
     }
 
-    pub(in crate::document) fn recalculate_after_operation(
+    fn recalculate_after_operation(
         &mut self,
         operation: &AppliedOperation,
     ) -> Vec<DocumentCellChange> {
@@ -703,7 +774,7 @@ impl SpreadsheetDocument {
         changes
     }
 
-    pub(in crate::document) fn patch_workbook_after_operation(
+    fn patch_workbook_after_operation(
         &mut self,
         operation: &AppliedOperation,
         cell_changes: &[DocumentCellChange],
@@ -717,7 +788,7 @@ impl SpreadsheetDocument {
         Ok(())
     }
 
-    pub(in crate::document) fn apply_operation_to_body_and_projection(
+    fn apply_operation_to_body_and_projection(
         &mut self,
         operation: &AppliedOperation,
     ) -> Result<(), AppError> {
@@ -744,7 +815,7 @@ impl SpreadsheetDocument {
         Ok(())
     }
 
-    pub(in crate::document) fn patch_workbook_formula_changes(
+    fn patch_workbook_formula_changes(
         &mut self,
         cell_changes: &[DocumentCellChange],
     ) -> Result<(), AppError> {
@@ -764,9 +835,9 @@ impl SpreadsheetDocument {
     }
 
     fn patch_workbook_cell_shapes(&mut self, shapes: &[SheetShapeMemento]) -> Result<(), AppError> {
-        let sheet_shapes: Vec<BodySheetShape> = shapes
+        let sheet_shapes: Vec<WorkbookSheetShape> = shapes
             .iter()
-            .map(|shape| BodySheetShape {
+            .map(|shape| WorkbookSheetShape {
                 sheet_index: shape.sheet_index,
                 row_lengths: shape.row_lengths.clone(),
                 protected_cells: shape.protected_cells.clone(),
@@ -788,11 +859,11 @@ impl SpreadsheetDocument {
             .capabilities(&self.formulas.structure_formula_limitations());
     }
 
-    pub(in crate::document) fn validate_projection_consistency(&self) -> Result<(), AppError> {
+    fn validate_projection_consistency(&self) -> Result<(), AppError> {
         self.body.validate_projection_consistency(&self.projection)
     }
 
-    pub(in crate::document) fn validate_projection_sheets(
+    fn validate_projection_sheets(
         &self,
         sheet_indexes: impl IntoIterator<Item = usize>,
     ) -> Result<(), AppError> {
@@ -800,14 +871,12 @@ impl SpreadsheetDocument {
             .validate_projection_sheets(&self.projection, sheet_indexes)
     }
 
-    pub(in crate::document) fn validate_persisted_projection_consistency(
-        &self,
-    ) -> Result<(), AppError> {
+    fn validate_persisted_projection_consistency(&self) -> Result<(), AppError> {
         self.body
             .validate_persisted_projection_consistency(&self.projection)
     }
 
-    pub(in crate::document) fn refresh_region_metadata_index(&mut self) {
+    fn refresh_region_metadata_index(&mut self) {
         self.region_metadata.rebuild(&self.projection);
     }
 
@@ -828,6 +897,42 @@ fn push_unique_reason(reasons: &mut Vec<String>, reason: impl Into<String>) {
     if !reasons.iter().any(|existing| existing == &reason) {
         reasons.push(reason);
     }
+}
+
+fn touched_sheet_indexes(
+    operation: &AppliedOperation,
+    cell_changes: &[DocumentCellChange],
+    sheet_count: usize,
+) -> Vec<usize> {
+    let mut sheets = BTreeSet::new();
+    match operation {
+        AppliedOperation::SetCell { sheet_index, .. }
+        | AppliedOperation::SetColumnWidth { sheet_index, .. }
+        | AppliedOperation::SetRowHeight { sheet_index, .. } => {
+            sheets.insert(*sheet_index);
+        }
+        AppliedOperation::SetCells { changes } => {
+            for change in changes {
+                sheets.insert(change.sheet_index);
+            }
+        }
+        AppliedOperation::AddRow { sheet_index, .. }
+        | AppliedOperation::DeleteRow { sheet_index, .. }
+        | AppliedOperation::AddColumn { sheet_index, .. }
+        | AppliedOperation::DeleteColumn { sheet_index, .. }
+        | AppliedOperation::AddSheet { sheet_index, .. } => {
+            sheets.insert(*sheet_index);
+        }
+        AppliedOperation::DeleteSheet { sheet_index } => {
+            for shifted_sheet_index in (*sheet_index).min(sheet_count)..sheet_count {
+                sheets.insert(shifted_sheet_index);
+            }
+        }
+    }
+    for change in cell_changes {
+        sheets.insert(change.sheet_index);
+    }
+    sheets.into_iter().collect()
 }
 
 fn disable_sheet_capabilities(capabilities: &mut SheetCapabilities, reason: &str) {
@@ -1034,5 +1139,26 @@ fn ensure_projection_cell_exists(sheet: &mut DocumentSheet, row: usize, col: usi
         if row_data.len() < target_width {
             row_data.resize(target_width, CellValue::Null);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_sheet_validation_targets_shifted_remaining_sheets() {
+        let indexes =
+            touched_sheet_indexes(&AppliedOperation::DeleteSheet { sheet_index: 1 }, &[], 3);
+
+        assert_eq!(indexes, vec![1, 2]);
+    }
+
+    #[test]
+    fn delete_last_sheet_validation_does_not_target_removed_index() {
+        let indexes =
+            touched_sheet_indexes(&AppliedOperation::DeleteSheet { sheet_index: 1 }, &[], 1);
+
+        assert!(indexes.is_empty());
     }
 }

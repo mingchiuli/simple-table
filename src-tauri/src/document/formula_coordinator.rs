@@ -1,7 +1,7 @@
 use crate::document_data::DocumentData;
 use formualizer_parse::parser::ReferenceType;
 
-use crate::document::backing::workbook_state::StructurePatchDiagnostics;
+use crate::document::backing::workbook_patch::StructurePatchDiagnostics;
 use crate::domain::{AppliedOperation, CellValue, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;

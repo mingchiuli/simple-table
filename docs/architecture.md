@@ -46,8 +46,8 @@ frontend modules must also remain acyclic.
 Rust production references are likewise resolved into a file-level module graph.
 The application layer cannot reach the runtime, adapters, commands, I/O, or
 recent-file infrastructure directly or through an intermediate module. Any
-dependency cycle involving the application layer, an adapter, or the backend
-composition root fails the architecture check.
+dependency cycle involving the application layer, an adapter, the backend
+composition root, the document aggregate, or I/O fails the architecture check.
 
 Tauri command modules are transport adapters. They own bounded wire
 deserialization and executor selection, then delegate to application services
@@ -167,6 +167,10 @@ in those invariants. Format-specific backing code is isolated under
 refresh, consistency checks, cell writes, Sheet synchronization, and layout-unit
 conversion. The I/O projection codec implements that port; no production module
 under `document` may import `io`.
+Operation commit and rollback are private `SpreadsheetDocument` behavior rather
+than a sibling module that reaches back into the aggregate. Shared workbook patch
+shapes and diagnostics live in a neutral backing contract, so the document body
+may delegate to workbook state without workbook state depending on the body.
 Canonical editable content lives in the serialization-independent
 `document_data::DocumentData` and `DocumentSheet` model. These types have no
 `serde` or `ts-rs` implementation and are not emitted to TypeScript. Merge,
@@ -180,7 +184,9 @@ plain document data or an already assembled backing and never expose the
 third-party workbook type. `state` owns the active editor session and may depend
 on `document`, but neither `state` nor `ops` may import `io` directly. The `io`
 module owns codecs, input limits, filesystem/platform adapters, and byte-level
-file generation.
+file generation. Its projection mapper owns worksheet-to-document conversion and
+consistency mapping. File readers and the `WorkbookBackingPort` adapter depend on
+that mapper independently; the mapper does not call back into readers or writers.
 
 Document execution returns internal `AppliedOperation`, `DocumentCellChange`,
 and `DocumentRestoreChange` values. The document, formula, memento, and state

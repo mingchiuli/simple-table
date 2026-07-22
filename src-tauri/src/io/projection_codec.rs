@@ -11,10 +11,6 @@ use umya_spreadsheet::{Workbook, Worksheet};
 pub(crate) struct WorkbookProjectionCodec;
 
 impl WorkbookProjectionCodec {
-    pub(crate) fn read_sheets(workbook: &Workbook) -> Vec<DocumentSheet> {
-        ProjectionMapper::sheets_from_workbook(workbook)
-    }
-
     pub(crate) fn refresh_projection(workbook: &Workbook, projection: &mut DocumentData) {
         ProjectionMapper::refresh_file_data_from_workbook(workbook, projection);
     }

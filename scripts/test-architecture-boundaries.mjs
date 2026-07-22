@@ -571,15 +571,17 @@ for (const file of rustApplicationFiles) {
   );
 }
 
-const rustArchitectureFiles = new Set([
+const rustAcyclicArchitectureFiles = new Set([
   join(rustRoot, 'runtime.rs'),
   ...rustApplicationFiles,
   ...sourceFiles(join(rustRoot, 'adapters'), '.rs'),
+  ...sourceFiles(join(rustRoot, 'document'), '.rs'),
+  ...sourceFiles(join(rustRoot, 'io'), '.rs'),
 ]);
 for (const cycle of rustDependencyCycles()) {
-  if (!cycle.some((file) => rustArchitectureFiles.has(file))) continue;
+  if (!cycle.some((file) => rustAcyclicArchitectureFiles.has(file))) continue;
   violations.push(
-    `Rust application module dependency cycle: ${cycle
+    `Rust architecture module dependency cycle: ${cycle
       .map((file) => relative(projectRoot, file))
       .join(' -> ')}`,
   );

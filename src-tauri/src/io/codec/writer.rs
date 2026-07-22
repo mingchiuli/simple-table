@@ -7,6 +7,7 @@ use crate::document_format::{
 };
 use crate::domain::CellValue;
 use crate::error::AppError;
+use crate::io::codec::address::coordinate;
 use crate::io::layout_units::{px_to_excel_column_width, px_to_points};
 use crate::resource_limits::MAX_GENERATED_FILE_BYTES;
 use umya_spreadsheet::{CellErrorType, Workbook, Worksheet, new_file, writer};
@@ -299,17 +300,6 @@ fn write_formula_cached_value(cell: &mut umya_spreadsheet::Cell, value: &CellVal
             cell.set_formula_result_blank();
         }
     }
-}
-
-pub fn coordinate(col: u32, row: u32) -> String {
-    let mut col_num = col;
-    let mut letters = String::new();
-    while col_num > 0 {
-        let rem = ((col_num - 1) % 26) as u8;
-        letters.insert(0, (b'A' + rem) as char);
-        col_num = (col_num - 1) / 26;
-    }
-    format!("{letters}{row}")
 }
 
 fn normalized_sheet_name(name: &str, sheet_index: usize) -> String {

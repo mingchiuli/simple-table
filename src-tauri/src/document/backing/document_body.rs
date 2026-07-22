@@ -1,8 +1,9 @@
 use crate::document_data::DocumentData;
 use std::{collections::BTreeSet, sync::Arc};
 
+use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, WorkbookSheetShape};
 use crate::document::backing::workbook_port::WorkbookBackingPort;
-use crate::document::backing::workbook_state::{self, StructurePatchDiagnostics};
+use crate::document::backing::workbook_state;
 use crate::document::capabilities::{
     SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
     WorkbookStructureCapabilities,
@@ -53,12 +54,6 @@ pub struct WorksheetSnapshot {
 
 pub struct BodyStructureOperationResult {
     pub diagnostics: StructurePatchDiagnostics,
-}
-
-pub struct BodySheetShape {
-    pub sheet_index: usize,
-    pub row_lengths: Vec<usize>,
-    pub protected_cells: Vec<(usize, usize)>,
 }
 
 impl BodyStructureMemento {
@@ -325,7 +320,10 @@ impl SpreadsheetDocumentBody {
         }
     }
 
-    pub fn patch_cell_shapes(&mut self, sheet_shapes: &[BodySheetShape]) -> Result<(), AppError> {
+    pub fn patch_cell_shapes(
+        &mut self,
+        sheet_shapes: &[WorkbookSheetShape],
+    ) -> Result<(), AppError> {
         match self {
             Self::Excel(body) => {
                 workbook_state::patch_cell_shapes(excel_workbook_mut(body), sheet_shapes)

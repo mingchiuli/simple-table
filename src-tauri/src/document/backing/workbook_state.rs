@@ -1,7 +1,7 @@
 use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 
-use crate::document::backing::document_body::BodySheetShape;
+use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, WorkbookSheetShape};
 use crate::document::backing::workbook_port::WorkbookBackingPort;
 use crate::document::capabilities::{
     SheetCapabilities, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
@@ -15,11 +15,6 @@ use crate::formula::reference_rewrite::{
     adjust_formula_references, invalidate_deleted_sheet_references,
 };
 use umya_spreadsheet::{Workbook, Worksheet};
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct StructurePatchDiagnostics {
-    pub skipped_formula_reference_rewrites: usize,
-}
 
 #[derive(Clone, Copy)]
 enum FormulaRewriteScope {
@@ -676,7 +671,7 @@ pub fn patch_layout_dimensions(
 
 pub fn patch_cell_shapes(
     workbook: &mut Workbook,
-    sheet_shapes: &[BodySheetShape],
+    sheet_shapes: &[WorkbookSheetShape],
 ) -> Result<(), AppError> {
     for shape in sheet_shapes {
         let Some(worksheet) = sheet_mut(workbook, shape.sheet_index)? else {
