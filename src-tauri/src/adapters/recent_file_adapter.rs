@@ -4,12 +4,12 @@ use crate::application::document_query_service::{self, DocumentQueryService};
 use crate::error::AppError;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::io::platform::mobile::MobileFileRuntime;
+use crate::recent::model::{AddRecentFileInput, RecentFileRecord, RecentStorageType};
 use crate::recent::store::RecentStore;
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::recent::store::validate_recent_files;
 use crate::recent::thumbnail::{capture_thumbnail, generate_thumbnail};
-use crate::recent::types::{AddRecentFileRequest, RecentFile, StorageType};
 
 #[derive(Clone)]
 pub struct RecentFileAdapter {
@@ -55,7 +55,7 @@ impl RecentFileAdapter {
 pub fn do_get_recent_files(
     service: &RecentFileAdapter,
     app: &AppHandle,
-) -> Result<Vec<RecentFile>, AppError> {
+) -> Result<Vec<RecentFileRecord>, AppError> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let stored = match service.recent_files().get_all(app) {
@@ -77,13 +77,13 @@ pub fn do_get_recent_files(
 pub fn do_add_recent_file_with_thumbnail(
     service: &RecentFileAdapter,
     app: &AppHandle,
-    request: AddRecentFileRequest,
-) -> Result<RecentFile, AppError> {
-    let AddRecentFileRequest {
+    input: AddRecentFileInput,
+) -> Result<RecentFileRecord, AppError> {
+    let AddRecentFileInput {
         original_path,
         document_id,
         base_revision,
-    } = request;
+    } = input;
     let (path, file_name, thumbnail) = document_query_service::inspect_current_file_for_command(
         service.document_queries(),
         document_id,
@@ -104,7 +104,7 @@ pub fn do_add_recent_file_with_thumbnail(
     }
 
     let file_size = recent_file_size(&path);
-    let mut recent_file = RecentFile::new(path, file_name, file_size);
+    let mut recent_file = RecentFileRecord::new(path, file_name, file_size);
     recent_file.storage_type = current_platform_storage_type();
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -137,7 +137,7 @@ pub fn do_remove_recent_file(
         if let Some(file) = do_get_recent_files(service, app)?
             .into_iter()
             .find(|file| file.id == id)
-            && file.storage_type == StorageType::MobileSandboxPath
+            && file.storage_type == RecentStorageType::MobileSandboxPath
         {
             let active_path = document_query_service::active_document_path(service)?;
             if !crate::io::platform::mobile::remove_managed_file_if_inactive(
@@ -167,13 +167,13 @@ pub fn do_remove_recent_file(
 fn reconcile_mobile_recent_files(
     service: &RecentFileAdapter,
     app: &AppHandle,
-    stored: Vec<RecentFile>,
-) -> Result<Vec<RecentFile>, AppError> {
+    stored: Vec<RecentFileRecord>,
+) -> Result<Vec<RecentFileRecord>, AppError> {
     use std::collections::HashMap;
 
     for file in stored
         .iter()
-        .filter(|file| file.storage_type == StorageType::MobileSandboxPath)
+        .filter(|file| file.storage_type == RecentStorageType::MobileSandboxPath)
     {
         if let Err(error) = crate::io::platform::mobile::migrate_managed_document(
             service.mobile_files(),
@@ -192,13 +192,13 @@ fn reconcile_mobile_recent_files(
 
     let mut stored_mobile: HashMap<_, _> = stored
         .iter()
-        .filter(|file| file.storage_type == StorageType::MobileSandboxPath)
+        .filter(|file| file.storage_type == RecentStorageType::MobileSandboxPath)
         .cloned()
         .map(|file| (file.path.clone(), file))
         .collect();
     let mut reconciled: Vec<_> = stored
         .into_iter()
-        .filter(|file| file.storage_type != StorageType::MobileSandboxPath)
+        .filter(|file| file.storage_type != RecentStorageType::MobileSandboxPath)
         .collect();
 
     for managed in
@@ -206,7 +206,7 @@ fn reconcile_mobile_recent_files(
     {
         let path = managed.path.to_string_lossy().to_string();
         let existing = stored_mobile.remove(&path);
-        reconciled.push(RecentFile {
+        reconciled.push(RecentFileRecord {
             id: managed.id,
             path,
             file_name: managed.file_name,
@@ -216,14 +216,14 @@ fn reconcile_mobile_recent_files(
                 .unwrap_or(managed.adopted_at_millis),
             file_size: managed.file_size.min(i64::MAX as u64) as i64,
             thumbnail: existing.as_ref().and_then(|file| file.thumbnail.clone()),
-            storage_type: StorageType::MobileSandboxPath,
+            storage_type: RecentStorageType::MobileSandboxPath,
             original_path: existing.and_then(|file| file.original_path),
         });
     }
     reconciled.sort_by_key(|file| std::cmp::Reverse(file.last_opened));
     let mut retained_thumbnails = 0;
     for file in &mut reconciled {
-        if file.storage_type != StorageType::MobileSandboxPath {
+        if file.storage_type != RecentStorageType::MobileSandboxPath {
             continue;
         }
         retained_thumbnails += 1;
@@ -241,7 +241,7 @@ fn reconcile_mobile_recent_files(
 fn cleanup_removed_mobile_files(
     service: &RecentFileAdapter,
     app: &AppHandle,
-    removed: &[RecentFile],
+    removed: &[RecentFileRecord],
 ) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let active_path = match document_query_service::active_document_path(service) {
@@ -254,7 +254,7 @@ fn cleanup_removed_mobile_files(
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     for file in removed {
-        if file.storage_type != StorageType::MobileSandboxPath {
+        if file.storage_type != RecentStorageType::MobileSandboxPath {
             continue;
         }
         if let Err(error) = crate::io::platform::mobile::remove_managed_file_if_inactive(
@@ -280,55 +280,26 @@ fn recent_file_size(path: &str) -> i64 {
         .unwrap_or_default()
 }
 
-fn current_platform_storage_type() -> StorageType {
+fn current_platform_storage_type() -> RecentStorageType {
     if cfg!(any(target_os = "android", target_os = "ios")) {
-        StorageType::MobileSandboxPath
+        RecentStorageType::MobileSandboxPath
     } else {
-        StorageType::DesktopPath
+        RecentStorageType::DesktopPath
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recent::types::StorageType;
-    use serde_json::json;
-
-    #[test]
-    fn add_recent_request_uses_generated_storage_type_contract() {
-        let request: AddRecentFileRequest = serde_json::from_value(json!({
-            "documentId": "7",
-            "baseRevision": "3",
-            "originalPath": "/original/book.xlsx"
-        }))
-        .expect("recent request");
-
-        assert_eq!(request.document_id, 7);
-        assert_eq!(request.base_revision, 3);
-        assert_eq!(
-            request.original_path.as_deref(),
-            Some("/original/book.xlsx")
-        );
-    }
-
-    #[test]
-    fn add_recent_request_requires_document_context() {
-        let error = serde_json::from_value::<AddRecentFileRequest>(json!({
-            "originalPath": "/original/book.xlsx"
-        }))
-        .expect_err("document context should be required");
-
-        assert!(error.to_string().contains("missing field"));
-    }
 
     #[test]
     fn platform_storage_type_matches_target_family() {
         let storage_type = current_platform_storage_type();
 
         if cfg!(any(target_os = "android", target_os = "ios")) {
-            assert_eq!(storage_type, StorageType::MobileSandboxPath);
+            assert_eq!(storage_type, RecentStorageType::MobileSandboxPath);
         } else {
-            assert_eq!(storage_type, StorageType::DesktopPath);
+            assert_eq!(storage_type, RecentStorageType::DesktopPath);
         }
     }
 }

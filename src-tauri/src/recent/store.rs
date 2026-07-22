@@ -1,10 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use super::types::RecentFile;
+use super::model::{RecentFileRecord, RecentStorageType};
 use crate::error::AppError;
 
 const STORE_FILE: &str = "recent-files.json";
@@ -17,34 +18,100 @@ const MAX_RECENT_ID_BYTES: usize = 256;
 const MAX_RECENT_PATH_BYTES: usize = 16 * 1024;
 const MAX_RECENT_FILE_NAME_BYTES: usize = 1_024;
 const MAX_RECENT_THUMBNAIL_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedRecentFile {
+    id: String,
+    path: String,
+    file_name: String,
+    last_opened: i64,
+    file_size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<String>,
+    #[serde(default)]
+    storage_type: PersistedStorageType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PersistedStorageType {
+    MobileSandboxPath,
+    #[default]
+    DesktopPath,
+}
+
+impl From<PersistedRecentFile> for RecentFileRecord {
+    fn from(value: PersistedRecentFile) -> Self {
+        Self {
+            id: value.id,
+            path: value.path,
+            file_name: value.file_name,
+            last_opened: value.last_opened,
+            file_size: value.file_size,
+            thumbnail: value.thumbnail,
+            storage_type: match value.storage_type {
+                PersistedStorageType::MobileSandboxPath => RecentStorageType::MobileSandboxPath,
+                PersistedStorageType::DesktopPath => RecentStorageType::DesktopPath,
+            },
+            original_path: value.original_path,
+        }
+    }
+}
+
+impl From<&RecentFileRecord> for PersistedRecentFile {
+    fn from(value: &RecentFileRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            path: value.path.clone(),
+            file_name: value.file_name.clone(),
+            last_opened: value.last_opened,
+            file_size: value.file_size,
+            thumbnail: value.thumbnail.clone(),
+            storage_type: match value.storage_type {
+                RecentStorageType::MobileSandboxPath => PersistedStorageType::MobileSandboxPath,
+                RecentStorageType::DesktopPath => PersistedStorageType::DesktopPath,
+            },
+            original_path: value.original_path.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct RecentStore {
     transaction: Arc<Mutex<()>>,
 }
 
 pub struct RecentStoreUpdate {
-    pub updated: RecentFile,
-    pub removed: Vec<RecentFile>,
+    pub updated: RecentFileRecord,
+    pub removed: Vec<RecentFileRecord>,
 }
 
 impl RecentStore {
-    pub fn get_all(&self, app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+    pub fn get_all(&self, app: &AppHandle) -> Result<Vec<RecentFileRecord>, AppError> {
         self.with_transaction(|| Self::get_all_unlocked(app))
     }
 
-    fn get_all_unlocked(app: &AppHandle) -> Result<Vec<RecentFile>, AppError> {
+    fn get_all_unlocked(app: &AppHandle) -> Result<Vec<RecentFileRecord>, AppError> {
         let store = app
             .store(STORE_FILE)
             .map_err(|error| AppError::ReadError(error.to_string()))?;
         decode_recent_files(store.get(STORE_KEY))
     }
 
-    fn save_unlocked(app: &AppHandle, files: &[RecentFile]) -> Result<(), AppError> {
+    fn save_unlocked(app: &AppHandle, files: &[RecentFileRecord]) -> Result<(), AppError> {
         validate_recent_files(files).map_err(AppError::WriteError)?;
         let store = app
             .store(STORE_FILE)
             .map_err(|e| AppError::Internal(e.to_string()))?;
-        let value = serde_json::to_value(files).map_err(|e| AppError::Internal(e.to_string()))?;
+        let persisted = files
+            .iter()
+            .map(PersistedRecentFile::from)
+            .collect::<Vec<_>>();
+        let value =
+            serde_json::to_value(persisted).map_err(|e| AppError::Internal(e.to_string()))?;
         let previous = store.get(STORE_KEY);
         store.set(STORE_KEY, value);
         if let Err(error) = store.save() {
@@ -59,7 +126,11 @@ impl RecentStore {
         Ok(())
     }
 
-    pub fn add(&self, app: &AppHandle, file: RecentFile) -> Result<RecentStoreUpdate, AppError> {
+    pub fn add(
+        &self,
+        app: &AppHandle,
+        file: RecentFileRecord,
+    ) -> Result<RecentStoreUpdate, AppError> {
         self.with_transaction(|| {
             let previous = Self::get_all_unlocked(app)?;
             let (files, updated) = upsert_recent_file(previous.clone(), file);
@@ -69,7 +140,7 @@ impl RecentStore {
         })
     }
 
-    pub fn remove(&self, app: &AppHandle, id: &str) -> Result<Vec<RecentFile>, AppError> {
+    pub fn remove(&self, app: &AppHandle, id: &str) -> Result<Vec<RecentFileRecord>, AppError> {
         self.with_transaction(|| {
             let mut files = Self::get_all_unlocked(app)?;
             let removed = files.iter().filter(|file| file.id == id).cloned().collect();
@@ -81,7 +152,11 @@ impl RecentStore {
 
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     #[cfg_attr(test, allow(dead_code))]
-    pub fn replace_all(&self, app: &AppHandle, mut files: Vec<RecentFile>) -> Result<(), AppError> {
+    pub fn replace_all(
+        &self,
+        app: &AppHandle,
+        mut files: Vec<RecentFileRecord>,
+    ) -> Result<(), AppError> {
         self.with_transaction(|| {
             files.sort_by_key(|file| Reverse(file.last_opened));
             limit_desktop_recents(&mut files, "");
@@ -107,12 +182,19 @@ impl RecentStore {
     }
 }
 
-fn decode_recent_files(value: Option<serde_json::Value>) -> Result<Vec<RecentFile>, AppError> {
+fn decode_recent_files(
+    value: Option<serde_json::Value>,
+) -> Result<Vec<RecentFileRecord>, AppError> {
     match value {
         Some(value) => {
-            let files: Vec<RecentFile> = serde_json::from_value(value).map_err(|error| {
-                AppError::ReadError(format!("Invalid recent file store: {error}"))
-            })?;
+            let files: Vec<PersistedRecentFile> =
+                serde_json::from_value(value).map_err(|error| {
+                    AppError::ReadError(format!("Invalid recent file store: {error}"))
+                })?;
+            let files = files
+                .into_iter()
+                .map(RecentFileRecord::from)
+                .collect::<Vec<_>>();
             validate_recent_files(&files).map_err(AppError::ReadError)?;
             Ok(files)
         }
@@ -120,7 +202,7 @@ fn decode_recent_files(value: Option<serde_json::Value>) -> Result<Vec<RecentFil
     }
 }
 
-pub(super) fn validate_recent_files(files: &[RecentFile]) -> Result<(), String> {
+pub(super) fn validate_recent_files(files: &[RecentFileRecord]) -> Result<(), String> {
     if files.len() > MAX_STORED_RECENT_FILES {
         return Err(format!(
             "Invalid recent file store: {} records exceeds the limit of {MAX_STORED_RECENT_FILES}",
@@ -161,20 +243,20 @@ fn validate_field(label: &str, value: &str, maximum_bytes: usize) -> Result<(), 
     Ok(())
 }
 
-fn recent_file_text_bytes(file: &RecentFile) -> usize {
+fn recent_file_text_bytes(file: &RecentFileRecord) -> usize {
     file.id
         .len()
         .saturating_add(file.path.len())
         .saturating_add(file.file_name.len())
         .saturating_add(file.thumbnail.as_ref().map_or(0, String::len))
         .saturating_add(file.original_path.as_ref().map_or(0, String::len))
-        .saturating_add(std::mem::size_of::<RecentFile>())
+        .saturating_add(std::mem::size_of::<RecentFileRecord>())
 }
 
 fn upsert_recent_file(
-    mut files: Vec<RecentFile>,
-    file: RecentFile,
-) -> (Vec<RecentFile>, RecentFile) {
+    mut files: Vec<RecentFileRecord>,
+    file: RecentFileRecord,
+) -> (Vec<RecentFileRecord>, RecentFileRecord) {
     let path = file.path.clone();
     let stable_id = files
         .iter()
@@ -186,7 +268,7 @@ fn upsert_recent_file(
         .find(|existing| existing.path == path)
         .and_then(|existing| existing.original_path.clone());
     let original_path = file.original_path.clone().or(retained_original_path);
-    let merged = RecentFile {
+    let merged = RecentFileRecord {
         id: stable_id,
         original_path,
         ..file
@@ -210,10 +292,10 @@ fn upsert_recent_file(
     (files, updated)
 }
 
-fn limit_managed_thumbnails(files: &mut [RecentFile]) {
+fn limit_managed_thumbnails(files: &mut [RecentFileRecord]) {
     let mut retained = 0;
     for file in files {
-        if file.storage_type != super::types::StorageType::MobileSandboxPath {
+        if file.storage_type != RecentStorageType::MobileSandboxPath {
             continue;
         }
         retained += 1;
@@ -223,13 +305,13 @@ fn limit_managed_thumbnails(files: &mut [RecentFile]) {
     }
 }
 
-fn limit_desktop_recents(files: &mut Vec<RecentFile>, path: &str) {
+fn limit_desktop_recents(files: &mut Vec<RecentFileRecord>, path: &str) {
     let mut managed = Vec::new();
     let mut desktop = Vec::new();
     for file in files.drain(..) {
         match file.storage_type {
-            super::types::StorageType::MobileSandboxPath => managed.push(file),
-            super::types::StorageType::DesktopPath => desktop.push(file),
+            RecentStorageType::MobileSandboxPath => managed.push(file),
+            RecentStorageType::DesktopPath => desktop.push(file),
         }
     }
     truncate_preserving_path(&mut desktop, path);
@@ -238,7 +320,10 @@ fn limit_desktop_recents(files: &mut Vec<RecentFile>, path: &str) {
     *files = managed;
 }
 
-fn removed_recent_files(previous: Vec<RecentFile>, current: &[RecentFile]) -> Vec<RecentFile> {
+fn removed_recent_files(
+    previous: Vec<RecentFileRecord>,
+    current: &[RecentFileRecord],
+) -> Vec<RecentFileRecord> {
     let retained_paths: HashSet<&str> = current.iter().map(|file| file.path.as_str()).collect();
     previous
         .into_iter()
@@ -246,7 +331,7 @@ fn removed_recent_files(previous: Vec<RecentFile>, current: &[RecentFile]) -> Ve
         .collect()
 }
 
-fn truncate_preserving_path(files: &mut Vec<RecentFile>, path: &str) {
+fn truncate_preserving_path(files: &mut Vec<RecentFileRecord>, path: &str) {
     if files.len() <= MAX_RECENT {
         return;
     }
@@ -269,23 +354,32 @@ fn truncate_preserving_path(files: &mut Vec<RecentFile>, path: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recent::types::StorageType;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::Duration;
 
-    fn recent(id: &str, path: &str, file_name: &str, last_opened: i64) -> RecentFile {
-        RecentFile {
+    fn recent(id: &str, path: &str, file_name: &str, last_opened: i64) -> RecentFileRecord {
+        RecentFileRecord {
             id: id.to_string(),
             path: path.to_string(),
             file_name: file_name.to_string(),
             last_opened,
             file_size: 1,
             thumbnail: None,
-            storage_type: StorageType::DesktopPath,
+            storage_type: RecentStorageType::DesktopPath,
             original_path: None,
         }
+    }
+
+    fn encoded_recent_files(files: &[RecentFileRecord]) -> serde_json::Value {
+        serde_json::to_value(
+            files
+                .iter()
+                .map(PersistedRecentFile::from)
+                .collect::<Vec<_>>(),
+        )
+        .expect("persisted recent files")
     }
 
     #[test]
@@ -302,6 +396,20 @@ mod tests {
     }
 
     #[test]
+    fn persisted_recent_schema_remains_wire_compatible() {
+        let mut file = recent("id", "/tmp/book.xlsx", "book.xlsx", 7);
+        file.original_path = Some("/import/book.xlsx".to_string());
+        let encoded = encoded_recent_files(&[file]);
+
+        assert_eq!(encoded[0]["id"], "id");
+        assert_eq!(encoded[0]["fileName"], "book.xlsx");
+        assert_eq!(encoded[0]["lastOpened"], 7);
+        assert_eq!(encoded[0]["storageType"], "desktopPath");
+        assert_eq!(encoded[0]["originalPath"], "/import/book.xlsx");
+        assert_eq!(decode_recent_files(Some(encoded)).unwrap().len(), 1);
+    }
+
+    #[test]
     fn recent_store_rejects_excessive_records() {
         let files = (0..=MAX_STORED_RECENT_FILES)
             .map(|index| {
@@ -314,7 +422,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let error = decode_recent_files(Some(serde_json::to_value(files).unwrap()))
+        let error = decode_recent_files(Some(encoded_recent_files(&files)))
             .expect_err("oversized recent store");
 
         assert!(matches!(error, AppError::ReadError(_)));
@@ -325,7 +433,7 @@ mod tests {
         let mut file = recent("id", "/tmp/book.xlsx", "book.xlsx", 1);
         file.thumbnail = Some("x".repeat(MAX_RECENT_THUMBNAIL_BYTES + 1));
 
-        let error = decode_recent_files(Some(serde_json::to_value(vec![file]).unwrap()))
+        let error = decode_recent_files(Some(encoded_recent_files(&[file])))
             .expect_err("oversized thumbnail");
 
         assert!(matches!(error, AppError::ReadError(_)));
@@ -459,7 +567,7 @@ mod tests {
                     &format!("{index}.xlsx"),
                     index as i64,
                 );
-                file.storage_type = StorageType::MobileSandboxPath;
+                file.storage_type = RecentStorageType::MobileSandboxPath;
                 file
             })
             .collect::<Vec<_>>();
@@ -471,7 +579,7 @@ mod tests {
         assert!(
             updated_files
                 .iter()
-                .all(|file| file.storage_type == StorageType::MobileSandboxPath)
+                .all(|file| file.storage_type == RecentStorageType::MobileSandboxPath)
         );
     }
 
@@ -485,7 +593,7 @@ mod tests {
                     &format!("{index}.xlsx"),
                     index as i64,
                 );
-                file.storage_type = StorageType::MobileSandboxPath;
+                file.storage_type = RecentStorageType::MobileSandboxPath;
                 file.thumbnail = Some(format!("thumbnail-{index}"));
                 file
             })

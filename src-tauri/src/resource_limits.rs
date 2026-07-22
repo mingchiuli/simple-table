@@ -32,6 +32,7 @@ pub const MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_SAVE_SOURCE_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_GENERATED_FILE_BYTES: usize = 192 * 1024 * 1024;
 pub const MAX_DOCUMENT_WORKING_SET_BYTES: usize = 832 * 1024 * 1024;
+pub const MAX_SEARCH_OUTCOME_RETAINED_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ResourceLedger {

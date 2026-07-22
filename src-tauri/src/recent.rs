@@ -1,5 +1,3 @@
-pub mod store;
-pub mod thumbnail;
-pub mod types;
-
-pub use types::{AddRecentFileRequest, RecentFile};
+pub(crate) mod model;
+pub(crate) mod store;
+pub(crate) mod thumbnail;

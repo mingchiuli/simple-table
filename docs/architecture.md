@@ -211,6 +211,12 @@ Protocol DTOs are split into dependency-ordered `cell`, `cell_change`,
 Modules inside `types` import sibling modules directly instead of resolving
 types through the root re-export facade, so the production dependency graph can
 observe and reject protocol cycles.
+Recent-file RPC requests and responses live in `types::recent` as well. The
+serialization-independent `recent::model` owns the runtime record and tracking
+input, while `recent::store` privately owns the persisted JSON schema.
+`protocol_projection::recent` is the only mapper between those semantic values
+and RPC DTOs, so persisted metadata migrations and wire-contract changes remain
+independent.
 All production Rust modules participate in the architecture dependency graph and
 module cycles are rejected regardless of which feature contains them.
 
@@ -453,8 +459,13 @@ the internal outcome.
 on `SearchQueryPort`. Save, mutation, and lifecycle workflows depend separately
 on `SearchIndexMaintenancePort`, so they cannot invoke the search use case and
 tests do not implement unrelated query behavior. Query plans, result admission,
-and fallback scanning live in the stateless `search_query_engine`; the query
-adapter only implements the application port. Worker threads, queue coalescing, resident
+and fallback scanning live in the stateless `search_query_engine`; a shared
+tokenizer leaf keeps indexed and fallback matching aligned without making the
+query engine depend on index storage. The index store accepts only a literal and
+term view and owns no query-validation or scan-matching policy. Search outcomes
+are bounded by an internal retained-memory limit, while only
+`protocol_projection::search` applies the exact serialized response-byte limit.
+The query adapter only implements the application port. Worker threads, queue coalescing, resident
 indexes, memory reservations, and Tantivy updates live in the shared outer
 `SearchIndexRuntime`; the maintenance adapter exposes only scheduling and
 cancellation. The dependency direction is adapter to runtime to query engine,

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::TopDocs;
@@ -7,20 +7,16 @@ use tantivy::query::{BooleanQuery, Occur, Query, RegexQuery, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, STRING, Schema, TextFieldIndexing, TextOptions, Value,
 };
-use tantivy::tokenizer::{LowerCaser, TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
-use tantivy_jieba::JiebaTokenizer;
 
+use crate::adapters::search_text_analyzer::search_text_analyzer;
 #[cfg(test)]
 use crate::domain::CellValue;
 use crate::domain::SearchCellText;
-use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;
-use crate::error::AppError;
 
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEX_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const MAX_SEARCH_QUERY_TERMS: usize = 64;
 
 struct SchemaFields {
     text: Field,
@@ -382,18 +378,6 @@ impl SearchIndexStore {
         })
     }
 
-    #[cfg(test)]
-    pub fn search_sheet(
-        &self,
-        sheet_index: usize,
-        query: &str,
-        limit: usize,
-    ) -> Option<Vec<SearchCellText>> {
-        let plan = SearchQueryPlan::new(query)?;
-        self.fresh_sheet_index(sheet_index)
-            .map(|index| index.search(&plan, limit))
-    }
-
     pub fn fresh_sheet_index(&self, sheet_index: usize) -> Option<Arc<SearchSheetIndex>> {
         let entry = match self.sheets.get(sheet_index)? {
             SearchSheetSlot::Fresh(entry) => entry,
@@ -517,80 +501,6 @@ fn nonzero_random_u64() -> u64 {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SearchQueryPlan {
-    literal: String,
-    terms: Vec<String>,
-}
-
-impl SearchQueryPlan {
-    #[cfg(test)]
-    pub fn new(query: &str) -> Option<Self> {
-        Self::try_new(query).ok().flatten()
-    }
-
-    pub fn try_new(query: &str) -> Result<Option<Self>, AppError> {
-        if query.len() > MAX_SEARCH_QUERY_BYTES {
-            return Err(AppError::ResourceLimitExceeded(format!(
-                "search query requires {} bytes; the maximum is {MAX_SEARCH_QUERY_BYTES} bytes",
-                query.len()
-            )));
-        }
-        let query = query.trim();
-        if query.is_empty() {
-            return Ok(None);
-        }
-        let mut terms = Vec::new();
-        let mut unique_terms = HashSet::new();
-        for term in tokenize_search_text(query) {
-            if !unique_terms.insert(term.clone()) {
-                continue;
-            }
-            if terms.len() >= MAX_SEARCH_QUERY_TERMS {
-                return Err(AppError::ResourceLimitExceeded(format!(
-                    "search query contains more than {MAX_SEARCH_QUERY_TERMS} terms"
-                )));
-            }
-            terms.push(term);
-        }
-        Ok(Some(Self {
-            literal: query.to_lowercase(),
-            terms,
-        }))
-    }
-
-    pub fn matches(&self, text: &str) -> bool {
-        let text = text.trim();
-        if text.is_empty() {
-            return false;
-        }
-        let text_lower = text.to_lowercase();
-        if text_lower.contains(&self.literal) {
-            return true;
-        }
-        if self.terms.is_empty() {
-            return false;
-        }
-        let text_terms: HashSet<_> = tokenize_search_text(text).into_iter().collect();
-        self.terms
-            .iter()
-            .all(|query_term| text_terms.contains(query_term))
-    }
-
-    pub(crate) fn first_match_byte(&self, text: &str) -> Option<usize> {
-        let lowercase = text.to_lowercase();
-        std::iter::once(&self.literal)
-            .chain(self.terms.iter())
-            .filter_map(|term| lowercase.find(term))
-            .filter(|index| *index <= text.len() && text.is_char_boundary(*index))
-            .min()
-    }
-
-    fn terms(&self) -> &[String] {
-        &self.terms
-    }
-}
-
 #[cfg(test)]
 pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
     build_sheet_index_with_cancel(cells, || true)
@@ -700,9 +610,7 @@ fn create_tantivy_index()
     let index = Index::builder()
         .schema(schema.clone())
         .open_or_create(directory.clone())?;
-    let analyzer = TextAnalyzer::builder(JiebaTokenizer::new())
-        .filter(LowerCaser)
-        .build();
+    let analyzer = search_text_analyzer();
     index.tokenizers().register("jieba", analyzer);
 
     Ok((
@@ -721,28 +629,10 @@ fn create_tantivy_index()
     ))
 }
 
-fn search_analyzer() -> TextAnalyzer {
-    TextAnalyzer::builder(JiebaTokenizer::new())
-        .filter(LowerCaser)
-        .build()
-}
-
-fn tokenize_search_text(text: &str) -> Vec<String> {
-    let mut analyzer = search_analyzer();
-    let mut stream = analyzer.token_stream(text);
-    let mut tokens = Vec::new();
-    while stream.advance() {
-        let token = stream.token();
-        if !token.text.is_empty() {
-            tokens.push(token.text.to_lowercase());
-        }
-    }
-    tokens
-}
-
 fn search_index(
     index: &SearchSheetIndex,
-    plan: &SearchQueryPlan,
+    literal: &str,
+    terms: &[String],
     limit: usize,
 ) -> Vec<SearchCellText> {
     let row_field = match index.schema.get_field("row") {
@@ -769,7 +659,8 @@ fn search_index(
         }
     };
     let searcher = reader.searcher();
-    let Some(query) = compile_index_query(index.text_field, index.literal_field, plan) else {
+    let Some(query) = compile_index_query(index.text_field, index.literal_field, literal, terms)
+    else {
         return vec![];
     };
     let top_docs = match searcher.search(
@@ -799,9 +690,6 @@ fn search_index(
                 .and_then(|value| value.as_str())
                 .unwrap_or(display)
                 .to_string();
-            if !plan.matches(&search_text) {
-                continue;
-            }
             results.push(SearchCellText {
                 row: row as usize,
                 col: col as usize,
@@ -829,18 +717,18 @@ impl SearchSheetIndex {
             .saturating_add(std::mem::size_of::<Self>())
     }
 
-    pub fn search(&self, plan: &SearchQueryPlan, limit: usize) -> Vec<SearchCellText> {
-        search_index(self, plan, limit)
+    pub fn search(&self, literal: &str, terms: &[String], limit: usize) -> Vec<SearchCellText> {
+        search_index(self, literal, terms, limit)
     }
 }
 
 fn compile_index_query(
     text_field: Field,
     literal_field: Field,
-    plan: &SearchQueryPlan,
+    literal: &str,
+    terms: &[String],
 ) -> Option<BooleanQuery> {
-    let term_clauses: Vec<(Occur, Box<dyn Query>)> = plan
-        .terms()
+    let term_clauses: Vec<(Occur, Box<dyn Query>)> = terms
         .iter()
         .map(|term| {
             let query = TermQuery::new(
@@ -851,7 +739,7 @@ fn compile_index_query(
         })
         .collect();
     let mut alternatives = Vec::<(Occur, Box<dyn Query>)>::new();
-    let literal_pattern = format!(".*{}.*", escape_regex_literal(&plan.literal));
+    let literal_pattern = format!(".*{}.*", escape_regex_literal(literal));
     if let Ok(query) = RegexQuery::from_pattern(&literal_pattern, literal_field) {
         alternatives.push((Occur::Should, Box::new(query)));
     }
@@ -879,6 +767,7 @@ fn escape_regex_literal(literal: &str) -> String {
 mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::collect_sheet_search_text;
+    use crate::adapters::search_query_engine::SearchQueryPlan;
     use crate::document_data::DocumentSheet;
     use crate::document_data::{CellFormat, RichMetadata};
     use crate::domain::CellNumber;
@@ -894,6 +783,18 @@ mod tests {
         };
         let cells = collect_sheet_search_text(&sheet);
         build_sheet_index(&cells).expect("index")
+    }
+
+    fn search_store_sheet(
+        store: &SearchIndexStore,
+        sheet_index: usize,
+        query: &str,
+        limit: usize,
+    ) -> Option<Vec<SearchCellText>> {
+        let plan = SearchQueryPlan::new(query)?;
+        store
+            .fresh_sheet_index(sheet_index)
+            .map(|index| index.search(plan.literal(), plan.terms(), limit))
     }
 
     #[test]
@@ -927,7 +828,7 @@ mod tests {
 
         store.install_sheet_index(document_id, 0, original_stamp, Some(index));
         assert_eq!(
-            store.search_sheet(0, "indexed", 10),
+            search_store_sheet(&store, 0, "indexed", 10),
             Some(vec![SearchCellText {
                 row: 0,
                 col: 0,
@@ -937,16 +838,16 @@ mod tests {
         );
 
         let stale_stamp = store.mark_stale(document_id);
-        assert_eq!(store.search_sheet(0, "indexed", 10), None);
+        assert_eq!(search_store_sheet(&store, 0, "indexed", 10), None);
 
         let stale_index = index_rows(&rows);
         store.install_sheet_index(document_id, 0, original_stamp, Some(stale_index));
-        assert_eq!(store.search_sheet(0, "indexed", 10), None);
+        assert_eq!(search_store_sheet(&store, 0, "indexed", 10), None);
 
         let replacement_index = index_rows(&rows);
         store.install_sheet_index(document_id, 0, stale_stamp, Some(replacement_index));
         assert_eq!(
-            store.search_sheet(0, "indexed", 10),
+            search_store_sheet(&store, 0, "indexed", 10),
             Some(vec![SearchCellText {
                 row: 0,
                 col: 0,
@@ -965,18 +866,18 @@ mod tests {
         let stamp = store.sheet_stamp(document_id, 0);
 
         store.install_sheet_index(document_id, 0, stamp, Some(index));
-        assert!(store.search_sheet(0, "old", 10).is_some());
+        assert!(search_store_sheet(&store, 0, "old", 10).is_some());
 
         store.mark_sheet_stale(0);
-        assert_eq!(store.search_sheet(0, "old", 10), None);
+        assert_eq!(search_store_sheet(&store, 0, "old", 10), None);
 
         store.mark_sheet_fresh(document_id, 0, stamp);
-        assert_eq!(store.search_sheet(0, "old", 10), None);
+        assert_eq!(search_store_sheet(&store, 0, "old", 10), None);
 
         let fresh_stamp = store.sheet_stamp(document_id, 0);
         let replacement = index_rows(&rows);
         store.install_sheet_index(document_id, 0, fresh_stamp, Some(replacement));
-        assert!(store.search_sheet(0, "old", 10).is_some());
+        assert!(search_store_sheet(&store, 0, "old", 10).is_some());
     }
 
     #[test]
@@ -993,7 +894,7 @@ mod tests {
 
         assert!(store.writer_handle(document_id, 0, stale_stamp).is_some());
         store.mark_sheet_fresh(document_id, 0, stale_stamp);
-        assert!(store.search_sheet(0, "old", 10).is_some());
+        assert!(search_store_sheet(&store, 0, "old", 10).is_some());
     }
 
     #[test]
@@ -1015,7 +916,7 @@ mod tests {
 
         assert!(store.writer_handle(document_id, 0, later_stamp).is_none());
         store.mark_sheet_fresh(document_id, 0, later_stamp);
-        assert_eq!(store.search_sheet(0, "old", 10), None);
+        assert_eq!(search_store_sheet(&store, 0, "old", 10), None);
     }
 
     #[test]
@@ -1043,7 +944,7 @@ mod tests {
         let cells = collect_sheet_search_text(&sheet);
         let plan = SearchQueryPlan::new("alpha beta").expect("query plan");
         let index = index_rows(&rows);
-        let indexed: Vec<_> = search_index(&index, &plan, 10)
+        let indexed: Vec<_> = search_index(&index, plan.literal(), plan.terms(), 10)
             .into_iter()
             .map(|cell| (cell.row, cell.col))
             .collect();
@@ -1074,7 +975,7 @@ mod tests {
 
         for query in ["pha", "(net)"] {
             let plan = SearchQueryPlan::new(query).expect("query plan");
-            let mut indexed: Vec<_> = search_index(&index, &plan, 10)
+            let mut indexed: Vec<_> = search_index(&index, plan.literal(), plan.terms(), 10)
                 .into_iter()
                 .map(|cell| (cell.row, cell.col))
                 .collect();
@@ -1106,7 +1007,7 @@ mod tests {
         let cells = collect_sheet_search_text(&sheet);
         let plan = SearchQueryPlan::new("match").expect("query plan");
         let index = index_rows(&rows);
-        let indexed: Vec<_> = search_index(&index, &plan, 2)
+        let indexed: Vec<_> = search_index(&index, plan.literal(), plan.terms(), 2)
             .into_iter()
             .map(|cell| (cell.row, cell.col))
             .collect();

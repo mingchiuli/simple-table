@@ -7,6 +7,7 @@ mod editor_session;
 mod file;
 mod formula;
 mod mutation;
+mod recent;
 mod search;
 #[cfg(test)]
 pub mod typescript;
@@ -22,6 +23,7 @@ pub use editor_session::*;
 pub use file::*;
 pub use formula::*;
 pub use mutation::*;
+pub use recent::*;
 pub use search::*;
 #[allow(unused_imports)]
 pub use update::*;

@@ -844,6 +844,29 @@ if (existsSync(join(rustRoot, 'adapters', 'search_index_scheduler.rs'))) {
 }
 
 rejectRustProductionMatches(
+  [join(rustRoot, 'adapters', 'search_index_store.rs')],
+  [/\bSearchQueryPlan\b/, /\bMAX_SEARCH_QUERY_BYTES\b/, /\bMAX_SEARCH_RESPONSE_BYTES\b/],
+  'the query-semantics-free search index storage boundary',
+);
+
+rejectRustProductionMatches(
+  [join(rustRoot, 'adapters', 'search_query_engine.rs')],
+  [/\bMAX_SEARCH_RESPONSE_BYTES\b/, /\bserialized_json_bytes\b/, /crate::types(?:::|\b)/],
+  'the transport-response-independent search query engine boundary',
+);
+
+for (const file of rustFiles.filter((candidate) => ![
+  join(rustRoot, 'editor_protocol.rs'),
+  join(rustRoot, 'protocol_projection', 'search.rs'),
+].includes(candidate))) {
+  if (/\bMAX_SEARCH_RESPONSE_BYTES\b/.test(rustProductionSource(file))) {
+    violations.push(
+      `${relative(projectRoot, file)} violates the protocol-projection-owned search response budget boundary`,
+    );
+  }
+}
+
+rejectRustProductionMatches(
   [join(rustRoot, 'adapters', 'search_index_runtime.rs')],
   [/pub\(crate\)\s+(?:struct\s+IndexScheduler\b|scheduler\s*:)/],
   'the encapsulated search scheduler state boundary',
@@ -887,6 +910,46 @@ rejectMatches(
   [/\bActiveDocumentRepository\b/, /\bDocumentHandle\b/, /crate::state(?:::|\b)/],
   'the repository-independent search port boundary',
 );
+
+if (existsSync(join(rustRoot, 'recent', 'types.rs'))) {
+  violations.push(
+    'src-tauri/src/recent/types.rs violates the separated recent persistence and RPC model boundary',
+  );
+}
+
+rejectRustProductionMatches(
+  [join(rustRoot, 'recent', 'model.rs')],
+  [/\bserde(?:::|\b)/, /\bts_rs\b/, /\bSerialize\b/, /\bDeserialize\b/, /crate::types(?:::|\b)/],
+  'the serialization-independent recent-file model boundary',
+);
+
+rejectRustProductionMatches(
+  [
+    join(rustRoot, 'recent', 'store.rs'),
+    join(rustRoot, 'adapters', 'recent_file_adapter.rs'),
+  ],
+  [/\bts_rs\b/, /crate::types(?:::|\b)/, /\bAddRecentFileRequest\b/, /\bRecentFile\b/],
+  'the RPC-independent recent-file persistence and adapter boundary',
+);
+
+rejectMatches(
+  [join(rustRoot, 'types', 'typescript.rs')],
+  [/crate::recent(?:::|\b)/],
+  'the protocol-owned recent-file TypeScript declaration boundary',
+);
+
+const recentCommandSource = readFileSync(join(rustRoot, 'commands', 'recent.rs'), 'utf8');
+for (const requirement of [
+  /protocol_projection::add_recent_file_input/,
+  /protocol_projection::recent_file/,
+  /protocol_projection::recent_files/,
+]) {
+  if (!requirement.test(recentCommandSource)) {
+    violations.push(
+      `src-tauri/src/commands/recent.rs violates the explicit recent-file protocol mapping boundary: ${requirement}`,
+    );
+  }
+}
 
 rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'application', 'search_ports.rs')],
@@ -1087,10 +1150,11 @@ rejectMatches(
     join(rustRoot, 'protocol_projection', 'document.rs'),
     join(rustRoot, 'protocol_projection', 'editor.rs'),
     join(rustRoot, 'protocol_projection', 'file.rs'),
+    join(rustRoot, 'protocol_projection', 'recent.rs'),
     join(rustRoot, 'protocol_projection', 'search.rs'),
     join(rustRoot, 'protocol_projection', 'update.rs'),
   ],
-  [/super::(?:document|editor|file|search|update)(?:::|\b)/],
+  [/super::(?:document|editor|file|recent|search|update)(?:::|\b)/],
   'the feature-isolated Rust protocol projection boundary',
 );
 
@@ -2078,7 +2142,12 @@ const searchQueryEngineSource = readFileSync(
   join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_engine.rs'),
   'utf8',
 );
-for (const requirement of [/fn\s+execute_search\b/, /fn\s+scan_sheet_fallback\b/]) {
+for (const requirement of [
+  /struct\s+SearchQueryPlan\b/,
+  /fn\s+execute_search\b/,
+  /fn\s+scan_sheet_fallback\b/,
+  /MAX_SEARCH_OUTCOME_RETAINED_BYTES/,
+]) {
   if (!requirement.test(searchQueryEngineSource)) {
     violations.push(
       `src-tauri/src/adapters/search_query_engine.rs violates the extracted search-query engine boundary: ${requirement}`,
@@ -2161,7 +2230,7 @@ rejectMatches(
 
 rejectMatches(
   [join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_store.rs')],
-  [/const\s+MAX_SEARCH_QUERY_BYTES\b/],
+  [/\bMAX_SEARCH_QUERY_BYTES\b/],
   'the editor-protocol-owned search-query resource policy boundary',
 );
 

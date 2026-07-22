@@ -1,14 +1,97 @@
-use crate::adapters::search_index_store::{SearchQueryPlan, SearchSheetIndex};
+use std::collections::HashSet;
+
+use crate::adapters::search_index_store::SearchSheetIndex;
+use crate::adapters::search_text_analyzer::tokenize_search_text;
 use crate::application::search_ports::SearchDocumentSourcePort;
 use crate::domain::{SearchHit, SearchOutcome, SearchScanCursor, SearchScope};
-use crate::editor_protocol::MAX_SEARCH_RESPONSE_BYTES;
+use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;
 use crate::error::AppError;
+use crate::resource_limits::MAX_SEARCH_OUTCOME_RETAINED_BYTES;
 
 const SEARCH_RESULT_LIMIT: usize = 1000;
 pub(crate) const MAX_SEARCH_RESULT_SNIPPET_BYTES: usize = 512;
 const MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH: usize = 1;
 const MAX_SEARCH_SCAN_CHUNK_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SEARCH_SCAN_CHUNK_CELLS: usize = 32_768;
+pub(crate) const MAX_SEARCH_QUERY_TERMS: usize = 64;
+
+#[derive(Debug, Clone)]
+pub(crate) struct SearchQueryPlan {
+    literal: String,
+    terms: Vec<String>,
+}
+
+impl SearchQueryPlan {
+    #[cfg(test)]
+    pub(crate) fn new(query: &str) -> Option<Self> {
+        Self::try_new(query).ok().flatten()
+    }
+
+    fn try_new(query: &str) -> Result<Option<Self>, AppError> {
+        if query.len() > MAX_SEARCH_QUERY_BYTES {
+            return Err(AppError::ResourceLimitExceeded(format!(
+                "search query requires {} bytes; the maximum is {MAX_SEARCH_QUERY_BYTES} bytes",
+                query.len()
+            )));
+        }
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(None);
+        }
+        let mut terms = Vec::new();
+        let mut unique_terms = HashSet::new();
+        for term in tokenize_search_text(query) {
+            if !unique_terms.insert(term.clone()) {
+                continue;
+            }
+            if terms.len() >= MAX_SEARCH_QUERY_TERMS {
+                return Err(AppError::ResourceLimitExceeded(format!(
+                    "search query contains more than {MAX_SEARCH_QUERY_TERMS} terms"
+                )));
+            }
+            terms.push(term);
+        }
+        Ok(Some(Self {
+            literal: query.to_lowercase(),
+            terms,
+        }))
+    }
+
+    pub(crate) fn matches(&self, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        let text_lower = text.to_lowercase();
+        if text_lower.contains(&self.literal) {
+            return true;
+        }
+        if self.terms.is_empty() {
+            return false;
+        }
+        let text_terms: HashSet<_> = tokenize_search_text(text).into_iter().collect();
+        self.terms
+            .iter()
+            .all(|query_term| text_terms.contains(query_term))
+    }
+
+    fn first_match_byte(&self, text: &str) -> Option<usize> {
+        let lowercase = text.to_lowercase();
+        std::iter::once(&self.literal)
+            .chain(self.terms.iter())
+            .filter_map(|term| lowercase.find(term))
+            .filter(|index| *index <= text.len() && text.is_char_boundary(*index))
+            .min()
+    }
+
+    pub(crate) fn literal(&self) -> &str {
+        &self.literal
+    }
+
+    pub(crate) fn terms(&self) -> &[String] {
+        &self.terms
+    }
+}
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
 fn col_to_letter(col: usize) -> String {
@@ -69,8 +152,12 @@ pub(crate) fn execute_search<P>(
         match input.index.as_ref() {
             Some(index) => {
                 let remaining = SEARCH_RESULT_LIMIT - results.len();
-                let cells = index.search(&plan, remaining);
-                for cell in cells.into_iter().take(remaining) {
+                let cells = index.search(plan.literal(), plan.terms(), remaining);
+                for cell in cells
+                    .into_iter()
+                    .filter(|cell| plan.matches(&cell.search_text))
+                    .take(remaining)
+                {
                     if !results.try_push(search_result(
                         &input,
                         &cell.display_text,
@@ -214,7 +301,7 @@ impl SearchResultCollector {
         }
         let result_bytes = estimated_search_hit_bytes(&result);
         let projected_bytes = self.estimated_bytes.saturating_add(result_bytes);
-        if projected_bytes > MAX_SEARCH_RESPONSE_BYTES {
+        if projected_bytes > MAX_SEARCH_OUTCOME_RETAINED_BYTES {
             self.truncated = true;
             return Ok(false);
         }
@@ -286,7 +373,6 @@ fn estimated_search_hit_bytes(result: &SearchHit) -> usize {
 #[cfg(test)]
 mod query_limit_tests {
     use super::*;
-    use crate::adapters::search_index_store::MAX_SEARCH_QUERY_TERMS;
     use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;
 
     #[test]
@@ -354,7 +440,7 @@ mod query_limit_tests {
         let response = collector.finish().expect("bounded response");
         assert!(response.truncated);
         assert!(response.results.len() < SEARCH_RESULT_LIMIT);
-        assert!(collector_estimated_bytes(&response) <= MAX_SEARCH_RESPONSE_BYTES);
+        assert!(collector_estimated_bytes(&response) <= MAX_SEARCH_OUTCOME_RETAINED_BYTES);
     }
 
     fn collector_estimated_bytes(response: &SearchOutcome) -> usize {

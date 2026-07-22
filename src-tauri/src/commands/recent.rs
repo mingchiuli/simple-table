@@ -1,8 +1,9 @@
 use super::CommandExecutionRuntime;
 use crate::adapters::recent_file_adapter;
 use crate::error::AppError;
-use crate::recent::{AddRecentFileRequest, RecentFile};
+use crate::protocol_projection;
 use crate::runtime::ApplicationRuntime;
+use crate::types::{AddRecentFileRequest, RecentFile};
 use tauri::{AppHandle, State};
 
 #[tauri::command]
@@ -14,7 +15,10 @@ pub async fn get_recent_files(
     let runtime = runtime.inner().clone();
     executions
         .recent()
-        .run(move || recent_file_adapter::do_get_recent_files(runtime.recent_files(), &app))
+        .run(move || {
+            recent_file_adapter::do_get_recent_files(runtime.recent_files(), &app)
+                .map(protocol_projection::recent_files)
+        })
         .await
 }
 
@@ -40,14 +44,16 @@ pub async fn add_recent_file_with_thumbnail(
     request: AddRecentFileRequest,
 ) -> Result<RecentFile, AppError> {
     let runtime = runtime.inner().clone();
+    let input = protocol_projection::add_recent_file_input(request);
     executions
         .recent()
         .run(move || {
             recent_file_adapter::do_add_recent_file_with_thumbnail(
                 runtime.recent_files(),
                 &app,
-                request,
+                input,
             )
+            .map(protocol_projection::recent_file)
         })
         .await
 }
