@@ -206,6 +206,11 @@ than in `state`. Its display projection is an internal wire serializer; the
 module cannot depend on application, state, operations, or I/O modules. Wire cell
 values are owned wrappers around domain cell values; JSON and TypeScript behavior
 is implemented on those wrappers and never globally attached to the domain type.
+Protocol DTOs are split into dependency-ordered `cell`, `cell_change`,
+`capabilities`, `document`, `editor_session`, `file`, and `mutation` modules.
+Modules inside `types` import sibling modules directly instead of resolving
+types through the root re-export facade, so the production dependency graph can
+observe and reject protocol cycles.
 All production Rust modules participate in the architecture dependency graph and
 module cycles are rejected regardless of which feature contains them.
 
@@ -254,7 +259,10 @@ consume that envelope and cannot depend on generated response declarations.
   formula state, and capabilities. It contains no search engine, index writer,
   index freshness state, worker, or scheduler.
 - `SearchIndexRuntime` owns derived Tantivy indexes, scheduling state, fallback
-  scan admission, and worker handles. Separate query and maintenance adapters
+  scan admission, and worker handles. Its scheduler state, locks, condition
+  variable, and capacity counters are private implementation details in the
+  same module as their queue and worker invariants; no sibling adapter can
+  mutate them directly. Separate query and maintenance adapters
   expose `SearchQueryPort` and `SearchIndexMaintenancePort` over that shared
   runtime. Dropping the runtime signals shutdown, wakes workers, and joins every
   owned thread. A revision mismatch makes an index unavailable before queued
@@ -409,7 +417,11 @@ same admitted wire response.
 
 Outcomes above the replay journal's resident-memory budget are stored as compact
 `ResyncRequired` results at the committed revision, preserving idempotency
-without retaining a second large body.
+without retaining a second large body. The serialization-independent
+`mutation_retention` policy owns retained-memory estimation and compaction for
+every internal patch shape. The replay coordinator receives an opaque outcome
+plus its admitted retained-byte count and therefore does not inspect patches or
+cell values.
 Request fingerprints are streamed into fixed-size SHA-256 digests, so replay
 entries never retain serialized mutation payloads. The replay coordinator lock
 protects only reservation and queue accounting; mutation execution, response

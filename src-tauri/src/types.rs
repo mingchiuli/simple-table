@@ -1,22 +1,28 @@
-#![allow(clippy::module_inception)]
-
+mod capabilities;
 mod cell;
-pub mod editor_command;
-pub mod editor_session;
-pub mod formula;
-pub mod search;
-pub mod types;
+mod cell_change;
+mod document;
+mod editor_command;
+mod editor_session;
+mod file;
+mod formula;
+mod mutation;
+mod search;
 #[cfg(test)]
 pub mod typescript;
-pub mod update;
+mod update;
 
 #[allow(unused_imports)]
+pub use capabilities::*;
 pub use cell::*;
+pub use cell_change::*;
+pub use document::*;
 pub use editor_command::*;
 pub use editor_session::*;
+pub use file::*;
 pub use formula::*;
+pub use mutation::*;
 pub use search::*;
-pub use types::*;
 #[allow(unused_imports)]
 pub use update::*;
 

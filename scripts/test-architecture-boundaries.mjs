@@ -761,6 +761,13 @@ rejectMatches(
 );
 
 rejectRustProductionMatches(
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs')
+    .filter((file) => !file.endsWith('/typescript.rs')),
+  [/^use\s+crate::types(?:::|\s*\{)/m],
+  'the direct-sibling Rust protocol dependency boundary',
+);
+
+rejectRustProductionMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs'),
   [/crate::types(?:::|\b)/, /crate::protocol_projection(?:::|\b)/],
   'the internal-outcome-only Rust application boundary',
@@ -784,7 +791,14 @@ rejectRustProductionMatches(
 
 rejectRustProductionMatches(
   [join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs')],
-  [/\bMutationRequestIdentity\b/, /\bEditorCommand\b/, /\bsha2\b/, /\bFingerprintWriter\b/],
+  [
+    /\bMutationRequestIdentity\b/,
+    /\bEditorCommand\b/,
+    /\bMutationPatch\b/,
+    /\bCellValue\b/,
+    /\bsha2\b/,
+    /\bFingerprintWriter\b/,
+  ],
   'the intent-agnostic mutation replay boundary',
 );
 
@@ -822,6 +836,18 @@ for (const requirement of [
 if (existsSync(join(rustRoot, 'application', 'runtime.rs'))) {
   violations.push('src-tauri/src/application/runtime.rs violates the top-level Rust composition-root boundary');
 }
+
+if (existsSync(join(rustRoot, 'adapters', 'search_index_scheduler.rs'))) {
+  violations.push(
+    'src-tauri/src/adapters/search_index_scheduler.rs violates the SearchIndexRuntime-owned scheduler boundary',
+  );
+}
+
+rejectRustProductionMatches(
+  [join(rustRoot, 'adapters', 'search_index_runtime.rs')],
+  [/pub\(crate\)\s+(?:struct\s+IndexScheduler\b|scheduler\s*:)/],
+  'the encapsulated search scheduler state boundary',
+);
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'projection_model'), '.rs'),

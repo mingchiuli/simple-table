@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::types::{FormulaStatus, WorkbookCapabilities};
+use super::capabilities::WorkbookCapabilities;
+use super::formula::FormulaStatus;
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

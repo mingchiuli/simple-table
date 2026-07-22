@@ -5,7 +5,6 @@ pub mod recent_file_adapter;
 pub(crate) mod search_document_source_adapter;
 pub mod search_index_adapter;
 pub(crate) mod search_index_runtime;
-pub(crate) mod search_index_scheduler;
 pub(crate) mod search_index_store;
 pub(crate) mod search_query_adapter;
 pub(crate) mod search_query_engine;

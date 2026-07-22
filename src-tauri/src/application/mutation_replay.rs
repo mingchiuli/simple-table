@@ -2,9 +2,8 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::application::mutation_intent::{MutationFingerprint, MutationIntent};
-use crate::domain::CellValue;
 use crate::error::AppError;
-use crate::projection_model::{MutationLookup, MutationOutcome, MutationPatch};
+use crate::projection_model::{MutationLookup, MutationOutcome, prepare_mutation_replay_payload};
 
 const MAX_REPLAY_ENTRIES: usize = 128;
 const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
@@ -216,25 +215,16 @@ fn prepare_replay_response(
     command_id: &str,
     response: &MutationOutcome,
 ) -> Option<PreparedReplayResponse> {
-    let original_bytes = estimated_mutation_outcome_bytes(response);
-    let (response, response_bytes) = if original_bytes <= MAX_REPLAY_BYTES {
-        (response.clone(), original_bytes)
-    } else {
-        let response = compact_replay_response(response);
-        let bytes = estimated_mutation_outcome_bytes(&response);
-        (response, bytes)
-    };
-    let bytes = response_bytes
-        .saturating_add(command_id.len())
+    let entry_bytes = command_id
+        .len()
         .saturating_add(std::mem::size_of::<MutationFingerprint>())
         .saturating_add(std::mem::size_of::<ReplayEntry>());
-    (bytes <= MAX_REPLAY_BYTES).then_some(PreparedReplayResponse { response, bytes })
-}
-
-fn compact_replay_response(response: &MutationOutcome) -> MutationOutcome {
-    let mut compact = response.clone();
-    compact.require_resync("mutation response exceeded replay budget");
-    compact
+    let payload =
+        prepare_mutation_replay_payload(response, MAX_REPLAY_BYTES.checked_sub(entry_bytes)?)?;
+    Some(PreparedReplayResponse {
+        response: payload.outcome,
+        bytes: entry_bytes.saturating_add(payload.retained_bytes),
+    })
 }
 
 pub(crate) fn retire_document(coordinator: &MutationReplayCoordinator, document_id: u64) {
@@ -282,68 +272,6 @@ pub(crate) fn get(
     Ok(response.map_or_else(MutationLookup::missing, |response| {
         MutationLookup::completed((*response).clone())
     }))
-}
-
-fn estimated_mutation_outcome_bytes(response: &MutationOutcome) -> usize {
-    let patch_bytes = response
-        .patches
-        .iter()
-        .map(|patch| match patch {
-            MutationPatch::Cells { changes } => changes
-                .iter()
-                .map(|change| {
-                    96usize
-                        .saturating_add(change.display.as_ref().map_or(0, String::len))
-                        .saturating_add(estimated_cell_value_bytes(&change.value))
-                })
-                .sum(),
-            MutationPatch::SheetInserted { sheet, .. } => sheet.name.len().saturating_mul(6) + 256,
-            MutationPatch::SheetsReplaced { sheets, .. } => sheets
-                .iter()
-                .map(|sheet| sheet.name.len().saturating_mul(6) + 256)
-                .sum(),
-            MutationPatch::ResyncRequired { reason } => reason.len().saturating_mul(6) + 64,
-            MutationPatch::Layout {
-                column_widths,
-                row_heights,
-                ..
-            } => column_widths
-                .len()
-                .saturating_add(row_heights.len())
-                .saturating_mul(48),
-            MutationPatch::SheetDeleted { .. }
-            | MutationPatch::SheetInvalidated { .. }
-            | MutationPatch::RowInserted { .. }
-            | MutationPatch::RowDeleted { .. }
-            | MutationPatch::ColumnInserted { .. }
-            | MutationPatch::ColumnDeleted { .. } => 96,
-        })
-        .sum::<usize>();
-    std::mem::size_of::<MutationOutcome>()
-        .saturating_add(patch_bytes)
-        .saturating_add(2048)
-}
-
-fn estimated_cell_value_bytes(value: &CellValue) -> usize {
-    match value {
-        CellValue::Null => 8,
-        CellValue::String(value) => value.len().saturating_mul(6).saturating_add(16),
-        CellValue::Number(_) | CellValue::Boolean(_) => 32,
-        CellValue::Formula {
-            formula,
-            cached_value,
-            error,
-        } => formula
-            .len()
-            .saturating_mul(6)
-            .saturating_add(estimated_cell_value_bytes(cached_value))
-            .saturating_add(
-                error
-                    .as_ref()
-                    .map_or(0, |value| value.len().saturating_mul(6)),
-            )
-            .saturating_add(64),
-    }
 }
 
 fn find_entry<'a>(

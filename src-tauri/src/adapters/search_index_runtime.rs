@@ -6,14 +6,8 @@ use std::time::{Duration, Instant};
 
 use tantivy::{Term, doc};
 
-use crate::adapters::search_index_scheduler::{
-    CellIndexUpdate, IndexJob, IndexScheduler, IndexSchedulerState, MAX_BUILDING_INDEX_BYTES,
-    MAX_INDEXABLE_SHEET_BYTES, MAX_PENDING_INDEX_BYTES, MAX_PENDING_INDEX_BYTES_PER_SHEET,
-    MAX_PENDING_INDEX_SHEETS, MAX_PENDING_INDEX_UPDATES_PER_SHEET, RebuildIndexUpdate,
-    SearchSchedulerStats, SheetPending,
-};
 use crate::adapters::search_index_store::{
-    MAX_RESIDENT_SEARCH_INDEXES, SearchIndexStamp, WRITER_ARENA_BYTES,
+    MAX_RESIDENT_SEARCH_INDEXES, SearchIndexRegistry, SearchIndexStamp, WRITER_ARENA_BYTES,
     build_sheet_index_with_cancel, search_position,
 };
 use crate::application::search_ports::SearchDocumentSourcePort;
@@ -25,9 +19,109 @@ use crate::domain::{
 
 const INDEX_DEBOUNCE: Duration = Duration::from_millis(300);
 const SEARCH_SCAN_RESERVATION_BYTES: usize = 24 * 1024 * 1024;
+const MAX_PENDING_INDEX_SHEETS: usize = 256;
+const MAX_PENDING_INDEX_UPDATES_PER_SHEET: usize = 4_096;
+const MAX_PENDING_INDEX_BYTES_PER_SHEET: usize = 8 * 1024 * 1024;
+const MAX_PENDING_INDEX_BYTES: usize = 16 * 1024 * 1024;
+const MAX_INDEXABLE_SHEET_BYTES: usize = 12 * 1024 * 1024;
+const MAX_BUILDING_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
+enum IndexJob {
+    Rebuild {
+        document_id: u64,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+    },
+    UpdateCell {
+        document_id: u64,
+        sheet_index: usize,
+        stamp: SearchIndexStamp,
+        row: usize,
+        col: usize,
+        search_text: String,
+        display_text: String,
+    },
+}
+
+struct CellIndexUpdate {
+    stamp: SearchIndexStamp,
+    row: usize,
+    col: usize,
+    search_text: String,
+    display_text: String,
+}
+
+struct RebuildIndexUpdate {
+    stamp: SearchIndexStamp,
+}
+
+impl IndexJob {
+    fn document_id(&self) -> u64 {
+        match self {
+            IndexJob::Rebuild { document_id, .. } | IndexJob::UpdateCell { document_id, .. } => {
+                *document_id
+            }
+        }
+    }
+
+    fn sheet_index(&self) -> usize {
+        match self {
+            IndexJob::Rebuild { sheet_index, .. } | IndexJob::UpdateCell { sheet_index, .. } => {
+                *sheet_index
+            }
+        }
+    }
+}
+
+struct SheetPending {
+    document_id: u64,
+    rebuild: Option<RebuildIndexUpdate>,
+    incremental: HashMap<(usize, usize), CellIndexUpdate>,
+    incremental_bytes: usize,
+}
+
+struct IndexScheduler {
+    state: Mutex<IndexSchedulerState>,
+    indexes: Arc<Mutex<SearchIndexRegistry>>,
+    source: Arc<dyn SearchDocumentSourcePort>,
+    wake: Condvar,
+    workers_available: AtomicBool,
+    shutdown: AtomicBool,
+}
+
+#[derive(Default)]
+struct IndexSchedulerState {
+    pending: HashMap<(u64, usize), SheetPending>,
+    pending_updates: usize,
+    pending_bytes: usize,
+    building_jobs: usize,
+    building_bytes: usize,
+    stats: SearchSchedulerStats,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SearchSchedulerStats {
+    queued_jobs: u64,
+    dropped_jobs_no_workers: u64,
+    canceled_batches: u64,
+    drained_batches: u64,
+    rebuild_jobs: u64,
+    incremental_jobs: u64,
+    incremental_fallback_rebuilds: u64,
+    coalesced_to_rebuilds: u64,
+    dropped_jobs_at_capacity: u64,
+    skipped_oversized_rebuilds: u64,
+    pending_sheets: usize,
+    pending_updates: usize,
+    pending_bytes: usize,
+    building_jobs: usize,
+    building_bytes: usize,
+    peak_building_jobs: usize,
+    peak_building_bytes: usize,
+}
 
 pub(crate) struct SearchIndexRuntime {
-    pub(crate) scheduler: Arc<IndexScheduler>,
+    scheduler: Arc<IndexScheduler>,
     scan_work: Arc<Mutex<usize>>,
     workers: Mutex<Vec<thread::JoinHandle<()>>>,
 }
@@ -120,14 +214,6 @@ impl SearchIndexRuntime {
         Ok(SearchScanReservation {
             active_bytes: Arc::clone(&self.scan_work),
         })
-    }
-
-    pub(crate) fn stats(&self) -> SearchSchedulerStats {
-        self.scheduler
-            .state
-            .lock()
-            .map(|state| state.stats.clone())
-            .unwrap_or_default()
     }
 
     pub(crate) fn rebuild_all_sheets_index(&self, document_id: u64) {
@@ -762,11 +848,6 @@ fn search_sheet_source_estimated_bytes(
         .sheets
         .get(sheet_index)
         .map(|sheet| sheet.estimated_source_bytes)
-}
-
-#[allow(dead_code)]
-pub(crate) fn search_scheduler_stats(search: &SearchIndexRuntime) -> SearchSchedulerStats {
-    search.stats()
 }
 
 fn run_rebuild(
