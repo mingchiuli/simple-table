@@ -69,12 +69,15 @@ export function createUpdateCoordinator(
     desktopUpdate: null,
     operationToken: 0,
   };
+  let disposed = false;
+  let disposal: Promise<void> | null = null;
 
   function synchronizePlatform() {
     store.setPlatform(normalizePlatform(port.platform()));
   }
 
   function initialize() {
+    if (disposed) return;
     synchronizePlatform();
     const token = runtime.operationToken;
     void ensureCurrentVersion().catch((error) => {
@@ -83,6 +86,7 @@ export function createUpdateCoordinator(
   }
 
   async function checkForUpdate() {
+    if (disposed) return;
     synchronizePlatform();
     const token = beginOperation();
     store.beginCheck();
@@ -107,6 +111,7 @@ export function createUpdateCoordinator(
   }
 
   async function downloadAndInstall() {
+    if (disposed) return;
     if (store.status === 'ready') {
       await relaunchWhenReady(beginOperation());
       return;
@@ -154,6 +159,7 @@ export function createUpdateCoordinator(
   }
 
   async function handleMobileUpdate() {
+    if (disposed) return;
     const info = store.mobileUpdateInfo;
     if (!info) return;
 
@@ -166,7 +172,7 @@ export function createUpdateCoordinator(
   }
 
   function reset() {
-    if (runtime.downloadPromise) return;
+    if (disposed || runtime.downloadPromise) return;
     runtime.operationToken += 1;
     runtime.desktopUpdate = null;
     store.reset();
@@ -188,7 +194,7 @@ export function createUpdateCoordinator(
     if (store.currentVersion) return store.currentVersion;
     runtime.currentVersionPromise ??= port.getVersion()
       .then((version) => {
-        store.setCurrentVersion(version);
+        if (!disposed) store.setCurrentVersion(version);
         return version;
       })
       .finally(() => {
@@ -203,7 +209,30 @@ export function createUpdateCoordinator(
   }
 
   function isCurrentOperation(token: number) {
-    return token === runtime.operationToken;
+    return !disposed && token === runtime.operationToken;
+  }
+
+  function dispose(): Promise<void> {
+    if (disposal) return disposal;
+    disposed = true;
+    runtime.operationToken += 1;
+    runtime.desktopUpdate = null;
+    disposal = waitForIdle();
+    return disposal;
+  }
+
+  async function waitForIdle(): Promise<void> {
+    while (
+      runtime.currentVersionPromise
+      || runtime.updateCheckPromise
+      || runtime.downloadPromise
+    ) {
+      await Promise.allSettled([
+        ...(runtime.currentVersionPromise ? [runtime.currentVersionPromise] : []),
+        ...(runtime.updateCheckPromise ? [runtime.updateCheckPromise] : []),
+        ...(runtime.downloadPromise ? [runtime.downloadPromise] : []),
+      ]);
+    }
   }
 
   synchronizePlatform();
@@ -214,6 +243,8 @@ export function createUpdateCoordinator(
     downloadAndInstall,
     handleMobileUpdate,
     reset,
+    waitForIdle,
+    dispose,
   };
 }
 

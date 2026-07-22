@@ -5,27 +5,27 @@ import "@/styles/platform.css";
 import { createPinia } from "pinia";
 import { createApp } from "vue";
 import App from "@/App.vue";
-import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
 import { applicationExitCoordinatorKey } from '@/composables/useApplicationExit';
 import {
-  createDocumentWorkspaceRuntime,
   documentWorkspaceRuntimeKey,
 } from '@/composables/documentWorkspaceRuntime';
+import {
+  applicationWorkspaceRuntimeKey,
+  createApplicationWorkspaceRuntime,
+} from '@/composables/applicationWorkspaceRuntime';
 import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
-import { tauriApplicationExitExecutor } from '@/platform/applicationExitPort';
+import { assertEditorResourcePolicyCompatibility } from '@/protocol/editorResourcePolicy';
 import router from "@/router";
 
+assertEditorResourcePolicyCompatibility();
 const app = createApp(App);
 const pinia = createPinia();
-const applicationExitCoordinator = createApplicationExitCoordinator(
-  tauriApplicationExitExecutor,
-);
-
 app.use(pinia);
 app.use(router);
-const documentWorkspaceRuntime = createDocumentWorkspaceRuntime();
-app.provide(applicationExitCoordinatorKey, applicationExitCoordinator);
-app.provide(documentWorkspaceRuntimeKey, documentWorkspaceRuntime);
+const applicationWorkspaceRuntime = createApplicationWorkspaceRuntime();
+app.provide(applicationWorkspaceRuntimeKey, applicationWorkspaceRuntime);
+app.provide(applicationExitCoordinatorKey, applicationWorkspaceRuntime.applicationExit);
+app.provide(documentWorkspaceRuntimeKey, applicationWorkspaceRuntime.document);
 
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -42,3 +42,10 @@ if (restoredActiveDocument && router.currentRoute.value.name === "home") {
 }
 
 app.mount("#app");
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    app.unmount();
+    void applicationWorkspaceRuntime.dispose();
+  });
+}

@@ -39,6 +39,10 @@ operation layer.
 Frontend component barrels are public package entry points for external
 consumers. Components inside the same package import siblings directly, so an
 entry point cannot form a cycle through one of the modules it exports.
+Architecture checks parse TypeScript and Vue scripts into one resolved module
+graph. Store and application boundaries are enforced over transitive reachability,
+with the full dependency path reported for an indirect violation; production
+frontend modules must also remain acyclic.
 
 Tauri command modules are transport adapters. They own bounded wire
 deserialization and executor selection, then delegate to application services
@@ -275,6 +279,11 @@ consume that envelope and cannot depend on generated response declarations.
   composables. Request concurrency and side effects belong to application
   services such as `recentFilesService` and `updateCoordinator`; both expose
   injectable ports for deterministic tests.
+- Frontend-owned editor resource limits live in `resourcePolicy` and are safe for
+  Stores and application services to consume. The protocol adapter compares
+  every wire-sensitive value with the Rust-generated constants at application
+  startup, so runtime state remains generated-DTO-independent without allowing
+  the frontend and backend limits to drift.
 - `recentFilesService` owns load ordering, active-load accounting, latest-only
   metadata tracking, and post-tracking refresh. Its composable captures the
   active document context and binds transport/Store ports, but owns no worker or
@@ -282,10 +291,15 @@ consume that envelope and cannot depend on generated response declarations.
   Store sees them.
 - Search request tokens and pending-cell debounce/save state are likewise owned
   by application coordinators. The composition root creates one
+  `ApplicationWorkspaceRuntime` per Pinia application. It owns the exit,
+  document, recent-file, and lazily initialized update coordinators; feature
+  composables only retrieve those instances and cannot keep module-level service
+  caches. Runtime disposal invalidates new work and drains every active service.
+  The application runtime creates one
   `DocumentWorkspaceRuntime` per Pinia document Store. That runtime owns the
   session, region, pending-save, search, command-bus, and document-preparation
-  coordinators. Feature composables are thin accessors and cannot create their
-  own document-scoped coordinator caches.
+  coordinators. Its disposal also invalidates queued region requests and waits
+  for active region loads, preparations, mutations, and cell saves.
 - `documentCommandCoordinator` owns interaction leases, mutation serialization,
   consistent reads, response application, and recovery as a port-driven
   workflow. The workspace-owned command bus binds that workflow to backend
@@ -300,7 +314,7 @@ consume that envelope and cannot depend on generated response declarations.
   removes an already-started mutation or cell save from its tracked Promise
   chain. New-generation work waits for that chain to drain, and mutation leases
   reject stale post-await commits before they can update the active projection.
-- The frontend composition root owns one `ApplicationExitCoordinator` instance.
+- The frontend application workspace owns one `ApplicationExitCoordinator` instance.
   Window close and update relaunch requests carry explicit intents through the
   same guard pipeline; concurrent requests resolve to a deterministic intent,
   with relaunch taking priority before execution starts. Platform modules
@@ -313,7 +327,10 @@ consume that envelope and cannot depend on generated response declarations.
   Route leave keeps the separate destructive document-close workflow.
 - `documentFileCoordinator` owns new-document creation, selected/recent/path
   opening, prepared-document commit/abort, save, export, and close compensation
-  as a port-driven application workflow. `routeDocumentLoadCoordinator` owns
+  as a port-driven application workflow. Every public open/new operation acquires
+  and releases its lifecycle lease internally; view and feature composables
+  cannot call a lower-level replacement transaction under an implicit caller-held
+  lock. `routeDocumentLoadCoordinator` owns
   latest-only route scheduling and cancellation, and delegates accepted paths to
   that file workflow. A Store-scoped `documentPreparationCoordinator` serializes
   route, picker, recent-file, and new-document preparation through one drain-

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createUpdateCoordinator,
+  type DesktopUpdateHandle,
   type UpdateExitPort,
   type UpdatePort,
   type UpdateSessionPort,
@@ -72,5 +73,33 @@ describe('updateCoordinator', () => {
     expect(session.downloaded).toBe(8);
     expect(session.status).toBe('ready');
     expect(requestRelaunch).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates results and drains an active update check on disposal', async () => {
+    const session = new TestUpdateSession();
+    let release!: (value: DesktopUpdateHandle | null) => void;
+    const check = new Promise<DesktopUpdateHandle | null>((resolve) => {
+      release = resolve;
+    });
+    const coordinator = createUpdateCoordinator(session, {
+      getVersion: async () => '1.0.0',
+      platform: () => 'macos',
+      checkDesktop: () => check,
+      checkMobile: async () => null,
+      openUrl: async () => undefined,
+    }, { requestRelaunch: async () => true });
+    const activeCheck = coordinator.checkForUpdate();
+    await Promise.resolve();
+
+    let disposed = false;
+    const disposal = coordinator.dispose().then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    release(null);
+    await Promise.all([activeCheck, disposal]);
+    expect(session.status).toBe('checking');
   });
 });

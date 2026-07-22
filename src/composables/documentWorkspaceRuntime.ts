@@ -71,6 +71,7 @@ function buildDocumentWorkspaceRuntime(
       preparations.waitForIdle(),
       sessionWorkflow.waitForMutations(),
       pendingCellSaves.waitForInFlightSave(),
+      regions.waitForIdle(),
     ]).then(() => {
       runtimes.delete(document);
     });

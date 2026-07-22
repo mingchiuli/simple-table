@@ -9,7 +9,7 @@ import {
 import {
   SHEET_REGION_TILE_COLUMNS,
   SHEET_REGION_TILE_ROWS,
-} from '@/protocol/editorResourcePolicy';
+} from '@/resourcePolicy/editorResourcePolicy';
 import { RegionStagingLimitError } from '@/application/documentRegionStagingBudget';
 import type {
   DocumentRegionProjection,
@@ -44,6 +44,10 @@ export function createDocumentRegionCoordinator(document: DocumentRegionPort) {
 
   function reset() {
     loads.reset();
+  }
+
+  function waitForIdle(): Promise<void> {
+    return loads.waitForIdle();
   }
 
   async function ensureSheetLoaded(
@@ -121,7 +125,7 @@ export function createDocumentRegionCoordinator(document: DocumentRegionPort) {
     );
   }
 
-  return { reset, ensureSheetLoaded, ensureSheetRegionLoaded };
+  return { reset, waitForIdle, ensureSheetLoaded, ensureSheetRegionLoaded };
 }
 
 function regionLoadKey(context: EditorCommandContext, region: SheetRegion) {

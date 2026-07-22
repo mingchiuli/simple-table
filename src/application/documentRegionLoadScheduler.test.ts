@@ -9,6 +9,14 @@ import {
   touchRegionBlock,
 } from '@/stores/documentRegionState';
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe('documentRegionCache', () => {
   it('runs at most four region requests concurrently', async () => {
     const scheduler = createDocumentRegionLoadScheduler();
@@ -116,6 +124,37 @@ describe('documentRegionCache', () => {
     }
     const viewportResults = await Promise.all(viewportLoads);
     expect(viewportResults.filter(Boolean)).toHaveLength(15);
+  });
+
+  it('invalidates queued work and waits for active loads to drain', async () => {
+    const scheduler = createDocumentRegionLoadScheduler();
+    const active = deferred<void>();
+    let queuedStarted = false;
+    const activeLoads = Array.from({ length: 4 }, (_, index) =>
+      scheduler.scheduleRegionLoad(`active-${index}`, async () => {
+        await active.promise;
+        return true;
+      })
+    );
+    const queued = scheduler.scheduleRegionLoad('queued', async () => {
+      queuedStarted = true;
+      return true;
+    });
+    scheduler.reset();
+
+    let idle = false;
+    const drained = scheduler.waitForIdle().then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    expect(await queued).toBe(false);
+    expect(queuedStarted).toBe(false);
+
+    active.resolve();
+    expect(await Promise.all(activeLoads)).toEqual([false, false, false, false]);
+    await drained;
+    expect(idle).toBe(true);
   });
 
   it('evicts the least recently used unpinned block', () => {

@@ -28,6 +28,7 @@ export function createDocumentRegionLoadScheduler() {
   let activeLoads = 0;
   const loads = new Map<string, RegionLoadRecord>();
   let queue: QueuedLoad[] = [];
+  const idleWaiters: Array<() => void> = [];
 
   function reset() {
     generation += 1;
@@ -117,6 +118,7 @@ export function createDocumentRegionLoadScheduler() {
       }
     }
     queue = retained;
+    resolveIdleWaiters();
   }
 
   function pumpQueue() {
@@ -151,6 +153,7 @@ export function createDocumentRegionLoadScheduler() {
         staging.release();
         activeLoads = Math.max(0, activeLoads - 1);
         pumpQueue();
+        resolveIdleWaiters();
       });
     }
   }
@@ -158,7 +161,18 @@ export function createDocumentRegionLoadScheduler() {
   function drainQueue() {
     for (const load of queue.splice(0)) load.resolve(false);
     pumpQueue();
+    resolveIdleWaiters();
   }
 
-  return { reset, beginViewportRegionLoad, scheduleRegionLoad };
+  function waitForIdle(): Promise<void> {
+    if (activeLoads === 0 && queue.length === 0) return Promise.resolve();
+    return new Promise((resolve) => idleWaiters.push(resolve));
+  }
+
+  function resolveIdleWaiters() {
+    if (activeLoads !== 0 || queue.length !== 0) return;
+    for (const resolve of idleWaiters.splice(0)) resolve();
+  }
+
+  return { reset, beginViewportRegionLoad, scheduleRegionLoad, waitForIdle };
 }

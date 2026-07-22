@@ -1,10 +1,10 @@
-import { computed, ref } from "vue";
+import { computed } from "vue";
+import { ElMessage } from "element-plus";
 import type { RecentFile } from "@/types";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import { pickOpenFile } from "@/platform";
-import { useDocumentLifecycle } from "@/composables/useDocumentLifecycle";
 import { useRecentFileUpdates } from "@/composables/useRecentFileUpdates";
-import { isAppErrorCode } from "@/utils/appError";
+import { appErrorMessage, isAppErrorCode } from "@/utils/appError";
 import { useDocumentFileCoordinator } from "@/composables/useDocumentFileCoordinator";
 
 type UseHomeFileActionsOptions = {
@@ -17,62 +17,40 @@ export function useHomeFileActions({
   const router = useRouter();
   const documentSessionStore = useDocumentSessionStore();
   const fileCoordinator = useDocumentFileCoordinator();
-  const { runDocumentLifecycle } = useDocumentLifecycle();
   const {
     refreshRecentFiles,
     removeRecentFile,
   } = useRecentFileUpdates();
-  const isHomeActionBusy = ref(false);
-  const isBusy = computed(
-    () => isHomeActionBusy.value || documentSessionStore.isInteractionLocked
-  );
+  const isBusy = computed(() => documentSessionStore.isInteractionLocked);
 
-  async function runHomeFileAction(errorPrefix: string, action: () => Promise<void>) {
-    if (isBusy.value) return;
-    isHomeActionBusy.value = true;
-    try {
-      await runDocumentLifecycle("loading", errorPrefix, action);
-    } finally {
-      isHomeActionBusy.value = false;
+  async function handleOpenFile() {
+    if (await fileCoordinator.openPickedFile()) {
+      await navigateToTableRoute();
     }
   }
 
-  async function handleOpenFile() {
-    await runHomeFileAction("Failed to open file", async () => {
-      const selection = await pickOpenFile();
-      if (!selection) return;
-      const opened = await fileCoordinator.openSelectedFile(selection);
-      if (!opened) return;
-      await navigateToTableRoute();
-    });
-  }
-
   async function handleNewFile() {
-    await runHomeFileAction("Failed to create file", async () => {
-      if (await fileCoordinator.createNewDocument()) {
-        await navigateToTableRoute();
-      }
-    });
+    if (await fileCoordinator.createNewDocument()) {
+      await navigateToTableRoute();
+    }
   }
 
   async function handleOpenRecent(file: RecentFile) {
-    await runHomeFileAction("Failed to open file", async () => {
-      try {
-        if (await fileCoordinator.openRecentDocument(file)) {
-          await navigateToTableRoute();
-          return;
-        }
-      } catch (error) {
-        if (!isFileNotFoundError(error)) {
-          throw error;
-        }
-      }
-
-      if (await relocateAndOpenRecent(file)) {
+    try {
+      if (await fileCoordinator.openRecentDocument(file)) {
         await navigateToTableRoute();
         return;
       }
-    });
+    } catch (error) {
+      if (!isFileNotFoundError(error)) {
+        ElMessage.error(`Failed to open file: ${appErrorMessage(error)}`);
+        return;
+      }
+    }
+
+    if (await relocateAndOpenRecent(file)) {
+      await navigateToTableRoute();
+    }
   }
 
   async function relocateAndOpenRecent(file: RecentFile): Promise<boolean> {

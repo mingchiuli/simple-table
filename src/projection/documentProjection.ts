@@ -13,8 +13,8 @@ import type {
   SheetRegionMetadata,
   SheetRegionProjection,
   SheetSlot,
-} from '@/types';
-import { defaultRichProjection } from '@/types';
+} from '@/types/documentRuntime';
+import { defaultRichProjection } from '@/types/documentRuntime';
 
 export type ProjectionPatchResult = {
   data: DocumentProjection | null;

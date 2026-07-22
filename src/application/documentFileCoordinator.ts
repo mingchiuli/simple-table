@@ -170,24 +170,38 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     await ports.runDocumentLifecycle('loading', 'Failed to open file', async () => {
       const selection = await ports.pickOpenFile();
       if (!selection) return;
-      openedFile = await openSelectedFile(selection);
+      openedFile = await openSelectedFileWithinLifecycle(selection);
     });
     return openedFile;
   }
 
   async function createNewDocument(): Promise<boolean> {
-    return replaceWithPreparedDocument(
-      ports.prepareNewFile,
-      null,
-    );
+    let created = false;
+    await ports.runDocumentLifecycle('loading', 'Failed to create file', async () => {
+      created = await replaceWithPreparedDocument(
+        ports.prepareNewFile,
+        null,
+      );
+    });
+    return created;
   }
 
   async function openRecentDocument(file: RecentFile): Promise<boolean> {
-    return replaceWithPreparedDocument(
-      () => ports.prepareRecentFile(file),
-      file.path,
-      file.originalPath,
-    );
+    let opened = false;
+    let failure: unknown;
+    await ports.runDocumentLifecycle('loading', 'Failed to open file', async () => {
+      try {
+        opened = await replaceWithPreparedDocument(
+          () => ports.prepareRecentFile(file),
+          file.path,
+          file.originalPath,
+        );
+      } catch (error) {
+        failure = error;
+      }
+    });
+    if (failure !== undefined) throw failure;
+    return opened;
   }
 
   async function saveCurrentFile(): Promise<SaveFileOutcome> {
@@ -301,6 +315,14 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
   }
 
   async function openSelectedFile(selection: OpenFileSelection): Promise<boolean> {
+    let opened = false;
+    await ports.runDocumentLifecycle('loading', 'Failed to open file', async () => {
+      opened = await openSelectedFileWithinLifecycle(selection);
+    });
+    return opened;
+  }
+
+  async function openSelectedFileWithinLifecycle(selection: OpenFileSelection): Promise<boolean> {
     let discardSelection = true;
     let replacement: DocumentReplacementLease | null = null;
     let actionError: unknown;

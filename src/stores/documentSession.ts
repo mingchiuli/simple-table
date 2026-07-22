@@ -15,7 +15,7 @@ import {
   MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES,
   MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES,
   MAX_RESIDENT_REGION_BYTES,
-} from '@/protocol/editorResourcePolicy';
+} from '@/resourcePolicy/editorResourcePolicy';
 import {
   createLoadedSheetSlot,
   estimateDocumentManifestResidentBytes,

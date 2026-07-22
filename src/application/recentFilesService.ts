@@ -40,20 +40,34 @@ export function createRecentFilesService(
     activeTracking: null,
     pendingTracking: null,
   };
+  const activeLoads = new Set<Promise<void>>();
+  let disposed = false;
+  let disposal: Promise<void> | null = null;
 
-  async function load() {
+  function load(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    const task = runLoad();
+    activeLoads.add(task);
+    void task.then(
+      () => activeLoads.delete(task),
+      () => activeLoads.delete(task),
+    );
+    return task;
+  }
+
+  async function runLoad() {
     const requestId = runtime.loadRequestId + 1;
     runtime.loadRequestId = requestId;
     runtime.activeLoadCount += 1;
     store.setLoading(true);
     try {
       const files = await port.getRecentFiles();
-      if (requestId === runtime.loadRequestId) {
+      if (!disposed && requestId === runtime.loadRequestId) {
         store.replaceFiles(files);
       }
     } finally {
       runtime.activeLoadCount = Math.max(0, runtime.activeLoadCount - 1);
-      store.setLoading(runtime.activeLoadCount > 0);
+      if (!disposed) store.setLoading(runtime.activeLoadCount > 0);
     }
   }
 
@@ -68,11 +82,13 @@ export function createRecentFilesService(
   }
 
   async function remove(id: string) {
+    if (disposed) return;
     await port.removeRecentFile(id);
     await load();
   }
 
   function queueRecentFileEntryUpdate(request: RecentFileTrackingRequest) {
+    if (disposed) return;
     runtime.pendingTracking = request;
     startTrackingWorker();
   }
@@ -81,15 +97,15 @@ export function createRecentFilesService(
     if (runtime.activeTracking) return;
     const worker = runTrackingWorker().catch(safeReportFailure);
     runtime.activeTracking = worker;
-    void worker.finally(() => {
+    void worker.then(() => {
       if (runtime.activeTracking === worker) runtime.activeTracking = null;
-      if (runtime.pendingTracking) startTrackingWorker();
+      if (!disposed && runtime.pendingTracking) startTrackingWorker();
     });
   }
 
   async function runTrackingWorker() {
-    while (true) {
-      while (runtime.pendingTracking) {
+    while (!disposed) {
+      while (!disposed && runtime.pendingTracking) {
         const request = runtime.pendingTracking;
         runtime.pendingTracking = null;
         try {
@@ -98,8 +114,29 @@ export function createRecentFilesService(
           safeReportFailure(error);
         }
       }
+      if (disposed) return;
       await refresh();
-      if (!runtime.pendingTracking) return;
+      if (disposed || !runtime.pendingTracking) return;
+    }
+  }
+
+  function dispose(): Promise<void> {
+    if (disposal) return disposal;
+    disposed = true;
+    runtime.loadRequestId += 1;
+    runtime.pendingTracking = null;
+    store.setLoading(false);
+    disposal = waitForIdle();
+    return disposal;
+  }
+
+  async function waitForIdle(): Promise<void> {
+    while (runtime.activeTracking || activeLoads.size > 0) {
+      const pending = [
+        ...(runtime.activeTracking ? [runtime.activeTracking] : []),
+        ...activeLoads,
+      ];
+      await Promise.allSettled(pending);
     }
   }
 
@@ -111,5 +148,5 @@ export function createRecentFilesService(
     }
   }
 
-  return { load, refresh, remove, queueRecentFileEntryUpdate };
+  return { load, refresh, remove, queueRecentFileEntryUpdate, waitForIdle, dispose };
 }

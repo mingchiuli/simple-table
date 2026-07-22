@@ -11,7 +11,7 @@ import {
   MAX_REGION_STAGING_WIRE_BYTES,
   SHEET_REGION_TILE_COLUMNS,
   SHEET_REGION_TILE_ROWS,
-} from '@/protocol/editorResourcePolicy';
+} from '@/resourcePolicy/editorResourcePolicy';
 import { regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 import type { RegionStagingLease } from '@/application/documentRegionStagingBudget';

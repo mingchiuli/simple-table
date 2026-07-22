@@ -125,6 +125,82 @@ function rejectFrontendDependencies(files, forbidden, boundary) {
   }
 }
 
+function rejectTransitiveFrontendDependencies(files, forbidden, boundary) {
+  for (const file of files) {
+    const path = findForbiddenFrontendDependencyPath(file, forbidden);
+    if (!path) continue;
+    violations.push(
+      `${relative(projectRoot, file)} violates ${boundary}: ${formatFrontendDependencyPath(path)}`,
+    );
+  }
+}
+
+function findForbiddenFrontendDependencyPath(
+  start,
+  forbidden,
+  graph = frontendDependencies,
+) {
+  const visited = new Set([start]);
+  const pending = [{ file: start, path: [] }];
+  while (pending.length > 0) {
+    const current = pending.shift();
+    for (const dependency of graph.get(current.file) ?? []) {
+      const path = [...current.path, { from: current.file, dependency }];
+      if (forbidden(dependency)) return path;
+      if (
+        dependency.path
+        && graph.has(dependency.path)
+        && !visited.has(dependency.path)
+      ) {
+        visited.add(dependency.path);
+        pending.push({ file: dependency.path, path });
+      }
+    }
+  }
+  return null;
+}
+
+function formatFrontendDependencyPath(path) {
+  return path.map(({ from, dependency }) => {
+    const target = dependency.path
+      ? relative(projectRoot, dependency.path)
+      : dependency.specifier;
+    return `${relative(projectRoot, from)} --${dependency.specifier}--> ${target}`;
+  }).join(' | ');
+}
+
+function frontendDependencyCycles(graph = frontendDependencies) {
+  const visiting = new Set();
+  const visited = new Set();
+  const stack = [];
+  const stackIndexes = new Map();
+  const cycles = [];
+
+  function visit(file) {
+    visiting.add(file);
+    stackIndexes.set(file, stack.length);
+    stack.push(file);
+    for (const dependency of graph.get(file) ?? []) {
+      const target = dependency.path;
+      if (!target || !graph.has(target)) continue;
+      if (visiting.has(target)) {
+        cycles.push([...stack.slice(stackIndexes.get(target)), target]);
+      } else if (!visited.has(target)) {
+        visit(target);
+      }
+    }
+    stack.pop();
+    stackIndexes.delete(file);
+    visiting.delete(file);
+    visited.add(file);
+  }
+
+  for (const file of graph.keys()) {
+    if (!visited.has(file)) visit(file);
+  }
+  return cycles;
+}
+
 function isFrontendPath(dependency, path) {
   return dependency.path === join(frontendRoot, path);
 }
@@ -140,7 +216,7 @@ function isExternalPackage(dependency, packageName) {
 }
 
 const storeFiles = sourceFiles(join(frontendRoot, 'stores'), '.ts');
-rejectFrontendDependencies(
+rejectTransitiveFrontendDependencies(
   storeFiles,
   (dependency) =>
     isFrontendPath(dependency, 'api.ts')
@@ -156,7 +232,7 @@ rejectFrontendDependencies(
 );
 
 const applicationFiles = sourceFiles(join(frontendRoot, 'application'), '.ts');
-rejectFrontendDependencies(
+rejectTransitiveFrontendDependencies(
   applicationFiles,
   (dependency) =>
     isFrontendPath(dependency, 'types/index.ts')
@@ -204,6 +280,33 @@ if (
     !isFrontendPath(dependency, 'stores/documentSession.ts'))
 ) {
   violations.push('architecture dependency parser does not normalize relative, aliased, and dynamic imports');
+}
+
+const transitiveProbeRoot = join(frontendRoot, 'application', '__transitive_probe__.ts');
+const transitiveProbeBridge = join(frontendRoot, 'utils', '__transitive_bridge__.ts');
+const transitiveProbeGraph = new Map([
+  [transitiveProbeRoot, moduleDependenciesFromSource(
+    transitiveProbeRoot,
+    `import '../../src/utils/__transitive_bridge__.ts';`,
+  )],
+  [transitiveProbeBridge, moduleDependenciesFromSource(
+    transitiveProbeBridge,
+    `export * from '../stores/documentSession';`,
+  )],
+]);
+const transitiveProbePath = findForbiddenFrontendDependencyPath(
+  transitiveProbeRoot,
+  (dependency) => isFrontendDirectory(dependency, 'stores'),
+  transitiveProbeGraph,
+);
+if (!transitiveProbePath || transitiveProbePath.length !== 2) {
+  violations.push('architecture dependency graph does not reject an indirect re-export boundary bypass');
+}
+
+for (const cycle of frontendDependencyCycles()) {
+  violations.push(
+    `frontend module dependency cycle: ${cycle.map((file) => relative(projectRoot, file)).join(' -> ')}`,
+  );
 }
 
 rejectMatches(
@@ -730,9 +833,9 @@ for (const requirement of [
 
 const frontendMainSource = readFileSync(join(projectRoot, 'src', 'main.ts'), 'utf8');
 for (const requirement of [
-  /\bcreateApplicationExitCoordinator\b/,
+  /\bcreateApplicationWorkspaceRuntime\b/,
+  /\.provide\s*\(\s*applicationWorkspaceRuntimeKey\b/,
   /\.provide\s*\(\s*applicationExitCoordinatorKey\b/,
-  /\bcreateDocumentWorkspaceRuntime\b/,
   /\.provide\s*\(\s*documentWorkspaceRuntimeKey\b/,
 ]) {
   if (!requirement.test(frontendMainSource)) {
@@ -953,6 +1056,7 @@ for (const requirement of [
   /sessionWorkflow\.waitForMutations\s*\(/,
   /pendingCellSaves\.waitForInFlightSave\s*\(/,
   /preparations\.waitForIdle\s*\(/,
+  /regions\.waitForIdle\s*\(/,
 ]) {
   if (!requirement.test(documentWorkspaceRuntimeSource)) {
     violations.push(
@@ -960,6 +1064,42 @@ for (const requirement of [
     );
   }
 }
+
+const applicationWorkspaceRuntimeSource = readFileSync(
+  join(projectRoot, 'src', 'composables', 'applicationWorkspaceRuntime.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /new\s+WeakMap\b/,
+  /\bcreateDocumentWorkspaceRuntime\b/,
+  /\bcreateRecentFilesService\b/,
+  /\bcreateUpdateCoordinator\b/,
+  /\bcreateApplicationExitCoordinator\b/,
+  /document\.dispose\s*\(/,
+  /recentFiles\.dispose\s*\(/,
+  /updateCoordinator\?\.dispose\s*\(/,
+]) {
+  if (!requirement.test(applicationWorkspaceRuntimeSource)) {
+    violations.push(
+      `src/composables/applicationWorkspaceRuntime.ts violates the explicit application workspace ownership boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [
+    join(projectRoot, 'src', 'composables', 'useRecentFilesService.ts'),
+    join(projectRoot, 'src', 'composables', 'useUpdateCoordinator.ts'),
+  ],
+  [/new\s+WeakMap\b/, /\bcreateRecentFilesService\b/, /\bcreateUpdateCoordinator\b/],
+  'the centralized frontend application workspace ownership boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'useHomeFileActions.ts')],
+  [/\buseDocumentLifecycle\b/, /\brunDocumentLifecycle\b/],
+  'the document-file-workflow-owned lifecycle boundary',
+);
 
 rejectMatches(
   [
@@ -1026,17 +1166,15 @@ const editorResourcePolicySource = readFileSync(
   'utf8',
 );
 for (const requirement of [
-  /\bMAX_SET_CELL_CHANGES\b/,
-  /\bPROTOCOL_MAX_CELL_TEXT_BYTES\b/,
-  /\bPROTOCOL_MAX_MUTATION_TEXT_BYTES\b/,
-  /\bPROTOCOL_MAX_SEARCH_QUERY_BYTES\b/,
-  /\bMAX_DOCUMENT_RESPONSE_BYTES\b/,
-  /\bMAX_DOCUMENT_MANIFEST_RESIDENT_BYTES\b/,
-  /\bMAX_DOCUMENT_PROJECTION_RESIDENT_BYTES\b/,
-  /\bMAX_REGION_STAGING_WIRE_BYTES\b/,
-  /\bMAX_DOCUMENT_WIRE_BYTES\b/,
-  /\bPROTOCOL_SHEET_REGION_TILE_ROWS\b/,
-  /\bPROTOCOL_SHEET_REGION_TILE_COLUMNS\b/,
+  /\bGENERATED_MAX_SET_CELL_CHANGES\b/,
+  /\bGENERATED_MAX_CELL_TEXT_BYTES\b/,
+  /\bGENERATED_MAX_MUTATION_TEXT_BYTES\b/,
+  /\bGENERATED_MAX_SEARCH_QUERY_BYTES\b/,
+  /\bGENERATED_MAX_DOCUMENT_RESPONSE_BYTES\b/,
+  /\bGENERATED_MAX_SHEET_REGION_RESPONSE_BYTES\b/,
+  /\bGENERATED_SHEET_REGION_TILE_ROWS\b/,
+  /\bGENERATED_SHEET_REGION_TILE_COLUMNS\b/,
+  /\bassertEditorResourcePolicyCompatibility\b/,
 ]) {
   if (!requirement.test(editorResourcePolicySource)) {
     violations.push(

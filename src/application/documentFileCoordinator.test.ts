@@ -273,12 +273,12 @@ describe('documentFileCoordinator', () => {
     expect(replacement.cancel).toHaveBeenCalledOnce();
   });
 
-  it('aborts a prepared document when commit fails', async () => {
+  it('aborts a prepared selected document when commit fails', async () => {
     const commitPreparedDocument = vi.fn().mockRejectedValue(new Error('commit failed'));
     const { ports, replacement } = createPorts({ commitPreparedDocument });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('commit failed');
+    await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
 
     expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'prepared' });
     expect(replacement.cancel).toHaveBeenCalledOnce();
@@ -305,7 +305,7 @@ describe('documentFileCoordinator', () => {
     );
   });
 
-  it('preserves a read failure when selected-file cleanup also fails', async () => {
+  it('contains a selected-file read failure when cleanup also fails', async () => {
     const reportCleanupError = vi.fn();
     const { ports, replacement } = createPorts({
       prepareOpenFile: vi.fn().mockRejectedValue(new Error('broken file')),
@@ -314,7 +314,7 @@ describe('documentFileCoordinator', () => {
     });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('broken file');
+    await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
 
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(reportCleanupError).toHaveBeenCalledWith(
@@ -385,6 +385,34 @@ describe('documentFileCoordinator', () => {
     expect(replacement.commit).toHaveBeenCalledOnce();
     expect(ports.openDocumentResponse).toHaveBeenCalledWith(opened, recent.path);
     expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(recent.originalPath);
+    expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
+      'loading',
+      'Failed to open file',
+      expect.any(Function),
+    );
+  });
+
+  it('releases the lifecycle before surfacing a recent-file failure', async () => {
+    const error = new Error('File not found: /tmp/missing.xlsx');
+    const { ports } = createPorts({
+      prepareRecentFile: vi.fn().mockRejectedValue(error),
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.openRecentDocument({
+      id: 'missing',
+      path: '/tmp/missing.xlsx',
+      fileName: 'missing.xlsx',
+      lastOpened: 1,
+      fileSize: 1,
+      storageType: 'desktopPath',
+    })).rejects.toBe(error);
+
+    expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
+      'loading',
+      'Failed to open file',
+      expect.any(Function),
+    );
   });
 
   it('creates a new document without adding an unsaved recent entry', async () => {
@@ -400,5 +428,10 @@ describe('documentFileCoordinator', () => {
     expect(replacement.commit).toHaveBeenCalledOnce();
     expect(ports.openDocumentResponse).toHaveBeenCalledWith(opened, null);
     expect(ports.queueRecentFileEntryUpdate).not.toHaveBeenCalled();
+    expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
+      'loading',
+      'Failed to create file',
+      expect.any(Function),
+    );
   });
 });

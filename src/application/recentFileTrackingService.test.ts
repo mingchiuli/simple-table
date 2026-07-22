@@ -64,4 +64,33 @@ describe('recent files tracking coordinator', () => {
     await expect(service.refresh()).resolves.toBe(false);
     expect(reportFailure).toHaveBeenCalledWith(error);
   });
+
+  it('invalidates queued tracking and drains active metadata work on disposal', async () => {
+    let release!: () => void;
+    const active = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { service, port } = createService({
+      addRecentFileWithThumbnail: vi.fn().mockReturnValue(active),
+    });
+    service.queueRecentFileEntryUpdate({
+      context: { documentId: '4', baseRevision: '2' },
+    });
+    await flushPromises();
+
+    let disposed = false;
+    const disposal = service.dispose().then(() => {
+      disposed = true;
+    });
+    service.queueRecentFileEntryUpdate({
+      context: { documentId: '5', baseRevision: '0' },
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    release();
+    await disposal;
+    expect(port.addRecentFileWithThumbnail).toHaveBeenCalledTimes(1);
+    expect(port.getRecentFiles).not.toHaveBeenCalled();
+  });
 });

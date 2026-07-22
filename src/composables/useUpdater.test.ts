@@ -8,6 +8,11 @@ import {
   useApplicationExitGuard,
 } from "@/composables/useApplicationExit";
 import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
+import {
+  applicationWorkspaceRuntimeKey,
+  createApplicationWorkspaceRuntime,
+  type ApplicationWorkspaceRuntime,
+} from '@/composables/applicationWorkspaceRuntime';
 
 const tauriMocks = vi.hoisted(() => ({
   check: vi.fn(),
@@ -19,6 +24,7 @@ const tauriMocks = vi.hoisted(() => ({
 }));
 
 let testApp: App;
+let applicationWorkspaceRuntime: ApplicationWorkspaceRuntime;
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
   check: tauriMocks.check,
@@ -82,15 +88,19 @@ describe("useUpdater", () => {
     tauriMocks.relaunch.mockResolvedValue(undefined);
     tauriMocks.openUrl.mockResolvedValue(undefined);
     testApp = createApp({});
-    testApp.provide(applicationExitCoordinatorKey, createApplicationExitCoordinator({
+    const applicationExit = createApplicationExitCoordinator({
       execute: async (intent) => {
         if (intent === 'relaunch') await tauriMocks.relaunch();
       },
-    }));
+    });
+    applicationWorkspaceRuntime = createApplicationWorkspaceRuntime({ applicationExit });
+    testApp.provide(applicationWorkspaceRuntimeKey, applicationWorkspaceRuntime);
+    testApp.provide(applicationExitCoordinatorKey, applicationExit);
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await applicationWorkspaceRuntime.dispose();
     warnSpy.mockRestore();
   });
 
