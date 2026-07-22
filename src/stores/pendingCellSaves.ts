@@ -12,7 +12,7 @@ import {
   MAX_BATCH_TEXT_BYTES,
   MAX_CELL_CHANGES_PER_BATCH,
   MAX_CELL_TEXT_BYTES,
-} from '@/resourcePolicy/editorResourcePolicy';
+} from '@/protocol/editorResourcePolicy';
 
 export type {
   CellSaveRequest,

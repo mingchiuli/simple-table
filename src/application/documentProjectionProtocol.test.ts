@@ -53,6 +53,7 @@ describe('document projection protocol', () => {
         },
       }],
       metadata: {},
+      wireBytes: 1,
     };
 
     const runtime = runtimeRegionProjection(protocol);
@@ -72,7 +73,7 @@ describe('document projection protocol', () => {
       region: { sheetIndex: 0, rowStart: 0, rowEnd: 1, colStart: 0, colEnd: 1 },
       cells: [],
       metadata: {},
-      estimatedBytes: 64,
+      wireBytes: 64,
     };
 
     const runtime = runtimeDocumentRegionProjection(protocol);

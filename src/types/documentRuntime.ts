@@ -136,7 +136,7 @@ export type SheetRegionProjection = {
   cells: SheetCellChange[];
   mergeAnchorCells: SheetCellChange[];
   metadata: SheetRegionMetadata;
-  wireBytes?: number;
+  wireBytes: number;
 };
 
 export type DocumentRegionProjection = {

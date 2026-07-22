@@ -340,7 +340,7 @@ mod tests {
             .expect("serialize response")
             .len();
 
-        assert_eq!(response.estimated_bytes, Some(serialized_bytes));
+        assert_eq!(response.wire_bytes, serialized_bytes);
         let unbounded = snapshot_sheet_region(
             &state,
             DocumentRegion {
@@ -399,7 +399,7 @@ mod tests {
             crate::editor_protocol::MAX_SHEET_REGION_RESPONSE_BYTES,
         )
         .expect("sized response");
-        assert!(response.estimated_bytes.is_some());
+        assert!(response.wire_bytes > 0);
     }
 
     #[test]

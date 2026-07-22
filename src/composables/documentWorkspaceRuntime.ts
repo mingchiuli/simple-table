@@ -2,11 +2,13 @@ import type { InjectionKey } from 'vue';
 import { getCurrentInstance, inject } from 'vue';
 
 import { createDocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
+import { createDocumentRegionCache } from '@/application/documentRegionCache';
 import { createDocumentRegionCoordinator } from '@/application/documentRegionCoordinator';
 import { createDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 import { createPendingCellSaveCoordinator } from '@/application/pendingCellSaveCoordinator';
 import { createSearchSessionCoordinator } from '@/application/searchSessionCoordinator';
 import { createDocumentCommandBus } from '@/composables/documentCommandBusAdapter';
+import { createDocumentSessionStoreAdapter } from '@/composables/documentSessionStoreAdapter';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
@@ -45,9 +47,11 @@ function buildDocumentWorkspaceRuntime(
   const selection = useEditorSelectionStore();
   const pendingCellSaves = createPendingCellSaveCoordinator(usePendingCellSavesStore());
   const search = createSearchSessionCoordinator(useSearchSessionStore());
-  const regions = createDocumentRegionCoordinator(document);
+  const regionCache = createDocumentRegionCache(document);
+  const documentSession = createDocumentSessionStoreAdapter(document, regionCache);
+  const regions = createDocumentRegionCoordinator(regionCache);
   const sessionWorkflow = createDocumentSessionCoordinator({
-    document,
+    document: documentSession,
     status,
     selection,
     pending: pendingCellSaves,
@@ -80,6 +84,8 @@ function buildDocumentWorkspaceRuntime(
 
   return {
     document,
+    documentSession,
+    regionCache,
     session,
     pendingCellSaves,
     search,

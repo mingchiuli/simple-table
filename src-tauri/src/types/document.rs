@@ -102,9 +102,7 @@ pub struct SheetRegionProjectionResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merge_anchor_cells: Vec<SheetCellChange>,
     pub metadata: SheetRegionMetadata,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub estimated_bytes: Option<usize>,
+    pub wire_bytes: usize,
 }
 
 #[allow(dead_code)]

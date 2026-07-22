@@ -194,19 +194,9 @@ export function regionBlock(response: SheetRegionProjection): SheetRegionBlock {
     cells,
     mergeAnchorCells,
     metadata,
-    wireBytes: response.wireBytes ?? estimateRegionWireBytes(response),
+    wireBytes: response.wireBytes,
   };
   return { ...block, residentBytes: estimateRegionResidentBytes(block) };
-}
-
-function estimateRegionWireBytes(response: SheetRegionProjection): number {
-  const metadata = response.metadata;
-  return 512
-    + response.cells.length * 256
-    + (response.mergeAnchorCells?.length ?? 0) * 256
-    + (metadata.merges?.length ?? 0) * 64
-    + Object.keys(metadata.cellFormats ?? {}).length * 256
-    + Object.keys(metadata.cellStyles ?? {}).length * 512;
 }
 
 type ResidentRegionBlock = Omit<SheetRegionBlock, 'residentBytes'>;

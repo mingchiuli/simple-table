@@ -1,7 +1,7 @@
 import {
   MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES,
   MAX_REGION_STAGING_WIRE_BYTES,
-} from '@/resourcePolicy/editorResourcePolicy';
+} from '@/resourcePolicy/editorMemoryPolicy';
 
 export type RegionStagingLease = {
   reserve(residentBytes: number, wireBytes: number): void;

@@ -4,7 +4,7 @@ import { createDocumentRegionStagingBudget } from '@/application/documentRegionS
 import {
   MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES,
   MAX_REGION_STAGING_WIRE_BYTES,
-} from '@/protocol/editorResourcePolicy';
+} from '@/resourcePolicy/editorMemoryPolicy';
 
 describe('documentRegionStagingBudget', () => {
   it('bounds resident bytes across concurrent staging leases', () => {

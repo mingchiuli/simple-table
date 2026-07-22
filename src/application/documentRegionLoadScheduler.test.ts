@@ -2,12 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   createDocumentRegionLoadScheduler,
 } from '@/application/documentRegionLoadScheduler';
-import {
-  oldestEvictableRegionBlock,
-  pinRegionBlocks,
-  replacePinnedRegionBlock,
-  touchRegionBlock,
-} from '@/stores/documentRegionState';
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -17,7 +11,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-describe('documentRegionCache', () => {
+describe('documentRegionLoadScheduler', () => {
   it('runs at most four region requests concurrently', async () => {
     const scheduler = createDocumentRegionLoadScheduler();
     let active = 0;
@@ -157,41 +151,6 @@ describe('documentRegionCache', () => {
     expect(idle).toBe(true);
   });
 
-  it('evicts the least recently used unpinned block', () => {
-    const owner = { regionLru: [] as string[], pinnedRegionBlocks: [] as string[] };
-    touchRegionBlock(owner, 'old');
-    touchRegionBlock(owner, 'visible');
-    touchRegionBlock(owner, 'recent');
-    pinRegionBlocks(owner, ['visible']);
-
-    expect(oldestEvictableRegionBlock(owner, new Set(['old', 'visible', 'recent']))).toBe('old');
-    touchRegionBlock(owner, 'old');
-    expect(oldestEvictableRegionBlock(owner, new Set(['old', 'visible', 'recent']))).toBe('recent');
-  });
-
-  it('replaces one parent pin without dropping other visible blocks', () => {
-    const owner = { regionLru: [] as string[], pinnedRegionBlocks: [] as string[] };
-    pinRegionBlocks(owner, ['parent', 'other']);
-
-    replacePinnedRegionBlock(owner, 'parent', ['child-a', 'child-b']);
-
-    expect(oldestEvictableRegionBlock(
-      owner,
-      new Set(['other', 'child-a', 'child-b'])
-    )).toBeUndefined();
-  });
-
-  it('does not repin a completed tile from an obsolete viewport', () => {
-    const owner = { regionLru: [] as string[], pinnedRegionBlocks: [] as string[] };
-    pinRegionBlocks(owner, ['current']);
-
-    replacePinnedRegionBlock(owner, 'obsolete', ['obsolete-child']);
-
-    expect(oldestEvictableRegionBlock(
-      owner,
-      new Set(['current', 'obsolete-child'])
-    )).toBe('obsolete-child');
-  });
 });
 
 async function waitFor(predicate: () => boolean) {

@@ -16,9 +16,10 @@ import { isReactive } from 'vue';
 import {
   MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES,
   MAX_REGION_BLOCK_RESIDENT_BYTES,
-} from '@/protocol/editorResourcePolicy';
+} from '@/resourcePolicy/editorMemoryPolicy';
 import {
   applyDocumentMutation,
+  documentRegionCache,
   openDocumentSession,
 } from '@/test/documentSessionTestDriver';
 
@@ -57,7 +58,7 @@ describe('documentSession sparse projection', () => {
   it('does not treat wire response bytes as resident cache bytes', () => {
     const store = useDocumentSessionStore();
     const response = openResponse();
-    response.initialRegion!.estimatedBytes = 15 * 1024 * 1024;
+    response.initialRegion!.wireBytes = 15 * 1024 * 1024;
 
     openDocumentSession(store, response);
 
@@ -85,8 +86,9 @@ describe('documentSession sparse projection', () => {
     };
 
     expect(store.manifestResidentBytes).toBeGreaterThan(5 * 1024 * 1024);
-    store.pinRegionBlocksForLoad([region]);
-    expect(store.commitLoadedRegionBlocks(store.requireCommandContext(), region, [block])).toBe(false);
+    const cache = documentRegionCache(store);
+    cache.pinRegionBlocksForLoad([region]);
+    expect(cache.commitLoadedRegionBlocks(store.requireCommandContext(), region, [block])).toBe(false);
     expect(store.loadedSheet(0)?.blocks).toHaveLength(0);
     expect(store.manifestResidentBytes).toBeLessThan(MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES);
   });
@@ -126,7 +128,7 @@ describe('documentSession sparse projection', () => {
     const store = useDocumentSessionStore();
     openDocumentSession(store, openResponse());
     const response = regionResponse(0, 128, 256, 0, 32, 'oversized');
-    response.estimatedBytes = 16 * 1024 * 1024 + 1;
+    response.wireBytes = 16 * 1024 * 1024 + 1;
 
     expect(await useDocumentSessionCoordinator().ensureSheetRegionLoaded(
       response.region,
@@ -245,7 +247,7 @@ describe('documentSession sparse projection', () => {
         region.colEnd,
         `row-${region.rowStart}`
       );
-      response.estimatedBytes = 9 * 1024 * 1024;
+      response.wireBytes = 9 * 1024 * 1024;
       return runtimeDocumentRegionProjection(response);
     };
 
@@ -483,15 +485,16 @@ describe('documentSession sparse projection', () => {
       layout: { columnWidths: {}, rowHeights: {} },
     }));
     openDocumentSession(store, opened);
-    store.activateResidentSheet(1);
-    store.activateResidentSheet(2);
-    store.activateResidentSheet(3);
-    store.touchResidentSheet(1);
+    const cache = documentRegionCache(store);
+    cache.activateResidentSheet(1);
+    cache.activateResidentSheet(2);
+    cache.activateResidentSheet(3);
+    cache.touchResidentSheet(1);
 
     applyDocumentMutation(store, mutation(undefined, opened.document.sheets.map((sheet) => (
       sheet.extent
     ))));
-    store.activateResidentSheet(4);
+    cache.activateResidentSheet(4);
 
     expect(store.isSheetLoaded(1)).toBe(true);
     expect(store.isSheetLoaded(2)).toBe(false);
@@ -506,11 +509,12 @@ describe('documentSession sparse projection', () => {
       layout: { columnWidths: {}, rowHeights: {} },
     }));
     openDocumentSession(store, opened);
-    store.activateResidentSheet(1);
-    store.activateResidentSheet(2);
-    store.activateResidentSheet(3);
-    store.touchResidentSheet(1);
-    store.activateResidentSheet(4, 2);
+    const cache = documentRegionCache(store);
+    cache.activateResidentSheet(1);
+    cache.activateResidentSheet(2);
+    cache.activateResidentSheet(3);
+    cache.touchResidentSheet(1);
+    cache.activateResidentSheet(4, 2);
 
     expect(store.isSheetLoaded(2)).toBe(true);
     expect(store.isSheetLoaded(0)).toBe(false);
@@ -668,6 +672,7 @@ function regionResponse(
       cellFormats: {},
       cellStyles: {},
     },
+    wireBytes: 1,
   };
 }
 

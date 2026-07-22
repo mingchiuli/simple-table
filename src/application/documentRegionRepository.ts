@@ -6,12 +6,14 @@ import type {
   SheetRegionBlock,
 } from '@/types/documentRuntime';
 import {
-  MAX_REGION_RESPONSE_BYTES,
   MAX_REGION_BLOCK_RESIDENT_BYTES,
   MAX_REGION_STAGING_WIRE_BYTES,
+} from '@/resourcePolicy/editorMemoryPolicy';
+import {
+  MAX_REGION_RESPONSE_BYTES,
   SHEET_REGION_TILE_COLUMNS,
   SHEET_REGION_TILE_ROWS,
-} from '@/resourcePolicy/editorResourcePolicy';
+} from '@/protocol/editorResourcePolicy';
 import { regionKey } from '@/projection/documentProjection';
 import { isAppErrorCode } from '@/utils/appError';
 import type { RegionStagingLease } from '@/application/documentRegionStagingBudget';

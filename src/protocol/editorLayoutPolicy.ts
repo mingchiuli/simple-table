@@ -5,7 +5,7 @@ import {
   MAX_ROW_HEIGHT_PX,
   MIN_INTERACTIVE_COLUMN_WIDTH_PX,
   MIN_INTERACTIVE_ROW_HEIGHT_PX,
-} from '@/types/protocol';
+} from '@/protocol/generatedEditorPolicy';
 
 export const DEFAULT_GRID_COLUMN_WIDTH = DEFAULT_COLUMN_WIDTH_PX;
 export const DEFAULT_GRID_ROW_HEIGHT = DEFAULT_ROW_HEIGHT_PX;

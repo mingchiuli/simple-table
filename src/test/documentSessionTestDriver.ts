@@ -4,6 +4,7 @@ import {
   type DocumentProtocolState,
 } from '@/application/documentSessionProtocol';
 import type { EditorMutationResponse, OpenDocumentResponse } from '@/types/protocol';
+import { createDocumentWorkspaceRuntime } from '@/composables/documentWorkspaceRuntime';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 
 type DocumentSessionStore = ReturnType<typeof useDocumentSessionStore>;
@@ -13,7 +14,7 @@ export function openDocumentSession(
   response: OpenDocumentResponse,
   path: string | null = null,
 ) {
-  store.replaceSessionState(openSessionState(response, path));
+  documentRuntime(store).documentSession.replaceSessionState(openSessionState(response, path));
 }
 
 export function applyDocumentMutation(
@@ -25,7 +26,20 @@ export function applyDocumentMutation(
   if (interpretation.status === 'ignored') {
     return { data: store.data, resyncRequired: false, applied: false };
   }
-  return store.applyMutationState(interpretation.state, protectedSheetIndex);
+  return documentRuntime(store).documentSession.applyMutationState(
+    interpretation.state,
+    protectedSheetIndex,
+  );
+}
+
+export function documentRegionCache(store: DocumentSessionStore) {
+  return documentRuntime(store).regionCache;
+}
+
+function documentRuntime(store: DocumentSessionStore) {
+  const runtime = createDocumentWorkspaceRuntime();
+  if (runtime.document !== store) throw new Error('Document store is owned by another runtime');
+  return runtime;
 }
 
 function protocolState(store: DocumentSessionStore): DocumentProtocolState {

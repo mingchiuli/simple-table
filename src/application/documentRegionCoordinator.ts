@@ -9,7 +9,7 @@ import {
 import {
   SHEET_REGION_TILE_COLUMNS,
   SHEET_REGION_TILE_ROWS,
-} from '@/resourcePolicy/editorResourcePolicy';
+} from '@/protocol/editorResourcePolicy';
 import { RegionStagingLimitError } from '@/application/documentRegionStagingBudget';
 import type {
   DocumentRegionProjection,

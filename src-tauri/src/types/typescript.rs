@@ -34,55 +34,11 @@ pub fn generated_typescript_contract() -> String {
     let cfg = Config::default();
     let mut output =
         String::from("// Generated from Rust editor contract by ts-rs. Do not edit by hand.\n\n");
+    output.push_str(
+        "import { EDITOR_MUTATION_PROTOCOL_VERSION } from '../protocol/generatedEditorPolicy';\n\n",
+    );
     output.push_str("export type U64String = `${bigint}`;\n\n");
-    output.push_str(&format!(
-        "export const EDITOR_MUTATION_PROTOCOL_VERSION = {EDITOR_MUTATION_PROTOCOL_VERSION} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_MUTATION_RESPONSE_BYTES = {MAX_MUTATION_RESPONSE_BYTES} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_DOCUMENT_RESPONSE_BYTES = {MAX_DOCUMENT_RESPONSE_BYTES} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_SHEET_REGION_RESPONSE_BYTES = {MAX_SHEET_REGION_RESPONSE_BYTES} as const;\n\n"
-    ));
-    output.push_str(&format!(
-        "export const SHEET_REGION_TILE_ROWS = {SHEET_REGION_TILE_ROWS} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const SHEET_REGION_TILE_COLUMNS = {SHEET_REGION_TILE_COLUMNS} as const;\n\n"
-    ));
-    output.push_str(&format!(
-        "export const DEFAULT_COLUMN_WIDTH_PX = {DEFAULT_COLUMN_WIDTH_PX} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const DEFAULT_ROW_HEIGHT_PX = {DEFAULT_ROW_HEIGHT_PX} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MIN_INTERACTIVE_COLUMN_WIDTH_PX = {MIN_INTERACTIVE_COLUMN_WIDTH_PX} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MIN_INTERACTIVE_ROW_HEIGHT_PX = {MIN_INTERACTIVE_ROW_HEIGHT_PX} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_COLUMN_WIDTH_PX = {MAX_COLUMN_WIDTH_PX} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_ROW_HEIGHT_PX = {MAX_ROW_HEIGHT_PX} as const;\n\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_SEARCH_QUERY_BYTES = {MAX_SEARCH_QUERY_BYTES} as const;\n\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_SET_CELL_CHANGES = {MAX_SET_CELL_CHANGES} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_CELL_TEXT_BYTES = {MAX_CELL_TEXT_BYTES} as const;\n"
-    ));
-    output.push_str(&format!(
-        "export const MAX_MUTATION_TEXT_BYTES = {MAX_MUTATION_TEXT_BYTES} as const;\n\n"
-    ));
+    output.push_str("export * from '../protocol/generatedEditorPolicy';\n\n");
 
     push_decl::<ScalarCellValue>(&mut output, &cfg);
     push_decl::<CellKind>(&mut output, &cfg);
@@ -148,6 +104,63 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SavedDocumentIdentity>(&mut output, &cfg);
     push_decl::<SavedDocumentResponse>(&mut output, &cfg);
     push_tauri_command_map(&mut output);
+
+    output
+}
+
+/// Scalar protocol policies emitted separately so policy consumers do not
+/// acquire a dependency on the generated DTO contract.
+pub fn generated_editor_policy() -> String {
+    let mut output =
+        String::from("// Generated from Rust editor protocol policy. Do not edit by hand.\n\n");
+    output.push_str(&format!(
+        "export const EDITOR_MUTATION_PROTOCOL_VERSION = {EDITOR_MUTATION_PROTOCOL_VERSION} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_MUTATION_RESPONSE_BYTES = {MAX_MUTATION_RESPONSE_BYTES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_DOCUMENT_RESPONSE_BYTES = {MAX_DOCUMENT_RESPONSE_BYTES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_SHEET_REGION_RESPONSE_BYTES = {MAX_SHEET_REGION_RESPONSE_BYTES} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const SHEET_REGION_TILE_ROWS = {SHEET_REGION_TILE_ROWS} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const SHEET_REGION_TILE_COLUMNS = {SHEET_REGION_TILE_COLUMNS} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const DEFAULT_COLUMN_WIDTH_PX = {DEFAULT_COLUMN_WIDTH_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const DEFAULT_ROW_HEIGHT_PX = {DEFAULT_ROW_HEIGHT_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MIN_INTERACTIVE_COLUMN_WIDTH_PX = {MIN_INTERACTIVE_COLUMN_WIDTH_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MIN_INTERACTIVE_ROW_HEIGHT_PX = {MIN_INTERACTIVE_ROW_HEIGHT_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_COLUMN_WIDTH_PX = {MAX_COLUMN_WIDTH_PX} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_ROW_HEIGHT_PX = {MAX_ROW_HEIGHT_PX} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_SEARCH_QUERY_BYTES = {MAX_SEARCH_QUERY_BYTES} as const;\n\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_SET_CELL_CHANGES = {MAX_SET_CELL_CHANGES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_CELL_TEXT_BYTES = {MAX_CELL_TEXT_BYTES} as const;\n"
+    ));
+    output.push_str(&format!(
+        "export const MAX_MUTATION_TEXT_BYTES = {MAX_MUTATION_TEXT_BYTES} as const;\n"
+    ));
 
     output
 }
@@ -308,18 +321,24 @@ mod tests {
 
     #[test]
     fn generated_typescript_contract_is_current() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let types_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../src/types/generated.ts")
             .canonicalize()
             .expect("generated types path");
-        let generated = generated_typescript_contract();
+        let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/protocol/generatedEditorPolicy.ts");
+        let generated_types = generated_typescript_contract();
+        let generated_policy = generated_editor_policy();
         if std::env::var_os("UPDATE_GENERATED_TYPES").is_some() {
-            fs::write(&path, generated.as_bytes()).expect("write generated types");
+            fs::write(&types_path, generated_types.as_bytes()).expect("write generated types");
+            fs::write(&policy_path, generated_policy.as_bytes()).expect("write generated policy");
         }
 
-        let committed = fs::read_to_string(path).expect("read generated types");
+        let committed_types = fs::read_to_string(types_path).expect("read generated types");
+        let committed_policy = fs::read_to_string(policy_path).expect("read generated policy");
 
-        assert_eq!(committed, generated);
+        assert_eq!(committed_types, generated_types);
+        assert_eq!(committed_policy, generated_policy);
     }
 
     #[test]

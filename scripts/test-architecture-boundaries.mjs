@@ -501,6 +501,17 @@ rejectFrontendDependencies(
   'the resolved single-entry frontend generated protocol boundary',
 );
 
+const generatedEditorPolicyConsumers = new Set([
+  join(frontendRoot, 'types', 'generated.ts'),
+  join(frontendRoot, 'protocol', 'editorLayoutPolicy.ts'),
+  join(frontendRoot, 'protocol', 'editorResourcePolicy.ts'),
+]);
+rejectFrontendDependencies(
+  frontendFiles.filter((file) => !generatedEditorPolicyConsumers.has(file)),
+  (dependency) => isFrontendPath(dependency, 'protocol/generatedEditorPolicy.ts'),
+  'the resolved generated editor policy adapter boundary',
+);
+
 rejectFrontendDependencies(
   sourceFiles(join(frontendRoot, 'components', 'table-grid'), '.vue'),
   (dependency) => isFrontendPath(dependency, 'components/table-grid/index.ts'),
@@ -1131,6 +1142,7 @@ for (const requirement of [
   /saved_document_response[\s\S]*MAX_DOCUMENT_RESPONSE_BYTES/,
   /response\.initial_region\s*=\s*None/,
   /serialized_json_bytes\s*\(\s*&?response\s*\)/,
+  /response\.wire_bytes\s*=\s*estimate/,
 ]) {
   if (!requirement.test(documentProtocolProjectionSource)) {
     violations.push(
@@ -1162,17 +1174,27 @@ const boundedDocumentSessionSource = readFileSync(
   join(projectRoot, 'src', 'stores', 'documentSession.ts'),
   'utf8',
 );
+const boundedDocumentRegionCacheSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentRegionCache.ts'),
+  'utf8',
+);
 for (const requirement of [
   /\bmanifestResidentBytes\b/,
   /\bestimateDocumentManifestResidentBytes\b/,
   /\bMAX_DOCUMENT_MANIFEST_RESIDENT_BYTES\b/,
-  /manifestResidentBytes\s*\+\s*totalBytes\(\)\s*>\s*MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES/,
 ]) {
   if (!requirement.test(boundedDocumentSessionSource)) {
     violations.push(
       `src/stores/documentSession.ts violates the bounded frontend document projection boundary: ${requirement}`,
     );
   }
+}
+if (!/manifestResidentBytes\s*\+\s*totalBytes\(\)\s*>\s*MAX_DOCUMENT_PROJECTION_RESIDENT_BYTES/.test(
+  boundedDocumentRegionCacheSource,
+)) {
+  violations.push(
+    'src/application/documentRegionCache.ts violates the bounded frontend document projection boundary',
+  );
 }
 
 if (sourceFiles(join(projectRoot, 'src-tauri', 'src', 'commands'), '.rs')
@@ -1597,15 +1619,11 @@ const editorResourcePolicySource = readFileSync(
   'utf8',
 );
 for (const requirement of [
-  /\bGENERATED_MAX_SET_CELL_CHANGES\b/,
-  /\bGENERATED_MAX_CELL_TEXT_BYTES\b/,
-  /\bGENERATED_MAX_MUTATION_TEXT_BYTES\b/,
-  /\bGENERATED_MAX_SEARCH_QUERY_BYTES\b/,
-  /\bGENERATED_MAX_DOCUMENT_RESPONSE_BYTES\b/,
-  /\bGENERATED_MAX_SHEET_REGION_RESPONSE_BYTES\b/,
-  /\bGENERATED_SHEET_REGION_TILE_ROWS\b/,
-  /\bGENERATED_SHEET_REGION_TILE_COLUMNS\b/,
-  /\bassertEditorResourcePolicyCompatibility\b/,
+  /from ['"]@\/protocol\/generatedEditorPolicy['"]/,
+  /MAX_DOCUMENT_WIRE_BYTES\s*=\s*MAX_DOCUMENT_RESPONSE_BYTES/,
+  /MAX_REGION_RESPONSE_BYTES\s*=\s*MAX_SHEET_REGION_RESPONSE_BYTES/,
+  /MAX_CELL_CHANGES_PER_BATCH\s*=\s*MAX_SET_CELL_CHANGES/,
+  /MAX_BATCH_TEXT_BYTES\s*=\s*MAX_MUTATION_TEXT_BYTES/,
 ]) {
   if (!requirement.test(editorResourcePolicySource)) {
     violations.push(
@@ -1974,6 +1992,10 @@ const documentSessionSource = readFileSync(
   join(projectRoot, 'src', 'stores', 'documentSession.ts'),
   'utf8',
 );
+const documentRegionCacheSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'documentRegionCache.ts'),
+  'utf8',
+);
 const documentRegionStagingBudgetSource = readFileSync(
   join(projectRoot, 'src', 'application', 'documentRegionStagingBudget.ts'),
   'utf8',
@@ -1998,7 +2020,15 @@ for (const [file, source, requirements] of [
       /\bMAX_REGION_BLOCK_RESIDENT_BYTES\b/,
     ],
   ],
-  ['src/stores/documentSession.ts', documentSessionSource, [/\bblock\.residentBytes\b/]],
+  [
+    'src/application/documentRegionCache.ts',
+    documentRegionCacheSource,
+    [
+      /\bblock\.residentBytes\b/,
+      /\bMAX_RESIDENT_REGION_BYTES\b/,
+      /\bMAX_DOCUMENT_PROJECTION_RESIDENT_BYTES\b/,
+    ],
+  ],
   [
     'src/application/documentRegionStagingBudget.ts',
     documentRegionStagingBudgetSource,
@@ -2034,10 +2064,53 @@ rejectMatches(
     join(projectRoot, 'src', 'types', 'documentRuntime.ts'),
     join(projectRoot, 'src', 'projection', 'documentProjection.ts'),
     join(projectRoot, 'src', 'application', 'documentRegionRepository.ts'),
+    join(projectRoot, 'src', 'application', 'documentRegionCache.ts'),
     join(projectRoot, 'src', 'stores', 'documentSession.ts'),
   ],
   [/\bestimatedBytes\b/],
   'the separate wire/resident region budget boundary',
+);
+
+rejectMatches(
+  [join(projectRoot, 'src', 'projection', 'documentProjection.ts')],
+  [/\bestimateRegionWireBytes\b/],
+  'the backend-measured region wire size boundary',
+);
+
+const rustDocumentTypesSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'types', 'document.rs'),
+  'utf8',
+);
+if (!/pub\s+wire_bytes:\s*usize/.test(rustDocumentTypesSource)) {
+  violations.push(
+    'src-tauri/src/types/document.rs violates the required region wire size contract',
+  );
+}
+
+for (const requirement of [
+  /\bresidentSheetOrder\b/,
+  /\bregionLru\b/,
+  /\bpinnedRegionBlocks\b/,
+  /\benforceResidentSheetBudget\b/,
+  /\benforceRegionBlockBudget\b/,
+]) {
+  if (!requirement.test(documentRegionCacheSource)) {
+    violations.push(
+      `src/application/documentRegionCache.ts violates the application-owned region cache boundary: ${requirement}`,
+    );
+  }
+}
+
+rejectMatches(
+  [join(projectRoot, 'src', 'stores', 'documentSession.ts')],
+  [
+    /\bresidentSheetOrder\b/,
+    /\bregionLru\b/,
+    /\bpinnedRegionBlocks\b/,
+    /\benforceResidentSheetBudget\b/,
+    /\benforceRegionBlockBudget\b/,
+  ],
+  'the application-owned region cache boundary',
 );
 
 if (/MAX_RESIDENT_REGION_BYTES\s*=\s*MAX_SHEET_REGION_RESPONSE_BYTES/.test(editorResourcePolicySource)) {

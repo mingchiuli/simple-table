@@ -291,14 +291,16 @@ consume that envelope and cannot depend on generated response declarations.
   count together with region blocks against the total frontend projection
   budget. Pinning protects normal cache residency, but cannot override that
   hard byte limit.
-- `documentSession` owns only serializable document projection, revision,
-  lifecycle flags, and region LRU/pin state. `documentSessionCoordinator` is the
-  application transaction boundary for document, status, selection, search,
-  and pending-edit Stores. `documentSessionRuntime` owns lifecycle and mutation
-  serialization, while `documentRegionCoordinator` independently owns region
-  tiling, admission, cancellation, and commit through a narrow document port.
-  The composable composition layer exposes a combined facade. Business Stores
-  must not instantiate or mutate one another.
+- `documentSession` owns only serializable document projection, revision, and
+  lifecycle flags. The application-owned `DocumentRegionCache` owns resident
+  Sheet recency, block LRU, pins, and eviction through a narrow document port.
+  `documentSessionCoordinator` is the application transaction boundary for
+  document, status, selection, search, and pending-edit Stores.
+  `documentSessionRuntime` owns lifecycle and mutation serialization, while
+  `documentRegionCoordinator` independently owns region tiling, admission,
+  cancellation, and commit. The composable composition layer combines the
+  Store and cache ports into the session facade. Business Stores must not
+  instantiate or mutate one another.
 - Backend open, save, mutation, and editor-session responses are interpreted by
   pure application protocol modules. `documentSessionProtocol` owns protocol
   version checks, document/revision admission, patch application, and resync
@@ -317,11 +319,13 @@ consume that envelope and cannot depend on generated response declarations.
   composables. Request concurrency and side effects belong to application
   services such as `recentFilesService` and `updateCoordinator`; both expose
   injectable ports for deterministic tests.
-- Frontend-owned editor resource limits live in `resourcePolicy` and are safe for
-  Stores and application services to consume. The protocol adapter compares
-  every wire-sensitive value with the Rust-generated constants at application
-  startup, so runtime state remains generated-DTO-independent without allowing
-  the frontend and backend limits to drift.
+- Frontend-owned resident-memory limits live in `resourcePolicy` and are safe
+  for Stores and application services to consume. Wire, mutation, tile, and
+  layout constants are emitted from Rust into the DTO-independent
+  `generatedEditorPolicy` leaf. Protocol adapters expose semantic aliases, so
+  Stores can consume wire policy without importing generated response DTOs and
+  there is no runtime compatibility assertion or duplicated hand-maintained
+  value that can drift.
 - `recentFilesService` owns load ordering, active-load accounting, latest-only
   metadata tracking, and post-tracking refresh. Its composable captures the
   active document context and binds transport/Store ports, but owns no worker or
@@ -631,16 +635,18 @@ anchors outside an intersecting tile are returned separately. The grid renders
 the visible region plus overscan and refuses to edit an unloaded cell.
 
 The frontend retains at most four resident Sheet slots, eight blocks per Sheet,
-24 blocks overall, and approximately 16 MiB of block payload. `RegionCache`
-uses access LRU, pins at most eight visible tiles, shares in-flight promises,
-rejects previous document generations, and runs at most four projection
-requests concurrently. `documentRegionCoordinator` owns this scheduling state;
-document session transactions only reset its generation. Active and queued
-loads for the current generation are limited to 16. A new viewport generation removes queued tiles that no longer
+24 blocks overall, and approximately 16 MiB of block payload.
+`DocumentRegionCache` uses access LRU and pins at most eight visible tiles.
+`documentRegionCoordinator` owns in-flight deduplication and the region load
+scheduler, rejects previous document generations, and runs at most four
+projection requests concurrently. Document session transactions coordinate
+cache reconciliation and scheduler reset through separate ports. Active and
+queued loads for the current generation are limited to 16. A new viewport generation removes queued tiles that no longer
 cover the visible area, while explicit Sheet loads and search-result navigation
 can evict queued viewport work. The initial region is a normal 128 x 32 tile and
 participates in the same LRU and byte budget. Rust caps each serialized region
-response at 16 MiB and reports its measured wire size. The protocol mapper
+response at 16 MiB and reports its exact serialized size in the required
+`wireBytes` field. The frontend has no size heuristic fallback. The protocol mapper
 separately estimates the resident JavaScript block, including UTF-16 strings,
 record keys, cell objects, formats, and styles. Fragment admission and aggregate
 load limits use wire bytes; LRU accounting and pin limits use resident bytes.
@@ -868,8 +874,9 @@ exclude explicitly test-only support modules but do not exempt workbook backing
 from the `document -> io` prohibition.
 
 Contract changes require both generated TypeScript and Rust serialization tests.
-Run the following command to intentionally update the generated contract, then
-run the normal frontend and Rust test suites.
+The generation test updates both the DTO contract and the independent editor
+policy leaf. Run the following command to intentionally update them, then run
+the normal frontend and Rust test suites.
 
 ```bash
 UPDATE_GENERATED_TYPES=1 cargo test \

@@ -91,6 +91,7 @@ function regionFromSheet(
       cellFormats: sheet.rich.cellFormats ?? {},
       cellStyles: sheet.rich.cellStyles ?? {},
     },
+    wireBytes: 1,
   };
 }
 

@@ -17,9 +17,9 @@ pub enum AppError {
     UnsupportedFormat,
     #[error("Document exceeds the supported resource limits: {0}")]
     ResourceLimitExceeded(String),
-    #[error("Sheet region response is {estimated_bytes} bytes, maximum is {maximum_bytes} bytes")]
+    #[error("Sheet region response is {wire_bytes} bytes, maximum is {maximum_bytes} bytes")]
     RegionResponseTooLarge {
-        estimated_bytes: usize,
+        wire_bytes: usize,
         maximum_bytes: usize,
     },
     #[error("Another prepared document is still active")]
@@ -131,7 +131,7 @@ mod tests {
     fn serializes_region_response_limit_with_a_distinct_code() {
         assert_eq!(
             serde_json::to_value(AppError::RegionResponseTooLarge {
-                estimated_bytes: 20,
+                wire_bytes: 20,
                 maximum_bytes: 10,
             })
             .expect("serialize error"),

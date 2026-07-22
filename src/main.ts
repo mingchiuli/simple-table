@@ -14,10 +14,8 @@ import {
   createApplicationWorkspaceRuntime,
 } from '@/composables/applicationWorkspaceRuntime';
 import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
-import { assertEditorResourcePolicyCompatibility } from '@/protocol/editorResourcePolicy';
 import router from "@/router";
 
-assertEditorResourcePolicyCompatibility();
 const app = createApp(App);
 const pinia = createPinia();
 app.use(pinia);

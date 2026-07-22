@@ -1,27 +1,10 @@
 // Generated from Rust editor contract by ts-rs. Do not edit by hand.
 
+import { EDITOR_MUTATION_PROTOCOL_VERSION } from '../protocol/generatedEditorPolicy';
+
 export type U64String = `${bigint}`;
 
-export const EDITOR_MUTATION_PROTOCOL_VERSION = 4 as const;
-export const MAX_MUTATION_RESPONSE_BYTES = 3145728 as const;
-export const MAX_DOCUMENT_RESPONSE_BYTES = 20971520 as const;
-export const MAX_SHEET_REGION_RESPONSE_BYTES = 16777216 as const;
-
-export const SHEET_REGION_TILE_ROWS = 128 as const;
-export const SHEET_REGION_TILE_COLUMNS = 32 as const;
-
-export const DEFAULT_COLUMN_WIDTH_PX = 120 as const;
-export const DEFAULT_ROW_HEIGHT_PX = 72 as const;
-export const MIN_INTERACTIVE_COLUMN_WIDTH_PX = 56 as const;
-export const MIN_INTERACTIVE_ROW_HEIGHT_PX = 36 as const;
-export const MAX_COLUMN_WIDTH_PX = 4096 as const;
-export const MAX_ROW_HEIGHT_PX = 4096 as const;
-
-export const MAX_SEARCH_QUERY_BYTES = 4096 as const;
-
-export const MAX_SET_CELL_CHANGES = 4096 as const;
-export const MAX_CELL_TEXT_BYTES = 4194304 as const;
-export const MAX_MUTATION_TEXT_BYTES = 8388608 as const;
+export * from '../protocol/generatedEditorPolicy';
 
 export type ScalarCellValue = string | number | boolean | null;
 
@@ -149,7 +132,7 @@ export type SheetRegion = { sheetIndex: number, rowStart: number, rowEnd: number
 
 export type SheetRegionMetadata = { merges?: Array<MergeRange>, cellFormats?: { [key in string]: CellFormatProjection }, cellStyles?: { [key in string]: CellStyleProjection }, };
 
-export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, mergeAnchorCells?: Array<SheetCellChange>, metadata: SheetRegionMetadata, estimatedBytes?: number, };
+export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, mergeAnchorCells?: Array<SheetCellChange>, metadata: SheetRegionMetadata, wireBytes: number, };
 
 export type PreparedOpenDocument = { token: string, };
 

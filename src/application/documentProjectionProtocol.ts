@@ -47,7 +47,7 @@ export function runtimeRegionProjection(
       value: runtimeCellValue(change.value),
     })),
     metadata: runtimeRegionMetadata(response.metadata),
-    wireBytes: response.estimatedBytes,
+    wireBytes: response.wireBytes,
   };
 }
 

@@ -88,16 +88,16 @@ pub(crate) fn sheet_region_response(
             .map(projected_cell_change)
             .collect(),
         metadata: region_metadata(value.metadata),
-        estimated_bytes: None,
+        wire_bytes: 0,
     };
     let mut estimate = serialized_json_bytes(&response)?;
     for _ in 0..8 {
-        response.estimated_bytes = Some(estimate);
+        response.wire_bytes = estimate;
         let actual = serialized_json_bytes(&response)?;
         if actual == estimate {
             if actual > maximum_bytes {
                 return Err(AppError::RegionResponseTooLarge {
-                    estimated_bytes: actual,
+                    wire_bytes: actual,
                     maximum_bytes,
                 });
             }
