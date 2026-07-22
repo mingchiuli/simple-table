@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use crate::application::mutation_replay::{
-    self, MutationReplayCoordinator, MutationRequestIdentity,
-};
+use crate::application::mutation_intent::MutationIntent;
+use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::search_ports::SearchIndexMaintenancePort;
-use crate::domain::CellEditInput;
+use crate::domain::{CellEditInput, EditorCommand};
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::{cell_ops, editor_ops};
@@ -78,8 +77,7 @@ pub fn undo(
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::Undo,
-        |registry| editor_ops::do_undo(registry, document_id, base_revision),
+        MutationIntent::Undo,
     )
 }
 
@@ -94,8 +92,7 @@ pub fn redo(
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::Redo,
-        |registry| editor_ops::do_redo(registry, document_id, base_revision),
+        MutationIntent::Redo,
     )
 }
 
@@ -109,27 +106,16 @@ pub fn set_cell(
     col: usize,
     text: String,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::SetCell {
+        EditorCommand::SetCell {
             sheet_index,
             row,
             col,
-            text: &text,
-        },
-        |registry| {
-            cell_ops::do_set_cell(
-                registry,
-                document_id,
-                base_revision,
-                sheet_index,
-                row,
-                col,
-                text.clone(),
-            )
+            text,
         },
     )
 }
@@ -141,13 +127,12 @@ pub fn set_cells(
     command_id: &str,
     edits: Vec<CellEditInput>,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::SetCells { edits: &edits },
-        |registry| cell_ops::do_set_cells(registry, document_id, base_revision, edits.clone()),
+        EditorCommand::SetCells { changes: edits },
     )
 }
 
@@ -159,17 +144,14 @@ pub fn add_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::AddRow {
+        EditorCommand::AddRow {
             sheet_index,
             row_index,
-        },
-        |registry| {
-            cell_ops::do_add_row(registry, document_id, base_revision, sheet_index, row_index)
         },
     )
 }
@@ -182,17 +164,14 @@ pub fn delete_row(
     sheet_index: usize,
     row_index: usize,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::DeleteRow {
+        EditorCommand::DeleteRow {
             sheet_index,
             row_index,
-        },
-        |registry| {
-            cell_ops::do_delete_row(registry, document_id, base_revision, sheet_index, row_index)
         },
     )
 }
@@ -205,17 +184,14 @@ pub fn add_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::AddColumn {
+        EditorCommand::AddColumn {
             sheet_index,
             col_index,
-        },
-        |registry| {
-            cell_ops::do_add_column(registry, document_id, base_revision, sheet_index, col_index)
         },
     )
 }
@@ -228,17 +204,14 @@ pub fn delete_column(
     sheet_index: usize,
     col_index: usize,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::DeleteColumn {
+        EditorCommand::DeleteColumn {
             sheet_index,
             col_index,
-        },
-        |registry| {
-            cell_ops::do_delete_column(registry, document_id, base_revision, sheet_index, col_index)
         },
     )
 }
@@ -252,25 +225,15 @@ pub fn set_column_width(
     col_index: usize,
     width: Option<u32>,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::SetColumnWidth {
+        EditorCommand::SetColumnWidth {
             sheet_index,
             col_index,
             width,
-        },
-        |registry| {
-            cell_ops::do_set_column_width(
-                registry,
-                document_id,
-                base_revision,
-                sheet_index,
-                col_index,
-                width,
-            )
         },
     )
 }
@@ -284,25 +247,15 @@ pub fn set_row_height(
     row_index: usize,
     height: Option<u32>,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::SetRowHeight {
+        EditorCommand::SetRowHeight {
             sheet_index,
             row_index,
             height,
-        },
-        |registry| {
-            cell_ops::do_set_row_height(
-                registry,
-                document_id,
-                base_revision,
-                sheet_index,
-                row_index,
-                height,
-            )
         },
     )
 }
@@ -313,13 +266,12 @@ pub fn add_sheet(
     base_revision: u64,
     command_id: &str,
 ) -> Result<MutationOutcome, AppError> {
-    run_mutation(
+    run_editor_command(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::AddSheet,
-        |registry| cell_ops::do_add_sheet(registry, document_id, base_revision),
+        EditorCommand::AddSheet { name: None },
     )
 }
 
@@ -330,13 +282,28 @@ pub fn delete_sheet(
     command_id: &str,
     sheet_index: usize,
 ) -> Result<MutationOutcome, AppError> {
+    run_editor_command(
+        service,
+        document_id,
+        base_revision,
+        command_id,
+        EditorCommand::DeleteSheet { sheet_index },
+    )
+}
+
+fn run_editor_command(
+    service: &EditorCommandService,
+    document_id: u64,
+    base_revision: u64,
+    command_id: &str,
+    command: EditorCommand,
+) -> Result<MutationOutcome, AppError> {
     run_mutation(
         service,
         document_id,
         base_revision,
         command_id,
-        MutationRequestIdentity::DeleteSheet { sheet_index },
-        |registry| cell_ops::do_delete_sheet(registry, document_id, base_revision, sheet_index),
+        MutationIntent::Execute(command),
     )
 }
 
@@ -345,17 +312,17 @@ fn run_mutation(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-    request: MutationRequestIdentity<'_>,
-    execute: impl FnOnce(&ActiveDocumentRepository) -> Result<MutationExecution, AppError>,
+    intent: MutationIntent,
 ) -> Result<MutationOutcome, AppError> {
     mutation_replay::run(
         service.mutation_replays(),
         document_id,
         base_revision,
         command_id,
-        request,
-        || {
-            let execution = execute(service.documents())?;
+        intent,
+        |intent| {
+            let execution =
+                execute_intent(service.documents(), document_id, base_revision, intent)?;
             let revision = execution.outcome.revision;
             service.search_indexes().schedule_work(
                 document_id,
@@ -365,4 +332,19 @@ fn run_mutation(
             Ok(execution.outcome)
         },
     )
+}
+
+fn execute_intent(
+    documents: &ActiveDocumentRepository,
+    document_id: u64,
+    base_revision: u64,
+    intent: MutationIntent,
+) -> Result<MutationExecution, AppError> {
+    match intent {
+        MutationIntent::Undo => editor_ops::do_undo(documents, document_id, base_revision),
+        MutationIntent::Redo => editor_ops::do_redo(documents, document_id, base_revision),
+        MutationIntent::Execute(command) => {
+            cell_ops::do_execute_command(documents, document_id, base_revision, command)
+        }
+    }
 }

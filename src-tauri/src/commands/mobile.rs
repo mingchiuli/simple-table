@@ -1,9 +1,9 @@
 #[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::application::runtime::ApplicationRuntime;
-#[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::error::AppError;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::protocol_projection;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::runtime::ApplicationRuntime;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::types::UpdateInfo;
 #[cfg(any(target_os = "android", target_os = "ios"))]

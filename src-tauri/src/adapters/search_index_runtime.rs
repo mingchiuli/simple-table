@@ -78,7 +78,7 @@ impl SearchIndexRuntime {
         scope: SearchScope,
         current_sheet_index: Option<usize>,
     ) -> Result<SearchOutcome, crate::error::AppError> {
-        crate::adapters::search_query_adapter::do_search(
+        crate::adapters::search_query_engine::execute_search(
             self.scheduler.source.as_ref(),
             document_id,
             base_revision,

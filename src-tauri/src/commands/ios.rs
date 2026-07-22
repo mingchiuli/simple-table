@@ -1,11 +1,11 @@
 #[cfg(target_os = "ios")]
 use super::{CommandExecutionRuntime, CommandU64};
 #[cfg(target_os = "ios")]
-use crate::application::runtime::ApplicationRuntime;
-#[cfg(target_os = "ios")]
 use crate::error::AppError;
 #[cfg(target_os = "ios")]
 use crate::protocol_projection;
+#[cfg(target_os = "ios")]
+use crate::runtime::ApplicationRuntime;
 #[cfg(target_os = "ios")]
 use crate::types::{PickedFileInfo, PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "ios")]

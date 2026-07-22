@@ -1,11 +1,11 @@
 #[cfg(target_os = "android")]
 use super::{CommandExecutionRuntime, CommandU64};
 #[cfg(target_os = "android")]
-use crate::application::runtime::ApplicationRuntime;
-#[cfg(target_os = "android")]
 use crate::error::AppError;
 #[cfg(target_os = "android")]
 use crate::protocol_projection;
+#[cfg(target_os = "android")]
+use crate::runtime::ApplicationRuntime;
 #[cfg(target_os = "android")]
 use crate::types::{PickedFileInfo, PreparedOpenDocument, SavedDocumentResponse};
 #[cfg(target_os = "android")]

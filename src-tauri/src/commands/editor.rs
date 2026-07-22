@@ -3,9 +3,9 @@
 use super::input::{BoundedCellText, SetCellBatch};
 use super::{CommandExecutionRuntime, CommandU64};
 use crate::application::editor_command_service;
-use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 use crate::protocol_projection;
+use crate::runtime::ApplicationRuntime;
 use crate::types::{EditorMutationResponse, EditorSessionInfo};
 use tauri::State;
 

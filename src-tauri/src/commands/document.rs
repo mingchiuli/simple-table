@@ -1,10 +1,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use super::{CommandExecutionRuntime, CommandU64};
-use crate::application::runtime::ApplicationRuntime;
 use crate::application::{document_query_service, document_service, editor_command_service};
 use crate::error::AppError;
 use crate::protocol_projection;
+use crate::runtime::ApplicationRuntime;
 use crate::types::{
     DocumentCapabilities, MutationResultLookup, NativeSavePlan, OpenDocumentResponse, SheetRegion,
     SheetRegionProjectionResponse, SpreadsheetFormatOptions,

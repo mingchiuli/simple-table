@@ -16,6 +16,7 @@ mod projection_model;
 mod protocol_projection;
 mod recent;
 mod resource_limits;
+mod runtime;
 mod state;
 mod types;
 mod utils;
@@ -53,7 +54,7 @@ use tauri::{Emitter, Manager};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
-        .manage(application::runtime::ApplicationRuntime::default())
+        .manage(runtime::ApplicationRuntime::default())
         .manage(commands::CommandExecutionRuntime::default());
 
     #[cfg(desktop)]
@@ -62,7 +63,7 @@ pub fn run() {
             println!("new app instance opened with {argv:?}");
             // File path is passed as argv[1], emit event for frontend to handle
             if argv.len() > 1 {
-                let runtime = app.state::<application::runtime::ApplicationRuntime>();
+                let runtime = app.state::<runtime::ApplicationRuntime>();
                 runtime.document_files().authorize_open_target(&argv[1]);
                 if let Err(e) = app.emit("deep-link-received", argv[1].clone()) {
                     eprintln!("Failed to emit deep link: {}", e);
@@ -82,7 +83,7 @@ pub fn run() {
     {
         builder = builder.setup(|app| {
             let document_files = app
-                .state::<application::runtime::ApplicationRuntime>()
+                .state::<runtime::ApplicationRuntime>()
                 .document_files()
                 .clone();
             for arg in std::env::args().skip(1) {
@@ -108,7 +109,7 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_fs::init());
         builder = builder.setup(|app| {
-            let runtime = app.state::<application::runtime::ApplicationRuntime>();
+            let runtime = app.state::<runtime::ApplicationRuntime>();
             runtime
                 .document_files()
                 .reconcile_transient_files(app.handle())?;

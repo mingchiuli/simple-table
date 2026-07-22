@@ -1,9 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
-use sha2::{Digest, Sha256};
-
-use crate::domain::{CellEditInput, CellValue};
+use crate::application::mutation_intent::{MutationFingerprint, MutationIntent};
+use crate::domain::CellValue;
 use crate::error::AppError;
 use crate::projection_model::{MutationLookup, MutationOutcome, MutationPatch};
 
@@ -12,57 +11,11 @@ const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IN_FLIGHT_MUTATIONS: usize = 64;
 const MAX_COMMAND_ID_BYTES: usize = 128;
 
-type RequestFingerprint = [u8; 32];
-
-pub(crate) enum MutationRequestIdentity<'a> {
-    Undo,
-    Redo,
-    SetCell {
-        sheet_index: usize,
-        row: usize,
-        col: usize,
-        text: &'a str,
-    },
-    SetCells {
-        edits: &'a [CellEditInput],
-    },
-    AddRow {
-        sheet_index: usize,
-        row_index: usize,
-    },
-    DeleteRow {
-        sheet_index: usize,
-        row_index: usize,
-    },
-    AddColumn {
-        sheet_index: usize,
-        col_index: usize,
-    },
-    DeleteColumn {
-        sheet_index: usize,
-        col_index: usize,
-    },
-    SetColumnWidth {
-        sheet_index: usize,
-        col_index: usize,
-        width: Option<u32>,
-    },
-    SetRowHeight {
-        sheet_index: usize,
-        row_index: usize,
-        height: Option<u32>,
-    },
-    AddSheet,
-    DeleteSheet {
-        sheet_index: usize,
-    },
-}
-
 #[derive(Clone)]
 struct ReplayEntry {
     document_id: u64,
     command_id: String,
-    fingerprint: RequestFingerprint,
+    fingerprint: MutationFingerprint,
     response: Arc<MutationOutcome>,
     bytes: usize,
 }
@@ -70,7 +23,7 @@ struct ReplayEntry {
 struct InFlightMutation {
     document_id: u64,
     command_id: String,
-    fingerprint: RequestFingerprint,
+    fingerprint: MutationFingerprint,
 }
 
 #[derive(Default)]
@@ -92,17 +45,17 @@ pub(crate) fn run(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-    request: MutationRequestIdentity<'_>,
-    execute: impl FnOnce() -> Result<MutationOutcome, AppError>,
+    intent: MutationIntent,
+    execute: impl FnOnce(MutationIntent) -> Result<MutationOutcome, AppError>,
 ) -> Result<MutationOutcome, AppError> {
     validate_command_id(command_id)?;
-    let fingerprint = request_fingerprint(base_revision, request)?;
+    let fingerprint = intent.fingerprint(base_revision)?;
     let reservation = match reserve(coordinator, document_id, command_id, fingerprint)? {
         ReservationResult::Replay(response) => return Ok((*response).clone()),
         ReservationResult::Execute(reservation) => reservation,
     };
 
-    let result = execute();
+    let result = execute(intent);
     reservation.finish(result)
 }
 
@@ -115,7 +68,7 @@ struct InFlightReservation {
     coordinator: Arc<MutationReplayCoordinator>,
     document_id: u64,
     command_id: String,
-    fingerprint: RequestFingerprint,
+    fingerprint: MutationFingerprint,
     finished: bool,
 }
 
@@ -172,7 +125,7 @@ fn reserve(
     coordinator: &Arc<MutationReplayCoordinator>,
     document_id: u64,
     command_id: &str,
-    fingerprint: RequestFingerprint,
+    fingerprint: MutationFingerprint,
 ) -> Result<ReservationResult, AppError> {
     reserve_with_coordinator(coordinator, document_id, command_id, fingerprint)
 }
@@ -181,7 +134,7 @@ fn reserve_with_coordinator(
     coordinator: &Arc<MutationReplayCoordinator>,
     document_id: u64,
     command_id: &str,
-    fingerprint: RequestFingerprint,
+    fingerprint: MutationFingerprint,
 ) -> Result<ReservationResult, AppError> {
     let mut cache = lock_cache(coordinator)?;
     loop {
@@ -233,7 +186,7 @@ fn insert_response(
     cache: &mut MutationReplayCache,
     document_id: u64,
     command_id: &str,
-    fingerprint: RequestFingerprint,
+    fingerprint: MutationFingerprint,
     prepared: PreparedReplayResponse,
 ) {
     while cache.entries.len() >= MAX_REPLAY_ENTRIES
@@ -273,7 +226,7 @@ fn prepare_replay_response(
     };
     let bytes = response_bytes
         .saturating_add(command_id.len())
-        .saturating_add(std::mem::size_of::<RequestFingerprint>())
+        .saturating_add(std::mem::size_of::<MutationFingerprint>())
         .saturating_add(std::mem::size_of::<ReplayEntry>());
     (bytes <= MAX_REPLAY_BYTES).then_some(PreparedReplayResponse { response, bytes })
 }
@@ -421,138 +374,6 @@ fn finish_retirement(cache: &mut MutationReplayCache, document_id: u64) {
     }
 }
 
-fn request_fingerprint(
-    base_revision: u64,
-    request: MutationRequestIdentity<'_>,
-) -> Result<RequestFingerprint, AppError> {
-    let mut fingerprint = FingerprintWriter::default();
-    fingerprint.write_u64(base_revision);
-    match request {
-        MutationRequestIdentity::Undo => fingerprint.write_tag(0),
-        MutationRequestIdentity::Redo => fingerprint.write_tag(1),
-        MutationRequestIdentity::SetCell {
-            sheet_index,
-            row,
-            col,
-            text,
-        } => {
-            fingerprint.write_tag(2);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(row)?;
-            fingerprint.write_index(col)?;
-            fingerprint.write_text(text)?;
-        }
-        MutationRequestIdentity::SetCells { edits } => {
-            fingerprint.write_tag(3);
-            fingerprint.write_index(edits.len())?;
-            for edit in edits {
-                fingerprint.write_index(edit.sheet_index)?;
-                fingerprint.write_index(edit.row)?;
-                fingerprint.write_index(edit.col)?;
-                fingerprint.write_text(&edit.text)?;
-            }
-        }
-        MutationRequestIdentity::AddRow {
-            sheet_index,
-            row_index,
-        } => {
-            fingerprint.write_tag(4);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(row_index)?;
-        }
-        MutationRequestIdentity::DeleteRow {
-            sheet_index,
-            row_index,
-        } => {
-            fingerprint.write_tag(5);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(row_index)?;
-        }
-        MutationRequestIdentity::AddColumn {
-            sheet_index,
-            col_index,
-        } => {
-            fingerprint.write_tag(6);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(col_index)?;
-        }
-        MutationRequestIdentity::DeleteColumn {
-            sheet_index,
-            col_index,
-        } => {
-            fingerprint.write_tag(7);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(col_index)?;
-        }
-        MutationRequestIdentity::SetColumnWidth {
-            sheet_index,
-            col_index,
-            width,
-        } => {
-            fingerprint.write_tag(8);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(col_index)?;
-            fingerprint.write_optional_u32(width);
-        }
-        MutationRequestIdentity::SetRowHeight {
-            sheet_index,
-            row_index,
-            height,
-        } => {
-            fingerprint.write_tag(9);
-            fingerprint.write_index(sheet_index)?;
-            fingerprint.write_index(row_index)?;
-            fingerprint.write_optional_u32(height);
-        }
-        MutationRequestIdentity::AddSheet => fingerprint.write_tag(10),
-        MutationRequestIdentity::DeleteSheet { sheet_index } => {
-            fingerprint.write_tag(11);
-            fingerprint.write_index(sheet_index)?;
-        }
-    }
-    Ok(fingerprint.finish())
-}
-
-#[derive(Default)]
-struct FingerprintWriter(Sha256);
-
-impl FingerprintWriter {
-    fn write_tag(&mut self, tag: u8) {
-        self.0.update([tag]);
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0.update(value.to_le_bytes());
-    }
-
-    fn write_index(&mut self, value: usize) -> Result<(), AppError> {
-        self.write_u64(u64::try_from(value).map_err(|_| {
-            AppError::ResourceLimitExceeded("mutation index exceeds u64 range".to_string())
-        })?);
-        Ok(())
-    }
-
-    fn write_text(&mut self, value: &str) -> Result<(), AppError> {
-        self.write_index(value.len())?;
-        self.0.update(value.as_bytes());
-        Ok(())
-    }
-
-    fn write_optional_u32(&mut self, value: Option<u32>) {
-        match value {
-            Some(value) => {
-                self.write_tag(1);
-                self.0.update(value.to_le_bytes());
-            }
-            None => self.write_tag(0),
-        }
-    }
-
-    fn finish(self) -> RequestFingerprint {
-        self.0.finalize().into()
-    }
-}
-
 fn validate_command_id(command_id: &str) -> Result<(), AppError> {
     if command_id.is_empty() || command_id.len() > MAX_COMMAND_ID_BYTES {
         return Err(AppError::DocumentStateInvalid(
@@ -591,6 +412,7 @@ fn wait_for_completion<'a>(
 mod tests {
     use super::*;
     use crate::document_data::DocumentData;
+    use crate::domain::{CellEditInput, EditorCommand};
     use crate::ops::patch_projector::status_mutation_outcome;
     use crate::projection_model::MutationLookupStatus;
     use crate::state::editor_state::EditorState;
@@ -611,25 +433,42 @@ mod tests {
         status_mutation_outcome(&state)
     }
 
-    fn set_cell_request(row: usize) -> MutationRequestIdentity<'static> {
-        MutationRequestIdentity::SetCell {
+    fn set_cell_request(row: usize) -> MutationIntent {
+        MutationIntent::Execute(EditorCommand::SetCell {
             sheet_index: 0,
             row,
             col: 0,
-            text: "value",
-        }
+            text: "value".to_string(),
+        })
+    }
+
+    fn set_cells_request(edits: &[CellEditInput]) -> MutationIntent {
+        MutationIntent::Execute(EditorCommand::SetCells {
+            changes: edits.to_vec(),
+        })
+    }
+
+    fn add_sheet_request() -> MutationIntent {
+        MutationIntent::Execute(EditorCommand::AddSheet { name: None })
+    }
+
+    fn request_fingerprint(
+        base_revision: u64,
+        intent: MutationIntent,
+    ) -> Result<MutationFingerprint, AppError> {
+        intent.fingerprint(base_revision)
     }
 
     #[test]
     fn replays_successful_mutations_once() {
         let coordinator = Arc::new(MutationReplayCoordinator::default());
         let calls = AtomicUsize::new(0);
-        let first = run(&coordinator, 91, 0, "command", set_cell_request(0), || {
+        let first = run(&coordinator, 91, 0, "command", set_cell_request(0), |_| {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok(response())
         })
         .expect("first mutation");
-        let second = run(&coordinator, 91, 0, "command", set_cell_request(0), || {
+        let second = run(&coordinator, 91, 0, "command", set_cell_request(0), |_| {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok(response())
         })
@@ -659,29 +498,15 @@ mod tests {
             outcome
         };
 
-        let first = run(
-            &coordinator,
-            99,
-            0,
-            "large",
-            MutationRequestIdentity::AddSheet,
-            || {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Ok(oversized_response())
-            },
-        )
+        let first = run(&coordinator, 99, 0, "large", add_sheet_request(), |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(oversized_response())
+        })
         .expect("first mutation");
-        let replayed = run(
-            &coordinator,
-            99,
-            0,
-            "large",
-            MutationRequestIdentity::AddSheet,
-            || {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Ok(oversized_response())
-            },
-        )
+        let replayed = run(&coordinator, 99, 0, "large", add_sheet_request(), |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(oversized_response())
+        })
         .expect("replayed mutation");
 
         assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -718,7 +543,7 @@ mod tests {
                     0,
                     "shared",
                     set_cell_request(0),
-                    || {
+                    |_| {
                         calls.fetch_add(1, Ordering::SeqCst);
                         started.wait();
                         release.wait();
@@ -738,7 +563,7 @@ mod tests {
                     0,
                     "shared",
                     set_cell_request(0),
-                    || {
+                    |_| {
                         calls.fetch_add(1, Ordering::SeqCst);
                         Ok(response())
                     },
@@ -772,7 +597,7 @@ mod tests {
                     0,
                     "running",
                     set_cell_request(0),
-                    || {
+                    |_| {
                         started.wait();
                         release.wait();
                         Ok(response())
@@ -817,7 +642,7 @@ mod tests {
                     0,
                     "running",
                     set_cell_request(0),
-                    || {
+                    |_| {
                         started.wait();
                         release.wait();
                         Ok(response())
@@ -854,7 +679,7 @@ mod tests {
                     0,
                     "running",
                     set_cell_request(0),
-                    || {
+                    |_| {
                         started.wait();
                         release.wait();
                         Ok(response())
@@ -870,7 +695,7 @@ mod tests {
             0,
             "running",
             set_cell_request(1),
-            || Ok(response()),
+            |_| Ok(response()),
         )
         .expect_err("different payload must be rejected");
         assert!(matches!(error, AppError::DocumentStateInvalid(_)));
@@ -894,20 +719,8 @@ mod tests {
             col: 0,
             text: "x".repeat(1024 * 1024),
         }];
-        let small = request_fingerprint(
-            0,
-            MutationRequestIdentity::SetCells {
-                edits: &small_edits,
-            },
-        )
-        .expect("small hash");
-        let large = request_fingerprint(
-            0,
-            MutationRequestIdentity::SetCells {
-                edits: &large_edits,
-            },
-        )
-        .expect("large hash");
+        let small = request_fingerprint(0, set_cells_request(&small_edits)).expect("small hash");
+        let large = request_fingerprint(0, set_cells_request(&large_edits)).expect("large hash");
 
         assert_eq!(small.len(), 32);
         assert_eq!(large.len(), 32);
@@ -918,18 +731,18 @@ mod tests {
     fn semantic_request_fingerprints_preserve_variants_and_field_boundaries() {
         let add_row = request_fingerprint(
             7,
-            MutationRequestIdentity::AddRow {
+            MutationIntent::Execute(EditorCommand::AddRow {
                 sheet_index: 1,
                 row_index: 2,
-            },
+            }),
         )
         .expect("add row fingerprint");
         let delete_row = request_fingerprint(
             7,
-            MutationRequestIdentity::DeleteRow {
+            MutationIntent::Execute(EditorCommand::DeleteRow {
                 sheet_index: 1,
                 row_index: 2,
-            },
+            }),
         )
         .expect("delete row fingerprint");
         let first_edits = vec![
@@ -960,32 +773,17 @@ mod tests {
                 text: "bc".to_string(),
             },
         ];
-        let first_batch = request_fingerprint(
-            7,
-            MutationRequestIdentity::SetCells {
-                edits: &first_edits,
-            },
-        )
-        .expect("first batch fingerprint");
-        let second_batch = request_fingerprint(
-            7,
-            MutationRequestIdentity::SetCells {
-                edits: &second_edits,
-            },
-        )
-        .expect("second batch fingerprint");
+        let first_batch = request_fingerprint(7, set_cells_request(&first_edits))
+            .expect("first batch fingerprint");
+        let second_batch = request_fingerprint(7, set_cells_request(&second_edits))
+            .expect("second batch fingerprint");
 
         assert_ne!(add_row, delete_row);
         assert_ne!(first_batch, second_batch);
         assert_ne!(
             first_batch,
-            request_fingerprint(
-                8,
-                MutationRequestIdentity::SetCells {
-                    edits: &first_edits,
-                }
-            )
-            .expect("next revision fingerprint")
+            request_fingerprint(8, set_cells_request(&first_edits))
+                .expect("next revision fingerprint")
         );
     }
 

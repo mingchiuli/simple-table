@@ -38,6 +38,247 @@ function rejectRustProductionMatches(files, patterns, boundary) {
   }
 }
 
+const rustRoot = join(projectRoot, 'src-tauri', 'src');
+const rustFiles = sourceFiles(rustRoot, '.rs').filter(
+  (file) => !file.endsWith('/test_support.rs') && !file.endsWith('/types/typescript.rs'),
+);
+const rustModulesByPath = new Map(
+  rustFiles.map((file) => [rustModuleSegments(file).join('::'), file]),
+);
+const rustDependencies = new Map(
+  rustFiles.map((file) => [
+    file,
+    rustModuleDependenciesFromSource(file, rustProductionSource(file)),
+  ]),
+);
+
+function rustProductionSource(file) {
+  return readFileSync(file, 'utf8')
+    .split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/)[0]
+    .replace(/#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?use[\s\S]*?;/g, '');
+}
+
+function rustModuleSegments(file) {
+  const segments = relative(rustRoot, file).replace(/\.rs$/, '').split('/');
+  if (segments.at(-1) === 'lib') return [];
+  if (segments.at(-1) === 'mod') segments.pop();
+  return segments;
+}
+
+function rustModuleDependenciesFromSource(file, source) {
+  const tokens = rustTokens(source);
+  const currentModule = rustModuleSegments(file);
+  const dependencies = new Set();
+
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const root = tokens[index];
+    if (!['crate', 'self', 'super'].includes(root) || tokens[index + 1] !== '::') continue;
+
+    let base = root === 'crate'
+      ? []
+      : root === 'self'
+        ? [...currentModule]
+        : currentModule.slice(0, -1);
+    let pathStart = index + 2;
+    while (tokens[pathStart] === 'super' && tokens[pathStart + 1] === '::') {
+      base = base.slice(0, -1);
+      pathStart += 2;
+    }
+    const { paths, next } = parseRustPathTree(tokens, pathStart, base);
+    index = Math.max(index, next - 1);
+    for (const modulePath of paths) {
+      const dependency = resolveRustModule(modulePath);
+      if (dependency && dependency !== file) dependencies.add(dependency);
+    }
+  }
+
+  return [...dependencies];
+}
+
+function parseRustPathTree(tokens, start, prefix) {
+  if (tokens[start] === '{') {
+    const paths = [];
+    let index = start + 1;
+    while (index < tokens.length && tokens[index] !== '}') {
+      if (tokens[index] === ',') {
+        index += 1;
+        continue;
+      }
+      const parsed = parseRustPathTree(tokens, index, prefix);
+      paths.push(...parsed.paths);
+      index = parsed.next;
+      if (tokens[index] === 'as') index += Math.min(2, tokens.length - index);
+    }
+    return { paths, next: tokens[index] === '}' ? index + 1 : index };
+  }
+
+  const segment = tokens[start];
+  if (!isRustIdentifier(segment) && segment !== '*') {
+    return { paths: [], next: start + 1 };
+  }
+  const path = segment === 'self' || segment === '*'
+    ? prefix
+    : [...prefix, segment];
+  if (tokens[start + 1] === '::') {
+    return parseRustPathTree(tokens, start + 2, path);
+  }
+  return { paths: path.length > 0 ? [path] : [], next: start + 1 };
+}
+
+function resolveRustModule(segments) {
+  for (let length = segments.length; length > 0; length -= 1) {
+    const file = rustModulesByPath.get(segments.slice(0, length).join('::'));
+    if (file) return file;
+  }
+  return null;
+}
+
+function isRustIdentifier(token) {
+  return typeof token === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(token);
+}
+
+function rustTokens(source) {
+  const tokens = [];
+  let index = 0;
+  while (index < source.length) {
+    const current = source[index];
+    const next = source[index + 1];
+    if (/\s/.test(current)) {
+      index += 1;
+      continue;
+    }
+    if (current === '/' && next === '/') {
+      index = source.indexOf('\n', index + 2);
+      if (index < 0) break;
+      continue;
+    }
+    if (current === '/' && next === '*') {
+      index = skipRustBlockComment(source, index + 2);
+      continue;
+    }
+    const rawStringEnd = rustRawStringEnd(source, index);
+    if (rawStringEnd !== null) {
+      index = rawStringEnd;
+      continue;
+    }
+    if (current === '"') {
+      index = skipRustQuoted(source, index + 1, '"');
+      continue;
+    }
+    if (current === "'" && source[index + 2] === "'") {
+      index += 3;
+      continue;
+    }
+    if (current === "'" && next === '\\') {
+      index = skipRustQuoted(source, index + 1, "'");
+      continue;
+    }
+    if (/[A-Za-z_]/.test(current)) {
+      let end = index + 1;
+      while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end += 1;
+      tokens.push(source.slice(index, end));
+      index = end;
+      continue;
+    }
+    if (current === ':' && next === ':') {
+      tokens.push('::');
+      index += 2;
+      continue;
+    }
+    if ('{},;*'.includes(current)) tokens.push(current);
+    index += 1;
+  }
+  return tokens;
+}
+
+function skipRustBlockComment(source, start) {
+  let depth = 1;
+  let index = start;
+  while (index < source.length && depth > 0) {
+    if (source[index] === '/' && source[index + 1] === '*') {
+      depth += 1;
+      index += 2;
+    } else if (source[index] === '*' && source[index + 1] === '/') {
+      depth -= 1;
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function rustRawStringEnd(source, start) {
+  if (source[start] !== 'r') return null;
+  let quote = start + 1;
+  while (source[quote] === '#') quote += 1;
+  if (source[quote] !== '"') return null;
+  const suffix = `"${'#'.repeat(quote - start - 1)}`;
+  const end = source.indexOf(suffix, quote + 1);
+  return end < 0 ? source.length : end + suffix.length;
+}
+
+function skipRustQuoted(source, start, quote) {
+  let index = start;
+  while (index < source.length) {
+    if (source[index] === '\\') {
+      index += 2;
+    } else if (source[index] === quote) {
+      return index + 1;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function findForbiddenRustDependencyPath(start, forbidden) {
+  const visited = new Set([start]);
+  const pending = [{ file: start, path: [] }];
+  while (pending.length > 0) {
+    const current = pending.shift();
+    for (const dependency of rustDependencies.get(current.file) ?? []) {
+      const path = [...current.path, dependency];
+      if (forbidden(dependency)) return path;
+      if (!visited.has(dependency)) {
+        visited.add(dependency);
+        pending.push({ file: dependency, path });
+      }
+    }
+  }
+  return null;
+}
+
+function rustDependencyCycles() {
+  const visiting = new Set();
+  const visited = new Set();
+  const stack = [];
+  const stackIndexes = new Map();
+  const cycles = [];
+
+  function visit(file) {
+    visiting.add(file);
+    stackIndexes.set(file, stack.length);
+    stack.push(file);
+    for (const dependency of rustDependencies.get(file) ?? []) {
+      if (visiting.has(dependency)) {
+        cycles.push([...stack.slice(stackIndexes.get(dependency)), dependency]);
+      } else if (!visited.has(dependency)) {
+        visit(dependency);
+      }
+    }
+    stack.pop();
+    stackIndexes.delete(file);
+    visiting.delete(file);
+    visited.add(file);
+  }
+
+  for (const file of rustDependencies.keys()) {
+    if (!visited.has(file)) visit(file);
+  }
+  return cycles;
+}
+
 const frontendRoot = join(projectRoot, 'src');
 const frontendFiles = [
   ...sourceFiles(frontendRoot, '.ts'),
@@ -309,6 +550,57 @@ for (const cycle of frontendDependencyCycles()) {
   );
 }
 
+const rustApplicationFiles = sourceFiles(join(rustRoot, 'application'), '.rs');
+for (const file of rustApplicationFiles) {
+  const path = findForbiddenRustDependencyPath(
+    file,
+    (dependency) => {
+      const target = relative(rustRoot, dependency);
+      return target === 'runtime.rs'
+        || target.startsWith('adapters/')
+        || target.startsWith('commands/')
+        || target.startsWith('io/')
+        || target.startsWith('recent/');
+    },
+  );
+  if (!path) continue;
+  violations.push(
+    `${relative(projectRoot, file)} violates the transitive inward-only Rust application boundary: ${[file, ...path]
+      .map((dependency) => relative(projectRoot, dependency))
+      .join(' -> ')}`,
+  );
+}
+
+const rustArchitectureFiles = new Set([
+  join(rustRoot, 'runtime.rs'),
+  ...rustApplicationFiles,
+  ...sourceFiles(join(rustRoot, 'adapters'), '.rs'),
+]);
+for (const cycle of rustDependencyCycles()) {
+  if (!cycle.some((file) => rustArchitectureFiles.has(file))) continue;
+  violations.push(
+    `Rust application module dependency cycle: ${cycle
+      .map((file) => relative(projectRoot, file))
+      .join(' -> ')}`,
+  );
+}
+
+const rustDependencyParserProbe = rustModuleDependenciesFromSource(
+  join(rustRoot, 'adapters', '__architecture_probe__.rs'),
+  `
+    use crate::{
+      adapters::search_index_runtime::SearchIndexRuntime as Runtime,
+      application::{search_ports::SearchQueryPort as QueryPort},
+    };
+  `,
+);
+if (
+  !rustDependencyParserProbe.includes(join(rustRoot, 'adapters', 'search_index_runtime.rs'))
+  || !rustDependencyParserProbe.includes(join(rustRoot, 'application', 'search_ports.rs'))
+) {
+  violations.push('Rust architecture dependency parser does not resolve grouped or aliased imports');
+}
+
 rejectMatches(
   sourceFiles(join(projectRoot, 'src', 'stores'), '.ts'),
   [
@@ -488,12 +780,54 @@ rejectRustProductionMatches(
 
 rejectRustProductionMatches(
   [
+    join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_intent.rs'),
     join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs'),
     join(projectRoot, 'src-tauri', 'src', 'application', 'editor_command_service.rs'),
   ],
   [/\bserde(?:::|\b)/, /\bserde_json(?:::|\b)/, /\bSerialize\b/, /\bDeserialize\b/],
   'the semantic-mutation-fingerprint application boundary',
 );
+
+rejectRustProductionMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs')],
+  [/\bMutationRequestIdentity\b/, /\bEditorCommand\b/, /\bsha2\b/, /\bFingerprintWriter\b/],
+  'the intent-agnostic mutation replay boundary',
+);
+
+const mutationIntentSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_intent.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /enum\s+MutationIntent[\s\S]*Undo[\s\S]*Redo[\s\S]*Execute\(EditorCommand\)/,
+  /fn\s+fingerprint\s*\(/,
+  /fn\s+write_editor_command\s*\(/,
+]) {
+  if (!requirement.test(mutationIntentSource)) {
+    violations.push(
+      `src-tauri/src/application/mutation_intent.rs violates the canonical mutation intent boundary: ${requirement}`,
+    );
+  }
+}
+
+const mutationReplaySource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'application', 'mutation_replay.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /let\s+fingerprint\s*=\s*intent\.fingerprint\(base_revision\)/,
+  /let\s+result\s*=\s*execute\(intent\)/,
+]) {
+  if (!requirement.test(mutationReplaySource)) {
+    violations.push(
+      `src-tauri/src/application/mutation_replay.rs violates the same-intent replay/execution boundary: ${requirement}`,
+    );
+  }
+}
+
+if (existsSync(join(rustRoot, 'application', 'runtime.rs'))) {
+  violations.push('src-tauri/src/application/runtime.rs violates the top-level Rust composition-root boundary');
+}
 
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'projection_model'), '.rs'),
@@ -883,19 +1217,13 @@ rejectMatches(
 );
 
 rejectMatches(
-  [
-    ...sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs').filter(
-      (file) => relative(projectRoot, file) !== 'src-tauri/src/application/runtime.rs',
-    ),
-  ],
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs'),
   [/\bApplicationRuntime\b/],
   'the narrow Rust application service dependency boundary',
 );
 
 rejectMatches(
-  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs').filter(
-    (file) => relative(projectRoot, file) !== 'src-tauri/src/application/runtime.rs',
-  ),
+  sourceFiles(join(projectRoot, 'src-tauri', 'src', 'application'), '.rs'),
   [
     /\btauri::(?:AppHandle|State)\b/,
     /crate::io(?:::|\b)/,
@@ -905,7 +1233,7 @@ rejectMatches(
 );
 
 rejectMatches(
-  [join(projectRoot, 'src-tauri', 'src', 'application', 'runtime.rs')],
+  [join(projectRoot, 'src-tauri', 'src', 'runtime.rs')],
   [/fn\s+desktop_files\s*\(/, /fn\s+mobile_files\s*\(/, /fn\s+recent_store\s*\(/],
   'the adapter-only Rust composition-root interface',
 );
@@ -965,6 +1293,7 @@ rejectMatches(
     join(projectRoot, 'src-tauri', 'src', 'application', 'search_ports.rs'),
     join(projectRoot, 'src-tauri', 'src', 'application', 'search_service.rs'),
     join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_adapter.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_engine.rs'),
     join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_adapter.rs'),
   ],
   [
@@ -1417,11 +1746,11 @@ if (!/\b_work:\s*Option<Box<dyn\s+DocumentWorkLease>>/.test(preparedDocumentRepo
 }
 
 const documentWorkRuntimeSource = readFileSync(
-  join(projectRoot, 'src-tauri', 'src', 'application', 'runtime.rs'),
+  join(projectRoot, 'src-tauri', 'src', 'runtime.rs'),
   'utf8',
 );
 if (!/DocumentOpenService::new\([\s\S]*work_budget\.clone\(\)[\s\S]*DocumentSaveService::new\([\s\S]*work_budget/m.test(documentWorkRuntimeSource)) {
-  violations.push('src-tauri/src/application/runtime.rs does not share one document work budget across open and save services');
+  violations.push('src-tauri/src/runtime.rs does not share one document work budget across open and save services');
 }
 
 const documentLayoutPolicySource = readFileSync(
@@ -1682,6 +2011,7 @@ rejectMatches(
 rejectMatches(
   [
     join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_adapter.rs'),
+    join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_engine.rs'),
     join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_adapter.rs'),
   ],
   [/std::thread/, /\bCondvar\b/, /\bIndexJob\b/, /\bIndexSchedulerState\b/],
@@ -1699,6 +2029,24 @@ rejectMatches(
   [/impl\s+SearchQueryPort\b/],
   'the maintenance-only search adapter boundary',
 );
+
+rejectMatches(
+  [join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_runtime.rs')],
+  [/search_query_adapter/],
+  'the acyclic search runtime boundary',
+);
+
+const searchQueryEngineSource = readFileSync(
+  join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_query_engine.rs'),
+  'utf8',
+);
+for (const requirement of [/fn\s+execute_search\b/, /fn\s+scan_sheet_fallback\b/]) {
+  if (!requirement.test(searchQueryEngineSource)) {
+    violations.push(
+      `src-tauri/src/adapters/search_query_engine.rs violates the extracted search-query engine boundary: ${requirement}`,
+    );
+  }
+}
 
 const searchRuntimeSource = readFileSync(
   join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_runtime.rs'),
@@ -1738,13 +2086,13 @@ rejectRustProductionMatches(
 );
 
 const applicationRuntimeSource = readFileSync(
-  join(projectRoot, 'src-tauri', 'src', 'application', 'runtime.rs'),
+  join(projectRoot, 'src-tauri', 'src', 'runtime.rs'),
   'utf8',
 );
 for (const requirement of [/\bUpdateService\b/, /\bupdate_queries\b/]) {
   if (!requirement.test(applicationRuntimeSource)) {
     violations.push(
-      `src-tauri/src/application/runtime.rs violates the explicitly-owned update runtime boundary: ${requirement}`,
+      `src-tauri/src/runtime.rs violates the explicitly-owned update runtime boundary: ${requirement}`,
     );
   }
 }

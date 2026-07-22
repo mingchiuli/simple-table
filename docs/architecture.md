@@ -43,6 +43,11 @@ Architecture checks parse TypeScript and Vue scripts into one resolved module
 graph. Store and application boundaries are enforced over transitive reachability,
 with the full dependency path reported for an indirect violation; production
 frontend modules must also remain acyclic.
+Rust production references are likewise resolved into a file-level module graph.
+The application layer cannot reach the runtime, adapters, commands, I/O, or
+recent-file infrastructure directly or through an intermediate module. Any
+dependency cycle involving the application layer, an adapter, or the backend
+composition root fails the architecture check.
 
 Tauri command modules are transport adapters. They own bounded wire
 deserialization and executor selection, then delegate to application services
@@ -66,7 +71,8 @@ permit covers both the internal operation and outward DTO projection, including
 exact serialized-byte admission. Command executors cannot be located through
 static `OnceLock` values.
 
-`ApplicationRuntime` is the backend composition root managed by Tauri. It
+The top-level `runtime` module owns `ApplicationRuntime`, the backend composition
+root managed by Tauri. It is deliberately outside the `application` module and
 constructs narrow document-query, document-open, document-lifecycle,
 document-save, editor-mutation, and search-query services over shared
 repositories and coordinators. It owns outer recent, file, and search adapters; concrete platform
@@ -111,8 +117,8 @@ returns serialization-independent values from `projection_model`. Exact wire
 response limits and all DTO construction live in the top-level
 `protocol_projection` module at the command boundary. Native-save capability
 policy lives in `document_format_policy`, while pure file-format policy lives in
-the top-level `document_format` module. Application production modules other
-than the composition root cannot import `io`; application and operation modules
+the top-level `document_format` module. Application production modules cannot
+import `io` or adapters; application and operation modules
 cannot import protocol DTOs or the outward protocol mapper. The I/O layer cannot
 depend on `application`, `commands`, `ops`, or `state`.
 Platform I/O returns serialization-independent file selections and byte inputs;
@@ -135,10 +141,13 @@ mapped to `CellEditInput` at the application boundary. Domain commands cannot
 depend on serde/JSON values, RPC requests, mutation responses, patches,
 TypeScript generation, or Tauri types. `CellNumber` admits only finite integer
 or floating-point values; the wire serializer alone maps those values to JSON.
-A mutation replay key is built from a closed internal command-identity enum
-using explicit fixed-width and length-prefixed hashing. Application replay and
-editor-command services cannot use serde or JSON to define idempotency, so wire
-format changes cannot alter request identity.
+`MutationIntent` is the single application mutation vocabulary: undo, redo, or
+execution of the domain-owned `EditorCommand`. The same owned intent is first
+hashed with explicit fixed-width and length-prefixed fields and then passed
+unchanged to the executor. The replay coordinator owns only reservations and
+cached outcomes; it cannot reconstruct commands or define a parallel identity
+enum. Application replay and editor-command services cannot use serde or JSON
+to define idempotency, so wire format changes cannot alter request identity.
 A new-Sheet operation carries only domain initialization data;
 projection and workbook adapters construct their own representations.
 Formula diagnostics and runtime status, workbook and Sheet capabilities,
@@ -416,11 +425,13 @@ the internal outcome.
 `SearchIndexWork` is an internal domain contract. `SearchService` depends only
 on `SearchQueryPort`. Save, mutation, and lifecycle workflows depend separately
 on `SearchIndexMaintenancePort`, so they cannot invoke the search use case and
-tests do not implement unrelated query behavior. Query plans and fallback
-scanning live in the query adapter. Worker threads, queue coalescing, resident
+tests do not implement unrelated query behavior. Query plans, result admission,
+and fallback scanning live in the stateless `search_query_engine`; the query
+adapter only implements the application port. Worker threads, queue coalescing, resident
 indexes, memory reservations, and Tantivy updates live in the shared outer
 `SearchIndexRuntime`; the maintenance adapter exposes only scheduling and
-cancellation. The runtime reads canonical content only through
+cancellation. The dependency direction is adapter to runtime to query engine,
+with no runtime-to-adapter edge. The runtime reads canonical content only through
 `SearchDocumentSourcePort`. Search scheduling cannot inspect frontend
 `EditorPatch` DTOs.
 

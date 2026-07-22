@@ -1,8 +1,8 @@
 use super::CommandExecutionRuntime;
 use crate::adapters::recent_file_adapter;
-use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 use crate::recent::{AddRecentFileRequest, RecentFile};
+use crate::runtime::ApplicationRuntime;
 use tauri::{AppHandle, State};
 
 #[tauri::command]

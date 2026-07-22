@@ -1,10 +1,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use super::{CommandExecutionRuntime, CommandU64};
-use crate::application::runtime::ApplicationRuntime;
 use crate::application::{document_open_service, document_service};
 use crate::error::AppError;
 use crate::protocol_projection;
+use crate::runtime::ApplicationRuntime;
 use crate::types::{
     DesktopOpenFileInfo, OpenDocumentResponse, PreparedOpenDocument, SavedDocumentResponse,
 };

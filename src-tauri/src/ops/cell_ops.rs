@@ -1,4 +1,6 @@
-use crate::domain::{CellEditInput, EditorCommand};
+#[cfg(test)]
+use crate::domain::CellEditInput;
+use crate::domain::EditorCommand;
 use crate::domain::{SearchCellIndexUpdate, SearchIndexWork};
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
@@ -16,6 +18,44 @@ struct LayoutMutation {
     row_heights: HashMap<usize, Option<u32>>,
 }
 
+pub fn do_execute_command(
+    registry: &ActiveDocumentRepository,
+    document_id: u64,
+    base_revision: u64,
+    command: EditorCommand,
+) -> Result<MutationExecution, AppError> {
+    match &command {
+        EditorCommand::SetCell { .. } | EditorCommand::SetCells { .. } => {
+            execute_cell_delta(registry, document_id, base_revision, command)
+        }
+        EditorCommand::SetColumnWidth {
+            sheet_index,
+            col_index,
+            width,
+        } => {
+            let patch = column_width_patch(*sheet_index, *col_index, *width);
+            execute_layout(registry, document_id, base_revision, command, patch)
+        }
+        EditorCommand::SetRowHeight {
+            sheet_index,
+            row_index,
+            height,
+        } => {
+            let patch = row_height_patch(*sheet_index, *row_index, *height);
+            execute_layout(registry, document_id, base_revision, command, patch)
+        }
+        EditorCommand::AddRow { .. }
+        | EditorCommand::DeleteRow { .. }
+        | EditorCommand::AddColumn { .. }
+        | EditorCommand::DeleteColumn { .. }
+        | EditorCommand::AddSheet { .. }
+        | EditorCommand::DeleteSheet { .. } => {
+            execute_structural_command(registry, document_id, base_revision, command)
+        }
+    }
+}
+
+#[cfg(test)]
 pub fn do_set_cell(
     registry: &ActiveDocumentRepository,
     document_id: u64,
@@ -40,6 +80,7 @@ pub fn do_set_cell(
     response
 }
 
+#[cfg(test)]
 pub fn do_set_cells(
     registry: &ActiveDocumentRepository,
     document_id: u64,
@@ -56,6 +97,7 @@ pub fn do_set_cells(
     response
 }
 
+#[cfg(test)]
 pub fn do_add_row(
     registry: &ActiveDocumentRepository,
     document_id: u64,
@@ -74,24 +116,7 @@ pub fn do_add_row(
     )
 }
 
-pub fn do_delete_row(
-    registry: &ActiveDocumentRepository,
-    document_id: u64,
-    base_revision: u64,
-    sheet_index: usize,
-    row_index: usize,
-) -> Result<MutationExecution, AppError> {
-    execute_structural_command(
-        registry,
-        document_id,
-        base_revision,
-        EditorCommand::DeleteRow {
-            sheet_index,
-            row_index,
-        },
-    )
-}
-
+#[cfg(test)]
 pub fn do_add_column(
     registry: &ActiveDocumentRepository,
     document_id: u64,
@@ -110,24 +135,7 @@ pub fn do_add_column(
     )
 }
 
-pub fn do_delete_column(
-    registry: &ActiveDocumentRepository,
-    document_id: u64,
-    base_revision: u64,
-    sheet_index: usize,
-    col_index: usize,
-) -> Result<MutationExecution, AppError> {
-    execute_structural_command(
-        registry,
-        document_id,
-        base_revision,
-        EditorCommand::DeleteColumn {
-            sheet_index,
-            col_index,
-        },
-    )
-}
-
+#[cfg(test)]
 pub fn do_set_column_width(
     registry: &ActiveDocumentRepository,
     document_id: u64,
@@ -149,6 +157,7 @@ pub fn do_set_column_width(
     )
 }
 
+#[cfg(test)]
 pub fn do_set_row_height(
     registry: &ActiveDocumentRepository,
     document_id: u64,
@@ -167,33 +176,6 @@ pub fn do_set_row_height(
             height,
         },
         row_height_patch(sheet_index, row_index, height),
-    )
-}
-
-pub fn do_add_sheet(
-    registry: &ActiveDocumentRepository,
-    document_id: u64,
-    base_revision: u64,
-) -> Result<MutationExecution, AppError> {
-    execute_structural_command(
-        registry,
-        document_id,
-        base_revision,
-        EditorCommand::AddSheet { name: None },
-    )
-}
-
-pub fn do_delete_sheet(
-    registry: &ActiveDocumentRepository,
-    document_id: u64,
-    base_revision: u64,
-    sheet_index: usize,
-) -> Result<MutationExecution, AppError> {
-    execute_structural_command(
-        registry,
-        document_id,
-        base_revision,
-        EditorCommand::DeleteSheet { sheet_index },
     )
 }
 

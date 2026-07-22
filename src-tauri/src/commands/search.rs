@@ -1,7 +1,7 @@
 use super::{CommandExecutionRuntime, CommandU64};
-use crate::application::runtime::ApplicationRuntime;
 use crate::error::AppError;
 use crate::protocol_projection;
+use crate::runtime::ApplicationRuntime;
 use crate::types::{SearchResponse, SearchScope};
 use tauri::State;
 
