@@ -4,6 +4,7 @@ import {
   type RouteDocumentLoadPorts,
 } from '@/application/routeDocumentLoadCoordinator';
 import { acknowledgeOpenTarget, releaseOpenTarget } from '@/platform';
+import { onScopeDispose } from 'vue';
 
 type UseRouteFileLoaderOptions = Omit<
   RouteDocumentLoadPorts,
@@ -15,7 +16,7 @@ type UseRouteFileLoaderOptions = Omit<
 };
 
 type RouteLeaveHandlerOptions = {
-  routeFileLoader: Pick<RouteDocumentLoadCoordinator, 'cancel'>;
+  routeFileLoader: Pick<RouteDocumentLoadCoordinator, 'dispose'>;
   hasActiveDocument: () => boolean;
   closeCurrentDocument: () => Promise<boolean>;
 };
@@ -28,12 +29,16 @@ export function useRouteFileLoader({
   },
   ...ports
 }: UseRouteFileLoaderOptions): RouteDocumentLoadCoordinator {
-  return createRouteDocumentLoadCoordinator({
+  const coordinator = createRouteDocumentLoadCoordinator({
     ...ports,
     acknowledgeOpenTarget: acknowledge,
     releaseOpenTarget: release,
     reportError,
   });
+  onScopeDispose(() => {
+    void coordinator.dispose();
+  });
+  return coordinator;
 }
 
 export function createRouteLeaveHandler({
@@ -43,13 +48,13 @@ export function createRouteLeaveHandler({
 }: RouteLeaveHandlerOptions) {
   return async () => {
     if (!hasActiveDocument()) {
-      routeFileLoader.cancel();
+      await routeFileLoader.dispose();
       return true;
     }
 
     const canLeave = await closeCurrentDocument();
     if (canLeave) {
-      routeFileLoader.cancel();
+      await routeFileLoader.dispose();
     }
     return canLeave;
   };

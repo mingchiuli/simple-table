@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use tantivy::{Term, doc};
 
 use crate::adapters::search_index_store::{
-    MAX_RESIDENT_SEARCH_INDEXES, SearchIndexRegistry, SearchIndexStamp, WRITER_ARENA_BYTES,
-    build_sheet_index_with_cancel, search_position,
+    MAX_RESIDENT_SEARCH_INDEXES, SearchIndexBuildOutcome, SearchIndexRegistry, SearchIndexStamp,
+    WRITER_ARENA_BYTES, build_sheet_index_with_cancel, search_position,
 };
 use crate::application::search_ports::SearchDocumentSourcePort;
 #[cfg(test)]
@@ -111,6 +111,7 @@ struct SearchSchedulerStats {
     coalesced_to_rebuilds: u64,
     dropped_jobs_at_capacity: u64,
     skipped_oversized_rebuilds: u64,
+    failed_rebuilds: u64,
     pending_sheets: usize,
     pending_updates: usize,
     pending_bytes: usize,
@@ -861,9 +862,19 @@ fn run_rebuild(
         return;
     }
 
-    let built_index = build_sheet_index_with_cancel(&search_text, || {
+    let built_index = match build_sheet_index_with_cancel(&search_text, || {
         search_stamp_is_current(scheduler, document_id, sheet_index, stamp)
-    });
+    }) {
+        Ok(SearchIndexBuildOutcome::Built(index)) => index,
+        Ok(SearchIndexBuildOutcome::Cancelled) => return,
+        Err(error) => {
+            eprintln!("Search index rebuild failed: {error}");
+            record_scheduler_event(scheduler, |stats| {
+                stats.failed_rebuilds = stats.failed_rebuilds.saturating_add(1);
+            });
+            return;
+        }
+    };
 
     let sheet_count = scheduler
         .source
@@ -872,20 +883,18 @@ fn run_rebuild(
         .flatten()
         .map(|snapshot| snapshot.sheets.len());
     let Some(sheet_count) = sheet_count else {
-        drop(built_index);
         return;
     };
     let retired = {
         let Ok(mut indexes) = scheduler.indexes.lock() else {
-            drop(built_index);
             return;
         };
         let store = indexes.document_mut(document_id);
         if store.sheet_stamp(document_id, sheet_index) != stamp {
-            drop(built_index);
             return;
         }
-        let mut retired = store.install_sheet_index(document_id, sheet_index, stamp, built_index);
+        let mut retired =
+            store.install_sheet_index(document_id, sheet_index, stamp, Some(built_index));
         retired.append(store.truncate(sheet_count));
         retired
     };
@@ -1265,6 +1274,40 @@ mod tests {
                 .search
                 .fresh_sheet_index(context.document_id, active_revision(&context), 0)
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn failed_index_query_falls_back_to_authoritative_document_scan() {
+        let context = context_for_rows(vec![vec![s("authoritative match")]]);
+        let revision = active_revision(&context);
+        let mut failed_index =
+            crate::adapters::search_index_store::build_sheet_index(&[SearchCellText {
+                row: 0,
+                col: 0,
+                search_text: "authoritative match".to_string(),
+                display_text: "authoritative match".to_string(),
+            }])
+            .expect("index");
+        failed_index.fail_queries_for_test("injected index query failure");
+        {
+            let mut indexes = context.search.scheduler.indexes.lock().unwrap();
+            let store = indexes.document_mut(context.document_id);
+            store.set_source_revision(revision);
+            let stamp = store.sheet_stamp(context.document_id, 0);
+            drop(store.install_sheet_index(context.document_id, 0, stamp, Some(failed_index)));
+        }
+
+        assert_eq!(search_rows(&context, "authoritative"), vec![(0, 0)]);
+        assert!(
+            context
+                .search
+                .scheduler
+                .state
+                .lock()
+                .unwrap()
+                .pending
+                .contains_key(&(context.document_id, 0))
         );
     }
 

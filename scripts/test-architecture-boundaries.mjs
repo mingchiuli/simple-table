@@ -860,6 +860,22 @@ rejectRustProductionMatches(
   'the query-semantics-free search index storage boundary',
 );
 
+const searchIndexStoreSource = readFileSync(
+  join(rustRoot, 'adapters', 'search_index_store.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /enum\s+SearchIndexBuildOutcome\b/,
+  /Result<SearchIndexBuildOutcome,\s*AppError>/,
+  /Result<Vec<SearchCellText>,\s*AppError>/,
+]) {
+  if (!requirement.test(searchIndexStoreSource)) {
+    violations.push(
+      `src-tauri/src/adapters/search_index_store.rs violates the explicit search-index failure boundary: ${requirement}`,
+    );
+  }
+}
+
 rejectRustProductionMatches(
   [join(rustRoot, 'adapters', 'search_query_engine.rs')],
   [/\bMAX_SEARCH_RESPONSE_BYTES\b/, /\bserialized_json_bytes\b/, /crate::types(?:::|\b)/],
@@ -1188,6 +1204,10 @@ for (const requirement of [
   /releaseOpenTarget\s*\(/,
   /claimOutcome\s*=\s*["']acknowledge["']/,
   /settleOpenTargetClaim\s*\(\s*openTargetClaimId\s*,\s*claimOutcome\s*\)/,
+  /function\s+waitForIdle\b/,
+  /function\s+dispose\b/,
+  /activeClaimSettlements\b/,
+  /attempt\s*<\s*3/,
 ]) {
   if (!requirement.test(launchTargetRouteCoordinatorSource)) {
     violations.push(
@@ -1721,9 +1741,12 @@ for (const requirement of [
   /\bcreateSearchSessionCoordinator\b/,
   /\bcreateDocumentCommandBus\b/,
   /\bcreateDocumentPreparationCoordinator\b/,
+  /\bcreateWorkspaceOperationTracker\b/,
+  /operations\.stopAcceptingWork\s*\(/,
+  /operations\.waitForIdle\s*\(/,
   /sessionWorkflow\.waitForMutations\s*\(/,
-  /pendingCellSaves\.waitForInFlightSave\s*\(/,
-  /preparations\.waitForIdle\s*\(/,
+  /rawPendingCellSaves\.waitForInFlightSave\s*\(/,
+  /rawPreparations\.waitForIdle\s*\(/,
   /regions\.waitForIdle\s*\(/,
   /\bhasInjectionContext\s*\(/,
   /inject\s*\(\s*documentWorkspaceRuntimeKey\b/,
@@ -1822,7 +1845,7 @@ const routeDocumentLoadCoordinatorSource = readFileSync(
 for (const requirement of [
   /\brouteLoadGeneration\b/,
   /\bpendingLoad\b/,
-  /\bworkerRunning\b/,
+  /\bworkerPromise\b/,
   /\bactiveCancellation\b/,
 ]) {
   if (!requirement.test(routeDocumentLoadCoordinatorSource)) {
@@ -1974,7 +1997,8 @@ const useDocumentFileCoordinatorSource = readFileSync(
 );
 for (const requirement of [
   /\buseDocumentWorkspaceRuntime\b/,
-  /workspace\.preparations\b/,
+  /workspace\.runTask\s*\(/,
+  /workspace\.runTask\s*\(\s*\(\{\s*commandBus\s*,\s*preparations\s*\}\)\s*=>/,
 ]) {
   if (!requirement.test(useDocumentFileCoordinatorSource)) {
     violations.push(

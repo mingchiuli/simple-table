@@ -17,6 +17,8 @@ export type RouteDocumentLoadPorts = {
 export type RouteDocumentLoadCoordinator = {
   enqueue: (filePath: string | null, openTargetClaimId?: string | null) => void;
   cancel: () => void;
+  waitForIdle: () => Promise<void>;
+  dispose: () => Promise<void>;
 };
 
 type PendingRouteLoad = {
@@ -43,16 +45,22 @@ export function createRouteDocumentLoadCoordinator({
   let lastLoadedRouteFilePath: string | null = null;
   let routeLoadGeneration = 0;
   let pendingLoad: PendingRouteLoad | null = null;
-  let workerRunning = false;
+  let workerPromise: Promise<void> | null = null;
   let activeCancellation: ActiveCancellation | null = null;
   const activeClaimSettlements = new Set<Promise<void>>();
+  let disposed = false;
+  let disposal: Promise<void> | null = null;
 
   function enqueue(filePath: string | null, openTargetClaimId: string | null = null) {
+    if (disposed) {
+      settleOpenTargetClaim(openTargetClaimId, 'release');
+      return;
+    }
     cancelActiveLoads();
     releaseSupersededPendingClaim(openTargetClaimId);
     const generation = ++routeLoadGeneration;
     pendingLoad = { filePath, openTargetClaimId, generation };
-    void runWorker();
+    startWorker();
   }
 
   function cancel() {
@@ -60,6 +68,14 @@ export function createRouteDocumentLoadCoordinator({
     routeLoadGeneration += 1;
     releaseSupersededPendingClaim(null);
     pendingLoad = null;
+  }
+
+  function dispose(): Promise<void> {
+    if (disposal) return disposal;
+    disposed = true;
+    cancel();
+    disposal = waitForIdle();
+    return disposal;
   }
 
   function releaseSupersededPendingClaim(replacementClaimId: string | null) {
@@ -77,11 +93,19 @@ export function createRouteDocumentLoadCoordinator({
     }
   }
 
+  function startWorker() {
+    if (disposed || workerPromise) return;
+    const worker = runWorker();
+    workerPromise = worker;
+    void worker.finally(() => {
+      if (workerPromise === worker) workerPromise = null;
+      if (!disposed && pendingLoad) startWorker();
+    });
+  }
+
   async function runWorker() {
-    if (workerRunning) return;
-    workerRunning = true;
     try {
-      while (pendingLoad) {
+      while (!disposed && pendingLoad) {
         const load = pendingLoad;
         pendingLoad = null;
         try {
@@ -91,8 +115,7 @@ export function createRouteDocumentLoadCoordinator({
         }
       }
     } finally {
-      workerRunning = false;
-      if (pendingLoad) void runWorker();
+      if (disposed) releaseSupersededPendingClaim(null);
     }
   }
 
@@ -163,12 +186,37 @@ export function createRouteDocumentLoadCoordinator({
     outcome: 'acknowledge' | 'release',
   ) {
     if (!claimId) return;
-    const settlement = (outcome === 'acknowledge'
-      ? acknowledgeOpenTarget(claimId)
-      : releaseOpenTarget(claimId))
-      .catch(safeReportError);
+    const settlement = settleOpenTargetClaimWithRetry(claimId, outcome);
     activeClaimSettlements.add(settlement);
     void settlement.finally(() => activeClaimSettlements.delete(settlement));
+  }
+
+  async function settleOpenTargetClaimWithRetry(
+    claimId: string,
+    outcome: 'acknowledge' | 'release',
+  ) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await (outcome === 'acknowledge'
+          ? acknowledgeOpenTarget(claimId)
+          : releaseOpenTarget(claimId));
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await Promise.resolve();
+      }
+    }
+    safeReportError(lastError);
+  }
+
+  async function waitForIdle() {
+    while (workerPromise || activeClaimSettlements.size > 0) {
+      await Promise.allSettled([
+        ...(workerPromise ? [workerPromise] : []),
+        ...activeClaimSettlements,
+      ]);
+    }
   }
 
   function notifyCancellation(handler: () => void) {
@@ -187,5 +235,5 @@ export function createRouteDocumentLoadCoordinator({
     }
   }
 
-  return { enqueue, cancel };
+  return { enqueue, cancel, waitForIdle, dispose };
 }

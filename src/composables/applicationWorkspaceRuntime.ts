@@ -54,6 +54,7 @@ export function createApplicationWorkspaceRuntime(
     (error) => console.warn('Failed to update recent file metadata', error),
   );
   let updateCoordinator: UpdateCoordinator | null = null;
+  let disposed = false;
   let disposal: Promise<void> | null = null;
 
   const runtime: ApplicationWorkspaceRuntime = {
@@ -71,10 +72,12 @@ export function createApplicationWorkspaceRuntime(
           },
         },
       );
+      if (disposed) void updateCoordinator.dispose();
       return updateCoordinator;
     },
     dispose() {
       if (disposal) return disposal;
+      disposed = true;
       disposal = Promise.all([
         document.dispose(),
         recentFiles.dispose(),

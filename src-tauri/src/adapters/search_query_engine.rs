@@ -149,44 +149,44 @@ pub(crate) fn execute_search<P>(
             sheet_name: sheet.name.clone(),
             index: indexed_sheet(sheet_index),
         };
-        match input.index.as_ref() {
-            Some(index) => {
-                let remaining = SEARCH_RESULT_LIMIT - results.len();
-                let cells = index.search(plan.literal(), plan.terms(), remaining);
-                for cell in cells
-                    .into_iter()
-                    .filter(|cell| plan.matches(&cell.search_text))
-                    .take(remaining)
-                {
-                    if !results.try_push(search_result(
-                        &input,
-                        &cell.display_text,
-                        cell.row,
-                        cell.col,
-                        &plan,
-                    ))? {
-                        break;
-                    }
-                }
+        let remaining = SEARCH_RESULT_LIMIT - results.len();
+        let indexed_cells = input
+            .index
+            .as_ref()
+            .map(|index| index.search(plan.literal(), plan.terms(), remaining))
+            .transpose();
+        let used_index = matches!(&indexed_cells, Ok(Some(_)));
+        match indexed_cells {
+            Ok(Some(cells)) => {
+                append_indexed_results(&input, &plan, cells, remaining, &mut results)?;
             }
-            None => {
-                used_scan_fallback = true;
-                if scan_reservation.is_none() {
-                    scan_reservation = Some(reserve_scan_work()?);
-                }
-                if on_demand_rebuilds.len() < MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH {
-                    on_demand_rebuilds.push(input.sheet_index);
-                }
-                scan_sheet_fallback(
-                    source,
-                    document_id,
-                    base_revision,
-                    &input,
-                    &plan,
-                    &mut results,
-                )?;
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!(
+                    "Search index query failed for Sheet {}; using authoritative scan: {error}",
+                    input.sheet_index
+                );
             }
         }
+        if used_index {
+            continue;
+        }
+
+        used_scan_fallback = true;
+        if scan_reservation.is_none() {
+            scan_reservation = Some(reserve_scan_work()?);
+        }
+        if on_demand_rebuilds.len() < MAX_ON_DEMAND_INDEX_REBUILDS_PER_SEARCH {
+            on_demand_rebuilds.push(input.sheet_index);
+        }
+        scan_sheet_fallback(
+            source,
+            document_id,
+            base_revision,
+            &input,
+            &plan,
+            &mut results,
+        )?;
     }
 
     drop(scan_reservation);
@@ -200,6 +200,31 @@ pub(crate) fn execute_search<P>(
     source.document_snapshot(document_id, Some(base_revision))?;
 
     results.finish()
+}
+
+fn append_indexed_results(
+    input: &SearchInput,
+    plan: &SearchQueryPlan,
+    cells: Vec<crate::domain::SearchCellText>,
+    limit: usize,
+    results: &mut SearchResultCollector,
+) -> Result<(), AppError> {
+    for cell in cells
+        .into_iter()
+        .filter(|cell| plan.matches(&cell.search_text))
+        .take(limit)
+    {
+        if !results.try_push(search_result(
+            input,
+            &cell.display_text,
+            cell.row,
+            cell.col,
+            plan,
+        ))? {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn scan_sheet_fallback(

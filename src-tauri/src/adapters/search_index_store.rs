@@ -13,6 +13,7 @@ use crate::adapters::search_text_analyzer::search_text_analyzer;
 #[cfg(test)]
 use crate::domain::CellValue;
 use crate::domain::SearchCellText;
+use crate::error::AppError;
 
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 pub(crate) const MAX_RESIDENT_SEARCH_INDEXES: usize = 4;
@@ -39,6 +40,13 @@ pub struct SearchSheetIndex {
     writer: Arc<Mutex<IndexWriter>>,
     #[cfg(test)]
     accounted_bytes_override: Option<usize>,
+    #[cfg(test)]
+    query_failure_override: Option<String>,
+}
+
+pub enum SearchIndexBuildOutcome {
+    Built(SearchSheetIndex),
+    Cancelled,
 }
 
 #[derive(Default)]
@@ -502,65 +510,60 @@ fn nonzero_random_u64() -> u64 {
 }
 
 #[cfg(test)]
-pub fn build_sheet_index(cells: &[SearchCellText]) -> Option<SearchSheetIndex> {
-    build_sheet_index_with_cancel(cells, || true)
+pub fn build_sheet_index(cells: &[SearchCellText]) -> Result<SearchSheetIndex, AppError> {
+    match build_sheet_index_with_cancel(cells, || true)? {
+        SearchIndexBuildOutcome::Built(index) => Ok(index),
+        SearchIndexBuildOutcome::Cancelled => Err(AppError::Internal(
+            "search index build was unexpectedly cancelled".to_string(),
+        )),
+    }
 }
 
 pub fn build_sheet_index_with_cancel(
     cells: &[SearchCellText],
     should_continue: impl Fn() -> bool,
-) -> Option<SearchSheetIndex> {
+) -> Result<SearchIndexBuildOutcome, AppError> {
     if !should_continue() {
-        return None;
+        return Ok(SearchIndexBuildOutcome::Cancelled);
     }
 
-    let (index, directory, schema, fields) = match create_tantivy_index() {
-        Ok(index) => index,
-        Err(error) => {
-            eprintln!("Failed to create tantivy index: {error:?}");
-            return None;
-        }
-    };
+    let (index, directory, schema, fields) =
+        create_tantivy_index().map_err(|error| search_index_error("create index", error))?;
 
-    let mut writer = match index.writer(WRITER_ARENA_BYTES) {
-        Ok(writer) => writer,
-        Err(error) => {
-            eprintln!("Failed to create index writer: {error:?}");
-            return None;
-        }
-    };
+    let mut writer = index
+        .writer(WRITER_ARENA_BYTES)
+        .map_err(|error| search_index_error("create writer", error))?;
 
     for (cell_index, cell) in cells.iter().enumerate() {
         if cell_index % 512 == 0 && !should_continue() {
-            return None;
+            return Ok(SearchIndexBuildOutcome::Cancelled);
         }
-        if let Err(error) = writer.add_document(doc!(
-            fields.text => cell.search_text.clone(),
-            fields.literal => cell.search_text.to_lowercase(),
-            fields.display => cell.display_text.clone(),
-            fields.row => cell.row as u64,
-            fields.col => cell.col as u64,
-            fields.position => search_position(cell.row, cell.col),
-            fields.cell_id => format!("{}:{}", cell.row, cell.col),
-        )) {
-            eprintln!("Failed to add document: {error:?}");
-        }
+        writer
+            .add_document(doc!(
+                fields.text => cell.search_text.clone(),
+                fields.literal => cell.search_text.to_lowercase(),
+                fields.display => cell.display_text.clone(),
+                fields.row => cell.row as u64,
+                fields.col => cell.col as u64,
+                fields.position => search_position(cell.row, cell.col),
+                fields.cell_id => format!("{}:{}", cell.row, cell.col),
+            ))
+            .map_err(|error| search_index_error("add document", error))?;
     }
 
     if !should_continue() {
-        return None;
+        return Ok(SearchIndexBuildOutcome::Cancelled);
     }
 
-    if let Err(error) = writer.commit() {
-        eprintln!("Failed to commit index: {error:?}");
-        return None;
-    }
+    writer
+        .commit()
+        .map_err(|error| search_index_error("commit writer", error))?;
 
     if !should_continue() {
-        return None;
+        return Ok(SearchIndexBuildOutcome::Cancelled);
     }
 
-    Some(SearchSheetIndex {
+    Ok(SearchIndexBuildOutcome::Built(SearchSheetIndex {
         index,
         directory,
         schema,
@@ -571,7 +574,13 @@ pub fn build_sheet_index_with_cancel(
         writer: Arc::new(Mutex::new(writer)),
         #[cfg(test)]
         accounted_bytes_override: None,
-    })
+        #[cfg(test)]
+        query_failure_override: None,
+    }))
+}
+
+fn search_index_error(operation: &str, error: impl std::fmt::Debug) -> AppError {
+    AppError::Internal(format!("failed to {operation} for search index: {error:?}"))
 }
 
 fn create_tantivy_index()
@@ -634,71 +643,82 @@ fn search_index(
     literal: &str,
     terms: &[String],
     limit: usize,
-) -> Vec<SearchCellText> {
-    let row_field = match index.schema.get_field("row") {
-        Ok(field) => field,
-        Err(_) => return vec![],
-    };
-    let col_field = match index.schema.get_field("col") {
-        Ok(field) => field,
-        Err(_) => return vec![],
-    };
-    let display_field = match index.schema.get_field("display") {
-        Ok(field) => field,
-        Err(_) => return vec![],
-    };
-    let text_field = match index.schema.get_field("text") {
-        Ok(field) => field,
-        Err(_) => return vec![],
-    };
-    let reader = match index.index.reader() {
-        Ok(reader) => reader,
-        Err(error) => {
-            eprintln!("Failed to create reader: {error:?}");
-            return vec![];
-        }
-    };
+) -> Result<Vec<SearchCellText>, AppError> {
+    #[cfg(test)]
+    if let Some(message) = &index.query_failure_override {
+        return Err(AppError::Internal(message.clone()));
+    }
+    let row_field = index
+        .schema
+        .get_field("row")
+        .map_err(|error| search_index_error("resolve row field", error))?;
+    let col_field = index
+        .schema
+        .get_field("col")
+        .map_err(|error| search_index_error("resolve column field", error))?;
+    let display_field = index
+        .schema
+        .get_field("display")
+        .map_err(|error| search_index_error("resolve display field", error))?;
+    let text_field = index
+        .schema
+        .get_field("text")
+        .map_err(|error| search_index_error("resolve text field", error))?;
+    let reader = index
+        .index
+        .reader()
+        .map_err(|error| search_index_error("create reader", error))?;
     let searcher = reader.searcher();
-    let Some(query) = compile_index_query(index.text_field, index.literal_field, literal, terms)
-    else {
-        return vec![];
-    };
-    let top_docs = match searcher.search(
-        &query,
-        &TopDocs::with_limit(limit).order_by_fast_field::<u64>("position", Order::Asc),
-    ) {
-        Ok(docs) => docs,
-        Err(error) => {
-            eprintln!("Search failed: {error:?}");
-            return vec![];
-        }
-    };
+    let query = compile_index_query(index.text_field, index.literal_field, literal, terms)
+        .ok_or_else(|| AppError::Internal("failed to compile search index query".to_string()))?;
+    let top_docs = searcher
+        .search(
+            &query,
+            &TopDocs::with_limit(limit).order_by_fast_field::<u64>("position", Order::Asc),
+        )
+        .map_err(|error| search_index_error("execute query", error))?;
 
     let mut results = Vec::new();
     for (_score, doc_address) in top_docs {
-        if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address)
-            && let (Some(row_val), Some(col_val), Some(display_val)) = (
-                doc.get_first(row_field),
-                doc.get_first(col_field),
-                doc.get_first(display_field),
-            )
-            && let (Some(row), Some(col), Some(display)) =
-                (row_val.as_u64(), col_val.as_u64(), display_val.as_str())
-        {
-            let search_text = doc
-                .get_first(text_field)
-                .and_then(|value| value.as_str())
-                .unwrap_or(display)
-                .to_string();
-            results.push(SearchCellText {
-                row: row as usize,
-                col: col as usize,
-                search_text,
-                display_text: display.to_string(),
-            });
+        let doc = searcher
+            .doc::<TantivyDocument>(doc_address)
+            .map_err(|error| search_index_error("read query result", error))?;
+        let row_value = doc
+            .get_first(row_field)
+            .ok_or_else(|| AppError::Internal("search index result has no row".to_string()))?;
+        let row = row_value
+            .as_u64()
+            .ok_or_else(|| AppError::Internal("search index row has invalid type".to_string()))?;
+        let col_value = doc
+            .get_first(col_field)
+            .ok_or_else(|| AppError::Internal("search index result has no column".to_string()))?;
+        let col = col_value.as_u64().ok_or_else(|| {
+            AppError::Internal("search index column has invalid type".to_string())
+        })?;
+        let display_value = doc.get_first(display_field).ok_or_else(|| {
+            AppError::Internal("search index result has no display text".to_string())
+        })?;
+        let display = display_value.as_str().ok_or_else(|| {
+            AppError::Internal("search index display text has invalid type".to_string())
+        })?;
+        let search_text = match doc.get_first(text_field) {
+            Some(value) => value.as_str().ok_or_else(|| {
+                AppError::Internal("search index text has invalid type".to_string())
+            })?,
+            None => display,
         }
+        .to_string();
+        results.push(SearchCellText {
+            row: usize::try_from(row)
+                .map_err(|_| AppError::Internal("search index row is out of range".to_string()))?,
+            col: usize::try_from(col).map_err(|_| {
+                AppError::Internal("search index column is out of range".to_string())
+            })?,
+            search_text,
+            display_text: display.to_string(),
+        });
     }
-    results
+    Ok(results)
 }
 
 pub(crate) fn search_position(row: usize, col: usize) -> u64 {
@@ -717,8 +737,18 @@ impl SearchSheetIndex {
             .saturating_add(std::mem::size_of::<Self>())
     }
 
-    pub fn search(&self, literal: &str, terms: &[String], limit: usize) -> Vec<SearchCellText> {
+    pub fn search(
+        &self,
+        literal: &str,
+        terms: &[String],
+        limit: usize,
+    ) -> Result<Vec<SearchCellText>, AppError> {
         search_index(self, literal, terms, limit)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_queries_for_test(&mut self, message: &str) {
+        self.query_failure_override = Some(message.to_string());
     }
 }
 
@@ -794,7 +824,7 @@ mod tests {
         let plan = SearchQueryPlan::new(query)?;
         store
             .fresh_sheet_index(sheet_index)
-            .map(|index| index.search(plan.literal(), plan.terms(), limit))
+            .and_then(|index| index.search(plan.literal(), plan.terms(), limit).ok())
     }
 
     #[test]
@@ -815,7 +845,10 @@ mod tests {
             display_text: "indexed text".to_string(),
         }];
 
-        assert!(build_sheet_index_with_cancel(&cells, || false).is_none());
+        assert!(matches!(
+            build_sheet_index_with_cancel(&cells, || false),
+            Ok(SearchIndexBuildOutcome::Cancelled)
+        ));
     }
 
     #[test]
@@ -945,6 +978,7 @@ mod tests {
         let plan = SearchQueryPlan::new("alpha beta").expect("query plan");
         let index = index_rows(&rows);
         let indexed: Vec<_> = search_index(&index, plan.literal(), plan.terms(), 10)
+            .expect("indexed search")
             .into_iter()
             .map(|cell| (cell.row, cell.col))
             .collect();
@@ -976,6 +1010,7 @@ mod tests {
         for query in ["pha", "(net)"] {
             let plan = SearchQueryPlan::new(query).expect("query plan");
             let mut indexed: Vec<_> = search_index(&index, plan.literal(), plan.terms(), 10)
+                .expect("indexed search")
                 .into_iter()
                 .map(|cell| (cell.row, cell.col))
                 .collect();
@@ -1008,6 +1043,7 @@ mod tests {
         let plan = SearchQueryPlan::new("match").expect("query plan");
         let index = index_rows(&rows);
         let indexed: Vec<_> = search_index(&index, plan.literal(), plan.terms(), 2)
+            .expect("indexed search")
             .into_iter()
             .map(|cell| (cell.row, cell.col))
             .collect();
@@ -1101,7 +1137,12 @@ mod tests {
         for sheet_index in 0..=MAX_RESIDENT_SEARCH_INDEXES {
             let stamp = store.sheet_stamp(document_id, sheet_index);
             retired_count += store
-                .install_sheet_index(document_id, sheet_index, stamp, build_sheet_index(&[]))
+                .install_sheet_index(
+                    document_id,
+                    sheet_index,
+                    stamp,
+                    Some(build_sheet_index(&[]).expect("index")),
+                )
                 .len();
         }
 

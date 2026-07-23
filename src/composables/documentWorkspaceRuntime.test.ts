@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDocumentWorkspaceRuntime } from '@/composables/documentWorkspaceRuntime';
 import { useDocumentCommandBus } from '@/composables/useDocumentCommandBus';
@@ -10,6 +10,15 @@ import {
   createDocumentWorkspaceTestContext,
   type DocumentWorkspaceTestContext,
 } from '@/test/documentWorkspaceTestContext';
+import { WorkspaceDisposedError } from '@/application/workspaceOperationTracker';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 describe('documentWorkspaceRuntime', () => {
   let workspace: DocumentWorkspaceTestContext;
@@ -64,5 +73,51 @@ describe('documentWorkspaceRuntime', () => {
     await Promise.all([preparation, disposal]);
 
     await expect(runtime.dispose()).resolves.toBeUndefined();
+  });
+
+  it('waits for admitted workspace operations and rejects work after disposal starts', async () => {
+    const runtime = createDocumentWorkspaceRuntime();
+    const active = deferred<string>();
+    const operation = runtime.runRequiredTask(() => active.promise);
+    let disposed = false;
+    const disposal = runtime.dispose().then(() => { disposed = true; });
+    const lateTask = vi.fn().mockResolvedValue('late');
+
+    await expect(runtime.runTask(lateTask, 'disposed')).resolves.toBe('disposed');
+    await expect(runtime.runRequiredTask(lateTask)).rejects.toBeInstanceOf(WorkspaceDisposedError);
+    await expect(runtime.preparations.run(lateTask)).rejects.toBeInstanceOf(
+      WorkspaceDisposedError,
+    );
+    expect(lateTask).not.toHaveBeenCalled();
+    expect(disposed).toBe(false);
+
+    active.resolve('completed');
+    await expect(operation).resolves.toBe('completed');
+    await disposal;
+    expect(disposed).toBe(true);
+    await expect(runtime.commandBus.ensureSheetRegionLoaded({
+      sheetIndex: 0,
+      rowStart: 0,
+      rowEnd: 1,
+      colStart: 0,
+      colEnd: 1,
+    })).resolves.toBe(false);
+  });
+
+  it('lets admitted operations finish internal work after disposal starts', async () => {
+    const runtime = createDocumentWorkspaceRuntime();
+    const active = deferred<void>();
+    const prepare = vi.fn().mockResolvedValue('prepared');
+    const operation = runtime.runTask(async ({ preparations }) => {
+      await active.promise;
+      return preparations.run(prepare);
+    }, 'disposed');
+
+    const disposal = runtime.dispose();
+    active.resolve();
+
+    await expect(operation).resolves.toBe('prepared');
+    await disposal;
+    expect(prepare).toHaveBeenCalledOnce();
   });
 });

@@ -243,6 +243,68 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(releaseOpenTarget).toHaveBeenCalledWith('claim-second');
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-latest');
   });
+
+  it('waits for the active load and claim settlement during disposal', async () => {
+    const load = deferred<boolean>();
+    const settlement = deferred<void>();
+    const releaseOpenTarget = vi.fn(() => settlement.promise);
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => '/tmp/active.xlsx',
+      getRouteOpenTargetClaimId: () => 'claim-active',
+      loadFileFromPath: vi.fn(() => load.promise),
+      releaseOpenTarget,
+    });
+    coordinator.enqueue('/tmp/active.xlsx', 'claim-active');
+    await flushPromises();
+
+    let disposed = false;
+    const disposal = coordinator.dispose().then(() => { disposed = true; });
+    await flushPromises();
+    expect(disposed).toBe(false);
+
+    load.resolve(false);
+    await flushPromises();
+    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-active');
+    expect(disposed).toBe(false);
+
+    settlement.resolve();
+    await disposal;
+    expect(disposed).toBe(true);
+  });
+
+  it('rejects post-disposal loads while still releasing their claims', async () => {
+    const loadFileFromPath = vi.fn().mockResolvedValue(true);
+    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createCoordinator({ loadFileFromPath, releaseOpenTarget });
+
+    await coordinator.dispose();
+    coordinator.enqueue('/tmp/late.xlsx', 'claim-late');
+    await coordinator.waitForIdle();
+
+    expect(loadFileFromPath).not.toHaveBeenCalled();
+    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-late');
+  });
+
+  it('retries transient claim settlement failures', async () => {
+    const releaseOpenTarget = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(undefined);
+    const reportError = vi.fn();
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => '/tmp/retry.xlsx',
+      getRouteOpenTargetClaimId: () => 'claim-retry',
+      loadFileFromPath: vi.fn().mockResolvedValue(false),
+      releaseOpenTarget,
+      reportError,
+    });
+
+    coordinator.enqueue('/tmp/retry.xlsx', 'claim-retry');
+    await coordinator.waitForIdle();
+
+    expect(releaseOpenTarget).toHaveBeenCalledTimes(2);
+    expect(reportError).not.toHaveBeenCalled();
+  });
 });
 
 type CoordinatorOverrides = Partial<Parameters<typeof createRouteDocumentLoadCoordinator>[0]>;

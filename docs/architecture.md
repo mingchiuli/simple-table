@@ -340,8 +340,14 @@ consume that envelope and cannot depend on generated response declarations.
   The application runtime creates one
   `DocumentWorkspaceRuntime` per Pinia document Store. That runtime owns the
   session, region, pending-save, search, command-bus, and document-preparation
-  coordinators. Its disposal also invalidates queued region requests and waits
-  for active region loads, preparations, mutations, and cell saves.
+  coordinators. A workspace operation tracker admits command-bus and file-workflow
+  tasks before they start. Admitted file workflows receive scoped access to the
+  raw command bus and preparation queue so their internal steps can finish after
+  disposal begins without exposing those capabilities to rejected callers. Disposal
+  first closes that admission gate, then
+  invalidates queued work and waits for admitted file operations, consistent
+  reads, editor-state refreshes, interaction leases, region loads, preparations,
+  mutations, and cell saves. Existing facades cannot start work after disposal.
 - `documentCommandCoordinator` owns interaction leases, mutation serialization,
   consistent reads, response application, and recovery as a port-driven
   workflow. The workspace-owned command bus binds that workflow to backend
@@ -466,7 +472,11 @@ tests do not implement unrelated query behavior. Query plans, result admission,
 and fallback scanning live in the stateless `search_query_engine`; a shared
 tokenizer leaf keeps indexed and fallback matching aligned without making the
 query engine depend on index storage. The index store accepts only a literal and
-term view and owns no query-validation or scan-matching policy. Search outcomes
+term view and owns no query-validation or scan-matching policy. Index builds
+distinguish cancellation from infrastructure failure, and indexed reads return
+errors instead of empty matches. A failed indexed read falls back to the bounded
+authoritative document scan in the same request and schedules an index rebuild,
+so derived-index faults cannot create false negative search results. Search outcomes
 are bounded by an internal retained-memory limit, while only
 `protocol_projection::search` applies the exact serialized response-byte limit.
 The query adapter only implements the application port. Worker threads, queue coalescing, resident
@@ -802,8 +812,11 @@ recent-file, and new-document preparation. Obsolete preparation drains through
 its bounded serial tail and owns late-token abort without keeping the obsolete
 route lifecycle active. Late-token abort is retried as an idempotent cleanup;
 permanent cleanup failures are reported immediately and remain observable at
-the workspace idle/disposal boundary. The route composable only adapts route
-observation, error reporting, and leave confirmation to that coordinator.
+the workspace idle/disposal boundary. Route-worker disposal closes admission,
+cancels the active load, retries claim settlement, and waits for both the worker
+and every acknowledgement or release before the route scope is destroyed. The
+route composable only adapts route observation, error reporting, leave
+confirmation, and scope disposal to that coordinator.
 
 Mobile imported selections and reserved save locations are likewise one-shot.
 Their registries are independently limited to 64 entries per purpose and expire
