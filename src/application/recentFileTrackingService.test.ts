@@ -93,4 +93,26 @@ describe('recent files tracking coordinator', () => {
     expect(port.addRecentFileWithThumbnail).toHaveBeenCalledTimes(1);
     expect(port.getRecentFiles).not.toHaveBeenCalled();
   });
+
+  it('drains an admitted removal and skips its refresh after disposal starts', async () => {
+    let release!: () => void;
+    const removal = new Promise<void>((resolve) => { release = resolve; });
+    const { service, port } = createService({
+      removeRecentFile: vi.fn().mockReturnValue(removal),
+    });
+    const activeRemoval = service.remove('recent-1');
+    await Promise.resolve();
+
+    let disposed = false;
+    const disposal = service.dispose().then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    release();
+    await Promise.all([activeRemoval, disposal]);
+    expect(port.removeRecentFile).toHaveBeenCalledWith('recent-1');
+    expect(port.getRecentFiles).not.toHaveBeenCalled();
+    await expect(service.remove('recent-2')).resolves.toBeUndefined();
+    expect(port.removeRecentFile).toHaveBeenCalledTimes(1);
+  });
 });

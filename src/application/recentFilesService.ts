@@ -1,5 +1,6 @@
 import type { EditorCommandContext } from '@/types/documentRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
+import { createWorkspaceOperationTracker } from '@/application/workspaceOperationTracker';
 
 export type RecentFilesPort = {
   getRecentFiles(): Promise<RecentFile[]>;
@@ -40,19 +41,12 @@ export function createRecentFilesService(
     activeTracking: null,
     pendingTracking: null,
   };
-  const activeLoads = new Set<Promise<void>>();
+  const operations = createWorkspaceOperationTracker();
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
   function load(): Promise<void> {
-    if (disposed) return Promise.resolve();
-    const task = runLoad();
-    activeLoads.add(task);
-    void task.then(
-      () => activeLoads.delete(task),
-      () => activeLoads.delete(task),
-    );
-    return task;
+    return operations.run(runLoad, undefined);
   }
 
   async function runLoad() {
@@ -81,21 +75,22 @@ export function createRecentFilesService(
     }
   }
 
-  async function remove(id: string) {
-    if (disposed) return;
-    await port.removeRecentFile(id);
-    await load();
+  function remove(id: string): Promise<void> {
+    return operations.run(async () => {
+      await port.removeRecentFile(id);
+      if (operations.isAcceptingWork()) await runLoad();
+    }, undefined);
   }
 
   function queueRecentFileEntryUpdate(request: RecentFileTrackingRequest) {
-    if (disposed) return;
+    if (!operations.isAcceptingWork()) return;
     runtime.pendingTracking = request;
     startTrackingWorker();
   }
 
   function startTrackingWorker() {
     if (runtime.activeTracking) return;
-    const worker = runTrackingWorker().catch(safeReportFailure);
+    const worker = operations.runRequired(runTrackingWorker).catch(safeReportFailure);
     runtime.activeTracking = worker;
     void worker.then(() => {
       if (runtime.activeTracking === worker) runtime.activeTracking = null;
@@ -123,6 +118,7 @@ export function createRecentFilesService(
   function dispose(): Promise<void> {
     if (disposal) return disposal;
     disposed = true;
+    operations.stopAcceptingWork();
     runtime.loadRequestId += 1;
     runtime.pendingTracking = null;
     store.setLoading(false);
@@ -131,13 +127,14 @@ export function createRecentFilesService(
   }
 
   async function waitForIdle(): Promise<void> {
-    while (runtime.activeTracking || activeLoads.size > 0) {
+    while (runtime.activeTracking) {
       const pending = [
         ...(runtime.activeTracking ? [runtime.activeTracking] : []),
-        ...activeLoads,
       ];
       await Promise.allSettled(pending);
     }
+    await operations.waitForIdle();
+    operations.markDisposed();
   }
 
   function safeReportFailure(error: unknown) {

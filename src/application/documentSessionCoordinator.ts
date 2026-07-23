@@ -41,6 +41,7 @@ import type {
   DocumentStatusStateInput,
   SelectionTransform,
 } from '@/types/editorRuntime';
+import type { PreparedOpenDocument } from '@/types/fileRuntime';
 
 export type MutationApplyResult = {
   data: DocumentProjection | null;
@@ -67,6 +68,10 @@ export type DocumentSessionCoordinatorPorts<
     beginEditorCommand(): boolean;
     endEditorCommand(): void;
     replaceSessionState(state: DocumentSessionStateInput): void;
+    replaceAdmittedSessionState(
+      state: DocumentSessionStateInput,
+      manifestResidentBytes: number,
+    ): void;
     replaceProjection(data: DocumentProjection, protectedSheetIndex?: number): void;
     clearDocument(): void;
     applyMutationState(
@@ -158,6 +163,26 @@ export function createDocumentSessionCoordinator<
     search.reset();
     status.reset();
     status.applyStatusState(editorSessionStatusState(response.editorSession));
+  }
+
+  function openPreparedDocument(
+    prepared: PreparedOpenDocument,
+    path: string | null = null,
+  ) {
+    sessionRuntime.reset();
+    regions.reset();
+    document.replaceAdmittedSessionState(
+      {
+        ...prepared.preview.session,
+        currentFilePath: path ?? prepared.preview.session.currentFilePath,
+      },
+      prepared.preview.manifestResidentBytes,
+    );
+    pending.reset();
+    selection.reset();
+    search.reset();
+    status.reset();
+    status.applyStatusState(prepared.preview.status);
   }
 
   function recoverActiveDocumentResponse(
@@ -429,6 +454,7 @@ export function createDocumentSessionCoordinator<
   return {
     discardPendingLocalWork,
     openDocumentResponse,
+    openPreparedDocument,
     recoverActiveDocumentResponse,
     applySavedDocumentResponse,
     applySavedDocumentResponseForContext,

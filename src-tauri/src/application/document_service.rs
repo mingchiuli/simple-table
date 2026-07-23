@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::application::document_projection;
+use crate::application::file_operation_replay::{
+    FileOperationAdmission, FileOperationFingerprint, FileOperationReplayCoordinator,
+    completed_operation_error, pending_operation_error,
+};
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
 use crate::application::prepared_source_port::{
@@ -8,7 +11,7 @@ use crate::application::prepared_source_port::{
 };
 use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::error::AppError;
-use crate::projection_model::OpenDocumentSnapshot;
+use crate::projection_model::{FileOperationKind, FileOperationReceipt};
 use crate::state::state::ActiveDocumentRepository;
 
 #[derive(Clone)]
@@ -18,6 +21,7 @@ pub struct DocumentLifecycleService {
     mutation_replays: Arc<MutationReplayCoordinator>,
     search_indexes: Arc<dyn SearchIndexMaintenancePort>,
     prepared_source_adoptions: Arc<dyn PreparedSourceAdoptionPort>,
+    file_operations: FileOperationReplayCoordinator,
 }
 
 impl DocumentLifecycleService {
@@ -27,6 +31,7 @@ impl DocumentLifecycleService {
         mutation_replays: Arc<MutationReplayCoordinator>,
         search_indexes: Arc<dyn SearchIndexMaintenancePort>,
         prepared_source_adoptions: Arc<dyn PreparedSourceAdoptionPort>,
+        file_operations: FileOperationReplayCoordinator,
     ) -> Self {
         Self {
             documents,
@@ -34,6 +39,7 @@ impl DocumentLifecycleService {
             mutation_replays,
             search_indexes,
             prepared_source_adoptions,
+            file_operations,
         }
     }
 
@@ -61,6 +67,10 @@ impl DocumentLifecycleService {
         self.prepared_source_adoptions
             .begin_adoption(source_path, file_name)
     }
+
+    fn file_operations(&self) -> &FileOperationReplayCoordinator {
+        &self.file_operations
+    }
 }
 
 /// Commits a prepared document and retires every service resource owned by the
@@ -70,7 +80,22 @@ pub fn commit_prepared_document(
     token: &str,
     expected_document_id: Option<u64>,
     expected_revision: Option<u64>,
-) -> Result<OpenDocumentSnapshot, AppError> {
+    operation_id: &str,
+) -> Result<FileOperationReceipt, AppError> {
+    let fingerprint =
+        FileOperationFingerprint::open(token, expected_document_id, expected_revision);
+    let reservation = match service
+        .file_operations()
+        .reserve(operation_id, fingerprint)?
+    {
+        FileOperationAdmission::Execute(reservation) => reservation,
+        FileOperationAdmission::Pending => {
+            return Err(pending_operation_error(FileOperationKind::Open));
+        }
+        FileOperationAdmission::Completed => {
+            return Err(completed_operation_error(FileOperationKind::Open));
+        }
+    };
     let checkout = service.prepared_documents().checkout(token)?;
     let replacement = service
         .documents()
@@ -79,17 +104,25 @@ pub fn commit_prepared_document(
         checkout.document().source_path.as_deref(),
         &checkout.document().editor_state.file_data().file_name,
     )?;
+    let receipt = FileOperationReceipt {
+        kind: FileOperationKind::Open,
+        document_id: checkout.document().editor_state.document_id(),
+        revision: checkout.document().editor_state.revision(),
+        path: checkout.document().editor_state.file_data().path.clone(),
+        file_name: checkout
+            .document()
+            .editor_state
+            .file_data()
+            .file_name
+            .clone(),
+    };
     let (prepared, _prepared_commit) = checkout.commit();
     let replacement = replacement.finish(prepared.editor_state)?;
     source_adoption.commit();
     let document_id = replacement.document_id;
     let previous_document = replacement.previous_document;
-    let active_handle = replacement.active_handle;
-
-    let response = {
-        let editor_state = active_handle.read()?;
-        document_projection::open_document_snapshot(&editor_state)
-    };
+    let _active_handle = replacement.active_handle;
+    let receipt = reservation.finish(receipt);
 
     if let Some(previous_document_id) = previous_document
         .as_ref()
@@ -102,7 +135,7 @@ pub fn commit_prepared_document(
     service
         .search_indexes()
         .rebuild_all_sheets_index(document_id);
-    Ok(response)
+    Ok(receipt)
 }
 
 pub fn close_current_document(

@@ -16,6 +16,7 @@ use crate::application::document_query_service::DocumentQueryService;
 use crate::application::document_save_service::DocumentSaveService;
 use crate::application::document_service::DocumentLifecycleService;
 use crate::application::editor_command_service::EditorCommandService;
+use crate::application::file_operation_replay::FileOperationReplayCoordinator;
 use crate::application::mutation_replay::MutationReplayCoordinator;
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
 use crate::application::search_service::SearchService;
@@ -46,6 +47,7 @@ impl Default for ApplicationRuntime {
     fn default() -> Self {
         let documents = ActiveDocumentRepository::default();
         let prepared_documents = PreparedDocumentRepository::default();
+        let file_operations = FileOperationReplayCoordinator::default();
         let mutation_replays = Arc::new(MutationReplayCoordinator::default());
         let search_source = Arc::new(RepositorySearchDocumentSource::new(documents.clone()));
         let search_runtime = SearchIndexRuntime::new(search_source);
@@ -83,8 +85,11 @@ impl Default for ApplicationRuntime {
             #[cfg(any(target_os = "android", target_os = "ios", test))]
             mobile_files.clone(),
         ));
-        let document_files =
-            DocumentFileWorkflowService::new(document_opens.clone(), document_saves);
+        let document_files = DocumentFileWorkflowService::new(
+            document_opens.clone(),
+            document_saves,
+            file_operations.clone(),
+        );
         Self {
             document_queries: document_queries.clone(),
             document_opens: document_opens.clone(),
@@ -94,6 +99,7 @@ impl Default for ApplicationRuntime {
                 Arc::clone(&mutation_replays),
                 search_indexes.clone(),
                 platform_files.clone(),
+                file_operations,
             ),
             editor_commands: EditorCommandService::new(documents, mutation_replays, search_indexes),
             search_queries,

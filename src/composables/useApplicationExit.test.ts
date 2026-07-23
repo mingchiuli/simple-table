@@ -97,4 +97,29 @@ describe('application exit coordination', () => {
 
     expect(order).toEqual(['first-rollback', 'second-rollback']);
   });
+
+  it('cancels a guard in progress and waits for it during disposal', async () => {
+    const guardResult = deferred<boolean>();
+    const guardPreparation = preparation();
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createApplicationExitCoordinator({ execute });
+    coordinator.registerGuard(async () => (
+      await guardResult.promise ? guardPreparation : null
+    ));
+
+    const exit = coordinator.requestExit('close');
+    const disposal = coordinator.dispose();
+    let disposed = false;
+    void disposal.then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    guardResult.resolve(true);
+    await expect(exit).resolves.toEqual({ status: 'cancelled' });
+    await disposal;
+
+    expect(guardPreparation.rollback).toHaveBeenCalledOnce();
+    expect(execute).not.toHaveBeenCalled();
+    await expect(coordinator.requestExit('relaunch')).resolves.toEqual({ status: 'cancelled' });
+  });
 });

@@ -30,7 +30,11 @@ export interface PlatformFileOps {
   /** 从平台受信任的最近文件记录读取并解析；未实现的平台回退到 prepareOpenFile(file.path) */
   prepareRecentFile?(file: RecentFile): Promise<PreparedOpenDocument>;
   /** 保存文件：生成字节 + 写入（一体化） */
-  saveFile(path: string, context: EditorCommandContext): Promise<SavedDocumentResponse>;
+  saveFile(
+    path: string,
+    context: EditorCommandContext,
+    operationId: string,
+  ): Promise<SavedDocumentResponse>;
   /** 选择保存位置 */
   pickSaveLocation?(defaultName: string): Promise<string | null>;
   /** 释放已预留但没有成功保存接管的保存目标；桌面路径通常无需实现 */

@@ -9,8 +9,9 @@ mod status;
 mod update;
 
 pub(crate) use document::{
-    document_capabilities, native_save_plan, open_document_response, prepared_open_document,
-    saved_document_response, sheet_region_response, spreadsheet_format_options,
+    document_capabilities, file_operation_lookup, file_operation_receipt, native_save_plan,
+    open_document_response, prepared_open_document, saved_document_response, sheet_region_response,
+    spreadsheet_format_options,
 };
 pub(crate) use editor::{mutation_lookup, mutation_response};
 #[cfg(any(target_os = "android", target_os = "ios"))]

@@ -80,9 +80,10 @@ pub(crate) struct OpenDocumentSnapshot {
     pub initial_region: Option<SheetRegionSnapshot>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct PreparedOpenDocument {
     pub token: String,
+    pub preview: OpenDocumentSnapshot,
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +97,57 @@ pub(crate) struct SavedDocumentOutcome {
     pub document: Option<DocumentManifestSnapshot>,
     pub identity: Option<SavedDocumentIdentity>,
     pub editor_session: EditorSessionSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileOperationKind {
+    Open,
+    Save,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileOperationReceipt {
+    pub kind: FileOperationKind,
+    pub document_id: u64,
+    pub revision: u64,
+    pub path: String,
+    pub file_name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileOperationLookupStatus {
+    Pending,
+    Completed,
+    Missing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileOperationLookup {
+    pub status: FileOperationLookupStatus,
+    pub receipt: Option<FileOperationReceipt>,
+}
+
+impl FileOperationLookup {
+    pub(crate) fn pending() -> Self {
+        Self {
+            status: FileOperationLookupStatus::Pending,
+            receipt: None,
+        }
+    }
+
+    pub(crate) fn completed(receipt: FileOperationReceipt) -> Self {
+        Self {
+            status: FileOperationLookupStatus::Completed,
+            receipt: Some(receipt),
+        }
+    }
+
+    pub(crate) fn missing() -> Self {
+        Self {
+            status: FileOperationLookupStatus::Missing,
+            receipt: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

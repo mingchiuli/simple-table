@@ -16,7 +16,8 @@ use crate::types::{
     AddRecentFileRequest, CellData, CellFormatProjection, CellFormulaProjection, CellKind,
     CellStyleProjection, CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities,
     DocumentManifest, DrawingKind, DrawingProjection, EditorCommandContext, EditorMutationResponse,
-    EditorPatch, EditorSessionInfo, EditorStateInfo, FormulaDiagnostics, FormulaIssue,
+    EditorPatch, EditorSessionInfo, EditorStateInfo, FileOperationKind, FileOperationReceipt,
+    FileOperationResultLookup, FileOperationResultStatus, FormulaDiagnostics, FormulaIssue,
     FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus, HyperlinkProjection,
     LayoutPatch, MergeRange, MutationResultLookup, MutationResultStatus, NativeSavePlan,
     OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, RecentFile,
@@ -101,6 +102,10 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetRegionMetadata>(&mut output, &cfg);
     push_decl::<SheetRegionProjectionResponse>(&mut output, &cfg);
     push_decl::<PreparedOpenDocument>(&mut output, &cfg);
+    push_decl::<FileOperationKind>(&mut output, &cfg);
+    push_decl::<FileOperationReceipt>(&mut output, &cfg);
+    push_decl::<FileOperationResultStatus>(&mut output, &cfg);
+    push_decl::<FileOperationResultLookup>(&mut output, &cfg);
     push_decl::<crate::types::DesktopOpenTargetClaim>(&mut output, &cfg);
     push_decl::<SavedDocumentIdentity>(&mut output, &cfg);
     push_decl::<SavedDocumentResponse>(&mut output, &cfg);

@@ -26,6 +26,18 @@ export function createDocumentSessionStoreAdapter(
     }
   }
 
+  function replaceAdmittedSessionState(
+    state: DocumentSessionStateInput,
+    manifestResidentBytes: number,
+  ) {
+    if (!state.preserveResidentSheetOrder) regionCache.reset();
+    document.replaceAdmittedSessionState(state, manifestResidentBytes);
+    regionCache.reconcileProjection(state.preferredSheetIndex);
+    if (state.activatePreferredSheet && document.data?.sheets[state.preferredSheetIndex]) {
+      regionCache.activateResidentSheet(state.preferredSheetIndex, state.preferredSheetIndex);
+    }
+  }
+
   function replaceProjection(data: DocumentProjection, protectedSheetIndex = 0) {
     regionCache.reset();
     document.replaceProjection(data);
@@ -73,6 +85,7 @@ export function createDocumentSessionStoreAdapter(
     beginEditorCommand: () => document.beginEditorCommand(),
     endEditorCommand: () => document.endEditorCommand(),
     replaceSessionState,
+    replaceAdmittedSessionState,
     replaceProjection,
     clearDocument,
     applyMutationState,

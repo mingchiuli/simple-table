@@ -31,6 +31,8 @@ type UpdateRuntime = {
   currentVersionPromise: Promise<string> | null;
   updateCheckPromise: Promise<UpdateCheckResult> | null;
   downloadPromise: Promise<void> | null;
+  mobileOpenPromise: Promise<void> | null;
+  exitPromise: Promise<void> | null;
   desktopUpdate: DesktopUpdateHandle | null;
   operationToken: number;
 };
@@ -66,6 +68,8 @@ export function createUpdateCoordinator(
     currentVersionPromise: null,
     updateCheckPromise: null,
     downloadPromise: null,
+    mobileOpenPromise: null,
+    exitPromise: null,
     desktopUpdate: null,
     operationToken: 0,
   };
@@ -155,20 +159,33 @@ export function createUpdateCoordinator(
 
   async function relaunchWhenReady(token: number) {
     if (!isCurrentOperation(token)) return;
-    await exit.requestRelaunch();
+    runtime.exitPromise ??= exit.requestRelaunch()
+      .then(() => undefined)
+      .finally(() => {
+        runtime.exitPromise = null;
+      });
+    await runtime.exitPromise;
   }
 
   async function handleMobileUpdate() {
     if (disposed) return;
     const info = store.mobileUpdateInfo;
     if (!info) return;
+    if (runtime.mobileOpenPromise) {
+      await runtime.mobileOpenPromise;
+      return;
+    }
 
     const token = beginOperation();
-    try {
-      await port.openUrl(store.isAndroid && info.apkUrl ? info.apkUrl : info.releaseUrl);
-    } catch (error) {
-      if (isCurrentOperation(token)) store.fail(appErrorMessage(error));
-    }
+    runtime.mobileOpenPromise = port
+      .openUrl(store.isAndroid && info.apkUrl ? info.apkUrl : info.releaseUrl)
+      .catch((error) => {
+        if (isCurrentOperation(token)) store.fail(appErrorMessage(error));
+      })
+      .finally(() => {
+        runtime.mobileOpenPromise = null;
+      });
+    await runtime.mobileOpenPromise;
   }
 
   function reset() {
@@ -226,11 +243,15 @@ export function createUpdateCoordinator(
       runtime.currentVersionPromise
       || runtime.updateCheckPromise
       || runtime.downloadPromise
+      || runtime.mobileOpenPromise
+      || runtime.exitPromise
     ) {
       await Promise.allSettled([
         ...(runtime.currentVersionPromise ? [runtime.currentVersionPromise] : []),
         ...(runtime.updateCheckPromise ? [runtime.updateCheckPromise] : []),
         ...(runtime.downloadPromise ? [runtime.downloadPromise] : []),
+        ...(runtime.mobileOpenPromise ? [runtime.mobileOpenPromise] : []),
+        ...(runtime.exitPromise ? [runtime.exitPromise] : []),
       ]);
     }
   }

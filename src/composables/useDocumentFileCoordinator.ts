@@ -5,9 +5,12 @@ import { createDocumentFileCoordinator } from '@/application/documentFileCoordin
 import type { DocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import {
+  fileOperationReceiptFromOpenResponse,
+  fileOperationReceiptFromSavedResponse,
   runtimeDocumentCapabilities,
   runtimeNativeSavePlan,
   runtimeSpreadsheetFormatOptions,
+  savedResponseFromOpenResponse,
 } from '@/application/fileProtocol';
 import { useDocumentWorkspaceRuntime } from '@/composables/documentWorkspaceRuntime';
 import type { DocumentCommandBus } from '@/composables/documentCommandBusAdapter';
@@ -70,12 +73,16 @@ export function useDocumentFileCoordinator({
       prepareOpenFile: (path) => prepareOpenFile(path),
       prepareRecentFile: (file) => prepareRecentFile(file),
       prepareNewFile: () => api.prepareNewFile(),
-      commitPreparedDocument: (prepared, expectedContext) =>
-        api.commitPreparedDocument(prepared.token, expectedContext),
-      openedDocumentId: (opened) => opened.editorSession.documentId,
+      commitPreparedDocument: (prepared, expectedContext, operationId) =>
+        api.commitPreparedDocument(prepared.token, expectedContext, operationId),
+      getFileOperationResult: (operationId) => api.getFileOperationResult(operationId),
+      getActiveDocument: () => api.getActiveDocument(),
+      receiptFromActiveDocument: fileOperationReceiptFromOpenResponse,
       abortPreparedDocument: (prepared) => api.abortPreparedDocument(prepared.token),
       closeDocument: (documentId) => api.closeCurrentDocument(documentId),
-      saveFile: (path, context) => saveFile(path, context),
+      saveFile: (path, context, operationId) => saveFile(path, context, operationId),
+      receiptFromSavedDocument: fileOperationReceiptFromSavedResponse,
+      savedDocumentFromActive: savedResponseFromOpenResponse,
       exportFile: (defaultName, context) => exportFile(defaultName, context),
       nativeSavePlan: async (context, target) =>
         runtimeNativeSavePlan(await api.getNativeSavePlan(context, target)),
@@ -83,7 +90,7 @@ export function useDocumentFileCoordinator({
         runtimeDocumentCapabilities(await api.getDocumentCapabilities(context)),
       defaultSpreadsheetExtension: spreadsheetFormats.defaultSpreadsheetExtension,
       withReservedSaveLocation,
-      openDocumentResponse: (response, path) => session.openDocumentResponse(response, path),
+      openPreparedDocument: (prepared, path) => session.openPreparedDocument(prepared, path),
       applySavedDocumentResponse: (context, response, path, preferredSheetIndex) =>
         session.applySavedDocumentResponseForContext(
           context,

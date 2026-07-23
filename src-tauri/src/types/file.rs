@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::document::DocumentManifest;
+use super::document::{DocumentManifest, OpenDocumentResponse};
 use super::editor_session::EditorSessionInfo;
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -29,11 +29,54 @@ pub struct DesktopOpenTargetClaim {
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct PreparedOpenDocument {
     pub token: String,
+    pub preview: OpenDocumentResponse,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum FileOperationKind {
+    Open,
+    Save,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FileOperationReceipt {
+    pub kind: FileOperationKind,
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
+    pub document_id: u64,
+    #[serde(with = "crate::types::u64_string")]
+    #[ts(type = "U64String")]
+    pub revision: u64,
+    pub path: String,
+    pub file_name: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum FileOperationResultStatus {
+    Pending,
+    Completed,
+    Missing,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FileOperationResultLookup {
+    pub status: FileOperationResultStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub receipt: Option<FileOperationReceipt>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

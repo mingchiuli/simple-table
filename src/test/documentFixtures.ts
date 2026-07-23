@@ -10,6 +10,8 @@ import type {
   SheetRegionProjectionResponse,
 } from '@/types/protocol';
 import { calculateSheetExtent } from '@/table-geometry/sheetExtent';
+import { runtimePreparedOpenDocument } from '@/application/fileProtocol';
+import type { PreparedOpenDocument } from '@/types/fileRuntime';
 
 export type SheetData = {
   name: string;
@@ -64,6 +66,13 @@ export function savedResponseFromFileData(
     },
     editorSession,
   };
+}
+
+export function preparedOpenDocument(
+  response: OpenDocumentResponse,
+  token = 'prepared-open',
+): PreparedOpenDocument {
+  return runtimePreparedOpenDocument({ token, preview: response });
 }
 
 function regionFromSheet(

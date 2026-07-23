@@ -20,7 +20,7 @@ function mockDesktopPlatform(fileOps: Record<string, unknown>) {
 }
 
 function preparedOpen(): PreparedOpenDocument {
-  return { token: "prepared-recent" };
+  return { token: "prepared-recent" } as PreparedOpenDocument;
 }
 
 describe("platform loader", () => {

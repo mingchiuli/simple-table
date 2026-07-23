@@ -1,4 +1,9 @@
 import { invokeCommand } from "@/tauriInvoke";
+import {
+  runtimeFileOperationReceipt,
+  runtimeFileOperationResultLookup,
+  runtimePreparedOpenDocument,
+} from '@/application/fileProtocol';
 import type {
   RecentFile,
   SetCellRequest,
@@ -8,7 +13,6 @@ import type {
   DocumentCapabilities,
   NativeSavePlan,
   OpenDocumentResponse,
-  PreparedOpenDocument,
   SpreadsheetFormatOptions,
   EditorCommandContext,
   SearchScope,
@@ -19,20 +23,35 @@ import type {
   MutationResultLookup,
 } from '@/types/protocol';
 import type { MutationCommandContext } from '@/types/documentRuntime';
+import type {
+  FileOperationReceipt,
+  FileOperationResultLookup,
+  PreparedOpenDocument as RuntimePreparedOpenDocument,
+} from '@/types/fileRuntime';
 
-export async function prepareNewFile(): Promise<PreparedOpenDocument> {
-  return invokeCommand("prepare_new_file", {});
+export async function prepareNewFile(): Promise<RuntimePreparedOpenDocument> {
+  return runtimePreparedOpenDocument(await invokeCommand("prepare_new_file", {}));
 }
 
 export async function commitPreparedDocument(
   token: string,
-  expectedContext: EditorCommandContext | null
-): Promise<OpenDocumentResponse> {
-  return invokeCommand("commit_prepared_document", {
+  expectedContext: EditorCommandContext | null,
+  operationId: string,
+): Promise<FileOperationReceipt> {
+  return runtimeFileOperationReceipt(await invokeCommand("commit_prepared_document", {
     token,
     expectedDocumentId: expectedContext?.documentId ?? null,
     expectedRevision: expectedContext?.baseRevision ?? null,
-  });
+    operationId,
+  }));
+}
+
+export async function getFileOperationResult(
+  operationId: string,
+): Promise<FileOperationResultLookup> {
+  return runtimeFileOperationResultLookup(
+    await invokeCommand('get_file_operation_result', { operationId }),
+  );
 }
 
 export async function abortPreparedDocument(token: string): Promise<void> {

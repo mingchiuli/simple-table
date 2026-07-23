@@ -95,20 +95,6 @@ impl BoundedBlockingExecutor {
         self.run(move || task().map(project)).await
     }
 
-    pub(crate) async fn run_fallibly_mapped<T, U, F, M>(
-        &self,
-        task: F,
-        project: M,
-    ) -> Result<U, AppError>
-    where
-        T: Send + 'static,
-        U: Send + 'static,
-        F: FnOnce() -> Result<T, AppError> + Send + 'static,
-        M: FnOnce(T) -> Result<U, AppError> + Send + 'static,
-    {
-        self.run(move || task().and_then(project)).await
-    }
-
     fn try_admit(&self) -> Result<CommandAdmission, AppError> {
         let category = Arc::clone(&self.admission)
             .try_acquire_owned()

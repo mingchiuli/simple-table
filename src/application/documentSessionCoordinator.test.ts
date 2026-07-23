@@ -8,6 +8,7 @@ import { usePendingCellSavesStore } from '@/stores/pendingCellSaves';
 import { useSearchSessionStore } from '@/stores/searchSession';
 import {
   openResponseFromFileData,
+  preparedOpenDocument,
   savedResponseFromFileData,
   type FileData,
 } from '@/test/documentFixtures';
@@ -43,6 +44,18 @@ describe('documentSessionCoordinator', () => {
     expect(Object.keys(pending.draftCellValues)).toHaveLength(0);
     expect(search.searchQuery).toBe('');
     expect(search.isSearching).toBe(false);
+  });
+
+  it('publishes a prepared document with its pre-admitted manifest budget', () => {
+    const coordinator = coordinatorForStores();
+    const document = useDocumentSessionStore();
+    const prepared = preparedOpenDocument(opened('0'));
+
+    coordinator.openPreparedDocument(prepared, '/tmp/prepared.xlsx');
+
+    expect(document.documentId).toBe('1');
+    expect(document.currentFilePath).toBe('/tmp/prepared.xlsx');
+    expect(document.manifestResidentBytes).toBe(prepared.preview.manifestResidentBytes);
   });
 
   it('does not clear local state when a saved response misses its command context', () => {

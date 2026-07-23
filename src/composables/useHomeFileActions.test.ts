@@ -13,7 +13,7 @@ import {
   type RecentFile,
 } from "@/types";
 import type { OpenDocumentResponse } from '@/types/protocol';
-import { openResponseFromFileData } from "@/test/documentFixtures";
+import { openResponseFromFileData, preparedOpenDocument } from "@/test/documentFixtures";
 import { openDocumentSession } from '@/test/documentSessionTestDriver';
 import {
   createApplicationWorkspaceTestContext,
@@ -54,6 +54,8 @@ vi.mock("@/api", () => ({
   }),
   prepareNewFile: openProtocolMocks.prepareNewFile,
   commitPreparedDocument: openProtocolMocks.commitPreparedDocument,
+  getFileOperationResult: vi.fn().mockResolvedValue({ status: 'missing' }),
+  getActiveDocument: vi.fn().mockResolvedValue(null),
   abortPreparedDocument: openProtocolMocks.abortPreparedDocument,
   removeRecentFile: vi.fn(),
 }));
@@ -108,18 +110,28 @@ function openedResponse(fileName = "book.xlsx", documentId: number | string = '1
 }
 
 function mockPreparedNew(response: OpenDocumentResponse, token = "prepared-new") {
-  openProtocolMocks.prepareNewFile.mockResolvedValue({ token });
-  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+  openProtocolMocks.prepareNewFile.mockResolvedValue(preparedOpenDocument(response, token));
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(openReceipt(response));
 }
 
 function mockPreparedRecent(response: OpenDocumentResponse, token = "prepared-recent") {
-  openProtocolMocks.prepareRecentFile.mockResolvedValue({ token });
-  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+  openProtocolMocks.prepareRecentFile.mockResolvedValue(preparedOpenDocument(response, token));
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(openReceipt(response));
 }
 
 function mockPreparedSelection(response: OpenDocumentResponse, token = "prepared-selection") {
-  openProtocolMocks.prepareOpenFile.mockResolvedValue({ token });
-  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+  openProtocolMocks.prepareOpenFile.mockResolvedValue(preparedOpenDocument(response, token));
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(openReceipt(response));
+}
+
+function openReceipt(response: OpenDocumentResponse) {
+  return {
+    kind: 'open' as const,
+    documentId: response.editorSession.documentId,
+    revision: response.editorSession.revision,
+    path: response.document.path,
+    fileName: response.document.fileName,
+  };
 }
 
 function recentFile(partial: Partial<RecentFile> = {}): RecentFile {
@@ -161,7 +173,11 @@ describe("useHomeFileActions", () => {
 
     expect(api.prepareNewFile).toHaveBeenCalledTimes(1);
     expect(api.prepareNewFile).toHaveBeenCalledWith();
-    expect(api.commitPreparedDocument).toHaveBeenCalledWith("prepared-new", null);
+    expect(api.commitPreparedDocument).toHaveBeenCalledWith(
+      "prepared-new",
+      null,
+      expect.any(String),
+    );
     expect(documentSessionStore.documentId).toBe('1');
     expect(documentSessionStore.data?.fileName).toBe("untitled.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);

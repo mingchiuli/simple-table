@@ -5,15 +5,19 @@ import {
   type DocumentFileCoordinatorPorts,
 } from '@/application/documentFileCoordinator';
 import {
+  defaultHistoryStatus,
   defaultWorkbookCapabilities,
+  readyFormulaStatus,
   type DocumentProjection,
   type EditorCommandContext,
   type NativeSavePlan,
+  type PreparedOpenDocument,
   type RecentFile,
 } from '@/types';
 import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
 import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import { createDocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
+import { preparedOpenDocument } from '@/test/documentFixtures';
 
 const context: EditorCommandContext = {
   documentId: '1',
@@ -69,6 +73,51 @@ function projection(fileName = 'book.xlsx'): DocumentProjection {
   };
 }
 
+function openedResponse(
+  fileName = 'opened.xlsx',
+  documentId: `${bigint}` = '2',
+  revision: `${bigint}` = '0',
+): OpenDocumentResponse {
+  return {
+    document: { path: `/tmp/${fileName}`, fileName, sheets: [] },
+    editorSession: {
+      documentId,
+      revision,
+      formulaStatus: readyFormulaStatus(),
+      capabilities: defaultWorkbookCapabilities(),
+      editorState: {
+        canUndo: false,
+        canRedo: false,
+        isDirty: false,
+        history: defaultHistoryStatus(),
+      },
+    },
+  };
+}
+
+function prepared(token = 'prepared'): PreparedOpenDocument {
+  return preparedOpenDocument(openedResponse(), token);
+}
+
+function openReceipt(value: PreparedOpenDocument) {
+  return {
+    kind: 'open' as const,
+    documentId: value.preview.session.documentId,
+    revision: value.preview.session.revision,
+    path: value.preview.session.data.path,
+    fileName: value.preview.session.data.fileName,
+  };
+}
+
+function savedResponse(): SavedDocumentResponse {
+  return {
+    document: { path: '/tmp/book.xlsx', fileName: 'book.xlsx', sheets: [] },
+    editorSession: {
+      ...openedResponse('book.xlsx', '1', '1').editorSession,
+    },
+  };
+}
+
 function savePlan(overrides: Partial<NativeSavePlan> = {}): NativeSavePlan {
   return {
     canSave: true,
@@ -98,6 +147,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     cancel: vi.fn(),
   };
   const lifecycleRelease = vi.fn();
+  const defaultPrepared = prepared();
   const ports: TestPorts = {
     getFileData: () => projection(),
     getCommandContext: () => context,
@@ -130,20 +180,42 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     prepareConsistentContext: vi.fn().mockResolvedValue(context),
     pickOpenFile: vi.fn().mockResolvedValue(null),
     discardOpenFileSelection: vi.fn().mockResolvedValue(undefined),
-    prepareOpenFile: vi.fn().mockResolvedValue({ token: 'prepared' }),
-    prepareRecentFile: vi.fn().mockResolvedValue({ token: 'recent' }),
-    prepareNewFile: vi.fn().mockResolvedValue({ token: 'new' }),
-    commitPreparedDocument: vi.fn().mockResolvedValue({} as OpenDocumentResponse),
-    openedDocumentId: (opened) => opened.editorSession.documentId,
+    prepareOpenFile: vi.fn().mockResolvedValue(defaultPrepared),
+    prepareRecentFile: vi.fn().mockResolvedValue(prepared('recent')),
+    prepareNewFile: vi.fn().mockResolvedValue(prepared('new')),
+    commitPreparedDocument: vi.fn().mockResolvedValue(openReceipt(defaultPrepared)),
+    getFileOperationResult: vi.fn().mockResolvedValue({ status: 'missing' }),
+    getActiveDocument: vi.fn().mockResolvedValue(null),
+    receiptFromActiveDocument: (document) => ({
+      kind: 'open',
+      documentId: document.editorSession.documentId,
+      revision: document.editorSession.revision,
+      path: document.document.path,
+      fileName: document.document.fileName,
+    }),
     abortPreparedDocument: vi.fn().mockResolvedValue(undefined),
     closeDocument: vi.fn().mockResolvedValue(undefined),
-    saveFile: vi.fn().mockResolvedValue({} as SavedDocumentResponse),
+    saveFile: vi.fn().mockResolvedValue(savedResponse()),
+    receiptFromSavedDocument: (document) => {
+      const identity = document.document ?? document.identity!;
+      return {
+        kind: 'save',
+        documentId: document.editorSession.documentId,
+        revision: document.editorSession.revision,
+        path: identity.path,
+        fileName: identity.fileName,
+      };
+    },
+    savedDocumentFromActive: (document) => ({
+      document: document.document,
+      editorSession: document.editorSession,
+    }),
     exportFile: vi.fn().mockResolvedValue(null),
     nativeSavePlan: vi.fn().mockResolvedValue(savePlan()),
     documentCapabilities: vi.fn().mockResolvedValue(savePlan().capabilities),
     defaultSpreadsheetExtension: vi.fn().mockResolvedValue('xlsx'),
     withReservedSaveLocation: vi.fn().mockResolvedValue(null),
-    openDocumentResponse: vi.fn(),
+    openPreparedDocument: vi.fn(),
     applySavedDocumentResponse: vi.fn().mockReturnValue(true),
     clearDocument: vi.fn(),
     queueRecentFileEntryUpdate: vi.fn(),
@@ -157,7 +229,7 @@ describe('documentFileCoordinator', () => {
     let current = true;
     const prepareOpenFile = vi.fn(async () => {
       current = false;
-      return { token: 'stale' };
+      return prepared('stale');
     });
     const { ports, replacement } = createPorts({ prepareOpenFile });
     const preparations = createDocumentPreparationCoordinator();
@@ -171,16 +243,18 @@ describe('documentFileCoordinator', () => {
       coordinator.loadFileFromPath('/tmp/stale.xlsx', cancellation)
     ).resolves.toBe(false);
 
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'stale' });
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'stale' }),
+    );
     expect(ports.commitPreparedDocument).not.toHaveBeenCalled();
     expect(replacement.cancel).toHaveBeenCalledOnce();
   });
 
   it('releases a cancelled route load while draining preparation before the next one', async () => {
-    const firstPrepare = deferred<{ token: string }>();
+    const firstPrepare = deferred<PreparedOpenDocument>();
     const prepareOpenFile = vi.fn()
       .mockReturnValueOnce(firstPrepare.promise)
-      .mockResolvedValueOnce({ token: 'latest' });
+      .mockResolvedValueOnce(prepared('latest'));
     const { ports } = createPorts({ prepareOpenFile });
     const preparations = createDocumentPreparationCoordinator();
     const coordinator = createDocumentFileCoordinator(ports, preparations);
@@ -196,16 +270,18 @@ describe('documentFileCoordinator', () => {
     await flushPromises();
     expect(prepareOpenFile).toHaveBeenCalledTimes(1);
 
-    firstPrepare.resolve({ token: 'slow' });
+    firstPrepare.resolve(prepared('slow'));
     await expect(latest).resolves.toBe(true);
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'slow' });
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'slow' }),
+    );
     expect(prepareOpenFile).toHaveBeenNthCalledWith(2, '/tmp/latest.xlsx');
   });
 
   it('serializes new-document preparation behind a cancelled route parse', async () => {
-    const routePrepare = deferred<{ token: string }>();
+    const routePrepare = deferred<PreparedOpenDocument>();
     const prepareOpenFile = vi.fn().mockReturnValue(routePrepare.promise);
-    const prepareNewFile = vi.fn().mockResolvedValue({ token: 'new' });
+    const prepareNewFile = vi.fn().mockResolvedValue(prepared('new'));
     const { ports } = createPorts({ prepareOpenFile, prepareNewFile });
     const preparations = createDocumentPreparationCoordinator();
     const routeCoordinator = createDocumentFileCoordinator(ports, preparations);
@@ -221,10 +297,12 @@ describe('documentFileCoordinator', () => {
     await flushPromises();
     expect(prepareNewFile).not.toHaveBeenCalled();
 
-    routePrepare.resolve({ token: 'stale-route' });
+    routePrepare.resolve(prepared('stale-route'));
 
     await expect(createDocument).resolves.toBe(true);
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'stale-route' });
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'stale-route' }),
+    );
     expect(prepareNewFile).toHaveBeenCalledOnce();
   });
 
@@ -235,7 +313,11 @@ describe('documentFileCoordinator', () => {
 
     await expect(coordinator.saveCurrentFile()).resolves.toEqual({ status: 'saved-stale' });
 
-    expect(ports.saveFile).toHaveBeenCalledWith('/tmp/book.xlsx', context);
+    expect(ports.saveFile).toHaveBeenCalledWith(
+      '/tmp/book.xlsx',
+      context,
+      expect.any(String),
+    );
     expect(ports.queueRecentFileEntryUpdate).not.toHaveBeenCalled();
   });
 
@@ -302,10 +384,12 @@ describe('documentFileCoordinator', () => {
 
     await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
 
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'prepared' });
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'prepared' }),
+    );
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.discardOpenFileSelection).toHaveBeenCalledWith(selection);
-    expect(ports.openDocumentResponse).not.toHaveBeenCalled();
+    expect(ports.openPreparedDocument).not.toHaveBeenCalled();
   });
 
   it('discards a selected file when document replacement is denied', async () => {
@@ -347,8 +431,8 @@ describe('documentFileCoordinator', () => {
 
   it('commits replacement before publishing a selected document', async () => {
     let replacementCommitted = false;
-    const opened = {} as OpenDocumentResponse;
-    const openDocumentResponse = vi.fn(() => {
+    const selectedPrepared = prepared();
+    const openPreparedDocument = vi.fn(() => {
       expect(replacementCommitted).toBe(true);
     });
     const cancel = vi.fn();
@@ -359,14 +443,15 @@ describe('documentFileCoordinator', () => {
         }),
         cancel,
       }),
-      commitPreparedDocument: vi.fn().mockResolvedValue(opened),
-      openDocumentResponse,
+      prepareOpenFile: vi.fn().mockResolvedValue(selectedPrepared),
+      commitPreparedDocument: vi.fn().mockResolvedValue(openReceipt(selectedPrepared)),
+      openPreparedDocument,
     });
     const coordinator = createDocumentFileCoordinator(ports);
 
     await expect(coordinator.openSelectedFile(selection)).resolves.toBe(true);
 
-    expect(openDocumentResponse).toHaveBeenCalledWith(opened, selection.path);
+    expect(openPreparedDocument).toHaveBeenCalledWith(selectedPrepared, selection.path);
     expect(ports.discardOpenFileSelection).not.toHaveBeenCalled();
     expect(ports.abortPreparedDocument).not.toHaveBeenCalled();
     expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(selection.originalPath);
@@ -380,9 +465,11 @@ describe('documentFileCoordinator', () => {
 
     await expect(coordinator.loadFileFromPath('/tmp/route.xlsx')).resolves.toBe(false);
 
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith({ token: 'prepared' });
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'prepared' }),
+    );
     expect(replacement.cancel).toHaveBeenCalledOnce();
-    expect(ports.openDocumentResponse).not.toHaveBeenCalled();
+    expect(ports.openPreparedDocument).not.toHaveBeenCalled();
   });
 
   it('opens a recent document through the shared replacement protocol', async () => {
@@ -396,16 +483,19 @@ describe('documentFileCoordinator', () => {
       storageType: 'desktopPath',
       originalPath: '/original/recent.xlsx',
     } as RecentFile;
-    const opened = {} as OpenDocumentResponse;
-    const commitPreparedDocument = vi.fn().mockResolvedValue(opened);
-    const { ports, replacement } = createPorts({ commitPreparedDocument });
+    const recentPrepared = prepared('recent');
+    const commitPreparedDocument = vi.fn().mockResolvedValue(openReceipt(recentPrepared));
+    const { ports, replacement } = createPorts({
+      prepareRecentFile: vi.fn().mockResolvedValue(recentPrepared),
+      commitPreparedDocument,
+    });
     const coordinator = createDocumentFileCoordinator(ports);
 
     await expect(coordinator.openRecentDocument(recent)).resolves.toBe(true);
 
     expect(ports.prepareRecentFile).toHaveBeenCalledWith(recent);
     expect(replacement.commit).toHaveBeenCalledOnce();
-    expect(ports.openDocumentResponse).toHaveBeenCalledWith(opened, recent.path);
+    expect(ports.openPreparedDocument).toHaveBeenCalledWith(recentPrepared, recent.path);
     expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(recent.originalPath);
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'loading',
@@ -438,9 +528,10 @@ describe('documentFileCoordinator', () => {
   });
 
   it('creates a new document without adding an unsaved recent entry', async () => {
-    const opened = {} as OpenDocumentResponse;
+    const newPrepared = prepared('new');
     const { ports, replacement } = createPorts({
-      commitPreparedDocument: vi.fn().mockResolvedValue(opened),
+      prepareNewFile: vi.fn().mockResolvedValue(newPrepared),
+      commitPreparedDocument: vi.fn().mockResolvedValue(openReceipt(newPrepared)),
     });
     const coordinator = createDocumentFileCoordinator(ports);
 
@@ -448,7 +539,7 @@ describe('documentFileCoordinator', () => {
 
     expect(ports.prepareNewFile).toHaveBeenCalledOnce();
     expect(replacement.commit).toHaveBeenCalledOnce();
-    expect(ports.openDocumentResponse).toHaveBeenCalledWith(opened, null);
+    expect(ports.openPreparedDocument).toHaveBeenCalledWith(newPrepared, null);
     expect(ports.queueRecentFileEntryUpdate).not.toHaveBeenCalled();
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'loading',

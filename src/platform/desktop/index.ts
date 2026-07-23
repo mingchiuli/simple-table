@@ -5,6 +5,7 @@ import type {
 } from '@/types/documentRuntime';
 import type { OpenTargetClaim, PreparedOpenDocument } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
+import { runtimePreparedOpenDocument } from '@/application/fileProtocol';
 
 export const desktopFileOps = {
   claimPendingOpenTarget: (): Promise<OpenTargetClaim | null> => {
@@ -30,16 +31,18 @@ export const desktopFileOps = {
 
   /** Desktop: 从后端已授权路径读取并解析。 */
   prepareOpenFile: async (path: string): Promise<PreparedOpenDocument> => {
-    return invokeCommand("prepare_open_file_desktop", { path });
+    return runtimePreparedOpenDocument(await invokeCommand("prepare_open_file_desktop", { path }));
   },
 
-  prepareRecentFile: (file: RecentFile): Promise<PreparedOpenDocument> => {
-    return invokeCommand("prepare_recent_file_desktop", { id: file.id });
+  prepareRecentFile: async (file: RecentFile): Promise<PreparedOpenDocument> => {
+    return runtimePreparedOpenDocument(
+      await invokeCommand("prepare_recent_file_desktop", { id: file.id }),
+    );
   },
 
   /** Desktop: 生成文件字节并写入路径 */
-  saveFile: async (path: string, context: EditorCommandContext) => {
-    return invokeCommand("save_file_desktop", { path, ...context });
+  saveFile: async (path: string, context: EditorCommandContext, operationId: string) => {
+    return invokeCommand("save_file_desktop", { path, ...context, operationId });
   },
 
   pickSaveLocation: async (defaultName: string) => {

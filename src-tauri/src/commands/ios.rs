@@ -81,13 +81,12 @@ pub async fn prepare_open_file_ios(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run_mapped(
-            move || {
-                let source = runtime.platform_files().mobile_open_source(app, path);
-                runtime.document_files().prepare_open(source)
-            },
-            protocol_projection::prepared_open_document,
-        )
+        .run(move || {
+            let source = runtime.platform_files().mobile_open_source(app, path);
+            runtime
+                .document_files()
+                .prepare_open_projected(source, protocol_projection::prepared_open_document)
+        })
         .await
 }
 
@@ -121,19 +120,21 @@ pub async fn save_file_ios(
     path: String,
     document_id: CommandU64,
     base_revision: CommandU64,
+    operation_id: String,
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run_fallibly_mapped(
-            move || {
-                let target = runtime.platform_files().mobile_save_target(app, path)?;
-                runtime
-                    .document_files()
-                    .save(target, document_id.get(), base_revision.get())
-            },
-            protocol_projection::saved_document_response,
-        )
+        .run(move || {
+            let target = runtime.platform_files().mobile_save_target(app, path)?;
+            runtime.document_files().save_projected(
+                target,
+                document_id.get(),
+                base_revision.get(),
+                &operation_id,
+                protocol_projection::saved_document_response,
+            )
+        })
         .await
 }
 

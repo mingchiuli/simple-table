@@ -79,6 +79,7 @@ export function createApplicationWorkspaceRuntime(
       if (disposal) return disposal;
       disposed = true;
       disposal = Promise.all([
+        applicationExit.dispose(),
         document.dispose(),
         recentFiles.dispose(),
         updateCoordinator?.dispose() ?? Promise.resolve(),

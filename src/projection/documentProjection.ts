@@ -15,6 +15,7 @@ import type {
   SheetSlot,
 } from '@/types/documentRuntime';
 import { defaultRichProjection } from '@/types/documentRuntime';
+import { MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES } from '@/resourcePolicy/editorMemoryPolicy';
 
 export type ProjectionPatchResult = {
   data: DocumentProjection | null;
@@ -53,6 +54,16 @@ export function estimateDocumentManifestResidentBytes(data: DocumentProjection):
       + utf16Bytes(sheet.name)
       + estimateLayoutIndexBytes(sheet.layout.columnWidths)
       + estimateLayoutIndexBytes(sheet.layout.rowHeights), 0);
+}
+
+export function admitDocumentManifestResidentBytes(data: DocumentProjection): number {
+  const bytes = estimateDocumentManifestResidentBytes(data);
+  if (bytes > MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES) {
+    throw new Error(
+      `Document manifest requires ${bytes} resident bytes; maximum is ${MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES}`,
+    );
+  }
+  return bytes;
 }
 
 function estimateLayoutIndexBytes(values: Record<number, number>): number {

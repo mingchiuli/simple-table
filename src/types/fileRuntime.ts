@@ -1,7 +1,28 @@
-import type { RuntimeWorkbookCapabilities } from './editorRuntime';
+import type { DocumentSessionStateInput, U64String } from './documentRuntime';
+import type { DocumentStatusStateInput, RuntimeWorkbookCapabilities } from './editorRuntime';
 
 export type PreparedOpenDocument = {
   token: string;
+  preview: {
+    session: DocumentSessionStateInput;
+    status: DocumentStatusStateInput;
+    manifestResidentBytes: number;
+  };
+};
+
+export type FileOperationKind = 'open' | 'save';
+
+export type FileOperationReceipt = {
+  kind: FileOperationKind;
+  documentId: U64String;
+  revision: U64String;
+  path: string;
+  fileName: string;
+};
+
+export type FileOperationResultLookup = {
+  status: 'pending' | 'completed' | 'missing';
+  receipt?: FileOperationReceipt;
 };
 
 export type OpenTargetClaim = {

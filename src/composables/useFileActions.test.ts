@@ -19,6 +19,7 @@ import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protoc
 import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import {
   openResponseFromFileData,
+  preparedOpenDocument,
   savedResponseFromFileData,
   type FileData,
   type SheetData,
@@ -74,6 +75,8 @@ vi.mock("@/api", () => ({
   closeCurrentDocument: vi.fn(),
   getNativeSavePlan: vi.fn(),
   commitPreparedDocument: openProtocolMocks.commitPreparedDocument,
+  getFileOperationResult: vi.fn().mockResolvedValue({ status: 'missing' }),
+  getActiveDocument: vi.fn().mockResolvedValue(null),
   abortPreparedDocument: openProtocolMocks.abortPreparedDocument,
 }));
 
@@ -115,27 +118,40 @@ function fileData(fileName: string, value: string): FileData {
 
 function openedResponse(fileName: string, documentId: number | string): OpenDocumentResponse {
   const editorSession = {
-      documentId: String(documentId) as `${bigint}`,
-      revision: '0' as const,
-      formulaStatus: readyFormulaStatus(),
-      capabilities: defaultWorkbookCapabilities(),
-      editorState: {
-        canUndo: false,
-        canRedo: false,
-        isDirty: false,
-        history: defaultHistoryStatus(),
-      },
-    };
+    documentId: String(documentId) as `${bigint}`,
+    revision: '0' as const,
+    formulaStatus: readyFormulaStatus(),
+    capabilities: defaultWorkbookCapabilities(),
+    editorState: {
+      canUndo: false,
+      canRedo: false,
+      isDirty: false,
+      history: defaultHistoryStatus(),
+    },
+  };
   return openResponseFromFileData(fileData(fileName, "opened"), editorSession);
 }
 
-function preparedOpen(token = "prepared-open"): PreparedOpenDocument {
-  return { token };
+function preparedOpen(
+  token = "prepared-open",
+  response = openedResponse(`${token}.xlsx`, 2),
+): PreparedOpenDocument {
+  return preparedOpenDocument(response, token);
+}
+
+function openReceipt(response: OpenDocumentResponse) {
+  return {
+    kind: 'open' as const,
+    documentId: response.editorSession.documentId,
+    revision: response.editorSession.revision,
+    path: response.document.path,
+    fileName: response.document.fileName,
+  };
 }
 
 function mockPreparedOpen(response: OpenDocumentResponse, token = "prepared-open") {
-  openProtocolMocks.prepareOpenFile.mockResolvedValue(preparedOpen(token));
-  openProtocolMocks.commitPreparedDocument.mockResolvedValue(response);
+  openProtocolMocks.prepareOpenFile.mockResolvedValue(preparedOpen(token, response));
+  openProtocolMocks.commitPreparedDocument.mockResolvedValue(openReceipt(response));
 }
 
 function newUntitledResponse(documentId: number): OpenDocumentResponse {
@@ -147,7 +163,7 @@ function savedResponse(fileName: string, path: string, documentId: number): Save
   const opened = openedResponse(fileName, documentId);
   return savedResponseFromFileData(
     { ...fileData(fileName, "saved"), path },
-    opened.editorSession
+    { ...opened.editorSession, revision: '1' },
   );
 }
 
@@ -325,9 +341,12 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const platform = await import("@/platform");
     const documentSessionStore = useDocumentSessionStore();
-    const pendingCommit = deferred<OpenDocumentResponse>();
+    const response = openedResponse("committing.xlsx", 2);
+    const pendingCommit = deferred<ReturnType<typeof openReceipt>>();
     const cancellation = controlledCancellation();
-    vi.mocked(platform.prepareOpenFile).mockResolvedValue(preparedOpen("committing-token"));
+    vi.mocked(platform.prepareOpenFile).mockResolvedValue(
+      preparedOpen("committing-token", response),
+    );
     vi.mocked(api.commitPreparedDocument).mockReturnValue(pendingCommit.promise);
 
     const actions = mountActions(vi.fn().mockResolvedValue(true));
@@ -337,7 +356,7 @@ describe("useFileActions", () => {
     cancellation.cancel();
     expect(documentSessionStore.lifecycle).toBe("loading");
 
-    pendingCommit.resolve(openedResponse("committing.xlsx", 2));
+    pendingCommit.resolve(openReceipt(response));
 
     await expect(loadPromise).resolves.toBe(false);
     expect(api.closeCurrentDocument).toHaveBeenCalledWith('2');
@@ -349,7 +368,8 @@ describe("useFileActions", () => {
   it("closes a replacement document committed after its route load was cancelled", async () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
-    const pendingCommit = deferred<OpenDocumentResponse>();
+    const response = openedResponse("replacement.xlsx", 2);
+    const pendingCommit = deferred<ReturnType<typeof openReceipt>>();
     const cancellation = controlledCancellation();
     openDocumentSession(
       workspace.runtime,
@@ -357,7 +377,7 @@ describe("useFileActions", () => {
       "/tmp/current.xlsx"
     );
     vi.mocked(openProtocolMocks.prepareOpenFile).mockResolvedValue(
-      preparedOpen("replacement-token")
+      preparedOpen("replacement-token", response)
     );
     vi.mocked(api.commitPreparedDocument).mockReturnValue(pendingCommit.promise);
 
@@ -365,12 +385,13 @@ describe("useFileActions", () => {
     const loadPromise = actions.loadFileFromPath("/tmp/replacement.xlsx", cancellation.signal);
     await waitForCondition(() => vi.mocked(api.commitPreparedDocument).mock.calls.length > 0);
 
-    expect(api.commitPreparedDocument).toHaveBeenCalledWith("replacement-token", {
-      documentId: '1',
-      baseRevision: '0',
-    });
+    expect(api.commitPreparedDocument).toHaveBeenCalledWith(
+      "replacement-token",
+      { documentId: '1', baseRevision: '0' },
+      expect.any(String),
+    );
     cancellation.cancel();
-    pendingCommit.resolve(openedResponse("replacement.xlsx", 2));
+    pendingCommit.resolve(openReceipt(response));
 
     await expect(loadPromise).resolves.toBe(false);
     expect(api.closeCurrentDocument).toHaveBeenCalledWith('2');
@@ -821,7 +842,7 @@ describe("useFileActions", () => {
     expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
       documentId: '1',
       baseRevision: '0',
-    });
+    }, expect.any(String));
     expect(platform.discardSaveLocation).not.toHaveBeenCalled();
     expect(documentSessionStore.currentFilePath).toBe(savePath);
   });
@@ -853,11 +874,11 @@ describe("useFileActions", () => {
       expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
         documentId: '1',
         baseRevision: '0',
-      });
+      }, expect.any(String));
       expect(platform.discardSaveLocation).not.toHaveBeenCalled();
       expect(documentSessionStore.currentFilePath).toBe(savePath);
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: '1', baseRevision: '0' },
+        { documentId: '1', baseRevision: '1' },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -892,10 +913,10 @@ describe("useFileActions", () => {
       expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
         documentId: '1',
         baseRevision: '0',
-      });
+      }, expect.any(String));
       expect(documentSessionStore.currentFilePath).toBe(existingPath);
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: '1', baseRevision: '0' },
+        { documentId: '1', baseRevision: '1' },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -922,7 +943,7 @@ describe("useFileActions", () => {
       ...saved,
       editorSession: {
         ...saved.editorSession,
-        revision: '3',
+        revision: '4',
       },
     });
 
@@ -933,7 +954,7 @@ describe("useFileActions", () => {
     expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
       documentId: '1',
       baseRevision: '3',
-    });
+    }, expect.any(String));
     expect(documentSessionStore.projectionStale).toBe(false);
     expect(documentSessionStore.loadedSheet(0)?.blocks).toHaveLength(0);
     expect(documentSessionStore.data?.fileName).toBe("current.xlsx");
@@ -952,7 +973,10 @@ describe("useFileActions", () => {
       .mockResolvedValueOnce(nativeSavePlan({ requiresSaveAs: true }))
       .mockResolvedValueOnce(nativeSavePlan());
     vi.mocked(platform.pickSaveLocation).mockResolvedValue(savePath);
-    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("stale-response.xlsx", savePath, 2));
+    vi.mocked(platform.saveFile).mockImplementation(async () => {
+      documentSessionStore.documentId = '2';
+      return savedResponse("stale-response.xlsx", savePath, 1);
+    });
 
     const actions = mountActions(flushPendingCellChanges);
 
@@ -961,14 +985,14 @@ describe("useFileActions", () => {
     expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
       documentId: '1',
       baseRevision: '0',
-    });
+    }, expect.any(String));
     expect(platform.discardSaveLocation).not.toHaveBeenCalled();
     expect(elementPlus.ElMessage.warning).toHaveBeenCalledWith(
       "File was saved, but the active document changed before the editor could refresh."
     );
     expect(elementPlus.ElMessage.success).not.toHaveBeenCalled();
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
-    expect(documentSessionStore.documentId).toBe('1');
+    expect(documentSessionStore.documentId).toBe('2');
     expect(documentSessionStore.currentFilePath).toBeNull();
   });
 
@@ -981,7 +1005,10 @@ describe("useFileActions", () => {
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
     openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), existingPath);
     vi.mocked(api.getNativeSavePlan).mockResolvedValueOnce(nativeSavePlan());
-    vi.mocked(platform.saveFile).mockResolvedValue(savedResponse("current.xlsx", existingPath, 2));
+    vi.mocked(platform.saveFile).mockImplementation(async () => {
+      documentSessionStore.documentId = '2';
+      return savedResponse("current.xlsx", existingPath, 1);
+    });
 
     const actions = mountActions(flushPendingCellChanges);
 
@@ -990,7 +1017,7 @@ describe("useFileActions", () => {
     expect(platform.saveFile).toHaveBeenCalledWith(existingPath, {
       documentId: '1',
       baseRevision: '0',
-    });
+    }, expect.any(String));
     expect(elementPlus.ElMessage.warning).toHaveBeenCalledWith(
       "File was saved, but the active document changed before the editor could refresh."
     );
@@ -1019,7 +1046,7 @@ describe("useFileActions", () => {
     expect(platform.saveFile).toHaveBeenCalledWith(savePath, {
       documentId: '1',
       baseRevision: '0',
-    });
+    }, expect.any(String));
     expect(platform.discardSaveLocation).toHaveBeenCalledWith(savePath);
     expect(documentSessionStore.currentFilePath).toBeNull();
   });

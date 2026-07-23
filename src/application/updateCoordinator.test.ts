@@ -102,4 +102,37 @@ describe('updateCoordinator', () => {
     await Promise.all([activeCheck, disposal]);
     expect(session.status).toBe('checking');
   });
+
+  it('drains an active mobile URL launch on disposal', async () => {
+    const session = new TestUpdateSession();
+    session.mobileUpdateInfo = {
+      version: '1.1.0',
+      tagName: 'v1.1.0',
+      releaseUrl: 'https://example.com/release',
+      apkUrl: 'https://example.com/app.apk',
+    };
+    let release!: () => void;
+    const open = new Promise<void>((resolve) => { release = resolve; });
+    const openUrl = vi.fn().mockReturnValue(open);
+    const coordinator = createUpdateCoordinator(session, {
+      getVersion: async () => '1.0.0',
+      platform: () => 'android',
+      checkDesktop: async () => null,
+      checkMobile: async () => null,
+      openUrl,
+    }, { requestRelaunch: async () => true });
+
+    const launch = coordinator.handleMobileUpdate();
+    await Promise.resolve();
+    let disposed = false;
+    const disposal = coordinator.dispose().then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+
+    release();
+    await Promise.all([launch, disposal]);
+    expect(openUrl).toHaveBeenCalledWith('https://example.com/app.apk');
+    await coordinator.handleMobileUpdate();
+    expect(openUrl).toHaveBeenCalledTimes(1);
+  });
 });

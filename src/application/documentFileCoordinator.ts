@@ -1,15 +1,17 @@
 import type {
   DocumentProjection,
   EditorCommandContext,
-  U64String,
 } from '@/types/documentRuntime';
 import type {
   DocumentCapabilities,
+  FileOperationReceipt,
+  FileOperationResultLookup,
   NativeSavePlan,
   PreparedOpenDocument,
 } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
+import { isNextU64 } from '@/utils/u64';
 import {
   neverCancelled,
   type OperationCancellationSignal,
@@ -19,6 +21,9 @@ import {
   type DocumentPreparationCoordinator,
 } from '@/application/documentPreparationCoordinator';
 import type { ApplicationExitPreparation } from '@/application/applicationExitCoordinator';
+import {
+  createDocumentFileOperationProtocol,
+} from '@/application/documentFileOperationProtocol';
 
 type DocumentLifecycle = 'loading' | 'saving' | 'closing';
 type DocumentLifecycleStatus = 'completed' | 'failed' | 'skipped';
@@ -61,7 +66,7 @@ export type SaveFileOutcome =
 
 export type ExportFileOutcome = 'none' | 'exported';
 
-export type DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument> = {
+export type DocumentFileCoordinatorPorts<ActiveDocument, SavedDocument> = {
   getFileData: () => DocumentProjection | null;
   getCommandContext: () => EditorCommandContext | null;
   getCurrentFilePath: () => string | null;
@@ -81,15 +86,21 @@ export type DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument> = {
   prepareNewFile: () => Promise<PreparedOpenDocument>;
   commitPreparedDocument: (
     prepared: PreparedOpenDocument,
-    expectedContext: EditorCommandContext | null
-  ) => Promise<OpenedDocument>;
-  openedDocumentId: (opened: OpenedDocument) => U64String;
+    expectedContext: EditorCommandContext | null,
+    operationId: string,
+  ) => Promise<FileOperationReceipt>;
+  getFileOperationResult: (operationId: string) => Promise<FileOperationResultLookup>;
+  getActiveDocument: () => Promise<ActiveDocument | null>;
+  receiptFromActiveDocument: (document: ActiveDocument) => FileOperationReceipt;
   abortPreparedDocument: (prepared: PreparedOpenDocument) => Promise<void>;
   closeDocument: (documentId: EditorCommandContext['documentId']) => Promise<void>;
   saveFile: (
     path: string,
-    context: EditorCommandContext
+    context: EditorCommandContext,
+    operationId: string,
   ) => Promise<SavedDocument>;
+  receiptFromSavedDocument: (document: SavedDocument) => FileOperationReceipt;
+  savedDocumentFromActive: (document: ActiveDocument) => SavedDocument;
   exportFile: (defaultName: string, context: EditorCommandContext) => Promise<string | null>;
   nativeSavePlan: (
     context: EditorCommandContext,
@@ -103,7 +114,7 @@ export type DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument> = {
     defaultName: string,
     action: (location: ReservedSaveLocation) => Promise<T>
   ) => Promise<T | null>;
-  openDocumentResponse: (response: OpenedDocument, path: string | null) => void;
+  openPreparedDocument: (prepared: PreparedOpenDocument, path: string | null) => void;
   applySavedDocumentResponse: (
     context: EditorCommandContext,
     response: SavedDocument,
@@ -115,10 +126,14 @@ export type DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument> = {
   reportCleanupError?: (message: string, error: unknown) => void;
 };
 
-export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
-  ports: DocumentFileCoordinatorPorts<OpenedDocument, SavedDocument>,
+export function createDocumentFileCoordinator<ActiveDocument, SavedDocument>(
+  ports: DocumentFileCoordinatorPorts<ActiveDocument, SavedDocument>,
   preparations: DocumentPreparationCoordinator = createDocumentPreparationCoordinator(),
 ) {
+  const fileOperations = createDocumentFileOperationProtocol({
+    getFileOperationResult: ports.getFileOperationResult,
+    reportError: ports.reportCleanupError,
+  });
   async function loadFileFromPath(
     filePath: string,
     cancellation: OperationCancellationSignal = neverCancelled,
@@ -144,21 +159,21 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
             await abortPreparedDocumentQuietly(prepared);
             return;
           }
-          const opened = await commitPreparedDocument(prepared, expectedContext);
+          const receipt = await commitPreparedDocument(prepared, expectedContext);
           if (cancellation.isCancelled()) {
             try {
-              await ports.closeDocument(ports.openedDocumentId(opened));
+              await ports.closeDocument(receipt.documentId);
               replacement.commit();
               ports.clearDocument();
             } catch (error) {
               replacement.commit();
-              ports.openDocumentResponse(opened, filePath);
+              ports.openPreparedDocument(prepared, filePath);
               throw error;
             }
             return;
           }
           replacement.commit();
-          ports.openDocumentResponse(opened, filePath);
+          ports.openPreparedDocument(prepared, filePath);
           loaded = true;
           ports.queueRecentFileEntryUpdate();
         } finally {
@@ -239,7 +254,7 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
             outcome = blockedSaveOutcome(targetPlan);
             return;
           }
-          const saved = await ports.saveFile(path, context);
+          const saved = await commitSavedDocument(path, context);
           markPersisted();
           outcome = applySavedResponse(path, context, saved);
         }
@@ -347,11 +362,11 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
       if (!replacement) return false;
       const expectedContext = ports.getCommandContext();
       const prepared = await preparations.run(() => ports.prepareOpenFile(selection.path));
-      const opened = await commitPreparedDocument(prepared, expectedContext);
+      await commitPreparedDocument(prepared, expectedContext);
       discardSelection = false;
       replacement.commit();
       replacement = null;
-      ports.openDocumentResponse(opened, selection.path);
+      ports.openPreparedDocument(prepared, selection.path);
       ports.queueRecentFileEntryUpdate(selection.originalPath);
       return true;
     } catch (error) {
@@ -384,9 +399,9 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     try {
       const expectedContext = ports.getCommandContext();
       const prepared = await preparations.run(prepare);
-      const opened = await commitPreparedDocument(prepared, expectedContext);
+      await commitPreparedDocument(prepared, expectedContext);
       replacement.commit();
-      ports.openDocumentResponse(opened, path);
+      ports.openPreparedDocument(prepared, path);
       if (path !== null) ports.queueRecentFileEntryUpdate(recentOriginalPath);
       return true;
     } catch (error) {
@@ -398,9 +413,25 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
   async function commitPreparedDocument(
     prepared: PreparedOpenDocument,
     expectedContext: EditorCommandContext | null,
-  ): Promise<OpenedDocument> {
+  ): Promise<FileOperationReceipt> {
     try {
-      return await ports.commitPreparedDocument(prepared, expectedContext);
+      return await fileOperations.execute({
+        kind: 'open',
+        invoke: (operationId) => ports.commitPreparedDocument(
+          prepared,
+          expectedContext,
+          operationId,
+        ),
+        receiptForResponse: (receipt) => receipt,
+        validateReceipt: (receipt) => receiptMatchesPrepared(receipt, prepared),
+        recoverResponse: async (receipt) => receipt,
+        recoverAmbiguous: async () => {
+          const active = await ports.getActiveDocument();
+          if (!active) return null;
+          const receipt = ports.receiptFromActiveDocument(active);
+          return receiptMatchesPrepared(receipt, prepared) ? receipt : null;
+        },
+      });
     } catch (error) {
       await abortPreparedDocumentQuietly(prepared);
       throw error;
@@ -411,8 +442,46 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     path: string,
     context: EditorCommandContext
   ): Promise<SaveFileOutcome> {
-    const saved = await ports.saveFile(path, context);
+    const saved = await commitSavedDocument(path, context);
     return applySavedResponse(path, context, saved);
+  }
+
+  async function commitSavedDocument(
+    path: string,
+    context: EditorCommandContext,
+  ): Promise<SavedDocument> {
+    return fileOperations.execute({
+      kind: 'save',
+      invoke: (operationId) => ports.saveFile(path, context, operationId),
+      receiptForResponse: ports.receiptFromSavedDocument,
+      validateReceipt: (receipt) => receiptMatchesSave(receipt, context),
+      recoverResponse: (receipt) => recoverSavedResponse(receipt),
+      recoverAmbiguous: async () => {
+        const active = await ports.getActiveDocument();
+        if (!active) return null;
+        const receipt = ports.receiptFromActiveDocument(active);
+        return receiptMatchesSave(receipt, context)
+          ? ports.savedDocumentFromActive(active)
+          : null;
+      },
+    });
+  }
+
+  async function recoverSavedResponse(
+    receipt: FileOperationReceipt,
+  ): Promise<SavedDocument> {
+    const active = await ports.getActiveDocument();
+    if (!active) {
+      throw new Error('Completed save receipt does not match the active document');
+    }
+    const activeReceipt = ports.receiptFromActiveDocument(active);
+    if (
+      activeReceipt.documentId !== receipt.documentId
+      || activeReceipt.revision !== receipt.revision
+    ) {
+      throw new Error('Completed save receipt does not match the active document');
+    }
+    return ports.savedDocumentFromActive(active);
   }
 
   function applySavedResponse(
@@ -458,4 +527,21 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     closeCurrentDocument,
     prepareApplicationExit,
   };
+}
+
+function receiptMatchesPrepared(
+  receipt: FileOperationReceipt,
+  prepared: PreparedOpenDocument,
+): boolean {
+  return receipt.documentId === prepared.preview.session.documentId
+    && receipt.revision === prepared.preview.session.revision
+    && receipt.fileName === prepared.preview.session.data.fileName;
+}
+
+function receiptMatchesSave(
+  receipt: FileOperationReceipt,
+  context: EditorCommandContext,
+): boolean {
+  return receipt.documentId === context.documentId
+    && isNextU64(receipt.revision, context.baseRevision);
 }

@@ -2,6 +2,7 @@ import { invokeCommand } from '@/tauriInvoke';
 import type { OpenFileSelection, PlatformAPI } from '../types';
 import type { EditorCommandContext } from '@/types/documentRuntime';
 import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import { runtimePreparedOpenDocument } from '@/application/fileProtocol';
 
 export const iosFileOps = {
   /** iOS: 后端用官方 dialog/fs 导入到 App 沙盒，不解析、不替换后端活动文档 */
@@ -21,13 +22,13 @@ export const iosFileOps = {
   },
 
   /** iOS: 从 App 沙盒路径读取并解析（用于最近文件列表） */
-  prepareOpenFile: (path: string): Promise<PreparedOpenDocument> => {
-    return invokeCommand("prepare_open_file_ios", { path });
+  prepareOpenFile: async (path: string): Promise<PreparedOpenDocument> => {
+    return runtimePreparedOpenDocument(await invokeCommand("prepare_open_file_ios", { path }));
   },
 
   /** iOS: 生成文件字节并写入 App 沙盒路径 */
-  saveFile: (path: string, context: EditorCommandContext) =>
-    invokeCommand("save_file_ios", { path, ...context }),
+  saveFile: (path: string, context: EditorCommandContext, operationId: string) =>
+    invokeCommand("save_file_ios", { path, ...context, operationId }),
 
   pickSaveLocation: (defaultName: string) =>
     invokeCommand("pick_save_location_ios", { defaultName }),

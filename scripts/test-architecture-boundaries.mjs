@@ -1326,13 +1326,17 @@ const commandExecutionRuntimeSource = readFileSync(
 for (const requirement of [
   /query:\s*Arc<BoundedBlockingExecutor>/,
   /pub\(crate\)\s+async\s+fn\s+run_mapped\b/,
-  /pub\(crate\)\s+async\s+fn\s+run_fallibly_mapped\b/,
 ]) {
   if (!requirement.test(commandExecutionRuntimeSource)) {
     violations.push(
       `src-tauri/src/commands/execution_runtime.rs violates the permit-scoped response projection boundary: ${requirement}`,
     );
   }
+}
+if (/pub\(crate\)\s+async\s+fn\s+run_fallibly_mapped\b/.test(commandExecutionRuntimeSource)) {
+  violations.push(
+    'src-tauri/src/commands/execution_runtime.rs reintroduces post-operation fallible response projection',
+  );
 }
 
 const lockingQueryCommandSources = [
@@ -1376,6 +1380,7 @@ const documentProtocolProjectionSource = readFileSync(
 for (const requirement of [
   /open_document_response[\s\S]*MAX_DOCUMENT_RESPONSE_BYTES/,
   /saved_document_response[\s\S]*MAX_DOCUMENT_RESPONSE_BYTES/,
+  /prepared_open_document[\s\S]*MAX_DOCUMENT_RESPONSE_BYTES/,
   /response\.initial_region\s*=\s*None/,
   /serialized_json_bytes\s*\(\s*&?response\s*\)/,
   /response\.wire_bytes\s*=\s*estimate/,
@@ -1416,8 +1421,7 @@ const boundedDocumentRegionCacheSource = readFileSync(
 );
 for (const requirement of [
   /\bmanifestResidentBytes\b/,
-  /\bestimateDocumentManifestResidentBytes\b/,
-  /\bMAX_DOCUMENT_MANIFEST_RESIDENT_BYTES\b/,
+  /\badmitDocumentManifestResidentBytes\b/,
 ]) {
   if (!requirement.test(boundedDocumentSessionSource)) {
     violations.push(
@@ -1775,6 +1779,7 @@ for (const requirement of [
   /document\.dispose\s*\(/,
   /recentFiles\.dispose\s*\(/,
   /updateCoordinator\?\.dispose\s*\(/,
+  /applicationExit\.dispose\s*\(/,
   /\bhasInjectionContext\s*\(/,
   /inject\s*\(\s*applicationWorkspaceRuntimeKey\b/,
 ]) {
@@ -2595,6 +2600,139 @@ rejectMatches(
   ],
   'the centralized frontend prepared-document workflow boundary',
 );
+
+const rustFileCommandSources = [
+  join(rustRoot, 'commands', 'file.rs'),
+  join(rustRoot, 'commands', 'android.rs'),
+  join(rustRoot, 'commands', 'ios.rs'),
+].map((file) => readFileSync(file, 'utf8')).join('\n');
+for (const requirement of [
+  /commit_prepared_document[\s\S]*operation_id:\s*String/,
+  /save_file_desktop[\s\S]*operation_id:\s*String/,
+  /save_file_android[\s\S]*operation_id:\s*String/,
+  /save_file_ios[\s\S]*operation_id:\s*String/,
+  /get_file_operation_result/,
+]) {
+  if (!requirement.test(rustFileCommandSources)) {
+    violations.push(`Rust file commands violate the idempotent file-operation boundary: ${requirement}`);
+  }
+}
+
+const fileOperationReplaySource = readFileSync(
+  join(rustRoot, 'application', 'file_operation_replay.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /MAX_COMPLETED_FILE_OPERATIONS:\s*usize\s*=\s*128/,
+  /MAX_IN_FLIGHT_FILE_OPERATIONS:\s*usize\s*=\s*16/,
+  /MAX_OPERATION_ID_BYTES:\s*usize\s*=\s*128/,
+  /ensure_same_fingerprint/,
+  /FileOperationLookup::pending/,
+  /FileOperationLookup::completed/,
+]) {
+  if (!requirement.test(fileOperationReplaySource)) {
+    violations.push(
+      `src-tauri/src/application/file_operation_replay.rs violates the bounded idempotent receipt-journal boundary: ${requirement}`,
+    );
+  }
+}
+
+const projectedDocumentSaveServiceSource = readFileSync(
+  join(rustRoot, 'application', 'document_save_service.rs'),
+  'utf8',
+);
+if (!/let projected\s*=\s*match[\s\S]*project\(response\)[\s\S]*commit_write\(\)/.test(
+  projectedDocumentSaveServiceSource,
+)) {
+  violations.push(
+    'src-tauri/src/application/document_save_service.rs must admit response projection before committing a write',
+  );
+}
+
+const fileOperationProtocolSource = readFileSync(
+  join(frontendRoot, 'application', 'documentFileOperationProtocol.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /createOperationId/,
+  /getFileOperationResult/,
+  /operation\.invoke\(operationId\)/,
+  /recoverResponse/,
+]) {
+  if (!requirement.test(fileOperationProtocolSource)) {
+    violations.push(
+      `src/application/documentFileOperationProtocol.ts violates the idempotent file-operation boundary: ${requirement}`,
+    );
+  }
+}
+
+const preparedFileProtocolSource = readFileSync(
+  join(frontendRoot, 'application', 'fileProtocol.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /runtimePreparedOpenDocument/,
+  /openSessionState\s*\(\s*prepared\.preview\s*\)/,
+  /manifestResidentBytes\s*=\s*admitDocumentManifestResidentBytes\s*\(\s*session\.data\s*\)/,
+]) {
+  if (!requirement.test(preparedFileProtocolSource)) {
+    violations.push(
+      `src/application/fileProtocol.ts violates the precommit prepared-preview admission boundary: ${requirement}`,
+    );
+  }
+}
+
+const preparedSessionCommitSource = readFileSync(
+  join(frontendRoot, 'application', 'documentSessionCoordinator.ts'),
+  'utf8',
+);
+if (!/openPreparedDocument[\s\S]*replaceAdmittedSessionState[\s\S]*prepared\.preview\.manifestResidentBytes/.test(
+  preparedSessionCommitSource,
+)) {
+  violations.push(
+    'src/application/documentSessionCoordinator.ts violates the infallible prepared-session publish boundary',
+  );
+}
+
+const documentProjectionAdmissionSource = readFileSync(
+  join(frontendRoot, 'projection', 'documentProjection.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /admitDocumentManifestResidentBytes/,
+  /estimateDocumentManifestResidentBytes\s*\(\s*data\s*\)/,
+  /bytes\s*>\s*MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES/,
+]) {
+  if (!requirement.test(documentProjectionAdmissionSource)) {
+    violations.push(
+      `src/projection/documentProjection.ts violates the shared manifest admission boundary: ${requirement}`,
+    );
+  }
+}
+
+const disposalApplicationExitCoordinatorSource = readFileSync(
+  join(frontendRoot, 'application', 'applicationExitCoordinator.ts'),
+  'utf8',
+);
+const recentFilesServiceDisposalSource = readFileSync(
+  join(frontendRoot, 'application', 'recentFilesService.ts'),
+  'utf8',
+);
+const updateCoordinatorDisposalSource = readFileSync(
+  join(frontendRoot, 'application', 'updateCoordinator.ts'),
+  'utf8',
+);
+for (const [source, label, requirements] of [
+  [disposalApplicationExitCoordinatorSource, 'applicationExitCoordinator', [/function\s+dispose\b/, /activeRequest\?\.promise/]],
+  [recentFilesServiceDisposalSource, 'recentFilesService', [/operations\.run\s*\(/, /operations\.waitForIdle\s*\(/]],
+  [updateCoordinatorDisposalSource, 'updateCoordinator', [/mobileOpenPromise/, /exitPromise/]],
+]) {
+  for (const requirement of requirements) {
+    if (!requirement.test(source)) {
+      violations.push(`src/application/${label}.ts violates the drain-preserving disposal boundary: ${requirement}`);
+    }
+  }
+}
 
 if (violations.length > 0) {
   console.error(violations.join('\n'));

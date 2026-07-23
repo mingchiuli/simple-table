@@ -10,8 +10,52 @@ use super::cell::{projected_cell_change, region_metadata, sheet_manifest, sheet_
 use super::size::serialized_json_bytes;
 use super::status::{editor_session, workbook_capabilities};
 
-pub(crate) fn prepared_open_document(value: PreparedOpenDocument) -> types::PreparedOpenDocument {
-    types::PreparedOpenDocument { token: value.token }
+pub(crate) fn prepared_open_document(
+    value: PreparedOpenDocument,
+) -> Result<types::PreparedOpenDocument, AppError> {
+    let mut response = types::PreparedOpenDocument {
+        token: value.token,
+        preview: project_open_document_response(value.preview),
+    };
+    if serialized_json_bytes(&response)? > MAX_DOCUMENT_RESPONSE_BYTES {
+        response.preview.initial_region = None;
+        ensure_document_response_is_bounded(&response, MAX_DOCUMENT_RESPONSE_BYTES)?;
+    }
+    Ok(response)
+}
+
+pub(crate) fn file_operation_receipt(
+    value: crate::projection_model::FileOperationReceipt,
+) -> types::FileOperationReceipt {
+    types::FileOperationReceipt {
+        kind: match value.kind {
+            crate::projection_model::FileOperationKind::Open => types::FileOperationKind::Open,
+            crate::projection_model::FileOperationKind::Save => types::FileOperationKind::Save,
+        },
+        document_id: value.document_id,
+        revision: value.revision,
+        path: value.path,
+        file_name: value.file_name,
+    }
+}
+
+pub(crate) fn file_operation_lookup(
+    value: crate::projection_model::FileOperationLookup,
+) -> types::FileOperationResultLookup {
+    types::FileOperationResultLookup {
+        status: match value.status {
+            crate::projection_model::FileOperationLookupStatus::Pending => {
+                types::FileOperationResultStatus::Pending
+            }
+            crate::projection_model::FileOperationLookupStatus::Completed => {
+                types::FileOperationResultStatus::Completed
+            }
+            crate::projection_model::FileOperationLookupStatus::Missing => {
+                types::FileOperationResultStatus::Missing
+            }
+        },
+        receipt: value.receipt.map(file_operation_receipt),
+    }
 }
 
 pub(crate) fn open_document_response(

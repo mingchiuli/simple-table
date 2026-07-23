@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::application::document_codec_port::{DocumentCodecPort, OpenDocumentSource};
+use crate::application::document_projection;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
 use crate::document_format::default_spreadsheet_extension;
@@ -122,6 +123,7 @@ fn prepare_editor_state(
     reservation: prepared_document_repository::PrepareReservation,
     work: Box<dyn DocumentWorkLease>,
 ) -> Result<PreparedOpenDocument, AppError> {
+    let preview = document_projection::open_document_snapshot(&editor_state);
     let token = service.prepared_documents().replace(
         editor_state,
         source_path,
@@ -129,7 +131,7 @@ fn prepare_editor_state(
         reservation,
         active_document_resource_bytes(service)?,
     )?;
-    Ok(PreparedOpenDocument { token })
+    Ok(PreparedOpenDocument { token, preview })
 }
 
 fn active_document_resource_bytes(service: &DocumentOpenService) -> Result<usize, AppError> {

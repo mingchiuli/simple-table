@@ -134,7 +134,15 @@ export type SheetRegionMetadata = { merges?: Array<MergeRange>, cellFormats?: { 
 
 export type SheetRegionProjectionResponse = { documentId: U64String, revision: U64String, region: SheetRegion, cells: Array<SheetCellChange>, mergeAnchorCells?: Array<SheetCellChange>, metadata: SheetRegionMetadata, wireBytes: number, };
 
-export type PreparedOpenDocument = { token: string, };
+export type PreparedOpenDocument = { token: string, preview: OpenDocumentResponse, };
+
+export type FileOperationKind = "open" | "save";
+
+export type FileOperationReceipt = { kind: FileOperationKind, documentId: U64String, revision: U64String, path: string, fileName: string, };
+
+export type FileOperationResultStatus = "pending" | "completed" | "missing";
+
+export type FileOperationResultLookup = { status: FileOperationResultStatus, receipt?: FileOperationReceipt, };
 
 export type DesktopOpenTargetClaim = { claimId: string, path: string, };
 
@@ -152,10 +160,11 @@ export type TauriCommandMap = {
   "prepare_recent_file_desktop": { args: { id: string }, result: PreparedOpenDocument },
   "pick_save_location_desktop": { args: { defaultName: string }, result: string | null },
   "discard_save_location_desktop": { args: { path: string }, result: void },
-  "save_file_desktop": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
+  "save_file_desktop": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
   "export_file_desktop": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
   "prepare_new_file": { args: Record<string, never>, result: PreparedOpenDocument },
-  "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null }, result: OpenDocumentResponse },
+  "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null, operationId: string }, result: FileOperationReceipt },
+  "get_file_operation_result": { args: { operationId: string }, result: FileOperationResultLookup },
   "abort_prepared_document": { args: { token: string }, result: void },
   "get_active_document": { args: Record<string, never>, result: OpenDocumentResponse | null },
   "get_mutation_result": { args: { documentId: U64String, commandId: string }, result: MutationResultLookup },
@@ -186,7 +195,7 @@ export type TauriCommandMap = {
   "discard_open_file_selection_android": { args: { path: string }, result: void },
   "discard_save_location_android": { args: { path: string }, result: void },
   "prepare_open_file_android": { args: { path: string }, result: PreparedOpenDocument },
-  "save_file_android": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
+  "save_file_android": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
   "export_file_android": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
   "pick_save_location_android": { args: { defaultName: string }, result: string | null },
   "pick_open_file_ios": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
@@ -194,7 +203,7 @@ export type TauriCommandMap = {
   "discard_save_location_ios": { args: { path: string }, result: void },
   "prepare_open_file_ios": { args: { path: string }, result: PreparedOpenDocument },
   "pick_save_location_ios": { args: { defaultName: string }, result: string | null },
-  "save_file_ios": { args: { path: string, documentId: U64String, baseRevision: U64String }, result: SavedDocumentResponse },
+  "save_file_ios": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
   "export_file_ios": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
   "check_update_mobile": { args: { currentVersion: string }, result: UpdateInfo | null },
 }

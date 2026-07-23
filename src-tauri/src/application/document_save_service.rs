@@ -7,7 +7,7 @@ use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::application::{document_format_policy, document_projection};
 use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
 use crate::error::AppError;
-use crate::projection_model::{SavedDocumentIdentity, SavedDocumentOutcome};
+use crate::projection_model::SavedDocumentOutcome;
 use crate::resource_limits::{
     MAX_GENERATED_FILE_BYTES, validate_document_identity, validate_prepared_document_bytes,
 };
@@ -171,24 +171,28 @@ pub fn prepare_current_file_save(
 
 pub fn abort_prepared_file_save(_prepared: PreparedDocumentSave) {}
 
-pub fn commit_current_file_save<F>(
+pub fn commit_current_file_save_projected<T, F, P>(
     service: &DocumentSaveService,
     path: String,
     prepared: PreparedDocumentSave,
     commit_write: F,
-) -> Result<SavedDocumentOutcome, AppError>
+    project: P,
+) -> Result<T, AppError>
 where
     F: FnOnce() -> Result<(), AppError>,
+    P: FnOnce(SavedDocumentOutcome) -> Result<T, AppError>,
 {
-    commit_current_file_save_with_registry(
+    commit_current_file_save_with_registry_projected(
         service.search_indexes(),
         service.documents(),
         path,
         prepared,
         commit_write,
+        project,
     )
 }
 
+#[cfg(test)]
 fn commit_current_file_save_with_registry<F>(
     search_indexes: &dyn SearchIndexMaintenancePort,
     registry: &ActiveDocumentRepository,
@@ -198,6 +202,28 @@ fn commit_current_file_save_with_registry<F>(
 ) -> Result<SavedDocumentOutcome, AppError>
 where
     F: FnOnce() -> Result<(), AppError>,
+{
+    commit_current_file_save_with_registry_projected(
+        search_indexes,
+        registry,
+        path,
+        prepared,
+        commit_write,
+        Ok,
+    )
+}
+
+fn commit_current_file_save_with_registry_projected<T, F, P>(
+    search_indexes: &dyn SearchIndexMaintenancePort,
+    registry: &ActiveDocumentRepository,
+    path: String,
+    prepared: PreparedDocumentSave,
+    commit_write: F,
+    project: P,
+) -> Result<T, AppError>
+where
+    F: FnOnce() -> Result<(), AppError>,
+    P: FnOnce(SavedDocumentOutcome) -> Result<T, AppError>,
 {
     let PreparedDocumentSave {
         document_id,
@@ -222,6 +248,7 @@ where
             output_name,
             extension,
             commit_write,
+            project,
         );
     }
 
@@ -238,24 +265,35 @@ where
             current_extension != saved_extension
         })?;
 
+    let projected = match (|| {
+        let editor_state = handle.read()?;
+        let response = document_projection::saved_document_outcome_with_reparse(
+            &editor_state,
+            &document,
+            clear_history,
+        )?;
+        project(response)
+    })() {
+        Ok(projected) => projected,
+        Err(error) => {
+            abort_save_commit(&handle, lease);
+            return Err(error);
+        }
+    };
+
     if let Err(error) = commit_write() {
         abort_save_commit(&handle, lease);
         return Err(error);
     }
 
-    let (document_id, response, retired) = {
+    let (document_id, retired) = {
         let mut editor_state = handle.write()?;
         let retired = editor_state.finish_save_commit(lease, document, clear_history)?;
-        let response = SavedDocumentOutcome {
-            document: Some(document_projection::document_manifest(&editor_state)),
-            identity: None,
-            editor_session: document_projection::editor_session_snapshot(&editor_state),
-        };
-        (editor_state.document_id(), response, retired)
+        (editor_state.document_id(), retired)
     };
     drop(retired);
     search_indexes.rebuild_all_sheets_index(document_id);
-    Ok(response)
+    Ok(projected)
 }
 
 fn begin_prepared_save_commit<F>(
@@ -276,7 +314,7 @@ where
     Ok((handle, lease, clear_history))
 }
 
-fn commit_current_file_save_without_reparse<F>(
+fn commit_current_file_save_without_reparse<T, F, P>(
     search_indexes: &dyn SearchIndexMaintenancePort,
     registry: &ActiveDocumentRepository,
     path: String,
@@ -285,9 +323,11 @@ fn commit_current_file_save_without_reparse<F>(
     output_name: String,
     saved_extension: String,
     commit_write: F,
-) -> Result<SavedDocumentOutcome, AppError>
+    project: P,
+) -> Result<T, AppError>
 where
     F: FnOnce() -> Result<(), AppError>,
+    P: FnOnce(SavedDocumentOutcome) -> Result<T, AppError>,
 {
     let (handle, lease, clear_history) =
         begin_prepared_save_commit(registry, document_id, revision, |editor_state| {
@@ -296,12 +336,29 @@ where
             current_extension.as_deref() != Some(saved_extension.as_str())
         })?;
 
+    let projected = match (|| {
+        let editor_state = handle.read()?;
+        let response = document_projection::saved_document_outcome_without_reparse(
+            &editor_state,
+            path.clone(),
+            output_name.clone(),
+            clear_history,
+        )?;
+        project(response)
+    })() {
+        Ok(projected) => projected,
+        Err(error) => {
+            abort_save_commit(&handle, lease);
+            return Err(error);
+        }
+    };
+
     if let Err(error) = commit_write() {
         abort_save_commit(&handle, lease);
         return Err(error);
     }
 
-    let (response, retired) = {
+    let (revision, retired) = {
         let mut editor_state = handle.write()?;
         let retired = editor_state.finish_save_commit_without_reparse(
             lease,
@@ -309,23 +366,11 @@ where
             output_name,
             clear_history,
         )?;
-        let response = SavedDocumentOutcome {
-            document: None,
-            identity: Some(SavedDocumentIdentity {
-                path: editor_state.file_data().path.clone(),
-                file_name: editor_state.file_data().file_name.clone(),
-            }),
-            editor_session: document_projection::editor_session_snapshot(&editor_state),
-        };
-        (response, retired)
+        (editor_state.revision(), retired)
     };
     drop(retired);
-    search_indexes.schedule_work(
-        document_id,
-        response.editor_session.revision,
-        crate::domain::SearchIndexWork::None,
-    );
-    Ok(response)
+    search_indexes.schedule_work(document_id, revision, crate::domain::SearchIndexWork::None);
+    Ok(projected)
 }
 
 fn ensure_editor_matches_prepared_save(
@@ -494,5 +539,36 @@ mod tests {
 
         assert!(matches!(result, Err(AppError::DocumentStateInvalid(_))));
         assert_eq!(writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn failed_response_projection_never_calls_writer_or_changes_state() {
+        let (registry, document_id, revision) = test_registry();
+        let search_indexes = NoopSearchIndexMaintenancePort;
+        let writes = AtomicUsize::new(0);
+
+        let result = commit_current_file_save_with_registry_projected(
+            &search_indexes,
+            &registry,
+            "/tmp/saved.xlsx".to_string(),
+            prepared_for_test(document_id, revision),
+            || {
+                writes.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            |_| -> Result<(), AppError> {
+                Err(AppError::ResourceLimitExceeded(
+                    "injected response admission failure".to_string(),
+                ))
+            },
+        );
+
+        assert!(matches!(result, Err(AppError::ResourceLimitExceeded(_))));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        let handle = registry.active_handle().unwrap().unwrap();
+        let state = handle.read().unwrap();
+        assert_eq!(state.revision(), revision);
+        assert_eq!(state.file_data().file_name, "book.xlsx");
+        assert!(!state.has_save_commit_in_progress());
     }
 }

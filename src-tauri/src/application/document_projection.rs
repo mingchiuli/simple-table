@@ -1,10 +1,12 @@
+use crate::document::document_model::SpreadsheetDocument;
 use crate::document::region_metadata_index::DocumentRegion;
 use crate::document_data::{DocumentSheet, MergeRange, SheetExtent};
 use crate::editor_protocol::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
 use crate::error::AppError;
 use crate::projection_model::{
     DocumentManifestSnapshot, EditorSessionSnapshot, EditorStateSnapshot, OpenDocumentSnapshot,
-    ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot, SheetRegionSnapshot,
+    ProjectedCellChange, SavedDocumentIdentity, SavedDocumentOutcome, SheetLayoutSnapshot,
+    SheetManifestSnapshot, SheetRegionSnapshot,
 };
 use crate::state::editor_state::EditorState;
 
@@ -59,6 +61,91 @@ pub(crate) fn document_manifest(editor_state: &EditorState) -> DocumentManifestS
             .map(|(sheet, extent)| SheetManifestSnapshot {
                 name: sheet.name.clone(),
                 extent,
+                layout: sheet_layout_projection(sheet),
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn saved_document_outcome_with_reparse(
+    editor_state: &EditorState,
+    saved_document: &SpreadsheetDocument,
+    clear_history: bool,
+) -> Result<SavedDocumentOutcome, AppError> {
+    Ok(SavedDocumentOutcome {
+        document: Some(document_manifest_from_data(saved_document.projection())),
+        identity: None,
+        editor_session: saved_editor_session_snapshot(
+            editor_state,
+            Some(saved_document),
+            clear_history,
+        )?,
+    })
+}
+
+pub(crate) fn saved_document_outcome_without_reparse(
+    editor_state: &EditorState,
+    path: String,
+    file_name: String,
+    clear_history: bool,
+) -> Result<SavedDocumentOutcome, AppError> {
+    Ok(SavedDocumentOutcome {
+        document: None,
+        identity: Some(SavedDocumentIdentity { path, file_name }),
+        editor_session: saved_editor_session_snapshot(editor_state, None, clear_history)?,
+    })
+}
+
+fn saved_editor_session_snapshot(
+    editor_state: &EditorState,
+    saved_document: Option<&SpreadsheetDocument>,
+    clear_history: bool,
+) -> Result<EditorSessionSnapshot, AppError> {
+    let revision = editor_state.revision().checked_add(1).ok_or_else(|| {
+        AppError::DocumentStateInvalid("document revision space exhausted".to_string())
+    })?;
+    let mut history = editor_state.history_status();
+    if clear_history {
+        history.is_truncated = false;
+        history.reason = None;
+        history.undo_entries = 0;
+        history.redo_entries = 0;
+        history.undo_estimated_bytes = 0;
+        history.redo_estimated_bytes = 0;
+    }
+    let transaction_available = saved_document
+        .map(|document| document.transaction_failure().is_none())
+        .unwrap_or_else(|| editor_state.transaction_failure().is_none());
+    Ok(EditorSessionSnapshot {
+        document_id: editor_state.document_id(),
+        revision,
+        formula_status: saved_document
+            .map(SpreadsheetDocument::formula_status)
+            .unwrap_or_else(|| editor_state.formula_status()),
+        capabilities: saved_document
+            .map(SpreadsheetDocument::capabilities)
+            .unwrap_or_else(|| editor_state.capabilities()),
+        editor_state: EditorStateSnapshot {
+            can_undo: transaction_available && !clear_history && history.undo_entries > 0,
+            can_redo: transaction_available && !clear_history && history.redo_entries > 0,
+            is_dirty: false,
+            history,
+        },
+    })
+}
+
+fn document_manifest_from_data(
+    source: &crate::document_data::DocumentData,
+) -> DocumentManifestSnapshot {
+    DocumentManifestSnapshot {
+        path: source.path.clone(),
+        file_name: source.file_name.clone(),
+        sheets: source
+            .sheets
+            .iter()
+            .map(|sheet| SheetManifestSnapshot {
+                name: sheet.name.clone(),
+                extent: sheet.extent(),
                 layout: sheet_layout_projection(sheet),
             })
             .collect(),

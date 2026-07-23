@@ -308,6 +308,10 @@ consume that envelope and cannot depend on generated response declarations.
   search outcomes, and selection transforms. Document, status, search, and
   selection Stores accept only runtime state inputs and cannot import response
   DTOs, generated protocol constants, or projection patch interpreters.
+  Open preparation includes a bounded preview. `fileProtocol` converts that
+  preview to a runtime session/status snapshot and admits its manifest memory
+  before the backend document can be replaced; commit therefore publishes an
+  already-admitted snapshot instead of interpreting a new whole-document DTO.
 - `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
   is the backend dirty flag OR pending frontend content. Store dictionaries are
   JSON-serializable records; large pending dictionaries remain raw and expose
@@ -337,6 +341,9 @@ consume that envelope and cannot depend on generated response declarations.
   document, recent-file, and lazily initialized update coordinators; feature
   composables only retrieve those instances and cannot keep module-level service
   caches. Runtime disposal invalidates new work and drains every active service.
+  This includes an active application-exit guard/executor request, explicit
+  recent-file removals, mobile URL launches, and update-triggered relaunches;
+  none of those services accepts new work after disposal begins.
   The application runtime creates one
   `DocumentWorkspaceRuntime` per Pinia document Store. That runtime owns the
   session, region, pending-save, search, command-bus, and document-preparation
@@ -385,6 +392,10 @@ consume that envelope and cannot depend on generated response declarations.
   preserving tail. Vue composables adapt Stores, platform APIs, lifecycle
   guards, router navigation, and user notifications; application modules do not
   import composables or UI libraries.
+  Its headless file-operation protocol assigns one operation ID to each open
+  commit or save, retries ambiguous IPC failures with that same ID, polls the
+  backend receipt journal, and recovers a lost response from the active document.
+  Protocol DTO inspection remains behind injected mapper ports.
 - Generic frontend utilities are pure and side-effect free. Backend format and
   recent-file workflows are port-driven application services. Composables bind
   those ports to the backend API, Pinia, platform adapters, and Element Plus;
@@ -558,6 +569,14 @@ Opening uses a prepare/commit/abort protocol. Preparing parses into a temporary
 `EditorState` without replacing the active document. Commit validates the
 expected active document and revision before replacement.
 
+Preparation also projects and size-checks the complete outward preview before
+returning its token. The frontend maps and memory-admits that preview before it
+requests commit. Commit accepts an operation ID and returns only a lightweight
+receipt. A bounded process-owned journal records completed open/save receipts,
+rejects reuse of an ID with a different payload, and exposes pending/completed/
+missing lookup so a lost IPC response never requires repeating an irreversible
+replacement or file write.
+
 Prepared commit checks out the prepared entry and acquires a backend document
 replacement lease while holding the registry lock only briefly. The registry
 lock is released before a mobile transient file is promoted into the managed
@@ -613,11 +632,12 @@ Saving follows this order:
 1. Flush frontend drafts and wait for queued mutations.
 2. Capture a backend save snapshot for the current revision.
 3. Acquire a save commit lease.
-4. Write the target atomically.
-5. Finish the lease, update identity if needed, advance revision, and mark the
+4. Build, bound, and admit the exact post-save response and operation receipt.
+5. Write the target atomically.
+6. Finish the lease, update identity if needed, advance revision, and mark the
    content hash as saved.
 
-All five steps are coordinated by `application::document_save_service` for
+All six steps are coordinated by `application::document_save_service` for
 desktop and mobile. Platform modules cannot acquire document state or save
 leases; the application service supplies the validated current path, and the
 platform modules only compare paths, consume authorization, select a target,
@@ -781,8 +801,10 @@ executing and sixteen admitted commands. Category limits remain narrower: file
 (execution/admission). A request must acquire both shared and category admission
 before it can wait for execution. Tauri async runtime threads do not perform
 those synchronous workloads directly. Response projection remains inside the
-same permit, saturation cannot create an unbounded semaphore wait queue, and
-separate category limits cannot overcommit the shared blocking pool.
+same permit. Any fallible response projection for open preparation and save is
+completed before the irreversible state or write commit; post-commit command
+mapping is infallible. Saturation cannot create an unbounded semaphore wait
+queue, and separate category limits cannot overcommit the shared blocking pool.
 
 Frontend recent-file updates use a latest-only worker shared by all composable
 instances. At most one update is active and one latest request is pending;

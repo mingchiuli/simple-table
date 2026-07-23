@@ -25,13 +25,17 @@ export type ApplicationExitCoordinator = ReturnType<typeof createApplicationExit
 export function createApplicationExitCoordinator(executor: ApplicationExitExecutor) {
   const exitGuards = new Set<ApplicationExitGuard>();
   let activeRequest: ActiveExitRequest | null = null;
+  let disposed = false;
+  let disposal: Promise<void> | null = null;
 
   function registerGuard(guard: ApplicationExitGuard): () => void {
+    if (disposed) return () => undefined;
     exitGuards.add(guard);
     return () => exitGuards.delete(guard);
   }
 
   function requestExit(intent: ApplicationExitIntent): Promise<ApplicationExitResult> {
+    if (disposed) return Promise.resolve({ status: 'cancelled' });
     if (activeRequest) {
       if (!activeRequest.actionStarted) {
         activeRequest.intent = preferredIntent(activeRequest.intent, intent);
@@ -55,6 +59,10 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
     const guards = Array.from(exitGuards).reverse();
     const preparations: ApplicationExitPreparation[] = [];
     for (const guard of guards) {
+      if (disposed) {
+        rollbackPreparations(preparations);
+        return { status: 'cancelled' };
+      }
       try {
         const preparation = await guard();
         if (!preparation) {
@@ -62,6 +70,10 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
           return { status: 'cancelled' };
         }
         preparations.push(preparation);
+        if (disposed) {
+          rollbackPreparations(preparations);
+          return { status: 'cancelled' };
+        }
       } catch (error) {
         rollbackPreparations(preparations);
         throw error;
@@ -80,7 +92,18 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
     return { status: 'executed', intent };
   }
 
-  return { registerGuard, requestExit };
+  function dispose(): Promise<void> {
+    if (disposal) return disposal;
+    disposed = true;
+    exitGuards.clear();
+    const active = activeRequest?.promise;
+    disposal = active
+      ? Promise.allSettled([active]).then(() => undefined)
+      : Promise.resolve();
+    return disposal;
+  }
+
+  return { registerGuard, requestExit, dispose };
 }
 
 function commitPreparations(preparations: ApplicationExitPreparation[]) {

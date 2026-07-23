@@ -80,9 +80,13 @@ export async function prepareRecentFile(file: RecentFile): Promise<PreparedOpenD
 }
 
 /** 保存文件：生成字节 + 写入（一体化） */
-export async function saveFile(path: string, context: EditorCommandContext) {
+export async function saveFile(
+  path: string,
+  context: EditorCommandContext,
+  operationId: string,
+) {
   const api = await getPlatformAPI();
-  return api.fileOps.saveFile(path, context);
+  return api.fileOps.saveFile(path, context, operationId);
 }
 
 /** 选择保存位置 */

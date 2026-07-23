@@ -9,6 +9,7 @@ pub mod document_save_service;
 pub mod document_service;
 pub(crate) mod document_work_budget_port;
 pub mod editor_command_service;
+pub(crate) mod file_operation_replay;
 pub(crate) mod mutation_intent;
 pub(crate) mod mutation_replay;
 pub(crate) mod prepared_document_repository;

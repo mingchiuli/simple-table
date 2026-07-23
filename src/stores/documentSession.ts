@@ -10,9 +10,8 @@ import type {
   SheetRegionBlock,
   U64String,
 } from '@/types/documentRuntime';
-import { MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES } from '@/resourcePolicy/editorMemoryPolicy';
 import {
-  estimateDocumentManifestResidentBytes,
+  admitDocumentManifestResidentBytes,
 } from '@/projection/documentProjection';
 import { ZERO_U64 } from '@/utils/u64';
 import { markRaw } from 'vue';
@@ -94,7 +93,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       return this.documentId === context.documentId && this.revision === context.baseRevision;
     },
     replaceProjection(data: DocumentProjection) {
-      const manifestResidentBytes = admittedManifestResidentBytes(data);
+      const manifestResidentBytes = admitDocumentManifestResidentBytes(data);
       this.data = markProjectionCellIndexesRaw(data);
       this.manifestResidentBytes = manifestResidentBytes;
       this.projectionStale = false;
@@ -103,7 +102,14 @@ export const useDocumentSessionStore = defineStore('documentSession', {
       this.data = markProjectionCellIndexesRaw(data);
     },
     replaceSessionState(state: DocumentSessionStoreStateInput) {
-      this.replaceProjection(state.data);
+      this.replaceAdmittedSessionState(state, admitDocumentManifestResidentBytes(state.data));
+    },
+    replaceAdmittedSessionState(
+      state: DocumentSessionStoreStateInput,
+      manifestResidentBytes: number,
+    ) {
+      this.data = markProjectionCellIndexesRaw(state.data);
+      this.manifestResidentBytes = manifestResidentBytes;
       this.currentFilePath = state.currentFilePath;
       this.documentId = state.documentId;
       this.revision = state.revision;
@@ -113,7 +119,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     updateIdentity(path: string | null, fileName: string) {
       if (this.data) {
         const data = { ...this.data, path: path ?? this.data.path, fileName };
-        this.manifestResidentBytes = admittedManifestResidentBytes(data);
+        this.manifestResidentBytes = admitDocumentManifestResidentBytes(data);
         this.data = data;
       }
       this.currentFilePath = path;
@@ -130,7 +136,7 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     },
     applyMutationState(state: DocumentMutationStateInput): MutationApplyResult {
       const data = markProjectionCellIndexesRaw(state.data);
-      const manifestResidentBytes = data ? admittedManifestResidentBytes(data) : 0;
+      const manifestResidentBytes = data ? admitDocumentManifestResidentBytes(data) : 0;
       this.documentId = state.documentId;
       this.revision = state.revision;
       this.data = data;
@@ -179,16 +185,6 @@ export const useDocumentSessionStore = defineStore('documentSession', {
     },
   },
 });
-
-function admittedManifestResidentBytes(data: DocumentProjection): number {
-  const bytes = estimateDocumentManifestResidentBytes(data);
-  if (bytes > MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES) {
-    throw new Error(
-      `Document manifest requires ${bytes} resident bytes; maximum is ${MAX_DOCUMENT_MANIFEST_RESIDENT_BYTES}`,
-    );
-  }
-  return bytes;
-}
 
 function markProjectionCellIndexesRaw(data: DocumentProjection | null): DocumentProjection | null {
   for (const sheet of data?.sheets ?? []) {

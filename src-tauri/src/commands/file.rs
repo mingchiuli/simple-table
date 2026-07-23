@@ -6,7 +6,8 @@ use crate::error::AppError;
 use crate::protocol_projection;
 use crate::runtime::ApplicationRuntime;
 use crate::types::{
-    DesktopOpenFileInfo, OpenDocumentResponse, PreparedOpenDocument, SavedDocumentResponse,
+    DesktopOpenFileInfo, FileOperationReceipt, FileOperationResultLookup, PreparedOpenDocument,
+    SavedDocumentResponse,
 };
 #[cfg(desktop)]
 use tauri::Emitter;
@@ -87,13 +88,12 @@ pub async fn prepare_open_file_desktop(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run_mapped(
-            move || {
-                let source = runtime.platform_files().open_source(path);
-                runtime.document_files().prepare_open(source)
-            },
-            protocol_projection::prepared_open_document,
-        )
+        .run(move || {
+            let source = runtime.platform_files().open_source(path);
+            runtime
+                .document_files()
+                .prepare_open_projected(source, protocol_projection::prepared_open_document)
+        })
         .await
 }
 
@@ -109,13 +109,12 @@ pub async fn prepare_recent_file_desktop(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run_mapped(
-            move || {
-                let source = runtime.platform_files().recent_open_source(app, id);
-                runtime.document_files().prepare_open(source)
-            },
-            protocol_projection::prepared_open_document,
-        )
+        .run(move || {
+            let source = runtime.platform_files().recent_open_source(app, id);
+            runtime
+                .document_files()
+                .prepare_open_projected(source, protocol_projection::prepared_open_document)
+        })
         .await
 }
 
@@ -155,19 +154,21 @@ pub async fn save_file_desktop(
     path: String,
     document_id: CommandU64,
     base_revision: CommandU64,
+    operation_id: String,
 ) -> Result<SavedDocumentResponse, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run_fallibly_mapped(
-            move || {
-                let target = runtime.platform_files().save_target(path);
-                runtime
-                    .document_files()
-                    .save(target, document_id.get(), base_revision.get())
-            },
-            protocol_projection::saved_document_response,
-        )
+        .run(move || {
+            let target = runtime.platform_files().save_target(path);
+            runtime.document_files().save_projected(
+                target,
+                document_id.get(),
+                base_revision.get(),
+                &operation_id,
+                protocol_projection::saved_document_response,
+            )
+        })
         .await
 }
 
@@ -208,10 +209,11 @@ pub async fn prepare_new_file(
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run_mapped(
-            move || runtime.document_files().prepare_new(),
-            protocol_projection::prepared_open_document,
-        )
+        .run(move || {
+            runtime
+                .document_files()
+                .prepare_new_projected(protocol_projection::prepared_open_document)
+        })
         .await
 }
 
@@ -222,20 +224,42 @@ pub async fn commit_prepared_document(
     token: String,
     expected_document_id: Option<CommandU64>,
     expected_revision: Option<CommandU64>,
-) -> Result<OpenDocumentResponse, AppError> {
+    operation_id: String,
+) -> Result<FileOperationReceipt, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run_fallibly_mapped(
+        .run_mapped(
             move || {
                 document_service::commit_prepared_document(
                     runtime.document_lifecycle(),
                     &token,
                     expected_document_id.map(CommandU64::get),
                     expected_revision.map(CommandU64::get),
+                    &operation_id,
                 )
             },
-            protocol_projection::open_document_response,
+            protocol_projection::file_operation_receipt,
+        )
+        .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_file_operation_result(
+    runtime: State<'_, ApplicationRuntime>,
+    executions: State<'_, CommandExecutionRuntime>,
+    operation_id: String,
+) -> Result<FileOperationResultLookup, AppError> {
+    let runtime = runtime.inner().clone();
+    executions
+        .query()
+        .run_mapped(
+            move || {
+                runtime
+                    .document_files()
+                    .file_operation_result(&operation_id)
+            },
+            protocol_projection::file_operation_lookup,
         )
         .await
 }
