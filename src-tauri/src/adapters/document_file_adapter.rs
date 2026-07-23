@@ -47,8 +47,13 @@ impl PlatformFileAdapter {
     }
 
     #[cfg(desktop)]
-    pub fn authorize_open_target(&self, target: &str) {
-        desktop::authorize_open_target(&self.desktop_files, target);
+    pub fn enqueue_open_target(&self, target: &str) -> bool {
+        desktop::enqueue_open_target(&self.desktop_files, target)
+    }
+
+    #[cfg(desktop)]
+    pub fn take_pending_open_targets(&self) -> Vec<String> {
+        desktop::take_pending_open_targets(&self.desktop_files)
     }
 
     #[cfg(desktop)]
@@ -391,39 +396,37 @@ impl DocumentSaveTargetPort for MobileSaveTarget {
         bytes: &[u8],
         output_name: &str,
     ) -> Result<Box<dyn StagedDocumentWrite>, AppError> {
-        crate::io::managed_documents::validate_managed_save(
-            self.files.managed_documents(),
-            &self.target,
-            bytes.len() as u64,
-        )?;
+        let transaction =
+            self.files
+                .begin_managed_save_transaction(&self.target, output_name, bytes)?;
         let temp = write_temp_file_for_target(&self.target, bytes)?;
         Ok(Box::new(MobileStagedWrite {
-            files: self.files,
             temp,
             target: self.target,
-            output_name: output_name.to_string(),
+            transaction: Some(transaction),
         }))
     }
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 struct MobileStagedWrite {
-    files: MobileFileRuntime,
     temp: PathBuf,
     target: PathBuf,
-    output_name: String,
+    transaction: Option<crate::io::managed_documents::ManagedSaveTransaction>,
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 impl StagedDocumentWrite for MobileStagedWrite {
-    fn commit(self: Box<Self>) -> Result<(), AppError> {
+    fn commit(mut self: Box<Self>) -> Result<(), AppError> {
         replace_temp_file(&self.temp, &self.target)?;
-        crate::io::managed_documents::adopt_completed_save(
-            self.files.managed_documents(),
-            self.files.transient_files(),
-            &self.target,
-            &self.output_name,
-        )?;
+        if let Some(transaction) = self.transaction.take()
+            && let Err(error) = transaction.finish_after_content_commit()
+        {
+            eprintln!(
+                "Saved document content but deferred managed metadata recovery for {}: {error}",
+                self.target.display()
+            );
+        }
         Ok(())
     }
 }

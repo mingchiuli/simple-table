@@ -17,6 +17,8 @@ export type OpenFileSelection = {
 };
 
 export interface PlatformFileOps {
+  /** Drain backend-normalized launch targets that already carry one-time open authorization. */
+  takePendingOpenTargets?(): Promise<string[]>;
   /** 只选择/导入文件，不解析、不替换后端活动文档 */
   pickOpenFile(): Promise<OpenFileSelection | null>;
   /** 释放已选择/导入但没有被当前文档接管的文件；桌面路径通常无需实现 */

@@ -3,7 +3,6 @@ import {
   baseNameWithoutExtension,
   decodeFileNameSegment,
   extensionFromName,
-  filePathFromDeepLinkTarget,
   fileNameFromPathLike,
   supportedSpreadsheetExtension,
 } from "@/utils/fileFormats";
@@ -51,21 +50,4 @@ describe("fileFormats", () => {
     expect(extensionFromName("/tmp/100% complete.xlsx")).toBe("xlsx");
   });
 
-  it("normalizes file deep links into platform paths", () => {
-    expect(filePathFromDeepLinkTarget("file:///Users/me/report%20final.xlsx")).toBe(
-      "/Users/me/report final.xlsx"
-    );
-    expect(filePathFromDeepLinkTarget("FILE:///Users/me/report.xlsx")).toBe(
-      "/Users/me/report.xlsx"
-    );
-    expect(filePathFromDeepLinkTarget("file:///C:/Users/me/report.xlsx")).toBe(
-      "C:/Users/me/report.xlsx"
-    );
-    expect(filePathFromDeepLinkTarget("file://server/share/report.xlsx")).toBe(
-      "//server/share/report.xlsx"
-    );
-    expect(filePathFromDeepLinkTarget("C:\\Users\\me\\report.xlsx")).toBe(
-      "C:\\Users\\me\\report.xlsx"
-    );
-  });
 });

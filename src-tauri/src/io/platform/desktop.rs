@@ -22,6 +22,7 @@ const PATH_AUTHORIZATION_TTL: Duration = Duration::from_secs(30 * 60);
 struct DesktopFileRuntimeInner {
     open_paths: Mutex<PathAuthorizationRegistry>,
     save_paths: Mutex<PathAuthorizationRegistry>,
+    pending_open_paths: Mutex<VecDeque<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -87,12 +88,33 @@ pub fn authorize_open_path(runtime: &DesktopFileRuntime, path: impl AsRef<Path>)
     );
 }
 
-pub fn authorize_open_target(runtime: &DesktopFileRuntime, target: &str) {
-    for candidate in open_target_candidates(target) {
-        if is_supported_existing_spreadsheet_path(&candidate) {
-            authorize_open_path(runtime, candidate);
+pub fn enqueue_open_target(runtime: &DesktopFileRuntime, target: &str) -> bool {
+    let Some(path) = resolve_open_target(target) else {
+        return false;
+    };
+    authorize_open_path(runtime, &path);
+    let path = path.to_string_lossy().to_string();
+    let Ok(mut pending) = runtime.inner.pending_open_paths.lock() else {
+        discard_open_file_selection(runtime, &path);
+        return false;
+    };
+    pending.retain(|entry| entry != &path);
+    pending.push_back(path);
+    while pending.len() > MAX_AUTHORIZED_PATHS {
+        if let Some(expired) = pending.pop_front() {
+            discard_open_file_selection(runtime, &expired);
         }
     }
+    true
+}
+
+pub fn take_pending_open_targets(runtime: &DesktopFileRuntime) -> Vec<String> {
+    runtime
+        .inner
+        .pending_open_paths
+        .lock()
+        .map(|mut pending| pending.drain(..).collect())
+        .unwrap_or_default()
 }
 
 pub fn pick_open_file(
@@ -305,17 +327,30 @@ fn normalize_target_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-fn open_target_candidates(target: &str) -> Vec<PathBuf> {
-    let mut candidates = vec![PathBuf::from(target)];
-    if let Some(file_uri_path) = file_uri_to_path(target) {
-        candidates.push(file_uri_path);
-    }
-    candidates
+fn resolve_open_target(target: &str) -> Option<PathBuf> {
+    let candidate = if target
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file:"))
+    {
+        file_uri_to_path(target)?
+    } else {
+        PathBuf::from(target)
+    };
+    is_supported_existing_spreadsheet_path(&candidate).then(|| normalize_existing_path(&candidate))
 }
 
 fn file_uri_to_path(target: &str) -> Option<PathBuf> {
-    let rest = target.strip_prefix("file://")?;
-    let decoded = percent_decode(rest);
+    let url = tauri::Url::parse(target).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    let decoded = percent_decode(url.path())?;
+    let host = url
+        .host_str()
+        .filter(|host| !host.eq_ignore_ascii_case("localhost"));
+    if let Some(host) = host {
+        return Some(PathBuf::from(format!("//{host}{decoded}")));
+    }
     #[cfg(windows)]
     {
         let path = decoded.strip_prefix('/').unwrap_or(&decoded);
@@ -331,7 +366,7 @@ fn is_supported_existing_spreadsheet_path(path: &Path) -> bool {
     path.is_file() && supported_extension_from_name(&path.to_string_lossy()).is_some()
 }
 
-fn percent_decode(value: &str) -> String {
+fn percent_decode(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -349,7 +384,7 @@ fn percent_decode(value: &str) -> String {
         index += 1;
     }
 
-    String::from_utf8(decoded).unwrap_or_else(|_| value.to_string())
+    String::from_utf8(decoded).ok()
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -394,18 +429,43 @@ mod tests {
     }
 
     #[test]
+    fn file_uri_parser_accepts_case_insensitive_scheme_and_localhost() {
+        assert_eq!(
+            file_uri_to_path("FILE://localhost/tmp/report%20final.xlsx").unwrap(),
+            PathBuf::from("/tmp/report final.xlsx")
+        );
+    }
+
+    #[test]
     fn file_association_url_authorizes_the_resolved_spreadsheet_path() {
         let runtime = DesktopFileRuntime::default();
         let path = temp_path("file-association.xlsx");
         std::fs::write(&path, b"").expect("write associated file");
         let target = format!("file://{}", path.to_string_lossy());
 
-        authorize_open_target(&runtime, &target);
+        assert!(enqueue_open_target(&runtime, &target));
 
         assert!(consume_path(
             &runtime.inner.open_paths,
             &normalize_existing_path(&path)
         ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn launch_targets_are_normalized_once_and_drained_from_the_runtime_queue() {
+        let runtime = DesktopFileRuntime::default();
+        let path = temp_path("queued-file-association.xlsx");
+        std::fs::write(&path, b"").expect("write associated file");
+        let target = format!("FILE://localhost{}", path.to_string_lossy());
+
+        assert!(enqueue_open_target(&runtime, &target));
+
+        assert_eq!(
+            take_pending_open_targets(&runtime),
+            vec![normalize_existing_path(&path).to_string_lossy().to_string()]
+        );
+        assert!(take_pending_open_targets(&runtime).is_empty());
         let _ = std::fs::remove_file(path);
     }
 

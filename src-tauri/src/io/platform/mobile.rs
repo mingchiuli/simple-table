@@ -62,6 +62,21 @@ impl MobileFileRuntime {
         )
     }
 
+    pub(crate) fn begin_managed_save_transaction(
+        &self,
+        target: &Path,
+        file_name: &str,
+        content: &[u8],
+    ) -> Result<managed_documents::ManagedSaveTransaction, AppError> {
+        managed_documents::begin_managed_save_transaction(
+            &self.managed_documents,
+            Arc::clone(&self.transient_files),
+            target,
+            file_name,
+            content,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn is_isolated_from(&self, other: &Self) -> bool {
         !Arc::ptr_eq(&self.storage_directory, &other.storage_directory)
@@ -92,6 +107,7 @@ fn initialize_mobile_storage(
     app: &AppHandle,
 ) -> Result<PathBuf, AppError> {
     let dir = resolve_mobile_dir(app)?;
+    managed_documents::recover_managed_save_transactions(runtime.managed_documents(), &dir)?;
     for managed in managed_documents::managed_documents(runtime.managed_documents(), &dir)? {
         clear_persistent_marker(&managed.path);
     }

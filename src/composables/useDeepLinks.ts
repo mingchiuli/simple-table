@@ -1,18 +1,17 @@
-import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { listen } from "@tauri-apps/api/event";
-import type { Router } from "vue-router";
-import { onMounted, onUnmounted } from "vue";
-import { filePathFromDeepLinkTarget } from "@/utils/fileFormats";
+import { listen } from '@tauri-apps/api/event';
+import type { Router } from 'vue-router';
+import { onMounted, onUnmounted } from 'vue';
+
+import { takePendingOpenTargets } from '@/platform';
 
 type Unlisten = () => void;
 
 type DeepLinkDependencies = {
   listen: (
-    event: "deep-link-received",
-    handler: (event: { payload: string }) => void
+    event: 'deep-link-received',
+    handler: (event: { payload: unknown }) => void,
   ) => Promise<Unlisten>;
-  onOpenUrl: (handler: (urls: string[]) => void) => Promise<Unlisten>;
-  getCurrent: () => Promise<string[] | null>;
+  takePendingOpenTargets: () => Promise<string[]>;
   pushFilePath: (filePath: string) => Promise<unknown>;
   reportError: (message: string, error: unknown) => void;
 };
@@ -22,12 +21,11 @@ export type DeepLinkLifecycle = {
   stop: () => void;
 };
 
-export function useDeepLinks(router: Pick<Router, "push">) {
+export function useDeepLinks(router: Pick<Router, 'push'>) {
   const lifecycle = createDeepLinkLifecycle({
     listen,
-    onOpenUrl,
-    getCurrent,
-    pushFilePath: (filePath) => router.push({ name: "table", query: { file: filePath } }),
+    takePendingOpenTargets,
+    pushFilePath: (filePath) => router.push({ name: 'table', query: { file: filePath } }),
     reportError: (message, error) => console.error(message, error),
   });
 
@@ -37,87 +35,67 @@ export function useDeepLinks(router: Pick<Router, "push">) {
 
 export function createDeepLinkLifecycle({
   listen,
-  onOpenUrl,
-  getCurrent,
+  takePendingOpenTargets,
   pushFilePath,
   reportError,
 }: DeepLinkDependencies): DeepLinkLifecycle {
   let lifecycleId = 0;
-  const unlisteners: Unlisten[] = [];
+  let unlisten: Unlisten | null = null;
+  let drainTail: Promise<void> = Promise.resolve();
 
   function start() {
     stop();
     const currentLifecycleId = ++lifecycleId;
-    void registerSingleInstanceDeepLinks(currentLifecycleId);
-    void registerFileAssociationDeepLinks(currentLifecycleId);
-    void handleInitialDeepLinks(currentLifecycleId);
+    void registerListener(currentLifecycleId);
   }
 
   function stop() {
     lifecycleId += 1;
-    while (unlisteners.length > 0) {
-      safeUnlisten(unlisteners.pop());
-    }
+    safeUnlisten(unlisten);
+    unlisten = null;
   }
 
-  async function registerSingleInstanceDeepLinks(currentLifecycleId: number) {
+  async function registerListener(currentLifecycleId: number) {
     try {
-      registerUnlistener(
-        await listen("deep-link-received", (event) => {
-          if (!isCurrentLifecycle(currentLifecycleId)) return;
-          handleDeepLink(event.payload);
-        }),
-        currentLifecycleId
-      );
-    } catch (error) {
-      reportError("Failed to initialize single instance deep links:", error);
-    }
-  }
-
-  async function registerFileAssociationDeepLinks(currentLifecycleId: number) {
-    try {
-      registerUnlistener(
-        await onOpenUrl((urls) => {
-          if (!isCurrentLifecycle(currentLifecycleId)) return;
-          if (urls.length > 0) {
-            handleDeepLink(urls[0]);
-          }
-        }),
-        currentLifecycleId
-      );
-    } catch (error) {
-      reportError("Failed to initialize file association deep links:", error);
-    }
-  }
-
-  async function handleInitialDeepLinks(currentLifecycleId: number) {
-    try {
-      const startUrls = await getCurrent();
-      if (!isCurrentLifecycle(currentLifecycleId)) return;
-      if (startUrls && startUrls.length > 0) {
-        handleDeepLink(startUrls[0]);
+      const registered = await listen('deep-link-received', () => {
+        requestDrain(currentLifecycleId);
+      });
+      if (!isCurrentLifecycle(currentLifecycleId)) {
+        safeUnlisten(registered);
+        return;
       }
+      unlisten = registered;
+      requestDrain(currentLifecycleId);
     } catch (error) {
-      reportError("Failed to read initial deep links:", error);
+      reportError('Failed to initialize document launch listener:', error);
     }
   }
 
-  function registerUnlistener(unlisten: Unlisten, currentLifecycleId: number) {
-    if (isCurrentLifecycle(currentLifecycleId)) {
-      unlisteners.push(unlisten);
+  function requestDrain(currentLifecycleId: number) {
+    drainTail = drainTail.then(
+      () => drainPendingTargets(currentLifecycleId),
+      () => drainPendingTargets(currentLifecycleId),
+    );
+  }
+
+  async function drainPendingTargets(currentLifecycleId: number) {
+    if (!isCurrentLifecycle(currentLifecycleId)) return;
+    let paths: string[];
+    try {
+      paths = await takePendingOpenTargets();
+    } catch (error) {
+      if (isCurrentLifecycle(currentLifecycleId)) {
+        reportError('Failed to read pending document launch targets:', error);
+      }
       return;
     }
-    safeUnlisten(unlisten);
-  }
-
-  function handleDeepLink(target: string) {
-    try {
-      const filePath = filePathFromDeepLinkTarget(target);
-      void pushFilePath(filePath).catch((error) => {
-        reportError("Failed to route deep link:", error);
-      });
-    } catch (error) {
-      reportError("Failed to parse deep link:", error);
+    for (const path of paths) {
+      if (!isCurrentLifecycle(currentLifecycleId)) return;
+      try {
+        await pushFilePath(path);
+      } catch (error) {
+        reportError('Failed to route document launch target:', error);
+      }
     }
   }
 
@@ -125,11 +103,11 @@ export function createDeepLinkLifecycle({
     return lifecycleId === currentLifecycleId;
   }
 
-  function safeUnlisten(unlisten: Unlisten | undefined) {
+  function safeUnlisten(value: Unlisten | null) {
     try {
-      unlisten?.();
+      value?.();
     } catch (error) {
-      reportError("Failed to clean up deep link listener:", error);
+      reportError('Failed to clean up document launch listener:', error);
     }
   }
 

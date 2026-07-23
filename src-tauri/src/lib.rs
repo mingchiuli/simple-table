@@ -46,7 +46,7 @@ use commands::{
 use commands::{
     discard_open_file_selection_desktop, discard_save_location_desktop, export_file_desktop,
     pick_open_file_desktop, pick_save_location_desktop, prepare_open_file_desktop,
-    prepare_recent_file_desktop, save_file_desktop,
+    prepare_recent_file_desktop, save_file_desktop, take_pending_open_targets_desktop,
 };
 
 use tauri::{Emitter, Manager};
@@ -61,11 +61,13 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             println!("new app instance opened with {argv:?}");
-            // File path is passed as argv[1], emit event for frontend to handle
-            if argv.len() > 1 {
-                let runtime = app.state::<runtime::ApplicationRuntime>();
-                runtime.platform_files().authorize_open_target(&argv[1]);
-                if let Err(e) = app.emit("deep-link-received", argv[1].clone()) {
+            let runtime = app.state::<runtime::ApplicationRuntime>();
+            let mut enqueued = false;
+            for target in argv.iter().skip(1) {
+                enqueued |= runtime.platform_files().enqueue_open_target(target);
+            }
+            if enqueued {
+                if let Err(e) = app.emit("deep-link-received", ()) {
                     eprintln!("Failed to emit deep link: {}", e);
                 }
             }
@@ -87,18 +89,23 @@ pub fn run() {
                 .platform_files()
                 .clone();
             for arg in std::env::args().skip(1) {
-                platform_files.authorize_open_target(&arg);
+                platform_files.enqueue_open_target(&arg);
             }
 
             use tauri_plugin_deep_link::DeepLinkExt;
-            if let Ok(Some(urls)) = app.deep_link().get_current()
-                && let Some(url) = urls.first()
-            {
-                platform_files.authorize_open_target(url.as_str());
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                for url in urls {
+                    platform_files.enqueue_open_target(url.as_str());
+                }
             }
+            let app_handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
-                if let Some(url) = event.urls().first() {
-                    platform_files.authorize_open_target(url.as_str());
+                let mut enqueued = false;
+                for url in event.urls() {
+                    enqueued |= platform_files.enqueue_open_target(url.as_str());
+                }
+                if enqueued && let Err(error) = app_handle.emit("deep-link-received", ()) {
+                    eprintln!("Failed to emit deep link: {error}");
                 }
             });
             Ok(())
@@ -128,6 +135,8 @@ pub fn run() {
             pick_open_file_desktop,
             #[cfg(desktop)]
             discard_open_file_selection_desktop,
+            #[cfg(desktop)]
+            take_pending_open_targets_desktop,
             #[cfg(desktop)]
             prepare_open_file_desktop,
             #[cfg(desktop)]

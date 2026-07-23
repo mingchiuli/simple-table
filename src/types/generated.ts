@@ -143,6 +143,7 @@ export type SavedDocumentResponse = { document?: DocumentManifest, identity?: Sa
 export type TauriCommandMap = {
   "pick_open_file_desktop": { args: Record<string, never>, result: { path: string, fileName: string } | null },
   "discard_open_file_selection_desktop": { args: { path: string }, result: void },
+  "take_pending_open_targets_desktop": { args: Record<string, never>, result: Array<string> },
   "prepare_open_file_desktop": { args: { path: string }, result: PreparedOpenDocument },
   "prepare_recent_file_desktop": { args: { id: string }, result: PreparedOpenDocument },
   "pick_save_location_desktop": { args: { defaultName: string }, result: string | null },

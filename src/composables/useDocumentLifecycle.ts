@@ -8,6 +8,11 @@ export type DocumentLifecycleRunStatus = "completed" | "failed" | "skipped";
 
 type DocumentLifecycleController = {
   release: () => void;
+  retain: () => DocumentLifecycleLease;
+};
+
+type DocumentLifecycleLease = {
+  release: () => void;
 };
 
 type DocumentLifecycleOptions = {
@@ -28,19 +33,29 @@ export function useDocumentLifecycle() {
       return "skipped";
     }
     let released = false;
+    let retained = false;
+    let completed = false;
     const release = () => {
       if (released) return;
       released = true;
       documentSessionCoordinator.endLifecycle(lifecycle);
     };
+    const retain = (): DocumentLifecycleLease => {
+      if (released) {
+        throw new Error('Cannot retain a released document lifecycle');
+      }
+      retained = true;
+      return { release };
+    };
     try {
-      await action({ release });
+      await action({ release, retain });
+      completed = true;
       return "completed";
     } catch (error) {
       ElMessage.error(`${errorPrefix}: ${appErrorMessage(error)}`);
       return "failed";
     } finally {
-      release();
+      if (!completed || !retained) release();
     }
   }
 

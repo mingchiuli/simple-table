@@ -39,6 +39,12 @@ export async function getPlatformAPI(): Promise<PlatformAPI> {
 
 // ==================== Convenience re-exports ====================
 
+/** Drain launch targets after backend parsing, validation, normalization, and authorization. */
+export async function takePendingOpenTargets(): Promise<string[]> {
+  const api = await getPlatformAPI();
+  return api.fileOps.takePendingOpenTargets?.() ?? [];
+}
+
 /** 只选择/导入文件，不解析、不替换后端活动文档 */
 export async function pickOpenFile(): Promise<OpenFileSelection | null> {
   const api = await getPlatformAPI();

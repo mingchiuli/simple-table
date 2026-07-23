@@ -35,6 +35,13 @@ pub fn discard_open_file_selection_desktop(runtime: State<'_, ApplicationRuntime
     runtime.platform_files().discard_open_file_selection(&path)
 }
 
+/// Desktop: drain normalized launch/file-association targets authorized by the backend.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn take_pending_open_targets_desktop(runtime: State<'_, ApplicationRuntime>) -> Vec<String> {
+    runtime.platform_files().take_pending_open_targets()
+}
+
 /// Desktop: 从后端已授权路径读取并解析文件。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]

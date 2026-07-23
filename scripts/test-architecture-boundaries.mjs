@@ -1054,6 +1054,105 @@ for (const requirement of [
   }
 }
 
+for (const requirement of [
+  /struct\s+ManagedSaveTransaction\b/,
+  /impl\s+Drop\s+for\s+ManagedSaveTransaction\b/,
+  /fn\s+begin_managed_save_transaction\b/,
+  /write_file_atomically\s*\(\s*&journal\b/,
+  /fn\s+recover_managed_save_transactions\b/,
+  /content_matches_transaction\s*\(/,
+  /name\.starts_with\(SAVE_TRANSACTION_PREFIX\)[\s\S]*continue/,
+]) {
+  if (!requirement.test(managedDocumentsSource)) {
+    violations.push(
+      `src-tauri/src/io/managed_documents.rs violates the recoverable managed-save transaction boundary: ${requirement}`,
+    );
+  }
+}
+
+const documentFileAdapterSource = readFileSync(
+  join(rustRoot, 'adapters', 'document_file_adapter.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /begin_managed_save_transaction\s*\([\s\S]*write_temp_file_for_target\s*\(/,
+  /replace_temp_file\s*\([\s\S]*finish_after_content_commit\s*\(/,
+]) {
+  if (!requirement.test(documentFileAdapterSource)) {
+    violations.push(
+      `src-tauri/src/adapters/document_file_adapter.rs violates the journal-before-content mobile save boundary: ${requirement}`,
+    );
+  }
+}
+
+const mobileFileRuntimeSource = readFileSync(
+  join(rustRoot, 'io', 'platform', 'mobile.rs'),
+  'utf8',
+);
+if (!/recover_managed_save_transactions\s*\([\s\S]*managed_documents\s*\(/.test(mobileFileRuntimeSource)) {
+  violations.push(
+    'src-tauri/src/io/platform/mobile.rs must recover managed save transactions before catalog reconciliation',
+  );
+}
+
+const desktopFileRuntimeSource = readFileSync(
+  join(rustRoot, 'io', 'platform', 'desktop.rs'),
+  'utf8',
+);
+for (const requirement of [
+  /pending_open_paths\s*:\s*Mutex\s*<\s*VecDeque\s*<\s*String\s*>\s*>/,
+  /fn\s+enqueue_open_target\b/,
+  /fn\s+take_pending_open_targets\b/,
+  /fn\s+resolve_open_target\b/,
+  /tauri::Url::parse\s*\(/,
+]) {
+  if (!requirement.test(desktopFileRuntimeSource)) {
+    violations.push(
+      `src-tauri/src/io/platform/desktop.rs violates the backend-owned launch-target boundary: ${requirement}`,
+    );
+  }
+}
+
+const tauriCompositionRootSource = readFileSync(join(rustRoot, 'lib.rs'), 'utf8');
+for (const requirement of [
+  /platform_files\(\)\.enqueue_open_target\s*\(/,
+  /deep_link\(\)\.get_current\s*\(\)/,
+  /deep_link\(\)\.on_open_url\s*\(/,
+  /emit\s*\(\s*["']deep-link-received["']\s*,\s*\(\)\s*\)/,
+  /take_pending_open_targets_desktop/,
+]) {
+  if (!requirement.test(tauriCompositionRootSource)) {
+    violations.push(
+      `src-tauri/src/lib.rs violates the queued launch-target composition boundary: ${requirement}`,
+    );
+  }
+}
+
+const deepLinkLifecycleSource = readFileSync(
+  join(projectRoot, 'src', 'composables', 'useDeepLinks.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /takePendingOpenTargets\s*\(/,
+  /listen\s*\(\s*["']deep-link-received["']/,
+  /drainTail\s*=\s*drainTail\.then\s*\(/,
+]) {
+  if (!requirement.test(deepLinkLifecycleSource)) {
+    violations.push(
+      `src/composables/useDeepLinks.ts violates the backend-owned queued launch-target boundary: ${requirement}`,
+    );
+  }
+}
+rejectMatches(
+  [join(projectRoot, 'src', 'composables', 'useDeepLinks.ts')],
+  [/@tauri-apps\/plugin-deep-link/, /decodeURIComponent\s*\(/, /new\s+URL\s*\(/, /filePathFromDeepLinkTarget/],
+  'the backend-owned launch-target parsing boundary',
+);
+
+if (readFileSync(join(projectRoot, 'package.json'), 'utf8').includes('@tauri-apps/plugin-deep-link')) {
+  violations.push('package.json retains the unused frontend deep-link plugin dependency');
+}
+
 rejectMatches(
   sourceFiles(join(projectRoot, 'src-tauri', 'src', 'types'), '.rs'),
   [/\bSearchIndexWork\b/, /\bSearchIndexUpdatePlan\b/],
@@ -1768,10 +1867,27 @@ for (const requirement of [
   /preparations\.runCancellable\s*\(/,
   /preparations\.run\s*\(/,
   /\bprepareApplicationExit\b/,
+  /prepareApplicationExit[\s\S]*async\s*\(\s*\{\s*retain\s*\}\s*\)/,
+  /lifecycleLease\.release\s*\(\s*\)/,
 ]) {
   if (!requirement.test(documentFileCoordinatorSource)) {
     violations.push(
       `src/application/documentFileCoordinator.ts violates the shared preparation and two-phase exit boundary: ${requirement}`,
+    );
+  }
+}
+
+const frontendDocumentLifecycleSource = readFileSync(
+  join(projectRoot, 'src', 'composables', 'useDocumentLifecycle.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /retain\s*:\s*\(\)\s*=>\s*DocumentLifecycleLease/,
+  /if\s*\(\s*!completed\s*\|\|\s*!retained\s*\)\s*release\s*\(\s*\)/,
+]) {
+  if (!requirement.test(frontendDocumentLifecycleSource)) {
+    violations.push(
+      `src/composables/useDocumentLifecycle.ts violates the transferable document lifecycle lease boundary: ${requirement}`,
     );
   }
 }

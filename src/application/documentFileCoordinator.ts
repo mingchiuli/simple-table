@@ -30,6 +30,11 @@ type DocumentReplacementLease = {
 
 type LifecycleController = {
   release: () => void;
+  retain: () => LifecycleLease;
+};
+
+type LifecycleLease = {
+  release: () => void;
 };
 
 type LifecycleOptions = {
@@ -301,12 +306,23 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
     const lifecycleStatus = await ports.runDocumentLifecycle(
       'closing',
       'Failed to prepare application exit',
-      async () => {
+      async ({ retain }) => {
         const replacement = await ports.beginDocumentReplacement();
         if (!replacement) return;
+        const lifecycleLease = retain();
+        let settled = false;
+        const settle = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          try {
+            action();
+          } finally {
+            lifecycleLease.release();
+          }
+        };
         preparation = {
-          commit: () => replacement.commit(),
-          rollback: () => replacement.cancel(),
+          commit: () => settle(replacement.commit),
+          rollback: () => settle(replacement.cancel),
         };
       },
       { waitForIdle: options.waitForIdle },

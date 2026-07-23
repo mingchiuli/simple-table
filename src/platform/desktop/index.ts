@@ -7,6 +7,10 @@ import type { PreparedOpenDocument } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 
 export const desktopFileOps = {
+  takePendingOpenTargets: (): Promise<string[]> => {
+    return invokeCommand("take_pending_open_targets_desktop", {});
+  },
+
   /** Desktop: 后端选择文件路径并授权随后读取，不在前端直接使用 dialog/fs 插件。 */
   pickOpenFile: async (): Promise<OpenFileSelection | null> => {
     return invokeCommand("pick_open_file_desktop", {});

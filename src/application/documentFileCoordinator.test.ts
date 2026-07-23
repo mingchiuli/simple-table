@@ -97,6 +97,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     commit: vi.fn(),
     cancel: vi.fn(),
   };
+  const lifecycleRelease = vi.fn();
   const ports: TestPorts = {
     getFileData: () => projection(),
     getCommandContext: () => context,
@@ -104,11 +105,26 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     getCurrentSheetIndex: () => 0,
     beginDocumentReplacement: vi.fn().mockResolvedValue(replacement),
     runDocumentLifecycle: vi.fn(async (_lifecycle, _errorPrefix, action) => {
+      let released = false;
+      let retained = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        lifecycleRelease();
+      };
       try {
-        await action({ release: () => undefined });
+        await action({
+          release,
+          retain: () => {
+            retained = true;
+            return { release };
+          },
+        });
         return 'completed';
       } catch {
         return 'failed';
+      } finally {
+        if (!retained) release();
       }
     }),
     prepareConsistentContext: vi.fn().mockResolvedValue(context),
@@ -133,7 +149,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     queueRecentFileEntryUpdate: vi.fn(),
     ...overrides,
   };
-  return { ports, replacement };
+  return { ports, replacement, lifecycleRelease };
 }
 
 describe('documentFileCoordinator', () => {
@@ -252,7 +268,7 @@ describe('documentFileCoordinator', () => {
   });
 
   it('prepares application exit without closing or clearing the document', async () => {
-    const { ports, replacement } = createPorts();
+    const { ports, replacement, lifecycleRelease } = createPorts();
     const coordinator = createDocumentFileCoordinator(ports);
 
     const preparation = await coordinator.prepareApplicationExit({ waitForIdle: true });
@@ -262,6 +278,7 @@ describe('documentFileCoordinator', () => {
     expect(replacement.commit).not.toHaveBeenCalled();
     expect(ports.closeDocument).not.toHaveBeenCalled();
     expect(ports.clearDocument).not.toHaveBeenCalled();
+    expect(lifecycleRelease).not.toHaveBeenCalled();
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'closing',
       'Failed to prepare application exit',
@@ -271,6 +288,11 @@ describe('documentFileCoordinator', () => {
 
     preparation?.rollback();
     expect(replacement.cancel).toHaveBeenCalledOnce();
+    expect(lifecycleRelease).toHaveBeenCalledOnce();
+
+    preparation?.commit();
+    expect(replacement.commit).not.toHaveBeenCalled();
+    expect(lifecycleRelease).toHaveBeenCalledOnce();
   });
 
   it('aborts a prepared selected document when commit fails', async () => {

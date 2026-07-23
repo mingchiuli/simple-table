@@ -710,6 +710,26 @@ describe("useFileActions", () => {
     expect(documentSessionStore.data).toBeNull();
   });
 
+  it("keeps the document locked until application exit preparation is settled", async () => {
+    const documentSessionStore = useDocumentSessionStore();
+    const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+
+    const actions = mountActions(flushPendingCellChanges);
+    const preparation = await actions.prepareApplicationExit({ waitForIdle: true });
+
+    expect(preparation).not.toBeNull();
+    expect(documentSessionStore.lifecycle).toBe("closing");
+    expect(documentSessionStore.isInteractionLocked).toBe(true);
+    expect(documentSessionStore.data).not.toBeNull();
+
+    preparation?.rollback();
+
+    expect(documentSessionStore.lifecycle).toBe("idle");
+    expect(documentSessionStore.isInteractionLocked).toBe(false);
+    expect(documentSessionStore.data).not.toBeNull();
+  });
+
   it("delegates document closing to the route-leave guard when returning home", async () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();

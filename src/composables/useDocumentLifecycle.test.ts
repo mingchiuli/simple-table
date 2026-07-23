@@ -133,4 +133,38 @@ describe("useDocumentLifecycle", () => {
 
     expect(store.lifecycle).toBe("saving");
   });
+
+  it("keeps a retained lifecycle active until its lease is released", async () => {
+    const store = useDocumentSessionStore();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
+    let releaseLease: (() => void) | undefined;
+
+    await expect(
+      runDocumentLifecycle("closing", "Failed", async ({ retain }) => {
+        releaseLease = retain().release;
+      })
+    ).resolves.toBe("completed");
+
+    expect(store.lifecycle).toBe("closing");
+    expect(store.isInteractionLocked).toBe(true);
+
+    releaseLease?.();
+    expect(store.lifecycle).toBe("idle");
+    expect(store.isInteractionLocked).toBe(false);
+  });
+
+  it("releases a retained lifecycle when the action fails", async () => {
+    const store = useDocumentSessionStore();
+    const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
+
+    await expect(
+      runDocumentLifecycle("closing", "Failed", async ({ retain }) => {
+        retain();
+        throw new Error("cannot prepare");
+      })
+    ).resolves.toBe("failed");
+
+    expect(store.lifecycle).toBe("idle");
+    expect(store.isInteractionLocked).toBe(false);
+  });
 });
