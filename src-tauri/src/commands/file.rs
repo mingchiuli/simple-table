@@ -8,6 +8,8 @@ use crate::runtime::ApplicationRuntime;
 use crate::types::{
     DesktopOpenFileInfo, OpenDocumentResponse, PreparedOpenDocument, SavedDocumentResponse,
 };
+#[cfg(desktop)]
+use tauri::Emitter;
 use tauri::{AppHandle, State};
 
 /// Desktop: 后端选择文件路径并授权随后读取。
@@ -35,11 +37,43 @@ pub fn discard_open_file_selection_desktop(runtime: State<'_, ApplicationRuntime
     runtime.platform_files().discard_open_file_selection(&path)
 }
 
-/// Desktop: drain normalized launch/file-association targets authorized by the backend.
+/// Desktop: claim one normalized launch/file-association target authorized by the backend.
 #[cfg(desktop)]
 #[tauri::command]
-pub fn take_pending_open_targets_desktop(runtime: State<'_, ApplicationRuntime>) -> Vec<String> {
-    runtime.platform_files().take_pending_open_targets()
+pub fn claim_pending_open_target_desktop(
+    runtime: State<'_, ApplicationRuntime>,
+) -> Result<Option<crate::types::DesktopOpenTargetClaim>, AppError> {
+    Ok(runtime
+        .platform_files()
+        .claim_pending_open_target()?
+        .map(protocol_projection::desktop_open_target_claim))
+}
+
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn acknowledge_open_target_desktop(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+    claim_id: String,
+) -> Result<(), AppError> {
+    if runtime
+        .platform_files()
+        .acknowledge_open_target(&claim_id)?
+    {
+        app.emit("deep-link-received", ()).map_err(|error| {
+            AppError::Internal(format!("Failed to emit launch target wake event: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
+pub fn release_open_target_desktop(
+    runtime: State<'_, ApplicationRuntime>,
+    claim_id: String,
+) -> Result<(), AppError> {
+    runtime.platform_files().release_open_target(&claim_id)
 }
 
 /// Desktop: 从后端已授权路径读取并解析文件。

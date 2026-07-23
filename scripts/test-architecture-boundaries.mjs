@@ -1094,15 +1094,35 @@ if (!/recover_managed_save_transactions\s*\([\s\S]*managed_documents\s*\(/.test(
     'src-tauri/src/io/platform/mobile.rs must recover managed save transactions before catalog reconciliation',
   );
 }
+for (const requirement of [
+  /struct\s+MobileStorageInitialization\b/,
+  /MobileStorageInitializationState::Initializing\b/,
+  /Err\(_\)\s*=>\s*MobileStorageInitializationState::Uninitialized/,
+  /fn\s+cached_mobile_storage_directory\b/,
+]) {
+  if (!requirement.test(mobileFileRuntimeSource)) {
+    violations.push(
+      `src-tauri/src/io/platform/mobile.rs violates the retryable single-flight mobile storage initialization boundary: ${requirement}`,
+    );
+  }
+}
+if (/OnceLock\s*<\s*Result\s*</.test(mobileFileRuntimeSource)) {
+  violations.push(
+    'src-tauri/src/io/platform/mobile.rs caches a failed mobile storage initialization for the process lifetime',
+  );
+}
 
 const desktopFileRuntimeSource = readFileSync(
   join(rustRoot, 'io', 'platform', 'desktop.rs'),
   'utf8',
 );
 for (const requirement of [
-  /pending_open_paths\s*:\s*Mutex\s*<\s*VecDeque\s*<\s*String\s*>\s*>/,
+  /open_targets\s*:\s*Mutex\s*<\s*OpenTargetQueue\s*>/,
   /fn\s+enqueue_open_target\b/,
-  /fn\s+take_pending_open_targets\b/,
+  /fn\s+claim_pending_open_target\b/,
+  /fn\s+acknowledge_open_target\b/,
+  /fn\s+release_open_target\b/,
+  /fn\s+requeue_expired\b/,
   /fn\s+resolve_open_target\b/,
   /tauri::Url::parse\s*\(/,
 ]) {
@@ -1119,7 +1139,9 @@ for (const requirement of [
   /deep_link\(\)\.get_current\s*\(\)/,
   /deep_link\(\)\.on_open_url\s*\(/,
   /emit\s*\(\s*["']deep-link-received["']\s*,\s*\(\)\s*\)/,
-  /take_pending_open_targets_desktop/,
+  /claim_pending_open_target_desktop/,
+  /acknowledge_open_target_desktop/,
+  /release_open_target_desktop/,
 ]) {
   if (!requirement.test(tauriCompositionRootSource)) {
     violations.push(
@@ -1133,7 +1155,8 @@ const deepLinkLifecycleSource = readFileSync(
   'utf8',
 );
 for (const requirement of [
-  /takePendingOpenTargets\s*\(/,
+  /claimPendingOpenTarget\s*\(/,
+  /releaseOpenTarget\s*\(/,
   /listen\s*\(\s*["']deep-link-received["']/,
   /drainTail\s*=\s*drainTail\.then\s*\(/,
 ]) {
@@ -1145,8 +1168,37 @@ for (const requirement of [
 }
 rejectMatches(
   [join(projectRoot, 'src', 'composables', 'useDeepLinks.ts')],
-  [/@tauri-apps\/plugin-deep-link/, /decodeURIComponent\s*\(/, /new\s+URL\s*\(/, /filePathFromDeepLinkTarget/],
+  [
+    /@tauri-apps\/plugin-deep-link/,
+    /decodeURIComponent\s*\(/,
+    /new\s+URL\s*\(/,
+    /filePathFromDeepLinkTarget/,
+    /takePendingOpenTargets/,
+  ],
   'the backend-owned launch-target parsing boundary',
+);
+
+const launchTargetRouteCoordinatorSource = readFileSync(
+  join(projectRoot, 'src', 'application', 'routeDocumentLoadCoordinator.ts'),
+  'utf8',
+);
+for (const requirement of [
+  /openTargetClaimId\s*:\s*string\s*\|\s*null/,
+  /acknowledgeOpenTarget\s*\(/,
+  /releaseOpenTarget\s*\(/,
+  /claimOutcome\s*=\s*["']acknowledge["']/,
+  /settleOpenTargetClaim\s*\(\s*openTargetClaimId\s*,\s*claimOutcome\s*\)/,
+]) {
+  if (!requirement.test(launchTargetRouteCoordinatorSource)) {
+    violations.push(
+      `src/application/routeDocumentLoadCoordinator.ts violates the load-confirmed launch-target settlement boundary: ${requirement}`,
+    );
+  }
+}
+rejectMatches(
+  [join(rustRoot, 'io', 'platform', 'desktop.rs')],
+  [/pending\.drain\s*\(/, /fn\s+take_pending_open_targets\b/],
+  'the acknowledged launch-target lease boundary',
 );
 
 if (readFileSync(join(projectRoot, 'package.json'), 'utf8').includes('@tauri-apps/plugin-deep-link')) {
@@ -1865,6 +1917,7 @@ const documentFileCoordinatorSource = readFileSync(
 );
 for (const requirement of [
   /preparations\.runCancellable\s*\(/,
+  /preparations\.runCancellable\s*\([\s\S]{0,250}\(result\)\s*=>\s*ports\.abortPreparedDocument\(result\)/,
   /preparations\.run\s*\(/,
   /\bprepareApplicationExit\b/,
   /prepareApplicationExit[\s\S]*async\s*\(\s*\{\s*retain\s*\}\s*\)/,
@@ -1899,6 +1952,11 @@ const documentPreparationCoordinatorSource = readFileSync(
 for (const requirement of [
   /\blet\s+tail\s*:/,
   /cancellation\.onCancel\s*\(/,
+  /function\s+discardWithRetry\b/,
+  /function\s+cleanup\s*</,
+  /function\s+observeCancelledCleanup\b/,
+  /activeCleanupObservers\b/,
+  /DocumentPreparationCleanupError\b/,
   /function\s+enqueue\b/,
   /tail\s*=\s*result\.then\s*\(/,
   /function\s+waitForIdle\b/,

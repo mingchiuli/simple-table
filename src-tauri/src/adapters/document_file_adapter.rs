@@ -52,8 +52,18 @@ impl PlatformFileAdapter {
     }
 
     #[cfg(desktop)]
-    pub fn take_pending_open_targets(&self) -> Vec<String> {
-        desktop::take_pending_open_targets(&self.desktop_files)
+    pub fn claim_pending_open_target(&self) -> Result<Option<desktop::OpenTargetClaim>, AppError> {
+        desktop::claim_pending_open_target(&self.desktop_files)
+    }
+
+    #[cfg(desktop)]
+    pub fn acknowledge_open_target(&self, claim_id: &str) -> Result<bool, AppError> {
+        desktop::acknowledge_open_target(&self.desktop_files, claim_id)
+    }
+
+    #[cfg(desktop)]
+    pub fn release_open_target(&self, claim_id: &str) -> Result<(), AppError> {
+        desktop::release_open_target(&self.desktop_files, claim_id)
     }
 
     #[cfg(desktop)]

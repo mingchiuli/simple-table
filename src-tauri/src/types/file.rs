@@ -21,6 +21,14 @@ pub struct DesktopOpenFileInfo {
     pub file_name: String,
 }
 
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DesktopOpenTargetClaim {
+    pub claim_id: String,
+    pub path: String,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

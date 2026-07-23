@@ -2,22 +2,26 @@ import type { OperationCancellationSignal } from '@/application/operationCancell
 
 export type RouteDocumentLoadPorts = {
   getRouteFilePath: () => string | null;
+  getRouteOpenTargetClaimId: () => string | null;
   getCurrentFilePath: () => string | null;
   loadFileFromPath: (
     filePath: string,
     cancellation: OperationCancellationSignal,
   ) => Promise<boolean>;
   refreshEditorState: () => Promise<void>;
+  acknowledgeOpenTarget: (claimId: string) => Promise<void>;
+  releaseOpenTarget: (claimId: string) => Promise<void>;
   reportError: (error: unknown) => void;
 };
 
 export type RouteDocumentLoadCoordinator = {
-  enqueue: (filePath: string | null) => void;
+  enqueue: (filePath: string | null, openTargetClaimId?: string | null) => void;
   cancel: () => void;
 };
 
 type PendingRouteLoad = {
   filePath: string | null;
+  openTargetClaimId: string | null;
   generation: number;
 };
 
@@ -28,9 +32,12 @@ type ActiveCancellation = {
 
 export function createRouteDocumentLoadCoordinator({
   getRouteFilePath,
+  getRouteOpenTargetClaimId,
   getCurrentFilePath,
   loadFileFromPath,
   refreshEditorState,
+  acknowledgeOpenTarget,
+  releaseOpenTarget,
   reportError,
 }: RouteDocumentLoadPorts): RouteDocumentLoadCoordinator {
   let lastLoadedRouteFilePath: string | null = null;
@@ -38,18 +45,28 @@ export function createRouteDocumentLoadCoordinator({
   let pendingLoad: PendingRouteLoad | null = null;
   let workerRunning = false;
   let activeCancellation: ActiveCancellation | null = null;
+  const activeClaimSettlements = new Set<Promise<void>>();
 
-  function enqueue(filePath: string | null) {
+  function enqueue(filePath: string | null, openTargetClaimId: string | null = null) {
     cancelActiveLoads();
+    releaseSupersededPendingClaim(openTargetClaimId);
     const generation = ++routeLoadGeneration;
-    pendingLoad = { filePath, generation };
+    pendingLoad = { filePath, openTargetClaimId, generation };
     void runWorker();
   }
 
   function cancel() {
     cancelActiveLoads();
     routeLoadGeneration += 1;
+    releaseSupersededPendingClaim(null);
     pendingLoad = null;
+  }
+
+  function releaseSupersededPendingClaim(replacementClaimId: string | null) {
+    const claimId = pendingLoad?.openTargetClaimId;
+    if (claimId && claimId !== replacementClaimId) {
+      settleOpenTargetClaim(claimId, 'release');
+    }
   }
 
   function cancelActiveLoads() {
@@ -79,42 +96,59 @@ export function createRouteDocumentLoadCoordinator({
     }
   }
 
-  async function runLoad({ filePath, generation }: PendingRouteLoad) {
-    if (!isCurrentRouteFileLoad(filePath, generation)) return;
-    if (!filePath) {
-      lastLoadedRouteFilePath = null;
-      await refreshEditorState();
+  async function runLoad({ filePath, openTargetClaimId, generation }: PendingRouteLoad) {
+    if (!isCurrentRouteFileLoad(filePath, openTargetClaimId, generation)) {
+      settleOpenTargetClaim(openTargetClaimId, 'release');
       return;
     }
-    if (filePath === lastLoadedRouteFilePath && getCurrentFilePath() === filePath) {
-      return;
-    }
-    const cancellation = createCancellationSignal(filePath, generation);
+    let claimOutcome: 'acknowledge' | 'release' = 'release';
     try {
-      if ((await loadFileFromPath(filePath, cancellation)) && !cancellation.isCancelled()) {
-        lastLoadedRouteFilePath = filePath;
+      if (!filePath) {
+        lastLoadedRouteFilePath = null;
+        await refreshEditorState();
+        return;
+      }
+      if (filePath === lastLoadedRouteFilePath && getCurrentFilePath() === filePath) {
+        claimOutcome = 'acknowledge';
+        return;
+      }
+      const cancellation = createCancellationSignal(filePath, openTargetClaimId, generation);
+      try {
+        if ((await loadFileFromPath(filePath, cancellation)) && !cancellation.isCancelled()) {
+          lastLoadedRouteFilePath = filePath;
+          claimOutcome = 'acknowledge';
+        }
+      } finally {
+        if (activeCancellation?.generation === generation) {
+          activeCancellation = null;
+        }
       }
     } finally {
-      if (activeCancellation?.generation === generation) {
-        activeCancellation = null;
-      }
+      settleOpenTargetClaim(openTargetClaimId, claimOutcome);
     }
   }
 
-  function isCurrentRouteFileLoad(filePath: string | null, generation: number) {
-    return generation === routeLoadGeneration && filePath === getRouteFilePath();
+  function isCurrentRouteFileLoad(
+    filePath: string | null,
+    openTargetClaimId: string | null,
+    generation: number,
+  ) {
+    return generation === routeLoadGeneration
+      && filePath === getRouteFilePath()
+      && openTargetClaimId === getRouteOpenTargetClaimId();
   }
 
   function createCancellationSignal(
     filePath: string,
+    openTargetClaimId: string | null,
     generation: number,
   ): OperationCancellationSignal {
     const handlers = new Set<() => void>();
     activeCancellation = { generation, handlers };
     return {
-      isCancelled: () => !isCurrentRouteFileLoad(filePath, generation),
+      isCancelled: () => !isCurrentRouteFileLoad(filePath, openTargetClaimId, generation),
       onCancel(handler) {
-        if (!isCurrentRouteFileLoad(filePath, generation)) {
+        if (!isCurrentRouteFileLoad(filePath, openTargetClaimId, generation)) {
           notifyCancellation(handler);
           return () => undefined;
         }
@@ -122,6 +156,19 @@ export function createRouteDocumentLoadCoordinator({
         return () => handlers.delete(handler);
       },
     };
+  }
+
+  function settleOpenTargetClaim(
+    claimId: string | null,
+    outcome: 'acknowledge' | 'release',
+  ) {
+    if (!claimId) return;
+    const settlement = (outcome === 'acknowledge'
+      ? acknowledgeOpenTarget(claimId)
+      : releaseOpenTarget(claimId))
+      .catch(safeReportError);
+    activeClaimSettlements.add(settlement);
+    void settlement.finally(() => activeClaimSettlements.delete(settlement));
   }
 
   function notifyCancellation(handler: () => void) {

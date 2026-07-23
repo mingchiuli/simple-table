@@ -101,6 +101,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<SheetRegionMetadata>(&mut output, &cfg);
     push_decl::<SheetRegionProjectionResponse>(&mut output, &cfg);
     push_decl::<PreparedOpenDocument>(&mut output, &cfg);
+    push_decl::<crate::types::DesktopOpenTargetClaim>(&mut output, &cfg);
     push_decl::<SavedDocumentIdentity>(&mut output, &cfg);
     push_decl::<SavedDocumentResponse>(&mut output, &cfg);
     push_tauri_command_map(&mut output);

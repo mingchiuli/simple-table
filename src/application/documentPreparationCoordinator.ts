@@ -4,11 +4,34 @@ export type DocumentPreparationCoordinator = ReturnType<
   typeof createDocumentPreparationCoordinator
 >;
 
-export function createDocumentPreparationCoordinator() {
+type DocumentPreparationCoordinatorOptions = {
+  cleanupAttempts?: number;
+  reportCleanupFailure?: (error: unknown) => void;
+};
+
+export class DocumentPreparationCleanupError extends Error {
+  constructor(readonly failures: readonly unknown[]) {
+    super(`Failed to clean up ${failures.length} cancelled document preparation task(s)`);
+    this.name = 'DocumentPreparationCleanupError';
+  }
+}
+
+const DEFAULT_CLEANUP_ATTEMPTS = 3;
+
+export function createDocumentPreparationCoordinator(
+  options: DocumentPreparationCoordinatorOptions = {},
+) {
   let tail: Promise<void> = Promise.resolve();
+  const activeCleanupObservers = new Set<Promise<void>>();
+  const cleanupFailures: unknown[] = [];
+  const cleanupAttempts = Math.max(1, options.cleanupAttempts ?? DEFAULT_CLEANUP_ATTEMPTS);
 
   function run<T>(prepare: () => Promise<T>): Promise<T> {
     return enqueue(prepare);
+  }
+
+  function cleanup<T>(result: T, discard: (result: T) => Promise<void>): Promise<void> {
+    return enqueue(() => discardWithRetry(result, discard));
   }
 
   async function runCancellable<T>(
@@ -29,15 +52,16 @@ export function createDocumentPreparationCoordinator() {
 
     const prepared = enqueue(async () => {
       if (cancelled) return undefined;
+      let result: T;
       try {
-        const result = await prepare();
-        if (!cancelled) return result;
-        await discard(result);
-        return undefined;
+        result = await prepare();
       } catch (error) {
         if (cancelled) return undefined;
         throw error;
       }
+      if (!cancelled) return result;
+      await discardWithRetry(result, discard);
+      return undefined;
     });
 
     try {
@@ -45,10 +69,45 @@ export function createDocumentPreparationCoordinator() {
         prepared.then((value) => ({ status: 'prepared' as const, value })),
         cancellationResult,
       ]);
-      return outcome.status === 'prepared' ? outcome.value : undefined;
+      if (outcome.status === 'prepared') return outcome.value;
+      observeCancelledCleanup(prepared);
+      return undefined;
     } finally {
       unregister();
     }
+  }
+
+  async function discardWithRetry<T>(
+    result: T,
+    discard: (result: T) => Promise<void>,
+  ): Promise<void> {
+    let lastFailure: unknown;
+    for (let attempt = 0; attempt < cleanupAttempts; attempt += 1) {
+      try {
+        await discard(result);
+        return;
+      } catch (error) {
+        lastFailure = error;
+        if (attempt + 1 < cleanupAttempts) await Promise.resolve();
+      }
+    }
+    throw lastFailure;
+  }
+
+  function observeCancelledCleanup(cleanup: Promise<unknown>) {
+    const observer = cleanup.then(
+      () => undefined,
+      (error) => {
+        cleanupFailures.push(error);
+        try {
+          options.reportCleanupFailure?.(error);
+        } catch {
+          // Failure reporting must not break preparation queue ownership.
+        }
+      },
+    );
+    activeCleanupObservers.add(observer);
+    void observer.finally(() => activeCleanupObservers.delete(observer));
   }
 
   function enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -60,9 +119,15 @@ export function createDocumentPreparationCoordinator() {
     return result;
   }
 
-  function waitForIdle(): Promise<void> {
-    return tail;
+  async function waitForIdle(): Promise<void> {
+    await tail;
+    while (activeCleanupObservers.size > 0) {
+      await Promise.allSettled(activeCleanupObservers);
+    }
+    if (cleanupFailures.length > 0) {
+      throw new DocumentPreparationCleanupError(cleanupFailures.splice(0));
+    }
   }
 
-  return { run, runCancellable, waitForIdle };
+  return { run, runCancellable, cleanup, waitForIdle };
 }

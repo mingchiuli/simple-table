@@ -58,7 +58,11 @@ function buildDocumentWorkspaceRuntime(
     ensureSheetLoaded: regions.ensureSheetLoaded,
     ensureSheetRegionLoaded: regions.ensureSheetRegionLoaded,
   };
-  const preparations = createDocumentPreparationCoordinator();
+  const preparations = createDocumentPreparationCoordinator({
+    reportCleanupFailure: (error) => {
+      console.error('Failed to clean up cancelled document preparation:', error);
+    },
+  });
   const commandBus = createDocumentCommandBus(document, session, selection);
   let disposal: Promise<void> | null = null;
 

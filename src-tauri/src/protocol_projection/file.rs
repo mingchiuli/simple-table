@@ -1,5 +1,7 @@
 #[cfg(any(desktop, target_os = "android", target_os = "ios"))]
 use crate::io::open_file_input::OpenFileSelection;
+#[cfg(desktop)]
+use crate::io::platform::desktop::OpenTargetClaim;
 #[cfg(any(desktop, target_os = "android", target_os = "ios"))]
 use crate::types;
 
@@ -8,6 +10,14 @@ pub(crate) fn desktop_open_file_info(value: OpenFileSelection) -> types::Desktop
     types::DesktopOpenFileInfo {
         path: value.path,
         file_name: value.file_name,
+    }
+}
+
+#[cfg(desktop)]
+pub(crate) fn desktop_open_target_claim(value: OpenTargetClaim) -> types::DesktopOpenTargetClaim {
+    types::DesktopOpenTargetClaim {
+        claim_id: value.claim_id,
+        path: value.path,
     }
 }
 

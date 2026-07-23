@@ -19,13 +19,13 @@ use crate::io::{
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FilePath;
 
 #[derive(Clone)]
 pub struct MobileFileRuntime {
-    storage_directory: Arc<OnceLock<Result<PathBuf, AppError>>>,
+    storage_directory: Arc<MobileStorageInitialization>,
     transient_files: Arc<TransientFileRegistry>,
     managed_documents: ManagedDocumentCatalog,
 }
@@ -33,10 +33,55 @@ pub struct MobileFileRuntime {
 impl Default for MobileFileRuntime {
     fn default() -> Self {
         Self {
-            storage_directory: Arc::new(OnceLock::new()),
+            storage_directory: Arc::new(MobileStorageInitialization::default()),
             transient_files: Arc::new(TransientFileRegistry::default()),
             managed_documents: ManagedDocumentCatalog::default(),
         }
+    }
+}
+
+#[derive(Default)]
+struct MobileStorageInitialization {
+    state: Mutex<MobileStorageInitializationState>,
+}
+
+#[derive(Default)]
+enum MobileStorageInitializationState {
+    #[default]
+    Uninitialized,
+    Initializing(Arc<MobileStorageInitializationAttempt>),
+    Ready(PathBuf),
+}
+
+#[derive(Default)]
+struct MobileStorageInitializationAttempt {
+    result: Mutex<Option<Result<PathBuf, AppError>>>,
+    completed: Condvar,
+}
+
+impl MobileStorageInitializationAttempt {
+    fn complete(&self, result: Result<PathBuf, AppError>) -> Result<(), AppError> {
+        let mut stored = self
+            .result
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("mobile storage initialization attempt"))?;
+        *stored = Some(result);
+        self.completed.notify_all();
+        Ok(())
+    }
+
+    fn wait(&self) -> Result<PathBuf, AppError> {
+        let mut stored = self
+            .result
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("mobile storage initialization attempt"))?;
+        while stored.is_none() {
+            stored = self
+                .completed
+                .wait(stored)
+                .map_err(|_| AppError::poisoned_lock("mobile storage initialization attempt"))?;
+        }
+        stored.as_ref().expect("completed result").clone()
     }
 }
 
@@ -135,10 +180,52 @@ pub(super) fn mobile_dir(
 }
 
 fn cached_mobile_storage_directory(
-    cache: &OnceLock<Result<PathBuf, AppError>>,
+    initialization: &MobileStorageInitialization,
     initialize: impl FnOnce() -> Result<PathBuf, AppError>,
 ) -> Result<PathBuf, AppError> {
-    cache.get_or_init(initialize).clone()
+    let (attempt, owns_attempt) = {
+        let mut state = initialization
+            .state
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("mobile storage initialization"))?;
+        match &*state {
+            MobileStorageInitializationState::Ready(path) => return Ok(path.clone()),
+            MobileStorageInitializationState::Initializing(attempt) => (Arc::clone(attempt), false),
+            MobileStorageInitializationState::Uninitialized => {
+                let attempt = Arc::new(MobileStorageInitializationAttempt::default());
+                *state = MobileStorageInitializationState::Initializing(Arc::clone(&attempt));
+                (attempt, true)
+            }
+        }
+    };
+
+    if !owns_attempt {
+        return attempt.wait();
+    }
+
+    let result = initialize();
+    let state_update = initialization.state.lock();
+    let mut state = match state_update {
+        Ok(state) => state,
+        Err(_) => {
+            let error = AppError::poisoned_lock("mobile storage initialization");
+            attempt.complete(Err(error.clone()))?;
+            return Err(error);
+        }
+    };
+    if matches!(
+        &*state,
+        MobileStorageInitializationState::Initializing(current)
+            if Arc::ptr_eq(current, &attempt)
+    ) {
+        *state = match &result {
+            Ok(path) => MobileStorageInitializationState::Ready(path.clone()),
+            Err(_) => MobileStorageInitializationState::Uninitialized,
+        };
+    }
+    drop(state);
+    attempt.complete(result.clone())?;
+    result
 }
 
 pub(super) fn unique_import_path(
@@ -516,14 +603,14 @@ pub(crate) fn write_export_target(
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_mobile_storage_directory, extension_from_name, is_save_target_authorized,
-        validated_mobile_files_path_in_dir,
+        MobileStorageInitialization, cached_mobile_storage_directory, extension_from_name,
+        is_save_target_authorized, validated_mobile_files_path_in_dir,
     };
     use crate::error::AppError;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, OnceLock};
     use std::thread;
 
     #[test]
@@ -555,7 +642,7 @@ mod tests {
 
     #[test]
     fn mobile_storage_initialization_is_shared_by_concurrent_callers() {
-        let cache = Arc::new(OnceLock::new());
+        let cache = Arc::new(MobileStorageInitialization::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let mut workers = Vec::new();
         for _ in 0..16 {
@@ -579,19 +666,25 @@ mod tests {
     }
 
     #[test]
-    fn mobile_storage_initialization_failure_is_stable() {
-        let cache = OnceLock::new();
+    fn mobile_storage_initialization_retries_after_failure() {
+        let cache = MobileStorageInitialization::default();
         let calls = AtomicUsize::new(0);
-        for _ in 0..2 {
-            assert!(matches!(
-                cached_mobile_storage_directory(&cache, || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err(AppError::ReadError("failed initialization".to_string()))
-                }),
-                Err(AppError::ReadError(_))
-            ));
-        }
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            cached_mobile_storage_directory(&cache, || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(AppError::ReadError("failed initialization".to_string()))
+            }),
+            Err(AppError::ReadError(_))
+        ));
+        assert_eq!(
+            cached_mobile_storage_directory(&cache, || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(PathBuf::from("/mobile/files"))
+            })
+            .expect("retry initialization"),
+            PathBuf::from("/mobile/files")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -127,8 +127,17 @@ function routeFilePath(): string | null {
   return value || null;
 }
 
+function routeOpenTargetClaimId(): string | null {
+  const value = route.query.openTargetClaim;
+  if (Array.isArray(value)) {
+    return value[0] || null;
+  }
+  return value || null;
+}
+
 const routeFileLoader = useRouteFileLoader({
   getRouteFilePath: routeFilePath,
+  getRouteOpenTargetClaimId: routeOpenTargetClaimId,
   getCurrentFilePath: () => documentSessionStore.currentFilePath,
   loadFileFromPath,
   refreshEditorState: commandBus.refreshEditorState,
@@ -197,8 +206,8 @@ const {
 });
 
 // ========== Lifecycle ==========
-watch(() => route.query.file, () => {
-  routeFileLoader.enqueue(routeFilePath());
+watch(() => [route.query.file, route.query.openTargetClaim], () => {
+  routeFileLoader.enqueue(routeFilePath(), routeOpenTargetClaimId());
 }, {
   immediate: true,
 });

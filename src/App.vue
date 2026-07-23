@@ -12,7 +12,9 @@ useDark();
 useWindowCloseGuard();
 const applicationWorkspaceRuntime = useApplicationWorkspaceRuntime();
 onUnmounted(() => {
-  void applicationWorkspaceRuntime.dispose();
+  void applicationWorkspaceRuntime.dispose().catch((error) => {
+    console.error('Failed to dispose application workspace:', error);
+  });
 });
 
 const router = useRouter();

@@ -13,10 +13,10 @@ pub(crate) use document::{
     saved_document_response, sheet_region_response, spreadsheet_format_options,
 };
 pub(crate) use editor::{mutation_lookup, mutation_response};
-#[cfg(desktop)]
-pub(crate) use file::desktop_open_file_info;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) use file::picked_file_info;
+#[cfg(desktop)]
+pub(crate) use file::{desktop_open_file_info, desktop_open_target_claim};
 pub(crate) use recent::{add_recent_file_input, recent_file, recent_files};
 pub(crate) use search::search_response;
 pub(crate) use status::editor_session;

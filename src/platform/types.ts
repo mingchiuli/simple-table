@@ -5,7 +5,7 @@
 import type {
   EditorCommandContext,
 } from '@/types/documentRuntime';
-import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import type { OpenTargetClaim, PreparedOpenDocument } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 import type { SavedDocumentResponse } from '@/types/protocol';
 
@@ -17,8 +17,10 @@ export type OpenFileSelection = {
 };
 
 export interface PlatformFileOps {
-  /** Drain backend-normalized launch targets that already carry one-time open authorization. */
-  takePendingOpenTargets?(): Promise<string[]>;
+  /** Claim one backend-normalized launch target with one-time open authorization. */
+  claimPendingOpenTarget?(): Promise<OpenTargetClaim | null>;
+  acknowledgeOpenTarget?(claimId: string): Promise<void>;
+  releaseOpenTarget?(claimId: string): Promise<void>;
   /** 只选择/导入文件，不解析、不替换后端活动文档 */
   pickOpenFile(): Promise<OpenFileSelection | null>;
   /** 释放已选择/导入但没有被当前文档接管的文件；桌面路径通常无需实现 */

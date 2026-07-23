@@ -3,12 +3,20 @@ import type { OpenFileSelection, PlatformAPI } from '../types';
 import type {
   EditorCommandContext,
 } from '@/types/documentRuntime';
-import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import type { OpenTargetClaim, PreparedOpenDocument } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 
 export const desktopFileOps = {
-  takePendingOpenTargets: (): Promise<string[]> => {
-    return invokeCommand("take_pending_open_targets_desktop", {});
+  claimPendingOpenTarget: (): Promise<OpenTargetClaim | null> => {
+    return invokeCommand("claim_pending_open_target_desktop", {});
+  },
+
+  acknowledgeOpenTarget: (claimId: string): Promise<void> => {
+    return invokeCommand("acknowledge_open_target_desktop", { claimId });
+  },
+
+  releaseOpenTarget: (claimId: string): Promise<void> => {
+    return invokeCommand("release_open_target_desktop", { claimId });
   },
 
   /** Desktop: 后端选择文件路径并授权随后读取，不在前端直接使用 dialog/fs 插件。 */

@@ -44,6 +44,8 @@ app.mount("#app");
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     app.unmount();
-    void applicationWorkspaceRuntime.dispose();
+    void applicationWorkspaceRuntime.dispose().catch((error) => {
+      console.error('Failed to dispose application workspace:', error);
+    });
   });
 }

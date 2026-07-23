@@ -4,6 +4,11 @@ export type PreparedOpenDocument = {
   token: string;
 };
 
+export type OpenTargetClaim = {
+  claimId: string;
+  path: string;
+};
+
 export type NativeSavePlan = {
   canSave: boolean;
   requiresSaveAs: boolean;

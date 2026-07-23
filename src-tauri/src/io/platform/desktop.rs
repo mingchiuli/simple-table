@@ -17,12 +17,13 @@ use tauri_plugin_fs::FilePath;
 
 const MAX_AUTHORIZED_PATHS: usize = 64;
 const PATH_AUTHORIZATION_TTL: Duration = Duration::from_secs(30 * 60);
+const OPEN_TARGET_CLAIM_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 struct DesktopFileRuntimeInner {
     open_paths: Mutex<PathAuthorizationRegistry>,
     save_paths: Mutex<PathAuthorizationRegistry>,
-    pending_open_paths: Mutex<VecDeque<String>>,
+    open_targets: Mutex<OpenTargetQueue>,
 }
 
 #[derive(Clone, Default)]
@@ -34,6 +35,95 @@ pub struct DesktopFileRuntime {
 struct PathAuthorizationRegistry {
     entries: HashMap<PathBuf, Instant>,
     order: VecDeque<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenTargetClaim {
+    pub claim_id: String,
+    pub path: String,
+}
+
+#[derive(Default)]
+struct OpenTargetQueue {
+    pending: VecDeque<String>,
+    claimed: HashMap<String, ClaimedOpenTarget>,
+}
+
+struct ClaimedOpenTarget {
+    path: String,
+    claimed_at: Instant,
+}
+
+impl OpenTargetQueue {
+    fn enqueue(&mut self, path: String) -> Vec<String> {
+        self.enqueue_at(path, Instant::now())
+    }
+
+    fn enqueue_at(&mut self, path: String, now: Instant) -> Vec<String> {
+        self.requeue_expired(now);
+        if self.claimed.values().any(|claim| claim.path == path) {
+            return Vec::new();
+        }
+        self.pending.retain(|entry| entry != &path);
+        self.pending.push_back(path);
+        let mut evicted = Vec::new();
+        while self.pending.len().saturating_add(self.claimed.len()) > MAX_AUTHORIZED_PATHS {
+            let Some(path) = self.pending.pop_front() else {
+                break;
+            };
+            evicted.push(path);
+        }
+        evicted
+    }
+
+    fn claim(&mut self) -> Option<OpenTargetClaim> {
+        self.claim_at(Instant::now())
+    }
+
+    fn claim_at(&mut self, now: Instant) -> Option<OpenTargetClaim> {
+        self.requeue_expired(now);
+        let path = self.pending.pop_front()?;
+        let claim_id = uuid::Uuid::new_v4().to_string();
+        self.claimed.insert(
+            claim_id.clone(),
+            ClaimedOpenTarget {
+                path: path.clone(),
+                claimed_at: now,
+            },
+        );
+        Some(OpenTargetClaim { claim_id, path })
+    }
+
+    fn acknowledge(&mut self, claim_id: &str) -> (Option<String>, bool) {
+        let path = self.claimed.remove(claim_id).map(|claim| claim.path);
+        self.requeue_expired(Instant::now());
+        (path, !self.pending.is_empty())
+    }
+
+    fn release(&mut self, claim_id: &str) -> Option<String> {
+        let Some(claim) = self.claimed.remove(claim_id) else {
+            return None;
+        };
+        if !self.pending.contains(&claim.path) {
+            self.pending.push_front(claim.path.clone());
+        }
+        Some(claim.path)
+    }
+
+    fn requeue_expired(&mut self, now: Instant) {
+        let mut expired = self
+            .claimed
+            .iter()
+            .filter(|(_, claim)| {
+                now.saturating_duration_since(claim.claimed_at) >= OPEN_TARGET_CLAIM_TTL
+            })
+            .map(|(claim_id, claim)| (claim.claimed_at, claim_id.clone()))
+            .collect::<Vec<_>>();
+        expired.sort_by_key(|(claimed_at, _)| *claimed_at);
+        for (_, claim_id) in expired.into_iter().rev() {
+            self.release(&claim_id);
+        }
+    }
 }
 
 impl PathAuthorizationRegistry {
@@ -92,29 +182,64 @@ pub fn enqueue_open_target(runtime: &DesktopFileRuntime, target: &str) -> bool {
     let Some(path) = resolve_open_target(target) else {
         return false;
     };
-    authorize_open_path(runtime, &path);
     let path = path.to_string_lossy().to_string();
-    let Ok(mut pending) = runtime.inner.pending_open_paths.lock() else {
-        discard_open_file_selection(runtime, &path);
+    let Ok(mut queue) = runtime.inner.open_targets.lock() else {
         return false;
     };
-    pending.retain(|entry| entry != &path);
-    pending.push_back(path);
-    while pending.len() > MAX_AUTHORIZED_PATHS {
-        if let Some(expired) = pending.pop_front() {
-            discard_open_file_selection(runtime, &expired);
-        }
+    let evicted = queue.enqueue(path.clone());
+    let accepted =
+        queue.pending.contains(&path) || queue.claimed.values().any(|claim| claim.path == path);
+    if accepted {
+        authorize_open_path(runtime, &path);
     }
-    true
+    drop(queue);
+    for expired in evicted {
+        discard_open_file_selection(runtime, &expired);
+    }
+    accepted
 }
 
-pub fn take_pending_open_targets(runtime: &DesktopFileRuntime) -> Vec<String> {
-    runtime
+pub fn claim_pending_open_target(
+    runtime: &DesktopFileRuntime,
+) -> Result<Option<OpenTargetClaim>, AppError> {
+    let mut queue = runtime
         .inner
-        .pending_open_paths
+        .open_targets
         .lock()
-        .map(|mut pending| pending.drain(..).collect())
-        .unwrap_or_default()
+        .map_err(|_| AppError::poisoned_lock("desktop open target queue"))?;
+    let claim = queue.claim();
+    if let Some(claim) = &claim {
+        authorize_open_path(runtime, &claim.path);
+    }
+    Ok(claim)
+}
+
+pub fn acknowledge_open_target(
+    runtime: &DesktopFileRuntime,
+    claim_id: &str,
+) -> Result<bool, AppError> {
+    let mut queue = runtime
+        .inner
+        .open_targets
+        .lock()
+        .map_err(|_| AppError::poisoned_lock("desktop open target queue"))?;
+    let (path, has_pending_targets) = queue.acknowledge(claim_id);
+    if let Some(path) = path {
+        discard_open_file_selection(runtime, &path);
+    }
+    Ok(has_pending_targets)
+}
+
+pub fn release_open_target(runtime: &DesktopFileRuntime, claim_id: &str) -> Result<(), AppError> {
+    let mut queue = runtime
+        .inner
+        .open_targets
+        .lock()
+        .map_err(|_| AppError::poisoned_lock("desktop open target queue"))?;
+    if let Some(path) = queue.release(claim_id) {
+        authorize_open_path(runtime, &path);
+    }
+    Ok(())
 }
 
 pub fn pick_open_file(
@@ -453,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_targets_are_normalized_once_and_drained_from_the_runtime_queue() {
+    fn launch_targets_are_normalized_claimed_and_acknowledged() {
         let runtime = DesktopFileRuntime::default();
         let path = temp_path("queued-file-association.xlsx");
         std::fs::write(&path, b"").expect("write associated file");
@@ -461,12 +586,85 @@ mod tests {
 
         assert!(enqueue_open_target(&runtime, &target));
 
+        let claim = claim_pending_open_target(&runtime)
+            .expect("claim command")
+            .expect("open target claim");
         assert_eq!(
-            take_pending_open_targets(&runtime),
-            vec![normalize_existing_path(&path).to_string_lossy().to_string()]
+            claim.path,
+            normalize_existing_path(&path).to_string_lossy().to_string()
         );
-        assert!(take_pending_open_targets(&runtime).is_empty());
+        assert!(claim_pending_open_target(&runtime).unwrap().is_none());
+        acknowledge_open_target(&runtime, &claim.claim_id).expect("acknowledge claim");
+        assert!(claim_pending_open_target(&runtime).unwrap().is_none());
+        assert!(!consume_path(
+            &runtime.inner.open_paths,
+            &normalize_existing_path(&path)
+        ));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn released_launch_target_claim_returns_to_the_front_of_the_queue() {
+        let runtime = DesktopFileRuntime::default();
+        let path = temp_path("released-file-association.xlsx");
+        std::fs::write(&path, b"").expect("write associated file");
+
+        assert!(enqueue_open_target(&runtime, &path.to_string_lossy()));
+        let first = claim_pending_open_target(&runtime)
+            .expect("claim command")
+            .expect("first claim");
+        assert!(consume_path(
+            &runtime.inner.open_paths,
+            &normalize_existing_path(&path)
+        ));
+        release_open_target(&runtime, &first.claim_id).expect("release claim");
+        assert!(consume_path(
+            &runtime.inner.open_paths,
+            &normalize_existing_path(&path)
+        ));
+        let retried = claim_pending_open_target(&runtime)
+            .expect("claim command")
+            .expect("retried claim");
+
+        assert_eq!(retried.path, first.path);
+        assert_ne!(retried.claim_id, first.claim_id);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn expired_launch_target_claim_is_requeued() {
+        let now = Instant::now();
+        let mut queue = OpenTargetQueue::default();
+        queue.enqueue_at("/tmp/expired.xlsx".to_string(), now);
+        let first = queue.claim_at(now).expect("first claim");
+
+        let retried = queue
+            .claim_at(now + OPEN_TARGET_CLAIM_TTL)
+            .expect("expired claim is requeued");
+
+        assert_eq!(retried.path, first.path);
+        assert_ne!(retried.claim_id, first.claim_id);
+    }
+
+    #[test]
+    fn expired_launch_target_claims_preserve_queue_order() {
+        let now = Instant::now();
+        let mut queue = OpenTargetQueue::default();
+        queue.enqueue_at("/tmp/first-expired.xlsx".to_string(), now);
+        queue.enqueue_at("/tmp/second-expired.xlsx".to_string(), now);
+        let first = queue.claim_at(now).expect("first claim");
+        let second_claimed_at = now + Duration::from_secs(1);
+        let second = queue.claim_at(second_claimed_at).expect("second claim");
+
+        let first_retried = queue
+            .claim_at(second_claimed_at + OPEN_TARGET_CLAIM_TTL)
+            .expect("first expired claim");
+        let second_retried = queue
+            .claim_at(second_claimed_at + OPEN_TARGET_CLAIM_TTL)
+            .expect("second expired claim");
+
+        assert_eq!(first_retried.path, first.path);
+        assert_eq!(second_retried.path, second.path);
     }
 
     #[test]

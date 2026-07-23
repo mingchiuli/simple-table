@@ -176,6 +176,73 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(reportError).toHaveBeenCalledOnce();
     expect(secondLoad).toHaveBeenCalledOnce();
   });
+
+  it('acknowledges a launch target only after its document opens', async () => {
+    const load = deferred<boolean>();
+    const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => '/tmp/claimed.xlsx',
+      getRouteOpenTargetClaimId: () => 'claim-1',
+      loadFileFromPath: vi.fn(() => load.promise),
+      acknowledgeOpenTarget,
+    });
+
+    coordinator.enqueue('/tmp/claimed.xlsx', 'claim-1');
+    await flushPromises();
+    expect(acknowledgeOpenTarget).not.toHaveBeenCalled();
+
+    load.resolve(true);
+    await flushPromises();
+
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-1');
+  });
+
+  it('releases a launch target when its document does not open', async () => {
+    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => '/tmp/rejected.xlsx',
+      getRouteOpenTargetClaimId: () => 'claim-rejected',
+      loadFileFromPath: vi.fn().mockResolvedValue(false),
+      releaseOpenTarget,
+    });
+
+    coordinator.enqueue('/tmp/rejected.xlsx', 'claim-rejected');
+    await flushPromises();
+
+    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-rejected');
+  });
+
+  it('releases active and superseded claims while acknowledging only the latest load', async () => {
+    let routeFilePath = '/tmp/first.xlsx';
+    let routeClaimId = 'claim-first';
+    const firstLoad = deferred<boolean>();
+    const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => routeFilePath,
+      getRouteOpenTargetClaimId: () => routeClaimId,
+      loadFileFromPath: vi.fn()
+        .mockImplementationOnce(() => firstLoad.promise)
+        .mockResolvedValueOnce(true),
+      acknowledgeOpenTarget,
+      releaseOpenTarget,
+    });
+
+    coordinator.enqueue(routeFilePath, routeClaimId);
+    await flushPromises();
+    routeFilePath = '/tmp/second.xlsx';
+    routeClaimId = 'claim-second';
+    coordinator.enqueue(routeFilePath, routeClaimId);
+    routeFilePath = '/tmp/latest.xlsx';
+    routeClaimId = 'claim-latest';
+    coordinator.enqueue(routeFilePath, routeClaimId);
+    firstLoad.resolve(false);
+    await flushPromises();
+
+    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-first');
+    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-second');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-latest');
+  });
 });
 
 type CoordinatorOverrides = Partial<Parameters<typeof createRouteDocumentLoadCoordinator>[0]>;
@@ -183,9 +250,12 @@ type CoordinatorOverrides = Partial<Parameters<typeof createRouteDocumentLoadCoo
 function createCoordinator(overrides: CoordinatorOverrides = {}) {
   return createRouteDocumentLoadCoordinator({
     getRouteFilePath: overrides.getRouteFilePath ?? (() => '/tmp/slow.xlsx'),
+    getRouteOpenTargetClaimId: overrides.getRouteOpenTargetClaimId ?? (() => null),
     getCurrentFilePath: overrides.getCurrentFilePath ?? (() => null),
     loadFileFromPath: overrides.loadFileFromPath ?? vi.fn().mockResolvedValue(true),
     refreshEditorState: overrides.refreshEditorState ?? vi.fn().mockResolvedValue(undefined),
+    acknowledgeOpenTarget: overrides.acknowledgeOpenTarget ?? vi.fn().mockResolvedValue(undefined),
+    releaseOpenTarget: overrides.releaseOpenTarget ?? vi.fn().mockResolvedValue(undefined),
     reportError: overrides.reportError ?? vi.fn(),
   });
 }

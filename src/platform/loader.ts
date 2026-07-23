@@ -4,7 +4,7 @@
 import { getPlatform } from '@/platform/runtime';
 import type { PlatformAPI, OpenFileSelection } from './types';
 import type { EditorCommandContext } from '@/types/documentRuntime';
-import type { PreparedOpenDocument } from '@/types/fileRuntime';
+import type { OpenTargetClaim, PreparedOpenDocument } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 import { createAsyncCache } from '@/utils/asyncCache';
 
@@ -39,10 +39,20 @@ export async function getPlatformAPI(): Promise<PlatformAPI> {
 
 // ==================== Convenience re-exports ====================
 
-/** Drain launch targets after backend parsing, validation, normalization, and authorization. */
-export async function takePendingOpenTargets(): Promise<string[]> {
+/** Claim one launch target after backend parsing, validation, normalization, and authorization. */
+export async function claimPendingOpenTarget(): Promise<OpenTargetClaim | null> {
   const api = await getPlatformAPI();
-  return api.fileOps.takePendingOpenTargets?.() ?? [];
+  return api.fileOps.claimPendingOpenTarget?.() ?? null;
+}
+
+export async function acknowledgeOpenTarget(claimId: string): Promise<void> {
+  const api = await getPlatformAPI();
+  await api.fileOps.acknowledgeOpenTarget?.(claimId);
+}
+
+export async function releaseOpenTarget(claimId: string): Promise<void> {
+  const api = await getPlatformAPI();
+  await api.fileOps.releaseOpenTarget?.(claimId);
 }
 
 /** 只选择/导入文件，不解析、不替换后端活动文档 */

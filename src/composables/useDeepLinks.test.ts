@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDeepLinkLifecycle } from '@/composables/useDeepLinks';
+import type { OpenTargetClaim } from '@/types/fileRuntime';
 
 type Dependencies = Parameters<typeof createDeepLinkLifecycle>[0];
 type Unlisten = () => void;
@@ -14,15 +15,16 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function claim(claimId: string, path: string): OpenTargetClaim {
+  return { claimId, path };
+}
+
 async function flushPromises() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
 }
 
 async function waitForCondition(condition: () => boolean) {
-  for (let index = 0; index < 32; index += 1) {
+  for (let index = 0; index < 48; index += 1) {
     if (condition()) return;
     await Promise.resolve();
   }
@@ -32,7 +34,8 @@ async function waitForCondition(condition: () => boolean) {
 function testDependencies(overrides: Partial<Dependencies> = {}) {
   const handlers: ListenHandler[] = [];
   const unlisten = vi.fn();
-  const takePendingOpenTargets = vi.fn().mockResolvedValue([]);
+  const claimPendingOpenTarget = vi.fn().mockResolvedValue(null);
+  const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
   const pushFilePath = vi.fn().mockResolvedValue(undefined);
   const reportError = vi.fn();
   const dependencies: Dependencies = {
@@ -40,7 +43,8 @@ function testDependencies(overrides: Partial<Dependencies> = {}) {
       handlers.push(handler);
       return Promise.resolve(unlisten);
     }),
-    takePendingOpenTargets,
+    claimPendingOpenTarget,
+    releaseOpenTarget,
     pushFilePath,
     reportError,
     ...overrides,
@@ -49,31 +53,36 @@ function testDependencies(overrides: Partial<Dependencies> = {}) {
     dependencies,
     getHandler: () => handlers.at(-1) ?? null,
     unlisten,
-    takePendingOpenTargets,
+    claimPendingOpenTarget,
+    releaseOpenTarget,
     pushFilePath,
     reportError,
   };
 }
 
 describe('createDeepLinkLifecycle', () => {
-  it('drains backend-normalized startup and live launch targets', async () => {
-    const takePendingOpenTargets = vi
+  it('claims one backend-normalized target for each startup or live wake', async () => {
+    const claimPendingOpenTarget = vi
       .fn()
-      .mockResolvedValueOnce(['/Users/me/start.xlsx'])
-      .mockResolvedValueOnce(['C:/Users/me/live.xlsx', '//server/share/opened.xlsx']);
-    const setup = testDependencies({ takePendingOpenTargets });
+      .mockResolvedValueOnce(claim('startup', '/Users/me/start.xlsx'))
+      .mockResolvedValueOnce(claim('live-1', 'C:/Users/me/live.xlsx'))
+      .mockResolvedValueOnce(claim('live-2', '//server/share/opened.xlsx'));
+    const setup = testDependencies({ claimPendingOpenTarget });
     const lifecycle = createDeepLinkLifecycle(setup.dependencies);
 
     lifecycle.start();
-    await flushPromises();
+    await waitForCondition(() => setup.pushFilePath.mock.calls.length === 1);
     setup.getHandler()?.({ payload: null });
-    await flushPromises();
+    await waitForCondition(() => setup.pushFilePath.mock.calls.length === 2);
+    setup.getHandler()?.({ payload: null });
+    await waitForCondition(() => setup.pushFilePath.mock.calls.length === 3);
 
     expect(setup.pushFilePath.mock.calls).toEqual([
-      ['/Users/me/start.xlsx'],
-      ['C:/Users/me/live.xlsx'],
-      ['//server/share/opened.xlsx'],
+      ['/Users/me/start.xlsx', 'startup'],
+      ['C:/Users/me/live.xlsx', 'live-1'],
+      ['//server/share/opened.xlsx', 'live-2'],
     ]);
+    expect(setup.releaseOpenTarget).not.toHaveBeenCalled();
   });
 
   it('cleans up a listener that resolves after the lifecycle stops', async () => {
@@ -88,87 +97,85 @@ describe('createDeepLinkLifecycle', () => {
     await flushPromises();
 
     expect(registeredUnlisten).toHaveBeenCalledOnce();
-    expect(setup.takePendingOpenTargets).not.toHaveBeenCalled();
+    expect(setup.claimPendingOpenTarget).not.toHaveBeenCalled();
   });
 
-  it('ignores a pending drain after the lifecycle stops', async () => {
-    const pendingTargets = deferred<string[]>();
-    const takePendingOpenTargets = vi.fn(() => pendingTargets.promise);
-    const setup = testDependencies({
-      takePendingOpenTargets,
-    });
+  it('releases a claim that arrives after the lifecycle stops', async () => {
+    const pendingClaim = deferred<OpenTargetClaim | null>();
+    const claimPendingOpenTarget = vi.fn(() => pendingClaim.promise);
+    const setup = testDependencies({ claimPendingOpenTarget });
     const lifecycle = createDeepLinkLifecycle(setup.dependencies);
 
     lifecycle.start();
-    await waitForCondition(() => takePendingOpenTargets.mock.calls.length === 1);
+    await waitForCondition(() => claimPendingOpenTarget.mock.calls.length === 1);
     lifecycle.stop();
-    pendingTargets.resolve(['/stale.xlsx']);
+    pendingClaim.resolve(claim('stale', '/stale.xlsx'));
     await flushPromises();
 
     expect(setup.pushFilePath).not.toHaveBeenCalled();
+    expect(setup.releaseOpenTarget).toHaveBeenCalledWith('stale');
   });
 
-  it('serializes drain requests so launch order remains stable', async () => {
-    const first = deferred<string[]>();
-    const takePendingOpenTargets = vi
+  it('serializes claim requests so launch order remains stable', async () => {
+    const first = deferred<OpenTargetClaim | null>();
+    const claimPendingOpenTarget = vi
       .fn()
       .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce(['/second.xlsx']);
-    const setup = testDependencies({ takePendingOpenTargets });
+      .mockResolvedValueOnce(claim('second', '/second.xlsx'))
+      .mockResolvedValue(null);
+    const setup = testDependencies({ claimPendingOpenTarget });
     const lifecycle = createDeepLinkLifecycle(setup.dependencies);
 
     lifecycle.start();
-    await flushPromises();
+    await waitForCondition(() => claimPendingOpenTarget.mock.calls.length === 1);
     setup.getHandler()?.({ payload: null });
-    first.resolve(['/first.xlsx']);
-    await flushPromises();
+    first.resolve(claim('first', '/first.xlsx'));
+    await waitForCondition(() => setup.pushFilePath.mock.calls.length === 2);
 
     expect(setup.pushFilePath.mock.calls).toEqual([
-      ['/first.xlsx'],
-      ['/second.xlsx'],
+      ['/first.xlsx', 'first'],
+      ['/second.xlsx', 'second'],
     ]);
   });
 
-  it('reports drain, routing, and cleanup failures without breaking ownership', async () => {
-    const brokenUnlisten = vi.fn(() => {
-      throw new Error('broken cleanup');
-    });
-    const takePendingOpenTargets = vi
-      .fn()
-      .mockResolvedValueOnce(['/broken.xlsx', '/healthy.xlsx'])
-      .mockRejectedValueOnce(new Error('drain failed'));
-    const pushFilePath = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('route failed'))
-      .mockResolvedValueOnce(undefined);
+  it('releases a claim when routing fails', async () => {
+    const failure = new Error('route failed');
     const setup = testDependencies({
-      listen: vi.fn((_event, handler) => {
-        queueMicrotask(() => handler({ payload: null }));
-        return Promise.resolve(brokenUnlisten);
-      }),
-      takePendingOpenTargets,
-      pushFilePath,
+      claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('broken', '/broken.xlsx')),
+      pushFilePath: vi.fn().mockRejectedValue(failure),
     });
     const lifecycle = createDeepLinkLifecycle(setup.dependencies);
 
     lifecycle.start();
-    await waitForCondition(() => setup.reportError.mock.calls.some(
-      ([message]) => message === 'Failed to read pending document launch targets:',
-    ));
-    lifecycle.stop();
+    await waitForCondition(() => setup.releaseOpenTarget.mock.calls.length === 1);
 
-    expect(pushFilePath).toHaveBeenCalledTimes(2);
+    expect(setup.releaseOpenTarget).toHaveBeenCalledWith('broken');
     expect(setup.reportError).toHaveBeenCalledWith(
       'Failed to route document launch target:',
-      expect.any(Error),
+      failure,
+    );
+  });
+
+  it('reports release failures after a route handoff failure', async () => {
+    const routeFailure = new Error('route failed');
+    const releaseFailure = new Error('release failed');
+    const setup = testDependencies({
+      claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('unsettled', '/book.xlsx')),
+      pushFilePath: vi.fn().mockRejectedValue(routeFailure),
+      releaseOpenTarget: vi.fn().mockRejectedValue(releaseFailure),
+    });
+    const lifecycle = createDeepLinkLifecycle(setup.dependencies);
+
+    lifecycle.start();
+    await waitForCondition(() => setup.reportError.mock.calls.length === 2);
+
+    expect(setup.reportError).toHaveBeenCalledWith(
+      'Failed to route document launch target:',
+      routeFailure,
     );
     expect(setup.reportError).toHaveBeenCalledWith(
-      'Failed to read pending document launch targets:',
-      expect.any(Error),
-    );
-    expect(setup.reportError).toHaveBeenCalledWith(
-      'Failed to clean up document launch listener:',
-      expect.any(Error),
+      'Failed to release document launch target:',
+      releaseFailure,
     );
   });
 });

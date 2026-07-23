@@ -137,7 +137,7 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
           const prepared = await preparations.runCancellable(
             () => ports.prepareOpenFile(filePath),
             cancellation,
-            abortPreparedDocumentQuietly,
+            (result) => ports.abortPreparedDocument(result),
           );
           if (!prepared) return;
           if (cancellation.isCancelled()) {
@@ -441,7 +441,7 @@ export function createDocumentFileCoordinator<OpenedDocument, SavedDocument>(
 
   async function abortPreparedDocumentQuietly(prepared: PreparedOpenDocument) {
     try {
-      await ports.abortPreparedDocument(prepared);
+      await preparations.cleanup(prepared, (result) => ports.abortPreparedDocument(result));
     } catch (error) {
       ports.reportCleanupError?.('Failed to abort unused prepared document', error);
     }

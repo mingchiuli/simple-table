@@ -786,6 +786,12 @@ process permissions. Open and save registries are independently limited to 64
 entries, authorizations expire after 30 minutes, and repeated authorization
 refreshes the eviction order. Preparing or saving consumes the capability;
 canceling the picker flow revokes it explicitly.
+Backend-normalized launch targets use a bounded claim/acknowledge queue rather
+than a destructive batch drain. The frontend claims one target at a time,
+passes the claim through the route, acknowledges it only after the document
+load succeeds, and releases it on cancellation, routing failure, or load
+failure. Unsettled claims expire after one minute and return to the queue, so a
+frontend lifecycle transition cannot silently discard a launch.
 
 Frontend route-driven opening is an application-owned latest-only worker. At
 most one file load is active and one pending route is retained; a newer route
@@ -794,8 +800,10 @@ instead of extending a Promise chain. A Store-scoped application preparation
 runtime survives route-component remounts and is shared by every route, picker,
 recent-file, and new-document preparation. Obsolete preparation drains through
 its bounded serial tail and owns late-token abort without keeping the obsolete
-route lifecycle active. The route composable only adapts route observation,
-error reporting, and leave confirmation to that coordinator.
+route lifecycle active. Late-token abort is retried as an idempotent cleanup;
+permanent cleanup failures are reported immediately and remain observable at
+the workspace idle/disposal boundary. The route composable only adapts route
+observation, error reporting, and leave confirmation to that coordinator.
 
 Mobile imported selections and reserved save locations are likewise one-shot.
 Their registries are independently limited to 64 entries per purpose and expire
@@ -809,9 +817,11 @@ transient expiry, and promotes non-empty interrupted save-location files into th
 managed catalog. Discard and transient expiry remove only files that have not
 been promoted.
 
-Mobile catalog recovery is a synchronous, process-once initialization barrier.
-All mobile file commands share its cached result, so ordinary directory access
-does not repeat startup repair and no command can race ahead of reconciliation.
+Mobile catalog recovery is a synchronous, retryable single-flight initialization
+barrier. Concurrent mobile file commands share the active attempt, and a
+successful directory result is cached so ordinary access does not repeat startup
+repair. A failed attempt returns the same error to its current waiters but resets
+the barrier, allowing a later command to retry without restarting the process.
 Persistent sidecar reads are capped at 16 KiB per marker, fields at 1,024 bytes,
 and a storage directory scan at 1,024 entries. Invalid or oversized catalog
 markers are removed where ownership can be determined safely; exceeding the

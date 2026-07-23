@@ -68,4 +68,66 @@ describe('documentPreparationCoordinator', () => {
       .rejects.toThrow('parse failed');
     await expect(coordinator.run(() => Promise.resolve('next'))).resolves.toBe('next');
   });
+
+  it('retries explicit cleanup for prepared results that become unused', async () => {
+    const coordinator = createDocumentPreparationCoordinator();
+    const discard = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary cleanup failure'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(coordinator.cleanup({ token: 'unused' }, discard)).resolves.toBeUndefined();
+
+    expect(discard).toHaveBeenCalledTimes(2);
+    expect(discard).toHaveBeenCalledWith({ token: 'unused' });
+  });
+
+  it('retries cancellation cleanup before releasing the preparation queue', async () => {
+    const coordinator = createDocumentPreparationCoordinator();
+    const preparedResult = deferred<{ token: string }>();
+    const cancellation = controlledCancellation();
+    const discard = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary cleanup failure'))
+      .mockRejectedValueOnce(new Error('temporary cleanup failure'))
+      .mockResolvedValueOnce(undefined);
+    const cancelled = coordinator.runCancellable(
+      () => preparedResult.promise,
+      cancellation.signal,
+      discard,
+    );
+
+    await flushPromises();
+    cancellation.cancel();
+    await expect(cancelled).resolves.toBeUndefined();
+    preparedResult.resolve({ token: 'cancelled' });
+
+    await expect(coordinator.waitForIdle()).resolves.toBeUndefined();
+    expect(discard).toHaveBeenCalledTimes(3);
+  });
+
+  it('reports permanent cancellation cleanup failures through the idle boundary', async () => {
+    const reportCleanupFailure = vi.fn();
+    const coordinator = createDocumentPreparationCoordinator({ reportCleanupFailure });
+    const preparedResult = deferred<{ token: string }>();
+    const cancellation = controlledCancellation();
+    const failure = new Error('permanent cleanup failure');
+    const cancelled = coordinator.runCancellable(
+      () => preparedResult.promise,
+      cancellation.signal,
+      vi.fn().mockRejectedValue(failure),
+    );
+
+    await flushPromises();
+    cancellation.cancel();
+    await expect(cancelled).resolves.toBeUndefined();
+    preparedResult.resolve({ token: 'cancelled' });
+
+    await expect(coordinator.waitForIdle()).rejects.toMatchObject({
+      name: 'DocumentPreparationCleanupError',
+      failures: [failure],
+    });
+    expect(reportCleanupFailure).toHaveBeenCalledWith(failure);
+    await expect(coordinator.waitForIdle()).resolves.toBeUndefined();
+  });
 });
