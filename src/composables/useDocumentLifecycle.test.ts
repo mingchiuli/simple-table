@@ -7,12 +7,6 @@ import {
   type DocumentWorkspaceTestContext,
 } from '@/test/documentWorkspaceTestContext';
 
-vi.mock("element-plus", () => ({
-  ElMessage: {
-    error: vi.fn(),
-  },
-}));
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -37,7 +31,7 @@ describe("useDocumentLifecycle", () => {
     const action = vi.fn().mockResolvedValue(undefined);
     const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
-    await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("completed");
+    await expect(runDocumentLifecycle("loading", action)).resolves.toBe("completed");
 
     expect(action).toHaveBeenCalledTimes(1);
     expect(store.lifecycle).toBe("idle");
@@ -50,24 +44,22 @@ describe("useDocumentLifecycle", () => {
 
     workspace.runtime.session.beginLifecycle('saving');
 
-    await expect(runDocumentLifecycle("loading", "Failed", action)).resolves.toBe("skipped");
+    await expect(runDocumentLifecycle("loading", action)).resolves.toBe("skipped");
 
     expect(action).not.toHaveBeenCalled();
     expect(store.lifecycle).toBe("saving");
   });
 
-  it("shows an error and releases lifecycle when the action fails", async () => {
-    const elementPlus = await import("element-plus");
+  it("propagates an error and releases lifecycle when the action fails", async () => {
     const store = useDocumentSessionStore();
     const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     await expect(
-      runDocumentLifecycle("saving", "Save failed", async () => {
+      runDocumentLifecycle("saving", async () => {
         throw new Error("disk full");
       })
-    ).resolves.toBe("failed");
+    ).rejects.toThrow("disk full");
 
-    expect(elementPlus.ElMessage.error).toHaveBeenCalledWith("Save failed: Error: disk full");
     expect(store.lifecycle).toBe("idle");
   });
 
@@ -78,7 +70,7 @@ describe("useDocumentLifecycle", () => {
     const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     coordinator.beginLifecycle('saving');
-    const runPromise = runDocumentLifecycle("loading", "Failed", action, {
+    const runPromise = runDocumentLifecycle("loading", action, {
       waitForIdle: true,
     });
     await Promise.resolve();
@@ -100,7 +92,7 @@ describe("useDocumentLifecycle", () => {
     let shouldContinue = true;
 
     coordinator.beginLifecycle('saving');
-    const runPromise = runDocumentLifecycle("loading", "Failed", action, {
+    const runPromise = runDocumentLifecycle("loading", action, {
       waitForIdle: true,
       shouldContinue: () => shouldContinue,
     });
@@ -119,7 +111,7 @@ describe("useDocumentLifecycle", () => {
     const work = deferred<void>();
     const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
-    const runPromise = runDocumentLifecycle("loading", "Failed", async ({ release }) => {
+    const runPromise = runDocumentLifecycle("loading", async ({ release }) => {
       release();
       await work.promise;
     });
@@ -140,7 +132,7 @@ describe("useDocumentLifecycle", () => {
     let releaseLease: (() => void) | undefined;
 
     await expect(
-      runDocumentLifecycle("closing", "Failed", async ({ retain }) => {
+      runDocumentLifecycle("closing", async ({ retain }) => {
         releaseLease = retain().release;
       })
     ).resolves.toBe("completed");
@@ -158,11 +150,11 @@ describe("useDocumentLifecycle", () => {
     const { runDocumentLifecycle } = workspace.run(() => useDocumentLifecycle());
 
     await expect(
-      runDocumentLifecycle("closing", "Failed", async ({ retain }) => {
+      runDocumentLifecycle("closing", async ({ retain }) => {
         retain();
         throw new Error("cannot prepare");
       })
-    ).resolves.toBe("failed");
+    ).rejects.toThrow("cannot prepare");
 
     expect(store.lifecycle).toBe("idle");
     expect(store.isInteractionLocked).toBe(false);

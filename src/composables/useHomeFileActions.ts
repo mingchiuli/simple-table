@@ -24,14 +24,22 @@ export function useHomeFileActions({
   const isBusy = computed(() => documentSessionStore.isInteractionLocked);
 
   async function handleOpenFile() {
-    if (await fileCoordinator.openPickedFile()) {
-      await navigateToTableRoute();
+    try {
+      if (await fileCoordinator.openPickedFile()) {
+        await navigateToTableRoute();
+      }
+    } catch (error) {
+      ElMessage.error(`Failed to open file: ${appErrorMessage(error)}`);
     }
   }
 
   async function handleNewFile() {
-    if (await fileCoordinator.createNewDocument()) {
-      await navigateToTableRoute();
+    try {
+      if (await fileCoordinator.createNewDocument()) {
+        await navigateToTableRoute();
+      }
+    } catch (error) {
+      ElMessage.error(`Failed to create file: ${appErrorMessage(error)}`);
     }
   }
 
@@ -48,8 +56,12 @@ export function useHomeFileActions({
       }
     }
 
-    if (await relocateAndOpenRecent(file)) {
-      await navigateToTableRoute();
+    try {
+      if (await relocateAndOpenRecent(file)) {
+        await navigateToTableRoute();
+      }
+    } catch (error) {
+      ElMessage.error(`Failed to open file: ${appErrorMessage(error)}`);
     }
   }
 

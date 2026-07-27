@@ -3,6 +3,7 @@ import type {
   FileOperationReceipt,
   FileOperationResultLookup,
 } from '@/types/fileRuntime';
+import { invokeIdempotently } from '@/application/idempotentCommandProtocol';
 
 type ProtocolClock = {
   now: () => number;
@@ -37,17 +38,12 @@ export function createDocumentFileOperationProtocol({
 }: DocumentFileOperationProtocolOptions) {
   async function execute<T>(operation: FileOperationExecution<T>): Promise<T> {
     const operationId = createOperationId();
-    try {
-      return admittedResponse(await operation.invoke(operationId), operation);
-    } catch {
-      // Reusing the operation id lets the backend distinguish a retry from a new write.
-    }
-
-    let retryError: unknown;
-    try {
-      return admittedResponse(await operation.invoke(operationId), operation);
-    } catch (error) {
-      retryError = error;
+    const invocation = await invokeIdempotently({
+      operationId,
+      invoke: operation.invoke,
+    });
+    if (invocation.status === 'response') {
+      return admittedResponse(invocation.response, operation);
     }
 
     try {
@@ -68,7 +64,7 @@ export function createDocumentFileOperationProtocol({
         reportError('Failed to recover an ambiguous file operation', error);
       }
     }
-    throw retryError;
+    throw invocation.error;
   }
 
   async function waitForResult(operationId: string): Promise<FileOperationReceipt | null> {

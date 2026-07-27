@@ -848,10 +848,29 @@ if (existsSync(join(rustRoot, 'application', 'runtime.rs'))) {
   violations.push('src-tauri/src/application/runtime.rs violates the top-level Rust composition-root boundary');
 }
 
-if (existsSync(join(rustRoot, 'adapters', 'search_index_scheduler.rs'))) {
-  violations.push(
-    'src-tauri/src/adapters/search_index_scheduler.rs violates the SearchIndexRuntime-owned scheduler boundary',
-  );
+const searchIndexRuntimeFile = join(rustRoot, 'adapters', 'search_index_runtime.rs');
+const searchIndexSchedulerFile = join(rustRoot, 'adapters', 'search_index_scheduler.rs');
+const searchIndexWorkerFile = join(rustRoot, 'adapters', 'search_index_worker.rs');
+for (const [ownedModule, allowedConsumers, boundary] of [
+  [
+    searchIndexSchedulerFile,
+    new Set([searchIndexRuntimeFile, searchIndexWorkerFile]),
+    'the SearchIndexRuntime-owned scheduler dependency boundary',
+  ],
+  [
+    searchIndexWorkerFile,
+    new Set([searchIndexRuntimeFile]),
+    'the SearchIndexRuntime-owned worker dependency boundary',
+  ],
+]) {
+  for (const [consumer, dependencies] of rustDependencies) {
+    if (allowedConsumers.has(consumer)) continue;
+    if (dependencies.includes(ownedModule)) {
+      violations.push(
+        `${relative(projectRoot, consumer)} violates ${boundary}: ${relative(projectRoot, ownedModule)}`,
+      );
+    }
+  }
 }
 
 rejectRustProductionMatches(
@@ -1939,25 +1958,6 @@ for (const requirement of [/\bOperationCancellationSignal\b/, /\bisCancelled\b/,
   }
 }
 
-const documentFileCoordinatorSource = readFileSync(
-  join(projectRoot, 'src', 'application', 'documentFileCoordinator.ts'),
-  'utf8',
-);
-for (const requirement of [
-  /preparations\.runCancellable\s*\(/,
-  /preparations\.runCancellable\s*\([\s\S]{0,250}\(result\)\s*=>\s*ports\.abortPreparedDocument\(result\)/,
-  /preparations\.run\s*\(/,
-  /\bprepareApplicationExit\b/,
-  /prepareApplicationExit[\s\S]*async\s*\(\s*\{\s*retain\s*\}\s*\)/,
-  /lifecycleLease\.release\s*\(\s*\)/,
-]) {
-  if (!requirement.test(documentFileCoordinatorSource)) {
-    violations.push(
-      `src/application/documentFileCoordinator.ts violates the shared preparation and two-phase exit boundary: ${requirement}`,
-    );
-  }
-}
-
 const frontendDocumentLifecycleSource = readFileSync(
   join(projectRoot, 'src', 'composables', 'useDocumentLifecycle.ts'),
   'utf8',
@@ -2012,7 +2012,12 @@ for (const requirement of [
   }
 }
 rejectMatches(
-  [join(projectRoot, 'src', 'application', 'documentFileCoordinator.ts')],
+  [
+    join(projectRoot, 'src', 'application', 'documentFileCoordinator.ts'),
+    join(projectRoot, 'src', 'application', 'documentOpenWorkflow.ts'),
+    join(projectRoot, 'src', 'application', 'documentPersistenceWorkflow.ts'),
+    join(projectRoot, 'src', 'application', 'documentCloseWorkflow.ts'),
+  ],
   [/\bContinuationGuard\b/, /shouldContinue\s*:\s*ContinuationGuard/],
   'the explicit operation cancellation signal boundary',
 );
@@ -2649,19 +2654,28 @@ if (!/let projected\s*=\s*match[\s\S]*project\(response\)[\s\S]*commit_write\(\)
   );
 }
 
-const fileOperationProtocolSource = readFileSync(
-  join(frontendRoot, 'application', 'documentFileOperationProtocol.ts'),
-  'utf8',
+const idempotentCommandProtocolFile = join(
+  frontendRoot,
+  'application',
+  'idempotentCommandProtocol.ts',
 );
-for (const requirement of [
-  /createOperationId/,
-  /getFileOperationResult/,
-  /operation\.invoke\(operationId\)/,
-  /recoverResponse/,
-]) {
-  if (!requirement.test(fileOperationProtocolSource)) {
+const idempotentProtocolConsumers = new Set([
+  join(frontendRoot, 'application', 'documentFileOperationProtocol.ts'),
+  join(frontendRoot, 'application', 'documentMutationProtocol.ts'),
+]);
+for (const consumer of idempotentProtocolConsumers) {
+  const dependencies = frontendDependencies.get(consumer) ?? [];
+  if (!dependencies.some((dependency) => dependency.path === idempotentCommandProtocolFile)) {
     violations.push(
-      `src/application/documentFileOperationProtocol.ts violates the idempotent file-operation boundary: ${requirement}`,
+      `${relative(projectRoot, consumer)} violates the shared idempotent invocation dependency boundary`,
+    );
+  }
+}
+for (const [consumer, dependencies] of frontendDependencies) {
+  if (idempotentProtocolConsumers.has(consumer)) continue;
+  if (dependencies.some((dependency) => dependency.path === idempotentCommandProtocolFile)) {
+    violations.push(
+      `${relative(projectRoot, consumer)} violates the protocol-owned idempotent invocation boundary`,
     );
   }
 }

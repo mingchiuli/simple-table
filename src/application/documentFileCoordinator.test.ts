@@ -154,7 +154,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     getCurrentFilePath: () => '/tmp/book.xlsx',
     getCurrentSheetIndex: () => 0,
     beginDocumentReplacement: vi.fn().mockResolvedValue(replacement),
-    runDocumentLifecycle: vi.fn(async (_lifecycle, _errorPrefix, action) => {
+    runDocumentLifecycle: vi.fn(async (_lifecycle, action) => {
       let released = false;
       let retained = false;
       const release = () => {
@@ -170,9 +170,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
             return { release };
           },
         });
-        return 'completed';
-      } catch {
-        return 'failed';
+        return 'completed' as const;
       } finally {
         if (!retained) release();
       }
@@ -343,7 +341,7 @@ describe('documentFileCoordinator', () => {
     const { ports, replacement } = createPorts({ closeDocument });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.closeCurrentDocument()).resolves.toBe(false);
+    await expect(coordinator.closeCurrentDocument()).rejects.toThrow('busy');
 
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.clearDocument).not.toHaveBeenCalled();
@@ -363,7 +361,6 @@ describe('documentFileCoordinator', () => {
     expect(lifecycleRelease).not.toHaveBeenCalled();
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'closing',
-      'Failed to prepare application exit',
       expect.any(Function),
       { waitForIdle: true },
     );
@@ -382,7 +379,7 @@ describe('documentFileCoordinator', () => {
     const { ports, replacement } = createPorts({ commitPreparedDocument });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
+    await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('commit failed');
 
     expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
       expect.objectContaining({ token: 'prepared' }),
@@ -420,7 +417,7 @@ describe('documentFileCoordinator', () => {
     });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
+    await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('broken file');
 
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(reportCleanupError).toHaveBeenCalledWith(
@@ -463,7 +460,7 @@ describe('documentFileCoordinator', () => {
     });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.loadFileFromPath('/tmp/route.xlsx')).resolves.toBe(false);
+    await expect(coordinator.loadFileFromPath('/tmp/route.xlsx')).rejects.toThrow('stale context');
 
     expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
       expect.objectContaining({ token: 'prepared' }),
@@ -499,7 +496,6 @@ describe('documentFileCoordinator', () => {
     expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(recent.originalPath);
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'loading',
-      'Failed to open file',
       expect.any(Function),
     );
   });
@@ -522,7 +518,6 @@ describe('documentFileCoordinator', () => {
 
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'loading',
-      'Failed to open file',
       expect.any(Function),
     );
   });
@@ -543,7 +538,6 @@ describe('documentFileCoordinator', () => {
     expect(ports.queueRecentFileEntryUpdate).not.toHaveBeenCalled();
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'loading',
-      'Failed to create file',
       expect.any(Function),
     );
   });

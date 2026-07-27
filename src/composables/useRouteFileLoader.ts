@@ -3,7 +3,9 @@ import {
   type RouteDocumentLoadCoordinator,
   type RouteDocumentLoadPorts,
 } from '@/application/routeDocumentLoadCoordinator';
+import { ElMessage } from 'element-plus';
 import { acknowledgeOpenTarget, releaseOpenTarget } from '@/platform';
+import { appErrorMessage } from '@/utils/appError';
 import { onScopeDispose } from 'vue';
 
 type UseRouteFileLoaderOptions = Omit<
@@ -25,7 +27,7 @@ export function useRouteFileLoader({
   acknowledgeOpenTarget: acknowledge = acknowledgeOpenTarget,
   releaseOpenTarget: release = releaseOpenTarget,
   reportError = (error) => {
-    console.error('Failed to handle route file load:', error);
+    ElMessage.error(`Failed to open file: ${appErrorMessage(error)}`);
   },
   ...ports
 }: UseRouteFileLoaderOptions): RouteDocumentLoadCoordinator {

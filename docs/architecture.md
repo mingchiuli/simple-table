@@ -265,10 +265,11 @@ consume that envelope and cannot depend on generated response declarations.
   formula state, and capabilities. It contains no search engine, index writer,
   index freshness state, worker, or scheduler.
 - `SearchIndexRuntime` owns derived Tantivy indexes, scheduling state, fallback
-  scan admission, and worker handles. Its scheduler state, locks, condition
-  variable, and capacity counters are private implementation details in the
-  same module as their queue and worker invariants; no sibling adapter can
-  mutate them directly. Separate query and maintenance adapters
+  scan admission, and worker handles. Queue admission and coalescing live in the
+  private `search_index_scheduler` module; thread execution and index builds live
+  in the private `search_index_worker` module. Architecture checks allow only the
+  runtime and its worker to consume scheduler internals, and only the runtime to
+  construct workers. Separate query and maintenance adapters
   expose `SearchQueryPort` and `SearchIndexMaintenancePort` over that shared
   runtime. Dropping the runtime signals shutdown, wakes workers, and joins every
   owned thread. A revision mismatch makes an index unavailable before queued
@@ -380,9 +381,12 @@ consume that envelope and cannot depend on generated response declarations.
   guard vetoes or platform execution fails. Guards never close the backend
   document or clear the frontend projection before platform exit succeeds.
   Route leave keeps the separate destructive document-close workflow.
-- `documentFileCoordinator` owns new-document creation, selected/recent/path
-  opening, prepared-document commit/abort, save, export, and close compensation
-  as a port-driven application workflow. Every public open/new operation acquires
+- `documentFileCoordinator` is a compatibility facade over three narrow,
+  port-driven application workflows. `documentOpenWorkflow` owns new-document
+  creation, selected/recent/path opening, and prepared-document commit/abort;
+  `documentPersistenceWorkflow` owns save and export; `documentCloseWorkflow`
+  owns destructive close and two-phase exit preparation. Every public open/new
+  operation acquires
   and releases its lifecycle lease internally; view and feature composables
   cannot call a lower-level replacement transaction under an implicit caller-held
   lock. `routeDocumentLoadCoordinator` owns
@@ -392,10 +396,13 @@ consume that envelope and cannot depend on generated response declarations.
   preserving tail. Vue composables adapt Stores, platform APIs, lifecycle
   guards, router navigation, and user notifications; application modules do not
   import composables or UI libraries.
-  Its headless file-operation protocol assigns one operation ID to each open
-  commit or save, retries ambiguous IPC failures with that same ID, polls the
-  backend receipt journal, and recovers a lost response from the active document.
-  Protocol DTO inspection remains behind injected mapper ports.
+  The lifecycle runner provides only mutual exclusion and lease ownership. It
+  propagates failures without presentation text; Vue composables translate those
+  failures into user messages. The headless file-operation protocol assigns one
+  operation ID to each open commit or save, retries ambiguous IPC failures with
+  that same ID, polls the backend receipt journal, and recovers a lost response
+  from the active document. Structured backend rejections are definitive and are
+  never retried. Protocol DTO inspection remains behind injected mapper ports.
 - Generic frontend utilities are pure and side-effect free. Backend format and
   recent-file workflows are port-driven application services. Composables bind
   those ports to the backend API, Pinia, platform adapters, and Element Plus;
@@ -519,7 +526,9 @@ changing revision, dirty state, or history; synchronous third-party evaluation
 is never interrupted after a transaction starts.
 
 The headless document mutation protocol owns idempotent retries, replay-result
-polling, and ambiguous-result projection recovery. Its transport, recovery
+polling, and ambiguous-result projection recovery. It shares the classified
+invocation policy with file operations: structured backend errors fail once,
+while only unclassified transport failures enter retry and recovery. Its transport, recovery
 port, clock, and command-id generator are injectable. `DocumentCommandBus` is
 the Vue adapter around that protocol: it owns interaction locks, pending-edit
 flushes, response application, post-mutation callbacks, and user-facing error

@@ -13,7 +13,7 @@ export function appErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function isAppErrorPayload(error: unknown): error is AppErrorPayload {
+export function isAppErrorPayload(error: unknown): error is AppErrorPayload {
   if (typeof error !== "object" || error === null) return false;
   const candidate = error as Partial<AppErrorPayload>;
   return typeof candidate.code === "string" && typeof candidate.message === "string";

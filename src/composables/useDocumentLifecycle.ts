@@ -1,10 +1,8 @@
-import { ElMessage } from "element-plus";
 import type { DocumentSessionLifecycle } from '@/types/documentRuntime';
-import { appErrorMessage } from "@/utils/appError";
 import { useDocumentSessionCoordinator } from '@/composables/useDocumentSessionCoordinator';
 
 type ActiveDocumentLifecycle = Exclude<DocumentSessionLifecycle, "idle">;
-export type DocumentLifecycleRunStatus = "completed" | "failed" | "skipped";
+export type DocumentLifecycleRunStatus = "completed" | "skipped";
 
 type DocumentLifecycleController = {
   release: () => void;
@@ -25,7 +23,6 @@ export function useDocumentLifecycle() {
 
   async function runDocumentLifecycle(
     lifecycle: ActiveDocumentLifecycle,
-    errorPrefix: string,
     action: (controller: DocumentLifecycleController) => Promise<void>,
     options: DocumentLifecycleOptions = {}
   ): Promise<DocumentLifecycleRunStatus> {
@@ -51,9 +48,6 @@ export function useDocumentLifecycle() {
       await action({ release, retain });
       completed = true;
       return "completed";
-    } catch (error) {
-      ElMessage.error(`${errorPrefix}: ${appErrorMessage(error)}`);
-      return "failed";
     } finally {
       if (!completed || !retained) release();
     }

@@ -12,6 +12,18 @@ import type {
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
 
 describe('document mutation protocol', () => {
+  it('does not retry a definitive backend rejection', async () => {
+    const rejection = { code: 'document_state_invalid', message: 'revision changed' };
+    const action = vi.fn().mockRejectedValue(rejection);
+    const getMutationResult = vi.fn();
+    const protocol = createProtocol({ getMutationResult });
+
+    await expect(protocol.execute(action, context())).rejects.toBe(rejection);
+
+    expect(action).toHaveBeenCalledOnce();
+    expect(getMutationResult).not.toHaveBeenCalled();
+  });
+
   it('retries an ambiguous mutation with the same command id', async () => {
     const action = vi.fn()
       .mockRejectedValueOnce(new Error('ipc closed'))

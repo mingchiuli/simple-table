@@ -8,6 +8,7 @@ import type {
   MutationResultLookup,
   OpenDocumentResponse,
 } from '@/types/protocol';
+import { invokeIdempotently } from '@/application/idempotentCommandProtocol';
 import { compareU64 } from '@/utils/u64';
 
 type MutationAction = (
@@ -67,18 +68,12 @@ export function createDocumentMutationProtocol({
     context: EditorCommandContext
   ): Promise<MutationExecutionResult> {
     const mutationContext = { ...context, commandId: createCommandId() };
-    try {
-      return { status: 'response', response: await action(mutationContext) };
-    } catch {
-      // Retrying the same command id is safe because the backend replay journal
-      // owns idempotency for ambiguous IPC failures.
-    }
-
-    let retryError: unknown;
-    try {
-      return { status: 'response', response: await action(mutationContext) };
-    } catch (error) {
-      retryError = error;
+    const invocation = await invokeIdempotently({
+      operationId: mutationContext.commandId,
+      invoke: () => action(mutationContext),
+    });
+    if (invocation.status === 'response') {
+      return { status: 'response', response: invocation.response };
     }
 
     try {
@@ -109,7 +104,7 @@ export function createDocumentMutationProtocol({
     } catch (error) {
       reportError('Failed to recover an ambiguous mutation result', error);
     }
-    throw retryError;
+    throw invocation.error;
   }
 
   async function waitForMutationResult(

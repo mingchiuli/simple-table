@@ -12,6 +12,45 @@ const receipt: FileOperationReceipt = {
 };
 
 describe('documentFileOperationProtocol', () => {
+  it('does not retry a definitive backend rejection', async () => {
+    const rejection = { code: 'document_state_invalid', message: 'revision changed' };
+    const invoke = vi.fn().mockRejectedValue(rejection);
+    const getFileOperationResult = vi.fn();
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult,
+      createOperationId: () => 'operation-definitive',
+    });
+
+    await expect(protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke,
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: vi.fn(),
+    })).rejects.toBe(rejection);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(getFileOperationResult).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a response that fails protocol admission', async () => {
+    const invoke = vi.fn().mockResolvedValue({ receipt });
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn(),
+      createOperationId: () => 'operation-mismatch',
+    });
+
+    await expect(protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke,
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => false,
+      recoverResponse: vi.fn(),
+    })).rejects.toThrow('mismatched save operation receipt');
+
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it('retries an ambiguous request with the same operation id', async () => {
     const invoke = vi.fn()
       .mockRejectedValueOnce(new Error('response lost'))
