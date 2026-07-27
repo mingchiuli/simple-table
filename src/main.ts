@@ -16,7 +16,6 @@ import {
   applicationWorkspaceRuntimeKey,
   createApplicationWorkspaceRuntime,
 } from '@/composables/applicationWorkspaceRuntime';
-import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
 import router from "@/router";
 
 const app = createApp(App);
@@ -32,7 +31,7 @@ app.provide(documentWorkspaceRuntimeKey, applicationWorkspaceRuntime.document);
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
   try {
-    restoredActiveDocument = await restoreActiveDocument(applicationWorkspaceRuntime.document);
+    restoredActiveDocument = await applicationWorkspaceRuntime.restoreActiveDocument();
   } catch (error) {
     console.error("Failed to restore the active document:", error);
   }

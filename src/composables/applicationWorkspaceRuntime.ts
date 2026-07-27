@@ -1,4 +1,5 @@
 import * as api from '@/api';
+import { restoreActiveDocument } from '@/application/activeDocumentRestoreCoordinator';
 import {
   createApplicationExitCoordinator,
   type ApplicationExitCoordinator,
@@ -35,6 +36,7 @@ export type ApplicationWorkspaceRuntime = {
   document: DocumentWorkspaceRuntime;
   recentFiles: RecentFilesService;
   readonly updates: UpdateCoordinator;
+  restoreActiveDocument(): Promise<boolean>;
   dispose(): Promise<void>;
 };
 
@@ -68,6 +70,22 @@ export function createApplicationWorkspaceRuntime(
     applicationWindow,
     document,
     recentFiles,
+    restoreActiveDocument() {
+      return document.runTask(
+        () => restoreActiveDocument({
+          isFrontendSessionInitialized: () =>
+            document.document.data !== null || document.document.documentId !== null,
+          loadActiveDocument: api.getActiveDocument,
+          publishActiveDocument: (activeDocument) => {
+            document.session.openDocumentResponse(
+              activeDocument,
+              activeDocument.document.path || null,
+            );
+          },
+        }),
+        false,
+      );
+    },
     get updates() {
       updateCoordinator ??= createUpdateCoordinator(
         useUpdateSessionStore(),

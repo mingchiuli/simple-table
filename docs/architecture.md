@@ -1,948 +1,232 @@
 # Architecture
 
 Simple Table is a single-document Tauri application. Rust owns the canonical
-document; Vue owns a renderable projection and transient UI state.
+document and persistence state. Vue owns a bounded render projection and
+transient interaction state.
 
-## Component Boundaries
+This document records stable boundaries and ownership. Resource values,
+function names, queue implementations, and response layouts belong to code and
+tests; they are intentionally not duplicated here.
+
+## Dependency Direction
 
 ```mermaid
-flowchart TB
+flowchart LR
     UI[Vue views and components]
-    APP[Document protocol services, command adapters, and composables]
-    STORE[Pinia SheetSlot and stable layout index]
-    REGION[Region repository and bounded RegionCache]
-    RPC[Rust-signature generated TauriCommandMap]
-    IPC[Typed invoke adapter]
-    ADAPTER[Rust platform adapters]
-    SERVICE[Rust ApplicationRuntime and document services]
-    OPS[Rust operation layer]
-    STATE[EditorState session]
-    DOMAIN[Editor command and applied-operation domain contract]
-    DOC[Document aggregate]
-    BACKING[Workbook-backed document backing]
-    IO[Workbook, CSV, and platform I/O]
+    COMPOSE[Vue composition adapters]
+    FAPP[Frontend application services]
+    STORE[Pinia runtime state]
+    PLATFORM[Frontend platform adapters]
+    IPC[Typed Tauri API]
 
-    UI --> APP --> STORE
-    APP --> REGION --> STORE
-    APP --> RPC --> IPC --> ADAPTER --> SERVICE --> OPS --> STATE --> DOC --> BACKING
+    COMMAND[Transport commands]
+    RUNTIME[Rust composition root]
+    RAPP[Rust application services]
+    OPS[Editor operations]
+    STATE[Editor session state]
+    DOCUMENT[Document aggregate]
+    DOMAIN[Domain contracts]
+    ADAPTER[Infrastructure adapters]
+    IO[File and platform I/O]
+
+    UI --> COMPOSE
+    COMPOSE --> FAPP
+    COMPOSE --> STORE
+    COMPOSE --> PLATFORM
+    COMPOSE --> IPC
+    PLATFORM --> IPC
+    IPC --> COMMAND
+    COMMAND --> RUNTIME
+    RUNTIME --> RAPP
+    RUNTIME --> ADAPTER
+    RAPP --> OPS
+    RAPP --> STATE
+    OPS --> STATE
+    STATE --> DOCUMENT
+    DOCUMENT --> DOMAIN
+    ADAPTER --> RAPP
     ADAPTER --> IO
-    IO --> BACKING
-    OPS --> DOMAIN
-    STATE --> DOMAIN
-    DOC --> DOMAIN
-    OPS -. mutation response .-> STORE
 ```
 
-Frontend platform adapters select desktop, Android, or iOS file operations.
-Business mutations remain platform-independent and go through the common Rust
-operation layer.
-Frontend component barrels are public package entry points for external
-consumers. Components inside the same package import siblings directly, so an
-entry point cannot form a cycle through one of the modules it exports.
-Architecture checks parse TypeScript and Vue scripts into one resolved module
-graph. Store and application boundaries are enforced over transitive reachability,
-with the full dependency path reported for an indirect violation; production
-frontend modules must also remain acyclic.
-Rust production references are likewise resolved into a file-level module graph.
-The frontend parser, Rust parser, source discovery, and parser fixtures live in
-separate `scripts/architecture` modules. Architecture rules assert dependency
-direction and forbidden types; transaction ordering, rollback, cancellation,
-and disposal are verified by behavioral tests rather than source-layout regexes.
-The application layer cannot reach the runtime, adapters, commands, I/O, or
-recent-file infrastructure directly or through an intermediate module. Any
-dependency cycle involving the application layer, an adapter, the backend
-composition root, the document aggregate, or I/O fails the architecture check.
+Dependencies point inward. Composition roots and adapters may know concrete
+implementations; application and domain code depend on semantic ports and
+internal models.
 
-Tauri command modules are transport adapters. They own bounded wire
-deserialization and executor selection, then delegate to application services
-or outer adapters. They cannot import platform I/O or update implementations,
-acquire the active-document registry, or invoke `ops` directly.
-The command surface is separated by use case into file, document-query,
-editor-mutation, search, and recent-file modules. Bounded cell input
-deserialization lives in a command-private input module; command use-case
-modules do not invoke one another.
-Document replacement and close coordination live in the Rust application
-layer, which owns retirement of mutation replay and search-index work before
-releasing the old document. Neither the document model nor the I/O layer may
-depend on command modules.
+## Frontend Boundaries
 
-`CommandExecutionRuntime` is a second Tauri-managed composition object for
-transport admission. It explicitly owns file, mutation, projection, query,
-search, and recent-file executors over one shared process budget. Locking
-document queries are asynchronous command adapters and use the bounded query
-executor rather than running on a Tauri async-runtime thread. An execution
-permit covers both the internal operation and outward DTO projection, including
-exact serialized-byte admission. Command executors cannot be located through
-static `OnceLock` values.
+### Protocol and runtime models
 
-The top-level `runtime` module owns `ApplicationRuntime`, the backend composition
-root managed by Tauri. It is deliberately outside the `application` module and
-constructs narrow document-query, document-open, document-lifecycle,
-document-save, editor-mutation, and search-query services over shared
-repositories and coordinators. It owns outer recent, file, and search adapters; concrete platform
-runtimes are private fields of those adapters and are not exposed to commands.
-Application services declare only their actual dependencies and cannot import
-the complete runtime, `AppHandle`, adapters, or I/O implementations. Commands
-may receive `tauri::State<ApplicationRuntime>` and
-`tauri::State<CommandExecutionRuntime>`, but select a narrow service, outer
-adapter, and executor before delegating work. Business repositories,
-schedulers, and command executors cannot locate process-global mutable state.
-Repository-backed search document access is an outer adapter assembled by the
-composition root. `search_service` contains only the port-driven use case and
-cannot depend on the active-document repository or `DocumentHandle`. The
-runtime exposes that query service independently; `EditorCommandService` owns
-only mutation replay, mutation execution, and post-mutation index maintenance.
-Search query and index ports exchange internal `SearchScope`, `SearchHit`, and
-`SearchOutcome` values rather than RPC responses. Search infrastructure
-enforces semantic result and memory budgets. The outward protocol projection
-performs final `SearchResponse` mapping and exact serialized-byte admission at
-the command boundary.
+- `src/types/generated.ts` is generated from Rust and is reachable only through
+  `src/types/protocol.ts`.
+- `src/types/*Runtime.ts` contains frontend-owned state contracts. Runtime
+  models do not depend on generated declarations.
+- `src/application/*Protocol.ts` maps transport responses into runtime state.
+  Stores and feature components do not retain transport DTOs.
+- Decimal `u64` identifiers remain strings in JavaScript and are compared with
+  `BigInt`, never `number`.
 
-The active-document registry is hidden behind `ActiveDocumentRepository`.
-Application and operation modules request semantic read or mutation handles
-from the repository; they cannot acquire its `RwLock` directly. Search
-infrastructure receives only `SearchDocumentSourcePort`, whose operations
-return version-checked metadata, admitted full-Sheet text snapshots, or bounded
-scan chunks. It cannot receive the concrete repository.
-Document replacement uses an RAII repository transaction that releases an
-unfinished replacement lease on drop.
+### Application and state
 
-Document opening is split between outer platform adapters and application
-orchestration. Platform modules consume authorization and return
-`OpenFileInput`; the outer adapter maps that value to `OpenDocumentSource`.
-The application open service owns parse reservations and prepared-document
-insertion, while an injected `DocumentCodecPort` owns format preflight, parsing,
-and `EditorState` construction. The opaque decode plan retains validated codec
-preflight state so XLSX archives are not scanned twice. Mobile prepared-source
-adoption is injected as a semantic lifecycle port at the composition root. The
-application query service only coordinates consistent repository reads.
-Manifest, region, and session assembly lives in `document_projection`, which
-returns serialization-independent values from `projection_model`. Exact wire
-response limits and all DTO construction live in the top-level
-`protocol_projection` module at the command boundary. Native-save capability
-policy lives in `document_format_policy`, while pure file-format policy lives in
-the top-level `document_format` module. Application production modules cannot
-import `io` or adapters; application and operation modules
-cannot import protocol DTOs or the outward protocol mapper. The I/O layer cannot
-depend on `application`, `commands`, `ops`, or `state`.
-Platform I/O returns serialization-independent file selections and byte inputs;
-it cannot import RPC DTOs or the recent-file repository. Recent-file identifier
-resolution belongs to the outer file adapter, and the command boundary maps
-internal selections to desktop or mobile response DTOs.
+- `src/application/` is framework-independent. It may not import Vue, Pinia,
+  Element Plus, router, platform modules, Tauri, or backend API adapters.
+- Application services own workflow policy, serialization, cancellation,
+  recovery, and lifecycle coordination through injected ports.
+- Pinia Stores own serializable view state and synchronous transitions. They do
+  not perform I/O, schedule work, or locate other services.
+- `DocumentWorkspaceRuntime` owns the document session, region cache, pending
+  saves, search session, command bus, and admitted document work.
+- `ApplicationWorkspaceRuntime` owns application exit, document workspace,
+  recent files, updates, and startup restoration. Disposal closes admission and
+  drains work already accepted by those runtimes.
 
-`domain::editor_operation` owns the editor command vocabulary, canonical
-applied operations, and their lightweight impact/projection views. Domain
-cell-address parsing lives beside that vocabulary. Cross-layer resource policy
-lives in the top-level `resource_limits` module so document, application, and
-I/O adapters can enforce the same rules without depending on one another. The
-state session and document model depend on the domain contract directly; they
-must not depend on the operation-handler layer. `ops` may depend on both the
-domain contract and state session to implement a use case, never the reverse.
+### Adapters and UI
 
-Core cell values and text parsing belong to `domain::cell_value`. Wire edit
-requests such as `SetCellRequest` belong to `types::editor_command` and are
-mapped to `CellEditInput` at the application boundary. Domain commands cannot
-depend on serde/JSON values, RPC requests, mutation responses, patches,
-TypeScript generation, or Tauri types. `CellNumber` admits only finite integer
-or floating-point values; the wire serializer alone maps those values to JSON.
-`MutationIntent` is the single application mutation vocabulary: undo, redo, or
-execution of the domain-owned `EditorCommand`. The same owned intent is first
-hashed with explicit fixed-width and length-prefixed fields and then passed
-unchanged to the executor. The replay coordinator owns only reservations and
-cached outcomes; it cannot reconstruct commands or define a parallel identity
-enum. Application replay and editor-command services cannot use serde or JSON
-to define idempotency, so wire format changes cannot alter request identity.
-A new-Sheet operation carries only domain initialization data;
-projection and workbook adapters construct their own representations.
-Formula diagnostics and runtime status, workbook and Sheet capabilities,
-history status, and region metadata are also internal semantic models. The
-document, formula, and state modules cannot import `types`. The top-level
-`projection_model` module owns serialization-independent application snapshots
-and mutation outcomes. The top-level `protocol_projection` module is their
-explicit outward wire mapper. Its document, editor, search, file, and update
-submodules map only their own feature, while shared cell, status, and response-size
-helpers remain dependency leaves. Serde and TypeScript DTO changes cannot
-propagate into the document aggregate, operation handlers, or application
-services.
+- `src/platform/` owns platform-specific Tauri APIs: operating-system selection,
+  file operations, window operations, update transport, and document-launch
+  events.
+- `src/api.ts` and `src/tauriInvoke.ts` form the typed IPC adapter;
+  `tauriInvoke.ts` is the only non-platform module that imports Tauri. Components
+  and views never call them directly.
+- `src/composables/` binds application ports to Pinia, router, platform, API,
+  and presentation services. A composable does not reimplement application
+  workflow state.
+- Vue components consume semantic props, Stores, or composable facades. They do
+  not import platform modules or Tauri APIs.
 
-The Rust `document` module is the physical aggregate boundary. It owns
-`SpreadsheetDocument`, transactions, mementos, formula coordination, save
-snapshots, region metadata, and the concrete workbook backing that participates
-in those invariants. Format-specific backing code is isolated under
-`document::backing`. The aggregate declares `WorkbookBackingPort` for projection
-refresh, consistency checks, cell writes, Sheet synchronization, and layout-unit
-conversion. The I/O projection codec implements that port; no production module
-under `document` may import `io`.
-Operation commit and rollback are private `SpreadsheetDocument` behavior rather
-than a sibling module that reaches back into the aggregate. Shared workbook patch
-shapes and diagnostics live in a neutral backing contract, so the document body
-may delegate to workbook state without workbook state depending on the body.
-Undo and redo restoration are private `EditorState` behavior: document restore,
-rollback, history movement, dirty/resource refresh, and revision advancement are
-committed by the session aggregate rather than a sibling transaction object.
-Canonical editable content lives in the serialization-independent
-`document_data::DocumentData` and `DocumentSheet` model. These types have no
-`serde` or `ts-rs` implementation and are not emitted to TypeScript. Merge,
-extent, cell-format, style, hyperlink, drawing, and freeze-pane values in that
-aggregate are internal semantic values rather than aliases of protocol DTOs.
-The application projection layer maps canonical content into manifests, bounded
-regions, and mutation patches; the Rust protocol module cannot expose or own a
-complete canonical document aggregate.
-`SpreadsheetDocument` and `EditorState` production constructors receive either
-plain document data or an already assembled backing and never expose the
-third-party workbook type. `state` owns the active editor session and may depend
-on `document`, but neither `state` nor `ops` may import `io` directly. The `io`
-module owns codecs, input limits, filesystem/platform adapters, and byte-level
-file generation. Its projection mapper owns worksheet-to-document conversion and
-consistency mapping. File readers and the `WorkbookBackingPort` adapter depend on
-that mapper independently; the mapper does not call back into readers or writers.
+## Backend Boundaries
 
-Document execution returns internal `AppliedOperation`, `DocumentCellChange`,
-and `DocumentRestoreChange` values. The document, formula, memento, and state
-layers cannot construct mutation protocol DTOs. `ops::patch_projector` maps
-operation effects to internal `MutationOutcome` and `MutationPatch` values;
-`protocol_projection` is the only mapper from those outcomes to
-`EditorMutationResponse`, `SheetCellChange`, and `EditorPatch` wire values.
+### Domain and aggregate
 
-Rust `types` is a runtime-independent protocol boundary. Session DTOs such as
-`EditorSessionInfo`, `EditorStateInfo`, and `HistoryStatus` live there rather
-than in `state`. Its display projection is an internal wire serializer; the
-module cannot depend on application, state, operations, or I/O modules. Wire cell
-values are owned wrappers around domain cell values; JSON and TypeScript behavior
-is implemented on those wrappers and never globally attached to the domain type.
-Protocol DTOs are split into dependency-ordered `cell`, `cell_change`,
-`capabilities`, `document`, `editor_session`, `file`, and `mutation` modules.
-Modules inside `types` import sibling modules directly instead of resolving
-types through the root re-export facade, so the production dependency graph can
-observe and reject protocol cycles.
-Recent-file RPC requests and responses live in `types::recent` as well. The
-serialization-independent `recent::model` owns the runtime record and tracking
-input, while `recent::store` privately owns the persisted JSON schema.
-`protocol_projection::recent` is the only mapper between those semantic values
-and RPC DTOs, so persisted metadata migrations and wire-contract changes remain
-independent.
-All production Rust modules participate in the architecture dependency graph and
-module cycles are rejected regardless of which feature contains them.
+- `domain/` owns editor commands, applied operations, cell values, search work,
+  and other serialization-independent contracts.
+- `document_data.rs` owns canonical editable content. It has no serde, Tauri,
+  TypeScript-generation, or workbook-library behavior.
+- `SpreadsheetDocument` is the physical document aggregate. It keeps canonical
+  projection, formula state, region metadata, and workbook backing consistent
+  across commit and rollback.
+- `EditorState` is the session aggregate. It owns document identity, revision,
+  history, dirty tracking, save leases, and resource accounting.
+- Aggregate size alone is not a design defect. Code is split only when a
+  responsibility can move without exposing mutable state or weakening a
+  transaction invariant.
 
-Save and export orchestration live in `application::document_save_service`.
-That service owns revision validation, save leases, state commit, and post-save
-index scheduling. Open preparation and save admission use one runtime-owned
-`DocumentWorkBudgetPort`. Optional save reparse uses a preflight decode plan
-from the same `DocumentCodecPort` used by open.
-Byte generation is a separate `DocumentEncodePort`; the document save snapshot
-exposes an immutable encoding source but never invokes an I/O writer itself.
-Platform I/O modules
-provide path authorization, destination selection, and write primitives. Outer
-file adapters compose those primitives with prepared save work and managed
-mobile-document adoption; the I/O layer must not call back into the application
-layer. The save service depends directly on projection and format-policy
-modules, never on the query service.
+### Application, operations, and state
 
-Mobile update checking is a port-driven application service. Version comparison
-and trusted-release policy live in `application::update_service`; the reqwest
-adapter privately decodes provider responses and owns its client and
-concurrent-check admission per `ApplicationRuntime`. Only the command boundary
-maps the internal update snapshot to `UpdateInfo`; update commands cannot invoke
-infrastructure directly.
+- `application/` coordinates use cases and semantic ports. It cannot depend on
+  commands, adapters, I/O, recent-file infrastructure, Tauri, Tantivy, or wire
+  DTOs.
+- `ops/` implements editor operations over the active document repository and
+  returns internal mutation outcomes. It does not construct protocol responses.
+- `state/` owns the active document repository and per-document handle. The
+  repository lock is not exposed; callers request read or mutation handles.
+- Replacement and close retire old document handles and derived runtime work
+  before old state is released.
 
-The frontend update adapter maps `UpdateInfo` immediately into
-`MobileUpdateState`. The update coordinator and Store use only that internal
-runtime model. Tauri update transport and application-exit coordination are
-separate ports assembled by the composable composition layer; the update
-platform adapter cannot import or select application exit policy.
+### Transport and infrastructure
 
-Frontend generated declarations are reachable only through the explicit
-`types/protocol` entry. The general `types` barrel exports runtime models only,
-so importing `@/types` cannot silently introduce an RPC DTO into an application
-service or Store. Document manifests, cell values, region metadata, mutation
-patches, file capabilities, and recent-file records cross explicit protocol
-mappers before entering runtime state. Projection reducers and pending-edit
-state depend only on those frontend-owned models and never retain response
-objects received from Tauri.
-Region response mapping also preserves document identity and revision in a
-frontend-owned envelope. Region scheduling, fragmentation, and cache admission
-consume that envelope and cannot depend on generated response declarations.
+- `commands/` contains thin Tauri adapters. Commands validate bounded wire
+  input, select a narrow runtime service and executor, and project the internal
+  result to a response.
+- `runtime.rs` is the Rust composition root. It is the only place that assembles
+  repositories, application services, platform adapters, search runtime, and
+  shared budgets.
+- `types/` owns wire DTOs. `projection_model/` owns serialization-independent
+  application results. `protocol_projection/` is the outward mapper between
+  them.
+- `io/` owns codecs, filesystem behavior, platform file access, and persistence
+  primitives. It cannot call application, command, operation, state, recent, or
+  protocol layers.
+- `adapters/` owns infrastructure implementations of application ports.
+  `search_index_backend.rs` is the only module allowed to depend on Tantivy and
+  its tokenizer integration. The index registry, worker, scheduler, and query
+  engine consume opaque backend contracts.
 
 ## State Ownership
 
-- `EditorState` is authoritative for content, revision, history, dirty state,
-  formula state, and capabilities. It contains no search engine, index writer,
-  index freshness state, worker, or scheduler.
-- `SearchIndexRuntime` owns derived Tantivy indexes, scheduling state, fallback
-  scan admission, and worker handles. Queue admission and coalescing live in the
-  private `search_index_scheduler` module; thread execution and index builds live
-  in the private `search_index_worker` module. `search_index_backend` is the only
-  module that imports Tantivy and encapsulates schema, building, queries, and
-  incremental writes behind an opaque index and read trait. The
-  `search_index_registry` module owns only revision stamps, stale/fresh state,
-  resident budgets, and retirement. Architecture checks allow only the runtime
-  and its worker to consume scheduler internals, and only the runtime to construct
-  workers. Separate query and maintenance adapters
-  expose `SearchQueryPort` and `SearchIndexMaintenancePort` over that shared
-  runtime. Dropping the runtime signals shutdown, wakes workers, and joins every
-  owned thread. A revision mismatch makes an index unavailable before queued
-  index work runs; search then uses the authoritative bounded document scan.
-- The active-document registry owns only the current `Arc<DocumentHandle>` and
-  replacement lease. Each handle owns a separate `RwLock<EditorState>`, so a
-  mutation or projection releases the registry lock before accessing document
-  content. Closing and replacement retire the old handle under its content
-  lock; work that cloned it earlier is rejected before it can read or commit.
-- `SpreadsheetDocument` keeps canonical `DocumentData` consistent with the
-  persistence body. XLSX documents retain the original workbook so supported
-  edits preserve metadata that is only projected read-only. Complete document
-  data is never an IPC response; the frontend receives manifests and bounded
-  Sheet regions.
-- `documentSession` stores a `DocumentProjection` made of explicit `SheetSlot`
-  values. Every Sheet owns a stable sparse layout index from its manifest.
-  Loaded Sheets additionally own bounded cell blocks and render-only metadata.
-  Cell-block eviction cannot change row or column geometry. Stable manifest
-  strings and sparse layout keys have a separate resident-byte estimate and
-  count together with region blocks against the total frontend projection
-  budget. Pinning protects normal cache residency, but cannot override that
-  hard byte limit.
-- `documentSession` owns only serializable document projection, revision, and
-  lifecycle flags. The application-owned `DocumentRegionCache` owns resident
-  Sheet recency, block LRU, pins, and eviction through a narrow document port.
-  `documentSessionCoordinator` is the application transaction boundary for
-  document, status, selection, search, and pending-edit Stores.
-  `documentSessionRuntime` owns lifecycle and mutation serialization, while
-  `documentRegionCoordinator` independently owns region tiling, admission,
-  cancellation, and commit. The composable composition layer combines the
-  Store and cache ports into the session facade. Business Stores must not
-  instantiate or mutate one another.
-- Backend open, save, mutation, and editor-session responses are interpreted by
-  pure application protocol modules. `documentSessionProtocol` owns protocol
-  version checks, document/revision admission, patch application, and resync
-  decisions. `editorRuntimeProtocol` normalizes status, capabilities, history,
-  search outcomes, and selection transforms. Document, status, search, and
-  selection Stores accept only runtime state inputs and cannot import response
-  DTOs, generated protocol constants, or projection patch interpreters.
-  Open preparation includes a bounded preview. `fileProtocol` converts that
-  preview to a runtime session/status snapshot and admits its manifest memory
-  before the backend document can be replaced; commit therefore publishes an
-  already-admitted snapshot instead of interpreting a new whole-document DTO.
-- `pendingCellSaves` owns drafts that have not reached Rust. The unsaved marker
-  is the backend dirty flag OR pending frontend content. Store dictionaries are
-  JSON-serializable records; large pending dictionaries remain raw and expose
-  reactive counters/versioned snapshots instead of deep-proxying every cell.
-- Selection and search result state are UI-only and must not influence document
-  dirty tracking.
-- Pinia Stores expose serializable view state and synchronous state transitions.
-  They cannot import backend APIs, Tauri plugins, platform adapters, or
-  composables. Request concurrency and side effects belong to application
-  services such as `recentFilesService` and `updateCoordinator`; both expose
-  injectable ports for deterministic tests.
-- Frontend-owned resident-memory limits live in `resourcePolicy` and are safe
-  for Stores and application services to consume. Wire, mutation, tile, and
-  layout constants are emitted from Rust into the DTO-independent
-  `generatedEditorPolicy` leaf. Protocol adapters expose semantic aliases, so
-  Stores can consume wire policy without importing generated response DTOs and
-  there is no runtime compatibility assertion or duplicated hand-maintained
-  value that can drift.
-- `recentFilesService` owns load ordering, active-load accounting, latest-only
-  metadata tracking, and post-tracking refresh. Its composable captures the
-  active document context and binds transport/Store ports, but owns no worker or
-  request queue. Generated recent-file records are mapped before the service or
-  Store sees them.
-- Search request tokens and pending-cell debounce/save state are likewise owned
-  by application coordinators. The composition root creates one
-  `ApplicationWorkspaceRuntime` per Pinia application. It owns the exit,
-  document, recent-file, and lazily initialized update coordinators; feature
-  composables only retrieve those instances and cannot keep module-level service
-  caches. Runtime disposal invalidates new work and drains every active service.
-  This includes an active application-exit guard/executor request, explicit
-  recent-file removals, mobile URL launches, and update-triggered relaunches;
-  none of those services accepts new work after disposal begins.
-  The application runtime creates one
-  `DocumentWorkspaceRuntime` per Pinia document Store. That runtime owns the
-  session, region, pending-save, search, command-bus, and document-preparation
-  coordinators. A workspace operation tracker admits command-bus and file-workflow
-  tasks before they start. Admitted file workflows receive scoped access to the
-  raw command bus and preparation queue so their internal steps can finish after
-  disposal begins without exposing those capabilities to rejected callers. Disposal
-  first closes that admission gate, then
-  invalidates queued work and waits for admitted file operations, consistent
-  reads, editor-state refreshes, interaction leases, region loads, preparations,
-  mutations, and cell saves. Existing facades cannot start work after disposal.
-- `documentCommandCoordinator` owns interaction leases, mutation serialization,
-  consistent reads, response application, and recovery as a port-driven
-  workflow. The workspace-owned command bus binds that workflow to backend
-  transport and user notifications; `useDocumentCommandBus` only exposes the
-  already assembled facade.
-  Editor feature composables submit semantic commands and cannot construct wire
-  mutation actions or response DTOs. Context-bound editor-state refresh follows
-  the same coordinator path: stale responses are ignored and current-context
-  failures remain observable by the route-load worker. `useDocumentStatus` is a
-  read-only status facade and cannot invoke backend APIs.
-- Resetting a frontend document generation invalidates queued work but never
-  removes an already-started mutation or cell save from its tracked Promise
-  chain. New-generation work waits for that chain to drain, and mutation leases
-  reject stale post-await commits before they can update the active projection.
-- The frontend application workspace owns one `ApplicationExitCoordinator` instance.
-  Window close and update relaunch requests carry explicit intents through the
-  same guard pipeline; concurrent requests resolve to a deterministic intent,
-  with relaunch taking priority before execution starts. One injected
-  `ApplicationWindowPort` owns Tauri close-event subscription plus close/relaunch
-  execution. Vue composables own only scoped subscription disposal and cannot
-  import Tauri APIs. Platform modules do not own exit policy. Exit guards
-  return two-phase preparation leases after flushing, waiting, and confirming.
-  Those leases keep autosave suspended through platform execution, commit only
-  after a successful close or relaunch, and roll back in reverse order if a
-  guard vetoes or platform execution fails. Guards never close the backend
-  document or clear the frontend projection before platform exit succeeds.
-  Route leave keeps the separate destructive document-close workflow.
-- `documentFileCoordinator` is a compatibility facade over three narrow,
-  port-driven application workflows. `documentOpenWorkflow` owns new-document
-  creation, selected/recent/path opening, and prepared-document commit/abort;
-  `documentPersistenceWorkflow` owns save and export; `documentCloseWorkflow`
-  owns destructive close and two-phase exit preparation. Every public open/new
-  operation acquires
-  and releases its lifecycle lease internally; view and feature composables
-  cannot call a lower-level replacement transaction under an implicit caller-held
-  lock. `routeDocumentLoadCoordinator` owns
-  latest-only route scheduling and cancellation, and delegates accepted paths to
-  that file workflow. A Store-scoped `documentPreparationCoordinator` serializes
-  route, picker, recent-file, and new-document preparation through one drain-
-  preserving tail. Vue composables adapt Stores, platform APIs, lifecycle
-  guards, router navigation, and user notifications; application modules do not
-  import composables or UI libraries.
-  The lifecycle runner provides only mutual exclusion and lease ownership. It
-  propagates failures without presentation text; Vue composables translate those
-  failures into user messages. The headless file-operation protocol assigns one
-  operation ID to each open commit or save, retries ambiguous IPC failures with
-  that same ID, polls the backend receipt journal, and recovers a lost response
-  from the active document. Structured backend rejections are definitive and are
-  never retried. Protocol DTO inspection remains behind injected mapper ports.
-- Generic frontend utilities are pure and side-effect free. Backend format and
-  recent-file workflows are port-driven application services. Composables bind
-  those ports to the backend API, Pinia, platform adapters, and Element Plus;
-  utility modules cannot import those dependencies.
-- Frontend application modules contain only port-driven workflows. Pinia/Tauri
-  composition, instance caching, and platform port implementations live in
-  `composables/` and `platform/`; application modules cannot import them.
+- Rust document content is authoritative. The frontend projection is replaceable
+  and may be marked stale after a revision gap or patch failure.
+- `documentSession` owns the manifest and loaded sheet slots.
+  `DocumentRegionCache` owns bounded resident blocks, recency, pins, and
+  eviction. Eviction cannot alter stable sheet geometry.
+- `pendingCellSaves` owns drafts not yet committed to Rust. Unsaved state is the
+  Rust dirty flag OR pending frontend content.
+- Selection, search results, dialogs, and viewport state are UI-only and never
+  affect document dirty tracking.
+- Derived search indexes never live in `EditorState`. `SearchIndexRuntime` owns
+  their workers, freshness, residency, cancellation, and shutdown.
+- Process state is instance-owned by a composition root. Business repositories,
+  schedulers, and executors do not locate mutable global singletons.
 
-## Mutation Protocol
+## Core Workflows
 
-Every document mutation carries `{ documentId, baseRevision, commandId }`.
+### Open and replacement
 
-Both values are Rust `u64` internally and decimal strings on the IPC boundary.
-The frontend compares them with `BigInt`; they must never be converted through
-JavaScript `number`.
+1. A platform adapter authorizes or imports a source.
+2. The Rust open service reserves work, preflights the format, and prepares an
+   `EditorState` without replacing the active document.
+3. The frontend admits the bounded preview and commits the prepared token with
+   the expected document context.
+4. Rust atomically replaces the document, retires old replay/index work, and
+   schedules the new indexes.
+5. Launch-target claims are acknowledged only after route loading succeeds and
+   are released on cancellation or failure.
 
-1. Pending cell edits are flushed before commands that depend on committed data.
-2. The frontend serializes document mutations.
-3. Rust rejects a command if the active document or revision changed.
-4. Rust applies the operation transactionally, updates history and dirty state,
-   and advances the revision exactly once for a non-no-op mutation.
-5. Rust returns status plus protocol-v4 projection patches. Structural row and
-   column patches carry coordinate changes that also shift the frontend's sparse
-   layout overrides. Routine mutations never return complete layout maps or
-   complete Sheets; a history restore whose direction cannot be represented
-   safely requests a projection resync.
-6. The frontend applies only the next revision. A gap, duplicate revision with
-   patches, unsupported protocol, or patch failure marks the projection stale.
-7. Successful responses are retained in a bounded replay journal. Retrying the
-   same `commandId` returns the result without reapplying the mutation. Ambiguous
-   IPC results are queried through `get_mutation_result`.
-8. A stale projection is locked and replaced from
-   `get_current_document_projection`, which returns a manifest and one bounded
-   preferred-Sheet region, before editing resumes.
+### Mutation
 
-Cell patches are capped at 4,096 changes and an estimated 2 MiB per response.
-Larger recalculations are represented as per-Sheet invalidations. Formula status
-exposes complete counts but at most 100 diagnostic samples per response.
-The complete serialized mutation response is capped at 3 MiB. Mutation replay
-stores an internal `MutationOutcome` under a conservative resident-memory
-budget. Exact serialized-byte counting and oversized-response replacement with
-`ResyncRequired` happen in `protocol_projection` after the document lock is
-released and immediately before the DTO crosses the command boundary. First
-execution and replay pass through the same mapper and therefore produce the
-same admitted wire response.
+1. Pending cell edits are flushed when the next operation requires committed
+   data.
+2. Every mutation carries document ID, base revision, and command ID.
+3. Rust reserves idempotent replay, validates context, executes one aggregate
+   transaction, and advances revision once for a non-no-op change.
+4. Internal outcomes are projected to bounded wire patches at the command
+   boundary.
+5. The frontend accepts only the expected next revision. Unsafe or unsupported
+   deltas trigger a bounded projection refresh.
 
-Outcomes above the replay journal's resident-memory budget are stored as compact
-`ResyncRequired` results at the committed revision, preserving idempotency
-without retaining a second large body. The serialization-independent
-`mutation_retention` policy owns retained-memory estimation and compaction for
-every internal patch shape. The replay coordinator receives an opaque outcome
-plus its admitted retained-byte count and therefore does not inspect patches or
-cell values.
-Request fingerprints are streamed into fixed-size SHA-256 digests, so replay
-entries never retain serialized mutation payloads. The replay coordinator lock
-protects only reservation and queue accounting; mutation execution, response
-serialization, and response cloning happen outside it. A concurrent retry waits
-only for the same `{ documentId, commandId }`. Result lookup returns
-`pending`, `completed`, or `missing` immediately; the frontend polls `pending`
-with exponential backoff and a three-second deadline. Closing or replacing a
-document marks its replay state retired and returns without waiting. The last
-in-flight reservation discards its late response and removes the retirement
-marker. At most 64 distinct mutation commands may be in flight, preventing the
-coordinator queue from becoming an unbounded admission path ahead of the
-document lock. Tauri mutation commands
-run on a dedicated blocking executor with one execution slot and eight total
-admission slots. Saturated admission fails immediately instead of retaining an
-unbounded set of IPC requests. `set_cells` accepts at most 4,096 changes and
-enforces that limit while deserializing the sequence. Cell text is limited during
-command deserialization to 4 MiB per cell and 8 MiB per batch. The frontend
-drains pending cell saves with the same count and byte limits without copying its
-complete queue. Active and queued requests are limited to 8,192 changes and
-16 MiB of UTF-8 text in total; input that exceeds the hard budget is rejected
-before it can replace an accepted draft.
+### Save
 
-Search scheduling metadata is internal to Rust and must not be serialized in
-`EditorMutationResponse`. Operations return a `MutationExecution` containing an
-internal mutation outcome and separate `SearchIndexWork`. The application
-schedules that work only on first execution, while mutation replay stores only
-the internal outcome.
-`SearchIndexWork` is an internal domain contract. `SearchService` depends only
-on `SearchQueryPort`. Save, mutation, and lifecycle workflows depend separately
-on `SearchIndexMaintenancePort`, so they cannot invoke the search use case and
-tests do not implement unrelated query behavior. Query plans, result admission,
-and fallback scanning live in the stateless `search_query_engine`; a shared
-tokenizer leaf keeps indexed and fallback matching aligned without making the
-query engine depend on index storage. The index store accepts only a literal and
-term view and owns no query-validation or scan-matching policy. Index builds
-distinguish cancellation from infrastructure failure, and indexed reads return
-errors instead of empty matches. A failed indexed read falls back to the bounded
-authoritative document scan in the same request and schedules an index rebuild,
-so derived-index faults cannot create false negative search results. Search outcomes
-are bounded by an internal retained-memory limit, while only
-`protocol_projection::search` applies the exact serialized response-byte limit.
-The query adapter only implements the application port. Worker threads, queue coalescing, resident
-indexes, memory reservations, and Tantivy updates live in the shared outer
-`SearchIndexRuntime`; the maintenance adapter exposes only scheduling and
-cancellation. The dependency direction is adapter to runtime to query engine,
-with no runtime-to-adapter edge. The runtime reads canonical content only through
-`SearchDocumentSourcePort`. Search scheduling cannot inspect frontend
-`EditorPatch` DTOs.
+1. Rust validates the target and captures an immutable save snapshot under the
+   current revision.
+2. Encoding and staged I/O occur outside the document lock under a shared work
+   budget.
+3. A save lease prevents mutation between final validation, durable write, and
+   saved-hash commit.
+4. Failed staging or writing aborts the lease. Successful save refreshes identity,
+   dirty state, capabilities, and derived search work.
 
-Formula parsing has a separate complexity boundary from ordinary cell text.
-Formula source is limited to 64 KiB, delimiter nesting to 128 levels, parsed
-syntax to 4,096 nodes, and precise dependency tracking to 1,024 references per
-formula. The AST cache has an 8 MiB byte budget, formula runtime source work is
-rejected before third-party workbook construction above an estimated 64 MiB,
-and the precise dependency index has a 32 MiB logical budget. Formulas whose
-dependencies exceed the precise-tracking limits remain registered but fall
-back to recalculation after every edit. Dependency removal uses reverse edges
-and batches range-bucket rebuilds once per mutation batch. Diagnostic counts
-remain complete while only 100 issue samples are retained internally.
+### Search
 
-Formula evaluation also has a per-mutation admission budget, separate from its
-memory budgets. Before a transaction captures rollback state or changes the
-document, Rust estimates the affected formula set, including fallback formulas,
-new formulas in the request, and all formulas rebuilt by structural edits. A
-mutation may evaluate at most 16,384 formulas and process at most 8 MiB of
-formula source. An oversized calculation is rejected atomically without
-changing revision, dirty state, or history; synchronous third-party evaluation
-is never interrupted after a transaction starts.
+1. `SearchService` consumes only a query port.
+2. The outer search adapter uses a fresh bounded index when available.
+3. Missing, stale, or failed indexes fall back to a bounded authoritative scan.
+4. Search results use internal retention limits; exact serialized response
+   admission occurs only at protocol projection.
 
-The headless document mutation protocol owns idempotent retries, replay-result
-polling, and ambiguous-result projection recovery. It shares the classified
-invocation policy with file operations: structured backend errors fail once,
-while only unclassified transport failures enter retry and recovery. Its transport, recovery
-port, clock, and command-id generator are injectable. `DocumentCommandBus` is
-the Vue adapter around that protocol: it owns interaction locks, pending-edit
-flushes, response application, post-mutation callbacks, and user-facing error
-messages. It delegates projection/status/selection/search commits and recovery
-to `documentSessionCoordinator`; bounded region navigation delegates to the
-separate `documentRegionCoordinator`. Components and feature composables should
-call the composed bus/coordinator facade instead of rebuilding either lifecycle.
+## Architecture Enforcement
 
-## RPC Contract
+`npm run test:architecture` parses TypeScript, Vue, and Rust production imports
+into dependency graphs. It enforces:
 
-Rust `ts-rs` declarations and the `TauriCommandMap` are emitted together into
-`src/types/generated.ts`. The command map generator parses the actual
-`#[tauri::command]` Rust signatures, including argument naming and return types.
-`invokeCommand` is the only direct wrapper around Tauri `invoke` in application
-code; command names, arguments, and results are checked against that map.
+- no production dependency cycles;
+- inward-only application, domain, Store, document, operation, and I/O layers;
+- generated protocol and runtime-model separation;
+- Tauri and Tantivy infrastructure ownership;
+- command, protocol-projection, and search-infrastructure module ownership.
 
-Static cross-process policy is also generated from Rust. Mutation protocol
-version, mutation/region response byte limits, and cell mutation count/text
-limits have one Rust source exposed through `editor_protocol`; the search-query
-UTF-8 byte limit follows the same path. Sheet-region tile dimensions originate
-in the layer-neutral `resource_limits` module, are re-exported through
-`editor_protocol`, and are generated for frontend region caching. Frontend
-session, region, pending-save, and search-input logic import the generated
-constants instead of repeating numeric literals. Persisted row-height and
-column-width defaults and bounds originate in `document_layout_policy` and
-follow the same generated path. The backend validates imported layout maps and
-every layout mutation against the persisted domain bounds. The frontend adds
-the stricter interactive minimums but cannot invent a value outside the backend
-domain.
+The architecture test deliberately does not inspect function names, local
+variables, source ordering, numeric constants, or expected call snippets. Those
+are implementation details, not dependency boundaries.
 
-Wire-level integer identifiers use the generated `` `${bigint}` `` type. The
-invoke adapter validates canonical decimal form and the Rust command boundary
-rejects JSON numbers. Revisions use checked increments and can never wrap.
+Behavioral guarantees are tested beside their owners:
 
-Frontend transport and protocol-mapping modules import those declarations from
-`src/types/protocol.ts`. Runtime models cannot re-export or alias generated DTOs;
-wire-to-runtime conversion copies nested cells, metadata, layouts, and patch
-payloads so protocol object ownership ends at the mapper.
+- transaction commit and rollback;
+- idempotency and stale-context rejection;
+- resource admission and bounded responses;
+- cancellation, disposal, and worker shutdown;
+- save durability and document replacement;
+- platform launch claims and application exit.
 
-Creating a blank document is a zero-argument backend command. Rust owns the
-default file format, Sheet name, dimensions, and initial cells; the frontend
-cannot submit a complete `FileData` aggregate through the new-document RPC.
-
-## Document Replacement And Save
-
-Opening uses a prepare/commit/abort protocol. Preparing parses into a temporary
-`EditorState` without replacing the active document. Commit validates the
-expected active document and revision before replacement.
-
-Preparation also projects and size-checks the complete outward preview before
-returning its token. The frontend maps and memory-admits that preview before it
-requests commit. Commit accepts an operation ID and returns only a lightweight
-receipt. A bounded process-owned journal records completed open/save receipts,
-rejects reuse of an ID with a different payload, and exposes pending/completed/
-missing lookup so a lost IPC response never requires repeating an irreversible
-replacement or file write.
-
-Prepared commit checks out the prepared entry and acquires a backend document
-replacement lease while holding the registry lock only briefly. The registry
-lock is released before a mobile transient file is promoted into the managed
-catalog. While the lease is active, mutation, save commit, close, and another
-replacement are rejected, but consistent reads of the old document remain
-available. The lease then atomically installs the prepared `EditorState`.
-Failed promotion restores the prepared token, and the checkout continues to
-reserve prepared-document capacity until replacement finishes.
-
-Closing and replacement detach the previous `EditorState` while holding the
-registry lock, then cancel its index and replay work and release the detached
-state after the lock is dropped. Save rebinding similarly returns the old
-workbook and any cleared history as retired resources for lock-external release.
-The close command runs on the mutation executor, so large document destruction
-does not run on the synchronous command path.
-
-Prepared documents are process-local, limited to one entry and an estimated
-128 MiB, and expire after five minutes. A second prepare is rejected while a
-live token exists; it never evicts the first token. The active and prepared
-documents are also limited to an estimated 256 MiB combined. The estimate
-includes the UI projection, retained XLSX workbook, formula runtime, metadata
-index, and history. Derived search indexes use the adapter's independent
-resident-index budget and are discarded when a document retires. Callers should
-still abort unused tokens promptly. Before third-party parsing, a format
-preflight validates archive
-structure and estimates parse memory from CSV input bytes or XLSX compressed
-plus expanded bytes. That estimate must fit both the prepared-document and
-combined active/prepared budgets; it is never clamped down to the budget. The
-completed document's resident estimate is checked again after parsing. Its
-runtime estimate retains the preflight parse estimate as a lower bound, because
-third-party workbook state may contain memory that the canonical projection
-cannot inspect directly. Expired, aborted, or rejected prepared states are
-detached under the prepared-store lock and released after the lock is dropped.
-Explicit abort runs on the bounded blocking executor. Route loads receive an
-explicit cancellation signal. Cancellation releases the obsolete frontend
-lifecycle immediately, while the single-slot preparation queue drains the
-already-started parse and aborts any late prepared token before starting the
-next preparation. Picker, recent-file, and new-document preparations use the
-same queue, so releasing a cancelled route lifecycle cannot race another
-preparation against the backend repository.
-
-The prepared-document repository lives in the application layer because its
-entries own complete `EditorState` values. It does not inspect the
-active-document registry. Its document-preparation caller supplies the active
-resource estimate before reserve and insert, so the caller owns the
-combined-budget policy while the repository owns only token capacity, TTL,
-checkout, and retirement. Each parsing reservation is transferred into the
-prepared entry and remains charged to the runtime working-set ledger until
-commit, abort, or expiry.
-
-Saving follows this order:
-
-1. Flush frontend drafts and wait for queued mutations.
-2. Capture a backend save snapshot for the current revision.
-3. Acquire a save commit lease.
-4. Build, bound, and admit the exact post-save response and operation receipt.
-5. Write the target atomically.
-6. Finish the lease, update identity if needed, advance revision, and mark the
-   content hash as saved.
-
-All six steps are coordinated by `application::document_save_service` for
-desktop and mobile. Platform modules cannot acquire document state or save
-leases; the application service supplies the validated current path, and the
-platform modules only compare paths, consume authorization, select a target,
-and perform the requested write.
-
-Closing or replacing an active document while a save lease is held is invalid.
-Save and export snapshot generation has a runtime-owned RAII work reservation
-that starts before the projection can be cloned and remains held through the
-temporary write, reparse, and commit or export write. Only one such job may run
-at a time, its estimated source is capped at 256 MiB, and XLSX/CSV writers
-use a limited output buffer capped at 192 MiB. Open preparation and save/export
-reservations share one 832 MiB peak ledger that includes the observed active
-document estimate and all admitted transient work. Save encoding reserves the
-maximum output buffer before allocation, then shrinks to actual output bytes.
-Formats that require rebinding retain a preflight parse estimate and decode
-plan, so reparse memory is admitted before third-party decoding begins.
-
-## Resource Boundaries
-
-Opening returns a `DocumentManifest` with stable sparse row and column layout
-overrides, plus only the first bounded cell region. Selecting a deferred Sheet
-and scrolling load aligned tiles through `get_sheet_region_projection` for the
-exact revision. Cell values, merges, formats, and styles are tile-scoped. Merge
-anchors outside an intersecting tile are returned separately. The grid renders
-the visible region plus overscan and refuses to edit an unloaded cell.
-
-The frontend retains at most four resident Sheet slots, eight blocks per Sheet,
-24 blocks overall, and approximately 16 MiB of block payload.
-`DocumentRegionCache` uses access LRU and pins at most eight visible tiles.
-`documentRegionCoordinator` owns in-flight deduplication and the region load
-scheduler, rejects previous document generations, and runs at most four
-projection requests concurrently. Document session transactions coordinate
-cache reconciliation and scheduler reset through separate ports. Active and
-queued loads for the current generation are limited to 16. A new viewport generation removes queued tiles that no longer
-cover the visible area, while explicit Sheet loads and search-result navigation
-can evict queued viewport work. The initial region is a normal 128 x 32 tile and
-participates in the same LRU and byte budget. Rust caps each serialized region
-response at 16 MiB and reports its exact serialized size in the required
-`wireBytes` field. The frontend has no size heuristic fallback. The protocol mapper
-separately estimates the resident JavaScript block, including UTF-16 strings,
-record keys, cell objects, formats, and styles. Fragment admission and aggregate
-load limits use wire bytes; LRU accounting and pin limits use resident bytes.
-The repository subdivides either an oversized wire response or a wire-valid
-block whose resident estimate exceeds 16 MiB, and treats the admitted child
-blocks as combined coverage. The ordinary cache target is 16 MiB; pinned
-visible blocks form a separate hard bound of eight resident-admitted blocks so
-visibility cannot turn the cache into an unbounded exception.
-
-Region responses also acquire an instance-owned staging lease before they are
-retained in a fragment array. All active loads share a 20 MiB resident and
-32 MiB wire staging budget, and each task releases its lease after commit,
-cancellation, or failure. The Store cache limit therefore does not leave an
-unbounded pre-commit memory window when several tiles fragment concurrently.
-
-Tile alignment, oversized-response subdivision, fragment deadlines, and
-aggregate fragment budgets live in `documentRegionRepository`. The document
-session passes the preferred or protected Sheet explicitly into projection
-replacement and eviction; cache policy must not read the selection Store.
-
-Each loaded Sheet also owns an aggregated region-metadata snapshot. It is rebuilt
-only when its resident block membership changes; cell-only patches retain the
-same merge, format, and style snapshot. Rendering therefore does not repeatedly
-copy all block metadata after ordinary edits.
-
-Frontend projection patches are reduced with structural sharing. Cell changes
-are grouped by Sheet and each affected region-block map is copied at most once
-per response; unchanged Sheets, blocks, extents, and no-op layout maps retain
-their object identity. Block keys are reindexed only after Sheet membership
-changes. This keeps a bounded mutation batch from multiplying work by the block
-cell count or invalidating the complete reactive projection.
-
-Installing a replacement projection is one `documentSession` operation. Open,
-resync, and mutation-error recovery all reset the region-load generation,
-reconcile the replacement block keys, preserve the resident-Sheet policy, and
-enforce block count and byte budgets through that operation. Callers must not
-replace projection data independently of its cache runtime.
-
-Grid geometry is sparse as well as cell data. Each axis stores its default size,
-sorted explicit overrides, and prefix size deltas. Offset lookup, pixel-to-index
-lookup, visible-item discovery, merged spans, and resize handles do not allocate
-an entry per logical row or column. Resize previews are a small transient
-override layer, and column labels are generated only for visible columns.
-Loaded merge ranges use a balanced row interval index. Every range is stored a
-constant number of times regardless of its row span, and point or viewport
-queries apply column filtering only to row-intersecting candidates.
-
-An oversized logical tile may be subdivided, but subdivision has its own
-admission boundary: at most 64 fragment requests, 32 MiB of combined fragment
-payload, and ten seconds may be spent on one logical load. Every recursive step
-checks the document and viewport generation before issuing another IPC request.
-Responses are converted to cache blocks as they arrive, so the loader does not
-retain both complete response objects and their mapped blocks. Resetting the
-document generation stops further recursive requests from an obsolete load.
-
-Region commands capture detached cells, metadata, manifest values, document ID,
-and revision while holding the document read lock, then release the lock before
-exact JSON size counting. Size counting uses a non-allocating writer and runs on
-a dedicated blocking executor with two execution slots and eight total admission
-slots. Region loading therefore cannot retain the global document lock while
-serializing a response or create an unbounded IPC work queue. Prepared-document
-commit is serialized with document mutations; its initial projection is likewise
-finalized only after the registry write lock is released.
-
-Formats and styles are indexed into the same 128 x 32 tile geometry, while
-merges use a row interval tree. Region projection therefore examines only
-intersecting buckets and intervals. Structural commits and history restores
-rebuild the index at the transaction boundary.
-
-The shared search-index runtime retains at most four Tantivy indexes and 64 MiB
-of measured resident index memory for the active document. Each index accounts for its live
-RAM-directory files, writer arena, and index structure rather than a fixed
-per-index estimate. Incremental commits
-recheck the byte budget and evict the oldest resident index when necessary.
-Search fallback scans through a cursor with chunks capped at 8 MiB of generated
-text and 32,768 visited cells. Each chunk is copied while holding only the
-document read lock and is consumed before the next chunk, so fallback never
-retains both a complete Sheet snapshot and a complete search-text snapshot. A
-24 MiB reservation owned by the application-scoped search-index runtime covers
-fallback scan memory. Search commands have one category execution slot and two
-category admission slots, and also participate in the shared command budget. A
-fallback queues one missing Sheet index per search so repeated searches
-converge to indexed execution without flooding the resident cache. Layout
-overrides are limited to 100,000 entries per document.
-
-Search queries are limited to 4 KiB of UTF-8 text and 64 unique normalized
-terms before document access. Query construction uses set-based deduplication,
-and scan matching uses set membership rather than nested term comparisons.
-Search results contain at most 512 bytes of UTF-8 text around the match, and the
-complete serialized response is limited to 2 MiB as well as 1,000 results. The
-response reports whether either limit truncated the result set, so full cell
-text is never copied through IPC solely for list rendering.
-
-Pending search-index work has a separate scheduler budget because it lives
-outside `EditorState`: at most 256 pending Sheets, 4,096 incremental updates or
-8 MiB per Sheet, and 16 MiB across the scheduler. Each pending Sheet and the
-global scheduler maintain constant-time byte counters. Crossing an update or
-byte limit discards that Sheet's queued text copies and replaces them with one
-full rebuild at the latest search-index stamp. Dropping a new Sheet at the
-global Sheet limit remains correct because search uses the current projection
-scan until an on-demand rebuild can be admitted.
-
-Index builds have an independent 64 MiB reservation budget covering the writer
-arena and a conservative multiple of the source Sheet estimate. The reservation
-is acquired before cloning search text and released after installation,
-cancellation, or failure. Sheets estimated above 12 MiB are not indexed and
-continue using the correct scan fallback. Scheduler statistics expose pending
-and building bytes separately. Index replacement, byte-budget eviction,
-truncation, cancellation, and oversized-index rejection return detached indexes
-so Tantivy resources are released only after the adapter index-registry lock is
-dropped.
-
-Undo and redo history uses deque storage. Clearing redo after a new edit and
-evicting old entries at the count or 64 MiB byte limit detach mementos from the
-history store and return them with the mutation result. The operation layer
-builds the consistent response under the document lock, then releases detached
-history resources after leaving the registry critical section.
-
-All blocking command categories share an explicit runtime budget of three
-executing and sixteen admitted commands. Category limits remain narrower: file
-2/8, mutation 1/8, projection 2/8, query 2/8, search 1/2, and recent-file 1/3
-(execution/admission). A request must acquire both shared and category admission
-before it can wait for execution. Tauri async runtime threads do not perform
-those synchronous workloads directly. Response projection remains inside the
-same permit. Any fallible response projection for open preparation and save is
-completed before the irreversible state or write commit; post-commit command
-mapping is infallible. Saturation cannot create an unbounded semaphore wait
-queue, and separate category limits cannot overcommit the shared blocking pool.
-
-Frontend recent-file updates use a latest-only worker shared by all composable
-instances. At most one update is active and one latest request is pending;
-superseded updates do not regenerate thumbnails or refresh the list. Persisted
-recent metadata accepts at most 1,024 records and 4 MiB of logical text, with
-separate limits for identifiers, paths, names, and thumbnails. Both decoded
-store data and mobile catalog reconciliation are validated before IPC output.
-
-Desktop open and save selections are one-shot path capabilities, not permanent
-process permissions. Open and save registries are independently limited to 64
-entries, authorizations expire after 30 minutes, and repeated authorization
-refreshes the eviction order. Preparing or saving consumes the capability;
-canceling the picker flow revokes it explicitly.
-Backend-normalized launch targets use a bounded claim/acknowledge queue rather
-than a destructive batch drain. The frontend claims one target at a time,
-passes the claim through the route, acknowledges it only after the document
-load succeeds, and releases it on cancellation, routing failure, or load
-failure. Unsettled claims expire after one minute and return to the queue, so a
-frontend lifecycle transition cannot silently discard a launch.
-
-Frontend route-driven opening is an application-owned latest-only worker. At
-most one file load is active and one pending route is retained; a newer route
-cancels the active `OperationCancellationSignal` and replaces the pending route
-instead of extending a Promise chain. A Store-scoped application preparation
-runtime survives route-component remounts and is shared by every route, picker,
-recent-file, and new-document preparation. Obsolete preparation drains through
-its bounded serial tail and owns late-token abort without keeping the obsolete
-route lifecycle active. Late-token abort is retried as an idempotent cleanup;
-permanent cleanup failures are reported immediately and remain observable at
-the workspace idle/disposal boundary. Route-worker disposal closes admission,
-cancels the active load, retries claim settlement, and waits for both the worker
-and every acknowledgement or release before the route scope is destroyed. The
-route composable only adapts route observation, error reporting, leave
-confirmation, and scope disposal to that coordinator.
-
-Mobile imported selections and reserved save locations are likewise one-shot.
-Their registries are independently limited to 64 entries per purpose and expire
-after 30 minutes. Registration writes a small hashed sidecar marker beside the
-managed file. Successful document adoption atomically creates a separate managed
-document sidecar before removing the transient marker. The managed sidecar is the
-durable ownership catalog; recent-file metadata and thumbnail generation are
-rebuildable secondary data and are not required to retain a mobile document.
-Startup removes stale transient markers for cataloged documents before applying
-transient expiry, and promotes non-empty interrupted save-location files into the
-managed catalog. Discard and transient expiry remove only files that have not
-been promoted.
-
-Mobile catalog recovery is a synchronous, retryable single-flight initialization
-barrier. Concurrent mobile file commands share the active attempt, and a
-successful directory result is cached so ordinary access does not repeat startup
-repair. A failed attempt returns the same error to its current waiters but resets
-the barrier, allowing a later command to retry without restarting the process.
-Persistent sidecar reads are capped at 16 KiB per marker, fields at 1,024 bytes,
-and a storage directory scan at 1,024 entries. Invalid or oversized catalog
-markers are removed where ownership can be determined safely; exceeding the
-directory admission limit fails initialization instead of performing unbounded
-startup work.
-
-New mobile adoptions are limited to 64 managed documents and 1 GiB of managed
-file bytes. Existing documents from older versions are migrated without silent
-deletion, after which the quota blocks additional adoption until the user removes
-documents. The home file list is reconciled from managed sidecars when recent
-metadata is missing or corrupt. Only the ten most recent managed entries retain
-embedded thumbnail data. Deleting a mobile entry removes the file and managed
-sidecar before removing its rebuildable recent metadata, and an active document
-cannot be deleted through this path.
-
-Mobile update checks use one process-wide request slot and a shared HTTP client
-with a ten-second connect timeout and twenty-second total timeout. The GitHub
-release body is streamed under a 256 KiB limit, release and current versions are
-parsed as strict SemVer, and only APK links under this repository's GitHub
-release-download path are exposed. Update failures use the same serialized
-`AppError` contract as other commands. An application-scoped Pinia update
-session owns update state, the in-flight check, and the desktop download task.
-Checks and downloads therefore remain single across route component remounts.
-Dialogs only subscribe to that session, and resetting dialog state cannot
-interrupt an active download or discard its progress.
-
-`ResourceLedger` caches per-Sheet resource usage and extents. Ordinary edits
-validate against cached workbook totals and refresh only affected Sheets,
-instead of scanning the entire workbook for every mutation. It accounts for
-the exact UTF-8 bytes of Sheet names, format/style strings, freeze-pane values,
-hyperlink targets and tooltips, in addition to entry counts, and caps both an
-individual metadata string and the workbook metadata total. Active document
-and history estimates share `document_resource_estimator`, so the same value is
-not priced differently depending on which owner retains it.
-
-Rust still owns the complete workbook and computes mutations, dirty hashing,
-formula recalculation, undo/redo, and search across all Sheets. No command
-returns the complete frontend document projection. Open and saved-document
-responses have a 20 MiB whole-response wire limit; an open response drops its
-optional initial region before rejecting a manifest that still cannot fit.
-Document identity, Sheet-name, and layout-entry input limits keep the required
-manifest independently bounded. The frontend separately caps the stable
-manifest at 16 MiB and the manifest plus resident region blocks at 20 MiB.
-History, prepared bytes, layout entries, replay bytes, region size, response
-size, resident Sheets, region blocks, block bytes, diagnostics, indexes, and
-request concurrency are correctness constraints.
-
-Revision capacity is checked before document, history, dirty, or save state is
-changed. Document, save-lease, and search-generation identifiers use nonzero
-random `u64` values rather than wrapping counters.
-
-## Verification
-
-Frontend dependency boundaries are checked from a TypeScript AST dependency
-graph. The checker parses TypeScript and Vue SFC scripts, resolves aliases,
-relative paths, re-exports, and literal dynamic imports, then applies layer rules
-to normalized module paths. Regex checks remain only for local semantic
-invariants that are not dependency relationships. Rust production boundaries
-exclude explicitly test-only support modules but do not exempt workbook backing
-from the `document -> io` prohibition.
-
-Contract changes require both generated TypeScript and Rust serialization tests.
-The generation test updates both the DTO contract and the independent editor
-policy leaf. Run the following command to intentionally update them, then run
-the normal frontend and Rust test suites.
-
-```bash
-UPDATE_GENERATED_TYPES=1 cargo test \
-  types::typescript::tests::generated_typescript_contract_is_current -- --exact
-```
+An architectural issue is complete when the dependency violation is removed,
+the relevant behavior is tested, and a stable graph rule prevents recurrence.
+Large files, naming preferences, and hypothetical future abstractions are not
+open architecture defects by themselves.

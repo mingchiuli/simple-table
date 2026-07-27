@@ -6,11 +6,31 @@ use tantivy::query::{BooleanQuery, Occur, Query, RegexQuery, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, STRING, Schema, TextFieldIndexing, TextOptions, Value,
 };
+use tantivy::tokenizer::{LowerCaser, TextAnalyzer, TokenStream};
 use tantivy::{Index, IndexWriter, Order, TantivyDocument, Term, doc};
+use tantivy_jieba::JiebaTokenizer;
 
-use crate::adapters::search_text_analyzer::search_text_analyzer;
 use crate::domain::SearchCellText;
 use crate::error::AppError;
+
+fn search_text_analyzer() -> TextAnalyzer {
+    TextAnalyzer::builder(JiebaTokenizer::new())
+        .filter(LowerCaser)
+        .build()
+}
+
+pub(crate) fn tokenize_search_text(text: &str) -> Vec<String> {
+    let mut analyzer = search_text_analyzer();
+    let mut stream = analyzer.token_stream(text);
+    let mut tokens = Vec::new();
+    while stream.advance() {
+        let token = stream.token();
+        if !token.text.is_empty() {
+            tokens.push(token.text.to_lowercase());
+        }
+    }
+    tokens
+}
 
 pub(crate) const WRITER_ARENA_BYTES: usize = 15_000_000;
 

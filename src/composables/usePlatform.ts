@@ -75,6 +75,7 @@ export function usePlatform() {
     isMobile,
     isTablet,
     isDesktop,
+    isMobileRuntime,
     platform,
     isMobileOrTablet,
   };

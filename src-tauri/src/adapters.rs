@@ -11,6 +11,5 @@ mod search_index_scheduler;
 mod search_index_worker;
 pub(crate) mod search_query_adapter;
 pub(crate) mod search_query_engine;
-pub(crate) mod search_text_analyzer;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub mod update_adapter;

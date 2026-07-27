@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { DocumentProjection, SearchScope } from '@/types';
 import { usePlatform } from '@/composables/usePlatform';
-import { isMobile as isMobileOS } from '@/platform/runtime';
 import {
   CirclePlus,
   Delete,
@@ -17,8 +16,7 @@ import { SearchBox } from '@/components/search';
 import { EditButtons } from '@/components/edit';
 import UpdateDialog from '@/components/UpdateDialog.vue';
 
-const { isMobileOrTablet } = usePlatform();
-const canExport = isMobileOS();
+const { isMobileOrTablet, isMobileRuntime: canExport } = usePlatform();
 const searchPopoverVisible = ref(false);
 const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
 

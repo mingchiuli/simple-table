@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import * as api from "@/api";
-import { restoreActiveDocument } from "@/composables/restoreActiveDocument";
+import { restoreActiveDocument } from "@/application/activeDocumentRestoreCoordinator";
 import { useDocumentSessionStore } from "@/stores/documentSession";
 import type { OpenDocumentResponse } from '@/types/protocol';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from "@/types";
@@ -11,10 +10,6 @@ import {
   createDocumentWorkspaceTestContext,
   type DocumentWorkspaceTestContext,
 } from '@/test/documentWorkspaceTestContext';
-
-vi.mock("@/api", () => ({
-  getActiveDocument: vi.fn(),
-}));
 
 function activeDocument(): OpenDocumentResponse {
   const fileData = {
@@ -45,7 +40,7 @@ function activeDocument(): OpenDocumentResponse {
   return openResponseFromFileData(fileData, editorSession);
 }
 
-describe("restoreActiveDocument", () => {
+describe("active document restore coordinator", () => {
   let workspace: DocumentWorkspaceTestContext;
 
   beforeEach(() => {
@@ -54,10 +49,25 @@ describe("restoreActiveDocument", () => {
     vi.resetAllMocks();
   });
 
-  it("hydrates a frontend session from the active backend document", async () => {
-    vi.mocked(api.getActiveDocument).mockResolvedValue(activeDocument());
+  function restore(loadActiveDocument: () => Promise<OpenDocumentResponse | null>) {
+    return restoreActiveDocument({
+      isFrontendSessionInitialized: () =>
+        workspace.runtime.document.data !== null
+        || workspace.runtime.document.documentId !== null,
+      loadActiveDocument,
+      publishActiveDocument: (document) => {
+        workspace.runtime.session.openDocumentResponse(
+          document,
+          document.document.path || null,
+        );
+      },
+    });
+  }
 
-    await expect(restoreActiveDocument(workspace.runtime)).resolves.toBe(true);
+  it("hydrates a frontend session from the active backend document", async () => {
+    const loadActiveDocument = vi.fn().mockResolvedValue(activeDocument());
+
+    await expect(restore(loadActiveDocument)).resolves.toBe(true);
 
     const store = useDocumentSessionStore();
     expect(store.documentId).toBe('9');
@@ -67,18 +77,35 @@ describe("restoreActiveDocument", () => {
 
   it("does not replace an already initialized frontend session", async () => {
     openDocumentSession(workspace.runtime, activeDocument(), "/tmp/recovered.xlsx");
+    const loadActiveDocument = vi.fn().mockResolvedValue(null);
 
-    await expect(restoreActiveDocument(workspace.runtime)).resolves.toBe(false);
-    expect(api.getActiveDocument).not.toHaveBeenCalled();
+    await expect(restore(loadActiveDocument)).resolves.toBe(false);
+    expect(loadActiveDocument).not.toHaveBeenCalled();
   });
 
   it("leaves the frontend empty when the backend has no active document", async () => {
-    vi.mocked(api.getActiveDocument).mockResolvedValue(null);
+    const loadActiveDocument = vi.fn().mockResolvedValue(null);
 
-    await expect(restoreActiveDocument(workspace.runtime)).resolves.toBe(false);
+    await expect(restore(loadActiveDocument)).resolves.toBe(false);
 
     const store = useDocumentSessionStore();
     expect(store.data).toBeNull();
     expect(store.documentId).toBeNull();
+  });
+
+  it("does not overwrite a frontend session initialized while the backend request is pending", async () => {
+    let resolveActiveDocument!: (document: OpenDocumentResponse | null) => void;
+    const pending = new Promise<OpenDocumentResponse | null>((resolve) => {
+      resolveActiveDocument = resolve;
+    });
+    const restoring = restore(() => pending);
+    const current = activeDocument();
+    current.editorSession.documentId = '10';
+    openDocumentSession(workspace.runtime, current, "/tmp/current.xlsx");
+
+    resolveActiveDocument(activeDocument());
+
+    await expect(restoring).resolves.toBe(false);
+    expect(workspace.runtime.document.documentId).toBe('10');
   });
 });

@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
-use crate::adapters::search_index_backend::SearchIndexReader;
-use crate::adapters::search_text_analyzer::tokenize_search_text;
+use crate::adapters::search_index_backend::{SearchIndexReader, tokenize_search_text};
 use crate::application::search_ports::SearchDocumentSourcePort;
 use crate::domain::{SearchHit, SearchOutcome, SearchScanCursor, SearchScope};
 use crate::editor_protocol::MAX_SEARCH_QUERY_BYTES;

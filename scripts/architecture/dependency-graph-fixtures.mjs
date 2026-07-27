@@ -69,5 +69,19 @@ export function dependencyGraphFixtureViolations({
     );
   }
 
+  const rustExternalProbe = rustGraph.externalDependenciesFromSource(`
+    use serde::{Deserialize, Serialize};
+    use serde_json as json;
+    extern crate tauri;
+    fn command(_state: tauri::State<'_, ()>) -> serde_json::Value {
+      json::Value::Null
+    }
+  `);
+  for (const dependency of ['serde', 'serde_json', 'tauri']) {
+    if (!rustExternalProbe.includes(dependency)) {
+      violations.push(`Rust architecture dependency parser does not resolve ${dependency}`);
+    }
+  }
+
   return violations;
 }

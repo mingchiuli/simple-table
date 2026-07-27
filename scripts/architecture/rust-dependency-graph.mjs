@@ -46,13 +46,47 @@ export function createRustDependencyGraph(rustRoot, rustFiles) {
   const dependencies = new Map(
     rustFiles.map((file) => [file, dependenciesFromSource(file, rustProductionSource(file))]),
   );
+  const externalDependencies = new Map(
+    rustFiles.map((file) => [file, externalDependenciesFromSource(rustProductionSource(file))]),
+  );
 
   return {
     dependencies,
+    externalDependencies,
     dependenciesFromSource,
+    externalDependenciesFromSource,
     findForbiddenPath: (start, forbidden) => findForbiddenPath(start, dependencies, forbidden),
     cycles: () => dependencyCycles(dependencies, (dependency) => dependency),
   };
+}
+
+function externalDependenciesFromSource(source) {
+  const tokens = rustTokens(source);
+  const dependencies = new Set();
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const root = tokens[index];
+    if (root === 'use') {
+      addExternalDependency(dependencies, tokens[index + 1]);
+    } else if (root === 'extern' && tokens[index + 1] === 'crate') {
+      addExternalDependency(dependencies, tokens[index + 2]);
+    }
+    if (
+      isRustIdentifier(root)
+      && tokens[index + 1] === '::'
+    ) {
+      addExternalDependency(dependencies, root);
+    }
+  }
+  return [...dependencies];
+}
+
+function addExternalDependency(dependencies, candidate) {
+  if (
+    isRustIdentifier(candidate)
+    && !['crate', 'self', 'super', 'std', 'core', 'alloc'].includes(candidate)
+  ) {
+    dependencies.add(candidate);
+  }
 }
 
 export function rustProductionSource(file) {
