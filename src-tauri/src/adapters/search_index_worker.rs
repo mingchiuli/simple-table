@@ -3,15 +3,14 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tantivy::{Term, doc};
-
+use crate::adapters::search_index_backend::{
+    SearchIndexBuildOutcome, SearchIndexCellUpdate, WRITER_ARENA_BYTES,
+    build_sheet_index_with_cancel,
+};
+use crate::adapters::search_index_registry::SearchIndexStamp;
 use crate::adapters::search_index_scheduler::{
     CellIndexUpdate, IndexScheduler, IndexSchedulerState, SearchSchedulerStats, SheetPending,
     update_pending_stats,
-};
-use crate::adapters::search_index_store::{
-    SearchIndexBuildOutcome, SearchIndexStamp, WRITER_ARENA_BYTES, build_sheet_index_with_cancel,
-    search_position,
 };
 use crate::application::search_ports::SearchDocumentSourcePort;
 use crate::domain::SearchCellText;
@@ -383,42 +382,22 @@ fn run_incremental(
     }) {
         return false;
     }
-    let Some(writer_handle) = scheduler.indexes.lock().ok().and_then(|indexes| {
+    let Some(index) = scheduler.indexes.lock().ok().and_then(|indexes| {
         indexes
             .document(document_id)
-            .and_then(|store| store.writer_handle(document_id, sheet_index, latest_stamp))
+            .and_then(|store| store.incremental_index(document_id, sheet_index, latest_stamp))
     }) else {
         return false;
     };
-    let mut writer = match writer_handle.writer.lock() {
-        Ok(writer) => writer,
-        Err(_) => return false,
-    };
-
-    for op in ops {
-        let cell_id = format!("{}:{}", op.row, op.col);
-        writer.delete_term(Term::from_field_text(writer_handle.cell_id_field, &cell_id));
-        if !op.search_text.is_empty()
-            && let Err(error) = writer.add_document(doc!(
-                writer_handle.text_field => op.search_text.clone(),
-                writer_handle.literal_field => op.search_text.to_lowercase(),
-                writer_handle.display_field => op.display_text.clone(),
-                writer_handle.row_field => op.row as u64,
-                writer_handle.col_field => op.col as u64,
-                writer_handle.position_field => search_position(op.row, op.col),
-                writer_handle.cell_id_field => cell_id,
-            ))
-        {
-            eprintln!("incremental add_document failed: {error:?}");
-            return false;
-        }
-    }
-
-    if let Err(error) = writer.commit() {
-        eprintln!("incremental commit failed: {error:?}");
+    if let Err(error) = index.apply_updates(ops.iter().map(|op| SearchIndexCellUpdate {
+        row: op.row,
+        col: op.col,
+        search_text: &op.search_text,
+        display_text: &op.display_text,
+    })) {
+        eprintln!("incremental search index update failed: {error}");
         return false;
     }
-    drop(writer);
 
     if !search_stamp_is_current(scheduler, document_id, sheet_index, latest_stamp) {
         return false;

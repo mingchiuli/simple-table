@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::adapters::search_index_store::SearchSheetIndex;
+use crate::adapters::search_index_backend::SearchIndexReader;
 use crate::adapters::search_text_analyzer::tokenize_search_text;
 use crate::application::search_ports::SearchDocumentSourcePort;
 use crate::domain::{SearchHit, SearchOutcome, SearchScanCursor, SearchScope};
@@ -114,7 +114,7 @@ pub(crate) fn execute_search<P>(
     query: &str,
     scope: SearchScope,
     current_sheet_index: Option<usize>,
-    mut indexed_sheet: impl FnMut(usize) -> Option<std::sync::Arc<SearchSheetIndex>>,
+    mut indexed_sheet: impl FnMut(usize) -> Option<std::sync::Arc<dyn SearchIndexReader>>,
     mut reserve_scan_work: impl FnMut() -> Result<P, AppError>,
     mut schedule_rebuild: impl FnMut(usize),
 ) -> Result<SearchOutcome, AppError> {
@@ -290,7 +290,7 @@ fn search_result(
 struct SearchInput {
     sheet_index: usize,
     sheet_name: String,
-    index: Option<std::sync::Arc<SearchSheetIndex>>,
+    index: Option<std::sync::Arc<dyn SearchIndexReader>>,
 }
 
 struct SearchResultCollector {

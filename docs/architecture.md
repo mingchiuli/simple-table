@@ -44,6 +44,10 @@ graph. Store and application boundaries are enforced over transitive reachabilit
 with the full dependency path reported for an indirect violation; production
 frontend modules must also remain acyclic.
 Rust production references are likewise resolved into a file-level module graph.
+The frontend parser, Rust parser, source discovery, and parser fixtures live in
+separate `scripts/architecture` modules. Architecture rules assert dependency
+direction and forbidden types; transaction ordering, rollback, cancellation,
+and disposal are verified by behavioral tests rather than source-layout regexes.
 The application layer cannot reach the runtime, adapters, commands, I/O, or
 recent-file infrastructure directly or through an intermediate module. Any
 dependency cycle involving the application layer, an adapter, the backend
@@ -267,9 +271,13 @@ consume that envelope and cannot depend on generated response declarations.
 - `SearchIndexRuntime` owns derived Tantivy indexes, scheduling state, fallback
   scan admission, and worker handles. Queue admission and coalescing live in the
   private `search_index_scheduler` module; thread execution and index builds live
-  in the private `search_index_worker` module. Architecture checks allow only the
-  runtime and its worker to consume scheduler internals, and only the runtime to
-  construct workers. Separate query and maintenance adapters
+  in the private `search_index_worker` module. `search_index_backend` is the only
+  module that imports Tantivy and encapsulates schema, building, queries, and
+  incremental writes behind an opaque index and read trait. The
+  `search_index_registry` module owns only revision stamps, stale/fresh state,
+  resident budgets, and retirement. Architecture checks allow only the runtime
+  and its worker to consume scheduler internals, and only the runtime to construct
+  workers. Separate query and maintenance adapters
   expose `SearchQueryPort` and `SearchIndexMaintenancePort` over that shared
   runtime. Dropping the runtime signals shutdown, wakes workers, and joins every
   owned thread. A revision mismatch makes an index unavailable before queued
@@ -373,8 +381,10 @@ consume that envelope and cannot depend on generated response declarations.
 - The frontend application workspace owns one `ApplicationExitCoordinator` instance.
   Window close and update relaunch requests carry explicit intents through the
   same guard pipeline; concurrent requests resolve to a deterministic intent,
-  with relaunch taking priority before execution starts. Platform modules
-  provide close and relaunch primitives but do not own exit policy. Exit guards
+  with relaunch taking priority before execution starts. One injected
+  `ApplicationWindowPort` owns Tauri close-event subscription plus close/relaunch
+  execution. Vue composables own only scoped subscription disposal and cannot
+  import Tauri APIs. Platform modules do not own exit policy. Exit guards
   return two-phase preparation leases after flushing, waiting, and confirming.
   Those leases keep autosave suspended through platform execution, commit only
   after a successful close or relaunch, and roll back in reverse order if a

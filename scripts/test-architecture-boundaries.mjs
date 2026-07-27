@@ -1,20 +1,16 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseVueSfc } from '@vue/compiler-sfc';
-import * as ts from 'typescript';
+import { dependencyGraphFixtureViolations } from './architecture/dependency-graph-fixtures.mjs';
+import { createFrontendDependencyGraph } from './architecture/frontend-dependency-graph.mjs';
+import {
+  createRustDependencyGraph,
+  rustProductionSource as productionRustSource,
+} from './architecture/rust-dependency-graph.mjs';
+import { sourceFiles } from './architecture/source-files.mjs';
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 const violations = [];
-
-function sourceFiles(directory, extension) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return sourceFiles(path, extension);
-    if (extname(entry.name) !== extension || entry.name.includes('.test.')) return [];
-    return [path];
-  });
-}
 
 function rejectMatches(files, patterns, boundary) {
   for (const file of files) {
@@ -42,241 +38,15 @@ const rustRoot = join(projectRoot, 'src-tauri', 'src');
 const rustFiles = sourceFiles(rustRoot, '.rs').filter(
   (file) => !file.endsWith('/test_support.rs') && !file.endsWith('/types/typescript.rs'),
 );
-const rustModulesByPath = new Map(
-  rustFiles.map((file) => [rustModuleSegments(file).join('::'), file]),
-);
-const rustDependencies = new Map(
-  rustFiles.map((file) => [
-    file,
-    rustModuleDependenciesFromSource(file, rustProductionSource(file)),
-  ]),
-);
-
-function rustProductionSource(file) {
-  return readFileSync(file, 'utf8')
-    .split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/)[0]
-    .replace(/#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?use[\s\S]*?;/g, '');
-}
-
-function rustModuleSegments(file) {
-  const segments = relative(rustRoot, file).replace(/\.rs$/, '').split('/');
-  if (segments.at(-1) === 'lib') return [];
-  if (segments.at(-1) === 'mod') segments.pop();
-  return segments;
-}
-
-function rustModuleDependenciesFromSource(file, source) {
-  const tokens = rustTokens(source);
-  const currentModule = rustModuleSegments(file);
-  const dependencies = new Set();
-
-  for (let index = 0; index < tokens.length - 1; index += 1) {
-    const root = tokens[index];
-    if (!['crate', 'self', 'super'].includes(root) || tokens[index + 1] !== '::') continue;
-
-    let base = root === 'crate'
-      ? []
-      : root === 'self'
-        ? [...currentModule]
-        : currentModule.slice(0, -1);
-    let pathStart = index + 2;
-    while (tokens[pathStart] === 'super' && tokens[pathStart + 1] === '::') {
-      base = base.slice(0, -1);
-      pathStart += 2;
-    }
-    const { paths, next } = parseRustPathTree(tokens, pathStart, base);
-    index = Math.max(index, next - 1);
-    for (const modulePath of paths) {
-      const dependency = resolveRustModule(modulePath);
-      if (dependency && dependency !== file) dependencies.add(dependency);
-    }
-  }
-
-  return [...dependencies];
-}
-
-function parseRustPathTree(tokens, start, prefix) {
-  if (tokens[start] === '{') {
-    const paths = [];
-    let index = start + 1;
-    while (index < tokens.length && tokens[index] !== '}') {
-      if (tokens[index] === ',') {
-        index += 1;
-        continue;
-      }
-      const parsed = parseRustPathTree(tokens, index, prefix);
-      paths.push(...parsed.paths);
-      index = parsed.next;
-      if (tokens[index] === 'as') index += Math.min(2, tokens.length - index);
-    }
-    return { paths, next: tokens[index] === '}' ? index + 1 : index };
-  }
-
-  const segment = tokens[start];
-  if (!isRustIdentifier(segment) && segment !== '*') {
-    return { paths: [], next: start + 1 };
-  }
-  const path = segment === 'self' || segment === '*'
-    ? prefix
-    : [...prefix, segment];
-  if (tokens[start + 1] === '::') {
-    return parseRustPathTree(tokens, start + 2, path);
-  }
-  return { paths: path.length > 0 ? [path] : [], next: start + 1 };
-}
-
-function resolveRustModule(segments) {
-  for (let length = segments.length; length > 0; length -= 1) {
-    const file = rustModulesByPath.get(segments.slice(0, length).join('::'));
-    if (file) return file;
-  }
-  return null;
-}
-
-function isRustIdentifier(token) {
-  return typeof token === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(token);
-}
-
-function rustTokens(source) {
-  const tokens = [];
-  let index = 0;
-  while (index < source.length) {
-    const current = source[index];
-    const next = source[index + 1];
-    if (/\s/.test(current)) {
-      index += 1;
-      continue;
-    }
-    if (current === '/' && next === '/') {
-      index = source.indexOf('\n', index + 2);
-      if (index < 0) break;
-      continue;
-    }
-    if (current === '/' && next === '*') {
-      index = skipRustBlockComment(source, index + 2);
-      continue;
-    }
-    const rawStringEnd = rustRawStringEnd(source, index);
-    if (rawStringEnd !== null) {
-      index = rawStringEnd;
-      continue;
-    }
-    if (current === '"') {
-      index = skipRustQuoted(source, index + 1, '"');
-      continue;
-    }
-    if (current === "'" && source[index + 2] === "'") {
-      index += 3;
-      continue;
-    }
-    if (current === "'" && next === '\\') {
-      index = skipRustQuoted(source, index + 1, "'");
-      continue;
-    }
-    if (/[A-Za-z_]/.test(current)) {
-      let end = index + 1;
-      while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end += 1;
-      tokens.push(source.slice(index, end));
-      index = end;
-      continue;
-    }
-    if (current === ':' && next === ':') {
-      tokens.push('::');
-      index += 2;
-      continue;
-    }
-    if ('{},;*'.includes(current)) tokens.push(current);
-    index += 1;
-  }
-  return tokens;
-}
-
-function skipRustBlockComment(source, start) {
-  let depth = 1;
-  let index = start;
-  while (index < source.length && depth > 0) {
-    if (source[index] === '/' && source[index + 1] === '*') {
-      depth += 1;
-      index += 2;
-    } else if (source[index] === '*' && source[index + 1] === '/') {
-      depth -= 1;
-      index += 2;
-    } else {
-      index += 1;
-    }
-  }
-  return index;
-}
-
-function rustRawStringEnd(source, start) {
-  if (source[start] !== 'r') return null;
-  let quote = start + 1;
-  while (source[quote] === '#') quote += 1;
-  if (source[quote] !== '"') return null;
-  const suffix = `"${'#'.repeat(quote - start - 1)}`;
-  const end = source.indexOf(suffix, quote + 1);
-  return end < 0 ? source.length : end + suffix.length;
-}
-
-function skipRustQuoted(source, start, quote) {
-  let index = start;
-  while (index < source.length) {
-    if (source[index] === '\\') {
-      index += 2;
-    } else if (source[index] === quote) {
-      return index + 1;
-    } else {
-      index += 1;
-    }
-  }
-  return index;
-}
+const rustDependencyGraph = createRustDependencyGraph(rustRoot, rustFiles);
+const rustDependencies = rustDependencyGraph.dependencies;
 
 function findForbiddenRustDependencyPath(start, forbidden) {
-  const visited = new Set([start]);
-  const pending = [{ file: start, path: [] }];
-  while (pending.length > 0) {
-    const current = pending.shift();
-    for (const dependency of rustDependencies.get(current.file) ?? []) {
-      const path = [...current.path, dependency];
-      if (forbidden(dependency)) return path;
-      if (!visited.has(dependency)) {
-        visited.add(dependency);
-        pending.push({ file: dependency, path });
-      }
-    }
-  }
-  return null;
+  return rustDependencyGraph.findForbiddenPath(start, forbidden);
 }
 
 function rustDependencyCycles() {
-  const visiting = new Set();
-  const visited = new Set();
-  const stack = [];
-  const stackIndexes = new Map();
-  const cycles = [];
-
-  function visit(file) {
-    visiting.add(file);
-    stackIndexes.set(file, stack.length);
-    stack.push(file);
-    for (const dependency of rustDependencies.get(file) ?? []) {
-      if (visiting.has(dependency)) {
-        cycles.push([...stack.slice(stackIndexes.get(dependency)), dependency]);
-      } else if (!visited.has(dependency)) {
-        visit(dependency);
-      }
-    }
-    stack.pop();
-    stackIndexes.delete(file);
-    visiting.delete(file);
-    visited.add(file);
-  }
-
-  for (const file of rustDependencies.keys()) {
-    if (!visited.has(file)) visit(file);
-  }
-  return cycles;
+  return rustDependencyGraph.cycles();
 }
 
 const frontendRoot = join(projectRoot, 'src');
@@ -284,72 +54,12 @@ const frontendFiles = [
   ...sourceFiles(frontendRoot, '.ts'),
   ...sourceFiles(frontendRoot, '.vue'),
 ];
-const frontendDependencies = new Map(
-  frontendFiles.map((file) => [file, moduleDependencies(file)]),
+const frontendDependencyGraph = createFrontendDependencyGraph(
+  frontendRoot,
+  frontendFiles,
+  (file) => violations.push(`${relative(projectRoot, file)} could not be parsed as a Vue SFC`),
 );
-
-function moduleDependencies(file) {
-  return moduleDependenciesFromSource(file, frontendScriptSource(file));
-}
-
-function moduleDependenciesFromSource(file, source) {
-  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const dependencies = [];
-
-  function visit(node) {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-      && node.moduleSpecifier
-      && ts.isStringLiteralLike(node.moduleSpecifier)
-    ) {
-      dependencies.push(resolveFrontendDependency(file, node.moduleSpecifier.text));
-    } else if (
-      ts.isCallExpression(node)
-      && node.expression.kind === ts.SyntaxKind.ImportKeyword
-      && node.arguments.length === 1
-      && ts.isStringLiteralLike(node.arguments[0])
-    ) {
-      dependencies.push(resolveFrontendDependency(file, node.arguments[0].text));
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(parsed);
-  return dependencies;
-}
-
-function frontendScriptSource(file) {
-  const source = readFileSync(file, 'utf8');
-  if (extname(file) !== '.vue') return source;
-  const { descriptor, errors } = parseVueSfc(source, { filename: file });
-  if (errors.length > 0) {
-    violations.push(`${relative(projectRoot, file)} could not be parsed as a Vue SFC`);
-  }
-  return [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join('\n');
-}
-
-function resolveFrontendDependency(fromFile, specifier) {
-  if (!specifier.startsWith('@/') && !specifier.startsWith('.')) {
-    return { specifier, external: true, path: null };
-  }
-  const unresolved = specifier.startsWith('@/')
-    ? resolve(frontendRoot, specifier.slice(2))
-    : resolve(dirname(fromFile), specifier);
-  const candidates = extname(unresolved)
-    ? [unresolved]
-    : [
-        `${unresolved}.ts`,
-        `${unresolved}.vue`,
-        join(unresolved, 'index.ts'),
-        join(unresolved, 'index.vue'),
-        unresolved,
-      ];
-  return {
-    specifier,
-    external: false,
-    path: candidates.find(existsSync) ?? unresolved,
-  };
-}
+const frontendDependencies = frontendDependencyGraph.dependencies;
 
 function rejectFrontendDependencies(files, forbidden, boundary) {
   for (const file of files) {
@@ -381,24 +91,7 @@ function findForbiddenFrontendDependencyPath(
   forbidden,
   graph = frontendDependencies,
 ) {
-  const visited = new Set([start]);
-  const pending = [{ file: start, path: [] }];
-  while (pending.length > 0) {
-    const current = pending.shift();
-    for (const dependency of graph.get(current.file) ?? []) {
-      const path = [...current.path, { from: current.file, dependency }];
-      if (forbidden(dependency)) return path;
-      if (
-        dependency.path
-        && graph.has(dependency.path)
-        && !visited.has(dependency.path)
-      ) {
-        visited.add(dependency.path);
-        pending.push({ file: dependency.path, path });
-      }
-    }
-  }
-  return null;
+  return frontendDependencyGraph.findForbiddenPath(start, forbidden, graph);
 }
 
 function formatFrontendDependencyPath(path) {
@@ -411,35 +104,7 @@ function formatFrontendDependencyPath(path) {
 }
 
 function frontendDependencyCycles(graph = frontendDependencies) {
-  const visiting = new Set();
-  const visited = new Set();
-  const stack = [];
-  const stackIndexes = new Map();
-  const cycles = [];
-
-  function visit(file) {
-    visiting.add(file);
-    stackIndexes.set(file, stack.length);
-    stack.push(file);
-    for (const dependency of graph.get(file) ?? []) {
-      const target = dependency.path;
-      if (!target || !graph.has(target)) continue;
-      if (visiting.has(target)) {
-        cycles.push([...stack.slice(stackIndexes.get(target)), target]);
-      } else if (!visited.has(target)) {
-        visit(target);
-      }
-    }
-    stack.pop();
-    stackIndexes.delete(file);
-    visiting.delete(file);
-    visited.add(file);
-  }
-
-  for (const file of graph.keys()) {
-    if (!visited.has(file)) visit(file);
-  }
-  return cycles;
+  return frontendDependencyGraph.cycles(graph);
 }
 
 function isFrontendPath(dependency, path) {
@@ -518,42 +183,12 @@ rejectFrontendDependencies(
   'the resolved acyclic table-grid component boundary',
 );
 
-const dependencyParserProbe = moduleDependenciesFromSource(
-  join(frontendRoot, 'application', '__architecture_probe__.ts'),
-  `
-    import '../stores/documentSession';
-    export { useDocumentSessionStore } from '@/stores/documentSession';
-    void import('../stores/documentSession');
-  `,
-);
-if (
-  dependencyParserProbe.length !== 3
-  || dependencyParserProbe.some((dependency) =>
-    !isFrontendPath(dependency, 'stores/documentSession.ts'))
-) {
-  violations.push('architecture dependency parser does not normalize relative, aliased, and dynamic imports');
-}
-
-const transitiveProbeRoot = join(frontendRoot, 'application', '__transitive_probe__.ts');
-const transitiveProbeBridge = join(frontendRoot, 'utils', '__transitive_bridge__.ts');
-const transitiveProbeGraph = new Map([
-  [transitiveProbeRoot, moduleDependenciesFromSource(
-    transitiveProbeRoot,
-    `import '../../src/utils/__transitive_bridge__.ts';`,
-  )],
-  [transitiveProbeBridge, moduleDependenciesFromSource(
-    transitiveProbeBridge,
-    `export * from '../stores/documentSession';`,
-  )],
-]);
-const transitiveProbePath = findForbiddenFrontendDependencyPath(
-  transitiveProbeRoot,
-  (dependency) => isFrontendDirectory(dependency, 'stores'),
-  transitiveProbeGraph,
-);
-if (!transitiveProbePath || transitiveProbePath.length !== 2) {
-  violations.push('architecture dependency graph does not reject an indirect re-export boundary bypass');
-}
+violations.push(...dependencyGraphFixtureViolations({
+  frontendRoot,
+  rustRoot,
+  frontendGraph: frontendDependencyGraph,
+  rustGraph: rustDependencyGraph,
+}));
 
 for (const cycle of frontendDependencyCycles()) {
   violations.push(
@@ -588,22 +223,6 @@ for (const cycle of rustDependencyCycles()) {
       .map((file) => relative(projectRoot, file))
       .join(' -> ')}`,
   );
-}
-
-const rustDependencyParserProbe = rustModuleDependenciesFromSource(
-  join(rustRoot, 'adapters', '__architecture_probe__.rs'),
-  `
-    use crate::{
-      adapters::search_index_runtime::SearchIndexRuntime as Runtime,
-      application::{search_ports::SearchQueryPort as QueryPort},
-    };
-  `,
-);
-if (
-  !rustDependencyParserProbe.includes(join(rustRoot, 'adapters', 'search_index_runtime.rs'))
-  || !rustDependencyParserProbe.includes(join(rustRoot, 'application', 'search_ports.rs'))
-) {
-  violations.push('Rust architecture dependency parser does not resolve grouped or aliased imports');
 }
 
 rejectMatches(
@@ -850,6 +469,9 @@ if (existsSync(join(rustRoot, 'application', 'runtime.rs'))) {
 
 const searchIndexRuntimeFile = join(rustRoot, 'adapters', 'search_index_runtime.rs');
 const searchIndexSchedulerFile = join(rustRoot, 'adapters', 'search_index_scheduler.rs');
+const searchIndexBackendFile = join(rustRoot, 'adapters', 'search_index_backend.rs');
+const searchIndexRegistryFile = join(rustRoot, 'adapters', 'search_index_registry.rs');
+const searchQueryEngineFile = join(rustRoot, 'adapters', 'search_query_engine.rs');
 const searchIndexWorkerFile = join(rustRoot, 'adapters', 'search_index_worker.rs');
 for (const [ownedModule, allowedConsumers, boundary] of [
   [
@@ -861,6 +483,16 @@ for (const [ownedModule, allowedConsumers, boundary] of [
     searchIndexWorkerFile,
     new Set([searchIndexRuntimeFile]),
     'the SearchIndexRuntime-owned worker dependency boundary',
+  ],
+  [
+    searchIndexBackendFile,
+    new Set([
+      searchIndexRuntimeFile,
+      searchIndexRegistryFile,
+      searchIndexWorkerFile,
+      searchQueryEngineFile,
+    ]),
+    'the encapsulated search-index backend dependency boundary',
   ],
 ]) {
   for (const [consumer, dependencies] of rustDependencies) {
@@ -874,26 +506,18 @@ for (const [ownedModule, allowedConsumers, boundary] of [
 }
 
 rejectRustProductionMatches(
-  [join(rustRoot, 'adapters', 'search_index_store.rs')],
-  [/\bSearchQueryPlan\b/, /\bMAX_SEARCH_QUERY_BYTES\b/, /\bMAX_SEARCH_RESPONSE_BYTES\b/],
-  'the query-semantics-free search index storage boundary',
+  [searchIndexRegistryFile],
+  [
+    /\btantivy\b/,
+    /\bSearchQueryPlan\b/,
+    /\bSearchIndexReader\b/,
+    /\bSearchIndexBuildOutcome\b/,
+    /\bMAX_SEARCH_QUERY_BYTES\b/,
+    /\bMAX_SEARCH_RESPONSE_BYTES\b/,
+    /fn\s+(?:search|build_sheet_index|compile_index_query)\b/,
+  ],
+  'the query-semantics-free search index registry boundary',
 );
-
-const searchIndexStoreSource = readFileSync(
-  join(rustRoot, 'adapters', 'search_index_store.rs'),
-  'utf8',
-);
-for (const requirement of [
-  /enum\s+SearchIndexBuildOutcome\b/,
-  /Result<SearchIndexBuildOutcome,\s*AppError>/,
-  /Result<Vec<SearchCellText>,\s*AppError>/,
-]) {
-  if (!requirement.test(searchIndexStoreSource)) {
-    violations.push(
-      `src-tauri/src/adapters/search_index_store.rs violates the explicit search-index failure boundary: ${requirement}`,
-    );
-  }
-}
 
 rejectRustProductionMatches(
   [join(rustRoot, 'adapters', 'search_query_engine.rs')],
@@ -905,7 +529,7 @@ for (const file of rustFiles.filter((candidate) => ![
   join(rustRoot, 'editor_protocol.rs'),
   join(rustRoot, 'protocol_projection', 'search.rs'),
 ].includes(candidate))) {
-  if (/\bMAX_SEARCH_RESPONSE_BYTES\b/.test(rustProductionSource(file))) {
+  if (/\bMAX_SEARCH_RESPONSE_BYTES\b/.test(productionRustSource(file))) {
     violations.push(
       `${relative(projectRoot, file)} violates the protocol-projection-owned search response budget boundary`,
     );
@@ -1035,90 +659,6 @@ rejectMatches(
   ],
   'the infrastructure-only platform file adapter boundary',
 );
-
-const documentFileWorkflowSource = readFileSync(
-  join(rustRoot, 'application', 'document_file_workflow.rs'),
-  'utf8',
-);
-for (const requirement of [
-  /trait\s+DocumentOpenSourcePort\b/,
-  /trait\s+DocumentSaveTargetPort\b/,
-  /trait\s+DocumentExportTargetPort\b/,
-  /trait\s+StagedDocumentWrite\b/,
-  /target\.ensure_authorized\s*\(/,
-  /target\.stage\s*\(/,
-  /move\s*\|\|\s*staged\.commit\s*\(/,
-]) {
-  if (!requirement.test(documentFileWorkflowSource)) {
-    violations.push(
-      `src-tauri/src/application/document_file_workflow.rs violates the application-owned file workflow boundary: ${requirement}`,
-    );
-  }
-}
-
-const documentLifecycleSource = readFileSync(
-  join(rustRoot, 'application', 'document_service.rs'),
-  'utf8',
-);
-for (const requirement of [
-  /begin_prepared_source_adoption\s*\([\s\S]*replacement\.finish\s*\([\s\S]*source_adoption\.commit\s*\(/,
-  /Arc\s*<\s*dyn\s+PreparedSourceAdoptionPort\s*>/,
-]) {
-  if (!requirement.test(documentLifecycleSource)) {
-    violations.push(
-      `src-tauri/src/application/document_service.rs violates the transactional prepared-source adoption boundary: ${requirement}`,
-    );
-  }
-}
-
-const managedDocumentsSource = readFileSync(
-  join(rustRoot, 'io', 'managed_documents.rs'),
-  'utf8',
-);
-for (const requirement of [
-  /struct\s+ManagedDocumentAdoption\b/,
-  /impl\s+Drop\s+for\s+ManagedDocumentAdoption\b/,
-  /if\s*!self\.committed\s*\{[\s\S]*self\.rollback\s*\(/,
-  /fn\s+commit\s*\(mut\s+self\)/,
-  /restore_after_failed_adoption\s*\(/,
-]) {
-  if (!requirement.test(managedDocumentsSource)) {
-    violations.push(
-      `src-tauri/src/io/managed_documents.rs violates the rollback-capable transient adoption boundary: ${requirement}`,
-    );
-  }
-}
-
-for (const requirement of [
-  /struct\s+ManagedSaveTransaction\b/,
-  /impl\s+Drop\s+for\s+ManagedSaveTransaction\b/,
-  /fn\s+begin_managed_save_transaction\b/,
-  /write_file_atomically\s*\(\s*&journal\b/,
-  /fn\s+recover_managed_save_transactions\b/,
-  /content_matches_transaction\s*\(/,
-  /name\.starts_with\(SAVE_TRANSACTION_PREFIX\)[\s\S]*continue/,
-]) {
-  if (!requirement.test(managedDocumentsSource)) {
-    violations.push(
-      `src-tauri/src/io/managed_documents.rs violates the recoverable managed-save transaction boundary: ${requirement}`,
-    );
-  }
-}
-
-const documentFileAdapterSource = readFileSync(
-  join(rustRoot, 'adapters', 'document_file_adapter.rs'),
-  'utf8',
-);
-for (const requirement of [
-  /begin_managed_save_transaction\s*\([\s\S]*write_temp_file_for_target\s*\(/,
-  /replace_temp_file\s*\([\s\S]*finish_after_content_commit\s*\(/,
-]) {
-  if (!requirement.test(documentFileAdapterSource)) {
-    violations.push(
-      `src-tauri/src/adapters/document_file_adapter.rs violates the journal-before-content mobile save boundary: ${requirement}`,
-    );
-  }
-}
 
 const mobileFileRuntimeSource = readFileSync(
   join(rustRoot, 'io', 'platform', 'mobile.rs'),
@@ -1532,35 +1072,26 @@ rejectMatches(
   'the instance-owned intent-based frontend exit boundary',
 );
 
-const applicationExitCoordinatorSource = readFileSync(
-  join(projectRoot, 'src', 'application', 'applicationExitCoordinator.ts'),
-  'utf8',
-);
-for (const requirement of [
-  /\bApplicationExitPreparation\b/,
-  /await\s+executor\.execute\(intent\)[\s\S]*commitPreparations\(preparations\)/,
-  /catch\s*\(error\)\s*\{[\s\S]*rollbackPreparations\(preparations\)/,
-]) {
-  if (!requirement.test(applicationExitCoordinatorSource)) {
+const frontendMainFile = join(frontendRoot, 'main.ts');
+const requiredCompositionDependencies = [
+  join(frontendRoot, 'composables', 'applicationWorkspaceRuntime.ts'),
+  join(frontendRoot, 'composables', 'documentWorkspaceRuntime.ts'),
+  join(frontendRoot, 'composables', 'useApplicationExit.ts'),
+];
+const frontendMainDependencies = frontendDependencies.get(frontendMainFile) ?? [];
+for (const requiredDependency of requiredCompositionDependencies) {
+  if (!frontendMainDependencies.some((dependency) => dependency.path === requiredDependency)) {
     violations.push(
-      `src/application/applicationExitCoordinator.ts violates the two-phase exit preparation boundary: ${requirement}`,
+      `src/main.ts violates the composition-root dependency boundary: ${relative(projectRoot, requiredDependency)}`,
     );
   }
 }
 
-const frontendMainSource = readFileSync(join(projectRoot, 'src', 'main.ts'), 'utf8');
-for (const requirement of [
-  /\bcreateApplicationWorkspaceRuntime\b/,
-  /\.provide\s*\(\s*applicationWorkspaceRuntimeKey\b/,
-  /\.provide\s*\(\s*applicationExitCoordinatorKey\b/,
-  /\.provide\s*\(\s*documentWorkspaceRuntimeKey\b/,
-]) {
-  if (!requirement.test(frontendMainSource)) {
-    violations.push(
-      `src/main.ts violates the composition-root-owned frontend exit boundary: ${requirement}`,
-    );
-  }
-}
+rejectFrontendDependencies(
+  [join(frontendRoot, 'composables', 'useApplicationExit.ts')],
+  (dependency) => isExternalPackage(dependency, '@tauri-apps'),
+  'the platform-owned application window boundary',
+);
 
 rejectMatches(
   [join(projectRoot, 'src', 'platform', 'updatePort.ts')],
@@ -1954,44 +1485,6 @@ for (const requirement of [/\bOperationCancellationSignal\b/, /\bisCancelled\b/,
   if (!requirement.test(operationCancellationSource)) {
     violations.push(
       `src/application/operationCancellation.ts violates the explicit operation cancellation boundary: ${requirement}`,
-    );
-  }
-}
-
-const frontendDocumentLifecycleSource = readFileSync(
-  join(projectRoot, 'src', 'composables', 'useDocumentLifecycle.ts'),
-  'utf8',
-);
-for (const requirement of [
-  /retain\s*:\s*\(\)\s*=>\s*DocumentLifecycleLease/,
-  /if\s*\(\s*!completed\s*\|\|\s*!retained\s*\)\s*release\s*\(\s*\)/,
-]) {
-  if (!requirement.test(frontendDocumentLifecycleSource)) {
-    violations.push(
-      `src/composables/useDocumentLifecycle.ts violates the transferable document lifecycle lease boundary: ${requirement}`,
-    );
-  }
-}
-
-const documentPreparationCoordinatorSource = readFileSync(
-  join(projectRoot, 'src', 'application', 'documentPreparationCoordinator.ts'),
-  'utf8',
-);
-for (const requirement of [
-  /\blet\s+tail\s*:/,
-  /cancellation\.onCancel\s*\(/,
-  /function\s+discardWithRetry\b/,
-  /function\s+cleanup\s*</,
-  /function\s+observeCancelledCleanup\b/,
-  /activeCleanupObservers\b/,
-  /DocumentPreparationCleanupError\b/,
-  /function\s+enqueue\b/,
-  /tail\s*=\s*result\.then\s*\(/,
-  /function\s+waitForIdle\b/,
-]) {
-  if (!requirement.test(documentPreparationCoordinatorSource)) {
-    violations.push(
-      `src/application/documentPreparationCoordinator.ts violates the drain-preserving shared preparation boundary: ${requirement}`,
     );
   }
 }
@@ -2587,7 +2080,7 @@ rejectMatches(
 );
 
 rejectMatches(
-  [join(projectRoot, 'src-tauri', 'src', 'adapters', 'search_index_store.rs')],
+  [searchIndexBackendFile, searchIndexRegistryFile],
   [/\bMAX_SEARCH_QUERY_BYTES\b/],
   'the editor-protocol-owned search-query resource policy boundary',
 );
@@ -2721,30 +2214,6 @@ for (const requirement of [
     violations.push(
       `src/projection/documentProjection.ts violates the shared manifest admission boundary: ${requirement}`,
     );
-  }
-}
-
-const disposalApplicationExitCoordinatorSource = readFileSync(
-  join(frontendRoot, 'application', 'applicationExitCoordinator.ts'),
-  'utf8',
-);
-const recentFilesServiceDisposalSource = readFileSync(
-  join(frontendRoot, 'application', 'recentFilesService.ts'),
-  'utf8',
-);
-const updateCoordinatorDisposalSource = readFileSync(
-  join(frontendRoot, 'application', 'updateCoordinator.ts'),
-  'utf8',
-);
-for (const [source, label, requirements] of [
-  [disposalApplicationExitCoordinatorSource, 'applicationExitCoordinator', [/function\s+dispose\b/, /activeRequest\?\.promise/]],
-  [recentFilesServiceDisposalSource, 'recentFilesService', [/operations\.run\s*\(/, /operations\.waitForIdle\s*\(/]],
-  [updateCoordinatorDisposalSource, 'updateCoordinator', [/mobileOpenPromise/, /exitPromise/]],
-]) {
-  for (const requirement of requirements) {
-    if (!requirement.test(source)) {
-      violations.push(`src/application/${label}.ts violates the drain-preserving disposal boundary: ${requirement}`);
-    }
   }
 }
 

@@ -1,13 +1,16 @@
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { inject, onMounted, onScopeDispose, type InjectionKey } from 'vue';
 
 import type {
   ApplicationExitCoordinator,
   ApplicationExitGuard,
+  ApplicationWindowPort,
 } from '@/application/applicationExitCoordinator';
 
 export const applicationExitCoordinatorKey: InjectionKey<ApplicationExitCoordinator> = Symbol(
   'applicationExitCoordinator',
+);
+export const applicationWindowPortKey: InjectionKey<ApplicationWindowPort> = Symbol(
+  'applicationWindowPort',
 );
 
 export function useApplicationExitCoordinator(): ApplicationExitCoordinator {
@@ -25,37 +28,54 @@ export function useApplicationExitGuard(guard: ApplicationExitGuard) {
 
 export function useWindowCloseGuard() {
   const coordinator = useApplicationExitCoordinator();
+  const applicationWindow = inject(applicationWindowPortKey);
+  if (!applicationWindow) {
+    throw new Error('Application window port is not provided');
+  }
+  const lifecycle = createWindowCloseGuardLifecycle(applicationWindow, coordinator);
+
+  onMounted(() => {
+    void lifecycle.start();
+  });
+  onScopeDispose(lifecycle.dispose);
+}
+
+export function createWindowCloseGuardLifecycle(
+  applicationWindow: Pick<ApplicationWindowPort, 'subscribeCloseRequested'>,
+  coordinator: Pick<ApplicationExitCoordinator, 'requestExit'>,
+  reportError: (message: string, error: unknown) => void = (message, error) => {
+    console.error(message, error);
+  },
+) {
   let disposed = false;
   let unlisten: (() => void) | null = null;
+  let registration: Promise<void> | null = null;
 
-  onMounted(async () => {
-    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-      return;
-    }
-
-    const appWindow = getCurrentWindow();
-    try {
-      const registeredUnlisten = await appWindow.onCloseRequested(async (event) => {
-        event.preventDefault();
-        try {
-          await coordinator.requestExit('close');
-        } catch (error) {
-          console.error('Failed to close the application:', error);
-        }
-      });
+  function start(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    registration ??= applicationWindow.subscribeCloseRequested(async () => {
+      try {
+        await coordinator.requestExit('close');
+      } catch (error) {
+        reportError('Failed to close the application:', error);
+      }
+    }).then((registeredUnlisten) => {
       if (disposed) {
         registeredUnlisten();
       } else {
         unlisten = registeredUnlisten;
       }
-    } catch (error) {
-      console.error('Failed to register the application close guard:', error);
-    }
-  });
+    }).catch((error) => {
+      reportError('Failed to register the application close guard:', error);
+    });
+    return registration;
+  }
 
-  onScopeDispose(() => {
+  function dispose() {
     disposed = true;
     unlisten?.();
     unlisten = null;
-  });
+  }
+
+  return { start, dispose };
 }

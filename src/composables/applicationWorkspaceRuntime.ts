@@ -1,5 +1,9 @@
 import * as api from '@/api';
-import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
+import {
+  createApplicationExitCoordinator,
+  type ApplicationExitCoordinator,
+  type ApplicationWindowPort,
+} from '@/application/applicationExitCoordinator';
 import { runtimeRecentFile } from '@/application/recentFileProtocol';
 import {
   createRecentFilesService,
@@ -13,20 +17,21 @@ import {
   createDocumentWorkspaceRuntime,
   type DocumentWorkspaceRuntime,
 } from '@/composables/documentWorkspaceRuntime';
-import { tauriApplicationExitExecutor } from '@/platform/applicationExitPort';
+import { tauriApplicationWindowPort } from '@/platform/applicationExitPort';
 import { tauriUpdatePort } from '@/platform/updatePort';
 import { useRecentFilesStore } from '@/stores/recentFiles';
 import { useUpdateSessionStore } from '@/stores/updateSession';
-import type { ApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
 import { hasInjectionContext, inject, type InjectionKey } from 'vue';
 
 type ApplicationWorkspaceRuntimeOptions = {
   applicationExit?: ApplicationExitCoordinator;
+  applicationWindow?: ApplicationWindowPort;
   document?: DocumentWorkspaceRuntime;
 };
 
 export type ApplicationWorkspaceRuntime = {
   applicationExit: ApplicationExitCoordinator;
+  applicationWindow: ApplicationWindowPort;
   document: DocumentWorkspaceRuntime;
   recentFiles: RecentFilesService;
   readonly updates: UpdateCoordinator;
@@ -39,8 +44,9 @@ export const applicationWorkspaceRuntimeKey: InjectionKey<ApplicationWorkspaceRu
 export function createApplicationWorkspaceRuntime(
   options: ApplicationWorkspaceRuntimeOptions = {},
 ): ApplicationWorkspaceRuntime {
+  const applicationWindow = options.applicationWindow ?? tauriApplicationWindowPort;
   const applicationExit = options.applicationExit
-    ?? createApplicationExitCoordinator(tauriApplicationExitExecutor);
+    ?? createApplicationExitCoordinator(applicationWindow);
   const document = options.document ?? createDocumentWorkspaceRuntime();
   const recentFiles = createRecentFilesService(
     useRecentFilesStore(),
@@ -59,6 +65,7 @@ export function createApplicationWorkspaceRuntime(
 
   const runtime: ApplicationWorkspaceRuntime = {
     applicationExit,
+    applicationWindow,
     document,
     recentFiles,
     get updates() {

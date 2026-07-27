@@ -5,7 +5,10 @@ import "@/styles/platform.css";
 import { createPinia } from "pinia";
 import { createApp } from "vue";
 import App from "@/App.vue";
-import { applicationExitCoordinatorKey } from '@/composables/useApplicationExit';
+import {
+  applicationExitCoordinatorKey,
+  applicationWindowPortKey,
+} from '@/composables/useApplicationExit';
 import {
   documentWorkspaceRuntimeKey,
 } from '@/composables/documentWorkspaceRuntime';
@@ -23,6 +26,7 @@ app.use(router);
 const applicationWorkspaceRuntime = createApplicationWorkspaceRuntime();
 app.provide(applicationWorkspaceRuntimeKey, applicationWorkspaceRuntime);
 app.provide(applicationExitCoordinatorKey, applicationWorkspaceRuntime.applicationExit);
+app.provide(applicationWindowPortKey, applicationWorkspaceRuntime.applicationWindow);
 app.provide(documentWorkspaceRuntimeKey, applicationWorkspaceRuntime.document);
 
 let restoredActiveDocument = false;

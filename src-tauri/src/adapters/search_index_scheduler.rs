@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
-use crate::adapters::search_index_store::{SearchIndexRegistry, SearchIndexStamp};
+use crate::adapters::search_index_registry::{SearchIndexRegistry, SearchIndexStamp};
 use crate::application::search_ports::SearchDocumentSourcePort;
 
 pub(super) const MAX_PENDING_INDEX_SHEETS: usize = 256;

@@ -7,12 +7,13 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::adapters::search_index_backend::SearchIndexReader;
+use crate::adapters::search_index_registry::{MAX_RESIDENT_SEARCH_INDEXES, SearchIndexStamp};
 #[cfg(test)]
 use crate::adapters::search_index_scheduler::IndexSchedulerState;
 use crate::adapters::search_index_scheduler::{
     IndexJob, IndexScheduler, merge_job, update_pending_stats,
 };
-use crate::adapters::search_index_store::{MAX_RESIDENT_SEARCH_INDEXES, SearchIndexStamp};
 use crate::adapters::search_index_worker::create_index_scheduler;
 #[cfg(test)]
 use crate::adapters::search_index_worker::{
@@ -96,11 +97,12 @@ impl SearchIndexRuntime {
         document_id: u64,
         source_revision: u64,
         sheet_index: usize,
-    ) -> Option<Arc<crate::adapters::search_index_store::SearchSheetIndex>> {
+    ) -> Option<Arc<dyn SearchIndexReader>> {
         let mut indexes = self.scheduler.indexes.lock().ok()?;
-        indexes
+        let index = indexes
             .synchronize_revision(document_id, source_revision)?
-            .fresh_sheet_index(sheet_index)
+            .fresh_sheet_index(sheet_index)?;
+        Some(index)
     }
 
     fn reserve_scan_work(&self) -> Result<SearchScanReservation, crate::error::AppError> {
@@ -350,7 +352,7 @@ impl Drop for SearchScanReservation {
 mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
-    use crate::adapters::search_index_store::SearchIndexRegistry;
+    use crate::adapters::search_index_registry::SearchIndexRegistry;
     use crate::document_data::{CellFormat, RichMetadata};
     use crate::document_data::{DocumentData, DocumentSheet};
     use crate::domain::CellNumber;
@@ -617,7 +619,7 @@ mod tests {
         let context = context_for_rows(vec![vec![s("authoritative match")]]);
         let revision = active_revision(&context);
         let mut failed_index =
-            crate::adapters::search_index_store::build_sheet_index(&[SearchCellText {
+            crate::adapters::search_index_backend::build_sheet_index(&[SearchCellText {
                 row: 0,
                 col: 0,
                 search_text: "authoritative match".to_string(),

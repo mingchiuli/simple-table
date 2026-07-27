@@ -14,6 +14,10 @@ export type ApplicationExitExecutor = {
   execute(intent: ApplicationExitIntent): Promise<void>;
 };
 
+export type ApplicationWindowPort = ApplicationExitExecutor & {
+  subscribeCloseRequested(handler: () => void | Promise<void>): Promise<() => void>;
+};
+
 type ActiveExitRequest = {
   intent: ApplicationExitIntent;
   actionStarted: boolean;
