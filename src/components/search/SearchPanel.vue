@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Close } from "@element-plus/icons-vue";
+import { buildSearchHighlightSegments } from "@/components/search/searchResultHighlight";
 import type { SearchResult } from "@/types";
 
 const props = defineProps<{
@@ -22,48 +23,6 @@ function handleResultClick(result: SearchResult) {
 function handleClear() {
   emit("clear");
 }
-
-// 转义 HTML 特殊字符，防止 XSS
-function escapeHtml(text: string): string {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-// 转义正则特殊字符
-function escapeRegex(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// 高亮显示查询词在文本中的匹配，文本过长时以匹配词为中心截断
-function getHighlightedSnippet(text: string, query: string, maxLen: number = 10): string {
-  if (!query) return escapeHtml(text);
-
-  // 转义正则特殊字符，防止 regex 错误
-  const escapedQuery = escapeRegex(query);
-  const lowerText = text.toLowerCase();
-  const lowerQuery = escapedQuery.toLowerCase();
-
-  const pos = lowerText.indexOf(lowerQuery);
-
-  // 文本足够短或没找到匹配，返回完整高亮
-  if (pos === -1 || text.length <= maxLen) {
-    const regex = new RegExp(`(${escapedQuery})`, "gi");
-    return escapeHtml(text).replace(regex, '<mark>$1</mark>');
-  }
-
-  // 计算截断范围，以匹配词为中心
-  const half = Math.floor((maxLen - query.length) / 2);
-  let start = Math.max(0, pos - half);
-  let end = Math.min(text.length, pos + query.length + half);
-
-  // 边界调整
-  if (start > 0) end = Math.min(text.length, start + maxLen);
-  if (end < text.length) start = Math.max(0, end - maxLen);
-
-  const snippet = (start > 0 ? '...' : '') + text.slice(start, end) + (end < text.length ? '...' : '');
-  return escapeHtml(snippet).replace(new RegExp(`(${escapedQuery})`, "gi"), '<mark>$1</mark>');
-}
 </script>
 
 <template>
@@ -82,7 +41,15 @@ function getHighlightedSnippet(text: string, query: string, maxLen: number = 10)
         @click="handleResultClick(result)"
       >
         <span class="cell-position">{{ result.cellPosition }}</span>
-        <span class="cell-value" v-html="getHighlightedSnippet(result.value, props.query)"></span>
+        <span class="cell-value">
+          <template
+            v-for="(segment, segmentIndex) in buildSearchHighlightSegments(result.value, props.query)"
+            :key="segmentIndex"
+          >
+            <mark v-if="segment.highlighted">{{ segment.text }}</mark>
+            <span v-else>{{ segment.text }}</span>
+          </template>
+        </span>
         <span v-if="result.sheetName" class="sheet-name">{{ result.sheetName }}</span>
       </div>
     </div>

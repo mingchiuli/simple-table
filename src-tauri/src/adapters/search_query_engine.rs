@@ -76,11 +76,11 @@ impl SearchQueryPlan {
 
     fn first_match_byte(&self, text: &str) -> Option<usize> {
         let lowercase = text.to_lowercase();
-        std::iter::once(&self.literal)
+        let lowercase_index = std::iter::once(&self.literal)
             .chain(self.terms.iter())
             .filter_map(|term| lowercase.find(term))
-            .filter(|index| *index <= text.len() && text.is_char_boundary(*index))
-            .min()
+            .min()?;
+        Some(original_byte_for_lowercase_offset(text, lowercase_index))
     }
 
     pub(crate) fn literal(&self) -> &str {
@@ -90,6 +90,19 @@ impl SearchQueryPlan {
     pub(crate) fn terms(&self) -> &[String] {
         &self.terms
     }
+}
+
+fn original_byte_for_lowercase_offset(text: &str, target: usize) -> usize {
+    let mut lowercase_offset = 0;
+    for (original_offset, character) in text.char_indices() {
+        let next_offset =
+            lowercase_offset + character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if target < next_offset {
+            return original_offset;
+        }
+        lowercase_offset = next_offset;
+    }
+    text.len()
 }
 
 /// 将列索引转换为字母 (0 -> A, 1 -> B, ...)
@@ -435,6 +448,20 @@ mod query_limit_tests {
             .expect("query plan")
             .expect("nonempty query");
         let value = format!("{}needle{}", "前".repeat(300), "后".repeat(300));
+
+        let snippet = bounded_search_snippet(&value, &plan, MAX_SEARCH_RESULT_SNIPPET_BYTES);
+
+        assert!(snippet.len() <= MAX_SEARCH_RESULT_SNIPPET_BYTES);
+        assert!(snippet.contains("needle"));
+        assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn search_snippet_maps_expanding_lowercase_offsets_to_the_original_text() {
+        let plan = SearchQueryPlan::try_new("needle")
+            .expect("query plan")
+            .expect("nonempty query");
+        let value = format!("{}needle", "İ".repeat(300));
 
         let snippet = bounded_search_snippet(&value, &plan, MAX_SEARCH_RESULT_SNIPPET_BYTES);
 

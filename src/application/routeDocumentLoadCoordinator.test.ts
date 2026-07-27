@@ -212,7 +212,7 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(releaseOpenTarget).toHaveBeenCalledWith('claim-rejected');
   });
 
-  it('releases active and superseded claims while acknowledging only the latest load', async () => {
+  it('consumes active and pending claims superseded by the latest load', async () => {
     let routeFilePath = '/tmp/first.xlsx';
     let routeClaimId = 'claim-first';
     const firstLoad = deferred<boolean>();
@@ -239,9 +239,37 @@ describe('routeDocumentLoadCoordinator', () => {
     firstLoad.resolve(false);
     await flushPromises();
 
-    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-first');
-    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-second');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-first');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-second');
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-latest');
+    expect(releaseOpenTarget).not.toHaveBeenCalled();
+  });
+
+  it('transfers a claim to its replacement load without settling it early', async () => {
+    const firstLoad = deferred<boolean>();
+    const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const loadFileFromPath = vi.fn()
+      .mockImplementationOnce(() => firstLoad.promise)
+      .mockResolvedValueOnce(true);
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => '/tmp/book.xlsx',
+      getRouteOpenTargetClaimId: () => 'claim-shared',
+      loadFileFromPath,
+      acknowledgeOpenTarget,
+      releaseOpenTarget,
+    });
+
+    coordinator.enqueue('/tmp/book.xlsx', 'claim-shared');
+    await flushPromises();
+    coordinator.enqueue('/tmp/book.xlsx', 'claim-shared');
+    firstLoad.resolve(false);
+    await coordinator.waitForIdle();
+
+    expect(loadFileFromPath).toHaveBeenCalledTimes(2);
+    expect(acknowledgeOpenTarget).toHaveBeenCalledOnce();
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-shared');
+    expect(releaseOpenTarget).not.toHaveBeenCalled();
   });
 
   it('waits for the active load and claim settlement during disposal', async () => {
