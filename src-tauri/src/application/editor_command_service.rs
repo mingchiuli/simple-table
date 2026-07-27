@@ -96,6 +96,7 @@ pub fn redo(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn set_cell(
     service: &EditorCommandService,
     document_id: u64,

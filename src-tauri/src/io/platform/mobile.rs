@@ -542,6 +542,7 @@ fn is_save_target_authorized(current_path: &str, target: &Path, is_reserved: boo
     is_reserved || (!current_path.is_empty() && Path::new(current_path) == target)
 }
 
+#[cfg(target_os = "ios")]
 pub fn reserve_save_location(
     runtime: &MobileFileRuntime,
     app: &AppHandle,

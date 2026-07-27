@@ -100,55 +100,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r29
-          add-to-path: true
-          link-to-sdk: true
-
-      - name: Export Android NDK paths
-        run: |
-          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "lts/*"
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Initialize Android project
-        run: npx tauri android init --ci --skip-targets-install
+      - name: Setup Tauri Android
+        uses: ./.github/actions/setup-tauri-android
 
       - name: Build Android debug APK
-        run: npx tauri android build --debug --apk --target aarch64 --ci
+        uses: tauri-apps/tauri-action@v1
+        with:
+          mobile: android
+          args: --debug --apk --target aarch64 --ci
 
   ios:
     name: iOS arm64 simulator
@@ -181,4 +142,7 @@ jobs:
         run: npx tauri ios init --ci --skip-targets-install
 
       - name: Build iOS simulator app
-        run: npx tauri ios build --debug --target aarch64-sim --no-sign --ci
+        uses: tauri-apps/tauri-action@v1
+        with:
+          mobile: ios
+          args: --debug --target aarch64-sim --no-sign --ci

@@ -202,7 +202,7 @@ fn decode_recent_files(
     }
 }
 
-pub(super) fn validate_recent_files(files: &[RecentFileRecord]) -> Result<(), String> {
+pub(crate) fn validate_recent_files(files: &[RecentFileRecord]) -> Result<(), String> {
     if files.len() > MAX_STORED_RECENT_FILES {
         return Err(format!(
             "Invalid recent file store: {} records exceeds the limit of {MAX_STORED_RECENT_FILES}",

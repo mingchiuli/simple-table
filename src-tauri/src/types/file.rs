@@ -21,6 +21,7 @@ pub struct DesktopOpenFileInfo {
     pub file_name: String,
 }
 
+#[cfg(desktop)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]

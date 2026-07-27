@@ -83,6 +83,7 @@ pub async fn redo(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_cell(
     runtime: State<'_, ApplicationRuntime>,
     executions: State<'_, CommandExecutionRuntime>,
@@ -270,6 +271,7 @@ pub async fn delete_column(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_column_width(
     runtime: State<'_, ApplicationRuntime>,
     executions: State<'_, CommandExecutionRuntime>,
@@ -301,6 +303,7 @@ pub async fn set_column_width(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_row_height(
     runtime: State<'_, ApplicationRuntime>,
     executions: State<'_, CommandExecutionRuntime>,

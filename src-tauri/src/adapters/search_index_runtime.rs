@@ -500,10 +500,7 @@ fn merge_job(state: &mut IndexSchedulerState, job: IndexJob) {
         match job {
             IndexJob::Rebuild { stamp, .. } => {
                 let latest_seen = latest_pending_stamp(entry);
-                if latest_seen.is_none_or(|latest| stamp >= latest) {
-                    entry.rebuild = Some(RebuildIndexUpdate { stamp });
-                    retain_updates_after(entry, stamp);
-                } else if entry.rebuild.is_none() {
+                if latest_seen.is_none_or(|latest| stamp >= latest) || entry.rebuild.is_none() {
                     entry.rebuild = Some(RebuildIndexUpdate { stamp });
                     retain_updates_after(entry, stamp);
                 }

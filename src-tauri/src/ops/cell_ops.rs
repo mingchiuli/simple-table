@@ -65,7 +65,7 @@ pub fn do_set_cell(
     col: usize,
     text: String,
 ) -> Result<MutationExecution, AppError> {
-    let response = execute_cell_delta(
+    execute_cell_delta(
         registry,
         document_id,
         base_revision,
@@ -75,9 +75,7 @@ pub fn do_set_cell(
             col,
             text,
         },
-    );
-
-    response
+    )
 }
 
 #[cfg(test)]
@@ -87,14 +85,12 @@ pub fn do_set_cells(
     base_revision: u64,
     changes: Vec<CellEditInput>,
 ) -> Result<MutationExecution, AppError> {
-    let response = execute_cell_delta(
+    execute_cell_delta(
         registry,
         document_id,
         base_revision,
         EditorCommand::SetCells { changes },
-    );
-
-    response
+    )
 }
 
 #[cfg(test)]

@@ -106,6 +106,7 @@ fn col_to_letter(col: usize) -> String {
 }
 
 /// 搜索单元格
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_search<P>(
     source: &dyn SearchDocumentSourcePort,
     document_id: u64,

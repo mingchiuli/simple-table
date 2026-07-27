@@ -18,12 +18,12 @@ pub(crate) fn generate_file_bytes_for_target(
     projection: &DocumentData,
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
-    if workbook.is_some()
+    if let Some(workbook) = workbook
         && crate::document_format::SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
             .is_some_and(crate::document_format::SpreadsheetFileFormat::is_xlsx)
     {
         return writer::generate_excel_bytes_from_workbook_for_target(
-            workbook.expect("checked workbook"),
+            workbook,
             target_path_or_name,
         );
     }

@@ -97,7 +97,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app with updater
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signing keys for updater
@@ -121,116 +121,34 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r29
-          add-to-path: true
-          link-to-sdk: true
-
-      - name: Set Android NDK env
-        run: |
-          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 'lts/*'
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Init Android project
-        run: npx tauri android init
+      - name: Setup Tauri Android
+        uses: ./.github/actions/setup-tauri-android
 
       - name: Copy custom icons to Android project
-        run: |
-          cp -r src-tauri/icons/android/mipmap-* src-tauri/gen/android/app/src/main/res/
-          cp -r src-tauri/icons/android/values src-tauri/gen/android/app/src/main/res/
+        run: cp -R src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
 
       - name: Setup Android signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          cd src-tauri/gen/android
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > keystore.properties
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
-          echo "storeFile=$RUNNER_TEMP/keystore.jks" >> keystore.properties
-          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > $RUNNER_TEMP/keystore.jks
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/keystore.jks"
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
+            "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" "$RUNNER_TEMP/keystore.jks" \
+            > src-tauri/gen/android/keystore.properties
+          git apply .github/patches/android-release-signing.patch
 
-      - name: Configure Gradle signing
-        run: |
-          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
-
-          # Step 1: 先读出原文件内容
-          ORIGINAL=$(cat "$GRADLE_FILE")
-
-          # Step 2: 重写文件 — 强制把两个 import 写在最前面
-          cat > "$GRADLE_FILE" << 'HEADER'
-          import java.util.Properties
-          import java.io.FileInputStream
-          HEADER
-
-          # Step 3: 把原内容追加回去（去掉可能已有的重复 import）
-          echo "$ORIGINAL" | grep -v '^import java.util.Properties' | grep -v '^import java.io.FileInputStream' >> "$GRADLE_FILE"
-
-          # Step 4: 在 buildTypes 前插入 signingConfigs
-          sed -i '/buildTypes {/i\
-          \        signingConfigs {\
-          \            create("release") {\
-          \                val keystorePropertiesFile = rootProject.file("keystore.properties")\
-          \                val keystoreProperties = Properties()\
-          \                if (keystorePropertiesFile.exists()) {\
-          \                    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\
-          \                }\
-          \                keyAlias = keystoreProperties["keyAlias"] as String\
-          \                keyPassword = keystoreProperties["keyPassword"] as String\
-          \                storeFile = file(keystoreProperties["storeFile"] as String)\
-          \                storePassword = keystoreProperties["storePassword"] as String\
-          \            }\
-          \        }' "$GRADLE_FILE"
-
-          # Step 5: 在 release buildType 中添加签名引用
-          sed -i '/getByName("release") {/a\
-          \                signingConfig = signingConfigs.getByName("release")' "$GRADLE_FILE"
-
-          # Debug: 打印前50行验证
-          echo "✅ build.gradle.kts 前50行:"
-          head -50 "$GRADLE_FILE" | cat -n
-
-      - name: Build Android APK
-        run: npx tauri android build --apk --target aarch64 --split-per-abi
-
-      - name: Upload APK to Release
+      - name: Build and upload Android APK
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -path "*/arm64/release/*-release.apk" | head -1)
-          if [ -z "$APK_PATH" ]; then
-            echo "::error::No arm64 release APK found"
-            exit 1
-          fi
-          gh release upload ${{ github.ref_name }} "$APK_PATH" --clobber
+        with:
+          mobile: android
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: --apk --target aarch64 --split-per-abi --ci
+          releaseAssetNamePattern: app-[arch]-release[ext]
+          uploadUpdaterJson: false

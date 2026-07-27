@@ -5,13 +5,12 @@ use crate::application::{document_open_service, document_service};
 use crate::error::AppError;
 use crate::protocol_projection;
 use crate::runtime::ApplicationRuntime;
-use crate::types::{
-    DesktopOpenFileInfo, FileOperationReceipt, FileOperationResultLookup, PreparedOpenDocument,
-    SavedDocumentResponse,
-};
 #[cfg(desktop)]
-use tauri::Emitter;
-use tauri::{AppHandle, State};
+use crate::types::{DesktopOpenFileInfo, SavedDocumentResponse};
+use crate::types::{FileOperationReceipt, FileOperationResultLookup, PreparedOpenDocument};
+use tauri::State;
+#[cfg(desktop)]
+use tauri::{AppHandle, Emitter};
 
 /// Desktop: 后端选择文件路径并授权随后读取。
 #[cfg(desktop)]

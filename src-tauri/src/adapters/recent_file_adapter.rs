@@ -139,7 +139,8 @@ pub fn do_remove_recent_file(
             .find(|file| file.id == id)
             && file.storage_type == RecentStorageType::MobileSandboxPath
         {
-            let active_path = document_query_service::active_document_path(service)?;
+            let active_path =
+                document_query_service::active_document_path(service.document_queries())?;
             if !crate::io::platform::mobile::remove_managed_file_if_inactive(
                 service.mobile_files(),
                 app,
@@ -244,7 +245,8 @@ fn cleanup_removed_mobile_files(
     removed: &[RecentFileRecord],
 ) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let active_path = match document_query_service::active_document_path(service) {
+    let active_path = match document_query_service::active_document_path(service.document_queries())
+    {
         Ok(active_path) => active_path,
         Err(error) => {
             eprintln!("Failed to inspect active document during recent cleanup: {error}");

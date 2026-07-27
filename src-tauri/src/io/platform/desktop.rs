@@ -101,9 +101,7 @@ impl OpenTargetQueue {
     }
 
     fn release(&mut self, claim_id: &str) -> Option<String> {
-        let Some(claim) = self.claimed.remove(claim_id) else {
-            return None;
-        };
+        let claim = self.claimed.remove(claim_id)?;
         if !self.pending.contains(&claim.path) {
             self.pending.push_front(claim.path.clone());
         }

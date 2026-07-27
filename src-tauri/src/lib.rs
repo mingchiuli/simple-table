@@ -51,7 +51,9 @@ use commands::{
     prepare_recent_file_desktop, release_open_target_desktop, save_file_desktop,
 };
 
-use tauri::{Emitter, Manager};
+#[cfg(desktop)]
+use tauri::Emitter;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -68,10 +70,8 @@ pub fn run() {
             for target in argv.iter().skip(1) {
                 enqueued |= runtime.platform_files().enqueue_open_target(target);
             }
-            if enqueued {
-                if let Err(e) = app.emit("deep-link-received", ()) {
-                    eprintln!("Failed to emit deep link: {}", e);
-                }
+            if enqueued && let Err(e) = app.emit("deep-link-received", ()) {
+                eprintln!("Failed to emit deep link: {}", e);
             }
         }));
     }

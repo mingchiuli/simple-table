@@ -249,7 +249,7 @@ impl MergeIntervalNode {
         }
         let mut by_start = overlaps.clone();
         by_start.sort_by_key(|merge| merge.start_row);
-        overlaps.sort_by(|left, right| right.end_row.cmp(&left.end_row));
+        overlaps.sort_by_key(|merge| std::cmp::Reverse(merge.end_row));
         Some(Box::new(Self {
             center,
             by_start,

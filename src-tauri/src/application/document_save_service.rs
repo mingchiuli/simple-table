@@ -314,6 +314,7 @@ where
     Ok((handle, lease, clear_history))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn commit_current_file_save_without_reparse<T, F, P>(
     search_indexes: &dyn SearchIndexMaintenancePort,
     registry: &ActiveDocumentRepository,

@@ -106,11 +106,11 @@ impl SpreadsheetDocument {
     }
 
     pub fn estimated_runtime_bytes(&self) -> usize {
-        let retained_workbook_metadata = self
-            .body
-            .is_excel_backed()
-            .then(|| estimate_document_metadata_bytes(&self.projection))
-            .unwrap_or_default();
+        let retained_workbook_metadata = if self.body.is_excel_backed() {
+            estimate_document_metadata_bytes(&self.projection)
+        } else {
+            0
+        };
         self.body
             .estimated_bytes()
             .saturating_add(retained_workbook_metadata)

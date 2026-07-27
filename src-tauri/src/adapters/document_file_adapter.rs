@@ -97,7 +97,7 @@ impl PlatformFileAdapter {
                 .get_all(&app)?
                 .into_iter()
                 .find(|file| file.id == id)
-                .ok_or_else(|| AppError::FileNotFound(id))?;
+                .ok_or(AppError::FileNotFound(id))?;
             desktop::read_file_trusted(&recent.path)
         })
     }
@@ -289,7 +289,7 @@ impl PreparedSourceAdoptionPort for PlatformFileAdapter {
             let adoption = self
                 .mobile_files
                 .begin_transient_document_adoption(source_path, file_name)?;
-            return Ok(Box::new(ManagedPreparedSourceAdoption(Some(adoption))));
+            Ok(Box::new(ManagedPreparedSourceAdoption(Some(adoption))))
         }
         #[cfg(not(any(target_os = "android", target_os = "ios", test)))]
         {
@@ -367,17 +367,20 @@ impl DocumentSaveTargetPort for DesktopSaveTarget {
     }
 }
 
+#[cfg(desktop)]
 struct AtomicStagedWrite {
     temp: PathBuf,
     target: PathBuf,
 }
 
+#[cfg(desktop)]
 impl StagedDocumentWrite for AtomicStagedWrite {
     fn commit(self: Box<Self>) -> Result<(), AppError> {
         replace_temp_file(&self.temp, &self.target)
     }
 }
 
+#[cfg(desktop)]
 impl Drop for AtomicStagedWrite {
     fn drop(&mut self) {
         cleanup_temp_file(&self.temp);
@@ -448,9 +451,11 @@ impl Drop for MobileStagedWrite {
     }
 }
 
+type ExportWriter = Box<dyn FnOnce(&[u8]) -> Result<String, AppError> + Send>;
+
 struct ClosureExportTarget {
     target_path_or_name: String,
-    write: Box<dyn FnOnce(&[u8]) -> Result<String, AppError> + Send>,
+    write: ExportWriter,
 }
 
 impl DocumentExportTargetPort for ClosureExportTarget {
