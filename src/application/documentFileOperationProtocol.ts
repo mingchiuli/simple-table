@@ -26,7 +26,7 @@ type DocumentFileOperationProtocolOptions = {
   reportError?: (message: string, error: unknown) => void;
 };
 
-const RESULT_POLL_DEADLINE_MS = 3_000;
+const RESULT_DISCOVERY_DEADLINE_MS = 3_000;
 const INITIAL_POLL_INTERVAL_MS = 25;
 const MAX_POLL_INTERVAL_MS = 250;
 
@@ -46,15 +46,17 @@ export function createDocumentFileOperationProtocol({
       return admittedResponse(invocation.response, operation);
     }
 
+    let result: Awaited<ReturnType<typeof waitForResult>> = { status: 'missing' };
     try {
-      const receipt = await waitForResult(operationId);
-      if (receipt) {
-        ensureReceipt(receipt, operation);
-        return await operation.recoverResponse(receipt);
+      result = await waitForResult(operationId);
+      if (result.status === 'completed') {
+        ensureReceipt(result.receipt, operation);
+        return await operation.recoverResponse(result.receipt);
       }
     } catch (error) {
       reportError('Failed to query an ambiguous file operation result', error);
     }
+    if (result.status === 'failed') throw result.error;
 
     if (operation.recoverAmbiguous) {
       try {
@@ -67,8 +69,12 @@ export function createDocumentFileOperationProtocol({
     throw invocation.error;
   }
 
-  async function waitForResult(operationId: string): Promise<FileOperationReceipt | null> {
-    const deadline = clock.now() + RESULT_POLL_DEADLINE_MS;
+  async function waitForResult(operationId: string): Promise<
+    | { status: 'completed'; receipt: FileOperationReceipt }
+    | { status: 'failed'; error: { code: string; message: string } }
+    | { status: 'missing' }
+  > {
+    const discoveryDeadline = clock.now() + RESULT_DISCOVERY_DEADLINE_MS;
     let interval = INITIAL_POLL_INTERVAL_MS;
     while (true) {
       const lookup = await getFileOperationResult(operationId);
@@ -76,9 +82,17 @@ export function createDocumentFileOperationProtocol({
         if (!lookup.receipt) {
           throw new Error('Completed file operation lookup did not include a receipt');
         }
-        return lookup.receipt;
+        return { status: 'completed', receipt: lookup.receipt };
       }
-      if (lookup.status === 'missing' || clock.now() >= deadline) return null;
+      if (lookup.status === 'failed') {
+        if (!lookup.error) {
+          throw new Error('Failed file operation lookup did not include an error');
+        }
+        return { status: 'failed', error: lookup.error };
+      }
+      if (lookup.status === 'missing' && clock.now() >= discoveryDeadline) {
+        return { status: 'missing' };
+      }
       await clock.sleep(interval);
       interval = Math.min(interval * 2, MAX_POLL_INTERVAL_MS);
     }

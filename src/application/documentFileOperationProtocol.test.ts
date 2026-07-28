@@ -98,4 +98,54 @@ describe('documentFileOperationProtocol', () => {
     expect(getFileOperationResult).toHaveBeenCalledTimes(2);
     expect(recoverResponse).toHaveBeenCalledWith(receipt);
   });
+
+  it('continues polling an admitted operation until it reaches a terminal result', async () => {
+    const recoverResponse = vi.fn().mockResolvedValue({ receipt, recovered: true });
+    let now = 0;
+    const getFileOperationResult = vi.fn(async () => now < 5_000
+      ? { status: 'pending' as const }
+      : { status: 'completed' as const, receipt });
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult,
+      createOperationId: () => 'operation-long-running',
+      clock: {
+        now: () => now,
+        sleep: async (milliseconds) => { now += milliseconds; },
+      },
+    });
+
+    await expect(protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse,
+    })).resolves.toEqual({ receipt, recovered: true });
+
+    expect(now).toBeGreaterThanOrEqual(5_000);
+    expect(recoverResponse).toHaveBeenCalledWith(receipt);
+  });
+
+  it('surfaces a terminal backend failure after an ambiguous response', async () => {
+    const failure = { code: 'write_error', message: 'disk full' };
+    const recoverAmbiguous = vi.fn();
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn().mockResolvedValue({
+        status: 'failed',
+        error: failure,
+      }),
+      createOperationId: () => 'operation-failed',
+    });
+
+    await expect(protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: vi.fn(),
+      recoverAmbiguous,
+    })).rejects.toBe(failure);
+
+    expect(recoverAmbiguous).not.toHaveBeenCalled();
+  });
 });

@@ -38,7 +38,7 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
   getActiveDocument: () => Promise<ActiveDocument | null>;
   receiptFromActiveDocument: (document: ActiveDocument) => FileOperationReceipt;
   abortPreparedDocument: (prepared: PreparedOpenDocument) => Promise<void>;
-  closeDocument: (documentId: EditorCommandContext['documentId']) => Promise<void>;
+  closeDocument: (context: EditorCommandContext) => Promise<void>;
   openPreparedDocument: (prepared: PreparedOpenDocument, path: string | null) => void;
   clearDocument: () => void;
   queueRecentFileEntryUpdate: (originalPath?: string) => void;
@@ -81,7 +81,10 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
           const receipt = await commitPreparedDocument(prepared, expectedContext);
           if (cancellation.isCancelled()) {
             try {
-              await ports.closeDocument(receipt.documentId);
+              await ports.closeDocument({
+                documentId: receipt.documentId,
+                baseRevision: receipt.revision,
+              });
               replacement.commit();
               ports.clearDocument();
             } catch (error) {

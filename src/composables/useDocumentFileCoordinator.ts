@@ -79,7 +79,8 @@ export function useDocumentFileCoordinator({
       getActiveDocument: () => api.getActiveDocument(),
       receiptFromActiveDocument: fileOperationReceiptFromOpenResponse,
       abortPreparedDocument: (prepared) => api.abortPreparedDocument(prepared.token),
-      closeDocument: (documentId) => api.closeCurrentDocument(documentId),
+      commitCloseDocument: (context, operationId) =>
+        api.closeCurrentDocument(context, operationId),
       saveFile: (path, context, operationId) => saveFile(path, context, operationId),
       receiptFromSavedDocument: fileOperationReceiptFromSavedResponse,
       savedDocumentFromActive: savedResponseFromOpenResponse,

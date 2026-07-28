@@ -109,6 +109,16 @@ function openReceipt(value: PreparedOpenDocument) {
   };
 }
 
+function closeReceipt(value: EditorCommandContext = context) {
+  return {
+    kind: 'close' as const,
+    documentId: value.documentId,
+    revision: value.baseRevision,
+    path: '/tmp/book.xlsx',
+    fileName: 'book.xlsx',
+  };
+}
+
 function savedResponse(): SavedDocumentResponse {
   return {
     document: { path: '/tmp/book.xlsx', fileName: 'book.xlsx', sheets: [] },
@@ -192,7 +202,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
       fileName: document.document.fileName,
     }),
     abortPreparedDocument: vi.fn().mockResolvedValue(undefined),
-    closeDocument: vi.fn().mockResolvedValue(undefined),
+    commitCloseDocument: vi.fn(async (value) => closeReceipt(value)),
     saveFile: vi.fn().mockResolvedValue(savedResponse()),
     receiptFromSavedDocument: (document) => {
       const identity = document.document ?? document.identity!;
@@ -337,14 +347,37 @@ describe('documentFileCoordinator', () => {
   });
 
   it('cancels replacement when closing the backend document fails', async () => {
-    const closeDocument = vi.fn().mockRejectedValue(new Error('busy'));
-    const { ports, replacement } = createPorts({ closeDocument });
+    const failure = { code: 'document_state_invalid', message: 'busy' };
+    const commitCloseDocument = vi.fn().mockRejectedValue(failure);
+    const { ports, replacement } = createPorts({ commitCloseDocument });
     const coordinator = createDocumentFileCoordinator(ports);
 
-    await expect(coordinator.closeCurrentDocument()).rejects.toThrow('busy');
+    await expect(coordinator.closeCurrentDocument()).rejects.toBe(failure);
 
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.clearDocument).not.toHaveBeenCalled();
+  });
+
+  it('clears the frontend after recovering a lost close response', async () => {
+    const commitCloseDocument = vi.fn().mockRejectedValue(new Error('response lost'));
+    const getFileOperationResult = vi.fn().mockResolvedValue({
+      status: 'completed',
+      receipt: closeReceipt(),
+    });
+    const { ports, replacement } = createPorts({
+      commitCloseDocument,
+      getFileOperationResult,
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.closeCurrentDocument()).resolves.toBe(true);
+
+    expect(commitCloseDocument).toHaveBeenCalledTimes(2);
+    expect(commitCloseDocument.mock.calls[0]?.[1]).toBe(
+      commitCloseDocument.mock.calls[1]?.[1],
+    );
+    expect(replacement.commit).toHaveBeenCalledOnce();
+    expect(ports.clearDocument).toHaveBeenCalledOnce();
   });
 
   it('prepares application exit without closing or clearing the document', async () => {
@@ -356,7 +389,7 @@ describe('documentFileCoordinator', () => {
     expect(preparation).not.toBeNull();
     expect(replacement.cancel).not.toHaveBeenCalled();
     expect(replacement.commit).not.toHaveBeenCalled();
-    expect(ports.closeDocument).not.toHaveBeenCalled();
+    expect(ports.commitCloseDocument).not.toHaveBeenCalled();
     expect(ports.clearDocument).not.toHaveBeenCalled();
     expect(lifecycleRelease).not.toHaveBeenCalled();
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(

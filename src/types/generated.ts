@@ -136,13 +136,15 @@ export type SheetRegionProjectionResponse = { documentId: U64String, revision: U
 
 export type PreparedOpenDocument = { token: string, preview: OpenDocumentResponse, };
 
-export type FileOperationKind = "open" | "save";
+export type FileOperationKind = "open" | "save" | "close";
 
 export type FileOperationReceipt = { kind: FileOperationKind, documentId: U64String, revision: U64String, path: string, fileName: string, };
 
-export type FileOperationResultStatus = "pending" | "completed" | "missing";
+export type FileOperationResultStatus = "pending" | "completed" | "failed" | "missing";
 
-export type FileOperationResultLookup = { status: FileOperationResultStatus, receipt?: FileOperationReceipt, };
+export type FileOperationFailure = { code: string, message: string, };
+
+export type FileOperationResultLookup = { status: FileOperationResultStatus, receipt?: FileOperationReceipt, error?: FileOperationFailure, };
 
 export type DesktopOpenTargetClaim = { claimId: string, path: string, };
 
@@ -170,7 +172,7 @@ export type TauriCommandMap = {
   "get_mutation_result": { args: { documentId: U64String, commandId: string }, result: MutationResultLookup },
   "get_current_document_projection": { args: { documentId: U64String, baseRevision: U64String, preferredSheetIndex: number }, result: OpenDocumentResponse },
   "get_sheet_region_projection": { args: { documentId: U64String, baseRevision: U64String, region: SheetRegion }, result: SheetRegionProjectionResponse },
-  "close_current_document": { args: { documentId: U64String }, result: void },
+  "close_current_document": { args: { documentId: U64String, baseRevision: U64String, operationId: string }, result: FileOperationReceipt },
   "get_document_capabilities": { args: { documentId: U64String, baseRevision: U64String }, result: DocumentCapabilities },
   "get_native_save_plan": { args: { documentId: U64String, baseRevision: U64String, targetPathOrName: string }, result: NativeSavePlan },
   "get_spreadsheet_format_options": { args: Record<string, never>, result: SpreadsheetFormatOptions },

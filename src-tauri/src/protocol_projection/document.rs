@@ -31,6 +31,7 @@ pub(crate) fn file_operation_receipt(
         kind: match value.kind {
             crate::projection_model::FileOperationKind::Open => types::FileOperationKind::Open,
             crate::projection_model::FileOperationKind::Save => types::FileOperationKind::Save,
+            crate::projection_model::FileOperationKind::Close => types::FileOperationKind::Close,
         },
         document_id: value.document_id,
         revision: value.revision,
@@ -50,11 +51,18 @@ pub(crate) fn file_operation_lookup(
             crate::projection_model::FileOperationLookupStatus::Completed => {
                 types::FileOperationResultStatus::Completed
             }
+            crate::projection_model::FileOperationLookupStatus::Failed => {
+                types::FileOperationResultStatus::Failed
+            }
             crate::projection_model::FileOperationLookupStatus::Missing => {
                 types::FileOperationResultStatus::Missing
             }
         },
         receipt: value.receipt.map(file_operation_receipt),
+        error: value.error.map(|error| types::FileOperationFailure {
+            code: error.code,
+            message: error.message,
+        }),
     }
 }
 

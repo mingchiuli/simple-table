@@ -53,8 +53,13 @@ impl ActiveDocumentRepository {
         })
     }
 
-    pub(crate) fn close(&self, document_id: u64) -> Result<Option<Arc<DocumentHandle>>, AppError> {
-        self.write_store()?.close_active_document(document_id)
+    pub(crate) fn close_for_command(
+        &self,
+        document_id: u64,
+        base_revision: u64,
+    ) -> Result<Option<Arc<DocumentHandle>>, AppError> {
+        self.write_store()?
+            .close_active_document_for_command(document_id, base_revision)
     }
 
     fn read_store(&self) -> Result<RwLockReadGuard<'_, ActiveDocumentStore>, AppError> {
@@ -328,6 +333,7 @@ impl ActiveDocumentStore {
         Ok(self.active.take())
     }
 
+    #[cfg(test)]
     pub(crate) fn close_active_document(
         &mut self,
         document_id: u64,
@@ -339,6 +345,17 @@ impl ActiveDocumentStore {
                 "active document changed before it was closed".to_string(),
             ));
         }
+        self.close_active()
+    }
+
+    pub(crate) fn close_active_document_for_command(
+        &mut self,
+        document_id: u64,
+        base_revision: u64,
+    ) -> Result<Option<Arc<DocumentHandle>>, AppError> {
+        self.ensure_no_replacement_in_progress()?;
+        let handle = self.active.as_ref().ok_or(AppError::NoFileLoaded)?;
+        drop(handle.read_for_command(document_id, base_revision)?);
         self.close_active()
     }
 

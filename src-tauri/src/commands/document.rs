@@ -6,8 +6,8 @@ use crate::error::AppError;
 use crate::protocol_projection;
 use crate::runtime::ApplicationRuntime;
 use crate::types::{
-    DocumentCapabilities, MutationResultLookup, NativeSavePlan, OpenDocumentResponse, SheetRegion,
-    SheetRegionProjectionResponse, SpreadsheetFormatOptions,
+    DocumentCapabilities, FileOperationReceipt, MutationResultLookup, NativeSavePlan,
+    OpenDocumentResponse, SheetRegion, SheetRegionProjectionResponse, SpreadsheetFormatOptions,
 };
 use tauri::State;
 
@@ -108,16 +108,23 @@ pub async fn close_current_document(
     runtime: State<'_, ApplicationRuntime>,
     executions: State<'_, CommandExecutionRuntime>,
     document_id: CommandU64,
-) -> Result<(), AppError> {
+    base_revision: CommandU64,
+    operation_id: String,
+) -> Result<FileOperationReceipt, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .mutation()
-        .run(move || {
-            document_service::close_current_document(
-                runtime.document_lifecycle(),
-                document_id.get(),
-            )
-        })
+        .run_mapped(
+            move || {
+                document_service::close_current_document(
+                    runtime.document_lifecycle(),
+                    document_id.get(),
+                    base_revision.get(),
+                    &operation_id,
+                )
+            },
+            protocol_projection::file_operation_receipt,
+        )
         .await
 }
 

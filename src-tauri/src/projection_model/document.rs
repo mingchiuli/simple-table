@@ -103,6 +103,7 @@ pub(crate) struct SavedDocumentOutcome {
 pub(crate) enum FileOperationKind {
     Open,
     Save,
+    Close,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,13 +119,21 @@ pub(crate) struct FileOperationReceipt {
 pub(crate) enum FileOperationLookupStatus {
     Pending,
     Completed,
+    Failed,
     Missing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileOperationFailure {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FileOperationLookup {
     pub status: FileOperationLookupStatus,
     pub receipt: Option<FileOperationReceipt>,
+    pub error: Option<FileOperationFailure>,
 }
 
 impl FileOperationLookup {
@@ -132,6 +141,7 @@ impl FileOperationLookup {
         Self {
             status: FileOperationLookupStatus::Pending,
             receipt: None,
+            error: None,
         }
     }
 
@@ -139,6 +149,18 @@ impl FileOperationLookup {
         Self {
             status: FileOperationLookupStatus::Completed,
             receipt: Some(receipt),
+            error: None,
+        }
+    }
+
+    pub(crate) fn failed(error: &crate::error::AppError) -> Self {
+        Self {
+            status: FileOperationLookupStatus::Failed,
+            receipt: None,
+            error: Some(FileOperationFailure {
+                code: error.code().to_string(),
+                message: error.to_string(),
+            }),
         }
     }
 
@@ -146,6 +168,7 @@ impl FileOperationLookup {
         Self {
             status: FileOperationLookupStatus::Missing,
             receipt: None,
+            error: None,
         }
     }
 }

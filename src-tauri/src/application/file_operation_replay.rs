@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use crate::error::AppError;
 use crate::projection_model::{FileOperationKind, FileOperationLookup, FileOperationReceipt};
 
-const MAX_COMPLETED_FILE_OPERATIONS: usize = 128;
+const MAX_TERMINAL_FILE_OPERATIONS: usize = 128;
 const MAX_IN_FLIGHT_FILE_OPERATIONS: usize = 16;
 const MAX_OPERATION_ID_BYTES: usize = 128;
 
@@ -35,6 +35,14 @@ impl FileOperationFingerprint {
         digest.update(revision.to_le_bytes());
         Self(digest.finalize().into())
     }
+
+    pub(crate) fn close(document_id: u64, revision: u64) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"close\0");
+        digest.update(document_id.to_le_bytes());
+        digest.update(revision.to_le_bytes());
+        Self(digest.finalize().into())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -45,20 +53,21 @@ pub(crate) struct FileOperationReplayCoordinator {
 #[derive(Default)]
 struct FileOperationReplayState {
     in_flight: HashMap<String, FileOperationFingerprint>,
-    completed: HashMap<String, CompletedFileOperation>,
-    completed_order: VecDeque<String>,
+    terminal: HashMap<String, TerminalFileOperation>,
+    terminal_order: VecDeque<String>,
 }
 
 #[derive(Clone)]
-struct CompletedFileOperation {
+struct TerminalFileOperation {
     fingerprint: FileOperationFingerprint,
-    receipt: FileOperationReceipt,
+    result: Result<FileOperationReceipt, AppError>,
 }
 
 pub(crate) enum FileOperationAdmission {
     Execute(FileOperationReservation),
     Pending,
     Completed,
+    Failed(AppError),
 }
 
 pub(crate) struct FileOperationReservation {
@@ -81,9 +90,12 @@ impl FileOperationReplayCoordinator {
     ) -> Result<FileOperationAdmission, AppError> {
         validate_operation_id(operation_id)?;
         let mut state = self.lock();
-        if let Some(completed) = state.completed.get(operation_id) {
-            ensure_same_fingerprint(completed.fingerprint, fingerprint)?;
-            return Ok(FileOperationAdmission::Completed);
+        if let Some(terminal) = state.terminal.get(operation_id) {
+            ensure_same_fingerprint(terminal.fingerprint, fingerprint)?;
+            return Ok(match &terminal.result {
+                Ok(_) => FileOperationAdmission::Completed,
+                Err(error) => FileOperationAdmission::Failed(error.clone()),
+            });
         }
         if let Some(in_flight) = state.in_flight.get(operation_id) {
             ensure_same_fingerprint(*in_flight, fingerprint)?;
@@ -112,10 +124,13 @@ impl FileOperationReplayCoordinator {
             return Ok(FileOperationLookup::pending());
         }
         Ok(state
-            .completed
+            .terminal
             .get(operation_id)
-            .map_or_else(FileOperationLookup::missing, |completed| {
-                FileOperationLookup::completed(completed.receipt.clone())
+            .map_or_else(FileOperationLookup::missing, |terminal| {
+                match &terminal.result {
+                    Ok(receipt) => FileOperationLookup::completed(receipt.clone()),
+                    Err(error) => FileOperationLookup::failed(error),
+                }
             }))
     }
 
@@ -127,24 +142,33 @@ impl FileOperationReplayCoordinator {
 }
 
 impl FileOperationReservation {
-    pub(crate) fn finish(mut self, receipt: FileOperationReceipt) -> FileOperationReceipt {
+    pub(crate) fn complete(mut self, receipt: FileOperationReceipt) -> FileOperationReceipt {
+        self.store_terminal(Ok(receipt.clone()));
+        receipt
+    }
+
+    pub(crate) fn fail(mut self, error: AppError) -> AppError {
+        self.store_terminal(Err(error.clone()));
+        error
+    }
+
+    fn store_terminal(&mut self, result: Result<FileOperationReceipt, AppError>) {
         let mut state = self.coordinator.lock();
         state.in_flight.remove(&self.operation_id);
-        while state.completed_order.len() >= MAX_COMPLETED_FILE_OPERATIONS {
-            if let Some(expired) = state.completed_order.pop_front() {
-                state.completed.remove(&expired);
+        while state.terminal_order.len() >= MAX_TERMINAL_FILE_OPERATIONS {
+            if let Some(expired) = state.terminal_order.pop_front() {
+                state.terminal.remove(&expired);
             }
         }
-        state.completed_order.push_back(self.operation_id.clone());
-        state.completed.insert(
+        state.terminal_order.push_back(self.operation_id.clone());
+        state.terminal.insert(
             self.operation_id.clone(),
-            CompletedFileOperation {
+            TerminalFileOperation {
                 fingerprint: self.fingerprint,
-                receipt: receipt.clone(),
+                result,
             },
         );
         self.finished = true;
-        receipt
     }
 }
 
@@ -164,6 +188,7 @@ pub(crate) fn completed_operation_error(kind: FileOperationKind) -> AppError {
     let operation = match kind {
         FileOperationKind::Open => "open",
         FileOperationKind::Save => "save",
+        FileOperationKind::Close => "close",
     };
     AppError::DocumentStateInvalid(format!(
         "{operation} operation already completed; query its operationId for the receipt"
@@ -174,6 +199,7 @@ pub(crate) fn pending_operation_error(kind: FileOperationKind) -> AppError {
     let operation = match kind {
         FileOperationKind::Open => "open",
         FileOperationKind::Save => "save",
+        FileOperationKind::Close => "close",
     };
     AppError::DocumentStateInvalid(format!(
         "{operation} operation is still pending; query its operationId for the receipt"
@@ -240,7 +266,7 @@ mod tests {
         else {
             panic!("first request must execute");
         };
-        reservation.finish(receipt(4));
+        reservation.complete(receipt(4));
 
         assert!(matches!(
             coordinator.reserve("operation-1", fingerprint),
@@ -271,6 +297,36 @@ mod tests {
         assert_eq!(
             coordinator.get("operation-2").expect("missing").status,
             crate::projection_model::FileOperationLookupStatus::Missing
+        );
+    }
+
+    #[test]
+    fn failed_operations_are_terminal_and_replay_the_original_error() {
+        let coordinator = FileOperationReplayCoordinator::default();
+        let fingerprint = FileOperationFingerprint::close(7, 3);
+        let reservation = match coordinator
+            .reserve("operation-failed", fingerprint)
+            .expect("reserve")
+        {
+            FileOperationAdmission::Execute(reservation) => reservation,
+            _ => panic!("first request must execute"),
+        };
+        let error = AppError::DocumentStateInvalid("revision changed".to_string());
+        reservation.fail(error.clone());
+
+        assert!(matches!(
+            coordinator.reserve("operation-failed", fingerprint),
+            Ok(FileOperationAdmission::Failed(AppError::DocumentStateInvalid(message)))
+                if message == "revision changed"
+        ));
+        let lookup = coordinator.get("operation-failed").expect("lookup");
+        assert_eq!(
+            lookup.status,
+            crate::projection_model::FileOperationLookupStatus::Failed
+        );
+        assert_eq!(
+            lookup.error.expect("failure").code,
+            "document_state_invalid"
         );
     }
 

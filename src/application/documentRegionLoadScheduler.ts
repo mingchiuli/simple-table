@@ -5,7 +5,6 @@ export type RegionLoadPriority = 'required' | 'viewport';
 
 type QueuedLoad = {
   generation: number;
-  viewportGeneration: number | null;
   priority: RegionLoadPriority;
   key: string;
   run: (isCurrent: () => boolean, staging: RegionStagingLease) => Promise<boolean>;
@@ -16,6 +15,7 @@ type QueuedLoad = {
 type RegionLoadRecord = {
   promise: Promise<boolean>;
   state: 'queued' | 'active';
+  priority: RegionLoadPriority;
 };
 
 const MAX_CONCURRENT_REGION_LOADS = 4;
@@ -25,6 +25,7 @@ export function createDocumentRegionLoadScheduler() {
   const stagingBudget = createDocumentRegionStagingBudget();
   let generation = 0;
   let viewportGeneration = 0;
+  let viewportKeys = new Set<string>();
   let activeLoads = 0;
   const loads = new Map<string, RegionLoadRecord>();
   let queue: QueuedLoad[] = [];
@@ -33,19 +34,17 @@ export function createDocumentRegionLoadScheduler() {
   function reset() {
     generation += 1;
     viewportGeneration += 1;
+    viewportKeys.clear();
     loads.clear();
     drainQueue();
   }
 
   function beginViewportRegionLoad(retainedKeys: Iterable<string>): number {
     viewportGeneration += 1;
-    const retained = new Set(retainedKeys);
-    cancelQueuedLoads((load) => load.priority === 'viewport' && !retained.has(load.key));
-    for (const load of queue) {
-      if (load.priority === 'viewport' && retained.has(load.key)) {
-        load.viewportGeneration = viewportGeneration;
-      }
-    }
+    viewportKeys = new Set(retainedKeys);
+    cancelQueuedLoads(
+      (load) => load.priority === 'viewport' && !viewportKeys.has(load.key),
+    );
     return viewportGeneration;
   }
 
@@ -54,10 +53,29 @@ export function createDocumentRegionLoadScheduler() {
     run: (isCurrent: () => boolean, staging: RegionStagingLease) => Promise<boolean>,
     options: { priority?: RegionLoadPriority; viewportGeneration?: number } = {}
   ): Promise<boolean> {
-    const existing = loads.get(key);
-    if (existing) return existing.promise;
-
     const priority = options.priority ?? 'required';
+    if (priority === 'viewport'
+      && (options.viewportGeneration !== viewportGeneration || !viewportKeys.has(key))) {
+      return Promise.resolve(false);
+    }
+    const existing = loads.get(key);
+    if (existing) {
+      if (priority === 'required' && existing.priority === 'viewport') {
+        existing.priority = 'required';
+        const queuedIndex = queue.findIndex((load) => load.key === key);
+        if (queuedIndex >= 0) {
+          const [queued] = queue.splice(queuedIndex, 1);
+          if (queued) {
+            queued.priority = 'required';
+            const firstViewport = queue.findIndex((load) => load.priority === 'viewport');
+            if (firstViewport >= 0) queue.splice(firstViewport, 0, queued);
+            else queue.push(queued);
+          }
+        }
+      }
+      return existing.promise;
+    }
+
     admitRegionLoad(priority);
     if (loads.size >= MAX_ADMITTED_REGION_LOADS) {
       return priority === 'viewport'
@@ -70,9 +88,6 @@ export function createDocumentRegionLoadScheduler() {
     const rawPromise = new Promise<boolean>((resolve, reject) => {
       const queued: QueuedLoad = {
         generation: loadGeneration,
-        viewportGeneration: priority === 'viewport'
-          ? options.viewportGeneration ?? viewportGeneration
-          : null,
         priority,
         key,
         run,
@@ -88,7 +103,7 @@ export function createDocumentRegionLoadScheduler() {
     const promise = rawPromise.finally(() => {
       if (loads.get(key) === record) loads.delete(key);
     });
-    record = { promise, state: 'queued' };
+    record = { promise, state: 'queued', priority };
     loads.set(key, record);
     pumpQueue();
     return promise;
@@ -129,7 +144,7 @@ export function createDocumentRegionLoadScheduler() {
         load.resolve(false);
         continue;
       }
-      if (load.priority === 'viewport' && load.viewportGeneration !== viewportGeneration) {
+      if (record.priority === 'viewport' && !viewportKeys.has(load.key)) {
         loads.delete(load.key);
         load.resolve(false);
         continue;
@@ -140,11 +155,10 @@ export function createDocumentRegionLoadScheduler() {
       const isCurrent = () => {
         if (load.generation !== generation) return false;
         if (loads.get(load.key) !== record) return false;
-        return load.priority !== 'viewport'
-          || load.viewportGeneration === viewportGeneration;
+        return record.priority !== 'viewport' || viewportKeys.has(load.key);
       };
       void load.run(isCurrent, staging).then(
-        (value) => load.resolve(load.generation === generation && value),
+        (value) => load.resolve(isCurrent() && value),
         (error) => {
           if (isCurrent()) load.reject(error);
           else load.resolve(false);

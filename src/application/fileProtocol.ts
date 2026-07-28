@@ -50,6 +50,7 @@ export function runtimeFileOperationResultLookup(
   return {
     status: lookup.status,
     receipt: lookup.receipt ? runtimeFileOperationReceipt(lookup.receipt) : undefined,
+    error: lookup.error ? { ...lookup.error } : undefined,
   };
 }
 

@@ -149,6 +149,16 @@ function openReceipt(response: OpenDocumentResponse) {
   };
 }
 
+function closeReceipt(documentId: `${bigint}`, revision: `${bigint}`) {
+  return {
+    kind: 'close' as const,
+    documentId,
+    revision,
+    path: '/tmp/closed.xlsx',
+    fileName: 'closed.xlsx',
+  };
+}
+
 function mockPreparedOpen(response: OpenDocumentResponse, token = "prepared-open") {
   openProtocolMocks.prepareOpenFile.mockResolvedValue(preparedOpen(token, response));
   openProtocolMocks.commitPreparedDocument.mockResolvedValue(openReceipt(response));
@@ -248,10 +258,13 @@ function mountActions(flushPendingCellChanges: () => Promise<boolean>) {
 }
 
 describe("useFileActions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePinia(createPinia());
     workspace = createApplicationWorkspaceTestContext();
     vi.clearAllMocks();
+    const api = await import('@/api');
+    vi.mocked(api.closeCurrentDocument).mockImplementation(async (context) =>
+      closeReceipt(context.documentId, context.baseRevision));
   });
 
   afterEach(() => workspace.application.dispose());
@@ -359,7 +372,10 @@ describe("useFileActions", () => {
     pendingCommit.resolve(openReceipt(response));
 
     await expect(loadPromise).resolves.toBe(false);
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith('2');
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(
+      { documentId: '2', baseRevision: '0' },
+      expect.any(String),
+    );
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
     expect(api.addRecentFileWithThumbnail).not.toHaveBeenCalled();
@@ -394,7 +410,10 @@ describe("useFileActions", () => {
     pendingCommit.resolve(openReceipt(response));
 
     await expect(loadPromise).resolves.toBe(false);
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith('2');
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(
+      { documentId: '2', baseRevision: '0' },
+      expect.any(String),
+    );
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
     expect(documentSessionStore.currentFilePath).toBeNull();
@@ -678,7 +697,10 @@ describe("useFileActions", () => {
 
     await expect(actions.closeCurrentDocument()).resolves.toBe(true);
 
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith('1');
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(
+      { documentId: '1', baseRevision: '0' },
+      expect.any(String),
+    );
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(documentSessionStore.data).toBeNull();
     expect(documentSessionStore.documentId).toBeNull();
@@ -689,7 +711,7 @@ describe("useFileActions", () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();
     const flushPendingCellChanges = vi.fn().mockResolvedValue(true);
-    const pendingClose = deferred<void>();
+    const pendingClose = deferred<ReturnType<typeof closeReceipt>>();
     openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
     vi.mocked(api.closeCurrentDocument).mockReturnValue(pendingClose.promise);
 
@@ -704,7 +726,7 @@ describe("useFileActions", () => {
     await expect(actions.closeCurrentDocument()).resolves.toBe(false);
     expect(api.closeCurrentDocument).toHaveBeenCalledTimes(1);
 
-    pendingClose.resolve();
+    pendingClose.resolve(closeReceipt('1', '0'));
 
     await expect(closePromise).resolves.toBe(true);
     expect(documentSessionStore.lifecycle).toBe("idle");
@@ -727,7 +749,10 @@ describe("useFileActions", () => {
     workspace.runtime.session.endLifecycle('saving');
 
     await expect(closePromise).resolves.toBe(true);
-    expect(api.closeCurrentDocument).toHaveBeenCalledWith('1');
+    expect(api.closeCurrentDocument).toHaveBeenCalledWith(
+      { documentId: '1', baseRevision: '0' },
+      expect.any(String),
+    );
     expect(documentSessionStore.data).toBeNull();
   });
 

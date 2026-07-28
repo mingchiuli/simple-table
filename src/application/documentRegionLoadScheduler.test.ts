@@ -84,8 +84,30 @@ describe('documentRegionLoadScheduler', () => {
 
     expect(await current).toBe(true);
     const oldResults = await Promise.all(oldLoads);
-    expect(oldResults.filter(Boolean)).toHaveLength(4);
+    expect(oldResults.filter(Boolean)).toHaveLength(0);
     expect(started).toBe(5);
+  });
+
+  it('keeps an active tile current when the next viewport retains it', async () => {
+    const scheduler = createDocumentRegionLoadScheduler();
+    const release = deferred<void>();
+    const firstGeneration = scheduler.beginViewportRegionLoad(['shared']);
+    let started = 0;
+    const first = scheduler.scheduleRegionLoad('shared', async (isCurrent) => {
+      started += 1;
+      await release.promise;
+      return isCurrent();
+    }, { priority: 'viewport', viewportGeneration: firstGeneration });
+
+    const nextGeneration = scheduler.beginViewportRegionLoad(['shared']);
+    const retained = scheduler.scheduleRegionLoad('shared', async () => {
+      started += 1;
+      return true;
+    }, { priority: 'viewport', viewportGeneration: nextGeneration });
+    release.resolve();
+
+    await expect(Promise.all([first, retained])).resolves.toEqual([true, true]);
+    expect(started).toBe(1);
   });
 
   it('admits required work ahead of queued viewport loads', async () => {

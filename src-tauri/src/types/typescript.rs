@@ -16,11 +16,11 @@ use crate::types::{
     AddRecentFileRequest, CellData, CellFormatProjection, CellFormulaProjection, CellKind,
     CellStyleProjection, CellValue, ColumnDeletedPatch, ColumnInsertedPatch, DocumentCapabilities,
     DocumentManifest, DrawingKind, DrawingProjection, EditorCommandContext, EditorMutationResponse,
-    EditorPatch, EditorSessionInfo, EditorStateInfo, FileOperationKind, FileOperationReceipt,
-    FileOperationResultLookup, FileOperationResultStatus, FormulaDiagnostics, FormulaIssue,
-    FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus, HyperlinkProjection,
-    LayoutPatch, MergeRange, MutationResultLookup, MutationResultStatus, NativeSavePlan,
-    OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, RecentFile,
+    EditorPatch, EditorSessionInfo, EditorStateInfo, FileOperationFailure, FileOperationKind,
+    FileOperationReceipt, FileOperationResultLookup, FileOperationResultStatus, FormulaDiagnostics,
+    FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus,
+    HyperlinkProjection, LayoutPatch, MergeRange, MutationResultLookup, MutationResultStatus,
+    NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, RecentFile,
     ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity,
     SavedDocumentResponse, ScalarCellValue, SearchResponse, SearchResult, SearchScope,
     SetCellRequest, SheetCapabilities, SheetDeletedPatch, SheetExtent, SheetInsertedPatch,
@@ -105,6 +105,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<FileOperationKind>(&mut output, &cfg);
     push_decl::<FileOperationReceipt>(&mut output, &cfg);
     push_decl::<FileOperationResultStatus>(&mut output, &cfg);
+    push_decl::<FileOperationFailure>(&mut output, &cfg);
     push_decl::<FileOperationResultLookup>(&mut output, &cfg);
     push_decl::<crate::types::DesktopOpenTargetClaim>(&mut output, &cfg);
     push_decl::<SavedDocumentIdentity>(&mut output, &cfg);

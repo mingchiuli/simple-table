@@ -98,38 +98,46 @@ impl DocumentFileWorkflowService {
             FileOperationAdmission::Completed => {
                 return Err(completed_operation_error(FileOperationKind::Save));
             }
+            FileOperationAdmission::Failed(error) => return Err(error),
         };
-        let current_path = document_save_service::current_document_path_for_command(
-            &self.saves,
-            document_id,
-            base_revision,
-        )?;
-        target.ensure_authorized(&current_path)?;
-        let prepared = document_save_service::prepare_current_file_save(
-            &self.saves,
-            document_id,
-            base_revision,
-            &target_path,
-        )?;
-        let staged = match target.stage(&prepared.bytes, &prepared.output_name) {
-            Ok(staged) => staged,
-            Err(error) => {
-                document_save_service::abort_prepared_file_save(prepared);
-                return Err(error);
+        let result = (|| {
+            let current_path = document_save_service::current_document_path_for_command(
+                &self.saves,
+                document_id,
+                base_revision,
+            )?;
+            target.ensure_authorized(&current_path)?;
+            let prepared = document_save_service::prepare_current_file_save(
+                &self.saves,
+                document_id,
+                base_revision,
+                &target_path,
+            )?;
+            let staged = match target.stage(&prepared.bytes, &prepared.output_name) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    document_save_service::abort_prepared_file_save(prepared);
+                    return Err(error);
+                }
+            };
+            document_save_service::commit_current_file_save_projected(
+                &self.saves,
+                target_path,
+                prepared,
+                move || staged.commit(),
+                |outcome| {
+                    let receipt = file_operation_receipt(FileOperationKind::Save, &outcome)?;
+                    project(outcome).map(|projected| (projected, receipt))
+                },
+            )
+        })();
+        match result {
+            Ok((projected, receipt)) => {
+                reservation.complete(receipt);
+                Ok(projected)
             }
-        };
-        let (projected, receipt) = document_save_service::commit_current_file_save_projected(
-            &self.saves,
-            target_path,
-            prepared,
-            move || staged.commit(),
-            |outcome| {
-                let receipt = file_operation_receipt(FileOperationKind::Save, &outcome)?;
-                project(outcome).map(|projected| (projected, receipt))
-            },
-        )?;
-        reservation.finish(receipt);
-        Ok(projected)
+            Err(error) => Err(reservation.fail(error)),
+        }
     }
 
     pub(crate) fn file_operation_result(

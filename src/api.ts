@@ -83,8 +83,14 @@ export async function getSheetRegionProjection(
   return invokeCommand("get_sheet_region_projection", { ...context, region });
 }
 
-export async function closeCurrentDocument(documentId: U64String): Promise<void> {
-  return invokeCommand("close_current_document", { documentId });
+export async function closeCurrentDocument(
+  context: EditorCommandContext,
+  operationId: string,
+): Promise<FileOperationReceipt> {
+  return runtimeFileOperationReceipt(await invokeCommand("close_current_document", {
+    ...context,
+    operationId,
+  }));
 }
 
 export async function getDocumentCapabilities(

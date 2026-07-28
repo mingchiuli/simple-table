@@ -44,6 +44,7 @@ pub struct PreparedOpenDocument {
 pub enum FileOperationKind {
     Open,
     Save,
+    Close,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -67,7 +68,16 @@ pub struct FileOperationReceipt {
 pub enum FileOperationResultStatus {
     Pending,
     Completed,
+    Failed,
     Missing,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FileOperationFailure {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -78,6 +88,9 @@ pub struct FileOperationResultLookup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub receipt: Option<FileOperationReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<FileOperationFailure>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

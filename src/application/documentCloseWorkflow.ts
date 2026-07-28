@@ -9,7 +9,7 @@ export type DocumentCloseWorkflowPorts = {
   getCommandContext: () => EditorCommandContext | null;
   beginDocumentReplacement: () => Promise<DocumentReplacementLease | null>;
   runDocumentLifecycle: DocumentLifecycleRunner;
-  closeDocument: (documentId: EditorCommandContext['documentId']) => Promise<void>;
+  closeDocument: (context: EditorCommandContext) => Promise<void>;
   clearDocument: () => void;
 };
 
@@ -29,7 +29,7 @@ export function createDocumentCloseWorkflow(ports: DocumentCloseWorkflowPorts) {
           return;
         }
         try {
-          await ports.closeDocument(context.documentId);
+          await ports.closeDocument(context);
         } catch (error) {
           replacement.cancel();
           throw error;
