@@ -130,6 +130,18 @@ impl Drop for InFlightReservation {
             .cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let error = AppError::Internal(
+            "mutation command ended before reaching a terminal state".to_string(),
+        );
+        if !cache.retired_documents.contains(&self.document_id) {
+            insert_response(
+                &mut cache,
+                self.document_id,
+                &self.command_id,
+                self.fingerprint,
+                prepare_replay_failure(&self.command_id, &error),
+            );
+        }
         remove_in_flight(&mut cache, self.document_id, &self.command_id);
         finish_retirement(&mut cache, self.document_id);
         self.coordinator.completed.notify_all();
@@ -474,6 +486,47 @@ mod tests {
             lookup.error.expect("failure payload").code,
             "document_state_invalid"
         );
+        retire_document(&coordinator, 91);
+    }
+
+    #[test]
+    fn dropped_mutation_reservations_become_terminal_failures() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
+        let intent = set_cell_request(0);
+        let fingerprint = request_fingerprint(0, intent.clone()).expect("fingerprint");
+        let reservation =
+            match reserve(&coordinator, 91, "abandoned-command", fingerprint).expect("reserve") {
+                ReservationResult::Execute(reservation) => reservation,
+                ReservationResult::Replay(_) => panic!("first request must execute"),
+            };
+
+        drop(reservation);
+
+        let lookup = get(&coordinator, 91, "abandoned-command").expect("lookup");
+        assert_eq!(lookup.status, MutationLookupStatus::Failed);
+        assert_eq!(lookup.error.expect("failure payload").code, "internal");
+        let replayed = run(&coordinator, 91, 0, "abandoned-command", intent, |_| {
+            panic!("abandoned mutation must not execute again")
+        })
+        .expect_err("abandoned mutation failure is replayed");
+        assert_eq!(
+            replayed.to_string(),
+            "Internal error: mutation command ended before reaching a terminal state"
+        );
+        let mismatched = run(
+            &coordinator,
+            91,
+            0,
+            "abandoned-command",
+            set_cell_request(1),
+            |_| panic!("mismatched mutation must not execute"),
+        )
+        .expect_err("command id cannot be reused with another payload");
+        assert!(matches!(
+            mismatched,
+            AppError::DocumentStateInvalid(message)
+                if message == "mutation commandId was reused with a different payload"
+        ));
         retire_document(&coordinator, 91);
     }
 

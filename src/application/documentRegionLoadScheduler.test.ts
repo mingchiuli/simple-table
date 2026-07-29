@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDocumentRegionLoadScheduler,
 } from '@/application/documentRegionLoadScheduler';
+import { createOperationCancellationSource } from '@/application/operationCancellation';
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -171,6 +172,23 @@ describe('documentRegionLoadScheduler', () => {
     expect(await Promise.all(activeLoads)).toEqual([false, false, false, false]);
     await drained;
     expect(idle).toBe(true);
+  });
+
+  it('ends active observations on disposal without releasing unresolved requests', async () => {
+    const cancellation = createOperationCancellationSource();
+    const scheduler = createDocumentRegionLoadScheduler(cancellation.signal);
+    const started = deferred<void>();
+    const load = scheduler.scheduleRegionLoad('unresolved', async () => {
+      started.resolve();
+      return new Promise(() => undefined);
+    });
+
+    await started.promise;
+    cancellation.cancel();
+
+    await expect(load).resolves.toBe(false);
+    await expect(scheduler.waitForIdle()).resolves.toBeUndefined();
+    await expect(scheduler.scheduleRegionLoad('late', async () => true)).resolves.toBe(false);
   });
 
 });

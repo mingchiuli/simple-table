@@ -1,6 +1,13 @@
 import type { EditorCommandContext } from '@/types/documentRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 import { createWorkspaceOperationTracker } from '@/application/workspaceOperationTracker';
+import {
+  createOperationCancellationSource,
+  isOperationCancelled,
+  neverCancelled,
+  raceWithOperationCancellation,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type RecentFilesPort = {
   getRecentFiles(): Promise<RecentFile[]>;
@@ -34,6 +41,7 @@ export function createRecentFilesService(
   store: RecentFilesState,
   port: RecentFilesPort,
   reportFailure: (error: unknown) => void = () => undefined,
+  parentCancellation: OperationCancellationSignal = neverCancelled,
 ) {
   const runtime: RecentFilesRuntime = {
     loadRequestId: 0,
@@ -42,6 +50,8 @@ export function createRecentFilesService(
     pendingTracking: null,
   };
   const operations = createWorkspaceOperationTracker();
+  const observationCancellation = createOperationCancellationSource();
+  const unlinkParentCancellation = parentCancellation.onCancel(observationCancellation.cancel);
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
@@ -55,7 +65,10 @@ export function createRecentFilesService(
     runtime.activeLoadCount += 1;
     store.setLoading(true);
     try {
-      const files = await port.getRecentFiles();
+      const files = await raceWithOperationCancellation(
+        port.getRecentFiles(),
+        observationCancellation.signal,
+      );
       if (!disposed && requestId === runtime.loadRequestId) {
         store.replaceFiles(files);
       }
@@ -70,6 +83,7 @@ export function createRecentFilesService(
       await load();
       return true;
     } catch (error) {
+      if (isOperationCancelled(error)) return false;
       safeReportFailure(error);
       return false;
     }
@@ -119,6 +133,8 @@ export function createRecentFilesService(
     if (disposal) return disposal;
     disposed = true;
     operations.stopAcceptingWork();
+    observationCancellation.cancel();
+    unlinkParentCancellation();
     runtime.loadRequestId += 1;
     runtime.pendingTracking = null;
     store.setLoading(false);

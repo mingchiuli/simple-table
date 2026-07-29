@@ -75,12 +75,9 @@ describe('updateCoordinator', () => {
     expect(requestRelaunch).toHaveBeenCalledOnce();
   });
 
-  it('invalidates results and drains an active update check on disposal', async () => {
+  it('invalidates results and abandons an active update check on disposal', async () => {
     const session = new TestUpdateSession();
-    let release!: (value: DesktopUpdateHandle | null) => void;
-    const check = new Promise<DesktopUpdateHandle | null>((resolve) => {
-      release = resolve;
-    });
+    const check = new Promise<DesktopUpdateHandle | null>(() => undefined);
     const coordinator = createUpdateCoordinator(session, {
       getVersion: async () => '1.0.0',
       platform: () => 'macos',
@@ -91,19 +88,11 @@ describe('updateCoordinator', () => {
     const activeCheck = coordinator.checkForUpdate();
     await Promise.resolve();
 
-    let disposed = false;
-    const disposal = coordinator.dispose().then(() => {
-      disposed = true;
-    });
-    await Promise.resolve();
-    expect(disposed).toBe(false);
-
-    release(null);
-    await Promise.all([activeCheck, disposal]);
+    await Promise.all([activeCheck, coordinator.dispose()]);
     expect(session.status).toBe('checking');
   });
 
-  it('drains an active mobile URL launch on disposal', async () => {
+  it('abandons an active mobile URL observation on disposal', async () => {
     const session = new TestUpdateSession();
     session.mobileUpdateInfo = {
       version: '1.1.0',
@@ -111,8 +100,7 @@ describe('updateCoordinator', () => {
       releaseUrl: 'https://example.com/release',
       apkUrl: 'https://example.com/app.apk',
     };
-    let release!: () => void;
-    const open = new Promise<void>((resolve) => { release = resolve; });
+    const open = new Promise<void>(() => undefined);
     const openUrl = vi.fn().mockReturnValue(open);
     const coordinator = createUpdateCoordinator(session, {
       getVersion: async () => '1.0.0',
@@ -124,15 +112,37 @@ describe('updateCoordinator', () => {
 
     const launch = coordinator.handleMobileUpdate();
     await Promise.resolve();
+    await Promise.all([launch, coordinator.dispose()]);
+    expect(openUrl).toHaveBeenCalledWith('https://example.com/app.apk');
+    await coordinator.handleMobileUpdate();
+    expect(openUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains an admitted update installation on disposal', async () => {
+    const session = new TestUpdateSession();
+    let releaseDownload!: () => void;
+    const download = new Promise<void>((resolve) => { releaseDownload = resolve; });
+    const coordinator = createUpdateCoordinator(session, {
+      getVersion: async () => '1.0.0',
+      platform: () => 'macos',
+      checkDesktop: async () => ({
+        version: '1.1.0',
+        downloadAndInstall: () => download,
+      }),
+      checkMobile: async () => null,
+      openUrl: async () => undefined,
+    }, { requestRelaunch: async () => true });
+    await coordinator.checkForUpdate();
+    const installation = coordinator.downloadAndInstall();
+    await Promise.resolve();
+
     let disposed = false;
     const disposal = coordinator.dispose().then(() => { disposed = true; });
     await Promise.resolve();
     expect(disposed).toBe(false);
 
-    release();
-    await Promise.all([launch, disposal]);
-    expect(openUrl).toHaveBeenCalledWith('https://example.com/app.apk');
-    await coordinator.handleMobileUpdate();
-    expect(openUrl).toHaveBeenCalledTimes(1);
+    releaseDownload();
+    await Promise.all([installation, disposal]);
+    expect(disposed).toBe(true);
   });
 });

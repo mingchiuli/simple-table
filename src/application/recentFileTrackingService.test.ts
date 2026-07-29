@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRecentFilesService } from '@/application/recentFilesService';
+import { OperationCancelledError } from '@/application/operationCancellation';
 
 async function flushPromises() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
@@ -114,5 +115,18 @@ describe('recent files tracking coordinator', () => {
     expect(port.getRecentFiles).not.toHaveBeenCalled();
     await expect(service.remove('recent-2')).resolves.toBeUndefined();
     expect(port.removeRecentFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('abandons an unresolved list observation on disposal', async () => {
+    const { service } = createService({
+      getRecentFiles: vi.fn(() => new Promise(() => undefined)),
+    });
+    const load = service.load();
+    await Promise.resolve();
+
+    const disposal = service.dispose();
+
+    await expect(load).rejects.toBeInstanceOf(OperationCancelledError);
+    await expect(disposal).resolves.toBeUndefined();
   });
 });

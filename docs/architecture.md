@@ -82,6 +82,9 @@ internal models.
   recent files, updates, and startup restoration. Disposal closes admission,
   cancels result observation that cannot outlive the workspace, and drains the
   remaining accepted work.
+- Cancellation ends frontend observation of queries and recoveries without
+  reclassifying backend work. Persistence, metadata writes, update installation,
+  and exit side effects that were already admitted are drained to completion.
 
 ### Adapters and UI
 
@@ -184,6 +187,8 @@ internal models.
 2. Every mutation carries document ID, base revision, and command ID.
 3. Rust reserves idempotent replay, validates context, executes one aggregate
    transaction, and advances revision once for a non-no-op change.
+   An admitted reservation always reaches a success or failure terminal state;
+   abnormal release cannot make it appear missing or admit the command again.
 4. Internal outcomes are projected to bounded wire patches at the command
    boundary.
 5. The frontend accepts only the expected next revision. Unsafe or unsupported

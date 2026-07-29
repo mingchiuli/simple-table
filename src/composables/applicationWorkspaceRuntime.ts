@@ -15,6 +15,10 @@ import {
   type UpdateCoordinator,
 } from '@/application/updateCoordinator';
 import {
+  createOperationCancellationSource,
+  raceWithOperationCancellation,
+} from '@/application/operationCancellation';
+import {
   createDocumentWorkspaceRuntime,
   type DocumentWorkspaceRuntime,
 } from '@/composables/documentWorkspaceRuntime';
@@ -50,6 +54,7 @@ export function createApplicationWorkspaceRuntime(
   const applicationExit = options.applicationExit
     ?? createApplicationExitCoordinator(applicationWindow);
   const document = options.document ?? createDocumentWorkspaceRuntime();
+  const applicationCancellation = createOperationCancellationSource();
   const recentFiles = createRecentFilesService(
     useRecentFilesStore(),
     {
@@ -60,6 +65,7 @@ export function createApplicationWorkspaceRuntime(
       },
     },
     (error) => console.warn('Failed to update recent file metadata', error),
+    applicationCancellation.signal,
   );
   let updateCoordinator: UpdateCoordinator | null = null;
   let disposed = false;
@@ -72,10 +78,13 @@ export function createApplicationWorkspaceRuntime(
     recentFiles,
     restoreActiveDocument() {
       return document.runTask(
-        () => restoreActiveDocument({
+        ({ cancellation }) => restoreActiveDocument({
           isFrontendSessionInitialized: () =>
             document.document.data !== null || document.document.documentId !== null,
-          loadActiveDocument: api.getActiveDocument,
+          loadActiveDocument: () => raceWithOperationCancellation(
+            api.getActiveDocument(),
+            cancellation,
+          ),
           publishActiveDocument: (activeDocument) => {
             document.session.openDocumentResponse(
               activeDocument,
@@ -96,6 +105,7 @@ export function createApplicationWorkspaceRuntime(
             return result.status === 'executed' && result.intent === 'relaunch';
           },
         },
+        applicationCancellation.signal,
       );
       if (disposed) void updateCoordinator.dispose();
       return updateCoordinator;
@@ -103,6 +113,7 @@ export function createApplicationWorkspaceRuntime(
     dispose() {
       if (disposal) return disposal;
       disposed = true;
+      applicationCancellation.cancel();
       disposal = Promise.all([
         applicationExit.dispose(),
         document.dispose(),

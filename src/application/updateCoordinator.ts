@@ -1,5 +1,11 @@
 import type { MobileUpdateState, UpdatePlatform } from '@/types/updateRuntime';
 import { appErrorMessage } from '@/utils/appError';
+import {
+  createOperationCancellationSource,
+  neverCancelled,
+  raceWithOperationCancellation,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type DesktopDownloadEvent =
   | { event: 'Started'; data: { contentLength?: number } }
@@ -63,6 +69,7 @@ export function createUpdateCoordinator(
   store: UpdateSessionPort,
   port: UpdatePort,
   exit: UpdateExitPort,
+  parentCancellation: OperationCancellationSignal = neverCancelled,
 ) {
   const runtime: UpdateRuntime = {
     currentVersionPromise: null,
@@ -73,6 +80,8 @@ export function createUpdateCoordinator(
     desktopUpdate: null,
     operationToken: 0,
   };
+  const observationCancellation = createOperationCancellationSource();
+  const unlinkParentCancellation = parentCancellation.onCancel(observationCancellation.cancel);
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
@@ -177,8 +186,10 @@ export function createUpdateCoordinator(
     }
 
     const token = beginOperation();
-    runtime.mobileOpenPromise = port
-      .openUrl(store.isAndroid && info.apkUrl ? info.apkUrl : info.releaseUrl)
+    runtime.mobileOpenPromise = raceWithOperationCancellation(
+      port.openUrl(store.isAndroid && info.apkUrl ? info.apkUrl : info.releaseUrl),
+      observationCancellation.signal,
+    )
       .catch((error) => {
         if (isCurrentOperation(token)) store.fail(appErrorMessage(error));
       })
@@ -198,18 +209,31 @@ export function createUpdateCoordinator(
   async function runUpdateCheck(): Promise<UpdateCheckResult> {
     const appVersion = await ensureCurrentVersion();
     if (store.isDesktop) {
-      return { platform: 'desktop', appVersion, update: await port.checkDesktop() };
+      return {
+        platform: 'desktop',
+        appVersion,
+        update: await raceWithOperationCancellation(
+          port.checkDesktop(),
+          observationCancellation.signal,
+        ),
+      };
     }
     return {
       platform: 'mobile',
       appVersion,
-      update: await port.checkMobile(appVersion),
+      update: await raceWithOperationCancellation(
+        port.checkMobile(appVersion),
+        observationCancellation.signal,
+      ),
     };
   }
 
   async function ensureCurrentVersion(): Promise<string> {
     if (store.currentVersion) return store.currentVersion;
-    runtime.currentVersionPromise ??= port.getVersion()
+    runtime.currentVersionPromise ??= raceWithOperationCancellation(
+      port.getVersion(),
+      observationCancellation.signal,
+    )
       .then((version) => {
         if (!disposed) store.setCurrentVersion(version);
         return version;
@@ -234,6 +258,8 @@ export function createUpdateCoordinator(
     disposed = true;
     runtime.operationToken += 1;
     runtime.desktopUpdate = null;
+    observationCancellation.cancel();
+    unlinkParentCancellation();
     disposal = waitForIdle();
     return disposal;
   }

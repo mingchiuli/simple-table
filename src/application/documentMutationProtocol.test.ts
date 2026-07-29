@@ -147,6 +147,49 @@ describe('document mutation protocol', () => {
 
     await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
   });
+
+  it('stops active-document recovery when its workspace is disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const recoveryStarted = deferred<void>();
+    const protocol = createProtocol({
+      cancellation: cancellation.signal,
+      getActiveDocument: vi.fn(() => {
+        recoveryStarted.resolve();
+        return new Promise<OpenDocumentResponse | null>(() => undefined);
+      }),
+    });
+    const execution = protocol.execute(
+      vi.fn().mockRejectedValue(new Error('ipc closed')),
+      context(),
+    );
+
+    await recoveryStarted.promise;
+    cancellation.cancel();
+
+    await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
+  });
+
+  it('stops projection recovery when its workspace is disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const recoveryStarted = deferred<void>();
+    const protocol = createProtocol({
+      cancellation: cancellation.signal,
+      getActiveDocument: vi.fn(async () => openResponse('2')),
+      getCurrentDocumentProjection: vi.fn(() => {
+        recoveryStarted.resolve();
+        return new Promise<OpenDocumentResponse>(() => undefined);
+      }),
+    });
+    const execution = protocol.execute(
+      vi.fn().mockRejectedValue(new Error('ipc closed')),
+      context(),
+    );
+
+    await recoveryStarted.promise;
+    cancellation.cancel();
+
+    await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
+  });
 });
 
 type ProtocolOverrides = Partial<DocumentMutationTransport> & {

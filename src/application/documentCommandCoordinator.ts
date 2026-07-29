@@ -21,6 +21,7 @@ import type {
 import {
   isOperationCancelled,
   neverCancelled,
+  raceWithOperationCancellation,
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
 
@@ -246,9 +247,9 @@ export function createDocumentCommandCoordinator({
   async function refreshAfterMutationError(refreshProjection: boolean): Promise<boolean> {
     try {
       await session.refreshAfterMutationFailure(
-        transport.getEditorState,
+        fetchEditorState,
         refreshProjection && document.data
-          ? transport.getCurrentDocumentProjection
+          ? fetchCurrentDocumentProjection
           : undefined,
         preferredSheetIndex(),
       );
@@ -262,7 +263,7 @@ export function createDocumentCommandCoordinator({
   async function refreshEditorState(): Promise<EditorStateRefreshOutcome> {
     const context = document.currentCommandContext();
     try {
-      const info = await transport.getEditorState(context);
+      const info = await fetchEditorState(context);
       if (!refreshContextIsCurrent(context)) return { status: 'stale' };
       session.applyEditorSessionForContext(context, info);
       return { status: 'completed' };
@@ -298,7 +299,7 @@ export function createDocumentCommandCoordinator({
       await session.waitForMutations();
       const context = document.commandContextForDocument(initialContext.documentId);
       if (!context) return undefined;
-      const result = await action(context);
+      const result = await raceWithOperationCancellation(action(context), cancellation);
       return document.matchesCommandContext(context) ? result : undefined;
     } finally {
       releaseEditorCommand();
@@ -341,7 +342,7 @@ export function createDocumentCommandCoordinator({
   function applyMutationResponse(response: EditorMutationResponse) {
     return session.applyMutationResponseWithResync(
       response,
-      transport.getCurrentDocumentProjection,
+      fetchCurrentDocumentProjection,
       preferredSheetIndex(),
     );
   }
@@ -357,7 +358,24 @@ export function createDocumentCommandCoordinator({
 
   async function fetchRegionProjection(context: EditorCommandContext, region: SheetRegion) {
     return runtimeDocumentRegionProjection(
-      await transport.getSheetRegionProjection(context, region),
+      await raceWithOperationCancellation(
+        transport.getSheetRegionProjection(context, region),
+        cancellation,
+      ),
+    );
+  }
+
+  function fetchEditorState(context: EditorCommandContext | null) {
+    return raceWithOperationCancellation(transport.getEditorState(context), cancellation);
+  }
+
+  function fetchCurrentDocumentProjection(
+    context: EditorCommandContext,
+    sheetIndex: number,
+  ) {
+    return raceWithOperationCancellation(
+      transport.getCurrentDocumentProjection(context, sheetIndex),
+      cancellation,
     );
   }
 

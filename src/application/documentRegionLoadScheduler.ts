@@ -1,5 +1,9 @@
 import { createDocumentRegionStagingBudget } from '@/application/documentRegionStagingBudget';
 import type { RegionStagingLease } from '@/application/documentRegionStagingBudget';
+import {
+  neverCancelled,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type RegionLoadPriority = 'required' | 'viewport';
 
@@ -10,6 +14,7 @@ type QueuedLoad = {
   run: (isCurrent: () => boolean, staging: RegionStagingLease) => Promise<boolean>;
   resolve: (value: boolean) => void;
   reject: (error: unknown) => void;
+  observing: boolean;
 };
 
 type RegionLoadRecord = {
@@ -21,12 +26,16 @@ type RegionLoadRecord = {
 const MAX_CONCURRENT_REGION_LOADS = 4;
 const MAX_ADMITTED_REGION_LOADS = 16;
 
-export function createDocumentRegionLoadScheduler() {
+export function createDocumentRegionLoadScheduler(
+  cancellation: OperationCancellationSignal = neverCancelled,
+) {
   const stagingBudget = createDocumentRegionStagingBudget();
   let generation = 0;
   let viewportGeneration = 0;
   let viewportKeys = new Set<string>();
   let activeLoads = 0;
+  let activeObservations = 0;
+  const active = new Set<QueuedLoad>();
   const loads = new Map<string, RegionLoadRecord>();
   let queue: QueuedLoad[] = [];
   const idleWaiters: Array<() => void> = [];
@@ -53,6 +62,7 @@ export function createDocumentRegionLoadScheduler() {
     run: (isCurrent: () => boolean, staging: RegionStagingLease) => Promise<boolean>,
     options: { priority?: RegionLoadPriority; viewportGeneration?: number } = {}
   ): Promise<boolean> {
+    if (cancellation.isCancelled()) return Promise.resolve(false);
     const priority = options.priority ?? 'required';
     if (priority === 'viewport'
       && (options.viewportGeneration !== viewportGeneration || !viewportKeys.has(key))) {
@@ -93,6 +103,7 @@ export function createDocumentRegionLoadScheduler() {
         run,
         resolve,
         reject,
+        observing: true,
       };
       const firstViewport = priority === 'required'
         ? queue.findIndex((load) => load.priority === 'viewport')
@@ -126,7 +137,7 @@ export function createDocumentRegionLoadScheduler() {
       if (canceled < maximum && predicate(load)) {
         const record = loads.get(load.key);
         if (record?.state === 'queued') loads.delete(load.key);
-        load.resolve(false);
+        settleQueuedLoad(load);
         canceled += 1;
       } else {
         retained.push(load);
@@ -137,34 +148,42 @@ export function createDocumentRegionLoadScheduler() {
   }
 
   function pumpQueue() {
-    while (activeLoads < MAX_CONCURRENT_REGION_LOADS && queue.length > 0) {
+    while (
+      !cancellation.isCancelled()
+      && activeLoads < MAX_CONCURRENT_REGION_LOADS
+      && queue.length > 0
+    ) {
       const load = queue.shift()!;
       const record = loads.get(load.key);
       if (!record || load.generation !== generation) {
-        load.resolve(false);
+        settleQueuedLoad(load);
         continue;
       }
       if (record.priority === 'viewport' && !viewportKeys.has(load.key)) {
         loads.delete(load.key);
-        load.resolve(false);
+        settleQueuedLoad(load);
         continue;
       }
       record.state = 'active';
       activeLoads += 1;
+      activeObservations += 1;
+      active.add(load);
       const staging = stagingBudget.acquire();
       const isCurrent = () => {
+        if (!load.observing || cancellation.isCancelled()) return false;
         if (load.generation !== generation) return false;
         if (loads.get(load.key) !== record) return false;
         return record.priority !== 'viewport' || viewportKeys.has(load.key);
       };
       void load.run(isCurrent, staging).then(
-        (value) => load.resolve(isCurrent() && value),
+        (value) => settleActiveObservation(load, isCurrent() && value),
         (error) => {
-          if (isCurrent()) load.reject(error);
-          else load.resolve(false);
+          if (isCurrent()) rejectActiveObservation(load, error);
+          else settleActiveObservation(load, false);
         }
       ).finally(() => {
         staging.release();
+        active.delete(load);
         activeLoads = Math.max(0, activeLoads - 1);
         pumpQueue();
         resolveIdleWaiters();
@@ -173,20 +192,54 @@ export function createDocumentRegionLoadScheduler() {
   }
 
   function drainQueue() {
-    for (const load of queue.splice(0)) load.resolve(false);
+    for (const load of queue.splice(0)) settleQueuedLoad(load);
     pumpQueue();
     resolveIdleWaiters();
   }
 
+  function settleQueuedLoad(load: QueuedLoad) {
+    if (!load.observing) return;
+    load.observing = false;
+    load.resolve(false);
+  }
+
+  function settleActiveObservation(load: QueuedLoad, value: boolean) {
+    if (!load.observing) return;
+    load.observing = false;
+    activeObservations = Math.max(0, activeObservations - 1);
+    load.resolve(value);
+    resolveIdleWaiters();
+  }
+
+  function rejectActiveObservation(load: QueuedLoad, error: unknown) {
+    if (!load.observing) return;
+    load.observing = false;
+    activeObservations = Math.max(0, activeObservations - 1);
+    load.reject(error);
+    resolveIdleWaiters();
+  }
+
+  function cancelObservationsForDisposal() {
+    generation += 1;
+    viewportGeneration += 1;
+    viewportKeys.clear();
+    loads.clear();
+    drainQueue();
+    for (const load of active) settleActiveObservation(load, false);
+    resolveIdleWaiters();
+  }
+
   function waitForIdle(): Promise<void> {
-    if (activeLoads === 0 && queue.length === 0) return Promise.resolve();
+    if (activeObservations === 0 && queue.length === 0) return Promise.resolve();
     return new Promise((resolve) => idleWaiters.push(resolve));
   }
 
   function resolveIdleWaiters() {
-    if (activeLoads !== 0 || queue.length !== 0) return;
+    if (activeObservations !== 0 || queue.length !== 0) return;
     for (const resolve of idleWaiters.splice(0)) resolve();
   }
+
+  cancellation.onCancel(cancelObservationsForDisposal);
 
   return { reset, beginViewportRegionLoad, scheduleRegionLoad, waitForIdle };
 }

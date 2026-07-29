@@ -99,22 +99,29 @@ export function createDocumentMutationProtocol({
     if (replay.status === 'failed') throw replay.error;
 
     try {
-      const active = await transport.getActiveDocument();
+      const active = await raceWithOperationCancellation(
+        transport.getActiveDocument(),
+        cancellation,
+      );
       if (
         active?.editorSession.documentId === context.documentId
         && compareU64(active.editorSession.revision, context.baseRevision) > 0
       ) {
         const preferredSheetIndex = recovery.preferredSheetIndex();
-        const projection = await transport.getCurrentDocumentProjection(
-          {
-            documentId: active.editorSession.documentId,
-            baseRevision: active.editorSession.revision,
-          },
-          preferredSheetIndex
+        const projection = await raceWithOperationCancellation(
+          transport.getCurrentDocumentProjection(
+            {
+              documentId: active.editorSession.documentId,
+              baseRevision: active.editorSession.revision,
+            },
+            preferredSheetIndex
+          ),
+          cancellation,
         );
         recovery.recoverProjection(projection, preferredSheetIndex);
       }
     } catch (error) {
+      if (isOperationCancelled(error)) throw error;
       reportError('Failed to recover an ambiguous mutation result', error);
     }
     throw invocation.error;

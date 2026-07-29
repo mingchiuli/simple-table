@@ -57,7 +57,7 @@ function buildDocumentWorkspaceRuntime(
   const rawSearch = createSearchSessionCoordinator(useSearchSessionStore());
   const regionCache = createDocumentRegionCache(document);
   const documentSession = createDocumentSessionStoreAdapter(document, regionCache);
-  const regions = createDocumentRegionCoordinator(regionCache);
+  const regions = createDocumentRegionCoordinator(regionCache, operationCancellation.signal);
   const sessionWorkflow = createDocumentSessionCoordinator({
     document: documentSession,
     status,

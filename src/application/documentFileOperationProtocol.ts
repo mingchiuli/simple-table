@@ -63,7 +63,10 @@ export function createDocumentFileOperationProtocol({
       result = await waitForResult(operationId);
       if (result.status === 'completed') {
         ensureReceipt(result.receipt, operation);
-        return await operation.recoverResponse(result.receipt);
+        return await raceWithOperationCancellation(
+          operation.recoverResponse(result.receipt),
+          cancellation,
+        );
       }
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
@@ -74,14 +77,21 @@ export function createDocumentFileOperationProtocol({
       if (!operation.recoverCancelled) {
         throw new Error(`${operation.kind} operation unexpectedly reached a cancelled state`);
       }
-      return await operation.recoverCancelled();
+      return await raceWithOperationCancellation(
+        Promise.resolve(operation.recoverCancelled()),
+        cancellation,
+      );
     }
 
     if (operation.recoverAmbiguous) {
       try {
-        const recovered = await operation.recoverAmbiguous();
+        const recovered = await raceWithOperationCancellation(
+          operation.recoverAmbiguous(),
+          cancellation,
+        );
         if (recovered) return admittedResponse(recovered, operation);
       } catch (error) {
+        if (isOperationCancelled(error)) throw error;
         reportError('Failed to recover an ambiguous file operation', error);
       }
     }

@@ -206,10 +206,9 @@ impl Drop for FileOperationReservation {
         if self.finished {
             return;
         }
-        let mut state = self.coordinator.lock();
-        if state.in_flight.get(&self.operation_id) == Some(&self.fingerprint) {
-            state.in_flight.remove(&self.operation_id);
-        }
+        self.store_terminal(TerminalFileOperationResult::Failed(AppError::Internal(
+            "file operation ended before reaching a terminal state".to_string(),
+        )));
     }
 }
 
@@ -320,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn dropped_reservations_release_in_flight_admission() {
+    fn dropped_reservations_become_terminal_failures() {
         let coordinator = FileOperationReplayCoordinator::default();
         let fingerprint = FileOperationFingerprint::open("token", None, None);
         let reservation = match coordinator
@@ -335,10 +334,25 @@ mod tests {
             crate::projection_model::FileOperationLookupStatus::Pending
         );
         drop(reservation);
+        let lookup = coordinator.get("operation-2").expect("failed");
         assert_eq!(
-            coordinator.get("operation-2").expect("missing").status,
-            crate::projection_model::FileOperationLookupStatus::Missing
+            lookup.status,
+            crate::projection_model::FileOperationLookupStatus::Failed
         );
+        assert_eq!(lookup.error.expect("failure").code, "internal");
+        assert!(matches!(
+            coordinator.reserve("operation-2", fingerprint),
+            Ok(FileOperationAdmission::Failed(AppError::Internal(message)))
+                if message == "file operation ended before reaching a terminal state"
+        ));
+        assert!(matches!(
+            coordinator.reserve(
+                "operation-2",
+                FileOperationFingerprint::open("other-token", None, None)
+            ),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "file operationId was reused with a different payload"
+        ));
     }
 
     #[test]

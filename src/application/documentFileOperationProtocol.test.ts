@@ -195,6 +195,62 @@ describe('documentFileOperationProtocol', () => {
     await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
     expect(invoke).toHaveBeenCalledTimes(2);
   });
+
+  it('stops observing terminal response recovery when its workspace is disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const recoveryStarted = deferred<void>();
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn().mockResolvedValue({ status: 'completed', receipt }),
+      createOperationId: () => 'operation-recovery',
+      cancellation: cancellation.signal,
+    });
+    const execution = protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: () => {
+        recoveryStarted.resolve();
+        return new Promise(() => undefined);
+      },
+    });
+
+    await recoveryStarted.promise;
+    cancellation.cancel();
+
+    await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
+  });
+
+  it('stops ambiguous recovery when its workspace is disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const recoveryStarted = deferred<void>();
+    let now = 0;
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn().mockResolvedValue({ status: 'missing' }),
+      createOperationId: () => 'operation-ambiguous-recovery',
+      cancellation: cancellation.signal,
+      clock: {
+        now: () => now,
+        sleep: async (milliseconds) => { now += milliseconds; },
+      },
+    });
+    const execution = protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: async () => ({ receipt }),
+      recoverAmbiguous: () => {
+        recoveryStarted.resolve();
+        return new Promise(() => undefined);
+      },
+    });
+
+    await recoveryStarted.promise;
+    cancellation.cancel();
+
+    await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
+  });
 });
 
 function deferred<T>() {

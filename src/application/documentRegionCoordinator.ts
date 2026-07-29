@@ -18,6 +18,10 @@ import type {
   SheetRegion,
   SheetRegionBlock,
 } from '@/types/documentRuntime';
+import {
+  neverCancelled,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type FetchRegionProjection = (
   context: EditorCommandContext,
@@ -39,8 +43,11 @@ export type DocumentRegionPort = {
   isSheetRegionLoaded(region: SheetRegion): boolean;
 };
 
-export function createDocumentRegionCoordinator(document: DocumentRegionPort) {
-  const loads = createDocumentRegionLoadScheduler();
+export function createDocumentRegionCoordinator(
+  document: DocumentRegionPort,
+  cancellation: OperationCancellationSignal = neverCancelled,
+) {
+  const loads = createDocumentRegionLoadScheduler(cancellation);
 
   function reset() {
     loads.reset();
