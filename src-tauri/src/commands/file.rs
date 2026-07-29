@@ -83,15 +83,20 @@ pub async fn prepare_open_file_desktop(
     runtime: State<'_, ApplicationRuntime>,
     executions: State<'_, CommandExecutionRuntime>,
     path: String,
+    preparation_id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
         .run(move || {
+            let source_identity = path.clone();
             let source = runtime.platform_files().open_source(path);
-            runtime
-                .document_files()
-                .prepare_open_projected(source, protocol_projection::prepared_open_document)
+            runtime.document_files().prepare_open_projected(
+                &preparation_id,
+                &source_identity,
+                source,
+                protocol_projection::prepared_open_document,
+            )
         })
         .await
 }
@@ -104,15 +109,20 @@ pub async fn prepare_recent_file_desktop(
     executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     id: String,
+    preparation_id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
         .run(move || {
+            let source_identity = format!("recent:{id}");
             let source = runtime.platform_files().recent_open_source(app, id);
-            runtime
-                .document_files()
-                .prepare_open_projected(source, protocol_projection::prepared_open_document)
+            runtime.document_files().prepare_open_projected(
+                &preparation_id,
+                &source_identity,
+                source,
+                protocol_projection::prepared_open_document,
+            )
         })
         .await
 }
@@ -181,22 +191,27 @@ pub async fn export_file_desktop(
     default_name: String,
     document_id: CommandU64,
     base_revision: CommandU64,
-) -> Result<Option<String>, AppError> {
+    operation_id: String,
+) -> Result<Option<FileOperationReceipt>, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || {
-            let Some(target) = runtime
-                .platform_files()
-                .pick_export_target(&app, &default_name)?
-            else {
-                return Ok(None);
-            };
-            runtime
-                .document_files()
-                .export(target, document_id.get(), base_revision.get())
-                .map(Some)
-        })
+        .run_mapped(
+            move || {
+                runtime.document_files().export(
+                    &operation_id,
+                    &default_name,
+                    document_id.get(),
+                    base_revision.get(),
+                    || {
+                        runtime
+                            .platform_files()
+                            .pick_export_target(&app, &default_name)
+                    },
+                )
+            },
+            |receipt| receipt.map(protocol_projection::file_operation_receipt),
+        )
         .await
 }
 
@@ -204,6 +219,7 @@ pub async fn export_file_desktop(
 pub async fn prepare_new_file(
     runtime: State<'_, ApplicationRuntime>,
     executions: State<'_, CommandExecutionRuntime>,
+    preparation_id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     executions
@@ -211,7 +227,7 @@ pub async fn prepare_new_file(
         .run(move || {
             runtime
                 .document_files()
-                .prepare_new_projected(protocol_projection::prepared_open_document)
+                .prepare_new_projected(&preparation_id, protocol_projection::prepared_open_document)
         })
         .await
 }

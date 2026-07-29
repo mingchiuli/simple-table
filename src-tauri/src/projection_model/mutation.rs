@@ -73,13 +73,21 @@ impl MutationOutcome {
 pub(crate) enum MutationLookupStatus {
     Pending,
     Completed,
+    Failed,
     Missing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MutationFailure {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct MutationLookup {
     pub status: MutationLookupStatus,
     pub response: Option<MutationOutcome>,
+    pub error: Option<MutationFailure>,
 }
 
 impl MutationLookup {
@@ -87,6 +95,7 @@ impl MutationLookup {
         Self {
             status: MutationLookupStatus::Pending,
             response: None,
+            error: None,
         }
     }
 
@@ -94,6 +103,18 @@ impl MutationLookup {
         Self {
             status: MutationLookupStatus::Completed,
             response: Some(response),
+            error: None,
+        }
+    }
+
+    pub(crate) fn failed(error: &crate::error::AppError) -> Self {
+        Self {
+            status: MutationLookupStatus::Failed,
+            response: None,
+            error: Some(MutationFailure {
+                code: error.code().to_string(),
+                message: error.to_string(),
+            }),
         }
     }
 
@@ -101,6 +122,7 @@ impl MutationLookup {
         Self {
             status: MutationLookupStatus::Missing,
             response: None,
+            error: None,
         }
     }
 }

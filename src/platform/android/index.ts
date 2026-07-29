@@ -2,7 +2,10 @@ import { invokeCommand } from '@/tauriInvoke';
 import type { OpenFileSelection, PlatformAPI } from '../types';
 import type { EditorCommandContext } from '@/types/documentRuntime';
 import type { PreparedOpenDocument } from '@/types/fileRuntime';
-import { runtimePreparedOpenDocument } from '@/application/fileProtocol';
+import {
+  runtimeFileOperationReceipt,
+  runtimePreparedOpenDocument,
+} from '@/application/fileProtocol';
 
 export const androidFileOps = {
   /** Android: 后端用官方 dialog/fs 导入到 App 沙盒，不解析、不替换后端活动文档 */
@@ -22,16 +25,28 @@ export const androidFileOps = {
   },
 
   /** Android: 从 App 沙盒路径读取并解析（用于最近文件列表） */
-  prepareOpenFile: async (path: string): Promise<PreparedOpenDocument> => {
-    return runtimePreparedOpenDocument(await invokeCommand("prepare_open_file_android", { path }));
+  prepareOpenFile: async (path: string, preparationId: string): Promise<PreparedOpenDocument> => {
+    return runtimePreparedOpenDocument(
+      await invokeCommand("prepare_open_file_android", { path, preparationId }),
+    );
   },
 
   /** Android: 生成文件字节并写入 App 沙盒路径 */
   saveFile: (path: string, context: EditorCommandContext, operationId: string) =>
     invokeCommand("save_file_android", { path, ...context, operationId }),
 
-  exportFile: (defaultName: string, context: EditorCommandContext) =>
-    invokeCommand("export_file_android", { defaultName, ...context }),
+  exportFile: async (
+    defaultName: string,
+    context: EditorCommandContext,
+    operationId: string,
+  ) => {
+    const receipt = await invokeCommand("export_file_android", {
+      defaultName,
+      ...context,
+      operationId,
+    });
+    return receipt ? runtimeFileOperationReceipt(receipt) : null;
+  },
 
   pickSaveLocation: (defaultName: string) =>
     invokeCommand("pick_save_location_android", { defaultName }),

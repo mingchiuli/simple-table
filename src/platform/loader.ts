@@ -68,15 +68,22 @@ export async function discardOpenFileSelection(selection: OpenFileSelection): Pr
 }
 
 /** 从已知路径读取并解析（用于最近文件列表） */
-export async function prepareOpenFile(path: string): Promise<PreparedOpenDocument> {
+export async function prepareOpenFile(
+  path: string,
+  preparationId: string,
+): Promise<PreparedOpenDocument> {
   const api = await getPlatformAPI();
-  return api.fileOps.prepareOpenFile(path);
+  return api.fileOps.prepareOpenFile(path, preparationId);
 }
 
 /** 从平台受信任的最近文件记录读取并解析 */
-export async function prepareRecentFile(file: RecentFile): Promise<PreparedOpenDocument> {
+export async function prepareRecentFile(
+  file: RecentFile,
+  preparationId: string,
+): Promise<PreparedOpenDocument> {
   const api = await getPlatformAPI();
-  return api.fileOps.prepareRecentFile?.(file) ?? api.fileOps.prepareOpenFile(file.path);
+  return api.fileOps.prepareRecentFile?.(file, preparationId)
+    ?? api.fileOps.prepareOpenFile(file.path, preparationId);
 }
 
 /** 保存文件：生成字节 + 写入（一体化） */
@@ -105,10 +112,14 @@ export async function discardSaveLocation(path: string): Promise<void> {
 }
 
 /** 导出当前编辑状态到用户选择的位置 */
-export async function exportFile(defaultName: string, context: EditorCommandContext) {
+export async function exportFile(
+  defaultName: string,
+  context: EditorCommandContext,
+  operationId: string,
+) {
   const api = await getPlatformAPI();
   if (!api.fileOps.exportFile) {
     throw new Error('exportFile not supported on this platform');
   }
-  return api.fileOps.exportFile(defaultName, context);
+  return api.fileOps.exportFile(defaultName, context, operationId);
 }

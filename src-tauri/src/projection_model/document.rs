@@ -104,6 +104,7 @@ pub(crate) enum FileOperationKind {
     Open,
     Save,
     Close,
+    Export,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +121,7 @@ pub(crate) enum FileOperationLookupStatus {
     Pending,
     Completed,
     Failed,
+    Cancelled,
     Missing,
 }
 
@@ -161,6 +163,14 @@ impl FileOperationLookup {
                 code: error.code().to_string(),
                 message: error.to_string(),
             }),
+        }
+    }
+
+    pub(crate) fn cancelled() -> Self {
+        Self {
+            status: FileOperationLookupStatus::Cancelled,
+            receipt: None,
+            error: None,
         }
     }
 

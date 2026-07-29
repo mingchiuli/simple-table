@@ -15,8 +15,14 @@ struct ReplayEntry {
     document_id: u64,
     command_id: String,
     fingerprint: MutationFingerprint,
-    response: Arc<MutationOutcome>,
+    result: TerminalMutationResult,
     bytes: usize,
+}
+
+#[derive(Clone)]
+enum TerminalMutationResult {
+    Completed(Arc<MutationOutcome>),
+    Failed(AppError),
 }
 
 struct InFlightMutation {
@@ -50,7 +56,12 @@ pub(crate) fn run(
     validate_command_id(command_id)?;
     let fingerprint = intent.fingerprint(base_revision)?;
     let reservation = match reserve(coordinator, document_id, command_id, fingerprint)? {
-        ReservationResult::Replay(response) => return Ok((*response).clone()),
+        ReservationResult::Replay(result) => {
+            return match result {
+                TerminalMutationResult::Completed(response) => Ok((*response).clone()),
+                TerminalMutationResult::Failed(error) => Err(error),
+            };
+        }
         ReservationResult::Execute(reservation) => reservation,
     };
 
@@ -59,7 +70,7 @@ pub(crate) fn run(
 }
 
 enum ReservationResult {
-    Replay(Arc<MutationOutcome>),
+    Replay(TerminalMutationResult),
     Execute(InFlightReservation),
 }
 
@@ -76,11 +87,16 @@ impl InFlightReservation {
         mut self,
         result: Result<MutationOutcome, AppError>,
     ) -> Result<MutationOutcome, AppError> {
-        let prepared = result
+        let prepared = match &result {
+            Ok(response) => prepare_replay_response(&self.command_id, response),
+            Err(error) => Some(prepare_replay_failure(&self.command_id, error)),
+        };
+        let replayed_response = prepared
             .as_ref()
-            .ok()
-            .and_then(|response| prepare_replay_response(&self.command_id, response));
-        let replayed_response = prepared.as_ref().map(|prepared| prepared.response.clone());
+            .and_then(|prepared| match &prepared.result {
+                TerminalMutationResult::Completed(response) => Some((**response).clone()),
+                TerminalMutationResult::Failed(_) => None,
+            });
         let mut cache = lock_cache(&self.coordinator)?;
         if let Some(prepared) =
             prepared.filter(|_| !cache.retired_documents.contains(&self.document_id))
@@ -146,7 +162,7 @@ fn reserve_with_coordinator(
             if entry.fingerprint != fingerprint {
                 return Err(reused_command_id_error());
             }
-            return Ok(ReservationResult::Replay(Arc::clone(&entry.response)));
+            return Ok(ReservationResult::Replay(entry.result.clone()));
         }
 
         if let Some(in_flight) = cache
@@ -201,13 +217,13 @@ fn insert_response(
         document_id,
         command_id: command_id.to_string(),
         fingerprint,
-        response: Arc::new(prepared.response),
+        result: prepared.result,
         bytes: prepared.bytes,
     });
 }
 
 struct PreparedReplayResponse {
-    response: MutationOutcome,
+    result: TerminalMutationResult,
     bytes: usize,
 }
 
@@ -222,9 +238,19 @@ fn prepare_replay_response(
     let payload =
         prepare_mutation_replay_payload(response, MAX_REPLAY_BYTES.checked_sub(entry_bytes)?)?;
     Some(PreparedReplayResponse {
-        response: payload.outcome,
+        result: TerminalMutationResult::Completed(Arc::new(payload.outcome)),
         bytes: entry_bytes.saturating_add(payload.retained_bytes),
     })
+}
+
+fn prepare_replay_failure(command_id: &str, error: &AppError) -> PreparedReplayResponse {
+    PreparedReplayResponse {
+        result: TerminalMutationResult::Failed(error.clone()),
+        bytes: command_id
+            .len()
+            .saturating_add(error.to_string().len())
+            .saturating_add(std::mem::size_of::<ReplayEntry>()),
+    }
 }
 
 pub(crate) fn retire_document(coordinator: &MutationReplayCoordinator, document_id: u64) {
@@ -266,12 +292,15 @@ pub(crate) fn get(
     {
         return Ok(MutationLookup::pending());
     }
-    let response =
-        find_entry(&cache, document_id, command_id).map(|entry| Arc::clone(&entry.response));
+    let result = find_entry(&cache, document_id, command_id).map(|entry| entry.result.clone());
     drop(cache);
-    Ok(response.map_or_else(MutationLookup::missing, |response| {
-        MutationLookup::completed((*response).clone())
-    }))
+    Ok(match result {
+        Some(TerminalMutationResult::Completed(response)) => {
+            MutationLookup::completed((*response).clone())
+        }
+        Some(TerminalMutationResult::Failed(error)) => MutationLookup::failed(&error),
+        None => MutationLookup::missing(),
+    })
 }
 
 fn find_entry<'a>(
@@ -404,6 +433,47 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert_eq!(first.revision, second.revision);
+        retire_document(&coordinator, 91);
+    }
+
+    #[test]
+    fn failed_mutations_are_terminal_and_replay_the_original_error() {
+        let coordinator = Arc::new(MutationReplayCoordinator::default());
+        let calls = AtomicUsize::new(0);
+        let execute = |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Err(AppError::DocumentStateInvalid(
+                "revision changed".to_string(),
+            ))
+        };
+
+        let first = run(
+            &coordinator,
+            91,
+            0,
+            "failed-command",
+            set_cell_request(0),
+            execute,
+        )
+        .expect_err("first mutation fails");
+        let second = run(
+            &coordinator,
+            91,
+            0,
+            "failed-command",
+            set_cell_request(0),
+            |_| panic!("terminal failure must not execute again"),
+        )
+        .expect_err("failure is replayed");
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(first.to_string(), second.to_string());
+        let lookup = get(&coordinator, 91, "failed-command").expect("lookup");
+        assert_eq!(lookup.status, MutationLookupStatus::Failed);
+        assert_eq!(
+            lookup.error.expect("failure payload").code,
+            "document_state_invalid"
+        );
         retire_document(&coordinator, 91);
     }
 

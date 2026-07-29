@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::application::file_operation_replay::{
     FileOperationAdmission, FileOperationFingerprint, FileOperationReplayCoordinator,
-    completed_operation_error, pending_operation_error,
+    cancelled_operation_error, completed_operation_error, pending_operation_error,
 };
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
@@ -96,6 +96,9 @@ pub fn commit_prepared_document(
             return Err(completed_operation_error(FileOperationKind::Open));
         }
         FileOperationAdmission::Failed(error) => return Err(error),
+        FileOperationAdmission::Cancelled => {
+            return Err(cancelled_operation_error(FileOperationKind::Open));
+        }
     };
     let result = (|| {
         let checkout = service.prepared_documents().checkout(token)?;
@@ -163,6 +166,9 @@ pub fn close_current_document(
             return Err(completed_operation_error(FileOperationKind::Close));
         }
         FileOperationAdmission::Failed(error) => return Err(error),
+        FileOperationAdmission::Cancelled => {
+            return Err(cancelled_operation_error(FileOperationKind::Close));
+        }
     };
     let result = (|| {
         let handle = service.documents().read_handle(document_id)?;
@@ -208,7 +214,10 @@ mod tests {
     use crate::runtime::ApplicationRuntime;
 
     fn open_new_document(runtime: &ApplicationRuntime) -> FileOperationReceipt {
-        let prepared = runtime.document_files().prepare_new().expect("prepare new");
+        let prepared = runtime
+            .document_files()
+            .prepare_new("prepare-close-test")
+            .expect("prepare new");
         commit_prepared_document(
             runtime.document_lifecycle(),
             &prepared.token,

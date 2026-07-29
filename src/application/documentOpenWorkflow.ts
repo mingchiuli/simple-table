@@ -1,4 +1,5 @@
 import { createDocumentFileOperationProtocol } from '@/application/documentFileOperationProtocol';
+import { invokeIdempotently } from '@/application/idempotentCommandProtocol';
 import type {
   DocumentLifecycleRunner,
   DocumentReplacementLease,
@@ -26,9 +27,12 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
   runDocumentLifecycle: DocumentLifecycleRunner;
   pickOpenFile: () => Promise<OpenFileSelection | null>;
   discardOpenFileSelection: (selection: OpenFileSelection) => Promise<void>;
-  prepareOpenFile: (path: string) => Promise<PreparedOpenDocument>;
-  prepareRecentFile: (file: RecentFile) => Promise<PreparedOpenDocument>;
-  prepareNewFile: () => Promise<PreparedOpenDocument>;
+  prepareOpenFile: (path: string, preparationId: string) => Promise<PreparedOpenDocument>;
+  prepareRecentFile: (
+    file: RecentFile,
+    preparationId: string,
+  ) => Promise<PreparedOpenDocument>;
+  prepareNewFile: (preparationId: string) => Promise<PreparedOpenDocument>;
   commitPreparedDocument: (
     prepared: PreparedOpenDocument,
     expectedContext: EditorCommandContext | null,
@@ -37,7 +41,7 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
   getFileOperationResult: (operationId: string) => Promise<FileOperationResultLookup>;
   getActiveDocument: () => Promise<ActiveDocument | null>;
   receiptFromActiveDocument: (document: ActiveDocument) => FileOperationReceipt;
-  abortPreparedDocument: (prepared: PreparedOpenDocument) => Promise<void>;
+  abortPreparedDocument: (preparationId: string) => Promise<void>;
   closeDocument: (context: EditorCommandContext) => Promise<void>;
   openPreparedDocument: (prepared: PreparedOpenDocument, path: string | null) => void;
   clearDocument: () => void;
@@ -48,7 +52,9 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
 export function createDocumentOpenWorkflow<ActiveDocument>(
   ports: DocumentOpenWorkflowPorts<ActiveDocument>,
   preparations: DocumentPreparationCoordinator = createDocumentPreparationCoordinator(),
+  createPreparationId: () => string = defaultPreparationId,
 ) {
+  const pendingPreparationCleanupIds = new Set<string>();
   const fileOperations = createDocumentFileOperationProtocol({
     getFileOperationResult: ports.getFileOperationResult,
     reportError: ports.reportCleanupError,
@@ -69,9 +75,11 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
           if (cancellation.isCancelled()) return;
           const expectedContext = ports.getCommandContext();
           const prepared = await preparations.runCancellable(
-            () => ports.prepareOpenFile(filePath),
+            () => prepareDocument((preparationId) => (
+              ports.prepareOpenFile(filePath, preparationId)
+            )),
             cancellation,
-            (result) => ports.abortPreparedDocument(result),
+            (result) => ports.abortPreparedDocument(result.token),
           );
           if (!prepared) return;
           if (cancellation.isCancelled()) {
@@ -128,7 +136,10 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
   async function createNewDocument(): Promise<boolean> {
     let created = false;
     await ports.runDocumentLifecycle('loading', async () => {
-      created = await replaceWithPreparedDocument(ports.prepareNewFile, null);
+      created = await replaceWithPreparedDocument(
+        (preparationId) => ports.prepareNewFile(preparationId),
+        null,
+      );
     });
     return created;
   }
@@ -137,7 +148,7 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
     let opened = false;
     await ports.runDocumentLifecycle('loading', async () => {
       opened = await replaceWithPreparedDocument(
-        () => ports.prepareRecentFile(file),
+        (preparationId) => ports.prepareRecentFile(file, preparationId),
         file.path,
         file.originalPath,
       );
@@ -153,7 +164,9 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
       replacement = await ports.beginDocumentReplacement();
       if (!replacement) return false;
       const expectedContext = ports.getCommandContext();
-      const prepared = await preparations.run(() => ports.prepareOpenFile(selection.path));
+      const prepared = await preparations.run(() => prepareDocument((preparationId) => (
+        ports.prepareOpenFile(selection.path, preparationId)
+      )));
       await commitPreparedDocument(prepared, expectedContext);
       discardSelection = false;
       replacement.commit();
@@ -182,7 +195,7 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
   }
 
   async function replaceWithPreparedDocument(
-    prepare: () => Promise<PreparedOpenDocument>,
+    prepare: (preparationId: string) => Promise<PreparedOpenDocument>,
     path: string | null,
     recentOriginalPath?: string,
   ): Promise<boolean> {
@@ -190,7 +203,7 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
     if (!replacement) return false;
     try {
       const expectedContext = ports.getCommandContext();
-      const prepared = await preparations.run(prepare);
+      const prepared = await preparations.run(() => prepareDocument(prepare));
       await commitPreparedDocument(prepared, expectedContext);
       replacement.commit();
       ports.openPreparedDocument(prepared, path);
@@ -232,9 +245,52 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
 
   async function abortPreparedDocumentQuietly(prepared: PreparedOpenDocument) {
     try {
-      await preparations.cleanup(prepared, (result) => ports.abortPreparedDocument(result));
+      await preparations.cleanup(prepared, (result) => ports.abortPreparedDocument(result.token));
     } catch (error) {
       ports.reportCleanupError?.('Failed to abort unused prepared document', error);
+    }
+  }
+
+  async function prepareDocument(
+    prepare: (preparationId: string) => Promise<PreparedOpenDocument>,
+  ): Promise<PreparedOpenDocument> {
+    await cleanupPendingPreparationIds();
+    const preparationId = createPreparationId();
+    try {
+      const invocation = await invokeIdempotently({
+        operationId: preparationId,
+        invoke: prepare,
+      });
+      if (invocation.status === 'ambiguous') throw invocation.error;
+      return invocation.response;
+    } catch (error) {
+      await abortPreparationIdQuietly(preparationId);
+      throw error;
+    }
+  }
+
+  async function abortPreparationIdQuietly(preparationId: string) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await ports.abortPreparedDocument(preparationId);
+        pendingPreparationCleanupIds.delete(preparationId);
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await Promise.resolve();
+      }
+    }
+    pendingPreparationCleanupIds.add(preparationId);
+    ports.reportCleanupError?.('Failed to abort document preparation', lastError);
+    return false;
+  }
+
+  async function cleanupPendingPreparationIds() {
+    for (const preparationId of [...pendingPreparationCleanupIds]) {
+      if (!(await abortPreparationIdQuietly(preparationId))) {
+        throw new Error('Previous document preparation could not be cleaned up');
+      }
     }
   }
 
@@ -245,6 +301,16 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
     createNewDocument,
     openRecentDocument,
   };
+}
+
+let fallbackPreparationId = 0;
+
+function defaultPreparationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  fallbackPreparationId += 1;
+  return `prepare-${Date.now()}-${fallbackPreparationId}`;
 }
 
 function receiptMatchesPrepared(

@@ -172,7 +172,7 @@ describe("useHomeFileActions", () => {
     await actions.handleNewFile();
 
     expect(api.prepareNewFile).toHaveBeenCalledTimes(1);
-    expect(api.prepareNewFile).toHaveBeenCalledWith();
+    expect(api.prepareNewFile).toHaveBeenCalledWith(expect.any(String));
     expect(api.commitPreparedDocument).toHaveBeenCalledWith(
       "prepared-new",
       null,
@@ -222,7 +222,9 @@ describe("useHomeFileActions", () => {
       },
       100
     );
-    vi.mocked(api.prepareNewFile).mockRejectedValue(new Error("prepare unavailable"));
+    vi.mocked(api.prepareNewFile).mockRejectedValue(
+      Object.assign(new Error("prepare unavailable"), { code: "read_error" }),
+    );
     vi.mocked(unsavedChanges.confirmDiscardUnsavedChanges).mockResolvedValue(true);
 
     try {
@@ -262,7 +264,7 @@ describe("useHomeFileActions", () => {
     await actions.handleOpenRecent(recentFile());
     await flushPromises();
 
-    expect(platform.prepareRecentFile).toHaveBeenCalledWith(recentFile());
+    expect(platform.prepareRecentFile).toHaveBeenCalledWith(recentFile(), expect.any(String));
     expect(documentSessionStore.documentId).toBe('2');
     expect(documentSessionStore.currentFilePath).toBe("/tmp/recent.xlsx");
     expect(navigateToTable).toHaveBeenCalledTimes(1);
@@ -291,7 +293,7 @@ describe("useHomeFileActions", () => {
     await actions.handleOpenRecent(stale);
     await flushPromises();
 
-    expect(platform.prepareRecentFile).toHaveBeenCalledWith(stale);
+    expect(platform.prepareRecentFile).toHaveBeenCalledWith(stale, expect.any(String));
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(api.removeRecentFile).toHaveBeenCalledWith("stale");
     expect(documentSessionStore.documentId).toBe('3');
@@ -304,7 +306,7 @@ describe("useHomeFileActions", () => {
     const platform = await import("@/platform");
     const navigateToTable = vi.fn();
     vi.mocked(platform.prepareRecentFile).mockRejectedValueOnce(
-      new Error("Unsupported file format")
+      Object.assign(new Error("Unsupported file format"), { code: "unsupported_format" }),
     );
 
     const actions = homeFileActions({ navigateToTable });
@@ -315,7 +317,7 @@ describe("useHomeFileActions", () => {
     expect(platform.pickOpenFile).not.toHaveBeenCalled();
     expect(navigateToTable).not.toHaveBeenCalled();
     expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
-      "Failed to open file: Error: Unsupported file format"
+      "Failed to open file: Unsupported file format"
     );
   });
 });

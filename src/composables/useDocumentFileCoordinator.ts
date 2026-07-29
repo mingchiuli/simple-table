@@ -70,21 +70,23 @@ export function useDocumentFileCoordinator({
         : Promise.resolve(document.currentCommandContext()),
       pickOpenFile: () => pickOpenFile(),
       discardOpenFileSelection: (selection) => discardOpenFileSelection(selection),
-      prepareOpenFile: (path) => prepareOpenFile(path),
-      prepareRecentFile: (file) => prepareRecentFile(file),
-      prepareNewFile: () => api.prepareNewFile(),
+      prepareOpenFile: (path, preparationId) => prepareOpenFile(path, preparationId),
+      prepareRecentFile: (file, preparationId) => prepareRecentFile(file, preparationId),
+      prepareNewFile: (preparationId) => api.prepareNewFile(preparationId),
       commitPreparedDocument: (prepared, expectedContext, operationId) =>
         api.commitPreparedDocument(prepared.token, expectedContext, operationId),
       getFileOperationResult: (operationId) => api.getFileOperationResult(operationId),
       getActiveDocument: () => api.getActiveDocument(),
       receiptFromActiveDocument: fileOperationReceiptFromOpenResponse,
-      abortPreparedDocument: (prepared) => api.abortPreparedDocument(prepared.token),
+      abortPreparedDocument: (preparationId) => api.abortPreparedDocument(preparationId),
       commitCloseDocument: (context, operationId) =>
         api.closeCurrentDocument(context, operationId),
       saveFile: (path, context, operationId) => saveFile(path, context, operationId),
       receiptFromSavedDocument: fileOperationReceiptFromSavedResponse,
       savedDocumentFromActive: savedResponseFromOpenResponse,
-      exportFile: (defaultName, context) => exportFile(defaultName, context),
+      exportFile: (defaultName, context, operationId) => (
+        exportFile(defaultName, context, operationId)
+      ),
       nativeSavePlan: async (context, target) =>
         runtimeNativeSavePlan(await api.getNativeSavePlan(context, target)),
       documentCapabilities: async (context) =>

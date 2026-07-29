@@ -1,13 +1,13 @@
-use crate::document_data::DocumentData;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::application::document_work_budget_port::DocumentWorkLease;
 use crate::error::AppError;
 use crate::resource_limits::{
-    ResourceLedger, validate_active_and_prepared_document_bytes, validate_prepared_document_bytes,
+    validate_active_and_prepared_document_bytes, validate_prepared_document_bytes,
 };
 use crate::state::editor_state::EditorState;
 
@@ -22,39 +22,106 @@ struct PreparedDocumentStore {
     pending: HashMap<String, PreparedDocumentEntry>,
     order: VecDeque<String>,
     retired: Vec<PreparedDocument>,
-    prepare_in_progress: bool,
+    prepare_in_progress: Option<InProgressPreparation>,
+    cancelled_preparation: Option<String>,
     checkout_in_progress: bool,
 }
 
 struct PreparedDocumentEntry {
     document: PreparedDocument,
+    fingerprint: PreparedDocumentFingerprint,
     created_at: Instant,
 }
 
+struct InProgressPreparation {
+    token: String,
+    fingerprint: PreparedDocumentFingerprint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedDocumentFingerprint([u8; 32]);
+
+impl PreparedDocumentFingerprint {
+    pub(crate) fn open(source_identity: &str) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"open\0");
+        hash_text(&mut digest, source_identity);
+        Self(digest.finalize().into())
+    }
+
+    pub(crate) fn new_file() -> Self {
+        Self(Sha256::digest(b"new\0").into())
+    }
+}
+
+#[derive(Debug)]
+enum PrepareAdmission {
+    Execute,
+    Replay,
+    Wait,
+}
+
 impl PreparedDocumentStore {
-    fn begin_prepare(&mut self, now: Instant) -> Result<(), AppError> {
+    fn begin_prepare(
+        &mut self,
+        token: &str,
+        fingerprint: PreparedDocumentFingerprint,
+        now: Instant,
+    ) -> Result<PrepareAdmission, AppError> {
         self.prune_expired(now);
-        if self.prepare_in_progress
-            || self.checkout_in_progress
-            || self.pending.len() >= MAX_PREPARED_DOCUMENTS
-        {
+        validate_preparation_id(token)?;
+        if self.cancelled_preparation.as_deref() == Some(token) {
+            self.cancelled_preparation = None;
+            return Err(preparation_aborted_error());
+        }
+        if self.prepare_in_progress.is_none() {
+            self.cancelled_preparation = None;
+        }
+        if let Some(entry) = self.pending.get(token) {
+            ensure_same_fingerprint(entry.fingerprint, fingerprint)?;
+            return Ok(PrepareAdmission::Replay);
+        }
+        if let Some(in_progress) = &self.prepare_in_progress {
+            if in_progress.token == token {
+                ensure_same_fingerprint(in_progress.fingerprint, fingerprint)?;
+                return Ok(PrepareAdmission::Wait);
+            }
             return Err(AppError::PreparedDocumentConflict);
         }
-        self.prepare_in_progress = true;
-        Ok(())
+        if self.checkout_in_progress || self.pending.len() >= MAX_PREPARED_DOCUMENTS {
+            return Err(AppError::PreparedDocumentConflict);
+        }
+        self.cancelled_preparation = None;
+        self.prepare_in_progress = Some(InProgressPreparation {
+            token: token.to_string(),
+            fingerprint,
+        });
+        Ok(PrepareAdmission::Execute)
     }
 
-    fn finish_prepare(&mut self) {
-        self.prepare_in_progress = false;
+    fn finish_prepare(&mut self, token: &str) {
+        if self
+            .prepare_in_progress
+            .as_ref()
+            .is_some_and(|preparation| preparation.token == token)
+        {
+            self.prepare_in_progress = None;
+        }
     }
 
-    fn insert(&mut self, token: String, prepared: PreparedDocument) -> Result<(), AppError> {
-        self.insert_at(token, prepared, Instant::now())
+    fn insert(
+        &mut self,
+        token: String,
+        fingerprint: PreparedDocumentFingerprint,
+        prepared: PreparedDocument,
+    ) -> Result<(), AppError> {
+        self.insert_at(token, fingerprint, prepared, Instant::now())
     }
 
     fn insert_at(
         &mut self,
         token: String,
+        fingerprint: PreparedDocumentFingerprint,
         prepared: PreparedDocument,
         now: Instant,
     ) -> Result<(), AppError> {
@@ -68,6 +135,7 @@ impl PreparedDocumentStore {
             token,
             PreparedDocumentEntry {
                 document: prepared,
+                fingerprint,
                 created_at: now,
             },
         ) {
@@ -109,6 +177,13 @@ impl PreparedDocumentStore {
 
     fn abort(&mut self, token: &str) {
         self.prune_expired(Instant::now());
+        if self
+            .prepare_in_progress
+            .as_ref()
+            .is_some_and(|preparation| preparation.token == token)
+        {
+            self.cancelled_preparation = Some(token.to_string());
+        }
         if let Some(entry) = self.pending.remove(token) {
             self.retired.push(entry.document);
         }
@@ -140,15 +215,29 @@ impl PreparedDocumentStore {
 
 const MAX_PREPARED_DOCUMENTS: usize = 1;
 const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_PREPARATION_ID_BYTES: usize = 128;
+
+#[derive(Default)]
+struct PreparedDocumentRepositoryInner {
+    store: Mutex<PreparedDocumentStore>,
+    prepare_completed: Condvar,
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct PreparedDocumentRepository {
-    store: Arc<Mutex<PreparedDocumentStore>>,
+    inner: Arc<PreparedDocumentRepositoryInner>,
 }
 
 pub(crate) struct PrepareReservation {
     repository: PreparedDocumentRepository,
+    token: String,
+    fingerprint: PreparedDocumentFingerprint,
     active: bool,
+}
+
+pub(crate) enum PrepareReservationResult {
+    Execute(PrepareReservation),
+    Replay,
 }
 
 pub(crate) struct PreparedDocumentCheckout {
@@ -183,7 +272,7 @@ impl Drop for PreparedDocumentCheckout {
         let Some(entry) = self.entry.take() else {
             return;
         };
-        let retired = match self.repository.store.lock() {
+        let retired = match self.repository.inner.store.lock() {
             Ok(mut store) => {
                 store.restore_checkout(self.token.clone(), entry);
                 store.take_retired()
@@ -202,7 +291,7 @@ impl Drop for PreparedDocumentCommit {
         if !self.active {
             return;
         }
-        if let Ok(mut store) = self.repository.store.lock() {
+        if let Ok(mut store) = self.repository.inner.store.lock() {
             store.finish_checkout();
             self.active = false;
         }
@@ -214,60 +303,76 @@ impl Drop for PrepareReservation {
         if !self.active {
             return;
         }
-        if let Ok(mut store) = self.repository.store.lock() {
-            store.finish_prepare();
+        if let Ok(mut store) = self.repository.inner.store.lock() {
+            store.finish_prepare(&self.token);
         }
+        self.repository.inner.prepare_completed.notify_all();
     }
 }
 
 impl PreparedDocumentRepository {
     #[cfg(test)]
     pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.store, &other.store)
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    pub(crate) fn reserve_for_parse_bytes(
+    pub(crate) fn reserve(
         &self,
-        estimated_parse_bytes: usize,
-        active_document_bytes: usize,
-    ) -> Result<PrepareReservation, AppError> {
-        validate_prepared_document_bytes(estimated_parse_bytes)?;
-        self.reserve_prepare(estimated_parse_bytes, active_document_bytes)
-    }
-
-    pub(crate) fn reserve_for_file_data(
-        &self,
-        file_data: &DocumentData,
-        active_document_bytes: usize,
-    ) -> Result<(PrepareReservation, usize), AppError> {
-        let estimated_bytes = ResourceLedger::from_file_data(file_data)
-            .estimated_bytes()
-            .saturating_mul(2);
-        validate_prepared_document_bytes(estimated_bytes)?;
-        self.reserve_prepare(estimated_bytes, active_document_bytes)
-            .map(|reservation| (reservation, estimated_bytes))
-    }
-
-    fn reserve_prepare(
-        &self,
-        estimated_bytes: usize,
-        active_document_bytes: usize,
-    ) -> Result<PrepareReservation, AppError> {
-        validate_active_and_prepared_document_bytes(active_document_bytes, estimated_bytes)?;
-        let (result, retired) = {
-            let mut store = self
-                .store
-                .lock()
-                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-            let result = store.begin_prepare(Instant::now());
-            (result, store.take_retired())
-        };
-        drop(retired);
-        result?;
-        Ok(PrepareReservation {
-            repository: self.clone(),
-            active: true,
-        })
+        token: &str,
+        fingerprint: PreparedDocumentFingerprint,
+    ) -> Result<PrepareReservationResult, AppError> {
+        let mut store = self
+            .inner
+            .store
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+        loop {
+            let result = store.begin_prepare(token, fingerprint, Instant::now());
+            let retired = store.take_retired();
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    drop(store);
+                    drop(retired);
+                    return Err(error);
+                }
+            };
+            match result {
+                PrepareAdmission::Execute => {
+                    let reservation = PrepareReservation {
+                        repository: self.clone(),
+                        token: token.to_string(),
+                        fingerprint,
+                        active: true,
+                    };
+                    drop(store);
+                    drop(retired);
+                    return Ok(PrepareReservationResult::Execute(reservation));
+                }
+                PrepareAdmission::Replay => {
+                    drop(store);
+                    drop(retired);
+                    return Ok(PrepareReservationResult::Replay);
+                }
+                PrepareAdmission::Wait => {
+                    if !retired.is_empty() {
+                        drop(store);
+                        drop(retired);
+                        store = self
+                            .inner
+                            .store
+                            .lock()
+                            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+                        continue;
+                    }
+                    store = self
+                        .inner
+                        .prepare_completed
+                        .wait(store)
+                        .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+                }
+            }
+        }
     }
 }
 
@@ -282,7 +387,8 @@ impl PreparedDocumentRepository {
     ) -> Result<String, AppError> {
         let estimated_bytes = editor_state.estimated_resource_bytes();
         validate_prepared_document_bytes(estimated_bytes)?;
-        let token = uuid::Uuid::new_v4().to_string();
+        let token = reservation.token.clone();
+        let fingerprint = reservation.fingerprint;
         let prepared = PreparedDocument {
             editor_state,
             source_path,
@@ -291,14 +397,21 @@ impl PreparedDocumentRepository {
         validate_active_and_prepared_document_bytes(active_document_bytes, estimated_bytes)?;
         let (result, retired) = {
             let mut store = self
+                .inner
                 .store
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-            store.finish_prepare();
+            store.finish_prepare(&token);
             reservation.active = false;
-            let result = store.insert(token.clone(), prepared);
+            let result = if store.cancelled_preparation.as_deref() == Some(&token) {
+                store.retired.push(prepared);
+                Err(preparation_aborted_error())
+            } else {
+                store.insert(token.clone(), fingerprint, prepared)
+            };
             (result, store.take_retired())
         };
+        self.inner.prepare_completed.notify_all();
         drop(retired);
         result?;
         Ok(token)
@@ -310,6 +423,7 @@ impl PreparedDocumentRepository {
     pub(crate) fn take(&self, token: &str) -> Result<PreparedDocument, AppError> {
         let (prepared, retired) = {
             let mut store = self
+                .inner
                 .store
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
@@ -327,6 +441,7 @@ impl PreparedDocumentRepository {
     pub(crate) fn checkout(&self, token: &str) -> Result<PreparedDocumentCheckout, AppError> {
         let (entry, retired) = {
             let mut store = self
+                .inner
                 .store
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
@@ -349,6 +464,7 @@ impl PreparedDocumentRepository {
     pub(crate) fn abort(&self, token: &str) -> Result<(), AppError> {
         let retired = {
             let mut store = self
+                .inner
                 .store
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
@@ -356,17 +472,79 @@ impl PreparedDocumentRepository {
             store.take_retired()
         };
         drop(retired);
+        self.inner.prepare_completed.notify_all();
         Ok(())
     }
+
+    pub(crate) fn project<T>(
+        &self,
+        token: &str,
+        fingerprint: PreparedDocumentFingerprint,
+        project: impl FnOnce(&EditorState) -> T,
+    ) -> Result<T, AppError> {
+        let mut store = self
+            .inner
+            .store
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+        store.prune_expired(Instant::now());
+        let entry = store.pending.get(token).ok_or_else(|| {
+            AppError::DocumentStateInvalid(
+                "prepared document token is no longer active".to_string(),
+            )
+        })?;
+        ensure_same_fingerprint(entry.fingerprint, fingerprint)?;
+        Ok(project(&entry.document.editor_state))
+    }
+}
+
+fn validate_preparation_id(token: &str) -> Result<(), AppError> {
+    if token.is_empty() || token.len() > MAX_PREPARATION_ID_BYTES {
+        return Err(AppError::DocumentStateInvalid(
+            "preparationId must contain between 1 and 128 bytes".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_same_fingerprint(
+    current: PreparedDocumentFingerprint,
+    requested: PreparedDocumentFingerprint,
+) -> Result<(), AppError> {
+    if current == requested {
+        return Ok(());
+    }
+    Err(AppError::DocumentStateInvalid(
+        "preparationId was reused with a different source".to_string(),
+    ))
+}
+
+fn preparation_aborted_error() -> AppError {
+    AppError::DocumentStateInvalid("document preparation was aborted".to_string())
+}
+
+fn hash_text(digest: &mut Sha256, value: &str) {
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value.as_bytes());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentSheet;
+    use crate::document_data::{DocumentData, DocumentSheet};
     use crate::resource_limits::{
         MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, MAX_PREPARED_DOCUMENT_BYTES,
     };
+    use std::sync::mpsc;
+    use std::thread;
+
+    struct NoopWorkLease;
+
+    impl DocumentWorkLease for NoopWorkLease {
+        fn set_work_bytes(&mut self, _work_bytes: usize) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
 
     fn prepared(name: &str) -> PreparedDocument {
         PreparedDocument {
@@ -383,11 +561,19 @@ mod tests {
         }
     }
 
+    fn fingerprint(value: &str) -> PreparedDocumentFingerprint {
+        PreparedDocumentFingerprint::open(value)
+    }
+
     #[test]
     fn taking_a_token_consumes_it() {
         let mut store = PreparedDocumentStore::default();
         store
-            .insert("token".to_string(), prepared("book.xlsx"))
+            .insert(
+                "token".to_string(),
+                fingerprint("token"),
+                prepared("book.xlsx"),
+            )
             .expect("insert token");
 
         let document = store.take("token").expect("prepared document");
@@ -401,10 +587,18 @@ mod tests {
     fn dropped_checkout_restores_the_prepared_document() {
         let mut store = PreparedDocumentStore::default();
         store
-            .insert("token".to_string(), prepared("book.xlsx"))
+            .insert(
+                "token".to_string(),
+                fingerprint("token"),
+                prepared("book.xlsx"),
+            )
             .expect("insert token");
         let entry = store.checkout("token").expect("checkout");
-        assert!(store.begin_prepare(Instant::now()).is_err());
+        assert!(
+            store
+                .begin_prepare("other", fingerprint("other"), Instant::now())
+                .is_err()
+        );
 
         store.restore_checkout("token".to_string(), entry);
 
@@ -416,7 +610,11 @@ mod tests {
     fn abort_is_idempotent() {
         let mut store = PreparedDocumentStore::default();
         store
-            .insert("token".to_string(), prepared("book.xlsx"))
+            .insert(
+                "token".to_string(),
+                fingerprint("token"),
+                prepared("book.xlsx"),
+            )
             .expect("insert token");
 
         store.abort("token");
@@ -431,11 +629,19 @@ mod tests {
     fn insertion_rejects_a_second_live_token_at_the_limit() {
         let mut store = PreparedDocumentStore::default();
         store
-            .insert("token-0".to_string(), prepared("book-0.xlsx"))
+            .insert(
+                "token-0".to_string(),
+                fingerprint("token-0"),
+                prepared("book-0.xlsx"),
+            )
             .expect("insert first token");
 
         assert!(matches!(
-            store.insert("token-1".to_string(), prepared("book-1.xlsx")),
+            store.insert(
+                "token-1".to_string(),
+                fingerprint("token-1"),
+                prepared("book-1.xlsx"),
+            ),
             Err(AppError::PreparedDocumentConflict)
         ));
         assert_eq!(store.take_retired().len(), 1);
@@ -444,19 +650,105 @@ mod tests {
     }
 
     #[test]
-    fn preparation_reservation_rejects_concurrent_parse_before_insertion() {
+    fn preparation_reservation_waits_for_matching_retry_and_rejects_other_work() {
         let mut store = PreparedDocumentStore::default();
 
         store
-            .begin_prepare(Instant::now())
+            .begin_prepare("token", fingerprint("token"), Instant::now())
             .expect("reserve prepare");
 
         assert!(matches!(
-            store.begin_prepare(Instant::now()),
+            store.begin_prepare("token", fingerprint("token"), Instant::now()),
+            Ok(PrepareAdmission::Wait)
+        ));
+        assert!(matches!(
+            store.begin_prepare("other", fingerprint("other"), Instant::now()),
             Err(AppError::PreparedDocumentConflict)
         ));
-        store.finish_prepare();
-        assert!(store.begin_prepare(Instant::now()).is_ok());
+        store.finish_prepare("token");
+        assert!(matches!(
+            store.begin_prepare("other", fingerprint("other"), Instant::now()),
+            Ok(PrepareAdmission::Execute)
+        ));
+    }
+
+    #[test]
+    fn completed_preparation_replays_only_for_the_same_fingerprint() {
+        let mut store = PreparedDocumentStore::default();
+        store
+            .insert(
+                "token".to_string(),
+                fingerprint("source"),
+                prepared("book.xlsx"),
+            )
+            .expect("insert prepared document");
+
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("source"), Instant::now()),
+            Ok(PrepareAdmission::Replay)
+        ));
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("other"), Instant::now()),
+            Err(AppError::DocumentStateInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn aborting_an_in_progress_preparation_prevents_its_result_from_being_reused() {
+        let mut store = PreparedDocumentStore::default();
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("source"), Instant::now()),
+            Ok(PrepareAdmission::Execute)
+        ));
+
+        store.abort("token");
+        store.finish_prepare("token");
+
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("source"), Instant::now()),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "document preparation was aborted"
+        ));
+    }
+
+    #[test]
+    fn concurrent_retry_waits_and_replays_the_completed_preparation() {
+        let repository = PreparedDocumentRepository::default();
+        let fingerprint = fingerprint("source");
+        let reservation = match repository
+            .reserve("shared", fingerprint)
+            .expect("first reservation")
+        {
+            PrepareReservationResult::Execute(reservation) => reservation,
+            PrepareReservationResult::Replay => panic!("first request cannot replay"),
+        };
+        let retry_repository = repository.clone();
+        let (sender, receiver) = mpsc::channel();
+        let retry = thread::spawn(move || {
+            sender
+                .send(retry_repository.reserve("shared", fingerprint))
+                .expect("send retry result");
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(20)).is_err());
+
+        repository
+            .replace(
+                prepared("book.xlsx").editor_state,
+                None,
+                Box::new(NoopWorkLease),
+                reservation,
+                0,
+            )
+            .expect("complete preparation");
+
+        assert!(matches!(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("retry unblocks")
+                .expect("retry succeeds"),
+            PrepareReservationResult::Replay
+        ));
+        retry.join().expect("retry thread");
     }
 
     #[test]
@@ -466,13 +758,19 @@ mod tests {
         store
             .insert_at(
                 "expired".to_string(),
+                fingerprint("expired"),
                 prepared("expired.xlsx"),
                 now - PREPARED_DOCUMENT_TTL,
             )
             .expect("insert expired token");
 
         store
-            .insert_at("current".to_string(), prepared("current.xlsx"), now)
+            .insert_at(
+                "current".to_string(),
+                fingerprint("current"),
+                prepared("current.xlsx"),
+                now,
+            )
             .expect("insert current token");
 
         assert!(!store.pending.contains_key("expired"));
@@ -487,6 +785,7 @@ mod tests {
         store
             .insert_at(
                 "expired".to_string(),
+                fingerprint("expired"),
                 prepared("expired.xlsx"),
                 Instant::now() - PREPARED_DOCUMENT_TTL,
             )

@@ -175,7 +175,16 @@ pub struct EditorMutationResponse {
 pub enum MutationResultStatus {
     Pending,
     Completed,
+    Failed,
     Missing,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct MutationFailure {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -186,4 +195,7 @@ pub struct MutationResultLookup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub response: Option<EditorMutationResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<MutationFailure>,
 }

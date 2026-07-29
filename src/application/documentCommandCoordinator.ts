@@ -177,9 +177,6 @@ export function createDocumentCommandCoordinator({
         async (context, lease): Promise<InteractiveMutationOutcome> => {
           const execution = await mutationProtocol.execute(action, context);
           if (!lease.isCurrent()) return { status: 'skipped' };
-          if (execution.status === 'recovered') {
-            return runAfterApplied(afterApplied);
-          }
           const response = execution.response;
           try {
             const result = await applyMutationResponse(response);
@@ -217,7 +214,6 @@ export function createDocumentCommandCoordinator({
       async (context, lease): Promise<BackgroundMutationOutcome> => {
         const execution = await mutationProtocol.execute(action, context);
         if (!lease.isCurrent()) return { status: 'skipped' };
-        if (execution.status === 'recovered') return { status: 'completed' };
         const response = execution.response;
         try {
           const result = await applyMutationResponse(response);

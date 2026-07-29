@@ -37,9 +37,14 @@ pub(crate) fn mutation_lookup(value: MutationLookup) -> types::MutationResultLoo
         status: match value.status {
             MutationLookupStatus::Pending => types::MutationResultStatus::Pending,
             MutationLookupStatus::Completed => types::MutationResultStatus::Completed,
+            MutationLookupStatus::Failed => types::MutationResultStatus::Failed,
             MutationLookupStatus::Missing => types::MutationResultStatus::Missing,
         },
         response: value.response.map(mutation_response),
+        error: value.error.map(|error| types::MutationFailure {
+            code: error.code,
+            message: error.message,
+        }),
     }
 }
 

@@ -19,15 +19,15 @@ use crate::types::{
     EditorPatch, EditorSessionInfo, EditorStateInfo, FileOperationFailure, FileOperationKind,
     FileOperationReceipt, FileOperationResultLookup, FileOperationResultStatus, FormulaDiagnostics,
     FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus,
-    HyperlinkProjection, LayoutPatch, MergeRange, MutationResultLookup, MutationResultStatus,
-    NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument, ReadOnlyRichProjection, RecentFile,
-    ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch, SavedDocumentIdentity,
-    SavedDocumentResponse, ScalarCellValue, SearchResponse, SearchResult, SearchScope,
-    SetCellRequest, SheetCapabilities, SheetDeletedPatch, SheetExtent, SheetInsertedPatch,
-    SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest, SheetRegion, SheetRegionMetadata,
-    SheetRegionProjectionResponse, SheetsReplacedPatch, SpreadsheetFormatOptions, StorageType,
-    UpdateInfo, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
+    HyperlinkProjection, LayoutPatch, MergeRange, MutationFailure, MutationResultLookup,
+    MutationResultStatus, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
+    ReadOnlyRichProjection, RecentFile, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
+    SavedDocumentIdentity, SavedDocumentResponse, ScalarCellValue, SearchResponse, SearchResult,
+    SearchScope, SetCellRequest, SheetCapabilities, SheetDeletedPatch, SheetExtent,
+    SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest, SheetRegion,
+    SheetRegionMetadata, SheetRegionProjectionResponse, SheetsReplacedPatch,
+    SpreadsheetFormatOptions, StorageType, UpdateInfo, WorkbookCapabilities,
+    WorkbookRichCapabilities, WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -95,6 +95,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<EditorCommandContext>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
     push_decl::<MutationResultStatus>(&mut output, &cfg);
+    push_decl::<MutationFailure>(&mut output, &cfg);
     push_decl::<MutationResultLookup>(&mut output, &cfg);
     push_decl::<EditorSessionInfo>(&mut output, &cfg);
     push_decl::<OpenDocumentResponse>(&mut output, &cfg);

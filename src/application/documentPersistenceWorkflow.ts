@@ -38,7 +38,11 @@ export type DocumentPersistenceWorkflowPorts<ActiveDocument, SavedDocument> = {
   receiptFromActiveDocument: (document: ActiveDocument) => FileOperationReceipt;
   receiptFromSavedDocument: (document: SavedDocument) => FileOperationReceipt;
   savedDocumentFromActive: (document: ActiveDocument) => SavedDocument;
-  exportFile: (defaultName: string, context: EditorCommandContext) => Promise<string | null>;
+  exportFile: (
+    defaultName: string,
+    context: EditorCommandContext,
+    operationId: string,
+  ) => Promise<FileOperationReceipt | null>;
   nativeSavePlan: (
     context: EditorCommandContext,
     targetPathOrName: string,
@@ -120,7 +124,22 @@ export function createDocumentPersistenceWorkflow<ActiveDocument, SavedDocument>
       const extension = isNewFile
         ? await ports.defaultSpreadsheetExtension()
         : capabilities.exportExtension;
-      if (await ports.exportFile(`${defaultName}.${extension}`, context)) {
+      const exported = await fileOperations.execute({
+        kind: 'export',
+        invoke: (operationId) => ports.exportFile(
+          `${defaultName}.${extension}`,
+          context,
+          operationId,
+        ),
+        receiptForResponse: (receipt) => receipt,
+        validateReceipt: (receipt) => (
+          receipt.documentId === context.documentId
+          && receipt.revision === context.baseRevision
+        ),
+        recoverResponse: async (receipt) => receipt,
+        recoverCancelled: () => null,
+      });
+      if (exported) {
         outcome = 'exported';
       }
     });

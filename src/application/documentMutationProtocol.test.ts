@@ -66,7 +66,7 @@ describe('document mutation protocol', () => {
     expect(getMutationResult).toHaveBeenCalledTimes(2);
   });
 
-  it('reports recovery when the active revision advanced', async () => {
+  it('refreshes an advanced projection without claiming the ambiguous command succeeded', async () => {
     const projection = openResponse('2');
     const recoverProjection = vi.fn(() => true);
     const protocol = createProtocol({
@@ -78,13 +78,48 @@ describe('document mutation protocol', () => {
       recoverProjection,
     });
 
-    const result = await protocol.execute(
-      vi.fn().mockRejectedValue(new Error('ipc closed')),
+    const transportError = new Error('ipc closed');
+    await expect(protocol.execute(
+      vi.fn().mockRejectedValue(transportError),
       context()
-    );
+    )).rejects.toBe(transportError);
 
-    expect(result).toEqual({ status: 'recovered' });
     expect(recoverProjection).toHaveBeenCalledWith(projection, 3);
+  });
+
+  it('continues polling an admitted mutation beyond the discovery deadline', async () => {
+    const replay = mutationResponse('2');
+    let now = 0;
+    const protocol = createProtocol({
+      getMutationResult: vi.fn(async () => now < 5_000
+        ? { status: 'pending' } as MutationResultLookup
+        : { status: 'completed', response: replay } as MutationResultLookup),
+      clock: {
+        now: () => now,
+        sleep: async (milliseconds) => { now += milliseconds; },
+      },
+    });
+
+    await expect(protocol.execute(
+      vi.fn().mockRejectedValue(new Error('ipc closed')),
+      context(),
+    )).resolves.toEqual({ status: 'response', response: replay });
+    expect(now).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it('surfaces a terminal mutation failure after an ambiguous response', async () => {
+    const failure = { code: 'document_state_invalid', message: 'revision changed' };
+    const protocol = createProtocol({
+      getMutationResult: vi.fn(async () => ({
+        status: 'failed',
+        error: failure,
+      } as MutationResultLookup)),
+    });
+
+    await expect(protocol.execute(
+      vi.fn().mockRejectedValue(new Error('ipc closed')),
+      context(),
+    )).rejects.toBe(failure);
   });
 });
 
@@ -111,8 +146,16 @@ function createProtocol(overrides: ProtocolOverrides = {}) {
       recoverProjection: overrides.recoverProjection ?? (() => false),
     },
     createCommandId: () => 'command-1',
-    clock: overrides.clock ?? { now: () => 0, sleep: async () => undefined },
+    clock: overrides.clock ?? advancingClock(),
   });
+}
+
+function advancingClock() {
+  let now = 0;
+  return {
+    now: () => now,
+    sleep: async (milliseconds: number) => { now += milliseconds; },
+  };
 }
 
 function context() {

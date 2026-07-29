@@ -13,9 +13,10 @@ type ProtocolClock = {
 type FileOperationExecution<T> = {
   kind: FileOperationKind;
   invoke: (operationId: string) => Promise<T>;
-  receiptForResponse: (response: T) => FileOperationReceipt;
+  receiptForResponse: (response: T) => FileOperationReceipt | null;
   validateReceipt: (receipt: FileOperationReceipt) => boolean;
   recoverResponse: (receipt: FileOperationReceipt) => Promise<T>;
+  recoverCancelled?: () => Promise<T> | T;
   recoverAmbiguous?: () => Promise<T | null>;
 };
 
@@ -57,6 +58,12 @@ export function createDocumentFileOperationProtocol({
       reportError('Failed to query an ambiguous file operation result', error);
     }
     if (result.status === 'failed') throw result.error;
+    if (result.status === 'cancelled') {
+      if (!operation.recoverCancelled) {
+        throw new Error(`${operation.kind} operation unexpectedly reached a cancelled state`);
+      }
+      return await operation.recoverCancelled();
+    }
 
     if (operation.recoverAmbiguous) {
       try {
@@ -72,6 +79,7 @@ export function createDocumentFileOperationProtocol({
   async function waitForResult(operationId: string): Promise<
     | { status: 'completed'; receipt: FileOperationReceipt }
     | { status: 'failed'; error: { code: string; message: string } }
+    | { status: 'cancelled' }
     | { status: 'missing' }
   > {
     const discoveryDeadline = clock.now() + RESULT_DISCOVERY_DEADLINE_MS;
@@ -90,6 +98,7 @@ export function createDocumentFileOperationProtocol({
         }
         return { status: 'failed', error: lookup.error };
       }
+      if (lookup.status === 'cancelled') return { status: 'cancelled' };
       if (lookup.status === 'missing' && clock.now() >= discoveryDeadline) {
         return { status: 'missing' };
       }
@@ -102,7 +111,14 @@ export function createDocumentFileOperationProtocol({
 }
 
 function admittedResponse<T>(response: T, operation: FileOperationExecution<T>): T {
-  ensureReceipt(operation.receiptForResponse(response), operation);
+  const receipt = operation.receiptForResponse(response);
+  if (!receipt) {
+    if (!operation.recoverCancelled) {
+      throw new Error(`${operation.kind} operation response did not include a receipt`);
+    }
+    return response;
+  }
+  ensureReceipt(receipt, operation);
   return response;
 }
 

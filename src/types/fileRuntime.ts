@@ -10,7 +10,7 @@ export type PreparedOpenDocument = {
   };
 };
 
-export type FileOperationKind = 'open' | 'save' | 'close';
+export type FileOperationKind = 'open' | 'save' | 'close' | 'export';
 
 export type FileOperationReceipt = {
   kind: FileOperationKind;
@@ -21,7 +21,7 @@ export type FileOperationReceipt = {
 };
 
 export type FileOperationResultLookup = {
-  status: 'pending' | 'completed' | 'failed' | 'missing';
+  status: 'pending' | 'completed' | 'failed' | 'cancelled' | 'missing';
   receipt?: FileOperationReceipt;
   error?: FileOperationFailure;
 };

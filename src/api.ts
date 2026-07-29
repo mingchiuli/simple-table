@@ -29,8 +29,10 @@ import type {
   PreparedOpenDocument as RuntimePreparedOpenDocument,
 } from '@/types/fileRuntime';
 
-export async function prepareNewFile(): Promise<RuntimePreparedOpenDocument> {
-  return runtimePreparedOpenDocument(await invokeCommand("prepare_new_file", {}));
+export async function prepareNewFile(
+  preparationId: string,
+): Promise<RuntimePreparedOpenDocument> {
+  return runtimePreparedOpenDocument(await invokeCommand("prepare_new_file", { preparationId }));
 }
 
 export async function commitPreparedDocument(

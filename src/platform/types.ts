@@ -5,7 +5,11 @@
 import type {
   EditorCommandContext,
 } from '@/types/documentRuntime';
-import type { OpenTargetClaim, PreparedOpenDocument } from '@/types/fileRuntime';
+import type {
+  FileOperationReceipt,
+  OpenTargetClaim,
+  PreparedOpenDocument,
+} from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 import type { SavedDocumentResponse } from '@/types/protocol';
 
@@ -26,9 +30,9 @@ export interface PlatformFileOps {
   /** 释放已选择/导入但没有被当前文档接管的文件；桌面路径通常无需实现 */
   discardOpenFileSelection?(selection: OpenFileSelection): Promise<void>;
   /** 从已知路径读取并解析（用于最近文件列表） */
-  prepareOpenFile(path: string): Promise<PreparedOpenDocument>;
+  prepareOpenFile(path: string, preparationId: string): Promise<PreparedOpenDocument>;
   /** 从平台受信任的最近文件记录读取并解析；未实现的平台回退到 prepareOpenFile(file.path) */
-  prepareRecentFile?(file: RecentFile): Promise<PreparedOpenDocument>;
+  prepareRecentFile?(file: RecentFile, preparationId: string): Promise<PreparedOpenDocument>;
   /** 保存文件：生成字节 + 写入（一体化） */
   saveFile(
     path: string,
@@ -40,7 +44,11 @@ export interface PlatformFileOps {
   /** 释放已预留但没有成功保存接管的保存目标；桌面路径通常无需实现 */
   discardSaveLocation?(path: string): Promise<void>;
   /** 导出当前编辑状态到用户选择的位置 */
-  exportFile?(defaultName: string, context: EditorCommandContext): Promise<string | null>;
+  exportFile?(
+    defaultName: string,
+    context: EditorCommandContext,
+    operationId: string,
+  ): Promise<FileOperationReceipt | null>;
 }
 
 export interface PlatformAPI {

@@ -43,6 +43,15 @@ impl FileOperationFingerprint {
         digest.update(revision.to_le_bytes());
         Self(digest.finalize().into())
     }
+
+    pub(crate) fn export(default_name: &str, document_id: u64, revision: u64) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"export\0");
+        hash_text(&mut digest, default_name);
+        digest.update(document_id.to_le_bytes());
+        digest.update(revision.to_le_bytes());
+        Self(digest.finalize().into())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -60,7 +69,14 @@ struct FileOperationReplayState {
 #[derive(Clone)]
 struct TerminalFileOperation {
     fingerprint: FileOperationFingerprint,
-    result: Result<FileOperationReceipt, AppError>,
+    result: TerminalFileOperationResult,
+}
+
+#[derive(Clone)]
+enum TerminalFileOperationResult {
+    Completed(FileOperationReceipt),
+    Failed(AppError),
+    Cancelled,
 }
 
 pub(crate) enum FileOperationAdmission {
@@ -68,6 +84,7 @@ pub(crate) enum FileOperationAdmission {
     Pending,
     Completed,
     Failed(AppError),
+    Cancelled,
 }
 
 pub(crate) struct FileOperationReservation {
@@ -93,8 +110,11 @@ impl FileOperationReplayCoordinator {
         if let Some(terminal) = state.terminal.get(operation_id) {
             ensure_same_fingerprint(terminal.fingerprint, fingerprint)?;
             return Ok(match &terminal.result {
-                Ok(_) => FileOperationAdmission::Completed,
-                Err(error) => FileOperationAdmission::Failed(error.clone()),
+                TerminalFileOperationResult::Completed(_) => FileOperationAdmission::Completed,
+                TerminalFileOperationResult::Failed(error) => {
+                    FileOperationAdmission::Failed(error.clone())
+                }
+                TerminalFileOperationResult::Cancelled => FileOperationAdmission::Cancelled,
             });
         }
         if let Some(in_flight) = state.in_flight.get(operation_id) {
@@ -128,8 +148,13 @@ impl FileOperationReplayCoordinator {
             .get(operation_id)
             .map_or_else(FileOperationLookup::missing, |terminal| {
                 match &terminal.result {
-                    Ok(receipt) => FileOperationLookup::completed(receipt.clone()),
-                    Err(error) => FileOperationLookup::failed(error),
+                    TerminalFileOperationResult::Completed(receipt) => {
+                        FileOperationLookup::completed(receipt.clone())
+                    }
+                    TerminalFileOperationResult::Failed(error) => {
+                        FileOperationLookup::failed(error)
+                    }
+                    TerminalFileOperationResult::Cancelled => FileOperationLookup::cancelled(),
                 }
             }))
     }
@@ -143,16 +168,20 @@ impl FileOperationReplayCoordinator {
 
 impl FileOperationReservation {
     pub(crate) fn complete(mut self, receipt: FileOperationReceipt) -> FileOperationReceipt {
-        self.store_terminal(Ok(receipt.clone()));
+        self.store_terminal(TerminalFileOperationResult::Completed(receipt.clone()));
         receipt
     }
 
     pub(crate) fn fail(mut self, error: AppError) -> AppError {
-        self.store_terminal(Err(error.clone()));
+        self.store_terminal(TerminalFileOperationResult::Failed(error.clone()));
         error
     }
 
-    fn store_terminal(&mut self, result: Result<FileOperationReceipt, AppError>) {
+    pub(crate) fn cancel(mut self) {
+        self.store_terminal(TerminalFileOperationResult::Cancelled);
+    }
+
+    fn store_terminal(&mut self, result: TerminalFileOperationResult) {
         let mut state = self.coordinator.lock();
         state.in_flight.remove(&self.operation_id);
         while state.terminal_order.len() >= MAX_TERMINAL_FILE_OPERATIONS {
@@ -189,6 +218,7 @@ pub(crate) fn completed_operation_error(kind: FileOperationKind) -> AppError {
         FileOperationKind::Open => "open",
         FileOperationKind::Save => "save",
         FileOperationKind::Close => "close",
+        FileOperationKind::Export => "export",
     };
     AppError::DocumentStateInvalid(format!(
         "{operation} operation already completed; query its operationId for the receipt"
@@ -200,10 +230,21 @@ pub(crate) fn pending_operation_error(kind: FileOperationKind) -> AppError {
         FileOperationKind::Open => "open",
         FileOperationKind::Save => "save",
         FileOperationKind::Close => "close",
+        FileOperationKind::Export => "export",
     };
     AppError::DocumentStateInvalid(format!(
         "{operation} operation is still pending; query its operationId for the receipt"
     ))
+}
+
+pub(crate) fn cancelled_operation_error(kind: FileOperationKind) -> AppError {
+    let operation = match kind {
+        FileOperationKind::Open => "open",
+        FileOperationKind::Save => "save",
+        FileOperationKind::Close => "close",
+        FileOperationKind::Export => "export",
+    };
+    AppError::DocumentStateInvalid(format!("{operation} operation was already cancelled"))
 }
 
 fn validate_operation_id(operation_id: &str) -> Result<(), AppError> {
@@ -327,6 +368,29 @@ mod tests {
         assert_eq!(
             lookup.error.expect("failure").code,
             "document_state_invalid"
+        );
+    }
+
+    #[test]
+    fn cancelled_exports_are_terminal_and_do_not_reopen_the_picker() {
+        let coordinator = FileOperationReplayCoordinator::default();
+        let fingerprint = FileOperationFingerprint::export("book.xlsx", 7, 3);
+        let reservation = match coordinator
+            .reserve("cancelled-export", fingerprint)
+            .expect("reserve")
+        {
+            FileOperationAdmission::Execute(reservation) => reservation,
+            _ => panic!("first request must execute"),
+        };
+        reservation.cancel();
+
+        assert!(matches!(
+            coordinator.reserve("cancelled-export", fingerprint),
+            Ok(FileOperationAdmission::Cancelled)
+        ));
+        assert_eq!(
+            coordinator.get("cancelled-export").expect("lookup").status,
+            crate::projection_model::FileOperationLookupStatus::Cancelled
         );
     }
 

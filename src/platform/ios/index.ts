@@ -2,7 +2,10 @@ import { invokeCommand } from '@/tauriInvoke';
 import type { OpenFileSelection, PlatformAPI } from '../types';
 import type { EditorCommandContext } from '@/types/documentRuntime';
 import type { PreparedOpenDocument } from '@/types/fileRuntime';
-import { runtimePreparedOpenDocument } from '@/application/fileProtocol';
+import {
+  runtimeFileOperationReceipt,
+  runtimePreparedOpenDocument,
+} from '@/application/fileProtocol';
 
 export const iosFileOps = {
   /** iOS: 后端用官方 dialog/fs 导入到 App 沙盒，不解析、不替换后端活动文档 */
@@ -22,8 +25,10 @@ export const iosFileOps = {
   },
 
   /** iOS: 从 App 沙盒路径读取并解析（用于最近文件列表） */
-  prepareOpenFile: async (path: string): Promise<PreparedOpenDocument> => {
-    return runtimePreparedOpenDocument(await invokeCommand("prepare_open_file_ios", { path }));
+  prepareOpenFile: async (path: string, preparationId: string): Promise<PreparedOpenDocument> => {
+    return runtimePreparedOpenDocument(
+      await invokeCommand("prepare_open_file_ios", { path, preparationId }),
+    );
   },
 
   /** iOS: 生成文件字节并写入 App 沙盒路径 */
@@ -37,8 +42,18 @@ export const iosFileOps = {
     return invokeCommand("discard_save_location_ios", { path });
   },
 
-  exportFile: (defaultName: string, context: EditorCommandContext) =>
-    invokeCommand("export_file_ios", { defaultName, ...context }),
+  exportFile: async (
+    defaultName: string,
+    context: EditorCommandContext,
+    operationId: string,
+  ) => {
+    const receipt = await invokeCommand("export_file_ios", {
+      defaultName,
+      ...context,
+      operationId,
+    });
+    return receipt ? runtimeFileOperationReceipt(receipt) : null;
+  },
 };
 
 export const iosAPI: PlatformAPI = {

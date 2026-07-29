@@ -24,6 +24,10 @@ const context: EditorCommandContext = {
   baseRevision: '0',
 };
 
+function appError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
 const selection = {
   path: '/tmp/imported.xlsx',
   fileName: 'imported.xlsx',
@@ -251,9 +255,7 @@ describe('documentFileCoordinator', () => {
       coordinator.loadFileFromPath('/tmp/stale.xlsx', cancellation)
     ).resolves.toBe(false);
 
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'stale' }),
-    );
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith('stale');
     expect(ports.commitPreparedDocument).not.toHaveBeenCalled();
     expect(replacement.cancel).toHaveBeenCalledOnce();
   });
@@ -280,10 +282,8 @@ describe('documentFileCoordinator', () => {
 
     firstPrepare.resolve(prepared('slow'));
     await expect(latest).resolves.toBe(true);
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'slow' }),
-    );
-    expect(prepareOpenFile).toHaveBeenNthCalledWith(2, '/tmp/latest.xlsx');
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith('slow');
+    expect(prepareOpenFile).toHaveBeenNthCalledWith(2, '/tmp/latest.xlsx', expect.any(String));
   });
 
   it('serializes new-document preparation behind a cancelled route parse', async () => {
@@ -308,9 +308,7 @@ describe('documentFileCoordinator', () => {
     routePrepare.resolve(prepared('stale-route'));
 
     await expect(createDocument).resolves.toBe(true);
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'stale-route' }),
-    );
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith('stale-route');
     expect(prepareNewFile).toHaveBeenCalledOnce();
   });
 
@@ -408,15 +406,15 @@ describe('documentFileCoordinator', () => {
   });
 
   it('aborts a prepared selected document when commit fails', async () => {
-    const commitPreparedDocument = vi.fn().mockRejectedValue(new Error('commit failed'));
+    const commitPreparedDocument = vi.fn().mockRejectedValue(
+      appError('document_state_invalid', 'commit failed'),
+    );
     const { ports, replacement } = createPorts({ commitPreparedDocument });
     const coordinator = createDocumentFileCoordinator(ports);
 
     await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('commit failed');
 
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'prepared' }),
-    );
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith('prepared');
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.discardOpenFileSelection).toHaveBeenCalledWith(selection);
     expect(ports.openPreparedDocument).not.toHaveBeenCalled();
@@ -489,15 +487,15 @@ describe('documentFileCoordinator', () => {
 
   it('aborts a prepared route document when commit fails', async () => {
     const { ports, replacement } = createPorts({
-      commitPreparedDocument: vi.fn().mockRejectedValue(new Error('stale context')),
+      commitPreparedDocument: vi.fn().mockRejectedValue(
+        appError('document_state_invalid', 'stale context'),
+      ),
     });
     const coordinator = createDocumentFileCoordinator(ports);
 
     await expect(coordinator.loadFileFromPath('/tmp/route.xlsx')).rejects.toThrow('stale context');
 
-    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'prepared' }),
-    );
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith('prepared');
     expect(replacement.cancel).toHaveBeenCalledOnce();
     expect(ports.openPreparedDocument).not.toHaveBeenCalled();
   });
@@ -523,7 +521,7 @@ describe('documentFileCoordinator', () => {
 
     await expect(coordinator.openRecentDocument(recent)).resolves.toBe(true);
 
-    expect(ports.prepareRecentFile).toHaveBeenCalledWith(recent);
+    expect(ports.prepareRecentFile).toHaveBeenCalledWith(recent, expect.any(String));
     expect(replacement.commit).toHaveBeenCalledOnce();
     expect(ports.openPreparedDocument).toHaveBeenCalledWith(recentPrepared, recent.path);
     expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(recent.originalPath);
@@ -573,5 +571,85 @@ describe('documentFileCoordinator', () => {
       'loading',
       expect.any(Function),
     );
+  });
+
+  it('retries a lost preparation response with the same client preparation id', async () => {
+    const prepareNewFile = vi.fn()
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockImplementation(async (preparationId: string) => prepared(preparationId));
+    const { ports } = createPorts({
+      prepareNewFile,
+      commitPreparedDocument: vi.fn(async (value) => openReceipt(value)),
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.createNewDocument()).resolves.toBe(true);
+
+    expect(prepareNewFile).toHaveBeenCalledTimes(2);
+    expect(prepareNewFile.mock.calls[0][0]).toBe(prepareNewFile.mock.calls[1][0]);
+    expect(ports.abortPreparedDocument).not.toHaveBeenCalled();
+  });
+
+  it('aborts a known preparation id when both preparation responses are lost', async () => {
+    const transportError = new Error('response lost');
+    const prepareNewFile = vi.fn().mockRejectedValue(transportError);
+    const { ports } = createPorts({ prepareNewFile });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.createNewDocument()).rejects.toBe(transportError);
+
+    expect(prepareNewFile).toHaveBeenCalledTimes(2);
+    const preparationId = prepareNewFile.mock.calls[0][0];
+    expect(prepareNewFile.mock.calls[1][0]).toBe(preparationId);
+    expect(ports.abortPreparedDocument).toHaveBeenCalledWith(preparationId);
+  });
+
+  it('cleans a retained preparation id before admitting the next preparation', async () => {
+    const transportError = new Error('response lost');
+    const prepareNewFile = vi.fn()
+      .mockRejectedValueOnce(transportError)
+      .mockRejectedValueOnce(transportError)
+      .mockImplementation(async (preparationId: string) => prepared(preparationId));
+    const abortPreparedDocument = vi.fn()
+      .mockRejectedValueOnce(new Error('cleanup transport lost'))
+      .mockRejectedValueOnce(new Error('cleanup transport lost'))
+      .mockRejectedValueOnce(new Error('cleanup transport lost'))
+      .mockResolvedValue(undefined);
+    const { ports } = createPorts({
+      prepareNewFile,
+      abortPreparedDocument,
+      commitPreparedDocument: vi.fn(async (value) => openReceipt(value)),
+    });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.createNewDocument()).rejects.toBe(transportError);
+    await expect(coordinator.createNewDocument()).resolves.toBe(true);
+
+    const retainedId = prepareNewFile.mock.calls[0][0];
+    expect(prepareNewFile.mock.calls[1][0]).toBe(retainedId);
+    expect(prepareNewFile.mock.calls[2][0]).not.toBe(retainedId);
+    expect(abortPreparedDocument).toHaveBeenNthCalledWith(4, retainedId);
+  });
+
+  it('recovers an exported file after both command responses are lost', async () => {
+    const receipt = {
+      kind: 'export' as const,
+      documentId: context.documentId,
+      revision: context.baseRevision,
+      path: '/tmp/export.xlsx',
+      fileName: 'book.xlsx',
+    };
+    const exportFile = vi.fn().mockRejectedValue(new Error('response lost'));
+    const getFileOperationResult = vi.fn()
+      .mockResolvedValueOnce({ status: 'pending' })
+      .mockResolvedValueOnce({ status: 'completed', receipt });
+    const { ports } = createPorts({ exportFile, getFileOperationResult });
+    const coordinator = createDocumentFileCoordinator(ports);
+
+    await expect(coordinator.exportCurrentFile()).resolves.toBe('exported');
+
+    expect(exportFile).toHaveBeenCalledTimes(2);
+    expect(exportFile.mock.calls[0][2]).toBe(exportFile.mock.calls[1][2]);
+    expect(getFileOperationResult).toHaveBeenCalledWith(exportFile.mock.calls[0][2]);
   });
 });

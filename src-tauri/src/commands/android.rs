@@ -77,15 +77,20 @@ pub async fn prepare_open_file_android(
     executions: State<'_, CommandExecutionRuntime>,
     app: AppHandle,
     path: String,
+    preparation_id: String,
 ) -> Result<PreparedOpenDocument, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
         .run(move || {
+            let source_identity = path.clone();
             let source = runtime.platform_files().mobile_open_source(app, path);
-            runtime
-                .document_files()
-                .prepare_open_projected(source, protocol_projection::prepared_open_document)
+            runtime.document_files().prepare_open_projected(
+                &preparation_id,
+                &source_identity,
+                source,
+                protocol_projection::prepared_open_document,
+            )
         })
         .await
 }
@@ -128,22 +133,27 @@ pub async fn export_file_android(
     default_name: String,
     document_id: CommandU64,
     base_revision: CommandU64,
-) -> Result<Option<String>, AppError> {
+    operation_id: String,
+) -> Result<Option<crate::types::FileOperationReceipt>, AppError> {
     let runtime = runtime.inner().clone();
     executions
         .file()
-        .run(move || {
-            let Some(target) = runtime
-                .platform_files()
-                .pick_mobile_export_target(&app, &default_name)?
-            else {
-                return Ok(None);
-            };
-            runtime
-                .document_files()
-                .export(target, document_id.get(), base_revision.get())
-                .map(Some)
-        })
+        .run_mapped(
+            move || {
+                runtime.document_files().export(
+                    &operation_id,
+                    &default_name,
+                    document_id.get(),
+                    base_revision.get(),
+                    || {
+                        runtime
+                            .platform_files()
+                            .pick_mobile_export_target(&app, &default_name)
+                    },
+                )
+            },
+            |receipt| receipt.map(protocol_projection::file_operation_receipt),
+        )
         .await
 }
 

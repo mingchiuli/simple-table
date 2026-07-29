@@ -75,8 +75,8 @@ describe("platform loader", () => {
 
     const platform = await import("@/platform/loader");
 
-    await expect(platform.prepareRecentFile(recent)).resolves.toBe(prepared);
-    expect(prepareRecentFile).toHaveBeenCalledWith(recent);
+    await expect(platform.prepareRecentFile(recent, "preparation-1")).resolves.toBe(prepared);
+    expect(prepareRecentFile).toHaveBeenCalledWith(recent, "preparation-1");
     expect(prepareOpenFile).not.toHaveBeenCalled();
   });
 
@@ -95,8 +95,8 @@ describe("platform loader", () => {
         lastOpened: 1,
         fileSize: 2,
         storageType: "desktopPath",
-      })
+      }, "preparation-2")
     ).resolves.toBe(prepared);
-    expect(prepareOpenFile).toHaveBeenCalledWith("/tmp/recent.xlsx");
+    expect(prepareOpenFile).toHaveBeenCalledWith("/tmp/recent.xlsx", "preparation-2");
   });
 });

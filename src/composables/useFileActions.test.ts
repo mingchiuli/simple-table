@@ -303,7 +303,10 @@ describe("useFileActions", () => {
     );
 
     await flushPromises();
-    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/stale.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(
+      "/tmp/stale.xlsx",
+      expect.any(String),
+    );
 
     cancellation.cancel();
     await expect(loadPromise).resolves.toBe(false);
@@ -461,7 +464,10 @@ describe("useFileActions", () => {
     workspace.runtime.session.endLifecycle('saving');
 
     await expect(loadPromise).resolves.toBe(true);
-    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(
+      "/tmp/queued.xlsx",
+      expect.any(String),
+    );
     expect(documentSessionStore.currentFilePath).toBe("/tmp/queued.xlsx");
   });
 
@@ -484,7 +490,10 @@ describe("useFileActions", () => {
     releaseEditorCommand?.();
 
     await expect(loadPromise).resolves.toBe(true);
-    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/queued.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(
+      "/tmp/queued.xlsx",
+      expect.any(String),
+    );
     expect(documentSessionStore.currentFilePath).toBe("/tmp/queued.xlsx");
   });
 
@@ -604,7 +613,10 @@ describe("useFileActions", () => {
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/next.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(
+      "/tmp/next.xlsx",
+      expect.any(String),
+    );
     expect(documentSessionStore.documentId).toBe('2');
   });
 
@@ -636,7 +648,10 @@ describe("useFileActions", () => {
     expect(unsavedChanges.confirmDiscardUnsavedChanges).toHaveBeenCalledTimes(1);
     expect(platform.pickOpenFile).toHaveBeenCalledTimes(1);
     expect(platform.discardOpenFileSelection).not.toHaveBeenCalled();
-    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/next.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(
+      "/tmp/next.xlsx",
+      expect.any(String),
+    );
     expect(documentSessionStore.documentId).toBe('2');
     expect(documentSessionStore.currentFilePath).toBe("/tmp/next.xlsx");
   });
@@ -668,7 +683,10 @@ describe("useFileActions", () => {
 
     await actions.handleOpenFile();
 
-    expect(platform.prepareOpenFile).toHaveBeenCalledWith("/tmp/broken.xlsx");
+    expect(platform.prepareOpenFile).toHaveBeenCalledWith(
+      "/tmp/broken.xlsx",
+      expect.any(String),
+    );
     expect(unsavedChanges.confirmDiscardUnsavedChanges).toHaveBeenCalledTimes(1);
     expect(flushPendingCellChanges).not.toHaveBeenCalled();
     expect(platform.discardOpenFileSelection).toHaveBeenCalledWith(selection);

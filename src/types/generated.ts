@@ -120,9 +120,11 @@ export type EditorCommandContext = { documentId: U64String, baseRevision: U64Str
 
 export type EditorMutationResponse = { protocolVersion: typeof EDITOR_MUTATION_PROTOCOL_VERSION, documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, patches?: Array<EditorPatch>, sheetExtents?: Array<SheetExtent>, };
 
-export type MutationResultStatus = "pending" | "completed" | "missing";
+export type MutationResultStatus = "pending" | "completed" | "failed" | "missing";
 
-export type MutationResultLookup = { status: MutationResultStatus, response?: EditorMutationResponse, };
+export type MutationFailure = { code: string, message: string, };
+
+export type MutationResultLookup = { status: MutationResultStatus, response?: EditorMutationResponse, error?: MutationFailure, };
 
 export type EditorSessionInfo = { documentId: U64String, revision: U64String, formulaStatus: FormulaStatus, capabilities: WorkbookCapabilities, editorState: EditorStateInfo, };
 
@@ -136,11 +138,11 @@ export type SheetRegionProjectionResponse = { documentId: U64String, revision: U
 
 export type PreparedOpenDocument = { token: string, preview: OpenDocumentResponse, };
 
-export type FileOperationKind = "open" | "save" | "close";
+export type FileOperationKind = "open" | "save" | "close" | "export";
 
 export type FileOperationReceipt = { kind: FileOperationKind, documentId: U64String, revision: U64String, path: string, fileName: string, };
 
-export type FileOperationResultStatus = "pending" | "completed" | "failed" | "missing";
+export type FileOperationResultStatus = "pending" | "completed" | "failed" | "cancelled" | "missing";
 
 export type FileOperationFailure = { code: string, message: string, };
 
@@ -158,13 +160,13 @@ export type TauriCommandMap = {
   "claim_pending_open_target_desktop": { args: Record<string, never>, result: DesktopOpenTargetClaim | null },
   "acknowledge_open_target_desktop": { args: { claimId: string }, result: void },
   "release_open_target_desktop": { args: { claimId: string }, result: void },
-  "prepare_open_file_desktop": { args: { path: string }, result: PreparedOpenDocument },
-  "prepare_recent_file_desktop": { args: { id: string }, result: PreparedOpenDocument },
+  "prepare_open_file_desktop": { args: { path: string, preparationId: string }, result: PreparedOpenDocument },
+  "prepare_recent_file_desktop": { args: { id: string, preparationId: string }, result: PreparedOpenDocument },
   "pick_save_location_desktop": { args: { defaultName: string }, result: string | null },
   "discard_save_location_desktop": { args: { path: string }, result: void },
   "save_file_desktop": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
-  "export_file_desktop": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
-  "prepare_new_file": { args: Record<string, never>, result: PreparedOpenDocument },
+  "export_file_desktop": { args: { defaultName: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: FileOperationReceipt | null },
+  "prepare_new_file": { args: { preparationId: string }, result: PreparedOpenDocument },
   "commit_prepared_document": { args: { token: string, expectedDocumentId: U64String | null, expectedRevision: U64String | null, operationId: string }, result: FileOperationReceipt },
   "get_file_operation_result": { args: { operationId: string }, result: FileOperationResultLookup },
   "abort_prepared_document": { args: { token: string }, result: void },
@@ -196,17 +198,17 @@ export type TauriCommandMap = {
   "pick_open_file_android": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
   "discard_open_file_selection_android": { args: { path: string }, result: void },
   "discard_save_location_android": { args: { path: string }, result: void },
-  "prepare_open_file_android": { args: { path: string }, result: PreparedOpenDocument },
+  "prepare_open_file_android": { args: { path: string, preparationId: string }, result: PreparedOpenDocument },
   "save_file_android": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
-  "export_file_android": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
+  "export_file_android": { args: { defaultName: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: FileOperationReceipt | null },
   "pick_save_location_android": { args: { defaultName: string }, result: string | null },
   "pick_open_file_ios": { args: Record<string, never>, result: { path: string, originalPath: string, fileName: string } | null },
   "discard_open_file_selection_ios": { args: { path: string }, result: void },
   "discard_save_location_ios": { args: { path: string }, result: void },
-  "prepare_open_file_ios": { args: { path: string }, result: PreparedOpenDocument },
+  "prepare_open_file_ios": { args: { path: string, preparationId: string }, result: PreparedOpenDocument },
   "pick_save_location_ios": { args: { defaultName: string }, result: string | null },
   "save_file_ios": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
-  "export_file_ios": { args: { defaultName: string, documentId: U64String, baseRevision: U64String }, result: string | null },
+  "export_file_ios": { args: { defaultName: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: FileOperationReceipt | null },
   "check_update_mobile": { args: { currentVersion: string }, result: UpdateInfo | null },
 }
 

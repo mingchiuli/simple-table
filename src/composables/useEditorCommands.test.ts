@@ -388,27 +388,36 @@ describe("useEditorCommands", () => {
     );
   });
 
-  it("recovers an applied mutation when both command responses are lost", async () => {
-    const api = await import("@/api");
-    const elementPlus = await import("element-plus");
-    const setup = setupCommands();
-    const recovered = openedResponse();
-    recovered.editorSession.revision = '1';
-    recovered.document.sheets[0].name = 'Recovered';
-    vi.mocked(api.addRow).mockRejectedValue(new Error("response channel closed"));
-    vi.mocked(api.getActiveDocument).mockResolvedValue(recovered);
-    vi.mocked(api.getCurrentDocumentProjection).mockResolvedValue(recovered);
+  it("refreshes an ambiguous applied mutation without claiming command success", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = await import("@/api");
+      const elementPlus = await import("element-plus");
+      const setup = setupCommands();
+      const recovered = openedResponse();
+      recovered.editorSession.revision = '1';
+      recovered.document.sheets[0].name = 'Recovered';
+      vi.mocked(api.addRow).mockRejectedValue(new Error("response channel closed"));
+      vi.mocked(api.getActiveDocument).mockResolvedValue(recovered);
+      vi.mocked(api.getCurrentDocumentProjection).mockResolvedValue(recovered);
 
-    await setup.commands.handleAddRow();
+      const command = setup.commands.handleAddRow();
+      await vi.advanceTimersByTimeAsync(3_250);
+      await command;
 
-    expect(api.addRow).toHaveBeenCalledTimes(2);
-    const firstContext = vi.mocked(api.addRow).mock.calls[0][0];
-    const retryContext = vi.mocked(api.addRow).mock.calls[1][0];
-    expect(retryContext.commandId).toBe(firstContext.commandId);
-    expect(setup.documentSessionStore.revision).toBe('1');
-    expect(setup.documentSessionStore.data?.sheets[0].name).toBe('Recovered');
-    expect(setup.documentSessionStore.projectionStale).toBe(false);
-    expect(elementPlus.ElMessage.error).not.toHaveBeenCalled();
+      expect(api.addRow).toHaveBeenCalledTimes(2);
+      const firstContext = vi.mocked(api.addRow).mock.calls[0][0];
+      const retryContext = vi.mocked(api.addRow).mock.calls[1][0];
+      expect(retryContext.commandId).toBe(firstContext.commandId);
+      expect(setup.documentSessionStore.revision).toBe('1');
+      expect(setup.documentSessionStore.data?.sheets[0].name).toBe('Recovered');
+      expect(setup.documentSessionStore.projectionStale).toBe(false);
+      expect(elementPlus.ElMessage.error).toHaveBeenCalledWith(
+        "Failed to add row: Error: response channel closed",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recovers an ambiguous mutation from the command replay endpoint", async () => {

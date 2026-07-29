@@ -148,4 +148,20 @@ describe('documentFileOperationProtocol', () => {
 
     expect(recoverAmbiguous).not.toHaveBeenCalled();
   });
+
+  it('recovers a terminal cancellation without repeating the side effect', async () => {
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn().mockResolvedValue({ status: 'cancelled' }),
+      createOperationId: () => 'operation-cancelled',
+    });
+
+    await expect(protocol.execute<FileOperationReceipt | null>({
+      kind: 'export',
+      invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+      receiptForResponse: (response) => response,
+      validateReceipt: () => true,
+      recoverResponse: async (value) => value,
+      recoverCancelled: () => null,
+    })).resolves.toBeNull();
+  });
 });

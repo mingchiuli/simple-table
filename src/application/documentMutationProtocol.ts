@@ -16,8 +16,7 @@ type MutationAction = (
 ) => Promise<EditorMutationResponse>;
 
 export type MutationExecutionResult =
-  | { status: 'response'; response: EditorMutationResponse }
-  | { status: 'recovered' };
+  { status: 'response'; response: EditorMutationResponse };
 
 export type DocumentMutationTransport = {
   getMutationResult: (
@@ -76,12 +75,16 @@ export function createDocumentMutationProtocol({
       return { status: 'response', response: invocation.response };
     }
 
+    let replay: Awaited<ReturnType<typeof waitForMutationResult>> = { status: 'missing' };
     try {
-      const replay = await waitForMutationResult(context.documentId, mutationContext.commandId);
-      if (replay) return { status: 'response', response: replay };
+      replay = await waitForMutationResult(context.documentId, mutationContext.commandId);
     } catch (error) {
       reportError('Failed to query an ambiguous mutation result', error);
     }
+    if (replay.status === 'completed') {
+      return { status: 'response', response: replay.response };
+    }
+    if (replay.status === 'failed') throw replay.error;
 
     try {
       const active = await transport.getActiveDocument();
@@ -97,9 +100,7 @@ export function createDocumentMutationProtocol({
           },
           preferredSheetIndex
         );
-        if (recovery.recoverProjection(projection, preferredSheetIndex)) {
-          return { status: 'recovered' };
-        }
+        recovery.recoverProjection(projection, preferredSheetIndex);
       }
     } catch (error) {
       reportError('Failed to recover an ambiguous mutation result', error);
@@ -110,19 +111,34 @@ export function createDocumentMutationProtocol({
   async function waitForMutationResult(
     documentId: U64String,
     commandId: string
-  ): Promise<EditorMutationResponse | null> {
-    const deadline = clock.now() + MUTATION_RESULT_POLL_DEADLINE_MS;
+  ): Promise<
+    | { status: 'completed'; response: EditorMutationResponse }
+    | { status: 'failed'; error: { code: string; message: string } }
+    | { status: 'missing' }
+  > {
+    const discoveryDeadline = clock.now() + MUTATION_RESULT_POLL_DEADLINE_MS;
     let pollInterval = MUTATION_RESULT_INITIAL_POLL_INTERVAL_MS;
+    let observedPending = false;
     while (true) {
       const lookup = await transport.getMutationResult(documentId, commandId);
       if (lookup.status === 'completed') {
         if (!lookup.response) {
           throw new Error('Completed mutation lookup did not include a response');
         }
-        return lookup.response;
+        return { status: 'completed', response: lookup.response };
       }
-      if (lookup.status === 'missing' || clock.now() >= deadline) {
-        return null;
+      if (lookup.status === 'failed') {
+        if (!lookup.error) {
+          throw new Error('Failed mutation lookup did not include an error');
+        }
+        return { status: 'failed', error: lookup.error };
+      }
+      if (lookup.status === 'pending') {
+        observedPending = true;
+      } else if (observedPending) {
+        throw new Error('Pending mutation result disappeared before reaching a terminal state');
+      } else if (clock.now() >= discoveryDeadline) {
+        return { status: 'missing' };
       }
       await clock.sleep(pollInterval);
       pollInterval = Math.min(

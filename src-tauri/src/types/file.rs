@@ -45,6 +45,7 @@ pub enum FileOperationKind {
     Open,
     Save,
     Close,
+    Export,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
@@ -69,6 +70,7 @@ pub enum FileOperationResultStatus {
     Pending,
     Completed,
     Failed,
+    Cancelled,
     Missing,
 }
 

@@ -32,6 +32,7 @@ pub(crate) fn file_operation_receipt(
             crate::projection_model::FileOperationKind::Open => types::FileOperationKind::Open,
             crate::projection_model::FileOperationKind::Save => types::FileOperationKind::Save,
             crate::projection_model::FileOperationKind::Close => types::FileOperationKind::Close,
+            crate::projection_model::FileOperationKind::Export => types::FileOperationKind::Export,
         },
         document_id: value.document_id,
         revision: value.revision,
@@ -53,6 +54,9 @@ pub(crate) fn file_operation_lookup(
             }
             crate::projection_model::FileOperationLookupStatus::Failed => {
                 types::FileOperationResultStatus::Failed
+            }
+            crate::projection_model::FileOperationLookupStatus::Cancelled => {
+                types::FileOperationResultStatus::Cancelled
             }
             crate::projection_model::FileOperationLookupStatus::Missing => {
                 types::FileOperationResultStatus::Missing

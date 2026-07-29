@@ -5,11 +5,16 @@ use std::sync::Arc;
 use crate::application::document_codec_port::{DocumentCodecPort, OpenDocumentSource};
 use crate::application::document_projection;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
-use crate::application::prepared_document_repository::{self, PreparedDocumentRepository};
+use crate::application::prepared_document_repository::{
+    self, PrepareReservation, PreparedDocumentFingerprint, PreparedDocumentRepository,
+};
 use crate::document_format::default_spreadsheet_extension;
 use crate::error::AppError;
 use crate::projection_model::PreparedOpenDocument;
-use crate::resource_limits::validate_file_data;
+use crate::resource_limits::{
+    ResourceLedger, validate_active_and_prepared_document_bytes, validate_file_data,
+    validate_prepared_document_bytes,
+};
 use crate::state::editor_state::EditorState;
 use crate::state::state::ActiveDocumentRepository;
 
@@ -66,14 +71,14 @@ impl DocumentOpenService {
 pub fn prepare_open_input(
     service: &DocumentOpenService,
     source: OpenDocumentSource,
+    reservation: PrepareReservation,
 ) -> Result<PreparedOpenDocument, AppError> {
     let source_path = PathBuf::from(&source.path);
     let plan = service.codec().plan_open(&source)?;
     let estimated_parse_bytes = plan.estimated_parse_bytes();
     let active_document_bytes = active_document_resource_bytes(service)?;
-    let reservation = service
-        .prepared_documents()
-        .reserve_for_parse_bytes(estimated_parse_bytes, active_document_bytes)?;
+    validate_prepared_document_bytes(estimated_parse_bytes)?;
+    validate_active_and_prepared_document_bytes(active_document_bytes, estimated_parse_bytes)?;
     let mut work = service
         .work_budget()
         .reserve_preparation(active_document_bytes, estimated_parse_bytes)?;
@@ -85,19 +90,49 @@ pub fn prepare_open_input(
     prepare_editor_state(service, editor_state, Some(source_path), reservation, work)
 }
 
-pub fn prepare_new_file(service: &DocumentOpenService) -> Result<PreparedOpenDocument, AppError> {
+pub fn prepare_new_file(
+    service: &DocumentOpenService,
+    preparation_id: &str,
+) -> Result<PreparedOpenDocument, AppError> {
+    let fingerprint = PreparedDocumentFingerprint::new_file();
+    let reservation = match service
+        .prepared_documents()
+        .reserve(preparation_id, fingerprint)?
+    {
+        prepared_document_repository::PrepareReservationResult::Execute(reservation) => reservation,
+        prepared_document_repository::PrepareReservationResult::Replay => {
+            return replay_prepared_document(service, preparation_id, fingerprint);
+        }
+    };
     let file_data = blank_file_data();
     validate_file_data(&file_data)?;
     let active_document_bytes = active_document_resource_bytes(service)?;
-    let (reservation, estimated_prepared_bytes) = service
-        .prepared_documents()
-        .reserve_for_file_data(&file_data, active_document_bytes)?;
+    let estimated_prepared_bytes = ResourceLedger::from_file_data(&file_data)
+        .estimated_bytes()
+        .saturating_mul(2);
+    validate_prepared_document_bytes(estimated_prepared_bytes)?;
+    validate_active_and_prepared_document_bytes(active_document_bytes, estimated_prepared_bytes)?;
     let mut work = service
         .work_budget()
         .reserve_preparation(active_document_bytes, estimated_prepared_bytes)?;
     let editor_state = EditorState::new(file_data);
     work.set_work_bytes(editor_state.estimated_resource_bytes())?;
     prepare_editor_state(service, editor_state, None, reservation, work)
+}
+
+pub(crate) fn replay_prepared_document(
+    service: &DocumentOpenService,
+    preparation_id: &str,
+    fingerprint: PreparedDocumentFingerprint,
+) -> Result<PreparedOpenDocument, AppError> {
+    service
+        .prepared_documents()
+        .project(preparation_id, fingerprint, |editor_state| {
+            PreparedOpenDocument {
+                token: preparation_id.to_string(),
+                preview: document_projection::open_document_snapshot(editor_state),
+            }
+        })
 }
 
 pub fn abort_prepared_document(service: &DocumentOpenService, token: &str) -> Result<(), AppError> {
@@ -234,6 +269,19 @@ mod tests {
     #[test]
     fn open_input_is_decoded_through_the_injected_codec() {
         let service = service();
+        let fingerprint = PreparedDocumentFingerprint::open("/tmp/imported");
+        let reservation = match service
+            .prepared_documents()
+            .reserve("prepare-open", fingerprint)
+            .expect("reserve preparation")
+        {
+            prepared_document_repository::PrepareReservationResult::Execute(reservation) => {
+                reservation
+            }
+            prepared_document_repository::PrepareReservationResult::Replay => {
+                panic!("first preparation cannot replay")
+            }
+        };
         let prepared = prepare_open_input(
             &service,
             OpenDocumentSource {
@@ -241,6 +289,7 @@ mod tests {
                 bytes: b"decoded through port".to_vec(),
                 file_name: Some("imported.csv".to_string()),
             },
+            reservation,
         )
         .expect("prepare source");
         let response = service
@@ -258,7 +307,7 @@ mod tests {
     #[test]
     fn new_file_uses_the_backend_owned_blank_template() {
         let service = service();
-        let prepared = prepare_new_file(&service).expect("init file");
+        let prepared = prepare_new_file(&service, "prepare-new").expect("init file");
         let response = service
             .prepared_documents()
             .take(&prepared.token)
@@ -275,5 +324,24 @@ mod tests {
                 .iter()
                 .all(|row| row.len() == 5 && row.iter().all(|cell| cell == &CellValue::Null))
         );
+    }
+
+    #[test]
+    fn retrying_a_completed_preparation_id_replays_the_same_document() {
+        let service = service();
+
+        let first = prepare_new_file(&service, "retryable-new").expect("first preparation");
+        let replayed = prepare_new_file(&service, "retryable-new").expect("replayed preparation");
+
+        assert_eq!(first.token, replayed.token);
+        assert_eq!(
+            first.preview.document.file_name,
+            replayed.preview.document.file_name
+        );
+        service
+            .prepared_documents()
+            .take(&first.token)
+            .expect("one prepared document remains");
+        assert!(service.prepared_documents().take(&first.token).is_err());
     }
 }

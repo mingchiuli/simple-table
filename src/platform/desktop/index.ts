@@ -5,7 +5,10 @@ import type {
 } from '@/types/documentRuntime';
 import type { OpenTargetClaim, PreparedOpenDocument } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
-import { runtimePreparedOpenDocument } from '@/application/fileProtocol';
+import {
+  runtimeFileOperationReceipt,
+  runtimePreparedOpenDocument,
+} from '@/application/fileProtocol';
 
 export const desktopFileOps = {
   claimPendingOpenTarget: (): Promise<OpenTargetClaim | null> => {
@@ -30,13 +33,18 @@ export const desktopFileOps = {
   },
 
   /** Desktop: 从后端已授权路径读取并解析。 */
-  prepareOpenFile: async (path: string): Promise<PreparedOpenDocument> => {
-    return runtimePreparedOpenDocument(await invokeCommand("prepare_open_file_desktop", { path }));
+  prepareOpenFile: async (path: string, preparationId: string): Promise<PreparedOpenDocument> => {
+    return runtimePreparedOpenDocument(
+      await invokeCommand("prepare_open_file_desktop", { path, preparationId }),
+    );
   },
 
-  prepareRecentFile: async (file: RecentFile): Promise<PreparedOpenDocument> => {
+  prepareRecentFile: async (
+    file: RecentFile,
+    preparationId: string,
+  ): Promise<PreparedOpenDocument> => {
     return runtimePreparedOpenDocument(
-      await invokeCommand("prepare_recent_file_desktop", { id: file.id }),
+      await invokeCommand("prepare_recent_file_desktop", { id: file.id, preparationId }),
     );
   },
 
@@ -53,8 +61,17 @@ export const desktopFileOps = {
     return invokeCommand("discard_save_location_desktop", { path });
   },
 
-  exportFile: async (defaultName: string, context: EditorCommandContext) => {
-    return invokeCommand("export_file_desktop", { defaultName, ...context });
+  exportFile: async (
+    defaultName: string,
+    context: EditorCommandContext,
+    operationId: string,
+  ) => {
+    const receipt = await invokeCommand("export_file_desktop", {
+      defaultName,
+      ...context,
+      operationId,
+    });
+    return receipt ? runtimeFileOperationReceipt(receipt) : null;
   },
 };
 
