@@ -12,6 +12,10 @@ import type {
 } from '@/types/fileRuntime';
 import { baseNameWithoutExtension, isUntitledSpreadsheet } from '@/utils/fileFormats';
 import { isNextU64 } from '@/utils/u64';
+import {
+  neverCancelled,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type SaveFileOutcome =
   | { status: 'none' }
@@ -65,10 +69,12 @@ export type DocumentPersistenceWorkflowPorts<ActiveDocument, SavedDocument> = {
 
 export function createDocumentPersistenceWorkflow<ActiveDocument, SavedDocument>(
   ports: DocumentPersistenceWorkflowPorts<ActiveDocument, SavedDocument>,
+  cancellation: OperationCancellationSignal = neverCancelled,
 ) {
   const fileOperations = createDocumentFileOperationProtocol({
     getFileOperationResult: ports.getFileOperationResult,
     reportError: ports.reportCleanupError,
+    cancellation,
   });
 
   async function saveCurrentFile(): Promise<SaveFileOutcome> {

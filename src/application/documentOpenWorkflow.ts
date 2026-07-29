@@ -49,15 +49,23 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
   reportCleanupError?: (message: string, error: unknown) => void;
 };
 
+type DocumentOpenWorkflowOptions = {
+  createPreparationId?: () => string;
+  cancellation?: OperationCancellationSignal;
+};
+
 export function createDocumentOpenWorkflow<ActiveDocument>(
   ports: DocumentOpenWorkflowPorts<ActiveDocument>,
   preparations: DocumentPreparationCoordinator = createDocumentPreparationCoordinator(),
-  createPreparationId: () => string = defaultPreparationId,
+  {
+    createPreparationId = defaultPreparationId,
+    cancellation = neverCancelled,
+  }: DocumentOpenWorkflowOptions = {},
 ) {
-  const pendingPreparationCleanupIds = new Set<string>();
   const fileOperations = createDocumentFileOperationProtocol({
     getFileOperationResult: ports.getFileOperationResult,
     reportError: ports.reportCleanupError,
+    cancellation,
   });
 
   async function loadFileFromPath(
@@ -270,27 +278,20 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
   }
 
   async function abortPreparationIdQuietly(preparationId: string) {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        await ports.abortPreparedDocument(preparationId);
-        pendingPreparationCleanupIds.delete(preparationId);
-        return true;
-      } catch (error) {
-        lastError = error;
-        if (attempt < 2) await Promise.resolve();
-      }
-    }
-    pendingPreparationCleanupIds.add(preparationId);
-    ports.reportCleanupError?.('Failed to abort document preparation', lastError);
-    return false;
+    const cleaned = await preparations.cleanupPreparationId(
+      preparationId,
+      ports.abortPreparedDocument,
+      (error) => ports.reportCleanupError?.('Failed to abort document preparation', error),
+    );
+    return cleaned;
   }
 
   async function cleanupPendingPreparationIds() {
-    for (const preparationId of [...pendingPreparationCleanupIds]) {
-      if (!(await abortPreparationIdQuietly(preparationId))) {
-        throw new Error('Previous document preparation could not be cleaned up');
-      }
+    if (!(await preparations.drainPreparationCleanupIds(
+      ports.abortPreparedDocument,
+      (error) => ports.reportCleanupError?.('Failed to abort document preparation', error),
+    ))) {
+      throw new Error('Previous document preparation could not be cleaned up');
     }
   }
 

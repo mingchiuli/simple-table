@@ -4,6 +4,10 @@ import type {
   FileOperationReceipt,
   FileOperationResultLookup,
 } from '@/types/fileRuntime';
+import {
+  neverCancelled,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type DocumentCloseOperationPorts<ActiveDocument> = {
   commitCloseDocument: (
@@ -18,10 +22,12 @@ export type DocumentCloseOperationPorts<ActiveDocument> = {
 
 export function createDocumentCloseOperation<ActiveDocument>(
   ports: DocumentCloseOperationPorts<ActiveDocument>,
+  cancellation: OperationCancellationSignal = neverCancelled,
 ) {
   const fileOperations = createDocumentFileOperationProtocol({
     getFileOperationResult: ports.getFileOperationResult,
     reportError: ports.reportCleanupError,
+    cancellation,
   });
 
   return async function closeDocument(context: EditorCommandContext): Promise<void> {

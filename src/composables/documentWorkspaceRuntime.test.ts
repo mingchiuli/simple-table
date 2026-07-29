@@ -11,6 +11,8 @@ import {
   type DocumentWorkspaceTestContext,
 } from '@/test/documentWorkspaceTestContext';
 import { WorkspaceDisposedError } from '@/application/workspaceOperationTracker';
+import { createDocumentFileOperationProtocol } from '@/application/documentFileOperationProtocol';
+import { OperationCancelledError } from '@/application/operationCancellation';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -119,5 +121,33 @@ describe('documentWorkspaceRuntime', () => {
     await expect(operation).resolves.toBe('prepared');
     await disposal;
     expect(prepare).toHaveBeenCalledOnce();
+  });
+
+  it('cancels non-terminal operation recovery so disposal can finish', async () => {
+    const runtime = createDocumentWorkspaceRuntime();
+    const lookupStarted = deferred<void>();
+    const operation = runtime.runTask(({ cancellation }) => {
+      const protocol = createDocumentFileOperationProtocol({
+        getFileOperationResult: () => {
+          lookupStarted.resolve();
+          return new Promise(() => undefined);
+        },
+        cancellation,
+      });
+      return protocol.execute({
+        kind: 'export',
+        invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+        receiptForResponse: () => null,
+        validateReceipt: () => true,
+        recoverResponse: async () => null,
+        recoverCancelled: () => null,
+      });
+    }, null);
+
+    await lookupStarted.promise;
+    const disposal = runtime.dispose();
+
+    await expect(operation).rejects.toBeInstanceOf(OperationCancelledError);
+    await expect(disposal).resolves.toBeUndefined();
   });
 });

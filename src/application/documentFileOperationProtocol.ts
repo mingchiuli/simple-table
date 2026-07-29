@@ -4,6 +4,12 @@ import type {
   FileOperationResultLookup,
 } from '@/types/fileRuntime';
 import { invokeIdempotently } from '@/application/idempotentCommandProtocol';
+import {
+  isOperationCancelled,
+  neverCancelled,
+  raceWithOperationCancellation,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 type ProtocolClock = {
   now: () => number;
@@ -25,6 +31,7 @@ type DocumentFileOperationProtocolOptions = {
   createOperationId?: () => string;
   clock?: ProtocolClock;
   reportError?: (message: string, error: unknown) => void;
+  cancellation?: OperationCancellationSignal;
 };
 
 const RESULT_DISCOVERY_DEADLINE_MS = 3_000;
@@ -36,13 +43,17 @@ export function createDocumentFileOperationProtocol({
   createOperationId = defaultOperationId,
   clock = systemClock,
   reportError = () => undefined,
+  cancellation = neverCancelled,
 }: DocumentFileOperationProtocolOptions) {
   async function execute<T>(operation: FileOperationExecution<T>): Promise<T> {
     const operationId = createOperationId();
-    const invocation = await invokeIdempotently({
-      operationId,
-      invoke: operation.invoke,
-    });
+    const invocation = await raceWithOperationCancellation(
+      invokeIdempotently({
+        operationId,
+        invoke: operation.invoke,
+      }),
+      cancellation,
+    );
     if (invocation.status === 'response') {
       return admittedResponse(invocation.response, operation);
     }
@@ -55,6 +66,7 @@ export function createDocumentFileOperationProtocol({
         return await operation.recoverResponse(result.receipt);
       }
     } catch (error) {
+      if (isOperationCancelled(error)) throw error;
       reportError('Failed to query an ambiguous file operation result', error);
     }
     if (result.status === 'failed') throw result.error;
@@ -85,7 +97,10 @@ export function createDocumentFileOperationProtocol({
     const discoveryDeadline = clock.now() + RESULT_DISCOVERY_DEADLINE_MS;
     let interval = INITIAL_POLL_INTERVAL_MS;
     while (true) {
-      const lookup = await getFileOperationResult(operationId);
+      const lookup = await raceWithOperationCancellation(
+        getFileOperationResult(operationId),
+        cancellation,
+      );
       if (lookup.status === 'completed') {
         if (!lookup.receipt) {
           throw new Error('Completed file operation lookup did not include a receipt');
@@ -102,7 +117,7 @@ export function createDocumentFileOperationProtocol({
       if (lookup.status === 'missing' && clock.now() >= discoveryDeadline) {
         return { status: 'missing' };
       }
-      await clock.sleep(interval);
+      await raceWithOperationCancellation(clock.sleep(interval), cancellation);
       interval = Math.min(interval * 2, MAX_POLL_INTERVAL_MS);
     }
   }

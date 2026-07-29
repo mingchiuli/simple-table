@@ -14,6 +14,7 @@ import {
 } from '@/application/fileProtocol';
 import { useDocumentWorkspaceRuntime } from '@/composables/documentWorkspaceRuntime';
 import type { DocumentCommandBus } from '@/composables/documentCommandBusAdapter';
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import { useDocumentLifecycle } from '@/composables/useDocumentLifecycle';
 import { useDocumentReplacementGuard } from '@/composables/useDocumentReplacementGuard';
 import { useRecentFileUpdates } from '@/composables/useRecentFileUpdates';
@@ -56,6 +57,7 @@ export function useDocumentFileCoordinator({
   function createCoordinator(
     commandBus: DocumentCommandBus,
     preparations: DocumentPreparationCoordinator,
+    cancellation: OperationCancellationSignal,
   ) {
     return createDocumentFileCoordinator({
       getFileData: () => fileData?.value ?? document.data,
@@ -104,7 +106,7 @@ export function useDocumentFileCoordinator({
       clearDocument: () => session.clearDocument(),
       queueRecentFileEntryUpdate,
       reportCleanupError: (message, error) => console.warn(`${message}:`, error),
-    }, preparations);
+    }, preparations, cancellation);
   }
 
   type FileCoordinator = ReturnType<typeof createCoordinator>;
@@ -114,8 +116,8 @@ export function useDocumentFileCoordinator({
     task: (coordinator: FileCoordinator) => Promise<T>,
     disposedValue: T,
   ): Promise<T> {
-    return workspace.runTask(({ commandBus, preparations }) => {
-      admittedCoordinator ??= createCoordinator(commandBus, preparations);
+    return workspace.runTask(({ commandBus, preparations, cancellation }) => {
+      admittedCoordinator ??= createCoordinator(commandBus, preparations, cancellation);
       return task(admittedCoordinator);
     }, disposedValue);
   }

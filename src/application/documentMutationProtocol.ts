@@ -9,6 +9,12 @@ import type {
   OpenDocumentResponse,
 } from '@/types/protocol';
 import { invokeIdempotently } from '@/application/idempotentCommandProtocol';
+import {
+  isOperationCancelled,
+  neverCancelled,
+  raceWithOperationCancellation,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 import { compareU64 } from '@/utils/u64';
 
 type MutationAction = (
@@ -49,6 +55,7 @@ type DocumentMutationProtocolOptions = {
   createCommandId?: () => string;
   clock?: ProtocolClock;
   reportError?: (message: string, error: unknown) => void;
+  cancellation?: OperationCancellationSignal;
 };
 
 const MUTATION_RESULT_POLL_DEADLINE_MS = 3_000;
@@ -61,16 +68,20 @@ export function createDocumentMutationProtocol({
   createCommandId = defaultCommandId,
   clock = systemClock,
   reportError = () => undefined,
+  cancellation = neverCancelled,
 }: DocumentMutationProtocolOptions) {
   async function execute(
     action: MutationAction,
     context: EditorCommandContext
   ): Promise<MutationExecutionResult> {
     const mutationContext = { ...context, commandId: createCommandId() };
-    const invocation = await invokeIdempotently({
-      operationId: mutationContext.commandId,
-      invoke: () => action(mutationContext),
-    });
+    const invocation = await raceWithOperationCancellation(
+      invokeIdempotently({
+        operationId: mutationContext.commandId,
+        invoke: () => action(mutationContext),
+      }),
+      cancellation,
+    );
     if (invocation.status === 'response') {
       return { status: 'response', response: invocation.response };
     }
@@ -79,6 +90,7 @@ export function createDocumentMutationProtocol({
     try {
       replay = await waitForMutationResult(context.documentId, mutationContext.commandId);
     } catch (error) {
+      if (isOperationCancelled(error)) throw error;
       reportError('Failed to query an ambiguous mutation result', error);
     }
     if (replay.status === 'completed') {
@@ -120,7 +132,10 @@ export function createDocumentMutationProtocol({
     let pollInterval = MUTATION_RESULT_INITIAL_POLL_INTERVAL_MS;
     let observedPending = false;
     while (true) {
-      const lookup = await transport.getMutationResult(documentId, commandId);
+      const lookup = await raceWithOperationCancellation(
+        transport.getMutationResult(documentId, commandId),
+        cancellation,
+      );
       if (lookup.status === 'completed') {
         if (!lookup.response) {
           throw new Error('Completed mutation lookup did not include a response');
@@ -140,7 +155,7 @@ export function createDocumentMutationProtocol({
       } else if (clock.now() >= discoveryDeadline) {
         return { status: 'missing' };
       }
-      await clock.sleep(pollInterval);
+      await raceWithOperationCancellation(clock.sleep(pollInterval), cancellation);
       pollInterval = Math.min(
         pollInterval * 2,
         MUTATION_RESULT_MAX_POLL_INTERVAL_MS

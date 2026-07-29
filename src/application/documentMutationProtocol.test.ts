@@ -9,7 +9,12 @@ import type {
   MutationResultLookup,
   OpenDocumentResponse,
 } from '@/types/protocol';
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
+import {
+  createOperationCancellationSource,
+  OperationCancelledError,
+} from '@/application/operationCancellation';
 
 describe('document mutation protocol', () => {
   it('does not retry a definitive backend rejection', async () => {
@@ -121,6 +126,27 @@ describe('document mutation protocol', () => {
       context(),
     )).rejects.toBe(failure);
   });
+
+  it('stops waiting for a non-terminal mutation when its workspace is disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const lookupStarted = deferred<void>();
+    const protocol = createProtocol({
+      cancellation: cancellation.signal,
+      getMutationResult: vi.fn(() => {
+        lookupStarted.resolve();
+        return new Promise<MutationResultLookup>(() => undefined);
+      }),
+    });
+    const execution = protocol.execute(
+      vi.fn().mockRejectedValue(new Error('ipc closed')),
+      context(),
+    );
+
+    await lookupStarted.promise;
+    cancellation.cancel();
+
+    await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
+  });
 });
 
 type ProtocolOverrides = Partial<DocumentMutationTransport> & {
@@ -129,6 +155,7 @@ type ProtocolOverrides = Partial<DocumentMutationTransport> & {
     now: () => number;
     sleep: (milliseconds: number) => Promise<void>;
   };
+  cancellation?: OperationCancellationSignal;
 };
 
 function createProtocol(overrides: ProtocolOverrides = {}) {
@@ -147,7 +174,16 @@ function createProtocol(overrides: ProtocolOverrides = {}) {
     },
     createCommandId: () => 'command-1',
     clock: overrides.clock ?? advancingClock(),
+    cancellation: overrides.cancellation,
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }
 
 function advancingClock() {

@@ -631,6 +631,36 @@ describe('documentFileCoordinator', () => {
     expect(abortPreparedDocument).toHaveBeenNthCalledWith(4, retainedId);
   });
 
+  it('retains preparation cleanup across file coordinator instances', async () => {
+    const transportError = new Error('response lost');
+    const prepareNewFile = vi.fn()
+      .mockRejectedValueOnce(transportError)
+      .mockRejectedValueOnce(transportError)
+      .mockImplementation(async (preparationId: string) => prepared(preparationId));
+    const abortPreparedDocument = vi.fn()
+      .mockRejectedValueOnce(new Error('cleanup transport lost'))
+      .mockRejectedValueOnce(new Error('cleanup transport lost'))
+      .mockRejectedValueOnce(new Error('cleanup transport lost'))
+      .mockResolvedValue(undefined);
+    const { ports } = createPorts({
+      prepareNewFile,
+      abortPreparedDocument,
+      commitPreparedDocument: vi.fn(async (value) => openReceipt(value)),
+    });
+    const preparations = createDocumentPreparationCoordinator();
+    const first = createDocumentFileCoordinator(ports, preparations);
+
+    await expect(first.createNewDocument()).rejects.toBe(transportError);
+
+    const second = createDocumentFileCoordinator(ports, preparations);
+    await expect(second.createNewDocument()).resolves.toBe(true);
+
+    const retainedId = prepareNewFile.mock.calls[0][0];
+    expect(prepareNewFile.mock.calls[1][0]).toBe(retainedId);
+    expect(prepareNewFile.mock.calls[2][0]).not.toBe(retainedId);
+    expect(abortPreparedDocument).toHaveBeenNthCalledWith(4, retainedId);
+  });
+
   it('recovers an exported file after both command responses are lost', async () => {
     const receipt = {
       kind: 'export' as const,

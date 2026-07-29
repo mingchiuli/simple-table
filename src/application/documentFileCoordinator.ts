@@ -13,6 +13,7 @@ import {
 import type { DocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
 import { createDocumentCloseOperation } from '@/application/documentCloseOperation';
 import type { FileOperationReceipt } from '@/types/fileRuntime';
+import type { OperationCancellationSignal } from '@/application/operationCancellation';
 
 export type {
   ExportFileOutcome,
@@ -36,15 +37,16 @@ export type DocumentFileCoordinatorPorts<ActiveDocument, SavedDocument> =
 export function createDocumentFileCoordinator<ActiveDocument, SavedDocument>(
   ports: DocumentFileCoordinatorPorts<ActiveDocument, SavedDocument>,
   preparations?: DocumentPreparationCoordinator,
+  cancellation?: OperationCancellationSignal,
 ) {
-  const closeDocument = createDocumentCloseOperation(ports);
+  const closeDocument = createDocumentCloseOperation(ports, cancellation);
   const workflowPorts: DocumentFileWorkflowPorts<ActiveDocument, SavedDocument> = {
     ...ports,
     closeDocument,
   };
   return {
-    ...createDocumentOpenWorkflow(workflowPorts, preparations),
-    ...createDocumentPersistenceWorkflow(workflowPorts),
+    ...createDocumentOpenWorkflow(workflowPorts, preparations, { cancellation }),
+    ...createDocumentPersistenceWorkflow(workflowPorts, cancellation),
     ...createDocumentCloseWorkflow(workflowPorts),
   };
 }

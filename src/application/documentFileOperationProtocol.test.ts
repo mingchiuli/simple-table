@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDocumentFileOperationProtocol } from '@/application/documentFileOperationProtocol';
-import type { FileOperationReceipt } from '@/types/fileRuntime';
+import type { FileOperationReceipt, FileOperationResultLookup } from '@/types/fileRuntime';
+import {
+  createOperationCancellationSource,
+  OperationCancelledError,
+} from '@/application/operationCancellation';
 
 const receipt: FileOperationReceipt = {
   kind: 'save',
@@ -164,4 +168,39 @@ describe('documentFileOperationProtocol', () => {
       recoverCancelled: () => null,
     })).resolves.toBeNull();
   });
+
+  it('stops waiting for a non-terminal result when its workspace is disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const lookupStarted = deferred<void>();
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn(() => {
+        lookupStarted.resolve();
+        return new Promise<FileOperationResultLookup>(() => undefined);
+      }),
+      createOperationId: () => 'operation-pending',
+      cancellation: cancellation.signal,
+    });
+    const invoke = vi.fn().mockRejectedValue(new Error('response lost'));
+    const execution = protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke,
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: vi.fn(),
+    });
+
+    await lookupStarted.promise;
+    cancellation.cancel();
+
+    await expect(execution).rejects.toBeInstanceOf(OperationCancelledError);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}

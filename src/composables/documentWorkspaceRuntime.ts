@@ -6,7 +6,10 @@ import { createDocumentRegionCoordinator } from '@/application/documentRegionCoo
 import { createDocumentSessionCoordinator } from '@/application/documentSessionCoordinator';
 import { createPendingCellSaveCoordinator } from '@/application/pendingCellSaveCoordinator';
 import { createSearchSessionCoordinator } from '@/application/searchSessionCoordinator';
-import type { OperationCancellationSignal } from '@/application/operationCancellation';
+import {
+  createOperationCancellationSource,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 import {
   createDocumentCommandBus,
   type DocumentCommandBus,
@@ -47,6 +50,7 @@ function buildDocumentWorkspaceRuntime(
   document: ReturnType<typeof useDocumentSessionStore>,
 ) {
   const operations = createWorkspaceOperationTracker();
+  const operationCancellation = createOperationCancellationSource();
   const status = useDocumentStatusStore();
   const selection = useEditorSelectionStore();
   const rawPendingCellSaves = createPendingCellSaveCoordinator(usePendingCellSavesStore());
@@ -72,7 +76,12 @@ function buildDocumentWorkspaceRuntime(
       console.error('Failed to clean up cancelled document preparation:', error);
     },
   });
-  const rawCommandBus = createDocumentCommandBus(document, session, selection);
+  const rawCommandBus = createDocumentCommandBus(
+    document,
+    session,
+    selection,
+    operationCancellation.signal,
+  );
   const pendingCellSaves = guardPendingCellSaves(rawPendingCellSaves, operations);
   const search = guardSearchSession(rawSearch, operations);
   const preparations = guardDocumentPreparations(rawPreparations, operations);
@@ -80,6 +89,7 @@ function buildDocumentWorkspaceRuntime(
   const admittedServices = {
     commandBus: rawCommandBus,
     preparations: rawPreparations,
+    cancellation: operationCancellation.signal,
   };
   let disposal: Promise<void> | null = null;
 
@@ -93,6 +103,7 @@ function buildDocumentWorkspaceRuntime(
   function dispose(): Promise<void> {
     if (disposal) return disposal;
     operations.stopAcceptingWork();
+    operationCancellation.cancel();
     sessionWorkflow.discardPendingLocalWork();
     rawSearch.reset();
     disposal = Promise.all([
@@ -171,6 +182,8 @@ function guardDocumentPreparations(
         preparations.runCancellable(prepare, cancellation, discard));
     },
     cleanup: preparations.cleanup,
+    cleanupPreparationId: preparations.cleanupPreparationId,
+    drainPreparationCleanupIds: preparations.drainPreparationCleanupIds,
     waitForIdle: preparations.waitForIdle,
   };
 }

@@ -19,6 +19,10 @@ import type {
 import type { SearchOutcomeStateInput, SearchScope } from '@/types/editorRuntime';
 import type { CellSaveRequest } from '@/types/pendingCellSave';
 import { appErrorMessage } from '@/utils/appError';
+import {
+  neverCancelled,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 type DocumentSessionCoordinator = ReturnType<typeof createDocumentSessionCoordinator> & Pick<
   ReturnType<typeof createDocumentRegionCoordinator>,
@@ -40,6 +44,7 @@ export function createDocumentCommandBus(
   document: DocumentSessionStore,
   session: DocumentSessionCoordinator,
   selection: EditorSelectionStore,
+  cancellation: OperationCancellationSignal = neverCancelled,
 ) {
   const coordinator = createDocumentCommandCoordinator({
     document,
@@ -56,6 +61,7 @@ export function createDocumentCommandBus(
     },
     preferredSheetIndex: () => selection.currentSheetIndex,
     reportDiagnostic: (message, error) => console.error(`${message}:`, error),
+    cancellation,
   });
 
   async function runInteractiveCommand(

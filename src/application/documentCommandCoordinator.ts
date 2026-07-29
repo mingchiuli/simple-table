@@ -18,6 +18,11 @@ import type {
   OpenDocumentResponse,
   SheetRegionProjectionResponse,
 } from '@/types/protocol';
+import {
+  isOperationCancelled,
+  neverCancelled,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 type MutationAction = (
   context: MutationCommandContext,
@@ -137,6 +142,7 @@ type DocumentCommandCoordinatorOptions = {
   transport: DocumentCommandTransport;
   preferredSheetIndex: () => number;
   reportDiagnostic?: (message: string, error: unknown) => void;
+  cancellation?: OperationCancellationSignal;
 };
 
 export function createDocumentCommandCoordinator({
@@ -145,6 +151,7 @@ export function createDocumentCommandCoordinator({
   transport,
   preferredSheetIndex,
   reportDiagnostic = () => undefined,
+  cancellation = neverCancelled,
 }: DocumentCommandCoordinatorOptions) {
   const mutationProtocol = createDocumentMutationProtocol({
     transport,
@@ -154,6 +161,7 @@ export function createDocumentCommandCoordinator({
         session.recoverActiveDocumentResponse(response, sheetIndex),
     },
     reportError: reportDiagnostic,
+    cancellation,
   });
 
   async function runInteractiveMutation({
@@ -198,6 +206,7 @@ export function createDocumentCommandCoordinator({
         },
       ) ?? { status: 'skipped' };
     } catch (error) {
+      if (isOperationCancelled(error)) return { status: 'skipped' };
       await refreshAfterMutationError(refreshProjectionOnError || document.projectionStale);
       return { status: 'failed', error };
     } finally {

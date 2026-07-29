@@ -74,10 +74,14 @@ internal models.
 - Pinia Stores own serializable view state and synchronous transitions. They do
   not perform I/O, schedule work, or locate other services.
 - `DocumentWorkspaceRuntime` owns the document session, region cache, pending
-  saves, search session, command bus, and admitted document work.
+  saves, search session, command bus, preparation cleanup journal, and admitted
+  document work. Its cancellation signal terminates frontend result observation
+  when the workspace is disposed; it never repeats or reclassifies the backend
+  side effect.
 - `ApplicationWorkspaceRuntime` owns application exit, document workspace,
-  recent files, updates, and startup restoration. Disposal closes admission and
-  drains work already accepted by those runtimes.
+  recent files, updates, and startup restoration. Disposal closes admission,
+  cancels result observation that cannot outlive the workspace, and drains the
+  remaining accepted work.
 
 ### Adapters and UI
 
@@ -164,6 +168,8 @@ internal models.
 1. A platform adapter authorizes or imports a source.
 2. The Rust open service reserves work, preflights the format, and prepares an
    `EditorState` without replacing the active document.
+   Preparation IDs have bounded, expiring success, failure, and cancellation
+   state so retries cannot consume a cancellation or install a late result.
 3. The frontend admits the bounded preview and commits the prepared token with
    the expected document context.
 4. Rust atomically replaces the document, retires old replay/index work, and

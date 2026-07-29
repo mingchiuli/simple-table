@@ -23,7 +23,8 @@ struct PreparedDocumentStore {
     order: VecDeque<String>,
     retired: Vec<PreparedDocument>,
     prepare_in_progress: Option<InProgressPreparation>,
-    cancelled_preparation: Option<String>,
+    terminal_preparations: HashMap<String, TerminalPreparation>,
+    terminal_order: VecDeque<String>,
     checkout_in_progress: bool,
 }
 
@@ -36,6 +37,18 @@ struct PreparedDocumentEntry {
 struct InProgressPreparation {
     token: String,
     fingerprint: PreparedDocumentFingerprint,
+}
+
+struct TerminalPreparation {
+    fingerprint: Option<PreparedDocumentFingerprint>,
+    outcome: TerminalPreparationOutcome,
+    created_at: Instant,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalPreparationOutcome {
+    Cancelled,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,12 +83,11 @@ impl PreparedDocumentStore {
     ) -> Result<PrepareAdmission, AppError> {
         self.prune_expired(now);
         validate_preparation_id(token)?;
-        if self.cancelled_preparation.as_deref() == Some(token) {
-            self.cancelled_preparation = None;
-            return Err(preparation_aborted_error());
-        }
-        if self.prepare_in_progress.is_none() {
-            self.cancelled_preparation = None;
+        if let Some(terminal) = self.terminal_preparations.get(token) {
+            if let Some(current) = terminal.fingerprint {
+                ensure_same_fingerprint(current, fingerprint)?;
+            }
+            return Err(terminal_preparation_error(terminal.outcome));
         }
         if let Some(entry) = self.pending.get(token) {
             ensure_same_fingerprint(entry.fingerprint, fingerprint)?;
@@ -91,7 +103,6 @@ impl PreparedDocumentStore {
         if self.checkout_in_progress || self.pending.len() >= MAX_PREPARED_DOCUMENTS {
             return Err(AppError::PreparedDocumentConflict);
         }
-        self.cancelled_preparation = None;
         self.prepare_in_progress = Some(InProgressPreparation {
             token: token.to_string(),
             fingerprint,
@@ -106,6 +117,25 @@ impl PreparedDocumentStore {
             .is_some_and(|preparation| preparation.token == token)
         {
             self.prepare_in_progress = None;
+        }
+    }
+
+    fn fail_prepare(&mut self, token: &str, fingerprint: PreparedDocumentFingerprint) {
+        if !self
+            .prepare_in_progress
+            .as_ref()
+            .is_some_and(|preparation| preparation.token == token)
+        {
+            return;
+        }
+        self.finish_prepare(token);
+        if !self.terminal_preparations.contains_key(token) {
+            self.record_terminal(
+                token.to_string(),
+                Some(fingerprint),
+                TerminalPreparationOutcome::Failed,
+                Instant::now(),
+            );
         }
     }
 
@@ -177,17 +207,27 @@ impl PreparedDocumentStore {
 
     fn abort(&mut self, token: &str) {
         self.prune_expired(Instant::now());
-        if self
+        let fingerprint = self
             .prepare_in_progress
             .as_ref()
-            .is_some_and(|preparation| preparation.token == token)
-        {
-            self.cancelled_preparation = Some(token.to_string());
-        }
+            .filter(|preparation| preparation.token == token)
+            .map(|preparation| preparation.fingerprint)
+            .or_else(|| self.pending.get(token).map(|entry| entry.fingerprint))
+            .or_else(|| {
+                self.terminal_preparations
+                    .get(token)
+                    .and_then(|terminal| terminal.fingerprint)
+            });
         if let Some(entry) = self.pending.remove(token) {
             self.retired.push(entry.document);
         }
         self.order.retain(|pending_token| pending_token != token);
+        self.record_terminal(
+            token.to_string(),
+            fingerprint,
+            TerminalPreparationOutcome::Cancelled,
+            Instant::now(),
+        );
     }
 
     fn prune_expired(&mut self, now: Instant) {
@@ -206,6 +246,43 @@ impl PreparedDocumentStore {
         }
         self.order
             .retain(|pending_token| self.pending.contains_key(pending_token));
+        let expired_terminal: Vec<_> = self
+            .terminal_preparations
+            .iter()
+            .filter(|(_, terminal)| {
+                now.saturating_duration_since(terminal.created_at) >= PREPARATION_TERMINAL_TTL
+            })
+            .map(|(token, _)| token.clone())
+            .collect();
+        for token in expired_terminal {
+            self.terminal_preparations.remove(&token);
+        }
+        self.terminal_order
+            .retain(|token| self.terminal_preparations.contains_key(token));
+    }
+
+    fn record_terminal(
+        &mut self,
+        token: String,
+        fingerprint: Option<PreparedDocumentFingerprint>,
+        outcome: TerminalPreparationOutcome,
+        now: Instant,
+    ) {
+        self.terminal_order.retain(|current| current != &token);
+        self.terminal_order.push_back(token.clone());
+        self.terminal_preparations.insert(
+            token,
+            TerminalPreparation {
+                fingerprint,
+                outcome,
+                created_at: now,
+            },
+        );
+        while self.terminal_order.len() > MAX_TERMINAL_PREPARATIONS {
+            if let Some(expired) = self.terminal_order.pop_front() {
+                self.terminal_preparations.remove(&expired);
+            }
+        }
     }
 
     fn take_retired(&mut self) -> Vec<PreparedDocument> {
@@ -215,6 +292,8 @@ impl PreparedDocumentStore {
 
 const MAX_PREPARED_DOCUMENTS: usize = 1;
 const PREPARED_DOCUMENT_TTL: Duration = Duration::from_secs(5 * 60);
+const PREPARATION_TERMINAL_TTL: Duration = PREPARED_DOCUMENT_TTL;
+const MAX_TERMINAL_PREPARATIONS: usize = 64;
 const MAX_PREPARATION_ID_BYTES: usize = 128;
 
 #[derive(Default)]
@@ -304,7 +383,7 @@ impl Drop for PrepareReservation {
             return;
         }
         if let Ok(mut store) = self.repository.inner.store.lock() {
-            store.finish_prepare(&self.token);
+            store.fail_prepare(&self.token, self.fingerprint);
         }
         self.repository.inner.prepare_completed.notify_all();
     }
@@ -403,9 +482,10 @@ impl PreparedDocumentRepository {
                 .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
             store.finish_prepare(&token);
             reservation.active = false;
-            let result = if store.cancelled_preparation.as_deref() == Some(&token) {
+            let result = if let Some(terminal) = store.terminal_preparations.get(&token) {
+                let error = terminal_preparation_error(terminal.outcome);
                 store.retired.push(prepared);
-                Err(preparation_aborted_error())
+                Err(error)
             } else {
                 store.insert(token.clone(), fingerprint, prepared)
             };
@@ -521,6 +601,17 @@ fn ensure_same_fingerprint(
 
 fn preparation_aborted_error() -> AppError {
     AppError::DocumentStateInvalid("document preparation was aborted".to_string())
+}
+
+fn preparation_failed_error() -> AppError {
+    AppError::DocumentStateInvalid("document preparation previously failed".to_string())
+}
+
+fn terminal_preparation_error(outcome: TerminalPreparationOutcome) -> AppError {
+    match outcome {
+        TerminalPreparationOutcome::Cancelled => preparation_aborted_error(),
+        TerminalPreparationOutcome::Failed => preparation_failed_error(),
+    }
 }
 
 fn hash_text(digest: &mut Sha256, value: &str) {
@@ -709,6 +800,89 @@ mod tests {
             Err(AppError::DocumentStateInvalid(message))
                 if message == "document preparation was aborted"
         ));
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("source"), Instant::now()),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "document preparation was aborted"
+        ));
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("other"), Instant::now()),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "preparationId was reused with a different source"
+        ));
+    }
+
+    #[test]
+    fn an_unknown_abort_prevents_a_later_preparation_with_the_same_id() {
+        let mut store = PreparedDocumentStore::default();
+
+        store.abort("token");
+
+        assert!(matches!(
+            store.begin_prepare("token", fingerprint("source"), Instant::now()),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "document preparation was aborted"
+        ));
+    }
+
+    #[test]
+    fn dropping_a_reservation_records_a_stable_failed_terminal_state() {
+        let repository = PreparedDocumentRepository::default();
+        let reservation = match repository
+            .reserve("failed", fingerprint("source"))
+            .expect("reserve preparation")
+        {
+            PrepareReservationResult::Execute(reservation) => reservation,
+            PrepareReservationResult::Replay => panic!("first request cannot replay"),
+        };
+
+        drop(reservation);
+
+        for _ in 0..2 {
+            assert!(matches!(
+                repository.reserve("failed", fingerprint("source")),
+                Err(AppError::DocumentStateInvalid(message))
+                    if message == "document preparation previously failed"
+            ));
+        }
+        assert!(matches!(
+            repository.reserve("failed", fingerprint("other")),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "preparationId was reused with a different source"
+        ));
+    }
+
+    #[test]
+    fn retry_cannot_consume_cancellation_before_a_late_result_arrives() {
+        let repository = PreparedDocumentRepository::default();
+        let fingerprint = fingerprint("source");
+        let reservation = match repository
+            .reserve("cancelled", fingerprint)
+            .expect("reserve preparation")
+        {
+            PrepareReservationResult::Execute(reservation) => reservation,
+            PrepareReservationResult::Replay => panic!("first request cannot replay"),
+        };
+
+        repository.abort("cancelled").expect("abort preparation");
+        assert!(matches!(
+            repository.reserve("cancelled", fingerprint),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "document preparation was aborted"
+        ));
+
+        assert!(matches!(
+            repository.replace(
+                prepared("late.xlsx").editor_state,
+                None,
+                Box::new(NoopWorkLease),
+                reservation,
+                0,
+            ),
+            Err(AppError::DocumentStateInvalid(message))
+                if message == "document preparation was aborted"
+        ));
+        assert!(repository.take("cancelled").is_err());
     }
 
     #[test]

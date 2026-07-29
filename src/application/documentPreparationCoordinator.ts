@@ -24,6 +24,7 @@ export function createDocumentPreparationCoordinator(
   let tail: Promise<void> = Promise.resolve();
   const activeCleanupObservers = new Set<Promise<void>>();
   const cleanupFailures: unknown[] = [];
+  const pendingCleanupIds = new Set<string>();
   const cleanupAttempts = Math.max(1, options.cleanupAttempts ?? DEFAULT_CLEANUP_ATTEMPTS);
 
   function run<T>(prepare: () => Promise<T>): Promise<T> {
@@ -94,6 +95,32 @@ export function createDocumentPreparationCoordinator(
     throw lastFailure;
   }
 
+  async function cleanupPreparationId(
+    preparationId: string,
+    discard: (preparationId: string) => Promise<void>,
+    reportFailure?: (error: unknown) => void,
+  ): Promise<boolean> {
+    try {
+      await discardWithRetry(preparationId, discard);
+      pendingCleanupIds.delete(preparationId);
+      return true;
+    } catch (error) {
+      pendingCleanupIds.add(preparationId);
+      reportFailure?.(error);
+      return false;
+    }
+  }
+
+  async function drainPreparationCleanupIds(
+    discard: (preparationId: string) => Promise<void>,
+    reportFailure?: (error: unknown) => void,
+  ): Promise<boolean> {
+    for (const preparationId of [...pendingCleanupIds]) {
+      if (!(await cleanupPreparationId(preparationId, discard, reportFailure))) return false;
+    }
+    return true;
+  }
+
   function observeCancelledCleanup(cleanup: Promise<unknown>) {
     const observer = cleanup.then(
       () => undefined,
@@ -129,5 +156,12 @@ export function createDocumentPreparationCoordinator(
     }
   }
 
-  return { run, runCancellable, cleanup, waitForIdle };
+  return {
+    run,
+    runCancellable,
+    cleanup,
+    cleanupPreparationId,
+    drainPreparationCleanupIds,
+    waitForIdle,
+  };
 }
