@@ -64,23 +64,36 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
     const preparations: ApplicationExitPreparation[] = [];
     for (const guard of guards) {
       if (disposed) {
-        rollbackPreparations(preparations);
+        throwIfSettlementFailed(
+          rollbackPreparations(preparations),
+          'Application exit was cancelled but one or more preparations failed to roll back',
+        );
         return { status: 'cancelled' };
       }
+      let preparation: ApplicationExitPreparation | null;
       try {
-        const preparation = await guard();
-        if (!preparation) {
-          rollbackPreparations(preparations);
-          return { status: 'cancelled' };
-        }
-        preparations.push(preparation);
-        if (disposed) {
-          rollbackPreparations(preparations);
-          return { status: 'cancelled' };
-        }
+        preparation = await guard();
       } catch (error) {
-        rollbackPreparations(preparations);
-        throw error;
+        throw combineWithSettlementFailures(
+          error,
+          rollbackPreparations(preparations),
+          'Application exit preparation failed and rollback was incomplete',
+        );
+      }
+      if (!preparation) {
+        throwIfSettlementFailed(
+          rollbackPreparations(preparations),
+          'Application exit was cancelled but one or more preparations failed to roll back',
+        );
+        return { status: 'cancelled' };
+      }
+      preparations.push(preparation);
+      if (disposed) {
+        throwIfSettlementFailed(
+          rollbackPreparations(preparations),
+          'Application exit was cancelled but one or more preparations failed to roll back',
+        );
+        return { status: 'cancelled' };
       }
     }
 
@@ -89,10 +102,16 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
     try {
       await executor.execute(intent);
     } catch (error) {
-      rollbackPreparations(preparations);
-      throw error;
+      throw combineWithSettlementFailures(
+        error,
+        rollbackPreparations(preparations),
+        'Application exit execution failed and rollback was incomplete',
+      );
     }
-    commitPreparations(preparations);
+    throwIfSettlementFailed(
+      commitPreparations(preparations),
+      'Application exit executed but one or more preparations failed to commit',
+    );
     return { status: 'executed', intent };
   }
 
@@ -110,14 +129,44 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
   return { registerGuard, requestExit, dispose };
 }
 
-function commitPreparations(preparations: ApplicationExitPreparation[]) {
-  for (const preparation of preparations) preparation.commit();
+function commitPreparations(preparations: ApplicationExitPreparation[]): unknown[] {
+  return settlePreparations(preparations, (preparation) => preparation.commit());
 }
 
-function rollbackPreparations(preparations: ApplicationExitPreparation[]) {
-  for (let index = preparations.length - 1; index >= 0; index -= 1) {
-    preparations[index]?.rollback();
+function rollbackPreparations(preparations: ApplicationExitPreparation[]): unknown[] {
+  return settlePreparations(
+    [...preparations].reverse(),
+    (preparation) => preparation.rollback(),
+  );
+}
+
+function settlePreparations(
+  preparations: readonly ApplicationExitPreparation[],
+  settle: (preparation: ApplicationExitPreparation) => void,
+): unknown[] {
+  const failures: unknown[] = [];
+  for (const preparation of preparations) {
+    try {
+      settle(preparation);
+    } catch (error) {
+      failures.push(error);
+    }
   }
+  return failures;
+}
+
+function throwIfSettlementFailed(failures: unknown[], message: string): void {
+  if (failures.length > 0) throw new AggregateError(failures, message);
+}
+
+function combineWithSettlementFailures(
+  primary: unknown,
+  settlementFailures: unknown[],
+  message: string,
+): unknown {
+  return settlementFailures.length > 0
+    ? new AggregateError([primary, ...settlementFailures], message)
+    : primary;
 }
 
 function preferredIntent(

@@ -19,6 +19,7 @@ import {
   createWorkspaceOperationTracker,
   type WorkspaceOperationTracker,
 } from '@/application/workspaceOperationTracker';
+import { drainAllSettled } from '@/application/asyncDrain';
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useDocumentStatusStore } from '@/stores/documentStatus';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
@@ -106,13 +107,13 @@ function buildDocumentWorkspaceRuntime(
     operationCancellation.cancel();
     sessionWorkflow.discardPendingLocalWork();
     rawSearch.reset();
-    disposal = Promise.all([
-      operations.waitForIdle(),
-      rawPreparations.waitForIdle(),
-      sessionWorkflow.waitForMutations(),
-      rawPendingCellSaves.waitForInFlightSave(),
-      regions.waitForIdle(),
-    ]).then(() => {
+    disposal = drainAllSettled([
+      () => operations.waitForIdle(),
+      () => rawPreparations.waitForIdle(),
+      () => sessionWorkflow.waitForMutations(),
+      () => rawPendingCellSaves.waitForInFlightSave(),
+      () => regions.waitForIdle(),
+    ], 'Failed to completely drain the document workspace').finally(() => {
       operations.markDisposed();
     });
     return disposal;

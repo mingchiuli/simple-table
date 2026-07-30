@@ -14,10 +14,12 @@ import {
   createUpdateCoordinator,
   type UpdateCoordinator,
 } from '@/application/updateCoordinator';
+import type { DocumentLaunchCoordinator } from '@/application/documentLaunchCoordinator';
 import {
   createOperationCancellationSource,
   raceWithOperationCancellation,
 } from '@/application/operationCancellation';
+import { drainAllSettled } from '@/application/asyncDrain';
 import {
   createDocumentWorkspaceRuntime,
   type DocumentWorkspaceRuntime,
@@ -40,6 +42,7 @@ export type ApplicationWorkspaceRuntime = {
   document: DocumentWorkspaceRuntime;
   recentFiles: RecentFilesService;
   readonly updates: UpdateCoordinator;
+  registerDocumentLaunch(coordinator: DocumentLaunchCoordinator): () => void;
   restoreActiveDocument(): Promise<boolean>;
   dispose(): Promise<void>;
 };
@@ -68,6 +71,7 @@ export function createApplicationWorkspaceRuntime(
     applicationCancellation.signal,
   );
   let updateCoordinator: UpdateCoordinator | null = null;
+  let documentLaunch: DocumentLaunchCoordinator | null = null;
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
@@ -110,16 +114,36 @@ export function createApplicationWorkspaceRuntime(
       if (disposed) void updateCoordinator.dispose();
       return updateCoordinator;
     },
+    registerDocumentLaunch(coordinator) {
+      if (disposed) {
+        void drainAllSettled(
+          [() => coordinator.dispose()],
+          'Failed to dispose a late document launch coordinator',
+        ).catch((error) => {
+          console.error('Failed to dispose a late document launch coordinator', error);
+        });
+        return () => undefined;
+      }
+      if (documentLaunch && documentLaunch !== coordinator) {
+        throw new Error('Application workspace already owns a document launch coordinator');
+      }
+      documentLaunch = coordinator;
+      return () => {
+        if (documentLaunch === coordinator) documentLaunch = null;
+      };
+    },
     dispose() {
       if (disposal) return disposal;
       disposed = true;
       applicationCancellation.cancel();
-      disposal = Promise.all([
-        applicationExit.dispose(),
-        document.dispose(),
-        recentFiles.dispose(),
-        updateCoordinator?.dispose() ?? Promise.resolve(),
-      ]).then(() => undefined);
+      const ownedDocumentLaunch = documentLaunch;
+      disposal = drainAllSettled([
+        () => ownedDocumentLaunch?.dispose(),
+        () => applicationExit.dispose(),
+        () => document.dispose(),
+        () => recentFiles.dispose(),
+        () => updateCoordinator?.dispose(),
+      ], 'Failed to completely drain the application workspace');
       return disposal;
     },
   };

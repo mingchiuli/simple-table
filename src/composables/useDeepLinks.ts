@@ -5,6 +5,7 @@ import {
   createDocumentLaunchCoordinator,
 } from '@/application/documentLaunchCoordinator';
 import { tauriDocumentLaunchPort } from '@/platform/documentLaunchPort';
+import { useApplicationWorkspaceRuntime } from '@/composables/applicationWorkspaceRuntime';
 
 export function useDeepLinks(router: Pick<Router, 'push'>) {
   const lifecycle = createDocumentLaunchCoordinator({
@@ -18,7 +19,16 @@ export function useDeepLinks(router: Pick<Router, 'push'>) {
     },
     reportError: (message, error) => console.error(message, error),
   });
+  const releaseOwnership = useApplicationWorkspaceRuntime().registerDocumentLaunch(lifecycle);
 
   onMounted(lifecycle.start);
-  onUnmounted(lifecycle.stop);
+  onUnmounted(() => {
+    void lifecycle.dispose().then(
+      releaseOwnership,
+      (error) => {
+        releaseOwnership();
+        console.error('Failed to dispose document launch coordination:', error);
+      },
+    );
+  });
 }

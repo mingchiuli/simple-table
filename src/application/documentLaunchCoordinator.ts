@@ -14,7 +14,7 @@ export type DocumentLaunchCoordinatorPorts = {
 
 export type DocumentLaunchCoordinator = {
   start(): void;
-  stop(): void;
+  dispose(): Promise<void>;
 };
 
 export function createDocumentLaunchCoordinator({
@@ -25,17 +25,32 @@ export function createDocumentLaunchCoordinator({
   let lifecycleId = 0;
   let unlisten: (() => void) | null = null;
   let drainTail: Promise<void> = Promise.resolve();
+  let registration: Promise<void> | null = null;
+  let activeClaim: OpenTargetClaim | null = null;
+  let started = false;
+  let disposed = false;
+  let disposal: Promise<void> | null = null;
 
   function start() {
-    stop();
+    if (started || disposed) return;
+    started = true;
     const currentLifecycleId = ++lifecycleId;
-    void registerListener(currentLifecycleId);
+    registration = registerListener(currentLifecycleId);
   }
 
-  function stop() {
+  function dispose(): Promise<void> {
+    if (disposal) return disposal;
+    disposed = true;
     lifecycleId += 1;
     safeUnlisten(unlisten);
     unlisten = null;
+    const pendingRegistration = registration;
+    const pendingDrain = drainTail;
+    disposal = Promise.allSettled([
+      pendingRegistration ?? Promise.resolve(),
+      pendingDrain,
+    ]).then(() => undefined);
+    return disposal;
   }
 
   async function registerListener(currentLifecycleId: number) {
@@ -50,7 +65,7 @@ export function createDocumentLaunchCoordinator({
       unlisten = registered;
       requestDrain(currentLifecycleId);
     } catch (error) {
-      reportError('Failed to initialize document launch listener:', error);
+      safeReportError('Failed to initialize document launch listener:', error);
     }
   }
 
@@ -69,7 +84,7 @@ export function createDocumentLaunchCoordinator({
         claim = await launchTargets.claimPendingOpenTarget();
       } catch (error) {
         if (isCurrentLifecycle(currentLifecycleId)) {
-          reportError('Failed to claim pending document launch target:', error);
+          safeReportError('Failed to claim pending document launch target:', error);
         }
         return;
       }
@@ -78,12 +93,16 @@ export function createDocumentLaunchCoordinator({
         await releaseClaim(claim);
         return;
       }
+      activeClaim = claim;
+      let handedOff = false;
       try {
         await openTarget(claim.path, claim.claimId);
+        handedOff = true;
       } catch (error) {
-        reportError('Failed to route document launch target:', error);
-        await releaseClaim(claim);
-        return;
+        safeReportError('Failed to route document launch target:', error);
+      } finally {
+        if (!handedOff) await releaseClaim(claim);
+        if (activeClaim?.claimId === claim.claimId) activeClaim = null;
       }
       return;
     }
@@ -93,21 +112,29 @@ export function createDocumentLaunchCoordinator({
     try {
       await launchTargets.releaseOpenTarget(claim.claimId);
     } catch (error) {
-      reportError('Failed to release document launch target:', error);
+      safeReportError('Failed to release document launch target:', error);
     }
   }
 
   function isCurrentLifecycle(currentLifecycleId: number) {
-    return lifecycleId === currentLifecycleId;
+    return !disposed && lifecycleId === currentLifecycleId;
   }
 
   function safeUnlisten(value: (() => void) | null) {
     try {
       value?.();
     } catch (error) {
-      reportError('Failed to clean up document launch listener:', error);
+      safeReportError('Failed to clean up document launch listener:', error);
     }
   }
 
-  return { start, stop };
+  function safeReportError(message: string, error: unknown) {
+    try {
+      reportError(message, error);
+    } catch {
+      // Error reporting must not interrupt claim settlement or listener disposal.
+    }
+  }
+
+  return { start, dispose };
 }

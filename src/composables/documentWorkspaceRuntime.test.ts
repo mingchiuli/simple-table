@@ -12,7 +12,10 @@ import {
 } from '@/test/documentWorkspaceTestContext';
 import { WorkspaceDisposedError } from '@/application/workspaceOperationTracker';
 import { createDocumentFileOperationProtocol } from '@/application/documentFileOperationProtocol';
-import { OperationCancelledError } from '@/application/operationCancellation';
+import {
+  createOperationCancellationSource,
+  OperationCancelledError,
+} from '@/application/operationCancellation';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -149,5 +152,52 @@ describe('documentWorkspaceRuntime', () => {
 
     await expect(operation).rejects.toBeInstanceOf(OperationCancelledError);
     await expect(disposal).resolves.toBeUndefined();
+  });
+
+  it('drains all admitted work and reaches disposal after preparation cleanup fails', async () => {
+    const runtime = createDocumentWorkspaceRuntime();
+    const preparation = deferred<string>();
+    const preparationStarted = deferred<void>();
+    const active = deferred<void>();
+    const cancellation = createOperationCancellationSource();
+    const discard = vi.fn().mockRejectedValue(new Error('cleanup failed'));
+    const cancelledPreparation = runtime.preparations.runCancellable(
+      () => {
+        preparationStarted.resolve();
+        return preparation.promise;
+      },
+      cancellation.signal,
+      discard,
+    );
+    const activeOperation = runtime.runRequiredTask(() => active.promise);
+
+    await preparationStarted.promise;
+    cancellation.cancel();
+    await expect(cancelledPreparation).resolves.toBeUndefined();
+
+    let settled = false;
+    const disposal = runtime.dispose();
+    void disposal.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    preparation.resolve('prepared');
+    for (let index = 0; index < 12 && discard.mock.calls.length < 3; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(discard).toHaveBeenCalledTimes(3);
+    expect(settled).toBe(false);
+
+    active.resolve();
+    await expect(activeOperation).resolves.toBeUndefined();
+    await expect(disposal).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Failed to completely drain the document workspace',
+    });
+    await expect(runtime.dispose()).rejects.toMatchObject({ name: 'AggregateError' });
+    await expect(runtime.runRequiredTask(() => Promise.resolve())).rejects.toBeInstanceOf(
+      WorkspaceDisposedError,
+    );
   });
 });

@@ -16,10 +16,12 @@ type TestOverrides = Partial<{
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
     resolve = promiseResolve;
+    reject = promiseReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function claim(claimId: string, path: string): OpenTargetClaim {
@@ -102,9 +104,9 @@ describe('document launch coordinator', () => {
     const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
 
     lifecycle.start();
-    lifecycle.stop();
+    const disposal = lifecycle.dispose();
     pendingListen.resolve(registeredUnlisten);
-    await flushPromises();
+    await disposal;
 
     expect(registeredUnlisten).toHaveBeenCalledOnce();
     expect(setup.claimPendingOpenTarget).not.toHaveBeenCalled();
@@ -118,12 +120,41 @@ describe('document launch coordinator', () => {
 
     lifecycle.start();
     await waitForCondition(() => claimPendingOpenTarget.mock.calls.length === 1);
-    lifecycle.stop();
+    const disposal = lifecycle.dispose();
     pendingClaim.resolve(claim('stale', '/stale.xlsx'));
-    await flushPromises();
+    await disposal;
 
     expect(setup.pushFilePath).not.toHaveBeenCalled();
     expect(setup.releaseOpenTarget).toHaveBeenCalledWith('stale');
+  });
+
+  it('waits for an active route handoff and releases its claim when the handoff fails', async () => {
+    const handoff = deferred<void>();
+    const routeFailure = new Error('route stopped');
+    const openTarget = vi.fn(() => handoff.promise);
+    const setup = testDependencies({
+      claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('active', '/active.xlsx')),
+      openTarget,
+    });
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+
+    lifecycle.start();
+    await waitForCondition(() => openTarget.mock.calls.length === 1);
+    let disposed = false;
+    const disposal = lifecycle.dispose().then(() => { disposed = true; });
+    await flushPromises();
+
+    expect(disposed).toBe(false);
+    expect(setup.releaseOpenTarget).not.toHaveBeenCalled();
+
+    handoff.reject(routeFailure);
+    await disposal;
+
+    expect(setup.releaseOpenTarget).toHaveBeenCalledWith('active');
+    expect(setup.reportError).toHaveBeenCalledWith(
+      'Failed to route document launch target:',
+      routeFailure,
+    );
   });
 
   it('serializes claim requests so launch order remains stable', async () => {

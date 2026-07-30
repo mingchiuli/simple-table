@@ -99,6 +99,67 @@ describe('application exit coordination', () => {
     expect(order).toEqual(['first-rollback', 'second-rollback']);
   });
 
+  it('commits every preparation even when an earlier commit fails', async () => {
+    const order: string[] = [];
+    const commitFailure = new Error('second commit failed');
+    const coordinator = createApplicationExitCoordinator({
+      execute: vi.fn().mockResolvedValue(undefined),
+    });
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: () => order.push('first-commit'),
+      rollback: vi.fn(),
+    }));
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: () => {
+        order.push('second-commit');
+        throw commitFailure;
+      },
+      rollback: vi.fn(),
+    }));
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: () => order.push('third-commit'),
+      rollback: vi.fn(),
+    }));
+
+    await expect(coordinator.requestExit('close')).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Application exit executed but one or more preparations failed to commit',
+      errors: [commitFailure],
+    });
+    expect(order).toEqual(['third-commit', 'second-commit', 'first-commit']);
+  });
+
+  it('preserves the execution error and rolls back every preparation after one rollback fails', async () => {
+    const order: string[] = [];
+    const executionFailure = new Error('destroy failed');
+    const rollbackFailure = new Error('second rollback failed');
+    const coordinator = createApplicationExitCoordinator({
+      execute: vi.fn().mockRejectedValue(executionFailure),
+    });
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: vi.fn(),
+      rollback: () => order.push('first-rollback'),
+    }));
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: vi.fn(),
+      rollback: () => {
+        order.push('second-rollback');
+        throw rollbackFailure;
+      },
+    }));
+    coordinator.registerGuard(vi.fn().mockResolvedValue({
+      commit: vi.fn(),
+      rollback: () => order.push('third-rollback'),
+    }));
+
+    await expect(coordinator.requestExit('close')).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Application exit execution failed and rollback was incomplete',
+      errors: [executionFailure, rollbackFailure],
+    });
+    expect(order).toEqual(['first-rollback', 'second-rollback', 'third-rollback']);
+  });
+
   it('cancels a guard in progress and waits for it during disposal', async () => {
     const guardResult = deferred<boolean>();
     const guardPreparation = preparation();

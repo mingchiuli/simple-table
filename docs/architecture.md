@@ -79,9 +79,9 @@ internal models.
   when the workspace is disposed; it never repeats or reclassifies the backend
   side effect.
 - `ApplicationWorkspaceRuntime` owns application exit, document workspace,
-  recent files, updates, and startup restoration. Disposal closes admission,
-  cancels result observation that cannot outlive the workspace, and drains the
-  remaining accepted work.
+  document-launch claims, recent files, updates, and startup restoration.
+  Disposal closes admission, cancels result observation that cannot outlive the
+  workspace, and settles every child drain before reporting cleanup failures.
 - Cancellation ends frontend observation of queries and recoveries without
   reclassifying backend work. Persistence, metadata writes, update installation,
   and exit side effects that were already admitted are drained to completion.
