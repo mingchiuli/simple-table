@@ -4,8 +4,10 @@ import {
   createOperationCancellationSource,
   neverCancelled,
   raceWithOperationCancellation,
+  throwIfOperationCancellationFailed,
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
+import { drainAllSettled } from '@/application/asyncDrain';
 
 export type DesktopDownloadEvent =
   | { event: 'Started'; data: { contentLength?: number } }
@@ -258,9 +260,15 @@ export function createUpdateCoordinator(
     disposed = true;
     runtime.operationToken += 1;
     runtime.desktopUpdate = null;
-    observationCancellation.cancel();
+    const cancellationFailures = observationCancellation.cancel();
     unlinkParentCancellation();
-    disposal = waitForIdle();
+    disposal = drainAllSettled([
+      () => throwIfOperationCancellationFailed(
+        cancellationFailures,
+        'Failed to notify every update cancellation observer',
+      ),
+      waitForIdle,
+    ], 'Failed to completely drain update coordination');
     return disposal;
   }
 

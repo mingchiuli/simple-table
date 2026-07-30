@@ -200,4 +200,22 @@ describe('documentWorkspaceRuntime', () => {
       WorkspaceDisposedError,
     );
   });
+
+  it('notifies every cancellation observer before reporting disposal failure', async () => {
+    const runtime = createDocumentWorkspaceRuntime();
+    const cancellationFailure = new Error('cancellation observer failed');
+    const finalObserver = vi.fn();
+    await runtime.runTask(async ({ cancellation }) => {
+      cancellation.onCancel(() => {
+        throw cancellationFailure;
+      });
+      cancellation.onCancel(finalObserver);
+    }, undefined);
+
+    await expect(runtime.dispose()).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Failed to completely drain the document workspace',
+    });
+    expect(finalObserver).toHaveBeenCalledOnce();
+  });
 });

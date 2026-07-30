@@ -218,5 +218,10 @@ describe('document launch coordinator', () => {
       'Failed to release document launch target:',
       releaseFailure,
     );
+    await expect(lifecycle.dispose()).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Failed to completely dispose document launch coordination',
+      errors: [releaseFailure],
+    });
   });
 });

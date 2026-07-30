@@ -333,6 +333,29 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(releaseOpenTarget).toHaveBeenCalledTimes(2);
     expect(reportError).not.toHaveBeenCalled();
   });
+
+  it('reports exhausted claim settlement failures from its lifecycle drain', async () => {
+    const settlementFailure = new Error('claim settlement failed');
+    const releaseOpenTarget = vi.fn().mockRejectedValue(settlementFailure);
+    const reportError = vi.fn();
+    const coordinator = createCoordinator({
+      getRouteFilePath: () => '/tmp/failed-settlement.xlsx',
+      getRouteOpenTargetClaimId: () => 'claim-failed-settlement',
+      loadFileFromPath: vi.fn().mockResolvedValue(false),
+      releaseOpenTarget,
+      reportError,
+    });
+
+    coordinator.enqueue('/tmp/failed-settlement.xlsx', 'claim-failed-settlement');
+
+    await expect(coordinator.dispose()).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Failed to settle one or more document launch claims',
+      errors: [settlementFailure],
+    });
+    expect(releaseOpenTarget).toHaveBeenCalledTimes(3);
+    expect(reportError).toHaveBeenCalledWith(settlementFailure);
+  });
 });
 
 type CoordinatorOverrides = Partial<Parameters<typeof createRouteDocumentLoadCoordinator>[0]>;

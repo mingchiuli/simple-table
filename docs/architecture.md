@@ -79,9 +79,14 @@ internal models.
   when the workspace is disposed; it never repeats or reclassifies the backend
   side effect.
 - `ApplicationWorkspaceRuntime` owns application exit, document workspace,
-  document-launch claims, recent files, updates, and startup restoration.
-  Disposal closes admission, cancels result observation that cannot outlive the
-  workspace, and settles every child drain before reporting cleanup failures.
+  document-launch claims, registered route-document loaders, recent files,
+  updates, and startup restoration. Route-scoped loaders remain registered with
+  the application until their asynchronous disposal settles. Disposal closes
+  admission, cancels result observation that cannot outlive the workspace, and
+  settles every child drain before reporting cleanup failures.
+- Cancellation broadcasts isolate observers so one failing callback cannot
+  prevent later observers from receiving cancellation. Notification failures
+  are reported through the owning runtime's drain after the broadcast completes.
 - Cancellation ends frontend observation of queries and recoveries without
   reclassifying backend work. Persistence, metadata writes, update installation,
   and exit side effects that were already admitted are drained to completion.
@@ -178,7 +183,8 @@ internal models.
 4. Rust atomically replaces the document, retires old replay/index work, and
    schedules the new indexes.
 5. Launch-target claims are acknowledged only after route loading succeeds and
-   are released on cancellation or failure.
+   are released on cancellation or failure. Exhausted claim settlement retries
+   make the owning lifecycle drain fail after all other cleanup has settled.
 
 ### Mutation
 

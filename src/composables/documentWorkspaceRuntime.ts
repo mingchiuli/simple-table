@@ -8,6 +8,7 @@ import { createPendingCellSaveCoordinator } from '@/application/pendingCellSaveC
 import { createSearchSessionCoordinator } from '@/application/searchSessionCoordinator';
 import {
   createOperationCancellationSource,
+  throwIfOperationCancellationFailed,
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
 import {
@@ -104,10 +105,14 @@ function buildDocumentWorkspaceRuntime(
   function dispose(): Promise<void> {
     if (disposal) return disposal;
     operations.stopAcceptingWork();
-    operationCancellation.cancel();
+    const cancellationFailures = operationCancellation.cancel();
     sessionWorkflow.discardPendingLocalWork();
     rawSearch.reset();
     disposal = drainAllSettled([
+      () => throwIfOperationCancellationFailed(
+        cancellationFailures,
+        'Failed to notify every document workspace cancellation observer',
+      ),
       () => operations.waitForIdle(),
       () => rawPreparations.waitForIdle(),
       () => sessionWorkflow.waitForMutations(),

@@ -15,9 +15,11 @@ import {
   type UpdateCoordinator,
 } from '@/application/updateCoordinator';
 import type { DocumentLaunchCoordinator } from '@/application/documentLaunchCoordinator';
+import type { RouteDocumentLoadCoordinator } from '@/application/routeDocumentLoadCoordinator';
 import {
   createOperationCancellationSource,
   raceWithOperationCancellation,
+  throwIfOperationCancellationFailed,
 } from '@/application/operationCancellation';
 import { drainAllSettled } from '@/application/asyncDrain';
 import {
@@ -43,6 +45,7 @@ export type ApplicationWorkspaceRuntime = {
   recentFiles: RecentFilesService;
   readonly updates: UpdateCoordinator;
   registerDocumentLaunch(coordinator: DocumentLaunchCoordinator): () => void;
+  registerRouteDocumentLoad(coordinator: RouteDocumentLoadCoordinator): () => void;
   restoreActiveDocument(): Promise<boolean>;
   dispose(): Promise<void>;
 };
@@ -72,6 +75,7 @@ export function createApplicationWorkspaceRuntime(
   );
   let updateCoordinator: UpdateCoordinator | null = null;
   let documentLaunch: DocumentLaunchCoordinator | null = null;
+  const routeDocumentLoads = new Set<RouteDocumentLoadCoordinator>();
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
@@ -132,13 +136,32 @@ export function createApplicationWorkspaceRuntime(
         if (documentLaunch === coordinator) documentLaunch = null;
       };
     },
+    registerRouteDocumentLoad(coordinator) {
+      if (disposed) {
+        void drainAllSettled(
+          [() => coordinator.dispose()],
+          'Failed to dispose a late route document load coordinator',
+        ).catch((error) => {
+          console.error('Failed to dispose a late route document load coordinator', error);
+        });
+        return () => undefined;
+      }
+      routeDocumentLoads.add(coordinator);
+      return () => routeDocumentLoads.delete(coordinator);
+    },
     dispose() {
       if (disposal) return disposal;
       disposed = true;
-      applicationCancellation.cancel();
+      const cancellationFailures = applicationCancellation.cancel();
       const ownedDocumentLaunch = documentLaunch;
+      const ownedRouteDocumentLoads = [...routeDocumentLoads];
       disposal = drainAllSettled([
+        () => throwIfOperationCancellationFailed(
+          cancellationFailures,
+          'Failed to notify every application workspace cancellation observer',
+        ),
         () => ownedDocumentLaunch?.dispose(),
+        ...ownedRouteDocumentLoads.map((coordinator) => () => coordinator.dispose()),
         () => applicationExit.dispose(),
         () => document.dispose(),
         () => recentFiles.dispose(),

@@ -6,8 +6,10 @@ import {
   isOperationCancelled,
   neverCancelled,
   raceWithOperationCancellation,
+  throwIfOperationCancellationFailed,
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
+import { drainAllSettled } from '@/application/asyncDrain';
 
 export type RecentFilesPort = {
   getRecentFiles(): Promise<RecentFile[]>;
@@ -133,12 +135,18 @@ export function createRecentFilesService(
     if (disposal) return disposal;
     disposed = true;
     operations.stopAcceptingWork();
-    observationCancellation.cancel();
+    const cancellationFailures = observationCancellation.cancel();
     unlinkParentCancellation();
     runtime.loadRequestId += 1;
     runtime.pendingTracking = null;
     store.setLoading(false);
-    disposal = waitForIdle();
+    disposal = drainAllSettled([
+      () => throwIfOperationCancellationFailed(
+        cancellationFailures,
+        'Failed to notify every recent-files cancellation observer',
+      ),
+      waitForIdle,
+    ], 'Failed to completely drain recent-file coordination');
     return disposal;
   }
 

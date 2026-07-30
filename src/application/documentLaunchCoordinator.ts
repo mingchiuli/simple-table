@@ -27,6 +27,7 @@ export function createDocumentLaunchCoordinator({
   let drainTail: Promise<void> = Promise.resolve();
   let registration: Promise<void> | null = null;
   let activeClaim: OpenTargetClaim | null = null;
+  const cleanupFailures: unknown[] = [];
   let started = false;
   let disposed = false;
   let disposal: Promise<void> | null = null;
@@ -49,7 +50,14 @@ export function createDocumentLaunchCoordinator({
     disposal = Promise.allSettled([
       pendingRegistration ?? Promise.resolve(),
       pendingDrain,
-    ]).then(() => undefined);
+    ]).then(() => {
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError(
+          cleanupFailures,
+          'Failed to completely dispose document launch coordination',
+        );
+      }
+    });
     return disposal;
   }
 
@@ -112,7 +120,7 @@ export function createDocumentLaunchCoordinator({
     try {
       await launchTargets.releaseOpenTarget(claim.claimId);
     } catch (error) {
-      safeReportError('Failed to release document launch target:', error);
+      recordCleanupFailure('Failed to release document launch target:', error);
     }
   }
 
@@ -124,8 +132,13 @@ export function createDocumentLaunchCoordinator({
     try {
       value?.();
     } catch (error) {
-      safeReportError('Failed to clean up document launch listener:', error);
+      recordCleanupFailure('Failed to clean up document launch listener:', error);
     }
+  }
+
+  function recordCleanupFailure(message: string, error: unknown) {
+    cleanupFailures.push(error);
+    safeReportError(message, error);
   }
 
   function safeReportError(message: string, error: unknown) {

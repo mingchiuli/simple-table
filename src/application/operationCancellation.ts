@@ -15,9 +15,17 @@ export class OperationCancelledError extends Error {
   }
 }
 
+export function throwIfOperationCancellationFailed(
+  failures: readonly unknown[],
+  message: string,
+): void {
+  if (failures.length > 0) throw new AggregateError(failures, message);
+}
+
 export function createOperationCancellationSource() {
   let cancelled = false;
   const handlers = new Set<() => void>();
+  const notificationFailures: unknown[] = [];
   const signal: OperationCancellationSignal = {
     isCancelled: () => cancelled,
     onCancel(handler) {
@@ -30,11 +38,19 @@ export function createOperationCancellationSource() {
     },
   };
 
-  function cancel() {
-    if (cancelled) return;
+  function cancel(): readonly unknown[] {
+    if (cancelled) return notificationFailures;
     cancelled = true;
-    for (const handler of handlers) handler();
+    const pendingHandlers = [...handlers];
     handlers.clear();
+    for (const handler of pendingHandlers) {
+      try {
+        handler();
+      } catch (error) {
+        notificationFailures.push(error);
+      }
+    }
+    return notificationFailures;
   }
 
   return { signal, cancel };

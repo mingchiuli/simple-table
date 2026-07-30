@@ -7,6 +7,7 @@ import { ElMessage } from 'element-plus';
 import { acknowledgeOpenTarget, releaseOpenTarget } from '@/platform';
 import { appErrorMessage } from '@/utils/appError';
 import { onScopeDispose } from 'vue';
+import { useApplicationWorkspaceRuntime } from '@/composables/applicationWorkspaceRuntime';
 
 type UseRouteFileLoaderOptions = Omit<
   RouteDocumentLoadPorts,
@@ -37,10 +38,21 @@ export function useRouteFileLoader({
     releaseOpenTarget: release,
     reportError,
   });
+  const releaseOwnership = useApplicationWorkspaceRuntime().registerRouteDocumentLoad(coordinator);
+  let disposal: Promise<void> | null = null;
+  const ownedCoordinator: RouteDocumentLoadCoordinator = {
+    ...coordinator,
+    dispose() {
+      disposal ??= coordinator.dispose().finally(releaseOwnership);
+      return disposal;
+    },
+  };
   onScopeDispose(() => {
-    void coordinator.dispose();
+    void ownedCoordinator.dispose().catch((error) => {
+      console.error('Failed to dispose route document loading:', error);
+    });
   });
-  return coordinator;
+  return ownedCoordinator;
 }
 
 export function createRouteLeaveHandler({
@@ -50,14 +62,24 @@ export function createRouteLeaveHandler({
 }: RouteLeaveHandlerOptions) {
   return async () => {
     if (!hasActiveDocument()) {
-      await routeFileLoader.dispose();
+      await disposeRouteFileLoader(routeFileLoader);
       return true;
     }
 
     const canLeave = await closeCurrentDocument();
     if (canLeave) {
-      await routeFileLoader.dispose();
+      await disposeRouteFileLoader(routeFileLoader);
     }
     return canLeave;
   };
+}
+
+async function disposeRouteFileLoader(
+  routeFileLoader: Pick<RouteDocumentLoadCoordinator, 'dispose'>,
+) {
+  try {
+    await routeFileLoader.dispose();
+  } catch (error) {
+    console.error('Failed to dispose route document loading:', error);
+  }
 }

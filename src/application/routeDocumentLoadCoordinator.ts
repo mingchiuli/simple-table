@@ -54,6 +54,7 @@ export function createRouteDocumentLoadCoordinator({
   let workerPromise: Promise<void> | null = null;
   let activeCancellation: ActiveCancellation | null = null;
   const activeClaimSettlements = new Set<Promise<void>>();
+  const claimSettlementFailures: unknown[] = [];
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
@@ -218,8 +219,16 @@ export function createRouteDocumentLoadCoordinator({
   ) {
     if (!claimId || outcome === 'transferred') return;
     const settlement = settleOpenTargetClaimWithRetry(claimId, outcome);
-    activeClaimSettlements.add(settlement);
-    void settlement.finally(() => activeClaimSettlements.delete(settlement));
+    let tracked!: Promise<void>;
+    tracked = settlement.then(
+      () => undefined,
+      (error) => {
+        claimSettlementFailures.push(error);
+      },
+    ).then(() => {
+      activeClaimSettlements.delete(tracked);
+    });
+    activeClaimSettlements.add(tracked);
   }
 
   async function settleOpenTargetClaimWithRetry(
@@ -240,6 +249,7 @@ export function createRouteDocumentLoadCoordinator({
       }
     }
     safeReportError(lastError);
+    throw lastError;
   }
 
   async function waitForIdle() {
@@ -248,6 +258,12 @@ export function createRouteDocumentLoadCoordinator({
         ...(workerPromise ? [workerPromise] : []),
         ...activeClaimSettlements,
       ]);
+    }
+    if (claimSettlementFailures.length > 0) {
+      throw new AggregateError(
+        claimSettlementFailures,
+        'Failed to settle one or more document launch claims',
+      );
     }
   }
 

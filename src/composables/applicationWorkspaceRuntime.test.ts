@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
+import type { RouteDocumentLoadCoordinator } from '@/application/routeDocumentLoadCoordinator';
 import {
   createApplicationWorkspaceRuntime,
 } from '@/composables/applicationWorkspaceRuntime';
@@ -23,6 +24,7 @@ describe('applicationWorkspaceRuntime', () => {
   it('waits for every child disposal before reporting aggregated failures', async () => {
     const documentDrain = deferred<void>();
     const documentLaunchDrain = deferred<void>();
+    const routeDocumentLoadDrain = deferred<void>();
     const exitFailure = new Error('exit cleanup failed');
     const applicationExit = {
       registerGuard: vi.fn(() => () => undefined),
@@ -40,6 +42,10 @@ describe('applicationWorkspaceRuntime', () => {
       dispose: vi.fn(() => documentLaunchDrain.promise),
     };
     runtime.registerDocumentLaunch(documentLaunch);
+    const routeDocumentLoad = {
+      dispose: vi.fn(() => routeDocumentLoadDrain.promise),
+    } as unknown as RouteDocumentLoadCoordinator;
+    runtime.registerRouteDocumentLoad(routeDocumentLoad);
 
     let settled = false;
     const disposal = runtime.dispose();
@@ -52,6 +58,7 @@ describe('applicationWorkspaceRuntime', () => {
     expect(applicationExit.dispose).toHaveBeenCalledOnce();
     expect(document.dispose).toHaveBeenCalledOnce();
     expect(documentLaunch.dispose).toHaveBeenCalledOnce();
+    expect(routeDocumentLoad.dispose).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
 
     documentDrain.resolve();
@@ -59,6 +66,10 @@ describe('applicationWorkspaceRuntime', () => {
     expect(settled).toBe(false);
 
     documentLaunchDrain.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    routeDocumentLoadDrain.resolve();
     await expect(disposal).rejects.toMatchObject({
       name: 'AggregateError',
       message: 'Failed to completely drain the application workspace',
