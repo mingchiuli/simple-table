@@ -76,7 +76,7 @@ export function createDocumentMutationProtocol({
   ): Promise<MutationExecutionResult> {
     const mutationContext = { ...context, commandId: createCommandId() };
     const invocation = await raceWithOperationCancellation(
-      invokeIdempotently({
+      () => invokeIdempotently({
         operationId: mutationContext.commandId,
         invoke: () => action(mutationContext),
       }),
@@ -100,7 +100,7 @@ export function createDocumentMutationProtocol({
 
     try {
       const active = await raceWithOperationCancellation(
-        transport.getActiveDocument(),
+        () => transport.getActiveDocument(),
         cancellation,
       );
       if (
@@ -109,7 +109,7 @@ export function createDocumentMutationProtocol({
       ) {
         const preferredSheetIndex = recovery.preferredSheetIndex();
         const projection = await raceWithOperationCancellation(
-          transport.getCurrentDocumentProjection(
+          () => transport.getCurrentDocumentProjection(
             {
               documentId: active.editorSession.documentId,
               baseRevision: active.editorSession.revision,
@@ -140,7 +140,7 @@ export function createDocumentMutationProtocol({
     let observedPending = false;
     while (true) {
       const lookup = await raceWithOperationCancellation(
-        transport.getMutationResult(documentId, commandId),
+        () => transport.getMutationResult(documentId, commandId),
         cancellation,
       );
       if (lookup.status === 'completed') {
@@ -162,7 +162,7 @@ export function createDocumentMutationProtocol({
       } else if (clock.now() >= discoveryDeadline) {
         return { status: 'missing' };
       }
-      await raceWithOperationCancellation(clock.sleep(pollInterval), cancellation);
+      await raceWithOperationCancellation(() => clock.sleep(pollInterval), cancellation);
       pollInterval = Math.min(
         pollInterval * 2,
         MUTATION_RESULT_MAX_POLL_INTERVAL_MS

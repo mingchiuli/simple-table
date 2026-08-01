@@ -107,15 +107,27 @@ fn sheet_region_snapshot_from_registry(
     document_projection::snapshot_sheet_region(&editor_state, region)
 }
 
-pub(crate) fn inspect_current_file_for_command<T>(
+pub(crate) fn inspect_active_file_if_command_matches<T>(
     service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
     inspect: impl FnOnce(&DocumentData) -> T,
-) -> Result<T, AppError> {
-    let handle = document_handle_for_read(service.documents(), document_id)?;
-    let editor_state = handle.read_for_command(document_id, base_revision)?;
-    Ok(inspect(editor_state.file_data()))
+) -> Result<Option<T>, AppError> {
+    let Some(handle) = service.documents().active_handle()? else {
+        return Ok(None);
+    };
+    if handle.document_id() != document_id {
+        return Ok(None);
+    }
+    let editor_state = match handle.read() {
+        Ok(editor_state) => editor_state,
+        Err(AppError::DocumentStateInvalid(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if editor_state.revision() != base_revision {
+        return Ok(None);
+    }
+    Ok(Some(inspect(editor_state.file_data())))
 }
 
 #[cfg(test)]
@@ -227,6 +239,42 @@ mod tests {
                 workbook: WorkbookCapabilities::default(),
             }
         );
+    }
+
+    #[test]
+    fn optional_active_file_inspection_treats_replaced_context_as_unavailable() {
+        let documents = ActiveDocumentRepository::default();
+        let service = DocumentQueryService::new(documents.clone());
+        let first_id = documents.replace_active_for_test(EditorState::with_workbook(
+            DocumentData {
+                path: "/tmp/first.xlsx".to_string(),
+                file_name: "first.xlsx".to_string(),
+                sheets: vec![DocumentSheet::default()],
+            },
+            None,
+        ));
+
+        assert_eq!(
+            inspect_active_file_if_command_matches(&service, first_id, 0, |file| {
+                file.path.clone()
+            })
+            .expect("inspect current file"),
+            Some("/tmp/first.xlsx".to_string())
+        );
+
+        documents.replace_active_for_test(EditorState::with_workbook(
+            DocumentData {
+                path: "/tmp/second.xlsx".to_string(),
+                file_name: "second.xlsx".to_string(),
+                sheets: vec![DocumentSheet::default()],
+            },
+            None,
+        ));
+
+        assert!(matches!(
+            inspect_active_file_if_command_matches(&service, first_id, 0, |_| ()),
+            Ok(None)
+        ));
     }
 
     #[test]

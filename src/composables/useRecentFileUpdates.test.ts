@@ -14,6 +14,7 @@ import {
   createApplicationWorkspaceTestContext,
   type ApplicationWorkspaceTestContext,
 } from '@/test/documentWorkspaceTestContext';
+import type { FileOperationReceipt } from '@/types/fileRuntime';
 
 let workspace: ApplicationWorkspaceTestContext;
 
@@ -96,18 +97,19 @@ describe("useRecentFileUpdates", () => {
 
   afterEach(() => workspace.application.dispose());
 
-  it("captures the active document context before running background recent updates", async () => {
+  it("passes the successful file operation receipt to the background update", async () => {
     const api = await import("@/api");
     openRecentTestDocument("old.xlsx", 1, 3);
     const { queueRecentFileEntryUpdate } = workspace.run(() => useRecentFileUpdates());
+    const oldReceipt = recentReceipt("old.xlsx", '1', '3');
 
-    queueRecentFileEntryUpdate("/original/old.xlsx");
+    queueRecentFileEntryUpdate(oldReceipt, "/original/old.xlsx");
     openRecentTestDocument("new.xlsx", 2, 0);
 
     await flushPromises();
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: '1', baseRevision: '3' },
+      oldReceipt,
       "/original/old.xlsx"
     );
   });
@@ -127,10 +129,11 @@ describe("useRecentFileUpdates", () => {
       });
     openRecentTestDocument("book.xlsx", 1, 3);
     const { queueRecentFileEntryUpdate } = workspace.run(() => useRecentFileUpdates());
+    const bookReceipt = recentReceipt("book.xlsx", '1', '3');
 
-    queueRecentFileEntryUpdate("/original/first.xlsx");
+    queueRecentFileEntryUpdate(bookReceipt, "/original/first.xlsx");
     for (let index = 0; index < 10_000; index += 1) {
-      queueRecentFileEntryUpdate(`/original/${index}.xlsx`);
+      queueRecentFileEntryUpdate(bookReceipt, `/original/${index}.xlsx`);
     }
     await flushPromises();
 
@@ -148,8 +151,22 @@ describe("useRecentFileUpdates", () => {
 
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledTimes(2);
     expect(api.addRecentFileWithThumbnail).toHaveBeenLastCalledWith(
-      { documentId: "1", baseRevision: "3" },
+      bookReceipt,
       "/original/9999.xlsx"
     );
   });
 });
+
+function recentReceipt(
+  fileName: string,
+  documentId: `${bigint}`,
+  revision: `${bigint}`,
+): FileOperationReceipt {
+  return {
+    kind: 'open',
+    documentId,
+    revision,
+    path: `/tmp/${fileName}`,
+    fileName,
+  };
+}

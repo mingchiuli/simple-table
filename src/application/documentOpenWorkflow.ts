@@ -45,7 +45,10 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
   closeDocument: (context: EditorCommandContext) => Promise<void>;
   openPreparedDocument: (prepared: PreparedOpenDocument, path: string | null) => void;
   clearDocument: () => void;
-  queueRecentFileEntryUpdate: (originalPath?: string) => void;
+  queueRecentFileEntryUpdate: (
+    receipt: FileOperationReceipt,
+    originalPath?: string,
+  ) => void;
   reportCleanupError?: (message: string, error: unknown) => void;
 };
 
@@ -113,7 +116,7 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
           replacement.commit();
           ports.openPreparedDocument(prepared, filePath);
           loaded = true;
-          ports.queueRecentFileEntryUpdate();
+          ports.queueRecentFileEntryUpdate(receipt);
         } finally {
           if (!loaded) replacement.cancel();
         }
@@ -175,12 +178,12 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
       const prepared = await preparations.run(() => prepareDocument((preparationId) => (
         ports.prepareOpenFile(selection.path, preparationId)
       )));
-      await commitPreparedDocument(prepared, expectedContext);
+      const receipt = await commitPreparedDocument(prepared, expectedContext);
       discardSelection = false;
       replacement.commit();
       replacement = null;
       ports.openPreparedDocument(prepared, selection.path);
-      ports.queueRecentFileEntryUpdate(selection.originalPath);
+      ports.queueRecentFileEntryUpdate(receipt, selection.originalPath);
       return true;
     } catch (error) {
       actionError = error;
@@ -212,10 +215,10 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
     try {
       const expectedContext = ports.getCommandContext();
       const prepared = await preparations.run(() => prepareDocument(prepare));
-      await commitPreparedDocument(prepared, expectedContext);
+      const receipt = await commitPreparedDocument(prepared, expectedContext);
       replacement.commit();
       ports.openPreparedDocument(prepared, path);
-      if (path !== null) ports.queueRecentFileEntryUpdate(recentOriginalPath);
+      if (path !== null) ports.queueRecentFileEntryUpdate(receipt, recentOriginalPath);
       return true;
     } catch (error) {
       replacement.cancel();

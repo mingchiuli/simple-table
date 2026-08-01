@@ -78,7 +78,7 @@ storageType: StorageType,
  */
 originalPath?: string, };
 
-export type AddRecentFileRequest = { originalPath?: string, documentId: U64String, baseRevision: U64String, };
+export type AddRecentFileRequest = { originalPath?: string, documentId: U64String, baseRevision: U64String, path: string, fileName: string, };
 
 export type UpdateInfo = { version: string, tagName: string, releaseUrl: string, apkUrl: string | null, };
 

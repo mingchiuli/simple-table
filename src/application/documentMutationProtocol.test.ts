@@ -17,6 +17,18 @@ import {
 } from '@/application/operationCancellation';
 
 describe('document mutation protocol', () => {
+  it('does not invoke a mutation after its workspace is already disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const action = vi.fn().mockResolvedValue(mutationResponse('2'));
+    const protocol = createProtocol({ cancellation: cancellation.signal });
+    cancellation.cancel();
+
+    await expect(protocol.execute(action, context()))
+      .rejects.toBeInstanceOf(OperationCancelledError);
+
+    expect(action).not.toHaveBeenCalled();
+  });
+
   it('does not retry a definitive backend rejection', async () => {
     const rejection = { code: 'document_state_invalid', message: 'revision changed' };
     const action = vi.fn().mockRejectedValue(rejection);

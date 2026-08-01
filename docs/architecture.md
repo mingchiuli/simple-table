@@ -88,9 +88,18 @@ internal models.
 - Cancellation broadcasts isolate observers so one failing callback cannot
   prevent later observers from receiving cancellation. Notification failures
   are reported through the owning runtime's drain after the broadcast completes.
-- Cancellation ends frontend observation of queries and recoveries without
-  reclassifying backend work. Persistence, metadata writes, update installation,
-  and exit side effects that were already admitted are drained to completion.
+- Cancellable calls are supplied as lazy factories. Cancellation admission is
+  checked before the factory runs, so disposal cannot accidentally start a new
+  query or side effect while rejecting its result. Cancellation may end frontend
+  observation of a started query or recovery without reclassifying idempotent
+  backend work. Required metadata writes, update installation, and exit side
+  effects that were already admitted are drained to completion.
+- Recent-file tracking consumes the immutable receipt returned by a successful
+  open or save. Its bounded worker queue coalesces repeated updates for the same
+  persisted path while retaining FIFO order across distinct paths up to the
+  backend persistence bound. The backend always persists receipt identity; a
+  matching active document may enrich the record with a thumbnail, but later
+  document replacement cannot invalidate the record itself.
 
 ### Adapters and UI
 
@@ -134,6 +143,10 @@ internal models.
   repository lock is not exposed; callers request read or mutation handles.
 - Replacement and close retire old document handles and derived runtime work
   before old state is released.
+- Expired prepared documents are removed under the repository mutex, then their
+  document work leases and large buffers are released after unlocking. Every
+  repository entry point that prunes expiration must drain this retired list on
+  both success and error paths.
 
 ### Transport and infrastructure
 

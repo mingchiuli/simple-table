@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createOperationCancellationSource,
+  OperationCancelledError,
+  raceWithOperationCancellation,
   throwIfOperationCancellationFailed,
 } from '@/application/operationCancellation';
 
@@ -28,5 +30,43 @@ describe('operation cancellation', () => {
       message: 'Cancellation notification failed',
       errors: [firstFailure],
     }));
+  });
+
+  it('does not start an operation after cancellation', async () => {
+    const source = createOperationCancellationSource();
+    const start = vi.fn(async () => 'result');
+    source.cancel();
+
+    await expect(raceWithOperationCancellation(start, source.signal))
+      .rejects.toBeInstanceOf(OperationCancelledError);
+
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('does not start when cancellation happens while registering the observer', async () => {
+    const start = vi.fn(async () => 'result');
+    const cancellation = {
+      isCancelled: () => false,
+      onCancel(handler: () => void) {
+        handler();
+        return () => undefined;
+      },
+    };
+
+    await expect(raceWithOperationCancellation(start, cancellation))
+      .rejects.toBeInstanceOf(OperationCancelledError);
+
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('contains failures from observers registered after cancellation', () => {
+    const source = createOperationCancellationSource();
+    const failures = source.cancel();
+    const lateFailure = new Error('late observer failed');
+
+    expect(() => source.signal.onCancel(() => {
+      throw lateFailure;
+    })).not.toThrow();
+    expect(failures).toEqual([lateFailure]);
   });
 });

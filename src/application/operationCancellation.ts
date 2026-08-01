@@ -30,7 +30,11 @@ export function createOperationCancellationSource() {
     isCancelled: () => cancelled,
     onCancel(handler) {
       if (cancelled) {
-        handler();
+        try {
+          handler();
+        } catch (error) {
+          notificationFailures.push(error);
+        }
         return () => undefined;
       }
       handlers.add(handler);
@@ -57,13 +61,42 @@ export function createOperationCancellationSource() {
 }
 
 export function raceWithOperationCancellation<T>(
-  operation: Promise<T>,
+  startOperation: () => Promise<T>,
   cancellation: OperationCancellationSignal,
 ): Promise<T> {
   if (cancellation.isCancelled()) return Promise.reject(new OperationCancelledError());
   return new Promise<T>((resolve, reject) => {
-    const unregister = cancellation.onCancel(() => reject(new OperationCancelledError()));
-    operation.then(resolve, reject).finally(unregister);
+    let settled = false;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      action();
+    };
+    const unregister = cancellation.onCancel(() => {
+      settle(() => reject(new OperationCancelledError()));
+    });
+    if (settled) return;
+
+    let operation: Promise<T>;
+    try {
+      operation = startOperation();
+    } catch (error) {
+      settle(() => {
+        unregister();
+        reject(error);
+      });
+      return;
+    }
+    operation.then(
+      (value) => settle(() => {
+        unregister();
+        resolve(value);
+      }),
+      (error) => settle(() => {
+        unregister();
+        reject(error);
+      }),
+    );
   });
 }
 

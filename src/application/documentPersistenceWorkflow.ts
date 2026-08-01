@@ -63,7 +63,10 @@ export type DocumentPersistenceWorkflowPorts<ActiveDocument, SavedDocument> = {
     path: string,
     preferredSheetIndex: number,
   ) => boolean;
-  queueRecentFileEntryUpdate: (originalPath?: string) => void;
+  queueRecentFileEntryUpdate: (
+    receipt: FileOperationReceipt,
+    originalPath?: string,
+  ) => void;
   reportCleanupError?: (message: string, error: unknown) => void;
 };
 
@@ -209,7 +212,7 @@ export function createDocumentPersistenceWorkflow<ActiveDocument, SavedDocument>
     )) {
       return { status: 'saved-stale' };
     }
-    ports.queueRecentFileEntryUpdate();
+    ports.queueRecentFileEntryUpdate(ports.receiptFromSavedDocument(saved));
     return { status: 'saved' };
   }
 

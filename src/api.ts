@@ -241,13 +241,15 @@ export async function getRecentFiles(): Promise<RecentFile[]> {
 }
 
 export async function addRecentFileWithThumbnail(
-  context: EditorCommandContext,
+  receipt: FileOperationReceipt,
   originalPath?: string
 ): Promise<RecentFile> {
   const request: AddRecentFileRequest = {
     originalPath,
-    documentId: context.documentId,
-    baseRevision: context.baseRevision,
+    documentId: receipt.documentId,
+    baseRevision: receipt.revision,
+    path: receipt.path,
+    fileName: receipt.fileName,
   };
 
   return invokeCommand("add_recent_file_with_thumbnail", {

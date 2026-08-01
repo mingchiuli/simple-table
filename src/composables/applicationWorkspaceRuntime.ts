@@ -66,8 +66,8 @@ export function createApplicationWorkspaceRuntime(
     {
       getRecentFiles: async () => (await api.getRecentFiles()).map(runtimeRecentFile),
       removeRecentFile: api.removeRecentFile,
-      addRecentFileWithThumbnail: async (context, originalPath) => {
-        runtimeRecentFile(await api.addRecentFileWithThumbnail(context, originalPath));
+      addRecentFileWithThumbnail: async (receipt, originalPath) => {
+        runtimeRecentFile(await api.addRecentFileWithThumbnail(receipt, originalPath));
       },
     },
     (error) => console.warn('Failed to update recent file metadata', error),
@@ -90,7 +90,7 @@ export function createApplicationWorkspaceRuntime(
           isFrontendSessionInitialized: () =>
             document.document.data !== null || document.document.documentId !== null,
           loadActiveDocument: () => raceWithOperationCancellation(
-            api.getActiveDocument(),
+            () => api.getActiveDocument(),
             cancellation,
           ),
           publishActiveDocument: (activeDocument) => {

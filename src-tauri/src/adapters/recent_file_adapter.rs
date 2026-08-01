@@ -83,19 +83,20 @@ pub fn do_add_recent_file_with_thumbnail(
         original_path,
         document_id,
         base_revision,
+        path,
+        file_name,
     } = input;
-    let (path, file_name, thumbnail) = document_query_service::inspect_current_file_for_command(
+    let thumbnail = document_query_service::inspect_active_file_if_command_matches(
         service.document_queries(),
         document_id,
         base_revision,
         |file_data| {
-            (
-                file_data.path.clone(),
-                file_data.file_name.clone(),
-                capture_thumbnail(file_data),
-            )
+            (file_data.path == path && file_data.file_name == file_name)
+                .then(|| capture_thumbnail(file_data))
+                .flatten()
         },
-    )?;
+    )?
+    .flatten();
 
     if path.is_empty() {
         return Err(AppError::DocumentStateInvalid(

@@ -1,14 +1,14 @@
 import { useRecentFilesService } from '@/composables/useRecentFilesService';
-import { useDocumentSessionStore } from '@/stores/documentSession';
+import type { FileOperationReceipt } from '@/types/fileRuntime';
 
 export function useRecentFileUpdates() {
-  const documentSessionStore = useDocumentSessionStore();
   const recentFilesService = useRecentFilesService();
 
-  function queueRecentFileEntryUpdate(originalPath?: string) {
-    const context = documentSessionStore.currentCommandContext();
-    if (!context) return;
-    recentFilesService.queueRecentFileEntryUpdate({ originalPath, context });
+  function queueRecentFileEntryUpdate(
+    receipt: FileOperationReceipt,
+    originalPath?: string,
+  ) {
+    recentFilesService.queueRecentFileEntryUpdate({ originalPath, receipt });
   }
 
   return {

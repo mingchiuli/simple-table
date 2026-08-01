@@ -510,7 +510,13 @@ describe("useFileActions", () => {
 
     expect(documentSessionStore.currentFilePath).toBe("/tmp/fast.xlsx");
     expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: '2', baseRevision: '0' },
+      {
+        kind: 'open',
+        documentId: '2',
+        revision: '0',
+        path: '/tmp/fast.xlsx',
+        fileName: 'fast.xlsx',
+      },
       undefined
     );
 
@@ -543,7 +549,13 @@ describe("useFileActions", () => {
       expect(documentSessionStore.documentId).toBe('2');
       expect(documentSessionStore.currentFilePath).toBe("/tmp/nameless.xlsx");
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: '2', baseRevision: '0' },
+        {
+          kind: 'open',
+          documentId: '2',
+          revision: '0',
+          path: '/tmp/nameless.xlsx',
+          fileName: 'nameless.xlsx',
+        },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -921,7 +933,13 @@ describe("useFileActions", () => {
       expect(platform.discardSaveLocation).not.toHaveBeenCalled();
       expect(documentSessionStore.currentFilePath).toBe(savePath);
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: '1', baseRevision: '1' },
+        {
+          kind: 'save',
+          documentId: '1',
+          revision: '1',
+          path: savePath,
+          fileName: 'saved-without-name.xlsx',
+        },
         undefined
       );
       expect(warn).toHaveBeenCalled();
@@ -959,7 +977,13 @@ describe("useFileActions", () => {
       }, expect.any(String));
       expect(documentSessionStore.currentFilePath).toBe(existingPath);
       expect(api.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-        { documentId: '1', baseRevision: '1' },
+        {
+          kind: 'save',
+          documentId: '1',
+          revision: '1',
+          path: existingPath,
+          fileName: 'current.xlsx',
+        },
         undefined
       );
       expect(warn).toHaveBeenCalled();

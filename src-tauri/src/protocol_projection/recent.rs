@@ -6,6 +6,8 @@ pub(crate) fn add_recent_file_input(value: types::AddRecentFileRequest) -> AddRe
         original_path: value.original_path,
         document_id: value.document_id,
         base_revision: value.base_revision,
+        path: value.path,
+        file_name: value.file_name,
     }
 }
 

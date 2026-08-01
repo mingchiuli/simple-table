@@ -299,7 +299,7 @@ export function createDocumentCommandCoordinator({
       await session.waitForMutations();
       const context = document.commandContextForDocument(initialContext.documentId);
       if (!context) return undefined;
-      const result = await raceWithOperationCancellation(action(context), cancellation);
+      const result = await raceWithOperationCancellation(() => action(context), cancellation);
       return document.matchesCommandContext(context) ? result : undefined;
     } finally {
       releaseEditorCommand();
@@ -359,14 +359,14 @@ export function createDocumentCommandCoordinator({
   async function fetchRegionProjection(context: EditorCommandContext, region: SheetRegion) {
     return runtimeDocumentRegionProjection(
       await raceWithOperationCancellation(
-        transport.getSheetRegionProjection(context, region),
+        () => transport.getSheetRegionProjection(context, region),
         cancellation,
       ),
     );
   }
 
   function fetchEditorState(context: EditorCommandContext | null) {
-    return raceWithOperationCancellation(transport.getEditorState(context), cancellation);
+    return raceWithOperationCancellation(() => transport.getEditorState(context), cancellation);
   }
 
   function fetchCurrentDocumentProjection(
@@ -374,7 +374,7 @@ export function createDocumentCommandCoordinator({
     sheetIndex: number,
   ) {
     return raceWithOperationCancellation(
-      transport.getCurrentDocumentProjection(context, sheetIndex),
+      () => transport.getCurrentDocumentProjection(context, sheetIndex),
       cancellation,
     );
   }

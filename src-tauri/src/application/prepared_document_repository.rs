@@ -562,19 +562,26 @@ impl PreparedDocumentRepository {
         fingerprint: PreparedDocumentFingerprint,
         project: impl FnOnce(&EditorState) -> T,
     ) -> Result<T, AppError> {
-        let mut store = self
-            .inner
-            .store
-            .lock()
-            .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
-        store.prune_expired(Instant::now());
-        let entry = store.pending.get(token).ok_or_else(|| {
-            AppError::DocumentStateInvalid(
-                "prepared document token is no longer active".to_string(),
-            )
-        })?;
-        ensure_same_fingerprint(entry.fingerprint, fingerprint)?;
-        Ok(project(&entry.document.editor_state))
+        let (result, retired) = {
+            let mut store = self
+                .inner
+                .store
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("prepared document store"))?;
+            store.prune_expired(Instant::now());
+            let result = (|| {
+                let entry = store.pending.get(token).ok_or_else(|| {
+                    AppError::DocumentStateInvalid(
+                        "prepared document token is no longer active".to_string(),
+                    )
+                })?;
+                ensure_same_fingerprint(entry.fingerprint, fingerprint)?;
+                Ok(project(&entry.document.editor_state))
+            })();
+            (result, store.take_retired())
+        };
+        drop(retired);
+        result
     }
 }
 
@@ -626,6 +633,7 @@ mod tests {
     use crate::resource_limits::{
         MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, MAX_PREPARED_DOCUMENT_BYTES,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::thread;
 
@@ -634,6 +642,20 @@ mod tests {
     impl DocumentWorkLease for NoopWorkLease {
         fn set_work_bytes(&mut self, _work_bytes: usize) -> Result<(), AppError> {
             Ok(())
+        }
+    }
+
+    struct DropTrackingWorkLease(Arc<AtomicBool>);
+
+    impl DocumentWorkLease for DropTrackingWorkLease {
+        fn set_work_bytes(&mut self, _work_bytes: usize) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    impl Drop for DropTrackingWorkLease {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
         }
     }
 
@@ -969,6 +991,43 @@ mod tests {
         assert!(store.pending.is_empty());
         assert!(store.order.is_empty());
         assert_eq!(store.take_retired().len(), 1);
+    }
+
+    #[test]
+    fn projecting_an_expired_token_releases_its_work_lease() {
+        let repository = PreparedDocumentRepository::default();
+        let lease_dropped = Arc::new(AtomicBool::new(false));
+        let mut document = prepared("expired.xlsx");
+        document._work = Some(Box::new(DropTrackingWorkLease(lease_dropped.clone())));
+        repository
+            .inner
+            .store
+            .lock()
+            .expect("prepared document store")
+            .insert_at(
+                "expired".to_string(),
+                fingerprint("expired"),
+                document,
+                Instant::now() - PREPARED_DOCUMENT_TTL,
+            )
+            .expect("insert expired token");
+
+        assert!(
+            repository
+                .project("expired", fingerprint("expired"), |_| ())
+                .is_err()
+        );
+
+        assert!(lease_dropped.load(Ordering::SeqCst));
+        assert!(
+            repository
+                .inner
+                .store
+                .lock()
+                .expect("prepared document store")
+                .retired
+                .is_empty()
+        );
     }
 
     #[test]

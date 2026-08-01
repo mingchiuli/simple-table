@@ -189,7 +189,7 @@ export function createUpdateCoordinator(
 
     const token = beginOperation();
     runtime.mobileOpenPromise = raceWithOperationCancellation(
-      port.openUrl(store.isAndroid && info.apkUrl ? info.apkUrl : info.releaseUrl),
+      () => port.openUrl(store.isAndroid && info.apkUrl ? info.apkUrl : info.releaseUrl),
       observationCancellation.signal,
     )
       .catch((error) => {
@@ -215,7 +215,7 @@ export function createUpdateCoordinator(
         platform: 'desktop',
         appVersion,
         update: await raceWithOperationCancellation(
-          port.checkDesktop(),
+          () => port.checkDesktop(),
           observationCancellation.signal,
         ),
       };
@@ -224,7 +224,7 @@ export function createUpdateCoordinator(
       platform: 'mobile',
       appVersion,
       update: await raceWithOperationCancellation(
-        port.checkMobile(appVersion),
+        () => port.checkMobile(appVersion),
         observationCancellation.signal,
       ),
     };
@@ -233,7 +233,7 @@ export function createUpdateCoordinator(
   async function ensureCurrentVersion(): Promise<string> {
     if (store.currentVersion) return store.currentVersion;
     runtime.currentVersionPromise ??= raceWithOperationCancellation(
-      port.getVersion(),
+      () => port.getVersion(),
       observationCancellation.signal,
     )
       .then((version) => {

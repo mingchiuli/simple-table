@@ -1,4 +1,4 @@
-import type { EditorCommandContext } from '@/types/documentRuntime';
+import type { FileOperationReceipt } from '@/types/fileRuntime';
 import type { RecentFile } from '@/types/recentFileRuntime';
 import { createWorkspaceOperationTracker } from '@/application/workspaceOperationTracker';
 import {
@@ -15,7 +15,7 @@ export type RecentFilesPort = {
   getRecentFiles(): Promise<RecentFile[]>;
   removeRecentFile(id: string): Promise<void>;
   addRecentFileWithThumbnail(
-    context: EditorCommandContext,
+    receipt: FileOperationReceipt,
     originalPath?: string,
   ): Promise<void>;
 };
@@ -27,15 +27,17 @@ export type RecentFilesState = {
 
 export type RecentFileTrackingRequest = {
   originalPath?: string;
-  context: EditorCommandContext;
+  receipt: FileOperationReceipt;
 };
 
 type RecentFilesRuntime = {
   loadRequestId: number;
   activeLoadCount: number;
   activeTracking: Promise<void> | null;
-  pendingTracking: RecentFileTrackingRequest | null;
+  pendingTracking: Map<string, RecentFileTrackingRequest>;
 };
+
+const MAX_PENDING_RECENT_FILE_UPDATES = 1_024;
 
 export type RecentFilesService = ReturnType<typeof createRecentFilesService>;
 
@@ -49,7 +51,7 @@ export function createRecentFilesService(
     loadRequestId: 0,
     activeLoadCount: 0,
     activeTracking: null,
-    pendingTracking: null,
+    pendingTracking: new Map(),
   };
   const operations = createWorkspaceOperationTracker();
   const observationCancellation = createOperationCancellationSource();
@@ -68,7 +70,7 @@ export function createRecentFilesService(
     store.setLoading(true);
     try {
       const files = await raceWithOperationCancellation(
-        port.getRecentFiles(),
+        () => port.getRecentFiles(),
         observationCancellation.signal,
       );
       if (!disposed && requestId === runtime.loadRequestId) {
@@ -100,7 +102,14 @@ export function createRecentFilesService(
 
   function queueRecentFileEntryUpdate(request: RecentFileTrackingRequest) {
     if (!operations.isAcceptingWork()) return;
-    runtime.pendingTracking = request;
+    const key = request.receipt.path;
+    runtime.pendingTracking.delete(key);
+    runtime.pendingTracking.set(key, request);
+    while (runtime.pendingTracking.size > MAX_PENDING_RECENT_FILE_UPDATES) {
+      const oldestKey = runtime.pendingTracking.keys().next().value;
+      if (oldestKey === undefined) break;
+      runtime.pendingTracking.delete(oldestKey);
+    }
     startTrackingWorker();
   }
 
@@ -110,24 +119,26 @@ export function createRecentFilesService(
     runtime.activeTracking = worker;
     void worker.then(() => {
       if (runtime.activeTracking === worker) runtime.activeTracking = null;
-      if (!disposed && runtime.pendingTracking) startTrackingWorker();
+      if (!disposed && runtime.pendingTracking.size > 0) startTrackingWorker();
     });
   }
 
   async function runTrackingWorker() {
     while (!disposed) {
-      while (!disposed && runtime.pendingTracking) {
-        const request = runtime.pendingTracking;
-        runtime.pendingTracking = null;
+      while (!disposed && runtime.pendingTracking.size > 0) {
+        const pending = runtime.pendingTracking.entries().next().value;
+        if (!pending) break;
+        const [key, request] = pending;
+        runtime.pendingTracking.delete(key);
         try {
-          await port.addRecentFileWithThumbnail(request.context, request.originalPath);
+          await port.addRecentFileWithThumbnail(request.receipt, request.originalPath);
         } catch (error) {
           safeReportFailure(error);
         }
       }
       if (disposed) return;
       await refresh();
-      if (disposed || !runtime.pendingTracking) return;
+      if (disposed || runtime.pendingTracking.size === 0) return;
     }
   }
 
@@ -138,7 +149,7 @@ export function createRecentFilesService(
     const cancellationFailures = observationCancellation.cancel();
     unlinkParentCancellation();
     runtime.loadRequestId += 1;
-    runtime.pendingTracking = null;
+    runtime.pendingTracking.clear();
     store.setLoading(false);
     disposal = drainAllSettled([
       () => throwIfOperationCancellationFailed(

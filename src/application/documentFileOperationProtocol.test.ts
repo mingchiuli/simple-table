@@ -16,6 +16,26 @@ const receipt: FileOperationReceipt = {
 };
 
 describe('documentFileOperationProtocol', () => {
+  it('does not invoke a file side effect after its workspace is already disposed', async () => {
+    const cancellation = createOperationCancellationSource();
+    const invoke = vi.fn().mockResolvedValue({ receipt });
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn(),
+      cancellation: cancellation.signal,
+    });
+    cancellation.cancel();
+
+    await expect(protocol.execute<{ receipt: FileOperationReceipt }>({
+      kind: 'save',
+      invoke,
+      receiptForResponse: (response) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: vi.fn(),
+    })).rejects.toBeInstanceOf(OperationCancelledError);
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('does not retry a definitive backend rejection', async () => {
     const rejection = { code: 'document_state_invalid', message: 'revision changed' };
     const invoke = vi.fn().mockRejectedValue(rejection);

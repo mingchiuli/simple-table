@@ -39,6 +39,8 @@ pub(crate) struct AddRecentFileInput {
     pub original_path: Option<String>,
     pub document_id: u64,
     pub base_revision: u64,
+    pub path: String,
+    pub file_name: String,
 }
 
 fn timestamp_millis(time: SystemTime) -> i64 {

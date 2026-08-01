@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createRecentFilesService } from '@/application/recentFilesService';
 import { OperationCancelledError } from '@/application/operationCancellation';
+import type { FileOperationReceipt } from '@/types/fileRuntime';
 
 async function flushPromises() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
@@ -23,18 +24,33 @@ function createService(overrides: Record<string, unknown> = {}) {
   return { service, port, reportFailure };
 }
 
+function receipt(
+  path: string,
+  documentId: `${bigint}` = '7',
+  revision: `${bigint}` = '3',
+): FileOperationReceipt {
+  return {
+    kind: 'open',
+    documentId,
+    revision,
+    path,
+    fileName: path.split('/').at(-1) ?? path,
+  };
+}
+
 describe('recent files tracking coordinator', () => {
-  it('passes the captured document context through its tracking port and refreshes', async () => {
+  it('passes the immutable file receipt through its tracking port and refreshes', async () => {
     const { service, port, reportFailure } = createService();
+    const bookReceipt = receipt('/tmp/book.xlsx', '8', '4');
 
     service.queueRecentFileEntryUpdate({
       originalPath: '/original/book.xlsx',
-      context: { documentId: '8', baseRevision: '4' },
+      receipt: bookReceipt,
     });
     await flushPromises();
 
     expect(port.addRecentFileWithThumbnail).toHaveBeenCalledWith(
-      { documentId: '8', baseRevision: '4' },
+      bookReceipt,
       '/original/book.xlsx',
     );
     expect(port.getRecentFiles).toHaveBeenCalledTimes(1);
@@ -48,7 +64,7 @@ describe('recent files tracking coordinator', () => {
     });
 
     service.queueRecentFileEntryUpdate({
-      context: { documentId: '7', baseRevision: '3' },
+      receipt: receipt('/tmp/book.xlsx'),
     });
     await flushPromises();
 
@@ -75,7 +91,7 @@ describe('recent files tracking coordinator', () => {
       addRecentFileWithThumbnail: vi.fn().mockReturnValue(active),
     });
     service.queueRecentFileEntryUpdate({
-      context: { documentId: '4', baseRevision: '2' },
+      receipt: receipt('/tmp/active.xlsx', '4', '2'),
     });
     await flushPromises();
 
@@ -84,7 +100,7 @@ describe('recent files tracking coordinator', () => {
       disposed = true;
     });
     service.queueRecentFileEntryUpdate({
-      context: { documentId: '5', baseRevision: '0' },
+      receipt: receipt('/tmp/queued.xlsx', '5', '0'),
     });
     await Promise.resolve();
     expect(disposed).toBe(false);
@@ -93,6 +109,31 @@ describe('recent files tracking coordinator', () => {
     await disposal;
     expect(port.addRecentFileWithThumbnail).toHaveBeenCalledTimes(1);
     expect(port.getRecentFiles).not.toHaveBeenCalled();
+  });
+
+  it('retains updates for every distinct file while another update is active', async () => {
+    const active = deferred<void>();
+    const { service, port } = createService({
+      addRecentFileWithThumbnail: vi.fn()
+        .mockReturnValueOnce(active.promise)
+        .mockResolvedValue(undefined),
+    });
+    const first = receipt('/tmp/first.xlsx', '1', '0');
+    const second = receipt('/tmp/second.xlsx', '2', '0');
+    const third = receipt('/tmp/third.xlsx', '3', '0');
+
+    service.queueRecentFileEntryUpdate({ receipt: first });
+    await flushPromises();
+    service.queueRecentFileEntryUpdate({ receipt: second });
+    service.queueRecentFileEntryUpdate({ receipt: third });
+    active.resolve();
+    await service.waitForIdle();
+
+    expect(port.addRecentFileWithThumbnail.mock.calls).toEqual([
+      [first, undefined],
+      [second, undefined],
+      [third, undefined],
+    ]);
   });
 
   it('drains an admitted removal and skips its refresh after disposal starts', async () => {
@@ -130,3 +171,11 @@ describe('recent files tracking coordinator', () => {
     await expect(disposal).resolves.toBeUndefined();
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}

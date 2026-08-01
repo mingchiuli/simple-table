@@ -46,6 +46,8 @@ pub struct AddRecentFileRequest {
     #[serde(with = "super::u64_string")]
     #[ts(type = "U64String")]
     pub base_revision: u64,
+    pub path: String,
+    pub file_name: String,
 }
 
 #[cfg(test)]
@@ -58,12 +60,16 @@ mod tests {
         let request: AddRecentFileRequest = serde_json::from_value(json!({
             "documentId": "7",
             "baseRevision": "3",
+            "path": "/managed/book.xlsx",
+            "fileName": "book.xlsx",
             "originalPath": "/original/book.xlsx"
         }))
         .expect("recent request");
 
         assert_eq!(request.document_id, 7);
         assert_eq!(request.base_revision, 3);
+        assert_eq!(request.path, "/managed/book.xlsx");
+        assert_eq!(request.file_name, "book.xlsx");
         assert_eq!(
             request.original_path.as_deref(),
             Some("/original/book.xlsx")
@@ -71,11 +77,13 @@ mod tests {
     }
 
     #[test]
-    fn add_recent_request_requires_document_context() {
+    fn add_recent_request_requires_stable_file_identity() {
         let error = serde_json::from_value::<AddRecentFileRequest>(json!({
-            "originalPath": "/original/book.xlsx"
+            "documentId": "7",
+            "baseRevision": "3",
+            "path": "/managed/book.xlsx"
         }))
-        .expect_err("document context should be required");
+        .expect_err("stable file identity should be required");
 
         assert!(error.to_string().contains("missing field"));
     }

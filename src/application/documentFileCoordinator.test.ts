@@ -482,7 +482,10 @@ describe('documentFileCoordinator', () => {
     expect(openPreparedDocument).toHaveBeenCalledWith(selectedPrepared, selection.path);
     expect(ports.discardOpenFileSelection).not.toHaveBeenCalled();
     expect(ports.abortPreparedDocument).not.toHaveBeenCalled();
-    expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(selection.originalPath);
+    expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(
+      openReceipt(selectedPrepared),
+      selection.originalPath,
+    );
   });
 
   it('aborts a prepared route document when commit fails', async () => {
@@ -524,7 +527,10 @@ describe('documentFileCoordinator', () => {
     expect(ports.prepareRecentFile).toHaveBeenCalledWith(recent, expect.any(String));
     expect(replacement.commit).toHaveBeenCalledOnce();
     expect(ports.openPreparedDocument).toHaveBeenCalledWith(recentPrepared, recent.path);
-    expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(recent.originalPath);
+    expect(ports.queueRecentFileEntryUpdate).toHaveBeenCalledWith(
+      openReceipt(recentPrepared),
+      recent.originalPath,
+    );
     expect(ports.runDocumentLifecycle).toHaveBeenCalledWith(
       'loading',
       expect.any(Function),

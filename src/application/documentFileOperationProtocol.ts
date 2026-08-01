@@ -48,7 +48,7 @@ export function createDocumentFileOperationProtocol({
   async function execute<T>(operation: FileOperationExecution<T>): Promise<T> {
     const operationId = createOperationId();
     const invocation = await raceWithOperationCancellation(
-      invokeIdempotently({
+      () => invokeIdempotently({
         operationId,
         invoke: operation.invoke,
       }),
@@ -62,9 +62,10 @@ export function createDocumentFileOperationProtocol({
     try {
       result = await waitForResult(operationId);
       if (result.status === 'completed') {
-        ensureReceipt(result.receipt, operation);
+        const receipt = result.receipt;
+        ensureReceipt(receipt, operation);
         return await raceWithOperationCancellation(
-          operation.recoverResponse(result.receipt),
+          () => operation.recoverResponse(receipt),
           cancellation,
         );
       }
@@ -74,19 +75,21 @@ export function createDocumentFileOperationProtocol({
     }
     if (result.status === 'failed') throw result.error;
     if (result.status === 'cancelled') {
-      if (!operation.recoverCancelled) {
+      const recoverCancelled = operation.recoverCancelled;
+      if (!recoverCancelled) {
         throw new Error(`${operation.kind} operation unexpectedly reached a cancelled state`);
       }
       return await raceWithOperationCancellation(
-        Promise.resolve(operation.recoverCancelled()),
+        () => Promise.resolve(recoverCancelled()),
         cancellation,
       );
     }
 
-    if (operation.recoverAmbiguous) {
+    const recoverAmbiguous = operation.recoverAmbiguous;
+    if (recoverAmbiguous) {
       try {
         const recovered = await raceWithOperationCancellation(
-          operation.recoverAmbiguous(),
+          () => recoverAmbiguous(),
           cancellation,
         );
         if (recovered) return admittedResponse(recovered, operation);
@@ -108,7 +111,7 @@ export function createDocumentFileOperationProtocol({
     let interval = INITIAL_POLL_INTERVAL_MS;
     while (true) {
       const lookup = await raceWithOperationCancellation(
-        getFileOperationResult(operationId),
+        () => getFileOperationResult(operationId),
         cancellation,
       );
       if (lookup.status === 'completed') {
@@ -127,7 +130,7 @@ export function createDocumentFileOperationProtocol({
       if (lookup.status === 'missing' && clock.now() >= discoveryDeadline) {
         return { status: 'missing' };
       }
-      await raceWithOperationCancellation(clock.sleep(interval), cancellation);
+      await raceWithOperationCancellation(() => clock.sleep(interval), cancellation);
       interval = Math.min(interval * 2, MAX_POLL_INTERVAL_MS);
     }
   }
