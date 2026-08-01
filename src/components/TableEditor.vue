@@ -112,6 +112,8 @@ const {
   headerHeight: HEADER_HEIGHT,
   defaultColumnWidth: DEFAULT_GRID_COLUMN_WIDTH,
   defaultRowHeight: DEFAULT_GRID_ROW_HEIGHT,
+  minimumColumnWidth: MIN_GRID_COLUMN_WIDTH,
+  minimumRowHeight: MIN_GRID_ROW_HEIGHT,
   overscanPx: OVERSCAN_PX,
   getDraftValue,
 });

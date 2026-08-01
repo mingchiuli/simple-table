@@ -186,6 +186,29 @@ describe('document launch coordinator', () => {
     ]);
   });
 
+  it('coalesces a burst of wake events while a claim is in flight', async () => {
+    const first = deferred<OpenTargetClaim | null>();
+    const claimPendingOpenTarget = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(null);
+    const setup = testDependencies({ claimPendingOpenTarget });
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+
+    lifecycle.start();
+    await waitForCondition(() => claimPendingOpenTarget.mock.calls.length === 1);
+    for (let index = 0; index < 10_000; index += 1) setup.getHandler()?.();
+    await flushPromises();
+    expect(claimPendingOpenTarget).toHaveBeenCalledOnce();
+
+    first.resolve(claim('first', '/first.xlsx'));
+    await waitForCondition(() => claimPendingOpenTarget.mock.calls.length === 2);
+    await flushPromises();
+
+    expect(claimPendingOpenTarget).toHaveBeenCalledTimes(2);
+    expect(setup.pushFilePath).toHaveBeenCalledOnce();
+  });
+
   it('acknowledges a claim when routing fails while the lifecycle is active', async () => {
     const failure = new Error('route failed');
     const setup = testDependencies({

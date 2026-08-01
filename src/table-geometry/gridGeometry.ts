@@ -19,13 +19,20 @@ export type AxisSizeOverrides = Readonly<Record<number, number>>;
 export class SparseAxisGeometry {
   readonly count: number;
   readonly defaultSize: number;
+  private readonly minimumSize: number;
   private readonly overrideIndexes: number[];
   private readonly overrideSizes: number[];
   private readonly prefixDeltas: number[];
 
-  constructor(count: number, defaultSize: number, overrides: AxisSizeOverrides = {}) {
+  constructor(
+    count: number,
+    defaultSize: number,
+    overrides: AxisSizeOverrides = {},
+    minimumSize = 0
+  ) {
     this.count = Math.max(0, Math.trunc(count));
-    this.defaultSize = Math.max(0, defaultSize);
+    this.minimumSize = Math.max(0, minimumSize);
+    this.defaultSize = this.normalizeSize(defaultSize);
     const entries = Object.entries(overrides)
       .map(([index, size]) => [Number(index), size] as const)
       .filter(([index, size]) =>
@@ -34,8 +41,9 @@ export class SparseAxisGeometry {
         && index < this.count
         && Number.isFinite(size)
         && size >= 0
-        && size !== this.defaultSize
       )
+      .map(([index, size]) => [index, this.normalizeSize(size)] as const)
+      .filter(([, size]) => size !== this.defaultSize)
       .sort(([left], [right]) => left - right);
     this.overrideIndexes = entries.map(([index]) => index);
     this.overrideSizes = entries.map(([, size]) => size);
@@ -49,7 +57,7 @@ export class SparseAxisGeometry {
 
   sizeAt(index: number, transient: AxisSizeOverrides = {}): number {
     const transientSize = transient[index];
-    if (transientSize !== undefined) return transientSize;
+    if (transientSize !== undefined) return this.normalizeSize(transientSize);
     const position = this.overridePosition(index);
     return position >= 0 ? this.overrideSizes[position] : this.defaultSize;
   }
@@ -85,6 +93,10 @@ export class SparseAxisGeometry {
   private overridePosition(index: number): number {
     const position = lowerBound(this.overrideIndexes, index);
     return this.overrideIndexes[position] === index ? position : -1;
+  }
+
+  private normalizeSize(size: number): number {
+    return Math.max(this.minimumSize, size);
   }
 }
 
@@ -162,10 +174,10 @@ function transientDeltaBefore(
   index: number
 ): number {
   let delta = 0;
-  for (const [entry, size] of Object.entries(transient)) {
+  for (const entry of Object.keys(transient)) {
     const overrideIndex = Number(entry);
     if (Number.isInteger(overrideIndex) && overrideIndex >= 0 && overrideIndex < index) {
-      delta += size - geometry.sizeAt(overrideIndex);
+      delta += geometry.sizeAt(overrideIndex, transient) - geometry.sizeAt(overrideIndex);
     }
   }
   return delta;

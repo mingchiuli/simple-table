@@ -58,4 +58,16 @@ describe("SparseAxisGeometry", () => {
       expect(geometry.offsetAt(index)).toBe(expected);
     }
   });
+
+  it("floors persisted and transient sizes before expanding the viewport", () => {
+    const tinyRows = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [index, 1])
+    );
+    const geometry = new SparseAxisGeometry(1_000, 72, tinyRows, 36);
+
+    expect(geometry.sizeAt(0)).toBe(36);
+    expect(geometry.sizeAt(0, { 0: 2 })).toBe(36);
+    expect(geometry.offsetAt(2, { 0: 2 })).toBe(72);
+    expect(collectVisibleItems(geometry, 0, 720, 0)).toHaveLength(21);
+  });
 });

@@ -46,6 +46,8 @@ type UseGridGeometryOptions = {
   headerHeight: number;
   defaultColumnWidth: number;
   defaultRowHeight: number;
+  minimumColumnWidth: number;
+  minimumRowHeight: number;
   overscanPx: number;
   getDraftValue: (rowIndex: number, colIndex: number) => string | undefined;
 };
@@ -60,6 +62,8 @@ export function useGridGeometry({
   headerHeight,
   defaultColumnWidth,
   defaultRowHeight,
+  minimumColumnWidth,
+  minimumRowHeight,
   overscanPx,
   getDraftValue,
 }: UseGridGeometryOptions) {
@@ -104,12 +108,14 @@ export function useGridGeometry({
   const columnGeometry = computed(() => new SparseAxisGeometry(
     columnCount.value,
     defaultColumnWidth,
-    committedColumnWidths.value
+    committedColumnWidths.value,
+    minimumColumnWidth
   ));
   const rowGeometry = computed(() => new SparseAxisGeometry(
     rowCount.value,
     defaultRowHeight,
-    committedRowHeights.value
+    committedRowHeights.value,
+    minimumRowHeight
   ));
   const totalColumnsWidth = computed(() =>
     columnGeometry.value.totalSize(previewColumnWidths.value)

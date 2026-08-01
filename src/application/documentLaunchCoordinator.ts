@@ -25,7 +25,8 @@ export function createDocumentLaunchCoordinator({
 }: DocumentLaunchCoordinatorPorts): DocumentLaunchCoordinator {
   let lifecycleId = 0;
   let unlisten: (() => void) | null = null;
-  let drainTail: Promise<void> = Promise.resolve();
+  let drainRequested = false;
+  let drainWorker: Promise<void> | null = null;
   let registration: Promise<void> | null = null;
   let activeClaim: OpenTargetClaim | null = null;
   const cleanupFailures: unknown[] = [];
@@ -44,10 +45,11 @@ export function createDocumentLaunchCoordinator({
     if (disposal) return disposal;
     disposed = true;
     lifecycleId += 1;
+    drainRequested = false;
     safeUnlisten(unlisten);
     unlisten = null;
     const pendingRegistration = registration;
-    const pendingDrain = drainTail;
+    const pendingDrain = drainWorker;
     disposal = Promise.allSettled([
       pendingRegistration ?? Promise.resolve(),
       pendingDrain,
@@ -79,10 +81,24 @@ export function createDocumentLaunchCoordinator({
   }
 
   function requestDrain(currentLifecycleId: number) {
-    drainTail = drainTail.then(
-      () => drainPendingTargets(currentLifecycleId),
-      () => drainPendingTargets(currentLifecycleId),
-    );
+    if (!isCurrentLifecycle(currentLifecycleId)) return;
+    drainRequested = true;
+    if (drainWorker) return;
+    const worker = runDrainWorker(currentLifecycleId);
+    drainWorker = worker;
+    void worker.finally(() => {
+      if (drainWorker === worker) drainWorker = null;
+      if (drainRequested && isCurrentLifecycle(currentLifecycleId)) {
+        requestDrain(currentLifecycleId);
+      }
+    });
+  }
+
+  async function runDrainWorker(currentLifecycleId: number) {
+    while (drainRequested && isCurrentLifecycle(currentLifecycleId)) {
+      drainRequested = false;
+      await drainPendingTargets(currentLifecycleId);
+    }
   }
 
   async function drainPendingTargets(currentLifecycleId: number) {

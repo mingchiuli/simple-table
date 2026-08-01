@@ -100,6 +100,9 @@ internal models.
   backend persistence bound. The backend always persists receipt identity; a
   matching active document may enrich the record with a thumbnail, but later
   document replacement cannot invalidate the record itself.
+- Document-launch wake events are edge notifications, not work items. The
+  launch coordinator coalesces a burst behind one active claim check; the
+  bounded backend claim queue remains the only backlog owner.
 
 ### Adapters and UI
 
@@ -179,6 +182,11 @@ internal models.
 - `documentSession` owns the manifest and loaded sheet slots.
   `DocumentRegionCache` owns bounded resident blocks, recency, pins, and
   eviction. Eviction cannot alter stable sheet geometry.
+- Persisted row and column dimensions remain document data, but renderer
+  geometry applies the interactive display floor before calculating visible
+  items, DOM cells, merge overlays, and region prefetch. A valid workbook with
+  sub-interactive dimensions cannot amplify one viewport into an unbounded
+  render projection.
 - `pendingCellSaves` owns drafts not yet committed to Rust. Unsaved state is the
   Rust dirty flag OR pending frontend content.
 - Selection, search results, dialogs, and viewport state are UI-only and never
