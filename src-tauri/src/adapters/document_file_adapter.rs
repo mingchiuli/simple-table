@@ -367,6 +367,7 @@ impl DocumentSaveTargetPort for DesktopSaveTarget {
         _output_name: &str,
     ) -> Result<Box<dyn StagedDocumentWrite>, AppError> {
         let target = PathBuf::from(&self.path);
+        desktop::cleanup_stale_atomic_temp_files(&target);
         let temp = write_temp_file_for_target(&target, bytes)?;
         Ok(Box::new(AtomicStagedWrite { temp, target }))
     }

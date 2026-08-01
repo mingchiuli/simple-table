@@ -18,6 +18,8 @@ export type DocumentLaunchCoordinator = {
   dispose(): Promise<void>;
 };
 
+const LISTENER_REGISTRATION_ATTEMPTS = 3;
+
 export function createDocumentLaunchCoordinator({
   launchTargets,
   openTarget,
@@ -38,6 +40,7 @@ export function createDocumentLaunchCoordinator({
     if (started || disposed) return;
     started = true;
     const currentLifecycleId = ++lifecycleId;
+    requestDrain(currentLifecycleId);
     registration = registerListener(currentLifecycleId);
   }
 
@@ -65,18 +68,25 @@ export function createDocumentLaunchCoordinator({
   }
 
   async function registerListener(currentLifecycleId: number) {
-    try {
-      const registered = await launchTargets.onLaunchTargetAvailable(() => {
-        requestDrain(currentLifecycleId);
-      });
-      if (!isCurrentLifecycle(currentLifecycleId)) {
-        safeUnlisten(registered);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < LISTENER_REGISTRATION_ATTEMPTS; attempt += 1) {
+      if (!isCurrentLifecycle(currentLifecycleId)) return;
+      try {
+        const registered = await launchTargets.onLaunchTargetAvailable(() => {
+          requestDrain(currentLifecycleId);
+        });
+        if (!isCurrentLifecycle(currentLifecycleId)) {
+          safeUnlisten(registered);
+          return;
+        }
+        unlisten = registered;
         return;
+      } catch (error) {
+        lastError = error;
       }
-      unlisten = registered;
-      requestDrain(currentLifecycleId);
-    } catch (error) {
-      safeReportError('Failed to initialize document launch listener:', error);
+    }
+    if (isCurrentLifecycle(currentLifecycleId)) {
+      safeReportError('Failed to initialize document launch listener:', lastError);
     }
   }
 

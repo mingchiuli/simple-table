@@ -2,6 +2,7 @@ use crate::error::AppError;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const TEMP_FILE_PREFIX: &str = ".simple-table-atomic-";
 const TEMP_FILE_SUFFIX: &str = ".tmp";
@@ -46,7 +47,6 @@ pub fn write_temp_file(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     result
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(crate) fn is_owned_temp_file_name(name: &str) -> bool {
     name.strip_prefix(TEMP_FILE_PREFIX)
         .and_then(|name| name.strip_suffix(TEMP_FILE_SUFFIX))
@@ -55,6 +55,20 @@ pub(crate) fn is_owned_temp_file_name(name: &str) -> bool {
 
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(crate) fn cleanup_orphaned_temp_files(directory: &Path) -> Result<(), AppError> {
+    cleanup_owned_temp_files(directory, None)
+}
+
+pub(crate) fn cleanup_stale_temp_files(
+    directory: &Path,
+    minimum_age: Duration,
+) -> Result<(), AppError> {
+    cleanup_owned_temp_files(directory, Some(minimum_age))
+}
+
+fn cleanup_owned_temp_files(
+    directory: &Path,
+    minimum_age: Option<Duration>,
+) -> Result<(), AppError> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -85,6 +99,16 @@ pub(crate) fn cleanup_orphaned_temp_files(directory: &Path) -> Result<(), AppErr
         if !file_type.is_file() {
             continue;
         }
+        if minimum_age.is_some_and(|minimum_age| {
+            !entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age >= minimum_age)
+        }) {
+            continue;
+        }
         match fs::remove_file(entry.path()) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -112,7 +136,6 @@ pub fn cleanup_temp_file(temp_path: &Path) {
     let _ = fs::remove_file(temp_path);
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", test))]
 fn is_legacy_owned_temp_file_name(name: &str) -> bool {
     name.strip_prefix('.')
         .and_then(|name| name.strip_suffix(TEMP_FILE_SUFFIX))
@@ -245,6 +268,28 @@ mod tests {
         cleanup_orphaned_temp_files(&directory).expect("cleanup temp files");
 
         assert!(bounded_directory_entries(&directory, "test").is_ok());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn stale_cleanup_preserves_fresh_and_unrelated_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "simple-table-atomic-stale-cleanup-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("test directory");
+        let owned = temp_path_for_target(&directory.join("document.xlsx"));
+        let unrelated = directory.join(".unrelated.tmp");
+        fs::write(&owned, b"owned").expect("owned temp");
+        fs::write(&unrelated, b"keep").expect("unrelated file");
+
+        cleanup_stale_temp_files(&directory, Duration::from_secs(60 * 60))
+            .expect("preserve fresh temp file");
+        assert!(owned.exists());
+
+        cleanup_stale_temp_files(&directory, Duration::ZERO).expect("remove stale temp file");
+        assert!(!owned.exists());
+        assert!(unrelated.exists());
         let _ = fs::remove_dir_all(directory);
     }
 

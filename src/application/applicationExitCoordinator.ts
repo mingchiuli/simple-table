@@ -18,6 +18,8 @@ export type ApplicationWindowPort = ApplicationExitExecutor & {
   subscribeCloseRequested(handler: () => void | Promise<void>): Promise<() => void>;
 };
 
+const LISTENER_REGISTRATION_ATTEMPTS = 3;
+
 type ActiveExitRequest = {
   intent: ApplicationExitIntent;
   actionStarted: boolean;
@@ -142,22 +144,34 @@ export function createWindowCloseRequestLifecycle(
 
   function start(): Promise<void> {
     if (disposed) return Promise.resolve();
-    registration ??= applicationWindow.subscribeCloseRequested(async () => {
-      try {
-        await coordinator.requestExit('close');
-      } catch (error) {
-        reportError('Failed to close the application:', error);
-      }
-    }).then((registeredUnlisten) => {
-      if (disposed) {
-        registeredUnlisten();
-      } else {
-        unlisten = registeredUnlisten;
-      }
-    }).catch((error) => {
-      reportError('Failed to register the application close request listener:', error);
-    });
+    registration ??= registerListener();
     return registration;
+  }
+
+  async function registerListener(): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < LISTENER_REGISTRATION_ATTEMPTS && !disposed; attempt += 1) {
+      try {
+        const registeredUnlisten = await applicationWindow.subscribeCloseRequested(async () => {
+          try {
+            await coordinator.requestExit('close');
+          } catch (error) {
+            reportError('Failed to close the application:', error);
+          }
+        });
+        if (disposed) {
+          registeredUnlisten();
+        } else {
+          unlisten = registeredUnlisten;
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!disposed) {
+      reportError('Failed to register the application close request listener:', lastError);
+    }
   }
 
   function dispose() {

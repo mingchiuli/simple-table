@@ -114,7 +114,52 @@ describe('document launch coordinator', () => {
     await disposal;
 
     expect(registeredUnlisten).toHaveBeenCalledOnce();
-    expect(setup.claimPendingOpenTarget).not.toHaveBeenCalled();
+    expect(setup.claimPendingOpenTarget).toHaveBeenCalledOnce();
+  });
+
+  it('retries a transient launch-listener registration failure', async () => {
+    const handlers: ListenHandler[] = [];
+    const registeredUnlisten = vi.fn();
+    const onLaunchTargetAvailable = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('listen failed once'))
+      .mockImplementation(async (handler) => {
+        handlers.push(handler);
+        return registeredUnlisten;
+      });
+    const setup = testDependencies({ onLaunchTargetAvailable });
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+
+    lifecycle.start();
+    await waitForCondition(() => handlers.length === 1);
+
+    expect(onLaunchTargetAvailable).toHaveBeenCalledTimes(2);
+    expect(setup.claimPendingOpenTarget).toHaveBeenCalledOnce();
+    expect(setup.reportError).not.toHaveBeenCalled();
+    await lifecycle.dispose();
+    expect(registeredUnlisten).toHaveBeenCalledOnce();
+  });
+
+  it('drains the startup queue even when listener registration keeps failing', async () => {
+    const failure = new Error('listen failed');
+    const onLaunchTargetAvailable = vi.fn().mockRejectedValue(failure);
+    const setup = testDependencies({
+      onLaunchTargetAvailable,
+      claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('startup', '/startup.xlsx')),
+    });
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+
+    lifecycle.start();
+    await waitForCondition(() => setup.pushFilePath.mock.calls.length === 1);
+    await waitForCondition(() => setup.reportError.mock.calls.length === 1);
+
+    expect(onLaunchTargetAvailable).toHaveBeenCalledTimes(3);
+    expect(setup.pushFilePath).toHaveBeenCalledWith('/startup.xlsx', 'startup');
+    expect(setup.reportError).toHaveBeenCalledWith(
+      'Failed to initialize document launch listener:',
+      failure,
+    );
+    await lifecycle.dispose();
   });
 
   it('releases a claim that arrives after the lifecycle stops', async () => {

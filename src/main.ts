@@ -28,6 +28,7 @@ const windowCloseRequests = createWindowCloseRequestLifecycle(
   applicationWorkspaceRuntime.applicationWindow,
   applicationWorkspaceRuntime.applicationExit,
 );
+await windowCloseRequests.start();
 
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -44,7 +45,6 @@ if (restoredActiveDocument && router.currentRoute.value.name === "home") {
 }
 
 app.mount("#app");
-await windowCloseRequests.start();
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {

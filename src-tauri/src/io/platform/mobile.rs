@@ -10,8 +10,9 @@ use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::io::transient_files::{
     TransientFilePurpose, TransientFileReservation, TransientPathCleanupLease,
-    clear_persistent_marker, completed_persisted_save_locations,
-    reconcile_persisted_transient_files, write_persistent_marker,
+    cleanup_persisted_transient_files_after_restart, clear_persistent_marker,
+    completed_persisted_save_locations, reconcile_persisted_transient_files,
+    write_persistent_marker,
 };
 use crate::io::{
     managed_documents,
@@ -182,6 +183,7 @@ fn initialize_mobile_storage(
 ) -> Result<PathBuf, AppError> {
     let dir = resolve_mobile_dir(app)?;
     cleanup_orphaned_temp_files(&dir)?;
+    cleanup_persisted_transient_files_after_restart(&dir)?;
     managed_documents::recover_managed_save_transactions(runtime.managed_documents(), &dir)?;
     for managed in managed_documents::managed_documents(runtime.managed_documents(), &dir)? {
         clear_persistent_marker(&managed.path);
@@ -287,7 +289,8 @@ pub(super) fn write_transient_path(
     bytes: &[u8],
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    register_transient_path(runtime, app, path, purpose)?;
+    let target = validated_mobile_files_path(runtime, app, path)?;
+    register_transient_target_with_size(runtime, target, purpose, bytes.len() as u64)?;
     if let Err(write_error) = write_path_with_official_fs(app, path.to_path_buf(), bytes) {
         let cleanup_result = discard_transient_file(runtime, app, &path.to_string_lossy(), purpose);
         return match cleanup_result {
@@ -503,9 +506,27 @@ fn register_transient_target(
     target: PathBuf,
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
+    let byte_count = match fs::metadata(&target) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == ErrorKind::NotFound => 0,
+        Err(error) => {
+            return Err(AppError::ReadError(format!(
+                "Failed to inspect transient file size: {error}"
+            )));
+        }
+    };
+    register_transient_target_with_size(runtime, target, purpose, byte_count)
+}
+
+fn register_transient_target_with_size(
+    runtime: &MobileFileRuntime,
+    target: PathBuf,
+    purpose: TransientFilePurpose,
+    byte_count: u64,
+) -> Result<(), AppError> {
     runtime
         .transient_files()
-        .register(target.clone(), purpose)?;
+        .register_with_size(target.clone(), purpose, byte_count)?;
     if let Err(error) = write_persistent_marker(&target, purpose) {
         let _ = runtime.transient_files().adopt_if_registered(&target);
         return Err(error);

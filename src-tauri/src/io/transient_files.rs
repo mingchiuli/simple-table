@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_TRANSIENT_FILES_PER_PURPOSE: usize = 64;
+const MAX_TRANSIENT_BYTES_PER_PURPOSE: u64 = 256 * 1024 * 1024;
 const TRANSIENT_FILE_TTL: Duration = Duration::from_secs(30 * 60);
 const MARKER_PREFIX: &str = ".simple-table-transient-";
 const MARKER_SUFFIX: &str = ".json";
@@ -30,6 +31,7 @@ pub enum TransientFilePurpose {
 struct TransientFileEntry {
     purpose: TransientFilePurpose,
     created_at: Instant,
+    byte_count: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -120,10 +122,29 @@ impl TransientFileRegistry {
         self.register_at(path, purpose, Instant::now())
     }
 
+    pub(crate) fn register_with_size(
+        &self,
+        path: PathBuf,
+        purpose: TransientFilePurpose,
+        byte_count: u64,
+    ) -> Result<(), AppError> {
+        self.register_sized_at(path, purpose, byte_count, Instant::now())
+    }
+
     fn register_at(
         &self,
         path: PathBuf,
         purpose: TransientFilePurpose,
+        now: Instant,
+    ) -> Result<(), AppError> {
+        self.register_sized_at(path, purpose, 0, now)
+    }
+
+    fn register_sized_at(
+        &self,
+        path: PathBuf,
+        purpose: TransientFilePurpose,
+        byte_count: u64,
         now: Instant,
     ) -> Result<(), AppError> {
         let (expired, result) = {
@@ -132,11 +153,31 @@ impl TransientFileRegistry {
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, now);
+            let current_bytes = paths
+                .values()
+                .filter_map(|state| match state {
+                    TransientFileState::Registered(entry)
+                    | TransientFileState::Reserved { entry, .. }
+                        if entry.purpose == purpose =>
+                    {
+                        Some(entry.byte_count)
+                    }
+                    _ => None,
+                })
+                .fold(0_u64, u64::saturating_add);
             let result = if let Some(existing) = paths.get_mut(&path) {
                 match existing {
                     TransientFileState::Registered(entry) if entry.purpose == purpose => {
-                        entry.created_at = now;
-                        Ok(())
+                        let next_bytes = current_bytes
+                            .saturating_sub(entry.byte_count)
+                            .saturating_add(byte_count);
+                        if next_bytes > MAX_TRANSIENT_BYTES_PER_PURPOSE {
+                            Err(transient_byte_limit_error(purpose, next_bytes))
+                        } else {
+                            entry.created_at = now;
+                            entry.byte_count = byte_count;
+                            Ok(())
+                        }
                     }
                     TransientFileState::Registered(_) => Err(AppError::DocumentStateInvalid(
                         "transient file is already registered for a different purpose".to_string(),
@@ -156,12 +197,18 @@ impl TransientFileRegistry {
                 Err(AppError::ResourceLimitExceeded(format!(
                     "at most {MAX_TRANSIENT_FILES_PER_PURPOSE} transient files may be registered for {purpose:?}"
                 )))
+            } else if current_bytes.saturating_add(byte_count) > MAX_TRANSIENT_BYTES_PER_PURPOSE {
+                Err(transient_byte_limit_error(
+                    purpose,
+                    current_bytes.saturating_add(byte_count),
+                ))
             } else {
                 paths.insert(
                     path.clone(),
                     TransientFileState::Registered(TransientFileEntry {
                         purpose,
                         created_at: now,
+                        byte_count,
                     }),
                 );
                 Ok(())
@@ -417,6 +464,12 @@ impl TransientFileRegistry {
     }
 }
 
+fn transient_byte_limit_error(purpose: TransientFilePurpose, byte_count: u64) -> AppError {
+    AppError::ResourceLimitExceeded(format!(
+        "transient files for {purpose:?} require {byte_count} bytes, maximum is {MAX_TRANSIENT_BYTES_PER_PURPOSE} bytes"
+    ))
+}
+
 pub(crate) fn write_persistent_marker(
     target: &Path,
     purpose: TransientFilePurpose,
@@ -440,6 +493,57 @@ fn write_persistent_marker_at(
         AppError::Internal(format!("Failed to encode transient marker: {error}"))
     })?;
     write_file_atomically(&marker_path(target)?, &bytes)
+}
+
+pub(crate) fn cleanup_persisted_transient_files_after_restart(
+    directory: &Path,
+) -> Result<(), AppError> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AppError::ReadError(format!(
+                "Failed to inspect persisted transient file directory: {error}"
+            )));
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            AppError::ReadError(format!(
+                "Failed to inspect persisted transient file directory entry: {error}"
+            ))
+        })?;
+        let marker_path = entry.path();
+        let Some(name) = marker_path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(MARKER_PREFIX) || !name.ends_with(MARKER_SUFFIX) {
+            continue;
+        }
+        let marker = read_marker_bytes(&marker_path, "transient file marker")
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<PersistentTransientMarker>(&bytes).ok())
+            .filter(|marker| {
+                validate_marker_field("target file name", &marker.target_file_name).is_ok()
+            });
+        let Some(marker) = marker else {
+            let _ = fs::remove_file(marker_path);
+            continue;
+        };
+        let target = directory.join(&marker.target_file_name);
+        if direct_file_name(&target).ok().as_deref() != Some(marker.target_file_name.as_str()) {
+            let _ = fs::remove_file(marker_path);
+            continue;
+        }
+        let completed_save = marker.purpose == TransientFilePurpose::SaveLocation
+            && fs::symlink_metadata(&target)
+                .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0);
+        if !completed_save {
+            cleanup_transient_artifacts(&target);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn reconcile_persisted_transient_files(directory: &Path) -> Result<(), AppError> {
@@ -809,6 +913,69 @@ mod tests {
     }
 
     #[test]
+    fn registrations_are_bounded_by_total_bytes_per_purpose() {
+        let registry = TransientFileRegistry::default();
+        let now = Instant::now();
+        let half_limit = MAX_TRANSIENT_BYTES_PER_PURPOSE / 2;
+        registry
+            .register_sized_at(
+                PathBuf::from("tmp").join("first.xlsx"),
+                TransientFilePurpose::OpenSelection,
+                half_limit,
+                now,
+            )
+            .unwrap();
+        registry
+            .register_sized_at(
+                PathBuf::from("tmp").join("second.xlsx"),
+                TransientFilePurpose::OpenSelection,
+                half_limit,
+                now,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            registry.register_sized_at(
+                PathBuf::from("tmp").join("over-limit.xlsx"),
+                TransientFilePurpose::OpenSelection,
+                1,
+                now,
+            ),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+        assert_eq!(registry.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_registration_updates_its_counted_bytes() {
+        let registry = TransientFileRegistry::default();
+        let now = Instant::now();
+        let path = PathBuf::from("tmp").join("repeated.xlsx");
+        registry
+            .register_sized_at(
+                path.clone(),
+                TransientFilePurpose::OpenSelection,
+                MAX_TRANSIENT_BYTES_PER_PURPOSE,
+                now,
+            )
+            .unwrap();
+        registry
+            .register_sized_at(path, TransientFilePurpose::OpenSelection, 1, now)
+            .unwrap();
+
+        assert!(
+            registry
+                .register_sized_at(
+                    PathBuf::from("tmp").join("remaining.xlsx"),
+                    TransientFilePurpose::OpenSelection,
+                    MAX_TRANSIENT_BYTES_PER_PURPOSE - 1,
+                    now,
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn expired_registration_removes_the_owned_file() {
         let directory = TestDir::new("expiry");
         let path = directory.path.join("expired.xlsx");
@@ -889,6 +1056,52 @@ mod tests {
 
         assert!(path.exists());
         assert!(marker_path(&path).unwrap().exists());
+    }
+
+    #[test]
+    fn restart_cleanup_removes_open_selections_and_empty_save_locations() {
+        let directory = TestDir::new("restart-cleanup");
+        let open_path = directory.path.join("open.xlsx");
+        let empty_save_path = directory.path.join("empty-save.xlsx");
+        let completed_save_path = directory.path.join("completed-save.xlsx");
+        fs::write(&open_path, b"temporary").unwrap();
+        fs::write(&empty_save_path, []).unwrap();
+        fs::write(&completed_save_path, b"completed").unwrap();
+        write_persistent_marker(&open_path, TransientFilePurpose::OpenSelection).unwrap();
+        write_persistent_marker(&empty_save_path, TransientFilePurpose::SaveLocation).unwrap();
+        write_persistent_marker(&completed_save_path, TransientFilePurpose::SaveLocation).unwrap();
+
+        cleanup_persisted_transient_files_after_restart(&directory.path).unwrap();
+
+        assert!(!open_path.exists());
+        assert!(!marker_path(&open_path).unwrap().exists());
+        assert!(!empty_save_path.exists());
+        assert!(!marker_path(&empty_save_path).unwrap().exists());
+        assert!(completed_save_path.exists());
+        assert!(marker_path(&completed_save_path).unwrap().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restart_cleanup_does_not_preserve_a_save_location_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TestDir::new("restart-save-symlink");
+        let outside = std::env::temp_dir().join(format!(
+            "simple-table-transient-outside-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let link = directory.path.join("saved.xlsx");
+        fs::write(&outside, b"outside").unwrap();
+        symlink(&outside, &link).unwrap();
+        write_persistent_marker(&link, TransientFilePurpose::SaveLocation).unwrap();
+
+        cleanup_persisted_transient_files_after_restart(&directory.path).unwrap();
+
+        assert!(outside.exists());
+        assert!(link.symlink_metadata().is_err());
+        assert!(!marker_path(&link).unwrap().exists());
+        let _ = fs::remove_file(outside);
     }
 
     #[test]

@@ -232,12 +232,14 @@ describe('window close guard lifecycle', () => {
   it('reports subscription and exit failures through the presentation boundary', async () => {
     const reportError = vi.fn();
     const requestExitAfterFailedRegistration = vi.fn();
+    const failedSubscription = vi.fn().mockRejectedValue(new Error('listen failed'));
     const failedRegistration = createWindowCloseRequestLifecycle(
-      { subscribeCloseRequested: vi.fn().mockRejectedValue(new Error('listen failed')) },
+      { subscribeCloseRequested: failedSubscription },
       { requestExit: requestExitAfterFailedRegistration },
       reportError,
     );
     await failedRegistration.start();
+    expect(failedSubscription).toHaveBeenCalledTimes(3);
     expect(requestExitAfterFailedRegistration).not.toHaveBeenCalled();
 
     const closeHandlers: Array<() => void | Promise<void>> = [];
@@ -258,5 +260,31 @@ describe('window close guard lifecycle', () => {
     expect(reportError).toHaveBeenCalledTimes(2);
     expect(reportError.mock.calls[0]?.[0]).toContain('register');
     expect(reportError.mock.calls[1]?.[0]).toContain('close');
+  });
+
+  it('retries a transient close-listener registration failure', async () => {
+    const closeHandlers: Array<() => void | Promise<void>> = [];
+    const unregister = vi.fn();
+    const subscribeCloseRequested = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('listen failed once'))
+      .mockImplementation(async (handler) => {
+        closeHandlers.push(handler);
+        return unregister;
+      });
+    const reportError = vi.fn();
+    const lifecycle = createWindowCloseRequestLifecycle(
+      { subscribeCloseRequested },
+      { requestExit: vi.fn().mockResolvedValue({ status: 'executed', intent: 'close' }) },
+      reportError,
+    );
+
+    await lifecycle.start();
+
+    expect(subscribeCloseRequested).toHaveBeenCalledTimes(2);
+    expect(closeHandlers).toHaveLength(1);
+    expect(reportError).not.toHaveBeenCalled();
+    lifecycle.dispose();
+    expect(unregister).toHaveBeenCalledOnce();
   });
 });

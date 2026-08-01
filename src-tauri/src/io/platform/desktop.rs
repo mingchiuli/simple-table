@@ -3,7 +3,7 @@ use crate::document_format::{
     supported_extension_from_name,
 };
 use crate::error::AppError;
-use crate::io::atomic_file::write_file_atomically;
+use crate::io::atomic_file::{cleanup_stale_temp_files, write_file_atomically};
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +18,7 @@ use tauri_plugin_fs::FilePath;
 const MAX_AUTHORIZED_PATHS: usize = 64;
 const PATH_AUTHORIZATION_TTL: Duration = Duration::from_secs(30 * 60);
 const OPEN_TARGET_CLAIM_TTL: Duration = Duration::from_secs(60);
+const STALE_ATOMIC_TEMP_FILE_AGE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Default)]
 struct DesktopFileRuntimeInner {
@@ -390,7 +391,21 @@ pub(crate) fn write_export_target(
     target: &DesktopExportTarget,
     bytes: &[u8],
 ) -> Result<(), AppError> {
+    cleanup_stale_atomic_temp_files(&target.path);
     write_file_atomically(&target.path, bytes)
+}
+
+pub(crate) fn cleanup_stale_atomic_temp_files(target: &Path) {
+    let directory = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if let Err(error) = cleanup_stale_temp_files(directory, STALE_ATOMIC_TEMP_FILE_AGE) {
+        eprintln!(
+            "Deferred cleanup of stale atomic temporary files in {}: {error}",
+            directory.display()
+        );
+    }
 }
 
 fn file_path_to_path_buf(path: FilePath) -> Result<PathBuf, AppError> {
