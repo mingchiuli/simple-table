@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::fs::{self, File};
+use std::io::{ErrorKind, Read};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
-use tauri_plugin_store::StoreExt;
+use tauri::{AppHandle, Manager};
 
 use super::model::{RecentFileRecord, RecentStorageType};
 use crate::error::AppError;
+use crate::io::atomic_file::{replace_temp_file, write_file_atomically};
 
 const STORE_FILE: &str = "recent-files.json";
 const STORE_KEY: &str = "recent_files";
@@ -95,35 +98,11 @@ impl RecentStore {
     }
 
     fn get_all_unlocked(app: &AppHandle) -> Result<Vec<RecentFileRecord>, AppError> {
-        let store = app
-            .store(STORE_FILE)
-            .map_err(|error| AppError::ReadError(error.to_string()))?;
-        decode_recent_files(store.get(STORE_KEY))
+        load_recent_files(&recent_store_path(app)?)
     }
 
     fn save_unlocked(app: &AppHandle, files: &[RecentFileRecord]) -> Result<(), AppError> {
-        validate_recent_files(files).map_err(AppError::WriteError)?;
-        let store = app
-            .store(STORE_FILE)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        let persisted = files
-            .iter()
-            .map(PersistedRecentFile::from)
-            .collect::<Vec<_>>();
-        let value =
-            serde_json::to_value(persisted).map_err(|e| AppError::Internal(e.to_string()))?;
-        let previous = store.get(STORE_KEY);
-        store.set(STORE_KEY, value);
-        if let Err(error) = store.save() {
-            match previous {
-                Some(value) => store.set(STORE_KEY, value),
-                None => {
-                    store.delete(STORE_KEY);
-                }
-            }
-            return Err(AppError::WriteError(error.to_string()));
-        }
-        Ok(())
+        save_recent_files(&recent_store_path(app)?, files)
     }
 
     pub fn add(
@@ -179,6 +158,123 @@ impl RecentStore {
     #[cfg(test)]
     pub(crate) fn is_same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.transaction, &other.transaction)
+    }
+}
+
+fn recent_store_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join(STORE_FILE))
+        .map_err(|error| {
+            AppError::Internal(format!("Failed to resolve recent file store path: {error}"))
+        })
+}
+
+fn load_recent_files(path: &Path) -> Result<Vec<RecentFileRecord>, AppError> {
+    let Some(bytes) = read_recent_store_bytes(path)? else {
+        return Ok(Vec::new());
+    };
+    decode_recent_store_bytes(&bytes)
+        .map_err(|error| quarantine_invalid_recent_store(path, error.to_string()))
+}
+
+fn read_recent_store_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AppError::ReadError(format!(
+                "Failed to open recent file store: {error}"
+            )));
+        }
+    };
+    let metadata = file.metadata().map_err(|error| {
+        AppError::ReadError(format!("Failed to inspect recent file store: {error}"))
+    })?;
+    if metadata.len() > MAX_RECENT_STORE_BYTES as u64 {
+        return Err(quarantine_invalid_recent_store(
+            path,
+            format!(
+                "Invalid recent file store: {} bytes exceeds the limit of {MAX_RECENT_STORE_BYTES}",
+                metadata.len()
+            ),
+        ));
+    }
+
+    let capacity = usize::try_from(metadata.len())
+        .unwrap_or(MAX_RECENT_STORE_BYTES)
+        .min(MAX_RECENT_STORE_BYTES);
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take((MAX_RECENT_STORE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            AppError::ReadError(format!("Failed to read recent file store: {error}"))
+        })?;
+    if bytes.len() > MAX_RECENT_STORE_BYTES {
+        return Err(quarantine_invalid_recent_store(
+            path,
+            format!(
+                "Invalid recent file store: more than {MAX_RECENT_STORE_BYTES} bytes were read"
+            ),
+        ));
+    }
+    Ok(Some(bytes))
+}
+
+fn decode_recent_store_bytes(bytes: &[u8]) -> Result<Vec<RecentFileRecord>, AppError> {
+    let mut store: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(bytes)
+        .map_err(|error| AppError::ReadError(format!("Invalid recent file store: {error}")))?;
+    decode_recent_files(store.remove(STORE_KEY))
+}
+
+fn save_recent_files(path: &Path, files: &[RecentFileRecord]) -> Result<(), AppError> {
+    let bytes = encode_recent_store(files)?;
+    let parent = path.parent().ok_or_else(|| {
+        AppError::WriteError("Recent file store path has no parent directory".to_string())
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        AppError::WriteError(format!(
+            "Failed to create recent file store directory: {error}"
+        ))
+    })?;
+    write_file_atomically(path, &bytes)
+}
+
+fn encode_recent_store(files: &[RecentFileRecord]) -> Result<Vec<u8>, AppError> {
+    validate_recent_files(files).map_err(AppError::WriteError)?;
+    let persisted = files
+        .iter()
+        .map(PersistedRecentFile::from)
+        .collect::<Vec<_>>();
+    let value =
+        serde_json::to_value(persisted).map_err(|error| AppError::Internal(error.to_string()))?;
+    let mut store = serde_json::Map::new();
+    store.insert(STORE_KEY.to_string(), value);
+    let bytes =
+        serde_json::to_vec_pretty(&store).map_err(|error| AppError::Internal(error.to_string()))?;
+    if bytes.len() > MAX_RECENT_STORE_BYTES {
+        return Err(AppError::WriteError(format!(
+            "Recent file store requires {} bytes; the maximum is {MAX_RECENT_STORE_BYTES}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn quarantine_invalid_recent_store(path: &Path, reason: String) -> AppError {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| STORE_FILE.to_string());
+    let quarantine = path.with_file_name(format!("{file_name}.corrupt"));
+    match replace_temp_file(path, &quarantine) {
+        Ok(()) => AppError::ReadError(format!(
+            "{reason}; the invalid store was moved to {}",
+            quarantine.display()
+        )),
+        Err(error) => AppError::ReadError(format!(
+            "{reason}; failed to quarantine the invalid store: {error}"
+        )),
     }
 }
 
@@ -382,6 +478,13 @@ mod tests {
         .expect("persisted recent files")
     }
 
+    fn temp_store_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "simple-table-recent-{label}-{}.json",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
     #[test]
     fn missing_recent_store_value_is_an_empty_list() {
         assert!(decode_recent_files(None).unwrap().is_empty());
@@ -407,6 +510,83 @@ mod tests {
         assert_eq!(encoded[0]["storageType"], "desktopPath");
         assert_eq!(encoded[0]["originalPath"], "/import/book.xlsx");
         assert_eq!(decode_recent_files(Some(encoded)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn direct_store_codec_reads_the_plugin_store_schema() {
+        let file = recent("id", "/tmp/book.xlsx", "book.xlsx", 7);
+        let mut store = serde_json::Map::new();
+        store.insert(STORE_KEY.to_string(), encoded_recent_files(&[file]));
+        let bytes = serde_json::to_vec(&store).expect("store bytes");
+
+        let decoded = decode_recent_store_bytes(&bytes).expect("compatible store");
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].id, "id");
+        assert_eq!(decoded[0].path, "/tmp/book.xlsx");
+    }
+
+    #[test]
+    fn oversized_store_is_quarantined_before_json_parsing() {
+        let path = temp_store_path("oversized");
+        let quarantine = path.with_file_name(format!(
+            "{}.corrupt",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+        fs::write(&path, vec![b'x'; MAX_RECENT_STORE_BYTES + 1]).expect("oversized store");
+
+        let error = load_recent_files(&path).expect_err("oversized store must fail");
+
+        assert!(error.to_string().contains("exceeds the limit"));
+        assert!(!path.exists());
+        assert_eq!(
+            fs::metadata(&quarantine).expect("quarantined store").len(),
+            (MAX_RECENT_STORE_BYTES + 1) as u64
+        );
+        let _ = fs::remove_file(quarantine);
+    }
+
+    #[test]
+    fn malformed_store_replaces_the_single_quarantine_backup() {
+        let path = temp_store_path("malformed");
+        let quarantine = path.with_file_name(format!(
+            "{}.corrupt",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+        fs::write(&path, b"{").expect("malformed store");
+        fs::write(&quarantine, b"older corruption").expect("older quarantine");
+
+        let error = load_recent_files(&path).expect_err("malformed store must fail");
+
+        assert!(error.to_string().contains("Invalid recent file store"));
+        assert!(!path.exists());
+        assert_eq!(fs::read(&quarantine).expect("quarantine bytes"), b"{");
+        let _ = fs::remove_file(quarantine);
+    }
+
+    #[test]
+    fn encoded_size_limit_preserves_the_previous_store() {
+        let path = temp_store_path("encoded-limit");
+        let previous = br#"{"recent_files":[]}"#;
+        fs::write(&path, previous).expect("previous store");
+        let files = (0..3)
+            .map(|index| {
+                let mut file = recent(
+                    &format!("id-{index}"),
+                    &format!("/tmp/{index}.xlsx"),
+                    &format!("{index}.xlsx"),
+                    index,
+                );
+                file.thumbnail = Some("\0".repeat(MAX_RECENT_THUMBNAIL_BYTES));
+                file
+            })
+            .collect::<Vec<_>>();
+
+        let error = save_recent_files(&path, &files).expect_err("encoded store must be bounded");
+
+        assert!(error.to_string().contains("maximum"));
+        assert_eq!(fs::read(&path).expect("previous store"), previous);
+        let _ = fs::remove_file(path);
     }
 
     #[test]
