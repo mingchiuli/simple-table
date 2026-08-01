@@ -186,6 +186,31 @@ describe('application exit coordination', () => {
     expect(execute).not.toHaveBeenCalled();
     await expect(coordinator.requestExit('relaunch')).resolves.toEqual({ status: 'cancelled' });
   });
+
+  it('times out a stuck guard and rolls back a preparation that arrives late', async () => {
+    vi.useFakeTimers();
+    try {
+      const lateGuard = deferred<ReturnType<typeof preparation>>();
+      const latePreparation = preparation();
+      const coordinator = createApplicationExitCoordinator(
+        { execute: vi.fn() },
+        { guardTimeoutMs: 100 },
+      );
+      coordinator.registerGuard(() => lateGuard.promise);
+
+      const exit = coordinator.requestExit('close');
+      const rejectedExit = expect(exit).rejects.toThrow('timed out after 100 ms');
+      await vi.advanceTimersByTimeAsync(100);
+      await rejectedExit;
+
+      lateGuard.resolve(latePreparation);
+      await vi.waitFor(() => {
+        expect(latePreparation.rollback).toHaveBeenCalledOnce();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('window close guard lifecycle', () => {
@@ -233,10 +258,15 @@ describe('window close guard lifecycle', () => {
     const reportError = vi.fn();
     const requestExitAfterFailedRegistration = vi.fn();
     const failedSubscription = vi.fn().mockRejectedValue(new Error('listen failed'));
-    const failedRegistration = createWindowCloseRequestLifecycle(
+    let failedRegistration: ReturnType<typeof createWindowCloseRequestLifecycle>;
+    failedRegistration = createWindowCloseRequestLifecycle(
       { subscribeCloseRequested: failedSubscription },
       { requestExit: requestExitAfterFailedRegistration },
-      reportError,
+      (message, error) => {
+        reportError(message, error);
+        failedRegistration.dispose();
+      },
+      () => Promise.resolve(),
     );
     await failedRegistration.start();
     expect(failedSubscription).toHaveBeenCalledTimes(3);
@@ -277,6 +307,7 @@ describe('window close guard lifecycle', () => {
       { subscribeCloseRequested },
       { requestExit: vi.fn().mockResolvedValue({ status: 'executed', intent: 'close' }) },
       reportError,
+      () => Promise.resolve(),
     );
 
     await lifecycle.start();
@@ -286,5 +317,63 @@ describe('window close guard lifecycle', () => {
     expect(reportError).not.toHaveBeenCalled();
     lifecycle.dispose();
     expect(unregister).toHaveBeenCalledOnce();
+  });
+
+  it('keeps retrying close-listener registration after the first reported failure batch', async () => {
+    const unregister = vi.fn();
+    const subscribeCloseRequested = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('listen failed 1'))
+      .mockRejectedValueOnce(new Error('listen failed 2'))
+      .mockRejectedValueOnce(new Error('listen failed 3'))
+      .mockResolvedValue(unregister);
+    const reportError = vi.fn();
+    const lifecycle = createWindowCloseRequestLifecycle(
+      { subscribeCloseRequested },
+      { requestExit: vi.fn() },
+      reportError,
+      () => Promise.resolve(),
+    );
+
+    await lifecycle.start();
+
+    expect(subscribeCloseRequested).toHaveBeenCalledTimes(4);
+    expect(reportError).toHaveBeenCalledOnce();
+    lifecycle.dispose();
+    expect(unregister).toHaveBeenCalledOnce();
+  });
+
+  it('abandons a stuck registration attempt and unregisters it if it resolves late', async () => {
+    vi.useFakeTimers();
+    try {
+      const stuckRegistration = deferred<() => void>();
+      const lateUnregister = vi.fn();
+      const activeUnregister = vi.fn();
+      const subscribeCloseRequested = vi
+        .fn()
+        .mockReturnValueOnce(stuckRegistration.promise)
+        .mockResolvedValue(activeUnregister);
+      const lifecycle = createWindowCloseRequestLifecycle(
+        { subscribeCloseRequested },
+        { requestExit: vi.fn() },
+        vi.fn(),
+        () => Promise.resolve(),
+        100,
+      );
+
+      const started = lifecycle.start();
+      await vi.advanceTimersByTimeAsync(100);
+      await started;
+      expect(subscribeCloseRequested).toHaveBeenCalledTimes(2);
+
+      stuckRegistration.resolve(lateUnregister);
+      await vi.waitFor(() => {
+        expect(lateUnregister).toHaveBeenCalledOnce();
+      });
+      lifecycle.dispose();
+      expect(activeUnregister).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -102,6 +102,23 @@ impl ManagedSaveTransaction {
         }
         result
     }
+
+    pub(crate) fn preserve_recovery_after_content_replace(mut self) -> Result<(), AppError> {
+        self.content_committed = true;
+        let metadata_result = persist_managed_document(
+            &self.catalog,
+            &self.target,
+            &self.file_name,
+            None,
+            None,
+            false,
+        );
+        if let Some(reservation) = self.transient_reservation.take() {
+            reservation.commit();
+        }
+        clear_persistent_marker(&self.target);
+        metadata_result
+    }
 }
 
 impl Drop for ManagedSaveTransaction {
@@ -969,6 +986,46 @@ mod tests {
         let records = managed_documents(&catalog, &dir.0).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].file_name, "Reserved.xlsx");
+    }
+
+    #[test]
+    fn uncertain_content_replace_keeps_recovery_journal_and_adopts_target() {
+        let catalog = ManagedDocumentCatalog::default();
+        let transient_files = Arc::new(TransientFileRegistry::default());
+        let dir = TestDir::new("save-transaction-uncertain-durability");
+        let target = dir.0.join("reserved.xlsx");
+        fs::write(&target, b"workbook").expect("replaced content");
+        transient_files
+            .register(
+                target.clone(),
+                crate::io::transient_files::TransientFilePurpose::SaveLocation,
+            )
+            .expect("transient registration");
+        crate::io::transient_files::write_persistent_marker(
+            &target,
+            crate::io::transient_files::TransientFilePurpose::SaveLocation,
+        )
+        .expect("transient marker");
+        let reservation = transient_files
+            .reserve_if_registered(
+                &target,
+                crate::io::transient_files::TransientFilePurpose::SaveLocation,
+            )
+            .expect("reserve transient target")
+            .expect("registered target");
+        let mut transaction =
+            begin_test_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook");
+        transaction.attach_transient_reservation(reservation);
+        let journal = save_transaction_path(&target).expect("journal path");
+
+        transaction
+            .preserve_recovery_after_content_replace()
+            .expect("preserve recovery state");
+
+        assert!(journal.exists());
+        assert!(!transient_files.contains(&target).unwrap());
+        assert!(!crate::io::transient_files::persistent_marker_exists_for_test(&target));
+        assert_eq!(managed_documents(&catalog, &dir.0).unwrap().len(), 1);
     }
 
     #[test]

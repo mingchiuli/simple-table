@@ -28,15 +28,37 @@ const windowCloseRequests = createWindowCloseRequestLifecycle(
   applicationWorkspaceRuntime.applicationWindow,
   applicationWorkspaceRuntime.applicationExit,
 );
-await windowCloseRequests.start();
 
+let restorationFailed = false;
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
   try {
     restoredActiveDocument = await applicationWorkspaceRuntime.restoreActiveDocument();
   } catch (error) {
+    restorationFailed = true;
     console.error("Failed to restore the active document:", error);
   }
+}
+
+let unregisterRestorationExitGuard: () => void = () => undefined;
+if (restorationFailed) {
+  unregisterRestorationExitGuard = applicationWorkspaceRuntime.applicationExit.registerGuard(
+    async () => {
+      try {
+        const restored = await applicationWorkspaceRuntime.restoreActiveDocument();
+        if (restored) {
+          await router.replace({ name: "table" });
+          unregisterRestorationExitGuard();
+          return null;
+        }
+        unregisterRestorationExitGuard();
+        return inertExitPreparation();
+      } catch (error) {
+        console.error("Failed to recover the active document before exit:", error);
+        return null;
+      }
+    },
+  );
 }
 
 await router.isReady();
@@ -45,6 +67,7 @@ if (restoredActiveDocument && router.currentRoute.value.name === "home") {
 }
 
 app.mount("#app");
+void windowCloseRequests.start();
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
@@ -54,4 +77,11 @@ if (import.meta.hot) {
       console.error('Failed to dispose application workspace:', error);
     });
   });
+}
+
+function inertExitPreparation() {
+  return {
+    commit: () => undefined,
+    rollback: () => undefined,
+  };
 }

@@ -5,11 +5,12 @@ use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use super::model::{RecentFileRecord, RecentStorageType};
 use crate::error::AppError;
-use crate::io::atomic_file::{replace_temp_file, write_file_atomically};
+use crate::io::atomic_file::{cleanup_stale_temp_files, replace_temp_file, write_file_atomically};
 
 const STORE_FILE: &str = "recent-files.json";
 const STORE_KEY: &str = "recent_files";
@@ -21,6 +22,7 @@ const MAX_RECENT_ID_BYTES: usize = 256;
 const MAX_RECENT_PATH_BYTES: usize = 16 * 1024;
 const MAX_RECENT_FILE_NAME_BYTES: usize = 1_024;
 const MAX_RECENT_THUMBNAIL_BYTES: usize = 256 * 1024;
+const STALE_RECENT_TEMP_FILE_AGE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +173,7 @@ fn recent_store_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 }
 
 fn load_recent_files(path: &Path) -> Result<Vec<RecentFileRecord>, AppError> {
+    cleanup_recent_store_temp_files(path);
     let Some(bytes) = read_recent_store_bytes(path)? else {
         return Ok(Vec::new());
     };
@@ -237,7 +240,20 @@ fn save_recent_files(path: &Path, files: &[RecentFileRecord]) -> Result<(), AppE
             "Failed to create recent file store directory: {error}"
         ))
     })?;
+    cleanup_recent_store_temp_files(path);
     write_file_atomically(path, &bytes)
+}
+
+fn cleanup_recent_store_temp_files(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if let Err(error) = cleanup_stale_temp_files(parent, STALE_RECENT_TEMP_FILE_AGE) {
+        eprintln!(
+            "Deferred cleanup of stale recent-store temporary files in {}: {error}",
+            parent.display()
+        );
+    }
 }
 
 fn encode_recent_store(files: &[RecentFileRecord]) -> Result<Vec<u8>, AppError> {

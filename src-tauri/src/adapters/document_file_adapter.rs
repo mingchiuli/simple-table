@@ -10,9 +10,11 @@ use crate::application::prepared_source_port::{
     NoopPreparedSourceAdoption, PreparedSourceAdoption, PreparedSourceAdoptionPort,
 };
 use crate::error::AppError;
-use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 #[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::io::atomic_file::{temp_path_for_target, write_temp_file};
+use crate::io::atomic_file::{
+    AtomicReplaceError, replace_temp_file_detailed, temp_path_for_target, write_temp_file,
+};
+use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
 #[cfg(any(desktop, target_os = "android", target_os = "ios"))]
 use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 #[cfg(desktop)]
@@ -458,7 +460,22 @@ struct MobileStagedWrite {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 impl StagedDocumentWrite for MobileStagedWrite {
     fn commit(mut self: Box<Self>) -> Result<(), AppError> {
-        replace_temp_file(&self.temp, &self.target)?;
+        match replace_temp_file_detailed(&self.temp, &self.target) {
+            Ok(()) => {}
+            Err(AtomicReplaceError::NotReplaced(error)) => return Err(error),
+            Err(AtomicReplaceError::ReplacedNotDurable(error)) => {
+                if let Some(transaction) = self.transaction.take()
+                    && let Err(recovery_error) =
+                        transaction.preserve_recovery_after_content_replace()
+                {
+                    eprintln!(
+                        "Failed to preserve managed save recovery for {}: {recovery_error}",
+                        self.target.display()
+                    );
+                }
+                return Err(error);
+            }
+        }
         if let Some(transaction) = self.transaction.take()
             && let Err(error) = transaction.finish_after_content_commit()
         {

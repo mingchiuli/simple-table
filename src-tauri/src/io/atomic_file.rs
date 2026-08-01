@@ -6,6 +6,20 @@ use std::time::Duration;
 
 const TEMP_FILE_PREFIX: &str = ".simple-table-atomic-";
 const TEMP_FILE_SUFFIX: &str = ".tmp";
+const MAX_STALE_TEMP_SCAN_ENTRIES: usize = 1_024;
+
+pub(crate) enum AtomicReplaceError {
+    NotReplaced(AppError),
+    ReplacedNotDurable(AppError),
+}
+
+impl AtomicReplaceError {
+    pub(crate) fn into_app_error(self) -> AppError {
+        match self {
+            Self::NotReplaced(error) | Self::ReplacedNotDurable(error) => error,
+        }
+    }
+}
 
 pub fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     let temp_path = write_temp_file_for_target(path, bytes)?;
@@ -55,19 +69,24 @@ pub(crate) fn is_owned_temp_file_name(name: &str) -> bool {
 
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(crate) fn cleanup_orphaned_temp_files(directory: &Path) -> Result<(), AppError> {
-    cleanup_owned_temp_files(directory, None)
+    cleanup_owned_temp_files(directory, None, None)
 }
 
 pub(crate) fn cleanup_stale_temp_files(
     directory: &Path,
     minimum_age: Duration,
 ) -> Result<(), AppError> {
-    cleanup_owned_temp_files(directory, Some(minimum_age))
+    cleanup_owned_temp_files(
+        directory,
+        Some(minimum_age),
+        Some(MAX_STALE_TEMP_SCAN_ENTRIES),
+    )
 }
 
 fn cleanup_owned_temp_files(
     directory: &Path,
     minimum_age: Option<Duration>,
+    maximum_entries: Option<usize>,
 ) -> Result<(), AppError> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -79,7 +98,7 @@ fn cleanup_owned_temp_files(
         }
     };
 
-    for entry in entries {
+    for entry in entries.take(maximum_entries.unwrap_or(usize::MAX)) {
         let entry = entry.map_err(|error| {
             AppError::ReadError(format!(
                 "Failed to inspect atomic temporary file directory entry: {error}"
@@ -123,13 +142,25 @@ fn cleanup_owned_temp_files(
 }
 
 pub fn replace_temp_file(temp_path: &Path, target: &Path) -> Result<(), AppError> {
-    replace_file(temp_path, target).map_err(|error| AppError::WriteError(error.to_string()))?;
-    sync_parent_dir(target).map_err(|error| {
-        AppError::WriteError(format!(
-            "File content was replaced but its parent directory could not be synchronized: {error}"
-        ))
+    replace_temp_file_detailed(temp_path, target).map_err(AtomicReplaceError::into_app_error)
+}
+
+pub(crate) fn replace_temp_file_detailed(
+    temp_path: &Path,
+    target: &Path,
+) -> Result<(), AtomicReplaceError> {
+    replace_file(temp_path, target).map_err(|error| {
+        AtomicReplaceError::NotReplaced(AppError::WriteError(error.to_string()))
     })?;
-    Ok(())
+    finish_replacement(sync_parent_dir(target))
+}
+
+fn finish_replacement(sync_result: std::io::Result<()>) -> Result<(), AtomicReplaceError> {
+    sync_result.map_err(|error| {
+        AtomicReplaceError::ReplacedNotDurable(AppError::WriteError(format!(
+            "File content was replaced but its parent directory could not be synchronized: {error}"
+        )))
+    })
 }
 
 pub fn cleanup_temp_file(temp_path: &Path) {
@@ -229,6 +260,20 @@ mod tests {
     }
 
     #[test]
+    fn replacement_reports_when_content_moved_but_directory_sync_failed() {
+        let error = finish_replacement(Err(std::io::Error::other("injected sync failure")))
+            .expect_err("replacement should report uncertain durability");
+
+        assert!(matches!(&error, AtomicReplaceError::ReplacedNotDurable(_)));
+        assert!(
+            error
+                .into_app_error()
+                .to_string()
+                .contains("content was replaced")
+        );
+    }
+
+    #[test]
     fn orphan_cleanup_removes_owned_and_legacy_temp_files_only() {
         let directory = std::env::temp_dir().join(format!(
             "simple-table-atomic-cleanup-{}",
@@ -290,6 +335,36 @@ mod tests {
         cleanup_stale_temp_files(&directory, Duration::ZERO).expect("remove stale temp file");
         assert!(!owned.exists());
         assert!(unrelated.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn stale_cleanup_has_a_fixed_directory_scan_budget() {
+        let directory = std::env::temp_dir().join(format!(
+            "simple-table-atomic-stale-cleanup-limit-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("test directory");
+        for _ in 0..=MAX_STALE_TEMP_SCAN_ENTRIES {
+            let owned = temp_path_for_target(&directory.join("document.xlsx"));
+            fs::write(owned, []).expect("owned temp");
+        }
+
+        cleanup_stale_temp_files(&directory, Duration::ZERO).expect("bounded cleanup");
+
+        assert!(
+            fs::read_dir(&directory)
+                .expect("remaining entries")
+                .next()
+                .is_some()
+        );
+        cleanup_orphaned_temp_files(&directory).expect("full startup cleanup");
+        assert!(
+            fs::read_dir(&directory)
+                .expect("empty entries")
+                .next()
+                .is_none()
+        );
         let _ = fs::remove_dir_all(directory);
     }
 

@@ -18,7 +18,14 @@ export type ApplicationWindowPort = ApplicationExitExecutor & {
   subscribeCloseRequested(handler: () => void | Promise<void>): Promise<() => void>;
 };
 
-const LISTENER_REGISTRATION_ATTEMPTS = 3;
+const LISTENER_REGISTRATION_REPORT_INTERVAL = 3;
+const LISTENER_REGISTRATION_RETRY_MS = 250;
+const LISTENER_REGISTRATION_TIMEOUT_MS = 5_000;
+const DEFAULT_EXIT_GUARD_TIMEOUT_MS = 30_000;
+
+type ApplicationExitCoordinatorOptions = {
+  guardTimeoutMs?: number;
+};
 
 type ActiveExitRequest = {
   intent: ApplicationExitIntent;
@@ -28,7 +35,10 @@ type ActiveExitRequest = {
 
 export type ApplicationExitCoordinator = ReturnType<typeof createApplicationExitCoordinator>;
 
-export function createApplicationExitCoordinator(executor: ApplicationExitExecutor) {
+export function createApplicationExitCoordinator(
+  executor: ApplicationExitExecutor,
+  { guardTimeoutMs = DEFAULT_EXIT_GUARD_TIMEOUT_MS }: ApplicationExitCoordinatorOptions = {},
+) {
   const exitGuards = new Set<ApplicationExitGuard>();
   let activeRequest: ActiveExitRequest | null = null;
   let disposed = false;
@@ -74,7 +84,7 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
       }
       let preparation: ApplicationExitPreparation | null;
       try {
-        preparation = await guard();
+        preparation = await prepareGuardBeforeDeadline(guard, guardTimeoutMs);
       } catch (error) {
         throw combineWithSettlementFailures(
           error,
@@ -137,6 +147,10 @@ export function createWindowCloseRequestLifecycle(
   reportError: (message: string, error: unknown) => void = (message, error) => {
     console.error(message, error);
   },
+  waitBeforeRetry: () => Promise<void> = () => new Promise(
+    (resolve) => setTimeout(resolve, LISTENER_REGISTRATION_RETRY_MS),
+  ),
+  registrationTimeoutMs = LISTENER_REGISTRATION_TIMEOUT_MS,
 ) {
   let disposed = false;
   let unlisten: (() => void) | null = null;
@@ -150,15 +164,19 @@ export function createWindowCloseRequestLifecycle(
 
   async function registerListener(): Promise<void> {
     let lastError: unknown;
-    for (let attempt = 0; attempt < LISTENER_REGISTRATION_ATTEMPTS && !disposed; attempt += 1) {
+    let failures = 0;
+    while (!disposed) {
       try {
-        const registeredUnlisten = await applicationWindow.subscribeCloseRequested(async () => {
-          try {
-            await coordinator.requestExit('close');
-          } catch (error) {
-            reportError('Failed to close the application:', error);
-          }
-        });
+        const registeredUnlisten = await subscribeBeforeDeadline(
+          () => applicationWindow.subscribeCloseRequested(async () => {
+            try {
+              await coordinator.requestExit('close');
+            } catch (error) {
+              reportError('Failed to close the application:', error);
+            }
+          }),
+          registrationTimeoutMs,
+        );
         if (disposed) {
           registeredUnlisten();
         } else {
@@ -167,10 +185,12 @@ export function createWindowCloseRequestLifecycle(
         return;
       } catch (error) {
         lastError = error;
+        failures += 1;
+        if (failures % LISTENER_REGISTRATION_REPORT_INTERVAL === 0) {
+          reportError('Failed to register the application close request listener:', lastError);
+        }
       }
-    }
-    if (!disposed) {
-      reportError('Failed to register the application close request listener:', lastError);
+      if (!disposed) await waitBeforeRetry();
     }
   }
 
@@ -181,6 +201,66 @@ export function createWindowCloseRequestLifecycle(
   }
 
   return { start, dispose };
+}
+
+async function subscribeBeforeDeadline(
+  subscribe: () => Promise<() => void>,
+  timeoutMs: number,
+): Promise<() => void> {
+  let expired = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const subscription = subscribe();
+  void subscription.then(
+    (unlisten) => {
+      if (expired) unlisten();
+    },
+    () => undefined,
+  );
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      expired = true;
+      reject(new Error(`Close-listener registration timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([subscription, deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function prepareGuardBeforeDeadline(
+  guard: ApplicationExitGuard,
+  timeoutMs: number,
+): Promise<ApplicationExitPreparation | null> {
+  let expired = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const preparation = Promise.resolve().then(guard);
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      expired = true;
+      reject(new Error(`Application exit preparation timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+  });
+
+  void preparation.then(
+    (latePreparation) => {
+      if (!expired || !latePreparation) return;
+      try {
+        latePreparation.rollback();
+      } catch (error) {
+        console.error('Failed to roll back a late application exit preparation:', error);
+      }
+    },
+    () => undefined,
+  );
+
+  try {
+    return await Promise.race([preparation, deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 function commitPreparations(preparations: ApplicationExitPreparation[]): unknown[] {

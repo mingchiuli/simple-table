@@ -1,4 +1,7 @@
-use crate::document_data::{DocumentData, DocumentSheet, MergeRange};
+use crate::document_data::{
+    CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
+    Hyperlink, MergeRange, RichMetadata,
+};
 use sha2::{Digest, Sha256};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +22,7 @@ struct SheetFingerprint<'a> {
     merges: &'a [MergeRange],
     column_widths: Option<&'a std::collections::HashMap<usize, u32>>,
     row_heights: Option<&'a std::collections::HashMap<usize, u32>>,
+    rich: &'a RichMetadata,
 }
 
 pub struct IncrementalContentFingerprint {
@@ -64,6 +68,7 @@ impl<'a> SheetFingerprint<'a> {
             merges: &sheet.merges,
             column_widths: sheet.column_widths.as_ref(),
             row_heights: sheet.row_heights.as_ref(),
+            rich: &sheet.rich,
         }
     }
 }
@@ -586,7 +591,179 @@ fn hash_sheet_content(sheet_index: usize, sheet: &SheetFingerprint<'_>) -> Conte
         &mut hash,
     );
     hash_layout_map(sheet_index, LayoutKind::Row, sheet.row_heights, &mut hash);
+    hash_rich_metadata(sheet_index, sheet.rich, &mut hash);
     hash
+}
+
+fn hash_rich_metadata(sheet_index: usize, rich: &RichMetadata, hash: &mut ContentHash) {
+    xor_hash(
+        hash,
+        &contribution(TAG_CELL_FORMAT_COUNT, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_usize(hasher, rich.cell_formats.len());
+        }),
+    );
+    for (cell, format) in &rich.cell_formats {
+        xor_hash(
+            hash,
+            &contribution(TAG_CELL_FORMAT, |hasher| {
+                write_usize(hasher, sheet_index);
+                write_str(hasher, cell);
+                hash_cell_format(format, hasher);
+            }),
+        );
+    }
+
+    xor_hash(
+        hash,
+        &contribution(TAG_CELL_STYLE_COUNT, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_usize(hasher, rich.cell_styles.len());
+        }),
+    );
+    for (cell, style) in &rich.cell_styles {
+        xor_hash(
+            hash,
+            &contribution(TAG_CELL_STYLE, |hasher| {
+                write_usize(hasher, sheet_index);
+                write_str(hasher, cell);
+                hash_cell_style(style, hasher);
+            }),
+        );
+    }
+
+    hash_hidden_indexes(
+        sheet_index,
+        &rich.hidden_rows,
+        TAG_HIDDEN_ROW_COUNT,
+        TAG_HIDDEN_ROW,
+        hash,
+    );
+    hash_hidden_indexes(
+        sheet_index,
+        &rich.hidden_columns,
+        TAG_HIDDEN_COLUMN_COUNT,
+        TAG_HIDDEN_COLUMN,
+        hash,
+    );
+
+    xor_hash(
+        hash,
+        &contribution(TAG_FREEZE_PANE, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_optional_freeze_pane(rich.freeze_pane.as_ref(), hasher);
+        }),
+    );
+
+    xor_hash(
+        hash,
+        &contribution(TAG_HYPERLINK_COUNT, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_usize(hasher, rich.hyperlinks.len());
+        }),
+    );
+    for (cell, hyperlink) in &rich.hyperlinks {
+        xor_hash(
+            hash,
+            &contribution(TAG_HYPERLINK, |hasher| {
+                write_usize(hasher, sheet_index);
+                write_str(hasher, cell);
+                hash_hyperlink(hyperlink, hasher);
+            }),
+        );
+    }
+
+    xor_hash(
+        hash,
+        &contribution(TAG_DRAWING_COUNT, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_usize(hasher, rich.drawings.len());
+        }),
+    );
+    for (drawing_index, drawing) in rich.drawings.iter().enumerate() {
+        xor_hash(
+            hash,
+            &contribution(TAG_DRAWING, |hasher| {
+                write_usize(hasher, sheet_index);
+                write_usize(hasher, drawing_index);
+                hash_drawing(drawing, hasher);
+            }),
+        );
+    }
+}
+
+fn hash_cell_format(format: &CellFormat, hasher: &mut Sha256) {
+    write_optional_str(hasher, format.number_format.as_deref());
+    write_optional_str(hasher, format.style_id.as_deref());
+}
+
+fn hash_cell_style(style: &CellStyle, hasher: &mut Sha256) {
+    write_optional_str(hasher, style.font_color.as_deref());
+    write_optional_str(hasher, style.background_color.as_deref());
+    write_optional_bool(hasher, style.bold);
+    write_optional_bool(hasher, style.italic);
+    write_optional_str(hasher, style.horizontal_align.as_deref());
+    write_optional_str(hasher, style.vertical_align.as_deref());
+    write_optional_str(hasher, style.number_format.as_deref());
+}
+
+fn hash_hidden_indexes(
+    sheet_index: usize,
+    indexes: &[usize],
+    count_tag: u8,
+    value_tag: u8,
+    hash: &mut ContentHash,
+) {
+    let indexes: BTreeSet<_> = indexes.iter().copied().collect();
+    xor_hash(
+        hash,
+        &contribution(count_tag, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_usize(hasher, indexes.len());
+        }),
+    );
+    for index in indexes {
+        xor_hash(
+            hash,
+            &contribution(value_tag, |hasher| {
+                write_usize(hasher, sheet_index);
+                write_usize(hasher, index);
+            }),
+        );
+    }
+}
+
+fn write_optional_freeze_pane(value: Option<&FreezePane>, hasher: &mut Sha256) {
+    let Some(value) = value else {
+        write_tag(hasher, 0);
+        return;
+    };
+    write_tag(hasher, 1);
+    write_str(hasher, &value.top_left_cell);
+    write_f64(hasher, value.horizontal_split);
+    write_f64(hasher, value.vertical_split);
+    write_str(hasher, &value.active_pane);
+    write_str(hasher, &value.state);
+}
+
+fn hash_hyperlink(hyperlink: &Hyperlink, hasher: &mut Sha256) {
+    write_str(hasher, &hyperlink.url);
+    write_optional_str(hasher, hyperlink.tooltip.as_deref());
+    write_bool(hasher, hyperlink.location);
+}
+
+fn hash_drawing(drawing: &Drawing, hasher: &mut Sha256) {
+    write_tag(
+        hasher,
+        match drawing.kind {
+            DrawingKind::Image => 0,
+            DrawingKind::Chart => 1,
+        },
+    );
+    write_u32(hasher, drawing.from_row);
+    write_u32(hasher, drawing.from_col);
+    write_optional_u32(hasher, drawing.to_row);
+    write_optional_u32(hasher, drawing.to_col);
 }
 
 fn hash_cell_value(cell: &CellValue, hasher: &mut Sha256) {
@@ -650,6 +827,19 @@ const TAG_COLUMN_WIDTH_COUNT: u8 = 8;
 const TAG_COLUMN_WIDTH: u8 = 9;
 const TAG_ROW_HEIGHT_COUNT: u8 = 10;
 const TAG_ROW_HEIGHT: u8 = 11;
+const TAG_CELL_FORMAT_COUNT: u8 = 12;
+const TAG_CELL_FORMAT: u8 = 13;
+const TAG_CELL_STYLE_COUNT: u8 = 14;
+const TAG_CELL_STYLE: u8 = 15;
+const TAG_HIDDEN_ROW_COUNT: u8 = 16;
+const TAG_HIDDEN_ROW: u8 = 17;
+const TAG_HIDDEN_COLUMN_COUNT: u8 = 18;
+const TAG_HIDDEN_COLUMN: u8 = 19;
+const TAG_FREEZE_PANE: u8 = 20;
+const TAG_HYPERLINK_COUNT: u8 = 21;
+const TAG_HYPERLINK: u8 = 22;
+const TAG_DRAWING_COUNT: u8 = 23;
+const TAG_DRAWING: u8 = 24;
 
 fn contribution(tag: u8, write: impl FnOnce(&mut Sha256)) -> ContentHash {
     let mut hasher = Sha256::new();
@@ -734,6 +924,44 @@ fn write_str(hasher: &mut Sha256, value: &str) {
     hasher.update(value.as_bytes());
 }
 
+fn write_optional_str(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            write_tag(hasher, 1);
+            write_str(hasher, value);
+        }
+        None => write_tag(hasher, 0),
+    }
+}
+
+fn write_bool(hasher: &mut Sha256, value: bool) {
+    hasher.update([u8::from(value)]);
+}
+
+fn write_optional_bool(hasher: &mut Sha256, value: Option<bool>) {
+    match value {
+        Some(value) => {
+            write_tag(hasher, 1);
+            write_bool(hasher, value);
+        }
+        None => write_tag(hasher, 0),
+    }
+}
+
+fn write_optional_u32(hasher: &mut Sha256, value: Option<u32>) {
+    match value {
+        Some(value) => {
+            write_tag(hasher, 1);
+            write_u32(hasher, value);
+        }
+        None => write_tag(hasher, 0),
+    }
+}
+
+fn write_f64(hasher: &mut Sha256, value: f64) {
+    hasher.update(value.to_bits().to_le_bytes());
+}
+
 fn write_usize(hasher: &mut Sha256, value: usize) {
     hasher.update(value.to_le_bytes());
 }
@@ -751,7 +979,10 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{ContentFingerprint, hash_content_fingerprint};
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document_data::{
+        CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
+        Hyperlink,
+    };
     use crate::domain::CellValue;
 
     fn file_data() -> DocumentData {
@@ -795,6 +1026,91 @@ mod tests {
             hash_file_content(&original),
             hash_file_content(&changed_layout)
         );
+    }
+
+    #[test]
+    fn hash_changes_when_persisted_rich_metadata_changes() {
+        let original = file_data();
+        let original_hash = hash_file_content(&original);
+
+        let mut variants = Vec::new();
+        let mut cell_format = original.clone();
+        cell_format.sheets[0].rich.cell_formats.insert(
+            "A1".to_string(),
+            CellFormat {
+                number_format: Some("0.00".to_string()),
+                style_id: Some("3".to_string()),
+            },
+        );
+        variants.push(cell_format);
+
+        let mut cell_style = original.clone();
+        cell_style.sheets[0].rich.cell_styles.insert(
+            "A1".to_string(),
+            CellStyle {
+                bold: Some(true),
+                background_color: Some("#ffffff".to_string()),
+                ..Default::default()
+            },
+        );
+        variants.push(cell_style);
+
+        let mut hidden = original.clone();
+        hidden.sheets[0].rich.hidden_rows.push(2);
+        hidden.sheets[0].rich.hidden_columns.push(3);
+        variants.push(hidden);
+
+        let mut frozen = original.clone();
+        frozen.sheets[0].rich.freeze_pane = Some(FreezePane {
+            top_left_cell: "B2".to_string(),
+            horizontal_split: 1.0,
+            vertical_split: 1.0,
+            active_pane: "bottomRight".to_string(),
+            state: "frozen".to_string(),
+        });
+        variants.push(frozen);
+
+        let mut linked = original.clone();
+        linked.sheets[0].rich.hyperlinks.insert(
+            "A1".to_string(),
+            Hyperlink {
+                url: "https://example.com".to_string(),
+                tooltip: Some("Example".to_string()),
+                location: false,
+            },
+        );
+        variants.push(linked);
+
+        let mut drawn = original.clone();
+        drawn.sheets[0].rich.drawings.push(Drawing {
+            kind: DrawingKind::Image,
+            from_row: 0,
+            from_col: 0,
+            to_row: Some(2),
+            to_col: Some(2),
+        });
+        variants.push(drawn);
+
+        for variant in variants {
+            assert_ne!(original_hash, hash_file_content(&variant));
+        }
+    }
+
+    #[test]
+    fn hash_ignores_derived_rich_metadata_flags_and_hidden_index_order() {
+        let mut original = file_data();
+        original.sheets[0].rich.hidden_rows = vec![3, 1];
+        original.sheets[0].rich.hidden_columns = vec![4, 2];
+
+        let mut changed = original.clone();
+        changed.sheets[0].rich.hidden_rows.reverse();
+        changed.sheets[0].rich.hidden_columns.reverse();
+        changed.sheets[0].rich.has_more_drawings = true;
+        changed.sheets[0].rich.has_style_metadata = true;
+        changed.sheets[0].rich.has_hyperlinks = true;
+        changed.sheets[0].rich.has_freeze_pane = true;
+
+        assert_eq!(hash_file_content(&original), hash_file_content(&changed));
     }
 
     #[test]
