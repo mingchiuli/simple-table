@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_TRANSIENT_FILES_PER_PURPOSE: usize = 64;
@@ -29,6 +29,30 @@ pub enum TransientFilePurpose {
 pub(crate) struct TransientFileEntry {
     purpose: TransientFilePurpose,
     created_at: Instant,
+}
+
+pub(crate) struct TransientFileReservation {
+    registry: Arc<TransientFileRegistry>,
+    target: PathBuf,
+    entry: Option<TransientFileEntry>,
+}
+
+impl TransientFileReservation {
+    pub(crate) fn commit(mut self) {
+        self.entry = None;
+        clear_persistent_marker(&self.target);
+    }
+}
+
+impl Drop for TransientFileReservation {
+    fn drop(&mut self) {
+        let Some(entry) = self.entry.take() else {
+            return;
+        };
+        let _ = self
+            .registry
+            .restore_after_failed_adoption(self.target.clone(), entry);
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -92,12 +116,7 @@ impl TransientFileRegistry {
             (expired, result)
         };
 
-        for expired_path in expired {
-            if result.is_ok() && expired_path == path {
-                continue;
-            }
-            cleanup_transient_artifacts(&expired_path);
-        }
+        self.cleanup_expired(expired);
         result
     }
 
@@ -129,12 +148,41 @@ impl TransientFileRegistry {
             };
             (expired, result)
         };
-        cleanup_expired(expired);
+        self.cleanup_expired(expired);
         result
     }
 
     pub fn adopt_if_registered(&self, path: &Path) -> Result<bool, AppError> {
         self.adopt_at(path, Instant::now())
+    }
+
+    pub(crate) fn reserve_if_registered(
+        self: &Arc<Self>,
+        path: &Path,
+        purpose: TransientFilePurpose,
+    ) -> Result<Option<TransientFileReservation>, AppError> {
+        let target = path.to_path_buf();
+        let (expired, entry) = {
+            let mut paths = self
+                .paths
+                .lock()
+                .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
+            let expired = prune_expired(&mut paths, Instant::now());
+            let entry = match paths.get(&target).copied() {
+                Some(entry) if entry.purpose == purpose => Ok(paths.remove(&target)),
+                Some(_) => Err(AppError::DocumentStateInvalid(
+                    "transient file is registered for a different purpose".to_string(),
+                )),
+                None => Ok(None),
+            };
+            (expired, entry)
+        };
+        self.cleanup_expired(expired);
+        Ok(entry?.map(|entry| TransientFileReservation {
+            registry: Arc::clone(self),
+            target,
+            entry: Some(entry),
+        }))
     }
 
     pub(crate) fn take_for_adoption(
@@ -149,7 +197,7 @@ impl TransientFileRegistry {
             let expired = prune_expired(&mut paths, Instant::now());
             (expired, paths.remove(path))
         };
-        cleanup_expired(expired);
+        self.cleanup_expired(expired);
         Ok(entry)
     }
 
@@ -175,7 +223,7 @@ impl TransientFileRegistry {
             let expired = prune_expired(&mut paths, now);
             (expired, paths.remove(path).is_some())
         };
-        cleanup_expired(expired);
+        self.cleanup_expired(expired);
         if adopted {
             clear_persistent_marker(path);
         }
@@ -186,6 +234,7 @@ impl TransientFileRegistry {
         self.contains_at(path, None, Instant::now())
     }
 
+    #[cfg(test)]
     pub fn contains_for(
         &self,
         path: &Path,
@@ -211,8 +260,20 @@ impl TransientFileRegistry {
                 .is_some_and(|entry| purpose.is_none_or(|purpose| entry.purpose == purpose));
             (expired, contains)
         };
-        cleanup_expired(expired);
+        self.cleanup_expired(expired);
         Ok(contains)
+    }
+
+    fn cleanup_expired(&self, paths: Vec<PathBuf>) {
+        for path in paths {
+            let Ok(registered) = self.paths.lock() else {
+                return;
+            };
+            if registered.contains_key(&path) {
+                continue;
+            }
+            cleanup_transient_artifacts(&path);
+        }
     }
 
     #[cfg(test)]
@@ -334,12 +395,6 @@ fn prune_expired(paths: &mut HashMap<PathBuf, TransientFileEntry>, now: Instant)
     expired
 }
 
-fn cleanup_expired(paths: Vec<PathBuf>) {
-    for path in paths {
-        cleanup_transient_artifacts(&path);
-    }
-}
-
 fn cleanup_transient_artifacts(target: &Path) {
     let _ = fs::remove_file(target);
     clear_persistent_marker(target);
@@ -459,6 +514,55 @@ mod tests {
     }
 
     #[test]
+    fn reserved_save_location_cannot_be_discarded_while_save_owns_it() {
+        let registry = Arc::new(TransientFileRegistry::default());
+        let path = PathBuf::from("tmp").join("saving.xlsx");
+        registry
+            .register(path.clone(), TransientFilePurpose::SaveLocation)
+            .unwrap();
+
+        let reservation = registry
+            .reserve_if_registered(&path, TransientFilePurpose::SaveLocation)
+            .unwrap()
+            .expect("save reservation");
+
+        assert!(
+            registry
+                .take(&path, TransientFilePurpose::SaveLocation)
+                .is_err()
+        );
+        drop(reservation);
+        assert_eq!(
+            registry
+                .take(&path, TransientFilePurpose::SaveLocation)
+                .unwrap(),
+            path
+        );
+    }
+
+    #[test]
+    fn committed_save_reservation_removes_transient_ownership() {
+        let directory = TestDir::new("save-reservation-commit");
+        let path = directory.path.join("saved.xlsx");
+        fs::write(&path, b"saved workbook").unwrap();
+        let registry = Arc::new(TransientFileRegistry::default());
+        registry
+            .register(path.clone(), TransientFilePurpose::SaveLocation)
+            .unwrap();
+        write_persistent_marker(&path, TransientFilePurpose::SaveLocation).unwrap();
+        let reservation = registry
+            .reserve_if_registered(&path, TransientFilePurpose::SaveLocation)
+            .unwrap()
+            .expect("save reservation");
+
+        reservation.commit();
+
+        assert!(!registry.contains(&path).unwrap());
+        assert!(!marker_path(&path).unwrap().exists());
+        assert!(path.exists());
+    }
+
+    #[test]
     fn duplicate_registration_refreshes_the_same_purpose() {
         let registry = TransientFileRegistry::default();
         let path = PathBuf::from("tmp").join("repeated.xlsx");
@@ -531,6 +635,34 @@ mod tests {
 
         assert!(!registry.contains_at(&path, None, now).unwrap());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn expired_cleanup_preserves_a_path_registered_again_before_deletion() {
+        let directory = TestDir::new("expiry-reregistered");
+        let path = directory.path.join("reused.xlsx");
+        fs::write(&path, b"new transient content").unwrap();
+        let registry = TransientFileRegistry::default();
+        let now = Instant::now();
+        registry
+            .register_at(
+                path.clone(),
+                TransientFilePurpose::OpenSelection,
+                now - TRANSIENT_FILE_TTL,
+            )
+            .unwrap();
+        let expired = {
+            let mut paths = registry.paths.lock().unwrap();
+            prune_expired(&mut paths, now)
+        };
+        registry
+            .register_at(path.clone(), TransientFilePurpose::OpenSelection, now)
+            .unwrap();
+
+        registry.cleanup_expired(expired);
+
+        assert!(path.exists());
+        assert!(registry.contains_at(&path, None, now).unwrap());
     }
 
     #[test]

@@ -8,8 +8,9 @@ use crate::error::AppError;
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::io::transient_files::{
-    TransientFilePurpose, clear_persistent_marker, completed_persisted_save_locations,
-    reconcile_persisted_transient_files, write_persistent_marker,
+    TransientFilePurpose, TransientFileReservation, clear_persistent_marker,
+    completed_persisted_save_locations, reconcile_persisted_transient_files,
+    write_persistent_marker,
 };
 use crate::io::{
     managed_documents,
@@ -120,6 +121,25 @@ impl MobileFileRuntime {
             file_name,
             content,
         )
+    }
+
+    pub(crate) fn reserve_save_target(
+        &self,
+        target: &Path,
+        current_document_path: &str,
+    ) -> Result<Option<TransientFileReservation>, AppError> {
+        let reservation = self
+            .transient_files
+            .reserve_if_registered(target, TransientFilePurpose::SaveLocation)?;
+        if reservation.is_some()
+            || (!current_document_path.is_empty() && Path::new(current_document_path) == target)
+        {
+            return Ok(reservation);
+        }
+        Err(AppError::DocumentStateInvalid(
+            "mobile save target is neither the current document nor a reserved save location"
+                .to_string(),
+        ))
     }
 
     #[cfg(test)]
@@ -382,16 +402,13 @@ pub fn discard_transient_file(
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) fn remove_managed_file_if_inactive(
+pub(crate) fn remove_managed_file(
     runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &str,
-    active_document_path: Option<&str>,
 ) -> Result<bool, AppError> {
     let target = validated_mobile_files_path(runtime, app, Path::new(path))?;
-    if active_document_path.is_some_and(|active| Path::new(active) == target)
-        || runtime.transient_files().contains(&target)?
-    {
+    if runtime.transient_files().contains(&target)? {
         return Ok(false);
     }
 
@@ -521,23 +538,7 @@ pub(crate) fn migrate_managed_document(
     )
 }
 
-pub(crate) fn ensure_save_target_authorized(
-    runtime: &MobileFileRuntime,
-    target: &Path,
-    current_document_path: &str,
-) -> Result<(), AppError> {
-    let is_reserved = runtime
-        .transient_files()
-        .contains_for(target, TransientFilePurpose::SaveLocation)?;
-    if is_save_target_authorized(current_document_path, target, is_reserved) {
-        return Ok(());
-    }
-    Err(AppError::DocumentStateInvalid(
-        "mobile save target is neither the current document nor a reserved save location"
-            .to_string(),
-    ))
-}
-
+#[cfg(test)]
 fn is_save_target_authorized(current_path: &str, target: &Path, is_reserved: bool) -> bool {
     is_reserved || (!current_path.is_empty() && Path::new(current_path) == target)
 }

@@ -21,7 +21,11 @@ pub fn write_temp_file_for_target(target: &Path, bytes: &[u8]) -> Result<PathBuf
 
 pub fn replace_temp_file(temp_path: &Path, target: &Path) -> Result<(), AppError> {
     replace_file(temp_path, target).map_err(|error| AppError::WriteError(error.to_string()))?;
-    sync_parent_dir(target);
+    sync_parent_dir(target).map_err(|error| {
+        AppError::WriteError(format!(
+            "File content was replaced but its parent directory could not be synchronized: {error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -78,11 +82,43 @@ fn replace_file(temp_path: &Path, target: &Path) -> std::io::Result<()> {
     }
 }
 
-fn sync_parent_dir(path: &Path) {
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if let Ok(dir) = fs::File::open(parent) {
-        let _ = dir.sync_all();
+#[cfg(not(windows))]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(windows)]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
+    // MoveFileExW with MOVEFILE_WRITE_THROUGH waits for the replacement to reach disk.
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_replaces_existing_content() {
+        let directory = std::env::temp_dir().join(format!(
+            "simple-table-atomic-write-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("test directory");
+        let target = directory.join("document.xlsx");
+        fs::write(&target, b"old").expect("old content");
+
+        write_file_atomically(&target, b"new").expect("atomic write");
+
+        assert_eq!(fs::read(&target).expect("saved content"), b"new");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn relative_target_synchronizes_the_current_directory() {
+        assert!(sync_parent_dir(Path::new("document.xlsx")).is_ok());
     }
 }

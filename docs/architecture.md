@@ -143,6 +143,10 @@ internal models.
   repository lock is not exposed; callers request read or mutation handles.
 - Replacement and close retire old document handles and derived runtime work
   before old state is released.
+- Mobile managed-file deletion holds an inactive-path lease from the active
+  document repository. Path deletion and document replacement are mutually
+  exclusive, and a prepared managed source is revalidated while the
+  replacement lease is held before it can become active.
 - Expired prepared documents are removed under the repository mutex, then their
   document work leases and large buffers are released after unlocking. Every
   repository entry point that prunes expiration must drain this retired list on
@@ -225,7 +229,11 @@ internal models.
    budget.
 3. A save lease prevents mutation between final validation, durable write, and
    saved-hash commit.
-4. Failed staging or writing aborts the lease. Successful save refreshes identity,
+4. A mobile reserved save location is atomically transferred from transient
+   cleanup ownership to the save transaction before encoding. Cancellation
+   restores that ownership; durable content commit ends it even when managed
+   metadata must be recovered from the save journal later.
+5. Failed staging or writing aborts the lease. Successful save refreshes identity,
    dirty state, capabilities, and derived search work.
 
 ### Search
@@ -235,6 +243,9 @@ internal models.
 3. Missing, stale, or failed indexes fall back to a bounded authoritative scan.
 4. Search results use internal retention limits; exact serialized response
    admission occurs only at protocol projection.
+5. Worker batches for one document sheet execute serially so an older batch
+   cannot mutate the same index after a newer batch; different sheets may still
+   build in parallel under the shared index budget.
 
 ## Architecture Enforcement
 

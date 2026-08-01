@@ -6,6 +6,8 @@ use crate::projection_model::{
     DocumentCapabilities, NativeSavePlan, OpenDocumentSnapshot, SheetRegionSnapshot,
     SpreadsheetFormatOptions,
 };
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::state::state::InactiveDocumentPathLease;
 use crate::state::state::{ActiveDocumentRepository, DocumentHandle};
 
 #[cfg(test)]
@@ -49,18 +51,11 @@ pub fn active_document_response(
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) fn active_document_path(
+pub(crate) fn begin_inactive_document_path_operation(
     service: &DocumentQueryService,
-) -> Result<Option<String>, AppError> {
-    let handle = service.documents().active_handle()?;
-    Ok(handle
-        .map(|handle| {
-            handle
-                .read()
-                .map(|editor_state| editor_state.file_data().path.clone())
-        })
-        .transpose()?
-        .filter(|path| !path.is_empty()))
+    path: &str,
+) -> Result<Option<InactiveDocumentPathLease>, AppError> {
+    service.documents().begin_inactive_path_operation(path)
 }
 
 pub fn current_document_projection_for_command(

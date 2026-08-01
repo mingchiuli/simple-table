@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use std::fs::{self, DirEntry, File};
+use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
 
@@ -41,6 +42,26 @@ pub(crate) fn bounded_directory_entries(
 pub(crate) fn read_marker_bytes(path: &Path, label: &str) -> Result<Vec<u8>, AppError> {
     let file = File::open(path)
         .map_err(|error| AppError::ReadError(format!("Failed to open {label}: {error}")))?;
+    read_open_marker_bytes(file, label)
+}
+
+pub(crate) fn read_optional_marker_bytes(
+    path: &Path,
+    label: &str,
+) -> Result<Option<Vec<u8>>, AppError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AppError::ReadError(format!(
+                "Failed to open {label}: {error}"
+            )));
+        }
+    };
+    read_open_marker_bytes(file, label).map(Some)
+}
+
+fn read_open_marker_bytes(file: File, label: &str) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     file.take((MAX_MARKER_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
@@ -79,6 +100,23 @@ mod tests {
             read_marker_bytes(&path, "test marker"),
             Err(AppError::ResourceLimitExceeded(_))
         ));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn optional_marker_reads_preserve_missing_and_bounded_results() {
+        let missing = temp_path("missing-optional-marker");
+        assert_eq!(
+            read_optional_marker_bytes(&missing, "test marker").unwrap(),
+            None
+        );
+
+        let path = temp_path("optional-marker");
+        fs::write(&path, b"marker").expect("marker bytes");
+        assert_eq!(
+            read_optional_marker_bytes(&path, "test marker").unwrap(),
+            Some(b"marker".to_vec())
+        );
         let _ = fs::remove_file(path);
     }
 

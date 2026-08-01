@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use std::sync::Mutex;
 
 use crate::application::document_codec_port::OpenDocumentSource;
 use crate::application::document_file_workflow::{
@@ -241,6 +243,7 @@ impl PlatformFileAdapter {
             files: self.mobile_files.clone(),
             path: target.to_string_lossy().to_string(),
             target,
+            reservation: Mutex::new(None),
         }))
     }
 
@@ -392,6 +395,7 @@ struct MobileSaveTarget {
     files: MobileFileRuntime,
     path: String,
     target: PathBuf,
+    reservation: Mutex<Option<crate::io::transient_files::TransientFileReservation>>,
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -401,7 +405,15 @@ impl DocumentSaveTargetPort for MobileSaveTarget {
     }
 
     fn ensure_authorized(&self, current_document_path: &str) -> Result<(), AppError> {
-        mobile::ensure_save_target_authorized(&self.files, &self.target, current_document_path)
+        let reservation = self
+            .files
+            .reserve_save_target(&self.target, current_document_path)?;
+        let mut stored = self
+            .reservation
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("mobile save target reservation"))?;
+        *stored = reservation;
+        Ok(())
     }
 
     fn stage(
@@ -409,13 +421,23 @@ impl DocumentSaveTargetPort for MobileSaveTarget {
         bytes: &[u8],
         output_name: &str,
     ) -> Result<Box<dyn StagedDocumentWrite>, AppError> {
-        let transaction =
-            self.files
-                .begin_managed_save_transaction(&self.target, output_name, bytes)?;
-        let temp = write_temp_file_for_target(&self.target, bytes)?;
+        let MobileSaveTarget {
+            files,
+            path: _,
+            target,
+            reservation,
+        } = *self;
+        let reservation = reservation
+            .into_inner()
+            .map_err(|_| AppError::poisoned_lock("mobile save target reservation"))?;
+        let mut transaction = files.begin_managed_save_transaction(&target, output_name, bytes)?;
+        if let Some(reservation) = reservation {
+            transaction.attach_transient_reservation(reservation);
+        }
+        let temp = write_temp_file_for_target(&target, bytes)?;
         Ok(Box::new(MobileStagedWrite {
             temp,
-            target: self.target,
+            target,
             transaction: Some(transaction),
         }))
     }

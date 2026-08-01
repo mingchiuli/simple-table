@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -7,6 +8,7 @@ use crate::state::editor_state::EditorState;
 struct ActiveDocumentStore {
     active: Option<Arc<DocumentHandle>>,
     replacement_lease: Option<u64>,
+    inactive_path_operations: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -62,6 +64,18 @@ impl ActiveDocumentRepository {
             .close_active_document_for_command(document_id, base_revision)
     }
 
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    pub(crate) fn begin_inactive_path_operation(
+        &self,
+        path: &str,
+    ) -> Result<Option<InactiveDocumentPathLease>, AppError> {
+        let reserved = self.write_store()?.reserve_inactive_path(path)?;
+        Ok(reserved.then(|| InactiveDocumentPathLease {
+            repository: self.clone(),
+            path: path.to_string(),
+        }))
+    }
+
     fn read_store(&self) -> Result<RwLockReadGuard<'_, ActiveDocumentStore>, AppError> {
         self.store
             .read()
@@ -96,6 +110,21 @@ pub(crate) struct DocumentReplacementResult {
     pub(crate) document_id: u64,
     pub(crate) previous_document: Option<Arc<DocumentHandle>>,
     pub(crate) active_handle: Arc<DocumentHandle>,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) struct InactiveDocumentPathLease {
+    repository: ActiveDocumentRepository,
+    path: String,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+impl Drop for InactiveDocumentPathLease {
+    fn drop(&mut self) {
+        if let Ok(mut store) = self.repository.write_store() {
+            store.inactive_path_operations.remove(&self.path);
+        }
+    }
 }
 
 pub(crate) struct DocumentReplacementTransaction {
@@ -242,6 +271,7 @@ impl ActiveDocumentStore {
         Self {
             active: None,
             replacement_lease: None,
+            inactive_path_operations: HashSet::new(),
         }
     }
 
@@ -294,6 +324,11 @@ impl ActiveDocumentStore {
         if self.replacement_lease.is_some() {
             return Err(AppError::DocumentStateInvalid(
                 "another document replacement is already in progress".to_string(),
+            ));
+        }
+        if !self.inactive_path_operations.is_empty() {
+            return Err(AppError::DocumentStateInvalid(
+                "a managed document path is being removed".to_string(),
             ));
         }
         match (document_id, revision) {
@@ -444,6 +479,12 @@ impl ActiveDocumentStore {
         editor_state: EditorState,
     ) -> Result<(u64, Option<Arc<DocumentHandle>>), AppError> {
         self.ensure_replacement_lease(lease)?;
+        let incoming_path = &editor_state.file_data().path;
+        if !incoming_path.is_empty() && self.inactive_path_operations.contains(incoming_path) {
+            return Err(AppError::DocumentStateInvalid(
+                "document path is being removed and cannot become active".to_string(),
+            ));
+        }
         if let Some(previous) = &self.active {
             previous.retire()?;
         }
@@ -465,6 +506,31 @@ impl ActiveDocumentStore {
         Err(AppError::DocumentStateInvalid(
             "document replacement is in progress".to_string(),
         ))
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    fn reserve_inactive_path(&mut self, path: &str) -> Result<bool, AppError> {
+        if path.is_empty() {
+            return Err(AppError::DocumentStateInvalid(
+                "inactive document path operation requires a path".to_string(),
+            ));
+        }
+        if self.replacement_lease.is_some() {
+            return Err(AppError::DocumentStateInvalid(
+                "document replacement is in progress".to_string(),
+            ));
+        }
+        if let Some(active) = &self.active
+            && active.read()?.file_data().path == path
+        {
+            return Ok(false);
+        }
+        if !self.inactive_path_operations.insert(path.to_string()) {
+            return Err(AppError::DocumentStateInvalid(
+                "another operation is already removing this document path".to_string(),
+            ));
+        }
+        Ok(true)
     }
 
     fn ensure_replacement_lease(&self, lease: DocumentReplacementLease) -> Result<(), AppError> {
@@ -493,6 +559,7 @@ fn nonzero_random_u64() -> u64 {
 mod tests {
     use super::*;
     use crate::document_data::{DocumentData, DocumentSheet};
+    use std::path::Path;
 
     fn editor_state(name: &str) -> EditorState {
         EditorState::with_workbook(
@@ -503,6 +570,17 @@ mod tests {
             },
             None,
         )
+    }
+
+    fn editor_state_at(path: &str) -> EditorState {
+        let mut state = editor_state(
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("document.xlsx"),
+        );
+        state.update_identity(path.to_string(), state.file_data().file_name.clone());
+        state
     }
 
     #[test]
@@ -650,6 +728,51 @@ mod tests {
             Some(replacement_id)
         );
         drop(previous);
+    }
+
+    #[test]
+    fn inactive_path_lease_blocks_replacement_until_file_removal_finishes() {
+        let repository = ActiveDocumentRepository::default();
+        let current = editor_state_at("/documents/current.xlsx");
+        let current_id = current.document_id();
+        let current_revision = current.revision();
+        repository.replace_active_for_test(current);
+
+        assert!(
+            repository
+                .begin_inactive_path_operation("/documents/current.xlsx")
+                .expect("active path check")
+                .is_none()
+        );
+        let removal = repository
+            .begin_inactive_path_operation("/documents/next.xlsx")
+            .expect("inactive path reservation")
+            .expect("inactive path lease");
+        assert!(
+            repository
+                .begin_replacement(Some(current_id), Some(current_revision))
+                .is_err()
+        );
+        assert_eq!(
+            repository
+                .active_handle()
+                .unwrap()
+                .map(|handle| handle.document_id()),
+            Some(current_id)
+        );
+
+        drop(removal);
+        let replacement = repository
+            .begin_replacement(Some(current_id), Some(current_revision))
+            .expect("retry replacement");
+        assert!(
+            repository
+                .begin_inactive_path_operation("/documents/next.xlsx")
+                .is_err()
+        );
+        replacement
+            .finish(editor_state_at("/documents/next.xlsx"))
+            .expect("replacement after removal");
     }
 
     #[test]

@@ -140,14 +140,7 @@ pub fn do_remove_recent_file(
             .find(|file| file.id == id)
             && file.storage_type == RecentStorageType::MobileSandboxPath
         {
-            let active_path =
-                document_query_service::active_document_path(service.document_queries())?;
-            if !crate::io::platform::mobile::remove_managed_file_if_inactive(
-                service.mobile_files(),
-                app,
-                &file.path,
-                active_path.as_deref(),
-            )? {
+            if !remove_mobile_file_if_inactive(service, app, &file.path)? {
                 return Err(AppError::DocumentStateInvalid(
                     "cannot delete the active mobile document".to_string(),
                 ));
@@ -246,26 +239,11 @@ fn cleanup_removed_mobile_files(
     removed: &[RecentFileRecord],
 ) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let active_path = match document_query_service::active_document_path(service.document_queries())
-    {
-        Ok(active_path) => active_path,
-        Err(error) => {
-            eprintln!("Failed to inspect active document during recent cleanup: {error}");
-            return;
-        }
-    };
-
-    #[cfg(any(target_os = "android", target_os = "ios"))]
     for file in removed {
         if file.storage_type != RecentStorageType::MobileSandboxPath {
             continue;
         }
-        if let Err(error) = crate::io::platform::mobile::remove_managed_file_if_inactive(
-            service.mobile_files(),
-            app,
-            &file.path,
-            active_path.as_deref(),
-        ) {
+        if let Err(error) = remove_mobile_file_if_inactive(service, app, &file.path) {
             eprintln!(
                 "Failed to clean up removed mobile document {}: {error}",
                 file.path
@@ -275,6 +253,28 @@ fn cleanup_removed_mobile_files(
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let _ = (service, app, removed);
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn remove_mobile_file_if_inactive(
+    service: &RecentFileAdapter,
+    app: &AppHandle,
+    path: &str,
+) -> Result<bool, AppError> {
+    let target = crate::io::platform::mobile::validated_mobile_files_path(
+        service.mobile_files(),
+        app,
+        std::path::Path::new(path),
+    )?;
+    let target = target.to_string_lossy().to_string();
+    let Some(_lease) = document_query_service::begin_inactive_document_path_operation(
+        service.document_queries(),
+        &target,
+    )?
+    else {
+        return Ok(false);
+    };
+    crate::io::platform::mobile::remove_managed_file(service.mobile_files(), app, &target)
 }
 
 fn recent_file_size(path: &str) -> i64 {

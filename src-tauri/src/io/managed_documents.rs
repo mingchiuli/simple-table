@@ -1,10 +1,10 @@
 use crate::error::AppError;
 use crate::io::atomic_file::write_file_atomically;
 use crate::io::marker_store::{
-    bounded_directory_entries, read_marker_bytes, validate_marker_field,
+    bounded_directory_entries, read_marker_bytes, read_optional_marker_bytes, validate_marker_field,
 };
 use crate::io::transient_files::{
-    TransientFileEntry, TransientFileRegistry, clear_persistent_marker,
+    TransientFileEntry, TransientFileRegistry, TransientFileReservation, clear_persistent_marker,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -69,25 +69,37 @@ pub(crate) struct ManagedSaveTransaction {
     target: PathBuf,
     file_name: String,
     journal: PathBuf,
+    transient_reservation: Option<TransientFileReservation>,
     content_committed: bool,
 }
 
 impl ManagedSaveTransaction {
+    pub(crate) fn attach_transient_reservation(&mut self, reservation: TransientFileReservation) {
+        self.transient_reservation = Some(reservation);
+    }
+
     pub(crate) fn finish_after_content_commit(mut self) -> Result<(), AppError> {
         self.content_committed = true;
-        persist_managed_document(
+        let metadata_result = persist_managed_document(
             &self.catalog,
             &self.target,
             &self.file_name,
             None,
             None,
             false,
-        )?;
-        let result = self
-            .transient_files
-            .adopt_if_registered(&self.target)
-            .map(|_| ());
+        );
+        let adoption_result = match self.transient_reservation.take() {
+            Some(reservation) => {
+                reservation.commit();
+                Ok(())
+            }
+            None => self
+                .transient_files
+                .adopt_if_registered(&self.target)
+                .map(|_| ()),
+        };
         clear_persistent_marker(&self.target);
+        let result = metadata_result.and(adoption_result);
         if result.is_ok() {
             remove_file_if_present(&self.journal, "managed save transaction")?;
         }
@@ -142,8 +154,13 @@ pub(crate) fn begin_transient_document_adoption(
     file_name: &str,
 ) -> Result<ManagedDocumentAdoption, AppError> {
     let transient_entry = transient_files.take_for_adoption(target)?;
+    if transient_entry.is_none() && !target.is_file() {
+        return Err(AppError::FileNotFound(target.to_string_lossy().to_string()));
+    }
     let previous_managed_marker = match transient_entry {
-        Some(_) => match marker_path(target).and_then(|path| read_optional_marker_bytes(&path)) {
+        Some(_) => match marker_path(target)
+            .and_then(|path| read_optional_marker_bytes(&path, "managed document marker"))
+        {
             Ok(marker) => marker,
             Err(error) => {
                 if let Some(entry) = transient_entry {
@@ -171,16 +188,6 @@ pub(crate) fn begin_transient_document_adoption(
         previous_managed_marker,
         committed: false,
     })
-}
-
-fn read_optional_marker_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(AppError::ReadError(format!(
-            "Failed to snapshot managed document marker: {error}"
-        ))),
-    }
 }
 
 fn restore_managed_marker(
@@ -232,6 +239,7 @@ pub(crate) fn begin_managed_save_transaction(
         target: target.to_path_buf(),
         file_name: file_name.to_string(),
         journal,
+        transient_reservation: None,
         content_committed: false,
     })
 }
@@ -803,6 +811,50 @@ mod tests {
     }
 
     #[test]
+    fn adoption_rejects_a_managed_source_deleted_after_preparation() {
+        let catalog = ManagedDocumentCatalog::default();
+        let transient_files = Arc::new(TransientFileRegistry::default());
+        let dir = TestDir::new("adoption-missing-source");
+        let target = dir.0.join("deleted.xlsx");
+
+        assert!(matches!(
+            begin_transient_document_adoption(&catalog, transient_files, &target, "Deleted.xlsx",),
+            Err(AppError::FileNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn adoption_rejects_an_oversized_rollback_marker_and_restores_transient_ownership() {
+        let catalog = ManagedDocumentCatalog::default();
+        let transient_files = Arc::new(TransientFileRegistry::default());
+        let dir = TestDir::new("adoption-oversized-marker");
+        let target = dir.0.join("selected.xlsx");
+        fs::write(&target, b"workbook").expect("transient file");
+        transient_files
+            .register(
+                target.clone(),
+                crate::io::transient_files::TransientFilePurpose::OpenSelection,
+            )
+            .expect("transient registration");
+        fs::write(
+            marker_path(&target).expect("managed marker path"),
+            vec![b'x'; crate::io::marker_store::MAX_MARKER_BYTES + 1],
+        )
+        .expect("oversized managed marker");
+
+        assert!(matches!(
+            begin_transient_document_adoption(
+                &catalog,
+                Arc::clone(&transient_files),
+                &target,
+                "Selected.xlsx",
+            ),
+            Err(AppError::ResourceLimitExceeded(_))
+        ));
+        assert!(transient_files.contains(&target).unwrap());
+    }
+
+    #[test]
     fn dropped_managed_save_transaction_removes_its_recovery_journal() {
         let catalog = ManagedDocumentCatalog::default();
         let transient_files = Arc::new(TransientFileRegistry::default());
@@ -865,6 +917,50 @@ mod tests {
         let records = managed_documents(&catalog, &dir.0).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].file_name, "Reserved.xlsx");
+    }
+
+    #[test]
+    fn committed_content_loses_transient_identity_even_if_metadata_persistence_fails() {
+        let catalog = ManagedDocumentCatalog::default();
+        let transient_files = Arc::new(TransientFileRegistry::default());
+        let dir = TestDir::new("save-metadata-failure");
+        let target = dir.0.join("reserved.xlsx");
+        fs::write(&target, []).expect("reserved target");
+        transient_files
+            .register(
+                target.clone(),
+                crate::io::transient_files::TransientFilePurpose::SaveLocation,
+            )
+            .expect("transient registration");
+        crate::io::transient_files::write_persistent_marker(
+            &target,
+            crate::io::transient_files::TransientFilePurpose::SaveLocation,
+        )
+        .expect("transient marker");
+        let reservation = transient_files
+            .reserve_if_registered(
+                &target,
+                crate::io::transient_files::TransientFilePurpose::SaveLocation,
+            )
+            .expect("reserve transient target")
+            .expect("registered target");
+        let mut transaction = begin_managed_save_transaction(
+            &catalog,
+            Arc::clone(&transient_files),
+            &target,
+            "Reserved.xlsx",
+            b"workbook",
+        )
+        .expect("save transaction");
+        transaction.attach_transient_reservation(reservation);
+        let journal = save_transaction_path(&target).expect("journal path");
+
+        fs::remove_file(&target).expect("inject metadata failure");
+        assert!(transaction.finish_after_content_commit().is_err());
+
+        assert!(!transient_files.contains(&target).unwrap());
+        assert!(!crate::io::transient_files::persistent_marker_exists_for_test(&target));
+        assert!(journal.exists());
     }
 
     #[test]

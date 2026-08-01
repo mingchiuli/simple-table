@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -76,6 +76,7 @@ pub(super) struct SheetPending {
 #[derive(Default)]
 pub(super) struct IndexSchedulerState {
     pub(super) pending: HashMap<(u64, usize), SheetPending>,
+    pub(super) active_sheets: HashSet<(u64, usize)>,
     pub(super) pending_updates: usize,
     pub(super) pending_bytes: usize,
     pub(super) building_jobs: usize,

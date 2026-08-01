@@ -52,7 +52,7 @@ pub(super) fn create_index_scheduler(
 }
 
 fn index_worker(scheduler: &Arc<IndexScheduler>) {
-    while let Some(((_, sheet_index), pending)) = drain_pending_job(scheduler) {
+    while let Some(((_, sheet_index), pending, _active_sheet)) = drain_pending_job(scheduler) {
         process_pending_sheet(scheduler, sheet_index, pending);
     }
 }
@@ -101,7 +101,26 @@ pub(super) fn process_pending_sheet(
     }
 }
 
-fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> Option<((u64, usize), SheetPending)> {
+struct ActiveSheetReservation {
+    scheduler: Arc<IndexScheduler>,
+    key: (u64, usize),
+}
+
+impl Drop for ActiveSheetReservation {
+    fn drop(&mut self) {
+        let mut state = self
+            .scheduler
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.active_sheets.remove(&self.key);
+        self.scheduler.wake.notify_all();
+    }
+}
+
+fn drain_pending_job(
+    scheduler: &Arc<IndexScheduler>,
+) -> Option<((u64, usize), SheetPending, ActiveSheetReservation)> {
     let mut state = scheduler
         .state
         .lock()
@@ -111,7 +130,7 @@ fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> Option<((u64, usize), S
         if scheduler.shutdown.load(Ordering::Acquire) {
             return None;
         }
-        while state.pending.is_empty() {
+        while !has_ready_job(&state) {
             state = scheduler
                 .wake
                 .wait(state)
@@ -139,25 +158,47 @@ fn drain_pending_job(scheduler: &Arc<IndexScheduler>) -> Option<((u64, usize), S
             }
         }
 
-        let Some(key) = state.pending.keys().next().copied() else {
+        let Some((key, pending)) = take_ready_job(&mut state) else {
             continue;
         };
-        let Some(pending) = state.pending.remove(&key) else {
-            continue;
-        };
-        state.pending_updates = state
-            .pending_updates
-            .saturating_sub(pending.incremental.len());
-        state.pending_bytes = state
-            .pending_bytes
-            .saturating_sub(pending.incremental_bytes);
-        update_pending_stats(&mut state);
-        if !state.pending.is_empty() {
+        if has_ready_job(&state) {
             scheduler.wake.notify_one();
         }
         state.stats.drained_batches = state.stats.drained_batches.saturating_add(1);
-        return Some((key, pending));
+        return Some((
+            key,
+            pending,
+            ActiveSheetReservation {
+                scheduler: Arc::clone(scheduler),
+                key,
+            },
+        ));
     }
+}
+
+fn has_ready_job(state: &IndexSchedulerState) -> bool {
+    state
+        .pending
+        .keys()
+        .any(|key| !state.active_sheets.contains(key))
+}
+
+fn take_ready_job(state: &mut IndexSchedulerState) -> Option<((u64, usize), SheetPending)> {
+    let key = state
+        .pending
+        .keys()
+        .find(|key| !state.active_sheets.contains(key))
+        .copied()?;
+    let pending = state.pending.remove(&key)?;
+    state.active_sheets.insert(key);
+    state.pending_updates = state
+        .pending_updates
+        .saturating_sub(pending.incremental.len());
+    state.pending_bytes = state
+        .pending_bytes
+        .saturating_sub(pending.incremental_bytes);
+    update_pending_stats(state);
+    Some((key, pending))
 }
 
 fn record_scheduler_event(
@@ -413,4 +454,56 @@ fn run_incremental(
     drop(retired);
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::search_index_scheduler::{IndexJob, merge_job};
+
+    fn update(document_id: u64, sheet_index: usize, revision: u64) -> IndexJob {
+        IndexJob::UpdateCell {
+            document_id,
+            sheet_index,
+            stamp: SearchIndexStamp {
+                document_id,
+                generation: 1,
+                source_revision: revision,
+                revision,
+            },
+            row: 0,
+            col: 0,
+            search_text: revision.to_string(),
+            display_text: revision.to_string(),
+        }
+    }
+
+    #[test]
+    fn same_sheet_batches_wait_while_other_sheets_remain_parallel() {
+        let mut state = IndexSchedulerState::default();
+        merge_job(&mut state, update(7, 2, 1));
+
+        let (active_key, _) = take_ready_job(&mut state).expect("first sheet batch");
+        assert_eq!(active_key, (7, 2));
+        assert!(state.active_sheets.contains(&active_key));
+
+        merge_job(&mut state, update(7, 2, 2));
+        merge_job(&mut state, update(7, 3, 1));
+
+        let (parallel_key, _) = take_ready_job(&mut state).expect("parallel sheet batch");
+        assert_eq!(parallel_key, (7, 3));
+        assert!(take_ready_job(&mut state).is_none());
+
+        state.active_sheets.remove(&active_key);
+        let (next_key, next) = take_ready_job(&mut state).expect("next same-sheet batch");
+        assert_eq!(next_key, active_key);
+        assert_eq!(
+            next.incremental
+                .get(&(0, 0))
+                .expect("coalesced update")
+                .stamp
+                .revision,
+            2
+        );
+    }
 }
