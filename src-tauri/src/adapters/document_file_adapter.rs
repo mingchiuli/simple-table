@@ -62,7 +62,7 @@ impl PlatformFileAdapter {
     }
 
     #[cfg(desktop)]
-    pub fn release_open_target(&self, claim_id: &str) -> Result<(), AppError> {
+    pub fn release_open_target(&self, claim_id: &str) -> Result<bool, AppError> {
         desktop::release_open_target(&self.desktop_files, claim_id)
     }
 

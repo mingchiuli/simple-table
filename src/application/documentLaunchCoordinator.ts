@@ -3,6 +3,7 @@ import type { OpenTargetClaim } from '@/types/fileRuntime';
 export type DocumentLaunchPort = {
   onLaunchTargetAvailable(handler: () => void): Promise<() => void>;
   claimPendingOpenTarget(): Promise<OpenTargetClaim | null>;
+  acknowledgeOpenTarget(claimId: string): Promise<void>;
   releaseOpenTarget(claimId: string): Promise<void>;
 };
 
@@ -109,7 +110,11 @@ export function createDocumentLaunchCoordinator({
       } catch (error) {
         safeReportError('Failed to route document launch target:', error);
       } finally {
-        if (!handedOff) await releaseClaim(claim);
+        if (!handedOff) {
+          await (isCurrentLifecycle(currentLifecycleId)
+            ? acknowledgeClaim(claim)
+            : releaseClaim(claim));
+        }
         if (activeClaim?.claimId === claim.claimId) activeClaim = null;
       }
       return;
@@ -121,6 +126,14 @@ export function createDocumentLaunchCoordinator({
       await launchTargets.releaseOpenTarget(claim.claimId);
     } catch (error) {
       recordCleanupFailure('Failed to release document launch target:', error);
+    }
+  }
+
+  async function acknowledgeClaim(claim: OpenTargetClaim) {
+    try {
+      await launchTargets.acknowledgeOpenTarget(claim.claimId);
+    } catch (error) {
+      recordCleanupFailure('Failed to acknowledge document launch target:', error);
     }
   }
 

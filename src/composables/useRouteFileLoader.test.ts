@@ -87,7 +87,7 @@ describe('useRouteFileLoader', () => {
     const workspace = createApplicationWorkspaceTestContext();
     const load = deferred<boolean>();
     const claimSettlement = deferred<void>();
-    const releaseOpenTarget = vi.fn(() => claimSettlement.promise);
+    const acknowledgeOpenTarget = vi.fn(() => claimSettlement.promise);
     const scope = effectScope();
     const loader = workspace.run(() => scope.run(() => useRouteFileLoader({
       getRouteFilePath: () => '/tmp/owned.xlsx',
@@ -95,8 +95,7 @@ describe('useRouteFileLoader', () => {
       getCurrentFilePath: () => null,
       loadFileFromPath: () => load.promise,
       refreshEditorState: vi.fn().mockResolvedValue(undefined),
-      acknowledgeOpenTarget: vi.fn().mockResolvedValue(undefined),
-      releaseOpenTarget,
+      acknowledgeOpenTarget,
       reportError: vi.fn(),
     })))!;
     loader.enqueue('/tmp/owned.xlsx', 'owned-claim');
@@ -112,7 +111,7 @@ describe('useRouteFileLoader', () => {
 
     load.resolve(false);
     await flushPromises();
-    expect(releaseOpenTarget).toHaveBeenCalledWith('owned-claim');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('owned-claim');
     expect(applicationDisposed).toBe(false);
 
     claimSettlement.resolve();

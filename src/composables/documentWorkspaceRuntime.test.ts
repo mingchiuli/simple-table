@@ -80,6 +80,33 @@ describe('documentWorkspaceRuntime', () => {
     await expect(runtime.dispose()).resolves.toBeUndefined();
   });
 
+  it('retries retained preparation ID cleanup before releasing the runtime', async () => {
+    const runtime = createDocumentWorkspaceRuntime();
+    const finalCleanup = deferred<void>();
+    const cleanupFailure = new Error('cleanup unavailable');
+    const discard = vi
+      .fn()
+      .mockRejectedValueOnce(cleanupFailure)
+      .mockRejectedValueOnce(cleanupFailure)
+      .mockRejectedValueOnce(cleanupFailure)
+      .mockImplementationOnce(() => finalCleanup.promise);
+
+    await expect(runtime.preparations.cleanupPreparationId('preparation-1', discard))
+      .resolves.toBe(false);
+    let disposed = false;
+    const disposal = runtime.dispose().then(() => { disposed = true; });
+    for (let index = 0; index < 8 && discard.mock.calls.length < 4; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(discard).toHaveBeenCalledTimes(4);
+    expect(disposed).toBe(false);
+
+    finalCleanup.resolve();
+    await disposal;
+    expect(disposed).toBe(true);
+  });
+
   it('waits for admitted workspace operations and rejects work after disposal starts', async () => {
     const runtime = createDocumentWorkspaceRuntime();
     const active = deferred<string>();

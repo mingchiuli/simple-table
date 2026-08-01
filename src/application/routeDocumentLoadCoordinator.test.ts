@@ -150,6 +150,8 @@ describe('routeDocumentLoadCoordinator', () => {
     let routeFilePath: string | null = '/tmp/first.xlsx';
     const releaseFirst = deferred<boolean>();
     const secondLoad = vi.fn().mockResolvedValue(true);
+    const secondCancellationObserver = vi.fn();
+    const cancellationFailure = new Error('cancellation failed');
     const reportError = vi.fn(() => {
       throw new Error('reporter failed');
     });
@@ -159,8 +161,9 @@ describe('routeDocumentLoadCoordinator', () => {
       loadFileFromPath: vi.fn()
         .mockImplementationOnce((_path, signal: OperationCancellationSignal) => {
           signal.onCancel(() => {
-            throw new Error('cancellation failed');
+            throw cancellationFailure;
           });
+          signal.onCancel(secondCancellationObserver);
           return releaseFirst.promise;
         })
         .mockImplementationOnce(secondLoad),
@@ -174,7 +177,14 @@ describe('routeDocumentLoadCoordinator', () => {
     await flushPromises();
 
     expect(reportError).toHaveBeenCalledOnce();
+    expect(reportError).toHaveBeenCalledWith(cancellationFailure);
+    expect(secondCancellationObserver).toHaveBeenCalledOnce();
     expect(secondLoad).toHaveBeenCalledOnce();
+    await expect(coordinator.waitForIdle()).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Failed to completely drain route document loading',
+      errors: [cancellationFailure],
+    });
   });
 
   it('acknowledges a launch target only after its document opens', async () => {
@@ -197,19 +207,19 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-1');
   });
 
-  it('releases a launch target when its document does not open', async () => {
-    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
+  it('acknowledges a launch target when its document is rejected', async () => {
+    const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
     const coordinator = createCoordinator({
       getRouteFilePath: () => '/tmp/rejected.xlsx',
       getRouteOpenTargetClaimId: () => 'claim-rejected',
       loadFileFromPath: vi.fn().mockResolvedValue(false),
-      releaseOpenTarget,
+      acknowledgeOpenTarget,
     });
 
     coordinator.enqueue('/tmp/rejected.xlsx', 'claim-rejected');
     await flushPromises();
 
-    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-rejected');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-rejected');
   });
 
   it('consumes active and pending claims superseded by the latest load', async () => {
@@ -217,7 +227,6 @@ describe('routeDocumentLoadCoordinator', () => {
     let routeClaimId = 'claim-first';
     const firstLoad = deferred<boolean>();
     const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
-    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
     const coordinator = createCoordinator({
       getRouteFilePath: () => routeFilePath,
       getRouteOpenTargetClaimId: () => routeClaimId,
@@ -225,7 +234,6 @@ describe('routeDocumentLoadCoordinator', () => {
         .mockImplementationOnce(() => firstLoad.promise)
         .mockResolvedValueOnce(true),
       acknowledgeOpenTarget,
-      releaseOpenTarget,
     });
 
     coordinator.enqueue(routeFilePath, routeClaimId);
@@ -242,13 +250,11 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-first');
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-second');
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-latest');
-    expect(releaseOpenTarget).not.toHaveBeenCalled();
   });
 
   it('transfers a claim to its replacement load without settling it early', async () => {
     const firstLoad = deferred<boolean>();
     const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
-    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
     const loadFileFromPath = vi.fn()
       .mockImplementationOnce(() => firstLoad.promise)
       .mockResolvedValueOnce(true);
@@ -257,7 +263,6 @@ describe('routeDocumentLoadCoordinator', () => {
       getRouteOpenTargetClaimId: () => 'claim-shared',
       loadFileFromPath,
       acknowledgeOpenTarget,
-      releaseOpenTarget,
     });
 
     coordinator.enqueue('/tmp/book.xlsx', 'claim-shared');
@@ -269,18 +274,17 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(loadFileFromPath).toHaveBeenCalledTimes(2);
     expect(acknowledgeOpenTarget).toHaveBeenCalledOnce();
     expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-shared');
-    expect(releaseOpenTarget).not.toHaveBeenCalled();
   });
 
   it('waits for the active load and claim settlement during disposal', async () => {
     const load = deferred<boolean>();
     const settlement = deferred<void>();
-    const releaseOpenTarget = vi.fn(() => settlement.promise);
+    const acknowledgeOpenTarget = vi.fn(() => settlement.promise);
     const coordinator = createCoordinator({
       getRouteFilePath: () => '/tmp/active.xlsx',
       getRouteOpenTargetClaimId: () => 'claim-active',
       loadFileFromPath: vi.fn(() => load.promise),
-      releaseOpenTarget,
+      acknowledgeOpenTarget,
     });
     coordinator.enqueue('/tmp/active.xlsx', 'claim-active');
     await flushPromises();
@@ -292,7 +296,7 @@ describe('routeDocumentLoadCoordinator', () => {
 
     load.resolve(false);
     await flushPromises();
-    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-active');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-active');
     expect(disposed).toBe(false);
 
     settlement.resolve();
@@ -300,21 +304,21 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(disposed).toBe(true);
   });
 
-  it('rejects post-disposal loads while still releasing their claims', async () => {
+  it('rejects post-disposal loads while still acknowledging their claims', async () => {
     const loadFileFromPath = vi.fn().mockResolvedValue(true);
-    const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
-    const coordinator = createCoordinator({ loadFileFromPath, releaseOpenTarget });
+    const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createCoordinator({ loadFileFromPath, acknowledgeOpenTarget });
 
     await coordinator.dispose();
     coordinator.enqueue('/tmp/late.xlsx', 'claim-late');
     await coordinator.waitForIdle();
 
     expect(loadFileFromPath).not.toHaveBeenCalled();
-    expect(releaseOpenTarget).toHaveBeenCalledWith('claim-late');
+    expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-late');
   });
 
   it('retries transient claim settlement failures', async () => {
-    const releaseOpenTarget = vi
+    const acknowledgeOpenTarget = vi
       .fn()
       .mockRejectedValueOnce(new Error('temporary failure'))
       .mockResolvedValueOnce(undefined);
@@ -323,26 +327,26 @@ describe('routeDocumentLoadCoordinator', () => {
       getRouteFilePath: () => '/tmp/retry.xlsx',
       getRouteOpenTargetClaimId: () => 'claim-retry',
       loadFileFromPath: vi.fn().mockResolvedValue(false),
-      releaseOpenTarget,
+      acknowledgeOpenTarget,
       reportError,
     });
 
     coordinator.enqueue('/tmp/retry.xlsx', 'claim-retry');
     await coordinator.waitForIdle();
 
-    expect(releaseOpenTarget).toHaveBeenCalledTimes(2);
+    expect(acknowledgeOpenTarget).toHaveBeenCalledTimes(2);
     expect(reportError).not.toHaveBeenCalled();
   });
 
   it('reports exhausted claim settlement failures from its lifecycle drain', async () => {
     const settlementFailure = new Error('claim settlement failed');
-    const releaseOpenTarget = vi.fn().mockRejectedValue(settlementFailure);
+    const acknowledgeOpenTarget = vi.fn().mockRejectedValue(settlementFailure);
     const reportError = vi.fn();
     const coordinator = createCoordinator({
       getRouteFilePath: () => '/tmp/failed-settlement.xlsx',
       getRouteOpenTargetClaimId: () => 'claim-failed-settlement',
       loadFileFromPath: vi.fn().mockResolvedValue(false),
-      releaseOpenTarget,
+      acknowledgeOpenTarget,
       reportError,
     });
 
@@ -350,10 +354,10 @@ describe('routeDocumentLoadCoordinator', () => {
 
     await expect(coordinator.dispose()).rejects.toMatchObject({
       name: 'AggregateError',
-      message: 'Failed to settle one or more document launch claims',
+      message: 'Failed to completely drain route document loading',
       errors: [settlementFailure],
     });
-    expect(releaseOpenTarget).toHaveBeenCalledTimes(3);
+    expect(acknowledgeOpenTarget).toHaveBeenCalledTimes(3);
     expect(reportError).toHaveBeenCalledWith(settlementFailure);
   });
 });
@@ -368,7 +372,6 @@ function createCoordinator(overrides: CoordinatorOverrides = {}) {
     loadFileFromPath: overrides.loadFileFromPath ?? vi.fn().mockResolvedValue(true),
     refreshEditorState: overrides.refreshEditorState ?? vi.fn().mockResolvedValue(undefined),
     acknowledgeOpenTarget: overrides.acknowledgeOpenTarget ?? vi.fn().mockResolvedValue(undefined),
-    releaseOpenTarget: overrides.releaseOpenTarget ?? vi.fn().mockResolvedValue(undefined),
     reportError: overrides.reportError ?? vi.fn(),
   });
 }

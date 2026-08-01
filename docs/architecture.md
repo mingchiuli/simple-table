@@ -77,7 +77,8 @@ internal models.
   saves, search session, command bus, preparation cleanup journal, and admitted
   document work. Its cancellation signal terminates frontend result observation
   when the workspace is disposed; it never repeats or reclassifies the backend
-  side effect.
+  side effect. Disposal retries every retained backend preparation cleanup and
+  reports any ID that still cannot be released.
 - `ApplicationWorkspaceRuntime` owns application exit, document workspace,
   document-launch claims, registered route-document loaders, recent files,
   updates, and startup restoration. Route-scoped loaders remain registered with
@@ -182,9 +183,12 @@ internal models.
    the expected document context.
 4. Rust atomically replaces the document, retires old replay/index work, and
    schedules the new indexes.
-5. Launch-target claims are acknowledged only after route loading succeeds and
-   are released on cancellation or failure. Exhausted claim settlement retries
-   make the owning lifecycle drain fail after all other cleanup has settled.
+5. A launch-target claim becomes terminal once an active route attempts it:
+   success, rejection, cancellation, and supersession all acknowledge the claim.
+   Claims are released only when the launch coordinator stops before handoff;
+   release requeues the target and emits a wake event for the next coordinator.
+   Exhausted claim settlement retries make the owning lifecycle drain fail after
+   all other cleanup has settled.
 
 ### Mutation
 

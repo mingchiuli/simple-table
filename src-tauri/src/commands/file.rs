@@ -71,9 +71,15 @@ pub fn acknowledge_open_target_desktop(
 #[tauri::command(rename_all = "camelCase")]
 pub fn release_open_target_desktop(
     runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
     claim_id: String,
 ) -> Result<(), AppError> {
-    runtime.platform_files().release_open_target(&claim_id)
+    if runtime.platform_files().release_open_target(&claim_id)? {
+        app.emit("deep-link-received", ()).map_err(|error| {
+            AppError::Internal(format!("Failed to emit launch target wake event: {error}"))
+        })?;
+    }
+    Ok(())
 }
 
 /// Desktop: 从后端已授权路径读取并解析文件。

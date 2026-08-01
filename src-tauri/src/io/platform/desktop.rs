@@ -228,7 +228,7 @@ pub fn acknowledge_open_target(
     Ok(has_pending_targets)
 }
 
-pub fn release_open_target(runtime: &DesktopFileRuntime, claim_id: &str) -> Result<(), AppError> {
+pub fn release_open_target(runtime: &DesktopFileRuntime, claim_id: &str) -> Result<bool, AppError> {
     let mut queue = runtime
         .inner
         .open_targets
@@ -237,7 +237,7 @@ pub fn release_open_target(runtime: &DesktopFileRuntime, claim_id: &str) -> Resu
     if let Some(path) = queue.release(claim_id) {
         authorize_open_path(runtime, &path);
     }
-    Ok(())
+    Ok(!queue.pending.is_empty())
 }
 
 pub fn pick_open_file(
@@ -615,7 +615,7 @@ mod tests {
             &runtime.inner.open_paths,
             &normalize_existing_path(&path)
         ));
-        release_open_target(&runtime, &first.claim_id).expect("release claim");
+        assert!(release_open_target(&runtime, &first.claim_id).expect("release claim"));
         assert!(consume_path(
             &runtime.inner.open_paths,
             &normalize_existing_path(&path)

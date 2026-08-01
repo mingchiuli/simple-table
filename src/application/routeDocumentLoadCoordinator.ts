@@ -1,4 +1,7 @@
-import type { OperationCancellationSignal } from '@/application/operationCancellation';
+import {
+  createOperationCancellationSource,
+  type OperationCancellationSignal,
+} from '@/application/operationCancellation';
 
 export type RouteDocumentLoadPorts = {
   getRouteFilePath: () => string | null;
@@ -10,7 +13,6 @@ export type RouteDocumentLoadPorts = {
   ) => Promise<boolean>;
   refreshEditorState: () => Promise<void>;
   acknowledgeOpenTarget: (claimId: string) => Promise<void>;
-  releaseOpenTarget: (claimId: string) => Promise<void>;
   reportError: (error: unknown) => void;
 };
 
@@ -27,15 +29,13 @@ type PendingRouteLoad = {
   generation: number;
 };
 
-type ClaimOutcome = 'acknowledge' | 'release' | 'superseded' | 'transferred';
-type ClaimInterruptionOutcome = Extract<ClaimOutcome, 'release' | 'superseded'>;
+type ClaimOutcome = 'acknowledge' | 'superseded' | 'transferred';
 
 type ActiveCancellation = {
   generation: number;
   openTargetClaimId: string | null;
-  cancelled: boolean;
   claimOutcome: ClaimOutcome | null;
-  handlers: Set<() => void>;
+  source: ReturnType<typeof createOperationCancellationSource>;
 };
 
 export function createRouteDocumentLoadCoordinator({
@@ -45,7 +45,6 @@ export function createRouteDocumentLoadCoordinator({
   loadFileFromPath,
   refreshEditorState,
   acknowledgeOpenTarget,
-  releaseOpenTarget,
   reportError,
 }: RouteDocumentLoadPorts): RouteDocumentLoadCoordinator {
   let lastLoadedRouteFilePath: string | null = null;
@@ -55,12 +54,13 @@ export function createRouteDocumentLoadCoordinator({
   let activeCancellation: ActiveCancellation | null = null;
   const activeClaimSettlements = new Set<Promise<void>>();
   const claimSettlementFailures: unknown[] = [];
+  const cancellationNotificationFailures: unknown[] = [];
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
   function enqueue(filePath: string | null, openTargetClaimId: string | null = null) {
     if (disposed) {
-      settleOpenTargetClaim(openTargetClaimId, 'release');
+      settleOpenTargetClaim(openTargetClaimId, 'acknowledge');
       return;
     }
     cancelActiveLoads('superseded', openTargetClaimId);
@@ -71,9 +71,9 @@ export function createRouteDocumentLoadCoordinator({
   }
 
   function cancel() {
-    cancelActiveLoads('release');
+    cancelActiveLoads('superseded');
     routeLoadGeneration += 1;
-    settleReplacedPendingClaim(null, 'release');
+    settleReplacedPendingClaim(null, 'superseded');
     pendingLoad = null;
   }
 
@@ -87,7 +87,7 @@ export function createRouteDocumentLoadCoordinator({
 
   function settleReplacedPendingClaim(
     replacementClaimId: string | null,
-    outcome: ClaimInterruptionOutcome,
+    outcome: Exclude<ClaimOutcome, 'transferred'>,
   ) {
     const claimId = pendingLoad?.openTargetClaimId;
     if (claimId && claimId !== replacementClaimId) {
@@ -96,19 +96,18 @@ export function createRouteDocumentLoadCoordinator({
   }
 
   function cancelActiveLoads(
-    outcome: ClaimInterruptionOutcome,
+    outcome: Exclude<ClaimOutcome, 'transferred'>,
     replacementClaimId: string | null = null,
   ) {
     const cancellation = activeCancellation;
     activeCancellation = null;
     if (!cancellation) return;
-    cancellation.cancelled = true;
     cancellation.claimOutcome = cancellation.openTargetClaimId
       && cancellation.openTargetClaimId === replacementClaimId
       ? 'transferred'
       : outcome;
-    for (const handler of cancellation.handlers) {
-      notifyCancellation(handler);
+    for (const error of cancellation.source.cancel()) {
+      recordCancellationNotificationFailure(error);
     }
   }
 
@@ -134,16 +133,16 @@ export function createRouteDocumentLoadCoordinator({
         }
       }
     } finally {
-      if (disposed) settleReplacedPendingClaim(null, 'release');
+      if (disposed) settleReplacedPendingClaim(null, 'superseded');
     }
   }
 
   async function runLoad({ filePath, openTargetClaimId, generation }: PendingRouteLoad) {
     if (!isCurrentRouteFileLoad(filePath, openTargetClaimId, generation)) {
-      settleOpenTargetClaim(openTargetClaimId, 'release');
+      settleOpenTargetClaim(openTargetClaimId, 'acknowledge');
       return;
     }
-    let claimOutcome: ClaimOutcome = 'release';
+    let claimOutcome: ClaimOutcome = 'acknowledge';
     try {
       if (!filePath) {
         lastLoadedRouteFilePath = null;
@@ -189,25 +188,27 @@ export function createRouteDocumentLoadCoordinator({
     openTargetClaimId: string | null,
     generation: number,
   ): { signal: OperationCancellationSignal; state: ActiveCancellation } {
-    const handlers = new Set<() => void>();
+    const source = createOperationCancellationSource();
     const state: ActiveCancellation = {
       generation,
       openTargetClaimId,
-      cancelled: false,
       claimOutcome: null,
-      handlers,
+      source,
     };
     activeCancellation = state;
     const signal: OperationCancellationSignal = {
-      isCancelled: () => state.cancelled
+      isCancelled: () => source.signal.isCancelled()
         || !isCurrentRouteFileLoad(filePath, openTargetClaimId, generation),
       onCancel(handler) {
         if (signal.isCancelled()) {
-          notifyCancellation(handler);
+          try {
+            handler();
+          } catch (error) {
+            recordCancellationNotificationFailure(error);
+          }
           return () => undefined;
         }
-        handlers.add(handler);
-        return () => handlers.delete(handler);
+        return source.signal.onCancel(handler);
       },
     };
     return { signal, state };
@@ -218,7 +219,7 @@ export function createRouteDocumentLoadCoordinator({
     outcome: ClaimOutcome,
   ) {
     if (!claimId || outcome === 'transferred') return;
-    const settlement = settleOpenTargetClaimWithRetry(claimId, outcome);
+    const settlement = settleOpenTargetClaimWithRetry(claimId);
     let tracked!: Promise<void>;
     tracked = settlement.then(
       () => undefined,
@@ -231,17 +232,12 @@ export function createRouteDocumentLoadCoordinator({
     activeClaimSettlements.add(tracked);
   }
 
-  async function settleOpenTargetClaimWithRetry(
-    claimId: string,
-    outcome: Exclude<ClaimOutcome, 'transferred'>,
-  ) {
+  async function settleOpenTargetClaimWithRetry(claimId: string) {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         // A superseded launch intent is terminal: consume it instead of requeueing stale work.
-        await (outcome === 'release'
-          ? releaseOpenTarget(claimId)
-          : acknowledgeOpenTarget(claimId));
+        await acknowledgeOpenTarget(claimId);
         return;
       } catch (error) {
         lastError = error;
@@ -252,6 +248,11 @@ export function createRouteDocumentLoadCoordinator({
     throw lastError;
   }
 
+  function recordCancellationNotificationFailure(error: unknown) {
+    cancellationNotificationFailures.push(error);
+    safeReportError(error);
+  }
+
   async function waitForIdle() {
     while (workerPromise || activeClaimSettlements.size > 0) {
       await Promise.allSettled([
@@ -259,19 +260,15 @@ export function createRouteDocumentLoadCoordinator({
         ...activeClaimSettlements,
       ]);
     }
-    if (claimSettlementFailures.length > 0) {
+    const failures = [
+      ...cancellationNotificationFailures,
+      ...claimSettlementFailures,
+    ];
+    if (failures.length > 0) {
       throw new AggregateError(
-        claimSettlementFailures,
-        'Failed to settle one or more document launch claims',
+        failures,
+        'Failed to completely drain route document loading',
       );
-    }
-  }
-
-  function notifyCancellation(handler: () => void) {
-    try {
-      handler();
-    } catch (error) {
-      safeReportError(error);
     }
   }
 

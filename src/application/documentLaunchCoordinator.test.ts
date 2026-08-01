@@ -9,6 +9,7 @@ type ListenHandler = () => void;
 type TestOverrides = Partial<{
   onLaunchTargetAvailable: Dependencies['launchTargets']['onLaunchTargetAvailable'];
   claimPendingOpenTarget: Dependencies['launchTargets']['claimPendingOpenTarget'];
+  acknowledgeOpenTarget: Dependencies['launchTargets']['acknowledgeOpenTarget'];
   releaseOpenTarget: Dependencies['launchTargets']['releaseOpenTarget'];
   openTarget: Dependencies['openTarget'];
   reportError: Dependencies['reportError'];
@@ -44,6 +45,7 @@ function testDependencies(overrides: TestOverrides = {}) {
   const handlers: ListenHandler[] = [];
   const unlisten = vi.fn();
   const claimPendingOpenTarget = vi.fn().mockResolvedValue(null);
+  const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
   const releaseOpenTarget = vi.fn().mockResolvedValue(undefined);
   const pushFilePath = vi.fn().mockResolvedValue(undefined);
   const reportError = vi.fn();
@@ -54,6 +56,7 @@ function testDependencies(overrides: TestOverrides = {}) {
         return Promise.resolve(unlisten);
       }),
       claimPendingOpenTarget: overrides.claimPendingOpenTarget ?? claimPendingOpenTarget,
+      acknowledgeOpenTarget: overrides.acknowledgeOpenTarget ?? acknowledgeOpenTarget,
       releaseOpenTarget: overrides.releaseOpenTarget ?? releaseOpenTarget,
     },
     openTarget: overrides.openTarget ?? pushFilePath,
@@ -64,6 +67,7 @@ function testDependencies(overrides: TestOverrides = {}) {
     getHandler: () => handlers.at(-1) ?? null,
     unlisten,
     claimPendingOpenTarget,
+    acknowledgeOpenTarget,
     releaseOpenTarget,
     pushFilePath,
     reportError,
@@ -92,6 +96,7 @@ describe('document launch coordinator', () => {
       ['C:/Users/me/live.xlsx', 'live-1'],
       ['//server/share/opened.xlsx', 'live-2'],
     ]);
+    expect(setup.acknowledgeOpenTarget).not.toHaveBeenCalled();
     expect(setup.releaseOpenTarget).not.toHaveBeenCalled();
   });
 
@@ -125,6 +130,7 @@ describe('document launch coordinator', () => {
     await disposal;
 
     expect(setup.pushFilePath).not.toHaveBeenCalled();
+    expect(setup.acknowledgeOpenTarget).not.toHaveBeenCalled();
     expect(setup.releaseOpenTarget).toHaveBeenCalledWith('stale');
   });
 
@@ -145,6 +151,7 @@ describe('document launch coordinator', () => {
     await flushPromises();
 
     expect(disposed).toBe(false);
+    expect(setup.acknowledgeOpenTarget).not.toHaveBeenCalled();
     expect(setup.releaseOpenTarget).not.toHaveBeenCalled();
 
     handoff.reject(routeFailure);
@@ -179,7 +186,7 @@ describe('document launch coordinator', () => {
     ]);
   });
 
-  it('releases a claim when routing fails', async () => {
+  it('acknowledges a claim when routing fails while the lifecycle is active', async () => {
     const failure = new Error('route failed');
     const setup = testDependencies({
       claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('broken', '/broken.xlsx')),
@@ -188,22 +195,23 @@ describe('document launch coordinator', () => {
     const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
 
     lifecycle.start();
-    await waitForCondition(() => setup.releaseOpenTarget.mock.calls.length === 1);
+    await waitForCondition(() => setup.acknowledgeOpenTarget.mock.calls.length === 1);
 
-    expect(setup.releaseOpenTarget).toHaveBeenCalledWith('broken');
+    expect(setup.acknowledgeOpenTarget).toHaveBeenCalledWith('broken');
+    expect(setup.releaseOpenTarget).not.toHaveBeenCalled();
     expect(setup.reportError).toHaveBeenCalledWith(
       'Failed to route document launch target:',
       failure,
     );
   });
 
-  it('reports release failures after a route handoff failure', async () => {
+  it('reports acknowledgement failures after a route handoff failure', async () => {
     const routeFailure = new Error('route failed');
-    const releaseFailure = new Error('release failed');
+    const acknowledgementFailure = new Error('acknowledgement failed');
     const setup = testDependencies({
       claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('unsettled', '/book.xlsx')),
       openTarget: vi.fn().mockRejectedValue(routeFailure),
-      releaseOpenTarget: vi.fn().mockRejectedValue(releaseFailure),
+      acknowledgeOpenTarget: vi.fn().mockRejectedValue(acknowledgementFailure),
     });
     const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
 
@@ -215,13 +223,13 @@ describe('document launch coordinator', () => {
       routeFailure,
     );
     expect(setup.reportError).toHaveBeenCalledWith(
-      'Failed to release document launch target:',
-      releaseFailure,
+      'Failed to acknowledge document launch target:',
+      acknowledgementFailure,
     );
     await expect(lifecycle.dispose()).rejects.toMatchObject({
       name: 'AggregateError',
       message: 'Failed to completely dispose document launch coordination',
-      errors: [releaseFailure],
+      errors: [acknowledgementFailure],
     });
   });
 });

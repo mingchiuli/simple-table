@@ -4,17 +4,16 @@ import {
   type RouteDocumentLoadPorts,
 } from '@/application/routeDocumentLoadCoordinator';
 import { ElMessage } from 'element-plus';
-import { acknowledgeOpenTarget, releaseOpenTarget } from '@/platform';
+import { acknowledgeOpenTarget } from '@/platform';
 import { appErrorMessage } from '@/utils/appError';
 import { onScopeDispose } from 'vue';
 import { useApplicationWorkspaceRuntime } from '@/composables/applicationWorkspaceRuntime';
 
 type UseRouteFileLoaderOptions = Omit<
   RouteDocumentLoadPorts,
-  'acknowledgeOpenTarget' | 'releaseOpenTarget' | 'reportError'
+  'acknowledgeOpenTarget' | 'reportError'
 > & {
   acknowledgeOpenTarget?: RouteDocumentLoadPorts['acknowledgeOpenTarget'];
-  releaseOpenTarget?: RouteDocumentLoadPorts['releaseOpenTarget'];
   reportError?: (error: unknown) => void;
 };
 
@@ -26,7 +25,6 @@ type RouteLeaveHandlerOptions = {
 
 export function useRouteFileLoader({
   acknowledgeOpenTarget: acknowledge = acknowledgeOpenTarget,
-  releaseOpenTarget: release = releaseOpenTarget,
   reportError = (error) => {
     ElMessage.error(`Failed to open file: ${appErrorMessage(error)}`);
   },
@@ -35,7 +33,6 @@ export function useRouteFileLoader({
   const coordinator = createRouteDocumentLoadCoordinator({
     ...ports,
     acknowledgeOpenTarget: acknowledge,
-    releaseOpenTarget: release,
     reportError,
   });
   const releaseOwnership = useApplicationWorkspaceRuntime().registerRouteDocumentLoad(coordinator);

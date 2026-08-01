@@ -9,6 +9,11 @@ type DocumentPreparationCoordinatorOptions = {
   reportCleanupFailure?: (error: unknown) => void;
 };
 
+type PendingPreparationCleanup = {
+  discard: (preparationId: string) => Promise<void>;
+  reportFailure?: (error: unknown) => void;
+};
+
 export class DocumentPreparationCleanupError extends Error {
   constructor(readonly failures: readonly unknown[]) {
     super(`Failed to clean up ${failures.length} cancelled document preparation task(s)`);
@@ -23,8 +28,9 @@ export function createDocumentPreparationCoordinator(
 ) {
   let tail: Promise<void> = Promise.resolve();
   const activeCleanupObservers = new Set<Promise<void>>();
+  const activePreparationIdCleanups = new Set<Promise<boolean>>();
   const cleanupFailures: unknown[] = [];
-  const pendingCleanupIds = new Set<string>();
+  const pendingCleanupIds = new Map<string, PendingPreparationCleanup>();
   const cleanupAttempts = Math.max(1, options.cleanupAttempts ?? DEFAULT_CLEANUP_ATTEMPTS);
 
   function run<T>(prepare: () => Promise<T>): Promise<T> {
@@ -95,7 +101,17 @@ export function createDocumentPreparationCoordinator(
     throw lastFailure;
   }
 
-  async function cleanupPreparationId(
+  function cleanupPreparationId(
+    preparationId: string,
+    discard: (preparationId: string) => Promise<void>,
+    reportFailure?: (error: unknown) => void,
+  ): Promise<boolean> {
+    return trackPreparationIdCleanup(
+      cleanupPreparationIdNow(preparationId, discard, reportFailure),
+    );
+  }
+
+  async function cleanupPreparationIdNow(
     preparationId: string,
     discard: (preparationId: string) => Promise<void>,
     reportFailure?: (error: unknown) => void,
@@ -105,20 +121,31 @@ export function createDocumentPreparationCoordinator(
       pendingCleanupIds.delete(preparationId);
       return true;
     } catch (error) {
-      pendingCleanupIds.add(preparationId);
-      reportFailure?.(error);
+      pendingCleanupIds.set(preparationId, { discard, reportFailure });
+      safeReportFailure(reportFailure, error);
       return false;
     }
   }
 
-  async function drainPreparationCleanupIds(
+  function drainPreparationCleanupIds(
     discard: (preparationId: string) => Promise<void>,
     reportFailure?: (error: unknown) => void,
   ): Promise<boolean> {
-    for (const preparationId of [...pendingCleanupIds]) {
-      if (!(await cleanupPreparationId(preparationId, discard, reportFailure))) return false;
-    }
-    return true;
+    return trackPreparationIdCleanup((async () => {
+      let cleaned = true;
+      for (const preparationId of [...pendingCleanupIds.keys()]) {
+        if (!(await cleanupPreparationIdNow(preparationId, discard, reportFailure))) {
+          cleaned = false;
+        }
+      }
+      return cleaned;
+    })());
+  }
+
+  function trackPreparationIdCleanup(cleanup: Promise<boolean>): Promise<boolean> {
+    activePreparationIdCleanups.add(cleanup);
+    void cleanup.finally(() => activePreparationIdCleanups.delete(cleanup));
+    return cleanup;
   }
 
   function observeCancelledCleanup(cleanup: Promise<unknown>) {
@@ -151,8 +178,33 @@ export function createDocumentPreparationCoordinator(
     while (activeCleanupObservers.size > 0) {
       await Promise.allSettled(activeCleanupObservers);
     }
-    if (cleanupFailures.length > 0) {
-      throw new DocumentPreparationCleanupError(cleanupFailures.splice(0));
+    while (activePreparationIdCleanups.size > 0) {
+      await Promise.allSettled(activePreparationIdCleanups);
+    }
+
+    const failures = cleanupFailures.splice(0);
+    for (const [preparationId, cleanup] of [...pendingCleanupIds]) {
+      try {
+        await discardWithRetry(preparationId, cleanup.discard);
+        pendingCleanupIds.delete(preparationId);
+      } catch (error) {
+        failures.push(error);
+        safeReportFailure(cleanup.reportFailure, error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new DocumentPreparationCleanupError(failures);
+    }
+  }
+
+  function safeReportFailure(
+    reportFailure: ((error: unknown) => void) | undefined,
+    error: unknown,
+  ) {
+    try {
+      reportFailure?.(error);
+    } catch {
+      // Cleanup reporting must not interrupt preparation ownership.
     }
   }
 

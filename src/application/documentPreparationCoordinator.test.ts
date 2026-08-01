@@ -82,6 +82,41 @@ describe('documentPreparationCoordinator', () => {
     expect(discard).toHaveBeenCalledWith({ token: 'unused' });
   });
 
+  it('drains retained preparation cleanup before becoming idle', async () => {
+    const cleanupFailure = new Error('cleanup unavailable');
+    const reportFailure = vi.fn();
+    const discard = vi
+      .fn()
+      .mockRejectedValueOnce(cleanupFailure)
+      .mockResolvedValue(undefined);
+    const coordinator = createDocumentPreparationCoordinator({ cleanupAttempts: 1 });
+
+    await expect(coordinator.cleanupPreparationId('preparation-1', discard, reportFailure))
+      .resolves.toBe(false);
+    await expect(coordinator.waitForIdle()).resolves.toBeUndefined();
+
+    expect(discard).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledOnce();
+  });
+
+  it('attempts every retained preparation cleanup and reports unresolved failures', async () => {
+    const firstFailure = new Error('first cleanup failed');
+    const secondFailure = new Error('second cleanup failed');
+    const firstDiscard = vi.fn().mockRejectedValue(firstFailure);
+    const secondDiscard = vi.fn().mockRejectedValue(secondFailure);
+    const coordinator = createDocumentPreparationCoordinator({ cleanupAttempts: 1 });
+
+    await coordinator.cleanupPreparationId('preparation-1', firstDiscard);
+    await coordinator.cleanupPreparationId('preparation-2', secondDiscard);
+
+    await expect(coordinator.waitForIdle()).rejects.toMatchObject({
+      name: 'DocumentPreparationCleanupError',
+      failures: [firstFailure, secondFailure],
+    });
+    expect(firstDiscard).toHaveBeenCalledTimes(2);
+    expect(secondDiscard).toHaveBeenCalledTimes(2);
+  });
+
   it('retries cancellation cleanup before releasing the preparation queue', async () => {
     const coordinator = createDocumentPreparationCoordinator();
     const preparedResult = deferred<{ token: string }>();
