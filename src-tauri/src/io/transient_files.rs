@@ -26,32 +26,78 @@ pub enum TransientFilePurpose {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct TransientFileEntry {
+struct TransientFileEntry {
     purpose: TransientFilePurpose,
     created_at: Instant,
+}
+
+#[derive(Clone, Copy)]
+enum TransientFileState {
+    Registered(TransientFileEntry),
+    Reserved {
+        entry: TransientFileEntry,
+        reservation_id: uuid::Uuid,
+    },
+    Cleanup {
+        reservation_id: uuid::Uuid,
+    },
+}
+
+impl TransientFileState {
+    fn purpose(self) -> Option<TransientFilePurpose> {
+        match self {
+            Self::Registered(entry) | Self::Reserved { entry, .. } => Some(entry.purpose),
+            Self::Cleanup { .. } => None,
+        }
+    }
 }
 
 pub(crate) struct TransientFileReservation {
     registry: Arc<TransientFileRegistry>,
     target: PathBuf,
-    entry: Option<TransientFileEntry>,
+    reservation_id: uuid::Uuid,
+    active: bool,
+}
+
+pub(crate) struct TransientPathCleanupLease {
+    registry: Arc<TransientFileRegistry>,
+    target: PathBuf,
+    reservation_id: uuid::Uuid,
 }
 
 impl TransientFileReservation {
     pub(crate) fn commit(mut self) {
-        self.entry = None;
-        clear_persistent_marker(&self.target);
+        if self
+            .registry
+            .commit_reservation(&self.target, self.reservation_id)
+            .unwrap_or(false)
+        {
+            self.active = false;
+            clear_persistent_marker(&self.target);
+        }
     }
 }
 
 impl Drop for TransientFileReservation {
     fn drop(&mut self) {
-        let Some(entry) = self.entry.take() else {
+        if !self.active {
             return;
-        };
+        }
+        if self
+            .registry
+            .release_reservation(&self.target, self.reservation_id)
+            .unwrap_or(false)
+        {
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for TransientPathCleanupLease {
+    fn drop(&mut self) {
         let _ = self
             .registry
-            .restore_after_failed_adoption(self.target.clone(), entry);
+            .release_cleanup(&self.target, self.reservation_id);
     }
 }
 
@@ -65,7 +111,7 @@ struct PersistentTransientMarker {
 
 #[derive(Default)]
 pub struct TransientFileRegistry {
-    paths: Mutex<HashMap<PathBuf, TransientFileEntry>>,
+    paths: Mutex<HashMap<PathBuf, TransientFileState>>,
 }
 
 impl TransientFileRegistry {
@@ -86,17 +132,23 @@ impl TransientFileRegistry {
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, now);
             let result = if let Some(existing) = paths.get_mut(&path) {
-                if existing.purpose == purpose {
-                    existing.created_at = now;
-                    Ok(())
-                } else {
-                    Err(AppError::DocumentStateInvalid(
+                match existing {
+                    TransientFileState::Registered(entry) if entry.purpose == purpose => {
+                        entry.created_at = now;
+                        Ok(())
+                    }
+                    TransientFileState::Registered(_) => Err(AppError::DocumentStateInvalid(
                         "transient file is already registered for a different purpose".to_string(),
-                    ))
+                    )),
+                    TransientFileState::Reserved { .. } | TransientFileState::Cleanup { .. } => {
+                        Err(AppError::DocumentStateInvalid(
+                            "transient file path is already in use".to_string(),
+                        ))
+                    }
                 }
             } else if paths
                 .values()
-                .filter(|entry| entry.purpose == purpose)
+                .filter(|state| state.purpose() == Some(purpose))
                 .count()
                 >= MAX_TRANSIENT_FILES_PER_PURPOSE
             {
@@ -106,10 +158,10 @@ impl TransientFileRegistry {
             } else {
                 paths.insert(
                     path.clone(),
-                    TransientFileEntry {
+                    TransientFileState::Registered(TransientFileEntry {
                         purpose,
                         created_at: now,
-                    },
+                    }),
                 );
                 Ok(())
             };
@@ -137,14 +189,14 @@ impl TransientFileRegistry {
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, now);
-            let result = if paths.get(&target).map(|entry| entry.purpose) == Some(purpose) {
-                paths.remove(&target);
-                Ok(target.clone())
-            } else {
-                Err(AppError::DocumentStateInvalid(
-                    "Refusing to discard a file that is not registered for this purpose"
-                        .to_string(),
-                ))
+            let result = match paths.get(&target).copied() {
+                Some(TransientFileState::Registered(entry)) if entry.purpose == purpose => {
+                    paths.remove(&target);
+                    Ok(target.clone())
+                }
+                _ => Err(AppError::DocumentStateInvalid(
+                    "Refusing to discard a file that is not available for this purpose".to_string(),
+                )),
             };
             (expired, result)
         };
@@ -162,55 +214,133 @@ impl TransientFileRegistry {
         purpose: TransientFilePurpose,
     ) -> Result<Option<TransientFileReservation>, AppError> {
         let target = path.to_path_buf();
-        let (expired, entry) = {
+        let reservation_id = uuid::Uuid::new_v4();
+        let (expired, reserved) = {
             let mut paths = self
                 .paths
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, Instant::now());
-            let entry = match paths.get(&target).copied() {
-                Some(entry) if entry.purpose == purpose => Ok(paths.remove(&target)),
-                Some(_) => Err(AppError::DocumentStateInvalid(
+            let reserved = match paths.get(&target).copied() {
+                Some(TransientFileState::Registered(entry)) if entry.purpose == purpose => {
+                    paths.insert(
+                        target.clone(),
+                        TransientFileState::Reserved {
+                            entry,
+                            reservation_id,
+                        },
+                    );
+                    Ok(true)
+                }
+                Some(TransientFileState::Registered(_)) => Err(AppError::DocumentStateInvalid(
                     "transient file is registered for a different purpose".to_string(),
                 )),
-                None => Ok(None),
+                Some(TransientFileState::Reserved { .. })
+                | Some(TransientFileState::Cleanup { .. }) => Err(AppError::DocumentStateInvalid(
+                    "transient file path is already in use".to_string(),
+                )),
+                None => Ok(false),
             };
-            (expired, entry)
+            (expired, reserved)
         };
         self.cleanup_expired(expired);
-        Ok(entry?.map(|entry| TransientFileReservation {
+        Ok(reserved?.then(|| TransientFileReservation {
             registry: Arc::clone(self),
             target,
-            entry: Some(entry),
+            reservation_id,
+            active: true,
         }))
     }
 
-    pub(crate) fn take_for_adoption(
-        &self,
+    pub(crate) fn begin_cleanup_if_unowned(
+        self: &Arc<Self>,
         path: &Path,
-    ) -> Result<Option<TransientFileEntry>, AppError> {
-        let (expired, entry) = {
+    ) -> Result<Option<TransientPathCleanupLease>, AppError> {
+        let target = path.to_path_buf();
+        let reservation_id = uuid::Uuid::new_v4();
+        let (expired, acquired) = {
             let mut paths = self
                 .paths
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, Instant::now());
-            (expired, paths.remove(path))
+            let acquired = if paths.contains_key(&target) {
+                false
+            } else {
+                paths.insert(
+                    target.clone(),
+                    TransientFileState::Cleanup { reservation_id },
+                );
+                true
+            };
+            (expired, acquired)
         };
         self.cleanup_expired(expired);
-        Ok(entry)
+        Ok(acquired.then(|| TransientPathCleanupLease {
+            registry: Arc::clone(self),
+            target,
+            reservation_id,
+        }))
     }
 
-    pub(crate) fn restore_after_failed_adoption(
+    fn commit_reservation(
         &self,
-        path: PathBuf,
-        entry: TransientFileEntry,
-    ) -> Result<(), AppError> {
+        path: &Path,
+        reservation_id: uuid::Uuid,
+    ) -> Result<bool, AppError> {
         let mut paths = self
             .paths
             .lock()
             .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
-        paths.insert(path, entry);
+        if matches!(
+            paths.get(path),
+            Some(TransientFileState::Reserved {
+                reservation_id: current,
+                ..
+            }) if *current == reservation_id
+        ) {
+            paths.remove(path);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn release_reservation(
+        &self,
+        path: &Path,
+        reservation_id: uuid::Uuid,
+    ) -> Result<bool, AppError> {
+        let mut paths = self
+            .paths
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
+        let Some(TransientFileState::Reserved {
+            entry,
+            reservation_id: current,
+        }) = paths.get(path).copied()
+        else {
+            return Ok(false);
+        };
+        if current != reservation_id {
+            return Ok(false);
+        }
+        paths.insert(path.to_path_buf(), TransientFileState::Registered(entry));
+        Ok(true)
+    }
+
+    fn release_cleanup(&self, path: &Path, reservation_id: uuid::Uuid) -> Result<(), AppError> {
+        let mut paths = self
+            .paths
+            .lock()
+            .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
+        if matches!(
+            paths.get(path),
+            Some(TransientFileState::Cleanup {
+                reservation_id: current,
+            }) if *current == reservation_id
+        ) {
+            paths.remove(path);
+        }
         Ok(())
     }
 
@@ -221,7 +351,11 @@ impl TransientFileRegistry {
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, now);
-            (expired, paths.remove(path).is_some())
+            let adopted = matches!(paths.get(path), Some(TransientFileState::Registered(_)));
+            if adopted {
+                paths.remove(path);
+            }
+            (expired, adopted)
         };
         self.cleanup_expired(expired);
         if adopted {
@@ -255,9 +389,9 @@ impl TransientFileRegistry {
                 .lock()
                 .map_err(|_| AppError::poisoned_lock("transient file registry"))?;
             let expired = prune_expired(&mut paths, now);
-            let contains = paths
-                .get(path)
-                .is_some_and(|entry| purpose.is_none_or(|purpose| entry.purpose == purpose));
+            let contains = paths.get(path).is_some_and(|state| {
+                purpose.is_none_or(|purpose| state.purpose() == Some(purpose))
+            });
             (expired, contains)
         };
         self.cleanup_expired(expired);
@@ -383,10 +517,15 @@ pub(crate) fn completed_persisted_save_locations(
     Ok(completed)
 }
 
-fn prune_expired(paths: &mut HashMap<PathBuf, TransientFileEntry>, now: Instant) -> Vec<PathBuf> {
+fn prune_expired(paths: &mut HashMap<PathBuf, TransientFileState>, now: Instant) -> Vec<PathBuf> {
     let mut expired = Vec::new();
-    paths.retain(|path, entry| {
-        let keep = now.saturating_duration_since(entry.created_at) < TRANSIENT_FILE_TTL;
+    paths.retain(|path, state| {
+        let keep = match state {
+            TransientFileState::Registered(entry) => {
+                now.saturating_duration_since(entry.created_at) < TRANSIENT_FILE_TTL
+            }
+            TransientFileState::Reserved { .. } | TransientFileState::Cleanup { .. } => true,
+        };
         if !keep {
             expired.push(path.clone());
         }
@@ -526,6 +665,8 @@ mod tests {
             .unwrap()
             .expect("save reservation");
 
+        assert!(registry.contains(&path).unwrap());
+        assert!(registry.begin_cleanup_if_unowned(&path).unwrap().is_none());
         assert!(
             registry
                 .take(&path, TransientFilePurpose::SaveLocation)
@@ -538,6 +679,56 @@ mod tests {
                 .unwrap(),
             path
         );
+    }
+
+    #[test]
+    fn cleanup_lease_excludes_new_transient_ownership_until_release() {
+        let registry = Arc::new(TransientFileRegistry::default());
+        let path = PathBuf::from("tmp").join("cleanup.xlsx");
+        let cleanup = registry
+            .begin_cleanup_if_unowned(&path)
+            .unwrap()
+            .expect("cleanup lease");
+
+        assert!(
+            registry
+                .register(path.clone(), TransientFilePurpose::OpenSelection)
+                .is_err()
+        );
+        assert!(
+            registry
+                .reserve_if_registered(&path, TransientFilePurpose::OpenSelection)
+                .is_err()
+        );
+
+        drop(cleanup);
+        registry
+            .register(path, TransientFilePurpose::OpenSelection)
+            .unwrap();
+    }
+
+    #[test]
+    fn active_reservation_is_not_expired_until_ownership_is_released() {
+        let directory = TestDir::new("reserved-expiry");
+        let path = directory.path.join("saving.xlsx");
+        fs::write(&path, b"temporary").unwrap();
+        let registry = Arc::new(TransientFileRegistry::default());
+        let now = Instant::now();
+        registry
+            .register_at(path.clone(), TransientFilePurpose::SaveLocation, now)
+            .unwrap();
+        let reservation = registry
+            .reserve_if_registered(&path, TransientFilePurpose::SaveLocation)
+            .unwrap()
+            .expect("save reservation");
+        let after_expiry = now + TRANSIENT_FILE_TTL + Duration::from_secs(1);
+
+        assert!(registry.contains_at(&path, None, after_expiry).unwrap());
+        assert!(path.exists());
+
+        drop(reservation);
+        assert!(!registry.contains_at(&path, None, after_expiry).unwrap());
+        assert!(!path.exists());
     }
 
     #[test]

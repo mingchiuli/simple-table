@@ -121,10 +121,10 @@ impl PreparedDocumentStore {
     }
 
     fn fail_prepare(&mut self, token: &str, fingerprint: PreparedDocumentFingerprint) {
-        if !self
+        if self
             .prepare_in_progress
             .as_ref()
-            .is_some_and(|preparation| preparation.token == token)
+            .is_none_or(|preparation| preparation.token != token)
         {
             return;
         }

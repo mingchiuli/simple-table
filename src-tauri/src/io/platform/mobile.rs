@@ -8,9 +8,9 @@ use crate::error::AppError;
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::io::transient_files::{
-    TransientFilePurpose, TransientFileReservation, clear_persistent_marker,
-    completed_persisted_save_locations, reconcile_persisted_transient_files,
-    write_persistent_marker,
+    TransientFilePurpose, TransientFileReservation, TransientPathCleanupLease,
+    clear_persistent_marker, completed_persisted_save_locations,
+    reconcile_persisted_transient_files, write_persistent_marker,
 };
 use crate::io::{
     managed_documents,
@@ -116,7 +116,6 @@ impl MobileFileRuntime {
     ) -> Result<managed_documents::ManagedSaveTransaction, AppError> {
         managed_documents::begin_managed_save_transaction(
             &self.managed_documents,
-            Arc::clone(&self.transient_files),
             target,
             file_name,
             content,
@@ -140,6 +139,13 @@ impl MobileFileRuntime {
             "mobile save target is neither the current document nor a reserved save location"
                 .to_string(),
         ))
+    }
+
+    fn begin_transient_path_cleanup(
+        &self,
+        target: &Path,
+    ) -> Result<Option<TransientPathCleanupLease>, AppError> {
+        self.transient_files.begin_cleanup_if_unowned(target)
     }
 
     #[cfg(test)]
@@ -408,9 +414,9 @@ pub(crate) fn remove_managed_file(
     path: &str,
 ) -> Result<bool, AppError> {
     let target = validated_mobile_files_path(runtime, app, Path::new(path))?;
-    if runtime.transient_files().contains(&target)? {
+    let Some(_cleanup_lease) = runtime.begin_transient_path_cleanup(&target)? else {
         return Ok(false);
-    }
+    };
 
     match fs::remove_file(&target) {
         Ok(()) => {

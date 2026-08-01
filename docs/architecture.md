@@ -143,10 +143,11 @@ internal models.
   repository lock is not exposed; callers request read or mutation handles.
 - Replacement and close retire old document handles and derived runtime work
   before old state is released.
-- Mobile managed-file deletion holds an inactive-path lease from the active
-  document repository. Path deletion and document replacement are mutually
-  exclusive, and a prepared managed source is revalidated while the
-  replacement lease is held before it can become active.
+- Mobile managed-file deletion holds both an inactive-path lease from the active
+  document repository and a cleanup lease from the transient-file registry.
+  Path deletion, transient registration or reservation, and document
+  replacement are mutually exclusive. A prepared managed source is revalidated
+  while the replacement lease is held before it can become active.
 - Expired prepared documents are removed under the repository mutex, then their
   document work leases and large buffers are released after unlocking. Every
   repository entry point that prunes expiration must drain this retired list on
@@ -229,9 +230,11 @@ internal models.
    budget.
 3. A save lease prevents mutation between final validation, durable write, and
    saved-hash commit.
-4. A mobile reserved save location is atomically transferred from transient
-   cleanup ownership to the save transaction before encoding. Cancellation
-   restores that ownership; durable content commit ends it even when managed
+4. A mobile reserved save location remains represented in the transient-file
+   registry while an identity-bound reservation transfers exclusive ownership
+   to the save transaction before encoding. Cleanup cannot acquire the path
+   during that reservation. Cancellation returns it to the registered state;
+   durable content commit removes the exact reservation even when managed
    metadata must be recovered from the save journal later.
 5. Failed staging or writing aborts the lease. Successful save refreshes identity,
    dirty state, capabilities, and derived search work.
