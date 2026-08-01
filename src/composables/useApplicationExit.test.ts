@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createApplicationExitCoordinator } from '@/application/applicationExitCoordinator';
-import { createWindowCloseGuardLifecycle } from '@/composables/useApplicationExit';
+import {
+  createApplicationExitCoordinator,
+  createWindowCloseRequestLifecycle,
+} from '@/application/applicationExitCoordinator';
 
 function preparation() {
   return {
@@ -191,7 +193,7 @@ describe('window close guard lifecycle', () => {
     const closeHandlers: Array<() => void | Promise<void>> = [];
     const unregister = vi.fn();
     const requestExit = vi.fn().mockResolvedValue({ status: 'executed', intent: 'close' });
-    const lifecycle = createWindowCloseGuardLifecycle(
+    const lifecycle = createWindowCloseRequestLifecycle(
       {
         subscribeCloseRequested: vi.fn(async (handler) => {
           closeHandlers.push(handler);
@@ -214,7 +216,7 @@ describe('window close guard lifecycle', () => {
   it('unregisters a delayed subscription that resolves after disposal', async () => {
     const subscription = deferred<() => void>();
     const unregister = vi.fn();
-    const lifecycle = createWindowCloseGuardLifecycle(
+    const lifecycle = createWindowCloseRequestLifecycle(
       { subscribeCloseRequested: vi.fn(() => subscription.promise) },
       { requestExit: vi.fn() },
     );
@@ -229,15 +231,17 @@ describe('window close guard lifecycle', () => {
 
   it('reports subscription and exit failures through the presentation boundary', async () => {
     const reportError = vi.fn();
-    const failedRegistration = createWindowCloseGuardLifecycle(
+    const requestExitAfterFailedRegistration = vi.fn();
+    const failedRegistration = createWindowCloseRequestLifecycle(
       { subscribeCloseRequested: vi.fn().mockRejectedValue(new Error('listen failed')) },
-      { requestExit: vi.fn() },
+      { requestExit: requestExitAfterFailedRegistration },
       reportError,
     );
     await failedRegistration.start();
+    expect(requestExitAfterFailedRegistration).not.toHaveBeenCalled();
 
     const closeHandlers: Array<() => void | Promise<void>> = [];
-    const failedExit = createWindowCloseGuardLifecycle(
+    const failedExit = createWindowCloseRequestLifecycle(
       {
         subscribeCloseRequested: vi.fn(async (handler) => {
           closeHandlers.push(handler);

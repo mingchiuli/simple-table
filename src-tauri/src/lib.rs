@@ -58,6 +58,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
+        .on_window_event(adapters::window_close_adapter::intercept_main_window_close)
         .manage(runtime::ApplicationRuntime::default())
         .manage(commands::CommandExecutionRuntime::default());
 

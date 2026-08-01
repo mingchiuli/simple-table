@@ -129,6 +129,46 @@ export function createApplicationExitCoordinator(executor: ApplicationExitExecut
   return { registerGuard, requestExit, dispose };
 }
 
+export function createWindowCloseRequestLifecycle(
+  applicationWindow: Pick<ApplicationWindowPort, 'subscribeCloseRequested'>,
+  coordinator: Pick<ApplicationExitCoordinator, 'requestExit'>,
+  reportError: (message: string, error: unknown) => void = (message, error) => {
+    console.error(message, error);
+  },
+) {
+  let disposed = false;
+  let unlisten: (() => void) | null = null;
+  let registration: Promise<void> | null = null;
+
+  function start(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    registration ??= applicationWindow.subscribeCloseRequested(async () => {
+      try {
+        await coordinator.requestExit('close');
+      } catch (error) {
+        reportError('Failed to close the application:', error);
+      }
+    }).then((registeredUnlisten) => {
+      if (disposed) {
+        registeredUnlisten();
+      } else {
+        unlisten = registeredUnlisten;
+      }
+    }).catch((error) => {
+      reportError('Failed to register the application close request listener:', error);
+    });
+    return registration;
+  }
+
+  function dispose() {
+    disposed = true;
+    unlisten?.();
+    unlisten = null;
+  }
+
+  return { start, dispose };
+}
+
 function commitPreparations(preparations: ApplicationExitPreparation[]): unknown[] {
   return settlePreparations(preparations, (preparation) => preparation.commit());
 }

@@ -13,3 +13,4 @@ pub(crate) mod search_query_adapter;
 pub(crate) mod search_query_engine;
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub mod update_adapter;
+pub(crate) mod window_close_adapter;

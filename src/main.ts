@@ -5,10 +5,8 @@ import "@/styles/platform.css";
 import { createPinia } from "pinia";
 import { createApp } from "vue";
 import App from "@/App.vue";
-import {
-  applicationExitCoordinatorKey,
-  applicationWindowPortKey,
-} from '@/composables/useApplicationExit';
+import { createWindowCloseRequestLifecycle } from '@/application/applicationExitCoordinator';
+import { applicationExitCoordinatorKey } from '@/composables/useApplicationExit';
 import {
   documentWorkspaceRuntimeKey,
 } from '@/composables/documentWorkspaceRuntime';
@@ -25,8 +23,11 @@ app.use(router);
 const applicationWorkspaceRuntime = createApplicationWorkspaceRuntime();
 app.provide(applicationWorkspaceRuntimeKey, applicationWorkspaceRuntime);
 app.provide(applicationExitCoordinatorKey, applicationWorkspaceRuntime.applicationExit);
-app.provide(applicationWindowPortKey, applicationWorkspaceRuntime.applicationWindow);
 app.provide(documentWorkspaceRuntimeKey, applicationWorkspaceRuntime.document);
+const windowCloseRequests = createWindowCloseRequestLifecycle(
+  applicationWorkspaceRuntime.applicationWindow,
+  applicationWorkspaceRuntime.applicationExit,
+);
 
 let restoredActiveDocument = false;
 if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -43,9 +44,11 @@ if (restoredActiveDocument && router.currentRoute.value.name === "home") {
 }
 
 app.mount("#app");
+await windowCloseRequests.start();
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
+    windowCloseRequests.dispose();
     app.unmount();
     void applicationWorkspaceRuntime.dispose().catch((error) => {
       console.error('Failed to dispose application workspace:', error);
