@@ -5,6 +5,7 @@ use crate::document_format::{
     supported_extension_or_default,
 };
 use crate::error::AppError;
+use crate::io::atomic_file::cleanup_orphaned_temp_files;
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::OpenFileInput;
 use crate::io::transient_files::{
@@ -111,12 +112,14 @@ impl MobileFileRuntime {
     pub(crate) fn begin_managed_save_transaction(
         &self,
         target: &Path,
+        temp: &Path,
         file_name: &str,
         content: &[u8],
     ) -> Result<managed_documents::ManagedSaveTransaction, AppError> {
         managed_documents::begin_managed_save_transaction(
             &self.managed_documents,
             target,
+            temp,
             file_name,
             content,
         )
@@ -178,6 +181,7 @@ fn initialize_mobile_storage(
     app: &AppHandle,
 ) -> Result<PathBuf, AppError> {
     let dir = resolve_mobile_dir(app)?;
+    cleanup_orphaned_temp_files(&dir)?;
     managed_documents::recover_managed_save_transactions(runtime.managed_documents(), &dir)?;
     for managed in managed_documents::managed_documents(runtime.managed_documents(), &dir)? {
         clear_persistent_marker(&managed.path);
@@ -276,15 +280,22 @@ pub(super) fn register_transient_path(
     register_transient_target(runtime, target, purpose)
 }
 
-pub(super) fn register_created_transient_path(
+pub(super) fn write_transient_path(
     runtime: &MobileFileRuntime,
     app: &AppHandle,
     path: &Path,
+    bytes: &[u8],
     purpose: TransientFilePurpose,
 ) -> Result<(), AppError> {
-    if let Err(error) = register_transient_path(runtime, app, path, purpose) {
-        let _ = fs::remove_file(path);
-        return Err(error);
+    register_transient_path(runtime, app, path, purpose)?;
+    if let Err(write_error) = write_path_with_official_fs(app, path.to_path_buf(), bytes) {
+        let cleanup_result = discard_transient_file(runtime, app, &path.to_string_lossy(), purpose);
+        return match cleanup_result {
+            Ok(()) => Err(write_error),
+            Err(cleanup_error) => Err(AppError::WriteError(format!(
+                "{write_error}; failed to clean up registered transient file: {cleanup_error}"
+            ))),
+        };
     }
     Ok(())
 }
@@ -560,8 +571,7 @@ pub fn reserve_save_location(
         uuid::Uuid::new_v4(),
         extension_from_name(file_name)
     ));
-    write_path_with_official_fs(app, path.clone(), &[])?;
-    register_created_transient_path(runtime, app, &path, TransientFilePurpose::SaveLocation)?;
+    write_transient_path(runtime, app, &path, &[], TransientFilePurpose::SaveLocation)?;
 
     Ok(path.to_string_lossy().to_string())
 }

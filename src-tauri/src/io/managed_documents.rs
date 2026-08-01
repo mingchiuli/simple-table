@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::io::atomic_file::write_file_atomically;
+use crate::io::atomic_file::{is_owned_temp_file_name, write_file_atomically};
 use crate::io::marker_store::{
     bounded_directory_entries, read_marker_bytes, read_optional_marker_bytes, validate_marker_field,
 };
@@ -52,6 +52,8 @@ struct PersistentManagedSaveTransaction {
     file_name: String,
     expected_size: u64,
     content_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    temp_file_name: Option<String>,
 }
 
 pub(crate) struct ManagedDocumentAdoption {
@@ -193,18 +195,22 @@ fn restore_managed_marker(
 pub(crate) fn begin_managed_save_transaction(
     catalog: &ManagedDocumentCatalog,
     target: &Path,
+    temp: &Path,
     file_name: &str,
     content: &[u8],
 ) -> Result<ManagedSaveTransaction, AppError> {
     validate_managed_save(catalog, target, content.len() as u64)?;
     let target_file_name = direct_file_name(target)?;
+    let temp_file_name = direct_file_name(temp)?;
     validate_marker_field("target file name", &target_file_name)?;
+    validate_transaction_temp_path(target, temp, &temp_file_name)?;
     validate_marker_field("file name", file_name)?;
     let transaction = PersistentManagedSaveTransaction {
         target_file_name,
         file_name: file_name.to_string(),
         expected_size: content.len() as u64,
         content_sha256: sha256_hex(content),
+        temp_file_name: Some(temp_file_name),
     };
     let journal = save_transaction_path(target)?;
     let bytes = serde_json::to_vec(&transaction).map_err(|error| {
@@ -246,6 +252,7 @@ pub(crate) fn recover_managed_save_transactions(
             let _ = fs::remove_file(&journal);
             continue;
         }
+        let temp = transaction_temp_path(directory, &transaction);
         let target = directory.join(&transaction.target_file_name);
         if direct_file_name(&target).ok().as_deref() != Some(transaction.target_file_name.as_str())
         {
@@ -255,6 +262,9 @@ pub(crate) fn recover_managed_save_transactions(
         match content_matches_transaction(&target, &transaction) {
             Ok(true) => {}
             Ok(false) => {
+                if !remove_transaction_temp(temp.as_deref()) {
+                    continue;
+                }
                 let _ = fs::remove_file(&journal);
                 continue;
             }
@@ -276,6 +286,9 @@ pub(crate) fn recover_managed_save_transactions(
             continue;
         }
         clear_persistent_marker(&target);
+        if !remove_transaction_temp(temp.as_deref()) {
+            continue;
+        }
         if let Err(error) = remove_file_if_present(&journal, "managed save transaction") {
             eprintln!(
                 "Failed to clear recovered managed save transaction {}: {error}",
@@ -545,6 +558,14 @@ fn validate_save_transaction(
 ) -> Result<(), AppError> {
     validate_marker_field("target file name", &transaction.target_file_name)?;
     validate_marker_field("file name", &transaction.file_name)?;
+    if let Some(temp_file_name) = &transaction.temp_file_name {
+        validate_marker_field("temporary file name", temp_file_name)?;
+        if !is_owned_temp_file_name(temp_file_name) {
+            return Err(AppError::DocumentStateInvalid(
+                "managed save transaction has an invalid temporary file name".to_string(),
+            ));
+        }
+    }
     if transaction.content_sha256.len() != 64
         || !transaction
             .content_sha256
@@ -556,6 +577,45 @@ fn validate_save_transaction(
         ));
     }
     Ok(())
+}
+
+fn validate_transaction_temp_path(
+    target: &Path,
+    temp: &Path,
+    temp_file_name: &str,
+) -> Result<(), AppError> {
+    validate_marker_field("temporary file name", temp_file_name)?;
+    if target.parent() != temp.parent() || !is_owned_temp_file_name(temp_file_name) {
+        return Err(AppError::DocumentStateInvalid(
+            "managed save temporary file must be an owned file beside its target".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn transaction_temp_path(
+    directory: &Path,
+    transaction: &PersistentManagedSaveTransaction,
+) -> Option<PathBuf> {
+    transaction
+        .temp_file_name
+        .as_ref()
+        .filter(|name| is_owned_temp_file_name(name))
+        .map(|name| directory.join(name))
+}
+
+fn remove_transaction_temp(temp: Option<&Path>) -> bool {
+    let Some(temp) = temp else {
+        return true;
+    };
+    if let Err(error) = remove_file_if_present(temp, "managed save temporary file") {
+        eprintln!(
+            "Deferred cleanup of managed save temporary file {}: {error}",
+            temp.display()
+        );
+        return false;
+    }
+    true
 }
 
 fn content_matches_transaction(
@@ -652,6 +712,7 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::atomic_file::temp_path_for_target;
 
     struct TestDir(PathBuf);
 
@@ -670,6 +731,17 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn begin_test_save_transaction(
+        catalog: &ManagedDocumentCatalog,
+        target: &Path,
+        file_name: &str,
+        content: &[u8],
+    ) -> ManagedSaveTransaction {
+        let temp = temp_path_for_target(target);
+        begin_managed_save_transaction(catalog, target, &temp, file_name, content)
+            .expect("save transaction")
     }
 
     #[test]
@@ -847,8 +919,7 @@ mod tests {
         fs::write(&target, []).expect("reserved target");
 
         let transaction =
-            begin_managed_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook")
-                .expect("save transaction");
+            begin_test_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook");
         let journal = save_transaction_path(&target).expect("journal path");
         assert!(journal.exists());
 
@@ -884,8 +955,7 @@ mod tests {
             .expect("reserve transient target")
             .expect("registered target");
         let mut transaction =
-            begin_managed_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook")
-                .expect("save transaction");
+            begin_test_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook");
         transaction.attach_transient_reservation(reservation);
 
         fs::write(&target, b"workbook").expect("committed content");
@@ -927,8 +997,7 @@ mod tests {
             .expect("reserve transient target")
             .expect("registered target");
         let mut transaction =
-            begin_managed_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook")
-                .expect("save transaction");
+            begin_test_save_transaction(&catalog, &target, "Reserved.xlsx", b"workbook");
         transaction.attach_transient_reservation(reservation);
         let journal = save_transaction_path(&target).expect("journal path");
 
@@ -949,16 +1018,26 @@ mod tests {
         fs::write(&completed, []).expect("completed reservation");
         fs::write(&incomplete, b"old-data").expect("incomplete target");
 
-        let completed_transaction =
-            begin_managed_save_transaction(&catalog, &completed, "Completed.xlsx", b"new-data")
-                .expect("completed transaction");
+        let completed_temp = temp_path_for_target(&completed);
+        let incomplete_temp = temp_path_for_target(&incomplete);
+        let completed_transaction = begin_managed_save_transaction(
+            &catalog,
+            &completed,
+            &completed_temp,
+            "Completed.xlsx",
+            b"new-data",
+        )
+        .expect("completed transaction");
         let incomplete_transaction = begin_managed_save_transaction(
             &catalog,
             &incomplete,
+            &incomplete_temp,
             "Incomplete.xlsx",
             b"different-data",
         )
         .expect("incomplete transaction");
+        fs::write(&completed_temp, b"staged-completed").expect("completed temp");
+        fs::write(&incomplete_temp, b"staged-incomplete").expect("incomplete temp");
         fs::write(&completed, b"new-data").expect("committed content");
         std::mem::forget(completed_transaction);
         std::mem::forget(incomplete_transaction);
@@ -970,6 +1049,31 @@ mod tests {
         assert_eq!(records[0].path, completed);
         assert!(!save_transaction_path(&completed).unwrap().exists());
         assert!(!save_transaction_path(&incomplete).unwrap().exists());
+        assert!(!completed_temp.exists());
+        assert!(!incomplete_temp.exists());
+    }
+
+    #[test]
+    fn recovery_accepts_legacy_save_transaction_without_temp_file_name() {
+        let catalog = ManagedDocumentCatalog::default();
+        let dir = TestDir::new("legacy-save-transaction");
+        let target = dir.0.join("legacy.xlsx");
+        fs::write(&target, b"committed").expect("committed target");
+        let journal = save_transaction_path(&target).expect("journal path");
+        let legacy = serde_json::json!({
+            "targetFileName": "legacy.xlsx",
+            "fileName": "Legacy.xlsx",
+            "expectedSize": 9,
+            "contentSha256": sha256_hex(b"committed")
+        });
+        fs::write(&journal, serde_json::to_vec(&legacy).unwrap()).expect("legacy journal");
+
+        recover_managed_save_transactions(&catalog, &dir.0).expect("recover legacy transaction");
+
+        assert!(!journal.exists());
+        let records = managed_documents(&catalog, &dir.0).expect("managed documents");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].path, target);
     }
 
     #[test]

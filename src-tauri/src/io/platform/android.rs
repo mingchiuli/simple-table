@@ -1,6 +1,5 @@
 use super::mobile::{
     self, MobileFileRuntime, mobile_dir, read_with_official_fs, unique_import_path,
-    write_path_with_official_fs,
 };
 use crate::document_format::{
     default_spreadsheet_file_name, file_name_from_path_like, file_stem_from_path_like,
@@ -63,11 +62,11 @@ pub fn pick_file_info(
         .ok_or(AppError::UnsupportedFormat)?;
     let file_name = normalized_import_file_name(&raw_file_name, &extension);
     let sandbox_path = unique_import_path(runtime, app, &file_name)?;
-    write_path_with_official_fs(app, sandbox_path.clone(), &bytes)?;
-    mobile::register_created_transient_path(
+    mobile::write_transient_path(
         runtime,
         app,
         &sandbox_path,
+        &bytes,
         TransientFilePurpose::OpenSelection,
     )?;
 

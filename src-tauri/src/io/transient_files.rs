@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(dead_code))]
 
 use crate::error::AppError;
+use crate::io::atomic_file::write_file_atomically;
 use crate::io::marker_store::{
     bounded_directory_entries, read_marker_bytes, validate_marker_field,
 };
@@ -438,9 +439,7 @@ fn write_persistent_marker_at(
     let bytes = serde_json::to_vec(&marker).map_err(|error| {
         AppError::Internal(format!("Failed to encode transient marker: {error}"))
     })?;
-    fs::write(marker_path(target)?, bytes).map_err(|error| {
-        AppError::WriteError(format!("Failed to persist transient file marker: {error}"))
-    })
+    write_file_atomically(&marker_path(target)?, &bytes)
 }
 
 pub(crate) fn reconcile_persisted_transient_files(directory: &Path) -> Result<(), AppError> {

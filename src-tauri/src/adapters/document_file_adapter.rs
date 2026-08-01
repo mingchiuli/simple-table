@@ -11,6 +11,8 @@ use crate::application::prepared_source_port::{
 };
 use crate::error::AppError;
 use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use crate::io::atomic_file::{temp_path_for_target, write_temp_file};
 #[cfg(any(desktop, target_os = "android", target_os = "ios"))]
 use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 #[cfg(desktop)]
@@ -430,11 +432,13 @@ impl DocumentSaveTargetPort for MobileSaveTarget {
         let reservation = reservation
             .into_inner()
             .map_err(|_| AppError::poisoned_lock("mobile save target reservation"))?;
-        let mut transaction = files.begin_managed_save_transaction(&target, output_name, bytes)?;
+        let temp = temp_path_for_target(&target);
+        let mut transaction =
+            files.begin_managed_save_transaction(&target, &temp, output_name, bytes)?;
         if let Some(reservation) = reservation {
             transaction.attach_transient_reservation(reservation);
         }
-        let temp = write_temp_file_for_target(&target, bytes)?;
+        write_temp_file(&temp, bytes)?;
         Ok(Box::new(MobileStagedWrite {
             temp,
             target,
