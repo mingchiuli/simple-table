@@ -308,6 +308,17 @@ export function createDocumentSessionCoordinator<
     return true;
   }
 
+  function markProjectionOutcomeUnknown(context: EditorCommandContext): boolean {
+    if (!document.matchesCommandContext(context)) return false;
+    document.markProjectionStale({
+      documentId: context.documentId,
+      revision: context.baseRevision,
+    });
+    regions.reset();
+    search.clearSearch();
+    return true;
+  }
+
   async function refreshAfterMutationFailure(
     fetchEditorSession: FetchEditorSession,
     fetchProjection?: FetchProjection,
@@ -461,6 +472,7 @@ export function createDocumentSessionCoordinator<
     clearDocument,
     applyMutationResponseWithResync,
     markProjectionStaleFromMutationResponse,
+    markProjectionOutcomeUnknown,
     refreshAfterMutationFailure,
     applyEditorSessionForContext,
     beginLifecycle,

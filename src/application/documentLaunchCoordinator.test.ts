@@ -110,11 +110,35 @@ describe('document launch coordinator', () => {
 
     lifecycle.start();
     const disposal = lifecycle.dispose();
-    pendingListen.resolve(registeredUnlisten);
     await disposal;
+
+    expect(registeredUnlisten).not.toHaveBeenCalled();
+    pendingListen.resolve(registeredUnlisten);
+    await flushPromises();
 
     expect(registeredUnlisten).toHaveBeenCalledOnce();
     expect(setup.claimPendingOpenTarget).toHaveBeenCalledOnce();
+  });
+
+  it('drains again after a delayed listener registration closes the startup race', async () => {
+    const pendingListen = deferred<Unlisten>();
+    const claimPendingOpenTarget = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(claim('after-listen', '/after-listen.xlsx'));
+    const setup = testDependencies({
+      onLaunchTargetAvailable: vi.fn(() => pendingListen.promise),
+      claimPendingOpenTarget,
+    });
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+
+    lifecycle.start();
+    await waitForCondition(() => claimPendingOpenTarget.mock.calls.length === 1);
+    pendingListen.resolve(vi.fn());
+    await waitForCondition(() => setup.pushFilePath.mock.calls.length === 1);
+
+    expect(setup.pushFilePath).toHaveBeenCalledWith('/after-listen.xlsx', 'after-listen');
+    await lifecycle.dispose();
   });
 
   it('retries a transient launch-listener registration failure', async () => {
@@ -128,7 +152,9 @@ describe('document launch coordinator', () => {
         return registeredUnlisten;
       });
     const setup = testDependencies({ onLaunchTargetAvailable });
-    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies, {
+      waitBeforeListenerRetry: () => Promise.resolve(),
+    });
 
     lifecycle.start();
     await waitForCondition(() => handlers.length === 1);
@@ -147,7 +173,9 @@ describe('document launch coordinator', () => {
       onLaunchTargetAvailable,
       claimPendingOpenTarget: vi.fn().mockResolvedValueOnce(claim('startup', '/startup.xlsx')),
     });
-    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies);
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies, {
+      waitBeforeListenerRetry: () => Promise.resolve(),
+    });
 
     lifecycle.start();
     await waitForCondition(() => setup.pushFilePath.mock.calls.length === 1);
@@ -160,6 +188,27 @@ describe('document launch coordinator', () => {
       failure,
     );
     await lifecycle.dispose();
+  });
+
+  it('keeps retrying launch-listener registration after reporting a failure batch', async () => {
+    const registeredUnlisten = vi.fn();
+    const onLaunchTargetAvailable = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('listen failed 1'))
+      .mockRejectedValueOnce(new Error('listen failed 2'))
+      .mockRejectedValueOnce(new Error('listen failed 3'))
+      .mockResolvedValue(registeredUnlisten);
+    const setup = testDependencies({ onLaunchTargetAvailable });
+    const lifecycle = createDocumentLaunchCoordinator(setup.dependencies, {
+      waitBeforeListenerRetry: () => Promise.resolve(),
+    });
+
+    lifecycle.start();
+    await waitForCondition(() => onLaunchTargetAvailable.mock.calls.length === 4);
+
+    expect(setup.reportError).toHaveBeenCalledOnce();
+    await lifecycle.dispose();
+    expect(registeredUnlisten).toHaveBeenCalledOnce();
   });
 
   it('releases a claim that arrives after the lifecycle stops', async () => {

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 const TEMP_FILE_PREFIX: &str = ".simple-table-atomic-";
 const TEMP_FILE_SUFFIX: &str = ".tmp";
+const MANAGED_TEMP_DIRECTORY: &str = ".simple-table-atomic-files";
 const MAX_STALE_TEMP_SCAN_ENTRIES: usize = 1_024;
 
 pub(crate) enum AtomicReplaceError {
@@ -28,6 +29,32 @@ pub fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppError> 
         cleanup_temp_file(&temp_path);
     }
     result
+}
+
+pub(crate) fn write_file_atomically_managed(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    let temp_path = write_managed_temp_file_for_target(path, bytes)?;
+    let result = replace_managed_temp_file(&temp_path, path);
+    if result.is_err() {
+        cleanup_managed_temp_file(&temp_path);
+    }
+    result
+}
+
+pub(crate) fn write_managed_temp_file_for_target(
+    target: &Path,
+    bytes: &[u8],
+) -> Result<PathBuf, AppError> {
+    let directory = managed_temp_directory_for_target(target);
+    ensure_managed_temp_directory(&directory)?;
+    let temp_path = directory.join(format!(
+        "{TEMP_FILE_PREFIX}{}{TEMP_FILE_SUFFIX}",
+        uuid::Uuid::new_v4()
+    ));
+    if let Err(error) = write_temp_file(&temp_path, bytes) {
+        cleanup_empty_managed_temp_directory(&directory);
+        return Err(error);
+    }
+    Ok(temp_path)
 }
 
 pub fn write_temp_file_for_target(target: &Path, bytes: &[u8]) -> Result<PathBuf, AppError> {
@@ -81,6 +108,21 @@ pub(crate) fn cleanup_stale_temp_files(
         Some(minimum_age),
         Some(MAX_STALE_TEMP_SCAN_ENTRIES),
     )
+}
+
+pub(crate) fn cleanup_stale_managed_temp_files(
+    directory: &Path,
+    minimum_age: Duration,
+) -> Result<(), AppError> {
+    let managed = directory.join(MANAGED_TEMP_DIRECTORY);
+    validate_managed_temp_directory(&managed)?;
+    cleanup_owned_temp_files(
+        &managed,
+        Some(minimum_age),
+        Some(MAX_STALE_TEMP_SCAN_ENTRIES),
+    )?;
+    cleanup_empty_managed_temp_directory(&managed);
+    Ok(())
 }
 
 fn cleanup_owned_temp_files(
@@ -145,6 +187,14 @@ pub fn replace_temp_file(temp_path: &Path, target: &Path) -> Result<(), AppError
     replace_temp_file_detailed(temp_path, target).map_err(AtomicReplaceError::into_app_error)
 }
 
+pub(crate) fn replace_managed_temp_file(temp_path: &Path, target: &Path) -> Result<(), AppError> {
+    let result = replace_temp_file_detailed(temp_path, target)
+        .and_then(|()| finish_replacement(sync_parent_dir(temp_path)))
+        .map_err(AtomicReplaceError::into_app_error);
+    cleanup_empty_managed_temp_directory(temp_path.parent().unwrap_or_else(|| Path::new(".")));
+    result
+}
+
 pub(crate) fn replace_temp_file_detailed(
     temp_path: &Path,
     target: &Path,
@@ -165,6 +215,63 @@ fn finish_replacement(sync_result: std::io::Result<()>) -> Result<(), AtomicRepl
 
 pub fn cleanup_temp_file(temp_path: &Path) {
     let _ = fs::remove_file(temp_path);
+}
+
+pub(crate) fn cleanup_managed_temp_file(temp_path: &Path) {
+    cleanup_temp_file(temp_path);
+    cleanup_empty_managed_temp_directory(temp_path.parent().unwrap_or_else(|| Path::new(".")));
+}
+
+fn managed_temp_directory_for_target(target: &Path) -> PathBuf {
+    target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(MANAGED_TEMP_DIRECTORY)
+}
+
+fn ensure_managed_temp_directory(directory: &Path) -> Result<(), AppError> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            Ok(())
+        }
+        Ok(_) => Err(AppError::WriteError(format!(
+            "Atomic temporary storage path is not a directory: {}",
+            directory.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir(directory)
+            .map_err(|error| {
+                AppError::WriteError(format!(
+                    "Failed to create atomic temporary storage directory {}: {error}",
+                    directory.display()
+                ))
+            }),
+        Err(error) => Err(AppError::WriteError(format!(
+            "Failed to inspect atomic temporary storage directory {}: {error}",
+            directory.display()
+        ))),
+    }
+}
+
+fn validate_managed_temp_directory(directory: &Path) -> Result<(), AppError> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            Ok(())
+        }
+        Ok(_) => Err(AppError::ReadError(format!(
+            "Atomic temporary storage path is not a directory: {}",
+            directory.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::ReadError(format!(
+            "Failed to inspect atomic temporary storage directory {}: {error}",
+            directory.display()
+        ))),
+    }
+}
+
+fn cleanup_empty_managed_temp_directory(directory: &Path) {
+    let _ = fs::remove_dir(directory);
 }
 
 fn is_legacy_owned_temp_file_name(name: &str) -> bool {
@@ -237,6 +344,23 @@ mod tests {
         write_file_atomically(&target, b"new").expect("atomic write");
 
         assert_eq!(fs::read(&target).expect("saved content"), b"new");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn managed_atomic_write_replaces_content_and_removes_its_temp_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "simple-table-managed-atomic-write-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("test directory");
+        let target = directory.join("document.xlsx");
+        fs::write(&target, b"old").expect("old content");
+
+        write_file_atomically_managed(&target, b"new").expect("managed atomic write");
+
+        assert_eq!(fs::read(&target).expect("saved content"), b"new");
+        assert!(!directory.join(MANAGED_TEMP_DIRECTORY).exists());
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -365,6 +489,52 @@ mod tests {
                 .next()
                 .is_none()
         );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn managed_stale_cleanup_is_not_hidden_by_large_user_directories() {
+        let directory = std::env::temp_dir().join(format!(
+            "simple-table-managed-cleanup-parent-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("test directory");
+        for index in 0..=MAX_STALE_TEMP_SCAN_ENTRIES {
+            fs::write(directory.join(format!("unrelated-{index}")), []).expect("unrelated file");
+        }
+        let target = directory.join("document.xlsx");
+        let owned = write_managed_temp_file_for_target(&target, b"stale").expect("managed temp");
+
+        cleanup_stale_managed_temp_files(&directory, Duration::ZERO)
+            .expect("managed stale cleanup");
+
+        assert!(!owned.exists());
+        assert!(!directory.join(MANAGED_TEMP_DIRECTORY).exists());
+        assert!(directory.join("unrelated-0").exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn managed_stale_cleanup_makes_progress_in_bounded_batches() {
+        let directory = std::env::temp_dir().join(format!(
+            "simple-table-managed-cleanup-batches-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let managed = directory.join(MANAGED_TEMP_DIRECTORY);
+        fs::create_dir_all(&managed).expect("managed temp directory");
+        for _ in 0..=MAX_STALE_TEMP_SCAN_ENTRIES {
+            let owned = managed.join(format!(
+                "{TEMP_FILE_PREFIX}{}{TEMP_FILE_SUFFIX}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::write(owned, []).expect("owned temp");
+        }
+
+        cleanup_stale_managed_temp_files(&directory, Duration::ZERO).expect("first batch");
+        assert!(managed.exists());
+        cleanup_stale_managed_temp_files(&directory, Duration::ZERO).expect("second batch");
+
+        assert!(!managed.exists());
         let _ = fs::remove_dir_all(directory);
     }
 

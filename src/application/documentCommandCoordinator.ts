@@ -93,6 +93,7 @@ export type DocumentCommandSessionPort = {
     preferredSheetIndex?: number,
   ): Promise<MutationApplyResult>;
   markProjectionStaleFromMutationResponse(response: EditorMutationResponse): boolean;
+  markProjectionOutcomeUnknown(context: EditorCommandContext): boolean;
   refreshAfterMutationFailure(
     fetchEditorSession: (
       context: EditorCommandContext | null,
@@ -160,6 +161,7 @@ export function createDocumentCommandCoordinator({
       preferredSheetIndex,
       recoverProjection: (response, sheetIndex) =>
         session.recoverActiveDocumentResponse(response, sheetIndex),
+      markOutcomeUnknown: (context) => session.markProjectionOutcomeUnknown(context),
     },
     reportError: reportDiagnostic,
     cancellation,

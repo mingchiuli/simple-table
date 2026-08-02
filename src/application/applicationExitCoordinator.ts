@@ -1,3 +1,5 @@
+import { createResilientEventSubscription } from '@/application/resilientEventSubscription';
+
 export type ApplicationExitPreparation = {
   commit(): void;
   rollback(): void;
@@ -18,10 +20,14 @@ export type ApplicationWindowPort = ApplicationExitExecutor & {
   subscribeCloseRequested(handler: () => void | Promise<void>): Promise<() => void>;
 };
 
-const LISTENER_REGISTRATION_REPORT_INTERVAL = 3;
-const LISTENER_REGISTRATION_RETRY_MS = 250;
-const LISTENER_REGISTRATION_TIMEOUT_MS = 5_000;
 const DEFAULT_EXIT_GUARD_TIMEOUT_MS = 30_000;
+
+export class ApplicationExitPreparationTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Application exit preparation timed out after ${timeoutMs} ms`);
+    this.name = 'ApplicationExitPreparationTimeoutError';
+  }
+}
 
 type ApplicationExitCoordinatorOptions = {
   guardTimeoutMs?: number;
@@ -138,96 +144,60 @@ export function createApplicationExitCoordinator(
     return disposal;
   }
 
-  return { registerGuard, requestExit, dispose };
+  async function forceExit(intent: ApplicationExitIntent): Promise<ApplicationExitResult> {
+    if (disposed) return { status: 'cancelled' };
+    const pending = activeRequest?.promise;
+    if (pending) await Promise.allSettled([pending]);
+    if (disposed) return { status: 'cancelled' };
+    await executor.execute(intent);
+    return { status: 'executed', intent };
+  }
+
+  return { registerGuard, requestExit, forceExit, dispose };
 }
 
 export function createWindowCloseRequestLifecycle(
   applicationWindow: Pick<ApplicationWindowPort, 'subscribeCloseRequested'>,
-  coordinator: Pick<ApplicationExitCoordinator, 'requestExit'>,
+  coordinator: Pick<ApplicationExitCoordinator, 'requestExit'>
+    & Partial<Pick<ApplicationExitCoordinator, 'forceExit'>>,
   reportError: (message: string, error: unknown) => void = (message, error) => {
     console.error(message, error);
   },
   waitBeforeRetry: () => Promise<void> = () => new Promise(
-    (resolve) => setTimeout(resolve, LISTENER_REGISTRATION_RETRY_MS),
+    (resolve) => setTimeout(resolve, 250),
   ),
-  registrationTimeoutMs = LISTENER_REGISTRATION_TIMEOUT_MS,
+  registrationTimeoutMs = 5_000,
+  confirmForceExit: () => boolean = defaultConfirmForceExit,
 ) {
-  let disposed = false;
-  let unlisten: (() => void) | null = null;
-  let registration: Promise<void> | null = null;
-
-  function start(): Promise<void> {
-    if (disposed) return Promise.resolve();
-    registration ??= registerListener();
-    return registration;
-  }
-
-  async function registerListener(): Promise<void> {
-    let lastError: unknown;
-    let failures = 0;
-    while (!disposed) {
+  const subscription = createResilientEventSubscription({
+    subscribe: (handler) => applicationWindow.subscribeCloseRequested(handler),
+    handler: async () => {
       try {
-        const registeredUnlisten = await subscribeBeforeDeadline(
-          () => applicationWindow.subscribeCloseRequested(async () => {
-            try {
-              await coordinator.requestExit('close');
-            } catch (error) {
-              reportError('Failed to close the application:', error);
-            }
-          }),
-          registrationTimeoutMs,
-        );
-        if (disposed) {
-          registeredUnlisten();
-        } else {
-          unlisten = registeredUnlisten;
-        }
-        return;
+        await coordinator.requestExit('close');
       } catch (error) {
-        lastError = error;
-        failures += 1;
-        if (failures % LISTENER_REGISTRATION_REPORT_INTERVAL === 0) {
-          reportError('Failed to register the application close request listener:', lastError);
+        if (
+          error instanceof ApplicationExitPreparationTimeoutError
+          && coordinator.forceExit
+          && confirmForceExit()
+        ) {
+          try {
+            await coordinator.forceExit('close');
+            return;
+          } catch (forceError) {
+            reportError('Failed to force close the application:', forceError);
+          }
         }
+        reportError('Failed to close the application:', error);
       }
-      if (!disposed) await waitBeforeRetry();
-    }
-  }
-
-  function dispose() {
-    disposed = true;
-    unlisten?.();
-    unlisten = null;
-  }
-
-  return { start, dispose };
-}
-
-async function subscribeBeforeDeadline(
-  subscribe: () => Promise<() => void>,
-  timeoutMs: number,
-): Promise<() => void> {
-  let expired = false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const subscription = subscribe();
-  void subscription.then(
-    (unlisten) => {
-      if (expired) unlisten();
     },
-    () => undefined,
-  );
-  const deadline = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      expired = true;
-      reject(new Error(`Close-listener registration timed out after ${timeoutMs} ms`));
-    }, timeoutMs);
+    reportError,
+    registrationErrorMessage: 'Failed to register the application close request listener:',
+    cleanupErrorMessage: 'Failed to clean up the application close request listener:',
+    waitBeforeRetry,
+    registrationTimeoutMs,
   });
 
-  try {
-    return await Promise.race([subscription, deadline]);
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
-  }
+  return subscription;
 }
 
 async function prepareGuardBeforeDeadline(
@@ -240,7 +210,7 @@ async function prepareGuardBeforeDeadline(
   const deadline = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
       expired = true;
-      reject(new Error(`Application exit preparation timed out after ${timeoutMs} ms`));
+      reject(new ApplicationExitPreparationTimeoutError(timeoutMs));
     }, timeoutMs);
   });
 
@@ -261,6 +231,13 @@ async function prepareGuardBeforeDeadline(
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
+}
+
+function defaultConfirmForceExit(): boolean {
+  return typeof window !== 'undefined'
+    && window.confirm(
+      'An operation is still pending. Force closing may leave the latest changes unsaved. Close anyway?',
+    );
 }
 
 function commitPreparations(preparations: ApplicationExitPreparation[]): unknown[] {

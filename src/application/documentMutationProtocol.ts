@@ -16,6 +16,11 @@ import {
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
 import { compareU64 } from '@/utils/u64';
+import {
+  isOperationOutcomeUnknown,
+  OperationOutcomeUnknownError,
+  runBeforeDeadline,
+} from '@/application/operationOutcome';
 
 type MutationAction = (
   context: MutationCommandContext
@@ -42,6 +47,7 @@ export type DocumentMutationRecovery = {
     response: OpenDocumentResponse,
     preferredSheetIndex: number
   ) => boolean;
+  markOutcomeUnknown?: (context: EditorCommandContext) => void;
 };
 
 type ProtocolClock = {
@@ -56,11 +62,17 @@ type DocumentMutationProtocolOptions = {
   clock?: ProtocolClock;
   reportError?: (message: string, error: unknown) => void;
   cancellation?: OperationCancellationSignal;
+  responseTimeoutMs?: number;
+  lookupTimeoutMs?: number;
+  terminalResultTimeoutMs?: number;
 };
 
 const MUTATION_RESULT_POLL_DEADLINE_MS = 3_000;
 const MUTATION_RESULT_INITIAL_POLL_INTERVAL_MS = 25;
 const MUTATION_RESULT_MAX_POLL_INTERVAL_MS = 250;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 30_000;
+const DEFAULT_LOOKUP_TIMEOUT_MS = 10_000;
+const DEFAULT_TERMINAL_RESULT_TIMEOUT_MS = 120_000;
 
 export function createDocumentMutationProtocol({
   transport,
@@ -69,16 +81,46 @@ export function createDocumentMutationProtocol({
   clock = systemClock,
   reportError = () => undefined,
   cancellation = neverCancelled,
+  responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
+  lookupTimeoutMs = DEFAULT_LOOKUP_TIMEOUT_MS,
+  terminalResultTimeoutMs = DEFAULT_TERMINAL_RESULT_TIMEOUT_MS,
 }: DocumentMutationProtocolOptions) {
   async function execute(
     action: MutationAction,
     context: EditorCommandContext
   ): Promise<MutationExecutionResult> {
     const mutationContext = { ...context, commandId: createCommandId() };
+    const outcomeUnknown = () => new OperationOutcomeUnknownError(
+      'mutation',
+      mutationContext.commandId,
+    );
+    try {
+      return await executeMutation(action, context, mutationContext, outcomeUnknown);
+    } catch (error) {
+      if (isOperationOutcomeUnknown(error)) {
+        try {
+          recovery.markOutcomeUnknown?.(context);
+        } catch (callbackError) {
+          reportError('Failed to mark a mutation with an unknown outcome', callbackError);
+        }
+      }
+      throw error;
+    }
+  }
+
+  async function executeMutation(
+    action: MutationAction,
+    context: EditorCommandContext,
+    mutationContext: MutationCommandContext,
+    outcomeUnknown: () => OperationOutcomeUnknownError,
+  ): Promise<MutationExecutionResult> {
     const invocation = await raceWithOperationCancellation(
       () => invokeIdempotently({
         operationId: mutationContext.commandId,
         invoke: () => action(mutationContext),
+        responseTimeoutMs,
+        timeoutError: outcomeUnknown,
+        cancellation,
       }),
       cancellation,
     );
@@ -88,9 +130,14 @@ export function createDocumentMutationProtocol({
 
     let replay: Awaited<ReturnType<typeof waitForMutationResult>> = { status: 'missing' };
     try {
-      replay = await waitForMutationResult(context.documentId, mutationContext.commandId);
+      replay = await waitForMutationResult(
+        context.documentId,
+        mutationContext.commandId,
+        outcomeUnknown,
+      );
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
+      if (isOperationOutcomeUnknown(error)) throw error;
       reportError('Failed to query an ambiguous mutation result', error);
     }
     if (replay.status === 'completed') {
@@ -99,8 +146,10 @@ export function createDocumentMutationProtocol({
     if (replay.status === 'failed') throw replay.error;
 
     try {
-      const active = await raceWithOperationCancellation(
+      const active = await runBeforeDeadline(
         () => transport.getActiveDocument(),
+        lookupTimeoutMs,
+        outcomeUnknown,
         cancellation,
       );
       if (
@@ -108,7 +157,7 @@ export function createDocumentMutationProtocol({
         && compareU64(active.editorSession.revision, context.baseRevision) > 0
       ) {
         const preferredSheetIndex = recovery.preferredSheetIndex();
-        const projection = await raceWithOperationCancellation(
+        const projection = await runBeforeDeadline(
           () => transport.getCurrentDocumentProjection(
             {
               documentId: active.editorSession.documentId,
@@ -116,12 +165,15 @@ export function createDocumentMutationProtocol({
             },
             preferredSheetIndex
           ),
+          lookupTimeoutMs,
+          outcomeUnknown,
           cancellation,
         );
         recovery.recoverProjection(projection, preferredSheetIndex);
       }
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
+      if (isOperationOutcomeUnknown(error)) throw error;
       reportError('Failed to recover an ambiguous mutation result', error);
     }
     throw invocation.error;
@@ -129,7 +181,8 @@ export function createDocumentMutationProtocol({
 
   async function waitForMutationResult(
     documentId: U64String,
-    commandId: string
+    commandId: string,
+    outcomeUnknown: () => OperationOutcomeUnknownError,
   ): Promise<
     | { status: 'completed'; response: EditorMutationResponse }
     | { status: 'failed'; error: { code: string; message: string } }
@@ -138,9 +191,12 @@ export function createDocumentMutationProtocol({
     const discoveryDeadline = clock.now() + MUTATION_RESULT_POLL_DEADLINE_MS;
     let pollInterval = MUTATION_RESULT_INITIAL_POLL_INTERVAL_MS;
     let observedPending = false;
+    let terminalDeadline: number | null = null;
     while (true) {
-      const lookup = await raceWithOperationCancellation(
+      const lookup = await runBeforeDeadline(
         () => transport.getMutationResult(documentId, commandId),
+        lookupTimeoutMs,
+        outcomeUnknown,
         cancellation,
       );
       if (lookup.status === 'completed') {
@@ -157,6 +213,8 @@ export function createDocumentMutationProtocol({
       }
       if (lookup.status === 'pending') {
         observedPending = true;
+        terminalDeadline ??= clock.now() + terminalResultTimeoutMs;
+        if (clock.now() >= terminalDeadline) throw outcomeUnknown();
       } else if (observedPending) {
         throw new Error('Pending mutation result disappeared before reaching a terminal state');
       } else if (clock.now() >= discoveryDeadline) {

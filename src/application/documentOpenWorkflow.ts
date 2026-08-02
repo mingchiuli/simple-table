@@ -50,6 +50,7 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
     originalPath?: string,
   ) => void;
   reportCleanupError?: (message: string, error: unknown) => void;
+  markDocumentOutcomeUnknown?: (context: EditorCommandContext) => void;
 };
 
 type DocumentOpenWorkflowOptions = {
@@ -247,6 +248,9 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
           const receipt = ports.receiptFromActiveDocument(active);
           return receiptMatchesPrepared(receipt, prepared) ? receipt : null;
         },
+        onOutcomeUnknown: () => {
+          if (expectedContext) ports.markDocumentOutcomeUnknown?.(expectedContext);
+        },
       });
     } catch (error) {
       await abortPreparedDocumentQuietly(prepared);
@@ -271,6 +275,7 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
       const invocation = await invokeIdempotently({
         operationId: preparationId,
         invoke: prepare,
+        cancellation,
       });
       if (invocation.status === 'ambiguous') throw invocation.error;
       return invocation.response;

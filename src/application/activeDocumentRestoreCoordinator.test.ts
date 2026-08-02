@@ -108,4 +108,21 @@ describe("active document restore coordinator", () => {
     await expect(restoring).resolves.toBe(false);
     expect(workspace.runtime.document.documentId).toBe('10');
   });
+
+  it("does not publish a restored document after another document lifecycle starts", async () => {
+    let busy = false;
+    const loadActiveDocument = vi.fn(async () => {
+      busy = true;
+      return activeDocument();
+    });
+    const publishActiveDocument = vi.fn();
+
+    await expect(restoreActiveDocument({
+      isFrontendSessionInitialized: () => busy,
+      loadActiveDocument,
+      publishActiveDocument,
+    })).resolves.toBe(false);
+
+    expect(publishActiveDocument).not.toHaveBeenCalled();
+  });
 });

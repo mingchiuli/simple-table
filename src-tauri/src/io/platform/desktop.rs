@@ -3,7 +3,9 @@ use crate::document_format::{
     supported_extension_from_name,
 };
 use crate::error::AppError;
-use crate::io::atomic_file::{cleanup_stale_temp_files, write_file_atomically};
+use crate::io::atomic_file::{
+    cleanup_stale_managed_temp_files, cleanup_stale_temp_files, write_file_atomically_managed,
+};
 use crate::io::input_limits::{read_input_bytes, validate_input_file_size};
 use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 use std::collections::{HashMap, VecDeque};
@@ -83,6 +85,9 @@ impl OpenTargetQueue {
 
     fn claim_at(&mut self, now: Instant) -> Option<OpenTargetClaim> {
         self.requeue_expired(now);
+        if !self.claimed.is_empty() {
+            return None;
+        }
         let path = self.pending.pop_front()?;
         let claim_id = uuid::Uuid::new_v4().to_string();
         self.claimed.insert(
@@ -392,7 +397,7 @@ pub(crate) fn write_export_target(
     bytes: &[u8],
 ) -> Result<(), AppError> {
     cleanup_stale_atomic_temp_files(&target.path);
-    write_file_atomically(&target.path, bytes)
+    write_file_atomically_managed(&target.path, bytes)
 }
 
 pub(crate) fn cleanup_stale_atomic_temp_files(target: &Path) {
@@ -400,9 +405,15 @@ pub(crate) fn cleanup_stale_atomic_temp_files(target: &Path) {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    if let Err(error) = cleanup_stale_temp_files(directory, STALE_ATOMIC_TEMP_FILE_AGE) {
+    if let Err(error) = cleanup_stale_managed_temp_files(directory, STALE_ATOMIC_TEMP_FILE_AGE) {
         eprintln!(
             "Deferred cleanup of stale atomic temporary files in {}: {error}",
+            directory.display()
+        );
+    }
+    if let Err(error) = cleanup_stale_temp_files(directory, STALE_ATOMIC_TEMP_FILE_AGE) {
+        eprintln!(
+            "Deferred cleanup of legacy atomic temporary files in {}: {error}",
             directory.display()
         );
     }
@@ -660,24 +671,19 @@ mod tests {
     }
 
     #[test]
-    fn expired_launch_target_claims_preserve_queue_order() {
+    fn launch_target_queue_allows_only_one_outstanding_claim() {
         let now = Instant::now();
         let mut queue = OpenTargetQueue::default();
-        queue.enqueue_at("/tmp/first-expired.xlsx".to_string(), now);
-        queue.enqueue_at("/tmp/second-expired.xlsx".to_string(), now);
+        queue.enqueue_at("/tmp/first.xlsx".to_string(), now);
+        queue.enqueue_at("/tmp/second.xlsx".to_string(), now);
         let first = queue.claim_at(now).expect("first claim");
-        let second_claimed_at = now + Duration::from_secs(1);
-        let second = queue.claim_at(second_claimed_at).expect("second claim");
 
-        let first_retried = queue
-            .claim_at(second_claimed_at + OPEN_TARGET_CLAIM_TTL)
-            .expect("first expired claim");
-        let second_retried = queue
-            .claim_at(second_claimed_at + OPEN_TARGET_CLAIM_TTL)
-            .expect("second expired claim");
-
-        assert_eq!(first_retried.path, first.path);
-        assert_eq!(second_retried.path, second.path);
+        assert!(queue.claim_at(now).is_none());
+        assert!(queue.acknowledge(&first.claim_id).1);
+        let second = queue
+            .claim_at(now)
+            .expect("second claim after acknowledgement");
+        assert_eq!(second.path, "/tmp/second.xlsx");
     }
 
     #[test]

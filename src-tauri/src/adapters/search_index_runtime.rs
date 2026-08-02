@@ -35,11 +35,20 @@ pub(crate) struct SearchIndexRuntime {
 
 impl Drop for SearchIndexRuntime {
     fn drop(&mut self) {
+        // Coordinate shutdown with the condition-variable mutex. Without this
+        // lock, a worker can observe `shutdown == false`, miss the notification,
+        // and then sleep forever while this destructor waits in `join`.
+        let scheduler_state = self
+            .scheduler
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.scheduler.shutdown.store(true, Ordering::Release);
         self.scheduler
             .workers_available
             .store(false, Ordering::Release);
         self.scheduler.wake.notify_all();
+        drop(scheduler_state);
         let workers = self
             .workers
             .get_mut()

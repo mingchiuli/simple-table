@@ -106,6 +106,9 @@ export function useDocumentFileCoordinator({
       clearDocument: () => session.clearDocument(),
       queueRecentFileEntryUpdate,
       reportCleanupError: (message, error) => console.warn(`${message}:`, error),
+      markDocumentOutcomeUnknown: (context) => {
+        session.markProjectionOutcomeUnknown(context);
+      },
     }, preparations, cancellation);
   }
 

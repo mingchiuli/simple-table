@@ -29,29 +29,22 @@ const windowCloseRequests = createWindowCloseRequestLifecycle(
   applicationWorkspaceRuntime.applicationExit,
 );
 
-let restorationFailed = false;
-let restoredActiveDocument = false;
-if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-  try {
-    restoredActiveDocument = await applicationWorkspaceRuntime.restoreActiveDocument();
-  } catch (error) {
-    restorationFailed = true;
-    console.error("Failed to restore the active document:", error);
-  }
-}
-
+const shouldRestoreActiveDocument = typeof window !== "undefined"
+  && "__TAURI_INTERNALS__" in window;
+let activeRestoration: Promise<boolean> | null = null;
+let restorationRequired = shouldRestoreActiveDocument;
 let unregisterRestorationExitGuard: () => void = () => undefined;
-if (restorationFailed) {
+if (restorationRequired) {
   unregisterRestorationExitGuard = applicationWorkspaceRuntime.applicationExit.registerGuard(
     async () => {
       try {
-        const restored = await applicationWorkspaceRuntime.restoreActiveDocument();
+        const restored = await restoreActiveDocumentOnce();
         if (restored) {
-          await router.replace({ name: "table" });
-          unregisterRestorationExitGuard();
+          await routeRestoredDocument();
+          finishRestorationGuard();
           return null;
         }
-        unregisterRestorationExitGuard();
+        finishRestorationGuard();
         return inertExitPreparation();
       } catch (error) {
         console.error("Failed to recover the active document before exit:", error);
@@ -61,13 +54,19 @@ if (restorationFailed) {
   );
 }
 
-await router.isReady();
-if (restoredActiveDocument && router.currentRoute.value.name === "home") {
-  await router.replace({ name: "table" });
-}
-
-app.mount("#app");
 void windowCloseRequests.start();
+app.mount("#app");
+if (restorationRequired) {
+  void restoreActiveDocumentOnce().then(
+    async (restored) => {
+      if (restored) await routeRestoredDocument();
+      finishRestorationGuard();
+    },
+    (error) => {
+      console.error("Failed to restore the active document:", error);
+    },
+  );
+}
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
@@ -84,4 +83,32 @@ function inertExitPreparation() {
     commit: () => undefined,
     rollback: () => undefined,
   };
+}
+
+function restoreActiveDocumentOnce(): Promise<boolean> {
+  if (activeRestoration) return activeRestoration;
+  const restoration = applicationWorkspaceRuntime.restoreActiveDocument();
+  activeRestoration = restoration;
+  void restoration.then(
+    () => {
+      if (activeRestoration === restoration) activeRestoration = null;
+    },
+    () => {
+      if (activeRestoration === restoration) activeRestoration = null;
+    },
+  );
+  return restoration;
+}
+
+async function routeRestoredDocument() {
+  await router.isReady();
+  if (router.currentRoute.value.name === "home") {
+    await router.replace({ name: "table" });
+  }
+}
+
+function finishRestorationGuard() {
+  if (!restorationRequired) return;
+  restorationRequired = false;
+  unregisterRestorationExitGuard();
 }

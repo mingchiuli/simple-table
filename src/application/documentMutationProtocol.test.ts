@@ -9,6 +9,7 @@ import type {
   MutationResultLookup,
   OpenDocumentResponse,
 } from '@/types/protocol';
+import { OperationOutcomeUnknownError } from '@/application/operationOutcome';
 import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import { defaultWorkbookCapabilities, readyFormulaStatus } from '@/types';
 import {
@@ -124,6 +125,28 @@ describe('document mutation protocol', () => {
     expect(now).toBeGreaterThanOrEqual(5_000);
   });
 
+  it('stops polling a permanently pending mutation and locks its projection', async () => {
+    let now = 0;
+    const markOutcomeUnknown = vi.fn();
+    const protocol = createProtocol({
+      getMutationResult: vi.fn(async () => ({ status: 'pending' } as MutationResultLookup)),
+      markOutcomeUnknown,
+      terminalResultTimeoutMs: 100,
+      clock: {
+        now: () => now,
+        sleep: async (milliseconds) => { now += milliseconds; },
+      },
+    });
+
+    await expect(protocol.execute(
+      vi.fn().mockRejectedValue(new Error('ipc closed')),
+      context(),
+    )).rejects.toBeInstanceOf(OperationOutcomeUnknownError);
+
+    expect(markOutcomeUnknown).toHaveBeenCalledWith(context());
+    expect(now).toBeGreaterThanOrEqual(100);
+  });
+
   it('surfaces a terminal mutation failure after an ambiguous response', async () => {
     const failure = { code: 'document_state_invalid', message: 'revision changed' };
     const protocol = createProtocol({
@@ -206,11 +229,13 @@ describe('document mutation protocol', () => {
 
 type ProtocolOverrides = Partial<DocumentMutationTransport> & {
   recoverProjection?: DocumentMutationRecovery['recoverProjection'];
+  markOutcomeUnknown?: DocumentMutationRecovery['markOutcomeUnknown'];
   clock?: {
     now: () => number;
     sleep: (milliseconds: number) => Promise<void>;
   };
   cancellation?: OperationCancellationSignal;
+  terminalResultTimeoutMs?: number;
 };
 
 function createProtocol(overrides: ProtocolOverrides = {}) {
@@ -226,10 +251,12 @@ function createProtocol(overrides: ProtocolOverrides = {}) {
     recovery: {
       preferredSheetIndex: () => 3,
       recoverProjection: overrides.recoverProjection ?? (() => false),
+      markOutcomeUnknown: overrides.markOutcomeUnknown,
     },
     createCommandId: () => 'command-1',
     clock: overrides.clock ?? advancingClock(),
     cancellation: overrides.cancellation,
+    terminalResultTimeoutMs: overrides.terminalResultTimeoutMs,
   });
 }
 

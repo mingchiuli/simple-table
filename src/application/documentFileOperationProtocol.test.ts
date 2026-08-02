@@ -6,6 +6,7 @@ import {
   createOperationCancellationSource,
   OperationCancelledError,
 } from '@/application/operationCancellation';
+import { OperationOutcomeUnknownError } from '@/application/operationOutcome';
 
 const receipt: FileOperationReceipt = {
   kind: 'save',
@@ -16,6 +17,57 @@ const receipt: FileOperationReceipt = {
 };
 
 describe('documentFileOperationProtocol', () => {
+  it('switches from an unresponsive invoke to receipt recovery without repeating the side effect', async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn(() => new Promise<{ receipt: FileOperationReceipt }>(() => undefined));
+      const protocol = createDocumentFileOperationProtocol({
+        getFileOperationResult: vi.fn().mockResolvedValue({ status: 'completed', receipt }),
+        createOperationId: () => 'operation-unresponsive',
+        responseTimeoutMs: 100,
+      });
+
+      const execution = protocol.execute({
+        kind: 'save',
+        invoke,
+        receiptForResponse: (response) => response.receipt,
+        validateReceipt: () => true,
+        recoverResponse: async (recovered) => ({ receipt: recovered }),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(execution).resolves.toEqual({ receipt });
+      expect(invoke).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops polling a permanently pending admitted operation and marks its outcome unknown', async () => {
+    const onOutcomeUnknown = vi.fn();
+    let now = 0;
+    const protocol = createDocumentFileOperationProtocol({
+      getFileOperationResult: vi.fn().mockResolvedValue({ status: 'pending' }),
+      createOperationId: () => 'operation-stuck',
+      terminalResultTimeoutMs: 100,
+      clock: {
+        now: () => now,
+        sleep: async (milliseconds) => { now += milliseconds; },
+      },
+    });
+
+    await expect(protocol.execute({
+      kind: 'save',
+      invoke: vi.fn().mockRejectedValue(new Error('response lost')),
+      receiptForResponse: (response: { receipt: FileOperationReceipt }) => response.receipt,
+      validateReceipt: () => true,
+      recoverResponse: async (recovered) => ({ receipt: recovered }),
+      onOutcomeUnknown,
+    })).rejects.toBeInstanceOf(OperationOutcomeUnknownError);
+
+    expect(onOutcomeUnknown).toHaveBeenCalledOnce();
+    expect(now).toBeGreaterThanOrEqual(100);
+  });
   it('does not invoke a file side effect after its workspace is already disposed', async () => {
     const cancellation = createOperationCancellationSource();
     const invoke = vi.fn().mockResolvedValue({ receipt });

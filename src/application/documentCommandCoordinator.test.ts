@@ -56,6 +56,7 @@ function setup() {
     recoverActiveDocumentResponse: () => false,
     applyMutationResponseWithResync,
     markProjectionStaleFromMutationResponse: () => true,
+    markProjectionOutcomeUnknown: () => true,
     refreshAfterMutationFailure,
     applyEditorSessionForContext,
     ensureSheetLoaded: async () => true,

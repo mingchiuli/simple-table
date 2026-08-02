@@ -1,4 +1,5 @@
 import type { OpenTargetClaim } from '@/types/fileRuntime';
+import { createResilientEventSubscription } from '@/application/resilientEventSubscription';
 
 export type DocumentLaunchPort = {
   onLaunchTargetAvailable(handler: () => void): Promise<() => void>;
@@ -18,30 +19,44 @@ export type DocumentLaunchCoordinator = {
   dispose(): Promise<void>;
 };
 
-const LISTENER_REGISTRATION_ATTEMPTS = 3;
+type DocumentLaunchCoordinatorOptions = {
+  waitBeforeListenerRetry?: () => Promise<void>;
+  listenerRegistrationTimeoutMs?: number;
+};
 
 export function createDocumentLaunchCoordinator({
   launchTargets,
   openTarget,
   reportError,
-}: DocumentLaunchCoordinatorPorts): DocumentLaunchCoordinator {
+}: DocumentLaunchCoordinatorPorts, {
+  waitBeforeListenerRetry,
+  listenerRegistrationTimeoutMs,
+}: DocumentLaunchCoordinatorOptions = {}): DocumentLaunchCoordinator {
   let lifecycleId = 0;
-  let unlisten: (() => void) | null = null;
   let drainRequested = false;
   let drainWorker: Promise<void> | null = null;
-  let registration: Promise<void> | null = null;
   let activeClaim: OpenTargetClaim | null = null;
   const cleanupFailures: unknown[] = [];
   let started = false;
   let disposed = false;
   let disposal: Promise<void> | null = null;
+  const listener = createResilientEventSubscription({
+    subscribe: (handler) => launchTargets.onLaunchTargetAvailable(handler),
+    handler: () => requestDrain(lifecycleId),
+    reportError: safeReportError,
+    registrationErrorMessage: 'Failed to initialize document launch listener:',
+    cleanupErrorMessage: 'Failed to clean up document launch listener:',
+    onSubscribed: () => requestDrain(lifecycleId),
+    waitBeforeRetry: waitBeforeListenerRetry,
+    registrationTimeoutMs: listenerRegistrationTimeoutMs,
+  });
 
   function start() {
     if (started || disposed) return;
     started = true;
     const currentLifecycleId = ++lifecycleId;
     requestDrain(currentLifecycleId);
-    registration = registerListener(currentLifecycleId);
+    void listener.start();
   }
 
   function dispose(): Promise<void> {
@@ -49,12 +64,9 @@ export function createDocumentLaunchCoordinator({
     disposed = true;
     lifecycleId += 1;
     drainRequested = false;
-    safeUnlisten(unlisten);
-    unlisten = null;
-    const pendingRegistration = registration;
+    listener.dispose();
     const pendingDrain = drainWorker;
     disposal = Promise.allSettled([
-      pendingRegistration ?? Promise.resolve(),
       pendingDrain,
     ]).then(() => {
       if (cleanupFailures.length > 0) {
@@ -65,29 +77,6 @@ export function createDocumentLaunchCoordinator({
       }
     });
     return disposal;
-  }
-
-  async function registerListener(currentLifecycleId: number) {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < LISTENER_REGISTRATION_ATTEMPTS; attempt += 1) {
-      if (!isCurrentLifecycle(currentLifecycleId)) return;
-      try {
-        const registered = await launchTargets.onLaunchTargetAvailable(() => {
-          requestDrain(currentLifecycleId);
-        });
-        if (!isCurrentLifecycle(currentLifecycleId)) {
-          safeUnlisten(registered);
-          return;
-        }
-        unlisten = registered;
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    if (isCurrentLifecycle(currentLifecycleId)) {
-      safeReportError('Failed to initialize document launch listener:', lastError);
-    }
   }
 
   function requestDrain(currentLifecycleId: number) {
@@ -165,14 +154,6 @@ export function createDocumentLaunchCoordinator({
 
   function isCurrentLifecycle(currentLifecycleId: number) {
     return !disposed && lifecycleId === currentLifecycleId;
-  }
-
-  function safeUnlisten(value: (() => void) | null) {
-    try {
-      value?.();
-    } catch (error) {
-      recordCleanupFailure('Failed to clean up document launch listener:', error);
-    }
   }
 
   function recordCleanupFailure(message: string, error: unknown) {

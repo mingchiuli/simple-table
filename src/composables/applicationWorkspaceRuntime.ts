@@ -88,7 +88,10 @@ export function createApplicationWorkspaceRuntime(
       return document.runTask(
         ({ cancellation }) => restoreActiveDocument({
           isFrontendSessionInitialized: () =>
-            document.document.data !== null || document.document.documentId !== null,
+            document.document.data !== null
+            || document.document.documentId !== null
+            || document.document.lifecycle !== 'idle'
+            || document.document.editorCommandDepth > 0,
           loadActiveDocument: () => raceWithOperationCancellation(
             () => api.getActiveDocument(),
             cancellation,

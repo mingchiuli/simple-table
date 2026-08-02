@@ -14,7 +14,10 @@ use crate::error::AppError;
 use crate::io::atomic_file::{
     AtomicReplaceError, replace_temp_file_detailed, temp_path_for_target, write_temp_file,
 };
-use crate::io::atomic_file::{cleanup_temp_file, replace_temp_file, write_temp_file_for_target};
+#[cfg(desktop)]
+use crate::io::atomic_file::{
+    cleanup_managed_temp_file, replace_managed_temp_file, write_managed_temp_file_for_target,
+};
 #[cfg(any(desktop, target_os = "android", target_os = "ios"))]
 use crate::io::open_file_input::{OpenFileInput, OpenFileSelection};
 #[cfg(desktop)]
@@ -370,7 +373,7 @@ impl DocumentSaveTargetPort for DesktopSaveTarget {
     ) -> Result<Box<dyn StagedDocumentWrite>, AppError> {
         let target = PathBuf::from(&self.path);
         desktop::cleanup_stale_atomic_temp_files(&target);
-        let temp = write_temp_file_for_target(&target, bytes)?;
+        let temp = write_managed_temp_file_for_target(&target, bytes)?;
         Ok(Box::new(AtomicStagedWrite { temp, target }))
     }
 }
@@ -384,14 +387,14 @@ struct AtomicStagedWrite {
 #[cfg(desktop)]
 impl StagedDocumentWrite for AtomicStagedWrite {
     fn commit(self: Box<Self>) -> Result<(), AppError> {
-        replace_temp_file(&self.temp, &self.target)
+        replace_managed_temp_file(&self.temp, &self.target)
     }
 }
 
 #[cfg(desktop)]
 impl Drop for AtomicStagedWrite {
     fn drop(&mut self) {
-        cleanup_temp_file(&self.temp);
+        cleanup_managed_temp_file(&self.temp);
     }
 }
 

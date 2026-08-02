@@ -376,4 +376,41 @@ describe('window close guard lifecycle', () => {
       vi.useRealTimers();
     }
   });
+
+  it('allows an explicitly confirmed force close after exit preparation times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const closeHandlers: Array<() => void | Promise<void>> = [];
+      const execute = vi.fn().mockResolvedValue(undefined);
+      const coordinator = createApplicationExitCoordinator(
+        { execute },
+        { guardTimeoutMs: 100 },
+      );
+      coordinator.registerGuard(() => new Promise(() => undefined));
+      const lifecycle = createWindowCloseRequestLifecycle(
+        {
+          subscribeCloseRequested: vi.fn(async (handler) => {
+            closeHandlers.push(handler);
+            return () => undefined;
+          }),
+        },
+        coordinator,
+        vi.fn(),
+        () => Promise.resolve(),
+        100,
+        () => true,
+      );
+      await lifecycle.start();
+
+      const closing = closeHandlers[0]?.();
+      await vi.advanceTimersByTimeAsync(100);
+      await closing;
+
+      expect(execute).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledWith('close');
+      lifecycle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
