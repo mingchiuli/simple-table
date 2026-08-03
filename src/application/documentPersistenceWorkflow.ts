@@ -68,7 +68,6 @@ export type DocumentPersistenceWorkflowPorts<ActiveDocument, SavedDocument> = {
     originalPath?: string,
   ) => void;
   reportCleanupError?: (message: string, error: unknown) => void;
-  markDocumentOutcomeUnknown?: (context: EditorCommandContext) => void;
 };
 
 export function createDocumentPersistenceWorkflow<ActiveDocument, SavedDocument>(
@@ -148,7 +147,6 @@ export function createDocumentPersistenceWorkflow<ActiveDocument, SavedDocument>
         ),
         recoverResponse: async (receipt) => receipt,
         recoverCancelled: () => null,
-        onOutcomeUnknown: () => ports.markDocumentOutcomeUnknown?.(context),
       });
       if (exported) {
         outcome = 'exported';
@@ -183,7 +181,6 @@ export function createDocumentPersistenceWorkflow<ActiveDocument, SavedDocument>
           ? ports.savedDocumentFromActive(active)
           : null;
       },
-      onOutcomeUnknown: () => ports.markDocumentOutcomeUnknown?.(context),
     });
   }
 

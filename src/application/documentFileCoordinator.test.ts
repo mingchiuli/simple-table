@@ -18,6 +18,7 @@ import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protoc
 import type { OperationCancellationSignal } from '@/application/operationCancellation';
 import { createDocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
 import { preparedOpenDocument } from '@/test/documentFixtures';
+import { OperationOutcomeUnknownError } from '@/application/operationOutcome';
 
 const context: EditorCommandContext = {
   documentId: '1',
@@ -231,6 +232,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
     applySavedDocumentResponse: vi.fn().mockReturnValue(true),
     clearDocument: vi.fn(),
     queueRecentFileEntryUpdate: vi.fn(),
+    markDocumentSessionOutcomeUnknown: vi.fn(),
     ...overrides,
   };
   return { ports, replacement, lifecycleRelease };
@@ -342,6 +344,50 @@ describe('documentFileCoordinator', () => {
 
     expect(ports.saveFile).not.toHaveBeenCalled();
     expect(ports.withReservedSaveLocation).not.toHaveBeenCalled();
+  });
+
+  it('does not invalidate the document projection when a save outcome stays unknown', async () => {
+    vi.useFakeTimers();
+    try {
+      const markDocumentSessionOutcomeUnknown = vi.fn();
+      const { ports } = createPorts({
+        saveFile: vi.fn().mockRejectedValue(new Error('response lost')),
+        getFileOperationResult: vi.fn().mockResolvedValue({ status: 'pending' }),
+        markDocumentSessionOutcomeUnknown,
+      });
+      const coordinator = createDocumentFileCoordinator(ports);
+      const save = coordinator.saveCurrentFile();
+      const rejectedSave = expect(save).rejects.toBeInstanceOf(OperationOutcomeUnknownError);
+
+      await vi.advanceTimersByTimeAsync(121_000);
+      await rejectedSave;
+
+      expect(markDocumentSessionOutcomeUnknown).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not invalidate the document projection when an export outcome stays unknown', async () => {
+    vi.useFakeTimers();
+    try {
+      const markDocumentSessionOutcomeUnknown = vi.fn();
+      const { ports } = createPorts({
+        exportFile: vi.fn().mockRejectedValue(new Error('response lost')),
+        getFileOperationResult: vi.fn().mockResolvedValue({ status: 'pending' }),
+        markDocumentSessionOutcomeUnknown,
+      });
+      const coordinator = createDocumentFileCoordinator(ports);
+      const exported = coordinator.exportCurrentFile();
+      const rejectedExport = expect(exported).rejects.toBeInstanceOf(OperationOutcomeUnknownError);
+
+      await vi.advanceTimersByTimeAsync(121_000);
+      await rejectedExport;
+
+      expect(markDocumentSessionOutcomeUnknown).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cancels replacement when closing the backend document fails', async () => {

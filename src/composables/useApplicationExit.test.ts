@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  ApplicationExitPreparationFailedError,
   createApplicationExitCoordinator,
   createWindowCloseRequestLifecycle,
 } from '@/application/applicationExitCoordinator';
@@ -211,6 +212,19 @@ describe('application exit coordination', () => {
       vi.useRealTimers();
     }
   });
+
+  it('distinguishes a failed exit preparation from an explicit cancellation', async () => {
+    const failure = new Error('status refresh failed');
+    const execute = vi.fn();
+    const coordinator = createApplicationExitCoordinator({ execute });
+    coordinator.registerGuard(vi.fn().mockRejectedValue(failure));
+
+    await expect(coordinator.requestExit('close')).rejects.toMatchObject({
+      name: 'ApplicationExitPreparationFailedError',
+      cause: failure,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
 });
 
 describe('window close guard lifecycle', () => {
@@ -412,5 +426,37 @@ describe('window close guard lifecycle', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('allows an explicitly confirmed force close after exit preparation fails', async () => {
+    const closeHandlers: Array<() => void | Promise<void>> = [];
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const requestExit = vi.fn().mockRejectedValue(
+      new ApplicationExitPreparationFailedError(new Error('status refresh failed')),
+    );
+    const forceExit = vi.fn(async (intent: 'close' | 'relaunch') => {
+      await execute(intent);
+      return { status: 'executed' as const, intent };
+    });
+    const lifecycle = createWindowCloseRequestLifecycle(
+      {
+        subscribeCloseRequested: vi.fn(async (handler) => {
+          closeHandlers.push(handler);
+          return () => undefined;
+        }),
+      },
+      { requestExit, forceExit },
+      vi.fn(),
+      () => Promise.resolve(),
+      100,
+      () => true,
+    );
+    await lifecycle.start();
+
+    await closeHandlers[0]?.();
+
+    expect(forceExit).toHaveBeenCalledWith('close');
+    expect(execute).toHaveBeenCalledWith('close');
+    lifecycle.dispose();
   });
 });

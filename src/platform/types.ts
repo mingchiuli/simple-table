@@ -24,6 +24,7 @@ export interface PlatformFileOps {
   /** Claim one backend-normalized launch target with one-time open authorization. */
   claimPendingOpenTarget?(): Promise<OpenTargetClaim | null>;
   acknowledgeOpenTarget?(claimId: string): Promise<void>;
+  renewOpenTarget?(claimId: string): Promise<boolean>;
   releaseOpenTarget?(claimId: string): Promise<void>;
   /** 只选择/导入文件，不解析、不替换后端活动文档 */
   pickOpenFile(): Promise<OpenFileSelection | null>;

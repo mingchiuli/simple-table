@@ -73,7 +73,7 @@ export function useFileActions({
       return await fileCoordinator.prepareApplicationExit(options);
     } catch (error) {
       ElMessage.error(`Failed to prepare application exit: ${appErrorMessage(error)}`);
-      return null;
+      throw error;
     }
   }
 

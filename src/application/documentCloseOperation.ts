@@ -18,7 +18,7 @@ export type DocumentCloseOperationPorts<ActiveDocument> = {
   getActiveDocument: () => Promise<ActiveDocument | null>;
   receiptFromActiveDocument: (document: ActiveDocument) => FileOperationReceipt;
   reportCleanupError?: (message: string, error: unknown) => void;
-  markDocumentOutcomeUnknown?: (context: EditorCommandContext) => void;
+  markDocumentSessionOutcomeUnknown?: (context: EditorCommandContext) => void;
 };
 
 export function createDocumentCloseOperation<ActiveDocument>(
@@ -46,7 +46,7 @@ export function createDocumentCloseOperation<ActiveDocument>(
         }
         return recoveredCloseReceipt(context);
       },
-      onOutcomeUnknown: () => ports.markDocumentOutcomeUnknown?.(context),
+      onOutcomeUnknown: () => ports.markDocumentSessionOutcomeUnknown?.(context),
     });
   };
 }

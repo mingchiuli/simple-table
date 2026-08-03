@@ -50,7 +50,7 @@ export type DocumentOpenWorkflowPorts<ActiveDocument> = {
     originalPath?: string,
   ) => void;
   reportCleanupError?: (message: string, error: unknown) => void;
-  markDocumentOutcomeUnknown?: (context: EditorCommandContext) => void;
+  markDocumentSessionOutcomeUnknown?: (context: EditorCommandContext) => void;
 };
 
 type DocumentOpenWorkflowOptions = {
@@ -249,7 +249,7 @@ export function createDocumentOpenWorkflow<ActiveDocument>(
           return receiptMatchesPrepared(receipt, prepared) ? receipt : null;
         },
         onOutcomeUnknown: () => {
-          if (expectedContext) ports.markDocumentOutcomeUnknown?.(expectedContext);
+          if (expectedContext) ports.markDocumentSessionOutcomeUnknown?.(expectedContext);
         },
       });
     } catch (error) {

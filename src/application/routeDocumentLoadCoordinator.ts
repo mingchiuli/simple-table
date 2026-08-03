@@ -1,7 +1,9 @@
 import {
   createOperationCancellationSource,
+  isOperationCancelled,
   type OperationCancellationSignal,
 } from '@/application/operationCancellation';
+import { runBeforeDeadline } from '@/application/operationOutcome';
 
 export type RouteDocumentLoadPorts = {
   getRouteFilePath: () => string | null;
@@ -13,6 +15,7 @@ export type RouteDocumentLoadPorts = {
   ) => Promise<boolean>;
   refreshEditorState: () => Promise<void>;
   acknowledgeOpenTarget: (claimId: string) => Promise<void>;
+  renewOpenTarget: (claimId: string) => Promise<boolean>;
   reportError: (error: unknown) => void;
 };
 
@@ -38,6 +41,28 @@ type ActiveCancellation = {
   source: ReturnType<typeof createOperationCancellationSource>;
 };
 
+type RouteDocumentLoadCoordinatorOptions = {
+  claimRenewIntervalMs?: number;
+  claimRenewTimeoutMs?: number;
+};
+
+const DEFAULT_CLAIM_RENEW_INTERVAL_MS = 15_000;
+const DEFAULT_CLAIM_RENEW_TIMEOUT_MS = 5_000;
+
+class OpenTargetClaimLostError extends Error {
+  constructor(claimId: string) {
+    super(`Open target claim ${claimId} expired or is no longer owned by this loader`);
+    this.name = 'OpenTargetClaimLostError';
+  }
+}
+
+class OpenTargetClaimRenewalTimeoutError extends Error {
+  constructor(claimId: string, timeoutMs: number) {
+    super(`Open target claim ${claimId} renewal timed out after ${timeoutMs} ms`);
+    this.name = 'OpenTargetClaimRenewalTimeoutError';
+  }
+}
+
 export function createRouteDocumentLoadCoordinator({
   getRouteFilePath,
   getRouteOpenTargetClaimId,
@@ -45,8 +70,12 @@ export function createRouteDocumentLoadCoordinator({
   loadFileFromPath,
   refreshEditorState,
   acknowledgeOpenTarget,
+  renewOpenTarget,
   reportError,
-}: RouteDocumentLoadPorts): RouteDocumentLoadCoordinator {
+}: RouteDocumentLoadPorts, {
+  claimRenewIntervalMs = DEFAULT_CLAIM_RENEW_INTERVAL_MS,
+  claimRenewTimeoutMs = DEFAULT_CLAIM_RENEW_TIMEOUT_MS,
+}: RouteDocumentLoadCoordinatorOptions = {}): RouteDocumentLoadCoordinator {
   let lastLoadedRouteFilePath: string | null = null;
   let routeLoadGeneration = 0;
   let pendingLoad: PendingRouteLoad | null = null;
@@ -154,13 +183,22 @@ export function createRouteDocumentLoadCoordinator({
         return;
       }
       const cancellation = createActiveCancellation(filePath, openTargetClaimId, generation);
+      const claimLease = openTargetClaimId
+        ? startOpenTargetClaimLease(openTargetClaimId, cancellation.state)
+        : null;
       try {
         if ((await loadFileFromPath(filePath, cancellation.signal))
           && !cancellation.signal.isCancelled()) {
           lastLoadedRouteFilePath = filePath;
           claimOutcome = 'acknowledge';
         }
+      } catch (error) {
+        if (!(cancellation.state.claimOutcome === 'transferred'
+          && isOperationCancelled(error))) {
+          throw error;
+        }
       } finally {
+        await claimLease?.stop();
         if (cancellation.state.claimOutcome) {
           claimOutcome = cancellation.state.claimOutcome;
         }
@@ -212,6 +250,51 @@ export function createRouteDocumentLoadCoordinator({
       },
     };
     return { signal, state };
+  }
+
+  function startOpenTargetClaimLease(claimId: string, state: ActiveCancellation) {
+    const leaseCancellation = createOperationCancellationSource();
+    const renewal = renewClaimUntilStopped(claimId, state, leaseCancellation.signal);
+    return {
+      async stop() {
+        for (const error of leaseCancellation.cancel()) {
+          recordCancellationNotificationFailure(error);
+        }
+        await renewal;
+      },
+    };
+  }
+
+  async function renewClaimUntilStopped(
+    claimId: string,
+    state: ActiveCancellation,
+    cancellation: OperationCancellationSignal,
+  ) {
+    while (!cancellation.isCancelled()) {
+      await waitForClaimRenewal(cancellation, claimRenewIntervalMs);
+      if (cancellation.isCancelled()) return;
+      let renewed: boolean;
+      try {
+        renewed = await runBeforeDeadline(
+          () => renewOpenTarget(claimId),
+          claimRenewTimeoutMs,
+          () => new OpenTargetClaimRenewalTimeoutError(claimId, claimRenewTimeoutMs),
+          cancellation,
+        );
+      } catch (error) {
+        if (cancellation.isCancelled() && isOperationCancelled(error)) return;
+        safeReportError(error);
+        continue;
+      }
+      if (renewed) continue;
+
+      state.claimOutcome = 'transferred';
+      for (const error of state.source.cancel()) {
+        recordCancellationNotificationFailure(error);
+      }
+      safeReportError(new OpenTargetClaimLostError(claimId));
+      return;
+    }
   }
 
   function settleOpenTargetClaim(
@@ -281,4 +364,26 @@ export function createRouteDocumentLoadCoordinator({
   }
 
   return { enqueue, cancel, waitForIdle, dispose };
+}
+
+function waitForClaimRenewal(
+  cancellation: OperationCancellationSignal,
+  delayMs: number,
+): Promise<void> {
+  if (cancellation.isCancelled()) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let unregister: () => void = () => undefined;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      unregister();
+      resolve();
+    };
+    const timeout = setTimeout(settle, delayMs);
+    unregister = cancellation.onCancel(() => {
+      clearTimeout(timeout);
+      settle();
+    });
+  });
 }

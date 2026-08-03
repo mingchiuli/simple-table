@@ -69,6 +69,22 @@ pub fn acknowledge_open_target_desktop(
 
 #[cfg(desktop)]
 #[tauri::command(rename_all = "camelCase")]
+pub fn renew_open_target_desktop(
+    runtime: State<'_, ApplicationRuntime>,
+    app: AppHandle,
+    claim_id: String,
+) -> Result<bool, AppError> {
+    let (renewed, should_wake_pending) = runtime.platform_files().renew_open_target(&claim_id)?;
+    if should_wake_pending {
+        app.emit("deep-link-received", ()).map_err(|error| {
+            AppError::Internal(format!("Failed to emit launch target wake event: {error}"))
+        })?;
+    }
+    Ok(renewed)
+}
+
+#[cfg(desktop)]
+#[tauri::command(rename_all = "camelCase")]
 pub fn release_open_target_desktop(
     runtime: State<'_, ApplicationRuntime>,
     app: AppHandle,

@@ -106,6 +106,15 @@ impl OpenTargetQueue {
         (path, !self.pending.is_empty())
     }
 
+    fn renew_at(&mut self, claim_id: &str, now: Instant) -> bool {
+        self.requeue_expired(now);
+        let Some(claim) = self.claimed.get_mut(claim_id) else {
+            return false;
+        };
+        claim.claimed_at = now;
+        true
+    }
+
     fn release(&mut self, claim_id: &str) -> Option<String> {
         let claim = self.claimed.remove(claim_id)?;
         if !self.pending.contains(&claim.path) {
@@ -232,6 +241,20 @@ pub fn acknowledge_open_target(
         discard_open_file_selection(runtime, &path);
     }
     Ok(has_pending_targets)
+}
+
+pub fn renew_open_target(
+    runtime: &DesktopFileRuntime,
+    claim_id: &str,
+) -> Result<(bool, bool), AppError> {
+    let mut queue = runtime
+        .inner
+        .open_targets
+        .lock()
+        .map_err(|_| AppError::poisoned_lock("desktop open target queue"))?;
+    let renewed = queue.renew_at(claim_id, Instant::now());
+    let should_wake_pending = !renewed && queue.claimed.is_empty() && !queue.pending.is_empty();
+    Ok((renewed, should_wake_pending))
 }
 
 pub fn release_open_target(runtime: &DesktopFileRuntime, claim_id: &str) -> Result<bool, AppError> {
@@ -666,6 +689,24 @@ mod tests {
             .claim_at(now + OPEN_TARGET_CLAIM_TTL)
             .expect("expired claim is requeued");
 
+        assert_eq!(retried.path, first.path);
+        assert_ne!(retried.claim_id, first.claim_id);
+    }
+
+    #[test]
+    fn renewed_launch_target_claim_expires_from_the_latest_renewal() {
+        let now = Instant::now();
+        let mut queue = OpenTargetQueue::default();
+        queue.enqueue_at("/tmp/renewed.xlsx".to_string(), now);
+        let first = queue.claim_at(now).expect("first claim");
+        let renewed_at = now + OPEN_TARGET_CLAIM_TTL / 2;
+
+        assert!(queue.renew_at(&first.claim_id, renewed_at));
+        assert!(queue.claim_at(now + OPEN_TARGET_CLAIM_TTL).is_none());
+
+        let retried = queue
+            .claim_at(renewed_at + OPEN_TARGET_CLAIM_TTL)
+            .expect("renewed claim eventually expires");
         assert_eq!(retried.path, first.path);
         assert_ne!(retried.claim_id, first.claim_id);
     }

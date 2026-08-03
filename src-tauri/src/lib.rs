@@ -48,7 +48,8 @@ use commands::{
     acknowledge_open_target_desktop, claim_pending_open_target_desktop,
     discard_open_file_selection_desktop, discard_save_location_desktop, export_file_desktop,
     pick_open_file_desktop, pick_save_location_desktop, prepare_open_file_desktop,
-    prepare_recent_file_desktop, release_open_target_desktop, save_file_desktop,
+    prepare_recent_file_desktop, release_open_target_desktop, renew_open_target_desktop,
+    save_file_desktop,
 };
 
 #[cfg(desktop)]
@@ -141,6 +142,8 @@ pub fn run() {
             claim_pending_open_target_desktop,
             #[cfg(desktop)]
             acknowledge_open_target_desktop,
+            #[cfg(desktop)]
+            renew_open_target_desktop,
             #[cfg(desktop)]
             release_open_target_desktop,
             #[cfg(desktop)]

@@ -159,6 +159,7 @@ export type TauriCommandMap = {
   "discard_open_file_selection_desktop": { args: { path: string }, result: void },
   "claim_pending_open_target_desktop": { args: Record<string, never>, result: DesktopOpenTargetClaim | null },
   "acknowledge_open_target_desktop": { args: { claimId: string }, result: void },
+  "renew_open_target_desktop": { args: { claimId: string }, result: boolean },
   "release_open_target_desktop": { args: { claimId: string }, result: void },
   "prepare_open_file_desktop": { args: { path: string, preparationId: string }, result: PreparedOpenDocument },
   "prepare_recent_file_desktop": { args: { id: string, preparationId: string }, result: PreparedOpenDocument },

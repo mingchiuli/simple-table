@@ -29,6 +29,16 @@ export class ApplicationExitPreparationTimeoutError extends Error {
   }
 }
 
+export class ApplicationExitPreparationFailedError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'Application exit preparation failed');
+    this.name = 'ApplicationExitPreparationFailedError';
+    this.cause = cause;
+  }
+}
+
 type ApplicationExitCoordinatorOptions = {
   guardTimeoutMs?: number;
 };
@@ -92,11 +102,13 @@ export function createApplicationExitCoordinator(
       try {
         preparation = await prepareGuardBeforeDeadline(guard, guardTimeoutMs);
       } catch (error) {
-        throw combineWithSettlementFailures(
+        const failure = combineWithSettlementFailures(
           error,
           rollbackPreparations(preparations),
           'Application exit preparation failed and rollback was incomplete',
         );
+        if (failure instanceof ApplicationExitPreparationTimeoutError) throw failure;
+        throw new ApplicationExitPreparationFailedError(failure);
       }
       if (!preparation) {
         throwIfSettlementFailed(
@@ -176,7 +188,7 @@ export function createWindowCloseRequestLifecycle(
         await coordinator.requestExit('close');
       } catch (error) {
         if (
-          error instanceof ApplicationExitPreparationTimeoutError
+          isApplicationExitPreparationFailure(error)
           && coordinator.forceExit
           && confirmForceExit()
         ) {
@@ -236,8 +248,13 @@ async function prepareGuardBeforeDeadline(
 function defaultConfirmForceExit(): boolean {
   return typeof window !== 'undefined'
     && window.confirm(
-      'An operation is still pending. Force closing may leave the latest changes unsaved. Close anyway?',
+      'The application could not finish preparing to close. Force closing may leave the latest changes unsaved. Close anyway?',
     );
+}
+
+function isApplicationExitPreparationFailure(error: unknown): boolean {
+  return error instanceof ApplicationExitPreparationTimeoutError
+    || error instanceof ApplicationExitPreparationFailedError;
 }
 
 function commitPreparations(preparations: ApplicationExitPreparation[]): unknown[] {

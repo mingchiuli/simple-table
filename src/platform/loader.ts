@@ -50,6 +50,11 @@ export async function acknowledgeOpenTarget(claimId: string): Promise<void> {
   await api.fileOps.acknowledgeOpenTarget?.(claimId);
 }
 
+export async function renewOpenTarget(claimId: string): Promise<boolean> {
+  const api = await getPlatformAPI();
+  return api.fileOps.renewOpenTarget?.(claimId) ?? false;
+}
+
 export async function releaseOpenTarget(claimId: string): Promise<void> {
   const api = await getPlatformAPI();
   await api.fileOps.releaseOpenTarget?.(claimId);

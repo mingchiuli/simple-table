@@ -48,7 +48,7 @@ if (restorationRequired) {
         return inertExitPreparation();
       } catch (error) {
         console.error("Failed to recover the active document before exit:", error);
-        return null;
+        throw error;
       }
     },
   );

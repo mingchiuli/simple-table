@@ -806,6 +806,15 @@ describe("useFileActions", () => {
     expect(documentSessionStore.data).not.toBeNull();
   });
 
+  it("propagates a technical application exit preparation failure", async () => {
+    const failure = new Error('pending edits failed to flush');
+    const flushPendingCellChanges = vi.fn().mockRejectedValue(failure);
+    openDocumentSession(workspace.runtime, openedResponse("current.xlsx", 1), "/tmp/current.xlsx");
+    const actions = mountActions(flushPendingCellChanges);
+
+    await expect(actions.prepareApplicationExit({ waitForIdle: true })).rejects.toBe(failure);
+  });
+
   it("delegates document closing to the route-leave guard when returning home", async () => {
     const api = await import("@/api");
     const documentSessionStore = useDocumentSessionStore();

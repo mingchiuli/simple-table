@@ -19,6 +19,10 @@ export const desktopFileOps = {
     return invokeCommand("acknowledge_open_target_desktop", { claimId });
   },
 
+  renewOpenTarget: (claimId: string): Promise<boolean> => {
+    return invokeCommand("renew_open_target_desktop", { claimId });
+  },
+
   releaseOpenTarget: (claimId: string): Promise<void> => {
     return invokeCommand("release_open_target_desktop", { claimId });
   },

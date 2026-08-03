@@ -118,6 +118,69 @@ describe('routeDocumentLoadCoordinator', () => {
     expect(reportError).toHaveBeenCalledWith(error);
   });
 
+  it('renews an open-target claim until its route load settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const load = deferred<boolean>();
+      const renewOpenTarget = vi.fn().mockResolvedValue(true);
+      const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
+      const coordinator = createCoordinator({
+        getRouteOpenTargetClaimId: () => 'claim-slow',
+        loadFileFromPath: vi.fn(() => load.promise),
+        renewOpenTarget,
+        acknowledgeOpenTarget,
+      }, {
+        claimRenewIntervalMs: 100,
+        claimRenewTimeoutMs: 50,
+      });
+
+      coordinator.enqueue('/tmp/slow.xlsx', 'claim-slow');
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(renewOpenTarget).toHaveBeenCalledTimes(2);
+      expect(renewOpenTarget).toHaveBeenCalledWith('claim-slow');
+      expect(acknowledgeOpenTarget).not.toHaveBeenCalled();
+
+      load.resolve(true);
+      await coordinator.waitForIdle();
+      expect(acknowledgeOpenTarget).toHaveBeenCalledWith('claim-slow');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a route load without acknowledging a claim whose lease was lost', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportError = vi.fn();
+      const acknowledgeOpenTarget = vi.fn().mockResolvedValue(undefined);
+      const loadFileFromPath = vi.fn((_path, cancellation: OperationCancellationSignal) => (
+        new Promise<boolean>((resolve) => cancellation.onCancel(() => resolve(false)))
+      ));
+      const coordinator = createCoordinator({
+        getRouteOpenTargetClaimId: () => 'claim-expired',
+        loadFileFromPath,
+        renewOpenTarget: vi.fn().mockResolvedValue(false),
+        acknowledgeOpenTarget,
+        reportError,
+      }, {
+        claimRenewIntervalMs: 100,
+        claimRenewTimeoutMs: 50,
+      });
+
+      coordinator.enqueue('/tmp/slow.xlsx', 'claim-expired');
+      await vi.advanceTimersByTimeAsync(100);
+      await coordinator.waitForIdle();
+
+      expect(acknowledgeOpenTarget).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'OpenTargetClaimLostError',
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('retains only the latest route while a load is in flight', async () => {
     let routeFilePath: string | null = '/tmp/first.xlsx';
     const releaseFirst = deferred<boolean>();
@@ -363,8 +426,12 @@ describe('routeDocumentLoadCoordinator', () => {
 });
 
 type CoordinatorOverrides = Partial<Parameters<typeof createRouteDocumentLoadCoordinator>[0]>;
+type CoordinatorOptions = Parameters<typeof createRouteDocumentLoadCoordinator>[1];
 
-function createCoordinator(overrides: CoordinatorOverrides = {}) {
+function createCoordinator(
+  overrides: CoordinatorOverrides = {},
+  options: CoordinatorOptions = {},
+) {
   return createRouteDocumentLoadCoordinator({
     getRouteFilePath: overrides.getRouteFilePath ?? (() => '/tmp/slow.xlsx'),
     getRouteOpenTargetClaimId: overrides.getRouteOpenTargetClaimId ?? (() => null),
@@ -372,6 +439,7 @@ function createCoordinator(overrides: CoordinatorOverrides = {}) {
     loadFileFromPath: overrides.loadFileFromPath ?? vi.fn().mockResolvedValue(true),
     refreshEditorState: overrides.refreshEditorState ?? vi.fn().mockResolvedValue(undefined),
     acknowledgeOpenTarget: overrides.acknowledgeOpenTarget ?? vi.fn().mockResolvedValue(undefined),
+    renewOpenTarget: overrides.renewOpenTarget ?? vi.fn().mockResolvedValue(true),
     reportError: overrides.reportError ?? vi.fn(),
-  });
+  }, options);
 }
