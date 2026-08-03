@@ -56,7 +56,6 @@ export function createRecentFilesService(
   const operations = createWorkspaceOperationTracker();
   const observationCancellation = createOperationCancellationSource();
   const unlinkParentCancellation = parentCancellation.onCancel(observationCancellation.cancel);
-  let disposed = false;
   let disposal: Promise<void> | null = null;
 
   function load(): Promise<void> {
@@ -73,12 +72,12 @@ export function createRecentFilesService(
         () => port.getRecentFiles(),
         observationCancellation.signal,
       );
-      if (!disposed && requestId === runtime.loadRequestId) {
+      if (operations.isAcceptingWork() && requestId === runtime.loadRequestId) {
         store.replaceFiles(files);
       }
     } finally {
       runtime.activeLoadCount = Math.max(0, runtime.activeLoadCount - 1);
-      if (!disposed) store.setLoading(runtime.activeLoadCount > 0);
+      if (operations.isAcceptingWork()) store.setLoading(runtime.activeLoadCount > 0);
     }
   }
 
@@ -119,13 +118,15 @@ export function createRecentFilesService(
     runtime.activeTracking = worker;
     void worker.then(() => {
       if (runtime.activeTracking === worker) runtime.activeTracking = null;
-      if (!disposed && runtime.pendingTracking.size > 0) startTrackingWorker();
+      if (operations.isAcceptingWork() && runtime.pendingTracking.size > 0) {
+        startTrackingWorker();
+      }
     });
   }
 
   async function runTrackingWorker() {
-    while (!disposed) {
-      while (!disposed && runtime.pendingTracking.size > 0) {
+    while (operations.isAcceptingWork()) {
+      while (operations.isAcceptingWork() && runtime.pendingTracking.size > 0) {
         const pending = runtime.pendingTracking.entries().next().value;
         if (!pending) break;
         const [key, request] = pending;
@@ -136,15 +137,14 @@ export function createRecentFilesService(
           safeReportFailure(error);
         }
       }
-      if (disposed) return;
+      if (!operations.isAcceptingWork()) return;
       await refresh();
-      if (disposed || runtime.pendingTracking.size === 0) return;
+      if (!operations.isAcceptingWork() || runtime.pendingTracking.size === 0) return;
     }
   }
 
   function dispose(): Promise<void> {
     if (disposal) return disposal;
-    disposed = true;
     operations.stopAcceptingWork();
     const cancellationFailures = observationCancellation.cancel();
     unlinkParentCancellation();

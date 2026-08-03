@@ -14,7 +14,6 @@ import {
   type DocumentPersistenceWorkflowPorts,
 } from '@/application/documentPersistenceWorkflow';
 import type { DocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
-import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import {
   fileOperationReceiptFromOpenResponse,
   fileOperationReceiptFromSavedResponse,
@@ -42,6 +41,7 @@ import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { DocumentProjection } from '@/types/documentRuntime';
 import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
+import { createAsyncCache } from '@/utils/asyncCache';
 
 type UseDocumentFileCoordinatorOptions = {
   fileData?: ComputedRef<DocumentProjection | null>;
@@ -67,10 +67,9 @@ export function useDocumentFileCoordinator({
   const { runDocumentLifecycle } = useDocumentLifecycle();
   const { withReservedSaveLocation } = useSaveLocation();
   const { queueRecentFileEntryUpdate } = useRecentFileUpdates();
-  const spreadsheetFormats = createSpreadsheetFormatService({
-    getSpreadsheetFormatOptions: async () =>
-      runtimeSpreadsheetFormatOptions(await api.getSpreadsheetFormatOptions()),
-  });
+  const spreadsheetFormatOptions = createAsyncCache(async () => (
+    runtimeSpreadsheetFormatOptions(await api.getSpreadsheetFormatOptions())
+  ));
   function createCoordinator(
     commandBus: DocumentCommandBus,
     preparations: DocumentPreparationCoordinator,
@@ -110,7 +109,8 @@ export function useDocumentFileCoordinator({
         runtimeNativeSavePlan(await api.getNativeSavePlan(context, target)),
       documentCapabilities: async (context) =>
         runtimeDocumentCapabilities(await api.getDocumentCapabilities(context)),
-      defaultSpreadsheetExtension: spreadsheetFormats.defaultSpreadsheetExtension,
+      defaultSpreadsheetExtension: async () =>
+        (await spreadsheetFormatOptions.get()).defaultExtension,
       withReservedSaveLocation,
       openPreparedDocument: (prepared, path) => session.openPreparedDocument(prepared, path),
       applySavedDocumentResponse: (context, response, path, preferredSheetIndex) =>

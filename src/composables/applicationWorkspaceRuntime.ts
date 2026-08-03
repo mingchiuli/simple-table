@@ -67,7 +67,7 @@ export function createApplicationWorkspaceRuntime(
       getRecentFiles: async () => (await api.getRecentFiles()).map(runtimeRecentFile),
       removeRecentFile: api.removeRecentFile,
       addRecentFileWithThumbnail: async (receipt, originalPath) => {
-        runtimeRecentFile(await api.addRecentFileWithThumbnail(receipt, originalPath));
+        await api.addRecentFileWithThumbnail(receipt, originalPath);
       },
     },
     (error) => console.warn('Failed to update recent file metadata', error),
