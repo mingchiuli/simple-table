@@ -28,6 +28,26 @@ export function createWorkspaceOperationTracker() {
     return runTracked(task, release);
   }
 
+  function guard<TArgs extends unknown[], T>(
+    task: (...args: TArgs) => Promise<T>,
+    disposedValue: T,
+  ): (...args: TArgs) => Promise<T> {
+    return (...args) => run(() => task(...args), disposedValue);
+  }
+
+  function guardRequired<TArgs extends unknown[], T>(
+    task: (...args: TArgs) => Promise<T>,
+  ): (...args: TArgs) => Promise<T> {
+    return (...args) => runRequired(() => task(...args));
+  }
+
+  function guardSync<TArgs extends unknown[], T>(
+    task: (...args: TArgs) => T,
+    disposedValue: T,
+  ): (...args: TArgs) => T {
+    return (...args) => isAcceptingWork() ? task(...args) : disposedValue;
+  }
+
   function stopAcceptingWork() {
     if (state === 'active') state = 'disposing';
   }
@@ -72,6 +92,9 @@ export function createWorkspaceOperationTracker() {
     isAcceptingWork,
     run,
     runRequired,
+    guard,
+    guardRequired,
+    guardSync,
     stopAcceptingWork,
     waitForIdle,
     markDisposed,

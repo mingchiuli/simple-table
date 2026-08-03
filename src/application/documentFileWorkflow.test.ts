@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  createDocumentFileCoordinator,
-  type DocumentFileCoordinatorPorts,
-} from '@/application/documentFileCoordinator';
+  createDocumentCloseWorkflow,
+  type DocumentCloseWorkflowPorts,
+} from '@/application/documentCloseWorkflow';
+import {
+  createDocumentOpenWorkflow,
+  type DocumentOpenWorkflowPorts,
+} from '@/application/documentOpenWorkflow';
+import {
+  createDocumentPersistenceWorkflow,
+  type DocumentPersistenceWorkflowPorts,
+} from '@/application/documentPersistenceWorkflow';
 import {
   defaultHistoryStatus,
   defaultWorkbookCapabilities,
@@ -16,7 +24,10 @@ import {
 } from '@/types';
 import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
 import type { OperationCancellationSignal } from '@/application/operationCancellation';
-import { createDocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
+import {
+  createDocumentPreparationCoordinator,
+  type DocumentPreparationCoordinator,
+} from '@/application/documentPreparationCoordinator';
 import { preparedOpenDocument } from '@/test/documentFixtures';
 import { OperationOutcomeUnknownError } from '@/application/operationOutcome';
 
@@ -154,7 +165,24 @@ function savePlan(overrides: Partial<NativeSavePlan> = {}): NativeSavePlan {
   };
 }
 
-type TestPorts = DocumentFileCoordinatorPorts<OpenDocumentResponse, SavedDocumentResponse>;
+type TestPorts =
+  & Omit<DocumentOpenWorkflowPorts<OpenDocumentResponse>, 'closeDocument'>
+  & DocumentPersistenceWorkflowPorts<OpenDocumentResponse, SavedDocumentResponse>
+  & DocumentCloseWorkflowPorts<OpenDocumentResponse>;
+
+function createTestFileWorkflow(
+  ports: TestPorts,
+  preparations?: DocumentPreparationCoordinator,
+) {
+  const closeWorkflow = createDocumentCloseWorkflow(ports);
+  const workflowPorts = { ...ports, closeDocument: closeWorkflow.closeDocument };
+  return {
+    ...createDocumentOpenWorkflow(workflowPorts, preparations),
+    ...createDocumentPersistenceWorkflow(workflowPorts),
+    closeCurrentDocument: closeWorkflow.closeCurrentDocument,
+    prepareApplicationExit: closeWorkflow.prepareApplicationExit,
+  };
+}
 
 function createPorts(overrides: Partial<TestPorts> = {}) {
   const replacement = {
@@ -238,7 +266,7 @@ function createPorts(overrides: Partial<TestPorts> = {}) {
   return { ports, replacement, lifecycleRelease };
 }
 
-describe('documentFileCoordinator', () => {
+describe('document file workflows', () => {
   it('aborts a prepared route load when its continuation becomes stale', async () => {
     let current = true;
     const prepareOpenFile = vi.fn(async () => {
@@ -247,7 +275,7 @@ describe('documentFileCoordinator', () => {
     });
     const { ports, replacement } = createPorts({ prepareOpenFile });
     const preparations = createDocumentPreparationCoordinator();
-    const coordinator = createDocumentFileCoordinator(ports, preparations);
+    const coordinator = createTestFileWorkflow(ports, preparations);
     const cancellation: OperationCancellationSignal = {
       isCancelled: () => !current,
       onCancel: () => () => undefined,
@@ -269,7 +297,7 @@ describe('documentFileCoordinator', () => {
       .mockResolvedValueOnce(prepared('latest'));
     const { ports } = createPorts({ prepareOpenFile });
     const preparations = createDocumentPreparationCoordinator();
-    const coordinator = createDocumentFileCoordinator(ports, preparations);
+    const coordinator = createTestFileWorkflow(ports, preparations);
     const firstCancellation = controlledCancellation();
 
     const first = coordinator.loadFileFromPath('/tmp/slow.xlsx', firstCancellation.signal);
@@ -277,7 +305,7 @@ describe('documentFileCoordinator', () => {
     firstCancellation.cancel();
     await expect(first).resolves.toBe(false);
 
-    const remountedCoordinator = createDocumentFileCoordinator(ports, preparations);
+    const remountedCoordinator = createTestFileWorkflow(ports, preparations);
     const latest = remountedCoordinator.loadFileFromPath('/tmp/latest.xlsx');
     await flushPromises();
     expect(prepareOpenFile).toHaveBeenCalledTimes(1);
@@ -294,7 +322,7 @@ describe('documentFileCoordinator', () => {
     const prepareNewFile = vi.fn().mockResolvedValue(prepared('new'));
     const { ports } = createPorts({ prepareOpenFile, prepareNewFile });
     const preparations = createDocumentPreparationCoordinator();
-    const routeCoordinator = createDocumentFileCoordinator(ports, preparations);
+    const routeCoordinator = createTestFileWorkflow(ports, preparations);
     const cancellation = controlledCancellation();
 
     const routeLoad = routeCoordinator.loadFileFromPath('/tmp/slow.xlsx', cancellation.signal);
@@ -302,7 +330,7 @@ describe('documentFileCoordinator', () => {
     cancellation.cancel();
     await expect(routeLoad).resolves.toBe(false);
 
-    const homeCoordinator = createDocumentFileCoordinator(ports, preparations);
+    const homeCoordinator = createTestFileWorkflow(ports, preparations);
     const createDocument = homeCoordinator.createNewDocument();
     await flushPromises();
     expect(prepareNewFile).not.toHaveBeenCalled();
@@ -317,7 +345,7 @@ describe('documentFileCoordinator', () => {
   it('returns a stale outcome when a physical save cannot update the active projection', async () => {
     const applySavedDocumentResponse = vi.fn().mockReturnValue(false);
     const { ports } = createPorts({ applySavedDocumentResponse });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.saveCurrentFile()).resolves.toEqual({ status: 'saved-stale' });
 
@@ -335,7 +363,7 @@ describe('documentFileCoordinator', () => {
       blockedReason: 'Unsupported workbook feature',
     }));
     const { ports } = createPorts({ nativeSavePlan });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.saveCurrentFile()).resolves.toEqual({
       status: 'blocked',
@@ -355,7 +383,7 @@ describe('documentFileCoordinator', () => {
         getFileOperationResult: vi.fn().mockResolvedValue({ status: 'pending' }),
         markDocumentSessionOutcomeUnknown,
       });
-      const coordinator = createDocumentFileCoordinator(ports);
+      const coordinator = createTestFileWorkflow(ports);
       const save = coordinator.saveCurrentFile();
       const rejectedSave = expect(save).rejects.toBeInstanceOf(OperationOutcomeUnknownError);
 
@@ -377,7 +405,7 @@ describe('documentFileCoordinator', () => {
         getFileOperationResult: vi.fn().mockResolvedValue({ status: 'pending' }),
         markDocumentSessionOutcomeUnknown,
       });
-      const coordinator = createDocumentFileCoordinator(ports);
+      const coordinator = createTestFileWorkflow(ports);
       const exported = coordinator.exportCurrentFile();
       const rejectedExport = expect(exported).rejects.toBeInstanceOf(OperationOutcomeUnknownError);
 
@@ -394,7 +422,7 @@ describe('documentFileCoordinator', () => {
     const failure = { code: 'document_state_invalid', message: 'busy' };
     const commitCloseDocument = vi.fn().mockRejectedValue(failure);
     const { ports, replacement } = createPorts({ commitCloseDocument });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.closeCurrentDocument()).rejects.toBe(failure);
 
@@ -412,7 +440,7 @@ describe('documentFileCoordinator', () => {
       commitCloseDocument,
       getFileOperationResult,
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.closeCurrentDocument()).resolves.toBe(true);
 
@@ -426,7 +454,7 @@ describe('documentFileCoordinator', () => {
 
   it('prepares application exit without closing or clearing the document', async () => {
     const { ports, replacement, lifecycleRelease } = createPorts();
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     const preparation = await coordinator.prepareApplicationExit({ waitForIdle: true });
 
@@ -456,7 +484,7 @@ describe('documentFileCoordinator', () => {
       appError('document_state_invalid', 'commit failed'),
     );
     const { ports, replacement } = createPorts({ commitPreparedDocument });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('commit failed');
 
@@ -473,7 +501,7 @@ describe('documentFileCoordinator', () => {
       discardOpenFileSelection: vi.fn().mockRejectedValue(new Error('cleanup failed')),
       reportCleanupError,
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.openSelectedFile(selection)).resolves.toBe(false);
 
@@ -492,7 +520,7 @@ describe('documentFileCoordinator', () => {
       discardOpenFileSelection: vi.fn().mockRejectedValue(new Error('cleanup failed')),
       reportCleanupError,
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.openSelectedFile(selection)).rejects.toThrow('broken file');
 
@@ -521,7 +549,7 @@ describe('documentFileCoordinator', () => {
       commitPreparedDocument: vi.fn().mockResolvedValue(openReceipt(selectedPrepared)),
       openPreparedDocument,
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.openSelectedFile(selection)).resolves.toBe(true);
 
@@ -540,7 +568,7 @@ describe('documentFileCoordinator', () => {
         appError('document_state_invalid', 'stale context'),
       ),
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.loadFileFromPath('/tmp/route.xlsx')).rejects.toThrow('stale context');
 
@@ -566,7 +594,7 @@ describe('documentFileCoordinator', () => {
       prepareRecentFile: vi.fn().mockResolvedValue(recentPrepared),
       commitPreparedDocument,
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.openRecentDocument(recent)).resolves.toBe(true);
 
@@ -588,7 +616,7 @@ describe('documentFileCoordinator', () => {
     const { ports } = createPorts({
       prepareRecentFile: vi.fn().mockRejectedValue(error),
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.openRecentDocument({
       id: 'missing',
@@ -611,7 +639,7 @@ describe('documentFileCoordinator', () => {
       prepareNewFile: vi.fn().mockResolvedValue(newPrepared),
       commitPreparedDocument: vi.fn().mockResolvedValue(openReceipt(newPrepared)),
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.createNewDocument()).resolves.toBe(true);
 
@@ -633,7 +661,7 @@ describe('documentFileCoordinator', () => {
       prepareNewFile,
       commitPreparedDocument: vi.fn(async (value) => openReceipt(value)),
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.createNewDocument()).resolves.toBe(true);
 
@@ -646,7 +674,7 @@ describe('documentFileCoordinator', () => {
     const transportError = new Error('response lost');
     const prepareNewFile = vi.fn().mockRejectedValue(transportError);
     const { ports } = createPorts({ prepareNewFile });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.createNewDocument()).rejects.toBe(transportError);
 
@@ -672,7 +700,7 @@ describe('documentFileCoordinator', () => {
       abortPreparedDocument,
       commitPreparedDocument: vi.fn(async (value) => openReceipt(value)),
     });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.createNewDocument()).rejects.toBe(transportError);
     await expect(coordinator.createNewDocument()).resolves.toBe(true);
@@ -700,11 +728,11 @@ describe('documentFileCoordinator', () => {
       commitPreparedDocument: vi.fn(async (value) => openReceipt(value)),
     });
     const preparations = createDocumentPreparationCoordinator();
-    const first = createDocumentFileCoordinator(ports, preparations);
+    const first = createTestFileWorkflow(ports, preparations);
 
     await expect(first.createNewDocument()).rejects.toBe(transportError);
 
-    const second = createDocumentFileCoordinator(ports, preparations);
+    const second = createTestFileWorkflow(ports, preparations);
     await expect(second.createNewDocument()).resolves.toBe(true);
 
     const retainedId = prepareNewFile.mock.calls[0][0];
@@ -726,7 +754,7 @@ describe('documentFileCoordinator', () => {
       .mockResolvedValueOnce({ status: 'pending' })
       .mockResolvedValueOnce({ status: 'completed', receipt });
     const { ports } = createPorts({ exportFile, getFileOperationResult });
-    const coordinator = createDocumentFileCoordinator(ports);
+    const coordinator = createTestFileWorkflow(ports);
 
     await expect(coordinator.exportCurrentFile()).resolves.toBe('exported');
 

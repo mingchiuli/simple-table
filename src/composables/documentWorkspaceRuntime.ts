@@ -144,30 +144,23 @@ function guardDocumentCommandBus(
   operations: WorkspaceOperationTracker,
 ): DocumentCommandBus {
   return {
-    addRow: (...args) => operations.run(() => commandBus.addRow(...args), undefined),
-    deleteRow: (...args) => operations.run(() => commandBus.deleteRow(...args), undefined),
-    addColumn: (...args) => operations.run(() => commandBus.addColumn(...args), undefined),
-    deleteColumn: (...args) => operations.run(() => commandBus.deleteColumn(...args), undefined),
-    addSheet: (...args) => operations.run(() => commandBus.addSheet(...args), undefined),
-    deleteSheet: (...args) => operations.run(() => commandBus.deleteSheet(...args), undefined),
-    undo: (...args) => operations.run(() => commandBus.undo(...args), undefined),
-    redo: (...args) => operations.run(() => commandBus.redo(...args), undefined),
-    setColumnWidth: (...args) =>
-      operations.run(() => commandBus.setColumnWidth(...args), undefined),
-    setRowHeight: (...args) =>
-      operations.run(() => commandBus.setRowHeight(...args), undefined),
-    setCells: (...args) => operations.run(() => commandBus.setCells(...args), undefined),
-    search: (...args) => operations.run(() => commandBus.search(...args), undefined),
-    refreshAfterMutationError: (...args) =>
-      operations.run(() => commandBus.refreshAfterMutationError(...args), false),
-    refreshEditorState: (...args) =>
-      operations.runRequired(() => commandBus.refreshEditorState(...args)),
-    ensureSheetLoaded: (...args) =>
-      operations.run(() => commandBus.ensureSheetLoaded(...args), false),
-    ensureSheetRegionLoaded: (...args) =>
-      operations.run(() => commandBus.ensureSheetRegionLoaded(...args), false),
-    prepareConsistentContext: (...args) =>
-      operations.run(() => commandBus.prepareConsistentContext(...args), undefined),
+    addRow: operations.guard(commandBus.addRow, undefined),
+    deleteRow: operations.guard(commandBus.deleteRow, undefined),
+    addColumn: operations.guard(commandBus.addColumn, undefined),
+    deleteColumn: operations.guard(commandBus.deleteColumn, undefined),
+    addSheet: operations.guard(commandBus.addSheet, undefined),
+    deleteSheet: operations.guard(commandBus.deleteSheet, undefined),
+    undo: operations.guard(commandBus.undo, undefined),
+    redo: operations.guard(commandBus.redo, undefined),
+    setColumnWidth: operations.guard(commandBus.setColumnWidth, undefined),
+    setRowHeight: operations.guard(commandBus.setRowHeight, undefined),
+    setCells: operations.guard(commandBus.setCells, undefined),
+    search: operations.guard(commandBus.search, undefined),
+    refreshAfterMutationError: operations.guard(commandBus.refreshAfterMutationError, false),
+    refreshEditorState: operations.guardRequired(commandBus.refreshEditorState),
+    ensureSheetLoaded: operations.guard(commandBus.ensureSheetLoaded, false),
+    ensureSheetRegionLoaded: operations.guard(commandBus.ensureSheetRegionLoaded, false),
+    prepareConsistentContext: operations.guard(commandBus.prepareConsistentContext, undefined),
   };
 }
 
@@ -200,24 +193,15 @@ function guardPendingCellSaves(
 ) {
   return {
     hasPendingWork: pending.hasPendingWork,
-    schedulePendingSave: (...args: Parameters<typeof pending.schedulePendingSave>) => {
-      if (operations.isAcceptingWork()) pending.schedulePendingSave(...args);
-    },
-    startPendingSave: (...args: Parameters<typeof pending.startPendingSave>) => {
-      if (operations.isAcceptingWork()) pending.startPendingSave(...args);
-    },
+    schedulePendingSave: operations.guardSync(pending.schedulePendingSave, undefined),
+    startPendingSave: operations.guardSync(pending.startPendingSave, undefined),
     clearDebounceIfNoQueuedSaves: pending.clearDebounceIfNoQueuedSaves,
     clearPendingContentChangeIfIdle: pending.clearPendingContentChangeIfIdle,
-    suspendAutosave: () => operations.isAcceptingWork()
-      ? pending.suspendAutosave()
-      : () => undefined,
-    flushPendingCellChanges: (...args: Parameters<typeof pending.flushPendingCellChanges>) =>
-      operations.run(() => pending.flushPendingCellChanges(...args), false),
+    suspendAutosave: operations.guardSync(pending.suspendAutosave, () => undefined),
+    flushPendingCellChanges: operations.guard(pending.flushPendingCellChanges, false),
     waitForInFlightSave: pending.waitForInFlightSave,
     releaseSchedulerIfIdle: pending.releaseSchedulerIfIdle,
-    reset: () => {
-      if (operations.isAcceptingWork()) pending.reset();
-    },
+    reset: operations.guardSync(pending.reset, undefined),
   };
 }
 
@@ -226,21 +210,12 @@ function guardSearchSession(
   operations: WorkspaceOperationTracker,
 ) {
   return {
-    beginSearch: (query: string) => operations.isAcceptingWork() ? search.beginSearch(query) : -1,
-    applySearchOutcome: (...args: Parameters<typeof search.applySearchOutcome>) =>
-      operations.isAcceptingWork() && search.applySearchOutcome(...args),
-    finishSearch: (...args: Parameters<typeof search.finishSearch>) => {
-      if (operations.isAcceptingWork()) search.finishSearch(...args);
-    },
-    clearSearch: () => {
-      if (operations.isAcceptingWork()) search.clearSearch();
-    },
-    reset: () => {
-      if (operations.isAcceptingWork()) search.reset();
-    },
+    beginSearch: operations.guardSync(search.beginSearch, -1),
+    applySearchOutcome: operations.guardSync(search.applySearchOutcome, false),
+    finishSearch: operations.guardSync(search.finishSearch, undefined),
+    clearSearch: operations.guardSync(search.clearSearch, undefined),
+    reset: operations.guardSync(search.reset, undefined),
     captureSnapshot: search.captureSnapshot,
-    restoreSnapshot: (...args: Parameters<typeof search.restoreSnapshot>) => {
-      if (operations.isAcceptingWork()) search.restoreSnapshot(...args);
-    },
+    restoreSnapshot: operations.guardSync(search.restoreSnapshot, undefined),
   };
 }

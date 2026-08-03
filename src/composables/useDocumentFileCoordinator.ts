@@ -1,7 +1,18 @@
 import type { ComputedRef } from 'vue';
 
 import * as api from '@/api';
-import { createDocumentFileCoordinator } from '@/application/documentFileCoordinator';
+import {
+  createDocumentCloseWorkflow,
+  type DocumentCloseWorkflowPorts,
+} from '@/application/documentCloseWorkflow';
+import {
+  createDocumentOpenWorkflow,
+  type DocumentOpenWorkflowPorts,
+} from '@/application/documentOpenWorkflow';
+import {
+  createDocumentPersistenceWorkflow,
+  type DocumentPersistenceWorkflowPorts,
+} from '@/application/documentPersistenceWorkflow';
 import type { DocumentPreparationCoordinator } from '@/application/documentPreparationCoordinator';
 import { createSpreadsheetFormatService } from '@/application/spreadsheetFormatService';
 import {
@@ -30,11 +41,17 @@ import {
 import { useDocumentSessionStore } from '@/stores/documentSession';
 import { useEditorSelectionStore } from '@/stores/editorSelection';
 import type { DocumentProjection } from '@/types/documentRuntime';
+import type { OpenDocumentResponse, SavedDocumentResponse } from '@/types/protocol';
 
 type UseDocumentFileCoordinatorOptions = {
   fileData?: ComputedRef<DocumentProjection | null>;
   flushPendingCellChanges?: () => Promise<boolean>;
 };
+
+type RuntimeDocumentFilePorts =
+  & Omit<DocumentOpenWorkflowPorts<OpenDocumentResponse>, 'closeDocument'>
+  & DocumentPersistenceWorkflowPorts<OpenDocumentResponse, SavedDocumentResponse>
+  & DocumentCloseWorkflowPorts<OpenDocumentResponse>;
 
 export function useDocumentFileCoordinator({
   fileData,
@@ -59,7 +76,7 @@ export function useDocumentFileCoordinator({
     preparations: DocumentPreparationCoordinator,
     cancellation: OperationCancellationSignal,
   ) {
-    return createDocumentFileCoordinator({
+    const ports: RuntimeDocumentFilePorts = {
       getFileData: () => fileData?.value ?? document.data,
       getCommandContext: () => document.currentCommandContext(),
       getCurrentFilePath: () => document.currentFilePath,
@@ -109,7 +126,15 @@ export function useDocumentFileCoordinator({
       markDocumentSessionOutcomeUnknown: (context) => {
         session.markProjectionOutcomeUnknown(context);
       },
-    }, preparations, cancellation);
+    };
+    const closeWorkflow = createDocumentCloseWorkflow(ports, cancellation);
+    const workflowPorts = { ...ports, closeDocument: closeWorkflow.closeDocument };
+    return {
+      ...createDocumentOpenWorkflow(workflowPorts, preparations, { cancellation }),
+      ...createDocumentPersistenceWorkflow(workflowPorts, cancellation),
+      closeCurrentDocument: closeWorkflow.closeCurrentDocument,
+      prepareApplicationExit: closeWorkflow.prepareApplicationExit,
+    };
   }
 
   type FileCoordinator = ReturnType<typeof createCoordinator>;
