@@ -12,7 +12,8 @@ use crate::application::prepared_source_port::{
 use crate::error::AppError;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::io::atomic_file::{
-    AtomicReplaceError, replace_temp_file_detailed, temp_path_for_target, write_temp_file,
+    AtomicReplaceError, cleanup_temp_file, replace_temp_file_detailed, temp_path_for_target,
+    write_temp_file,
 };
 #[cfg(desktop)]
 use crate::io::atomic_file::{
