@@ -21,6 +21,9 @@ import type {
   SheetRegionProjectionResponse,
   U64String,
   MutationResultLookup,
+  ImageAnchor,
+  ImageSelection,
+  SheetImagePage,
 } from '@/types/protocol';
 import type { MutationCommandContext } from '@/types/documentRuntime';
 import type {
@@ -208,6 +211,66 @@ export async function setRowHeight(
     rowIndex,
     height,
   });
+}
+
+// ==================== Image Operations ====================
+
+export async function pickImage(): Promise<ImageSelection | null> {
+  return invokeCommand('pick_image', {});
+}
+
+export async function discardImageSelection(token: string): Promise<void> {
+  return invokeCommand('discard_image_selection', { token });
+}
+
+export async function insertImage(
+  context: MutationCommandContext,
+  sheetIndex: number,
+  row: number,
+  col: number,
+  selectionToken: string,
+): Promise<EditorMutationResponse> {
+  return invokeCommand('insert_image', {
+    ...context,
+    sheetIndex,
+    row,
+    col,
+    selectionToken,
+  });
+}
+
+export async function updateImage(
+  context: MutationCommandContext,
+  sheetIndex: number,
+  imageId: string,
+  anchor: ImageAnchor,
+): Promise<EditorMutationResponse> {
+  return invokeCommand('update_image', { ...context, sheetIndex, imageId, anchor });
+}
+
+export async function deleteImage(
+  context: MutationCommandContext,
+  sheetIndex: number,
+  imageId: string,
+): Promise<EditorMutationResponse> {
+  return invokeCommand('delete_image', { ...context, sheetIndex, imageId });
+}
+
+export async function getSheetImages(
+  context: EditorCommandContext,
+  sheetIndex: number,
+  offset: number,
+  limit: number,
+): Promise<SheetImagePage> {
+  return invokeCommand('get_sheet_images', { ...context, sheetIndex, offset, limit });
+}
+
+export async function getImageBytes(
+  context: EditorCommandContext,
+  sheetIndex: number,
+  imageId: string,
+): Promise<ArrayBuffer> {
+  return invokeCommand('get_image_bytes', { ...context, sheetIndex, imageId });
 }
 
 // ==================== Sheet Operations ====================

@@ -113,6 +113,33 @@ impl FingerprintWriter {
                 self.write_tag(11);
                 self.write_index(*sheet_index)?;
             }
+            EditorCommand::InsertImage {
+                sheet_index, image, ..
+            } => {
+                self.write_tag(12);
+                self.write_index(*sheet_index)?;
+                self.write_text(&image.id)?;
+                self.write_text(&image.media_id)?;
+                self.write_image_anchor(&image.anchor)?;
+            }
+            EditorCommand::UpdateImage {
+                sheet_index,
+                image_id,
+                anchor,
+            } => {
+                self.write_tag(13);
+                self.write_index(*sheet_index)?;
+                self.write_text(image_id)?;
+                self.write_image_anchor(anchor)?;
+            }
+            EditorCommand::DeleteImage {
+                sheet_index,
+                image_id,
+            } => {
+                self.write_tag(14);
+                self.write_index(*sheet_index)?;
+                self.write_text(image_id)?;
+            }
         }
         Ok(())
     }
@@ -157,6 +184,38 @@ impl FingerprintWriter {
             }
             None => self.write_tag(0),
         }
+    }
+
+    fn write_image_anchor(
+        &mut self,
+        anchor: &crate::document_data::ImageAnchor,
+    ) -> Result<(), AppError> {
+        use crate::document_data::ImageAnchor;
+        match anchor {
+            ImageAnchor::OneCell {
+                from,
+                width_emu,
+                height_emu,
+            } => {
+                self.write_tag(0);
+                self.write_image_marker(from);
+                self.0.update(width_emu.to_le_bytes());
+                self.0.update(height_emu.to_le_bytes());
+            }
+            ImageAnchor::TwoCell { from, to } => {
+                self.write_tag(1);
+                self.write_image_marker(from);
+                self.write_image_marker(to);
+            }
+        }
+        Ok(())
+    }
+
+    fn write_image_marker(&mut self, marker: &crate::document_data::ImageMarker) {
+        self.write_u64(u64::from(marker.row));
+        self.write_u64(u64::from(marker.col));
+        self.0.update(marker.row_offset_emu.to_le_bytes());
+        self.0.update(marker.col_offset_emu.to_le_bytes());
     }
 
     fn finish(self) -> MutationFingerprint {

@@ -3,9 +3,11 @@ import GridCellsLayer from './GridCellsLayer.vue';
 import GridHeaders from './GridHeaders.vue';
 import MergeCellsLayer from './MergeCellsLayer.vue';
 import ResizeLayer from './ResizeLayer.vue';
+import ImageLayer from './ImageLayer.vue';
 import type { ColumnResizeHandle, GridItem, RowResizeHandle } from "@/table-geometry/gridGeometry";
 import type { CellItem, ColumnItem, MergeOverlayCell } from "@/table-geometry/useGridGeometry";
 import type { CellValue } from "@/types";
+import type { ImageAnchor, SheetImage } from '@/types/documentRuntime';
 
 defineProps<{
   columns: ColumnItem[];
@@ -14,6 +16,8 @@ defineProps<{
   totalRowsHeight: number;
   scrollLeft: number;
   scrollTop: number;
+  viewportWidth: number;
+  viewportHeight: number;
   cells: CellItem[];
   mergeCells: MergeOverlayCell[];
   selectedCell?: { row: number; col: number } | null;
@@ -31,6 +35,15 @@ defineProps<{
   resizeLineY: number;
   isTouchDevice: boolean;
   setScrollViewportRef: (element: unknown) => void;
+  images: SheetImage[];
+  imageUrls: Readonly<Record<string, string>>;
+  selectedImageId: string | null;
+  canMoveResizeImages: boolean;
+  canDeleteImages: boolean;
+  getColumnOffset: (colIndex: number) => number;
+  getRowOffset: (rowIndex: number) => number;
+  getColumnIndexAt: (left: number) => number;
+  getRowIndexAt: (top: number) => number;
 }>();
 
 const emit = defineEmits<{
@@ -44,6 +57,10 @@ const emit = defineEmits<{
   (e: "cancel", rowIndex: number, colIndex: number): void;
   (e: "column-resize-start", event: MouseEvent | TouchEvent, colIndex: number, boundaryX: number): void;
   (e: "row-resize-start", event: MouseEvent | TouchEvent, rowIndex: number, boundaryY: number): void;
+  (e: 'image-select', imageId: string | null): void;
+  (e: 'image-update', imageId: string, anchor: ImageAnchor): void;
+  (e: 'image-delete', imageId: string): void;
+  (e: 'image-assets-request', imageIds: string[]): void;
 }>();
 </script>
 
@@ -95,6 +112,26 @@ const emit = defineEmits<{
         @input="(rowIndex, colIndex, value) => emit('input', rowIndex, colIndex, value)"
         @commit="(rowIndex, colIndex, value) => emit('commit', rowIndex, colIndex, value)"
         @cancel="(rowIndex, colIndex) => emit('cancel', rowIndex, colIndex)"
+      />
+
+      <ImageLayer
+        :images="images"
+        :image-urls="imageUrls"
+        :selected-image-id="selectedImageId"
+        :can-move-resize="canMoveResizeImages"
+        :can-delete="canDeleteImages"
+        :get-column-offset="getColumnOffset"
+        :get-row-offset="getRowOffset"
+        :get-column-index-at="getColumnIndexAt"
+        :get-row-index-at="getRowIndexAt"
+        :viewport-left="scrollLeft"
+        :viewport-top="scrollTop"
+        :viewport-width="viewportWidth"
+        :viewport-height="viewportHeight"
+        @select="emit('image-select', $event)"
+        @update="(imageId, anchor) => emit('image-update', imageId, anchor)"
+        @delete="emit('image-delete', $event)"
+        @request-assets="emit('image-assets-request', $event)"
       />
     </div>
   </div>

@@ -203,6 +203,9 @@ impl FormulaCoordinator {
             AppliedOperation::SetColumnWidth { .. } | AppliedOperation::SetRowHeight { .. } => {
                 std::collections::HashSet::new()
             }
+            AppliedOperation::InsertImage { .. }
+            | AppliedOperation::UpdateImage { .. }
+            | AppliedOperation::DeleteImage { .. } => std::collections::HashSet::new(),
             AppliedOperation::AddRow { .. }
             | AppliedOperation::DeleteRow { .. }
             | AppliedOperation::AddColumn { .. }
@@ -481,7 +484,10 @@ impl<'a> FormulaStructureTarget<'a> {
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
             | AppliedOperation::SetColumnWidth { .. }
-            | AppliedOperation::SetRowHeight { .. } => None,
+            | AppliedOperation::SetRowHeight { .. }
+            | AppliedOperation::InsertImage { .. }
+            | AppliedOperation::UpdateImage { .. }
+            | AppliedOperation::DeleteImage { .. } => None,
         }
     }
 }

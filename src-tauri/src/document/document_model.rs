@@ -3,9 +3,9 @@ use crate::document::backing::workbook_patch::WorkbookSheetShape;
 use crate::document::capabilities::{SheetCapabilities, WorkbookCapabilities};
 use crate::document::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
-    FileStructureMemento, LayoutMemento, ProjectionSheetSnapshot, RichProjectionMemento,
-    RowStructureMemento, SheetShapeMemento, SheetTailMemento, StructureMemento,
-    protected_rich_cell_positions,
+    FileStructureMemento, ImageMemento, LayoutMemento, ProjectionSheetSnapshot,
+    RichProjectionMemento, RowStructureMemento, SheetShapeMemento, SheetTailMemento,
+    StructureMemento, protected_rich_cell_positions,
 };
 use crate::document::document_memento_budget;
 use crate::document::document_patches::{CurrentStructureShape, restore_structure_changes};
@@ -92,6 +92,22 @@ impl SpreadsheetDocument {
         &self.projection
     }
 
+    pub(crate) fn image_bytes(
+        &self,
+        sheet_index: usize,
+        image_id: &str,
+    ) -> Option<std::sync::Arc<[u8]>> {
+        let image = self
+            .projection
+            .sheets
+            .get(sheet_index)?
+            .rich
+            .images
+            .iter()
+            .find(|image| image.id == image_id && image.renderable)?;
+        self.body.image_bytes(sheet_index, image.z_index)
+    }
+
     fn sheet_count(&self) -> usize {
         self.projection.sheets.len()
     }
@@ -137,6 +153,10 @@ impl SpreadsheetDocument {
                 &mut capabilities.structure.blocked_sheet_structure_reasons,
                 reason,
             );
+            capabilities.rich.images.can_insert = false;
+            capabilities.rich.images.can_move_resize = false;
+            capabilities.rich.images.can_delete = false;
+            push_unique_reason(&mut capabilities.rich.images.blocked_reasons, reason);
             push_unique_reason(
                 &mut capabilities.structure.blocked_structure_reasons,
                 reason,
@@ -342,6 +362,43 @@ impl SpreadsheetDocument {
             AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => {
                 DocumentMementoSide::Structure(Box::new(self.structure_memento(operation)))
             }
+            AppliedOperation::InsertImage {
+                sheet_index,
+                image,
+                bytes,
+                image_name,
+                ..
+            } => DocumentMementoSide::Image(ImageMemento {
+                sheet_index: *sheet_index,
+                image_id: image.id.clone(),
+                image: self.current_image(*sheet_index, &image.id),
+                asset: self.current_image(*sheet_index, &image.id).map(|_| {
+                    crate::document::backing::document_body::BodyImageAsset {
+                        image_name: image_name.clone(),
+                        bytes: bytes.clone(),
+                    }
+                }),
+            }),
+            AppliedOperation::UpdateImage {
+                sheet_index,
+                new_image,
+                ..
+            } => DocumentMementoSide::Image(ImageMemento {
+                sheet_index: *sheet_index,
+                image_id: new_image.id.clone(),
+                image: self.current_image(*sheet_index, &new_image.id),
+                asset: None,
+            }),
+            AppliedOperation::DeleteImage {
+                sheet_index, image, ..
+            } => DocumentMementoSide::Image(ImageMemento {
+                sheet_index: *sheet_index,
+                image_id: image.id.clone(),
+                image: self.current_image(*sheet_index, &image.id),
+                asset: self
+                    .current_image(*sheet_index, &image.id)
+                    .and_then(|current| self.body.image_asset(*sheet_index, current.z_index)),
+            }),
         }
     }
 
@@ -371,7 +428,74 @@ impl SpreadsheetDocument {
             DocumentMementoSide::Cells(memento) => self.restore_cells(memento),
             DocumentMementoSide::Layout(memento) => self.restore_layout(memento),
             DocumentMementoSide::Structure(memento) => self.restore_structure(memento),
+            DocumentMementoSide::Image(memento) => self.restore_image(memento),
         }
+    }
+
+    fn current_image(
+        &self,
+        sheet_index: usize,
+        image_id: &str,
+    ) -> Option<crate::document_data::SheetImage> {
+        self.projection
+            .sheets
+            .get(sheet_index)?
+            .rich
+            .images
+            .iter()
+            .find(|image| image.id == image_id)
+            .cloned()
+    }
+
+    fn restore_image(&mut self, memento: &ImageMemento) -> Result<DocumentRestoreResult, AppError> {
+        let current = self.current_image(memento.sheet_index, &memento.image_id);
+        let operation = match (&current, &memento.image) {
+            (Some(old_image), Some(new_image)) => AppliedOperation::UpdateImage {
+                sheet_index: memento.sheet_index,
+                old_image: old_image.clone(),
+                new_image: new_image.clone(),
+            },
+            (None, Some(image)) => {
+                let asset = memento.asset.as_ref().ok_or_else(|| {
+                    AppError::DocumentStateInvalid(format!(
+                        "image {} cannot be restored without media data",
+                        memento.image_id
+                    ))
+                })?;
+                AppliedOperation::InsertImage {
+                    sheet_index: memento.sheet_index,
+                    image: image.clone(),
+                    image_name: asset.image_name.clone(),
+                    bytes: asset.bytes.clone(),
+                }
+            }
+            (Some(image), None) => AppliedOperation::DeleteImage {
+                sheet_index: memento.sheet_index,
+                image: image.clone(),
+            },
+            (None, None) => return Ok(DocumentRestoreResult::default()),
+        };
+
+        operation
+            .projection_mutation()
+            .execute(&mut self.projection);
+        self.body
+            .patch_after_operation(&mut self.projection, &operation, &[])?;
+        self.fail_post_patch_restore_if_injected()?;
+        self.validate_projection_sheets([memento.sheet_index])?;
+        let change = match &memento.image {
+            Some(image) => DocumentRestoreChange::ImageUpserted {
+                sheet_index: memento.sheet_index,
+                image: image.clone(),
+            },
+            None => DocumentRestoreChange::ImageDeleted {
+                sheet_index: memento.sheet_index,
+                image_id: memento.image_id.clone(),
+            },
+        };
+        Ok(DocumentRestoreResult {
+            changes: vec![change],
+        })
     }
 
     fn fail_restore_if_injected(&mut self) -> Result<(), AppError> {
@@ -604,7 +728,10 @@ impl SpreadsheetDocument {
             AppliedOperation::SetCell { .. }
             | AppliedOperation::SetCells { .. }
             | AppliedOperation::SetColumnWidth { .. }
-            | AppliedOperation::SetRowHeight { .. } => FileStructureMemento::empty(sheet_count),
+            | AppliedOperation::SetRowHeight { .. }
+            | AppliedOperation::InsertImage { .. }
+            | AppliedOperation::UpdateImage { .. }
+            | AppliedOperation::DeleteImage { .. } => FileStructureMemento::empty(sheet_count),
         }
     }
 
@@ -911,6 +1038,11 @@ fn touched_sheet_indexes(
         | AppliedOperation::SetRowHeight { sheet_index, .. } => {
             sheets.insert(*sheet_index);
         }
+        AppliedOperation::InsertImage { sheet_index, .. }
+        | AppliedOperation::UpdateImage { sheet_index, .. }
+        | AppliedOperation::DeleteImage { sheet_index, .. } => {
+            sheets.insert(*sheet_index);
+        }
         AppliedOperation::SetCells { changes } => {
             for change in changes {
                 sheets.insert(change.sheet_index);
@@ -964,7 +1096,10 @@ fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bo
         | AppliedOperation::SetColumnWidth { .. }
         | AppliedOperation::SetRowHeight { .. }
         | AppliedOperation::AddSheet { .. }
-        | AppliedOperation::DeleteSheet { .. } => false,
+        | AppliedOperation::DeleteSheet { .. }
+        | AppliedOperation::InsertImage { .. }
+        | AppliedOperation::UpdateImage { .. }
+        | AppliedOperation::DeleteImage { .. } => false,
     }
 }
 

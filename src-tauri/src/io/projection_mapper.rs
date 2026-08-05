@@ -1,12 +1,13 @@
 use crate::document_data::{
     CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
-    Hyperlink, MergeRange, RichMetadata,
+    Hyperlink, ImageAnchor, ImageMarker, MergeRange, RichMetadata, SheetImage,
 };
 use crate::document_layout_policy::DEFAULT_ROW_HEIGHT_PX;
 use crate::domain::{CellNumber, CellValue};
 use crate::error::AppError;
 use crate::io::codec::address::coordinate;
 use crate::io::layout_units::{excel_column_width_to_px, is_default_column_width, points_to_px};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use umya_spreadsheet::{Cell, Workbook, Worksheet};
 
@@ -269,6 +270,7 @@ fn read_rich_projection(worksheet: &Worksheet) -> RichMetadata {
     let freeze_pane = read_freeze_pane(worksheet);
     let hyperlinks = read_hyperlinks(worksheet);
     let drawings = read_drawings(worksheet);
+    let images = read_images(worksheet);
     let has_style_metadata = !cell_formats.is_empty() || !cell_styles.is_empty();
     let has_hyperlinks = !hyperlinks.is_empty();
     let has_freeze_pane = freeze_pane.is_some();
@@ -281,6 +283,7 @@ fn read_rich_projection(worksheet: &Worksheet) -> RichMetadata {
         freeze_pane,
         hyperlinks,
         drawings,
+        images,
         has_more_drawings: false,
         has_style_metadata,
         has_hyperlinks,
@@ -415,17 +418,6 @@ fn has_style_projection(style: &CellStyle) -> bool {
 
 fn read_drawings(worksheet: &Worksheet) -> Vec<Drawing> {
     let mut drawings = Vec::new();
-    drawings.extend(worksheet.image_collection().iter().map(|image| {
-        let from = image.from_marker_type();
-        let to = image.to_marker_type();
-        Drawing {
-            kind: DrawingKind::Image,
-            from_row: from.row(),
-            from_col: from.col(),
-            to_row: to.map(|marker| marker.row()),
-            to_col: to.map(|marker| marker.col()),
-        }
-    }));
     drawings.extend(worksheet.chart_collection().iter().filter_map(|chart| {
         let (col, row) = parse_coordinate_1_based(&chart.coordinate())?;
         Some(Drawing {
@@ -437,6 +429,122 @@ fn read_drawings(worksheet: &Worksheet) -> Vec<Drawing> {
         })
     }));
     drawings
+}
+
+fn read_images(worksheet: &Worksheet) -> Vec<SheetImage> {
+    worksheet
+        .image_collection()
+        .iter()
+        .enumerate()
+        .map(|(z_index, image)| {
+            let bytes = image.image_data();
+            let media_id = Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let mime_type = image_mime_type(image.image_name(), bytes).to_string();
+            let (intrinsic_width, intrinsic_height) =
+                image::ImageReader::new(std::io::Cursor::new(bytes))
+                    .with_guessed_format()
+                    .ok()
+                    .and_then(|reader| reader.into_dimensions().ok())
+                    .unwrap_or((0, 0));
+            let renderable = matches!(mime_type.as_str(), "image/png" | "image/jpeg")
+                && !bytes.is_empty()
+                && bytes.len() <= crate::document_data::MAX_EMBEDDED_IMAGE_BYTES
+                && intrinsic_width > 0
+                && intrinsic_height > 0
+                && u64::from(intrinsic_width) * u64::from(intrinsic_height)
+                    <= crate::document_data::MAX_RENDER_IMAGE_PIXELS;
+            SheetImage {
+                id: image_session_id(image, z_index, &media_id),
+                media_id,
+                mime_type: mime_type.clone(),
+                intrinsic_width,
+                intrinsic_height,
+                anchor: image_anchor(image),
+                z_index,
+                renderable,
+            }
+        })
+        .collect()
+}
+
+fn image_anchor(image: &umya_spreadsheet::Image) -> ImageAnchor {
+    if let Some(anchor) = image.two_cell_anchor() {
+        return ImageAnchor::TwoCell {
+            from: image_marker(anchor.from_marker()),
+            to: image_marker(anchor.to_marker()),
+        };
+    }
+    if let Some(anchor) = image.one_cell_anchor() {
+        return ImageAnchor::OneCell {
+            from: image_marker(anchor.from_marker()),
+            width_emu: anchor.extent().cx(),
+            height_emu: anchor.extent().cy(),
+        };
+    }
+    ImageAnchor::OneCell {
+        from: ImageMarker::default(),
+        width_emu: 0,
+        height_emu: 0,
+    }
+}
+
+fn image_marker(
+    marker: &umya_spreadsheet::structs::drawing::spreadsheet::MarkerType,
+) -> ImageMarker {
+    ImageMarker {
+        row: marker.row(),
+        col: marker.col(),
+        row_offset_emu: marker.row_off(),
+        col_offset_emu: marker.col_off(),
+    }
+}
+
+fn image_session_id(image: &umya_spreadsheet::Image, z_index: usize, media_id: &str) -> String {
+    let picture = image
+        .one_cell_anchor()
+        .and_then(|anchor| anchor.picture())
+        .or_else(|| image.two_cell_anchor().and_then(|anchor| anchor.picture()));
+    let properties = picture.map(|picture| {
+        picture
+            .non_visual_picture_properties()
+            .non_visual_drawing_properties()
+    });
+    if let Some(name) = properties.map(|properties| properties.name())
+        && let Some(id) = name.strip_prefix("simple-table-image-")
+    {
+        return id.to_string();
+    }
+    let drawing_id = properties
+        .map(|properties| properties.id())
+        .unwrap_or_default();
+    format!(
+        "xlsx-{drawing_id}-{z_index}-{}",
+        &media_id[..media_id.len().min(12)]
+    )
+}
+
+fn image_mime_type(name: &str, bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return "image/png";
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return "image/jpeg";
+    }
+    match std::path::Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("gif") => "image/gif",
+        Some("bmp") => "image/bmp",
+        Some("tif" | "tiff") => "image/tiff",
+        Some("emf") => "image/emf",
+        _ => "application/octet-stream",
+    }
 }
 
 fn parse_coordinate_1_based(coordinate: &str) -> Option<(u32, u32)> {

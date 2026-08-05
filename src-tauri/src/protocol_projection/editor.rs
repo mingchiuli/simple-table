@@ -129,6 +129,21 @@ fn mutation_patch(value: MutationPatch) -> types::EditorPatch {
                 count,
             },
         },
+        MutationPatch::ImageUpserted { sheet_index, image } => types::EditorPatch::ImageUpserted {
+            patch: types::ImageUpsertedPatch {
+                sheet_index,
+                image: super::status::sheet_image(image),
+            },
+        },
+        MutationPatch::ImageDeleted {
+            sheet_index,
+            image_id,
+        } => types::EditorPatch::ImageDeleted {
+            patch: types::ImageDeletedPatch {
+                sheet_index,
+                image_id,
+            },
+        },
         MutationPatch::ResyncRequired { reason } => types::EditorPatch::ResyncRequired {
             patch: types::ResyncRequiredPatch { reason },
         },

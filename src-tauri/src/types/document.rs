@@ -176,6 +176,5 @@ pub struct DrawingProjection {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub enum DrawingKind {
-    Image,
     Chart,
 }

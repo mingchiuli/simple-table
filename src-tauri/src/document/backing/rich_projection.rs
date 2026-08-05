@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 #[cfg(test)]
 use crate::document::region_metadata_index::DocumentRegion;
-use crate::document_data::{Drawing, RichMetadata};
+use crate::document_data::{Drawing, ImageAnchor, RichMetadata, SheetImage};
 use crate::domain::cell_key::parse_cell_key;
 
 #[derive(Clone, Copy)]
@@ -37,6 +37,13 @@ impl RichProjectionScope {
         match self {
             Self::Rows { start } => drawing_row_scope_affected(drawing, start),
             Self::Columns { start } => drawing_column_scope_affected(drawing, start),
+        }
+    }
+
+    pub(crate) fn contains_image(self, image: &SheetImage) -> bool {
+        match self {
+            Self::Rows { start } => image_row_scope_affected(image, start),
+            Self::Columns { start } => image_column_scope_affected(image, start),
         }
     }
 
@@ -77,6 +84,12 @@ pub(crate) fn filter_rich_projection(
             .drawings
             .iter()
             .filter(|drawing| scope.contains_drawing(drawing))
+            .cloned()
+            .collect(),
+        images: source
+            .images
+            .iter()
+            .filter(|image| scope.contains_image(image))
             .cloned()
             .collect(),
         has_more_drawings: source.has_more_drawings,
@@ -143,6 +156,7 @@ pub(crate) fn filter_rich_projection_region(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
         drawings,
+        images: source.images.clone(),
         has_more_drawings: source.has_more_drawings,
         has_style_metadata: source.has_style_metadata,
         has_hyperlinks: source.has_hyperlinks,
@@ -167,6 +181,7 @@ pub(crate) fn restore_rich_projection_scope(
     target
         .drawings
         .retain(|drawing| !scope.contains_drawing(drawing));
+    target.images.retain(|image| !scope.contains_image(image));
     target.hidden_rows.retain(|row| !scope.contains_row(*row));
     target
         .hidden_columns
@@ -185,6 +200,7 @@ pub(crate) fn restore_rich_projection_scope(
     target.cell_styles.extend(projection.cell_styles.clone());
     target.hyperlinks.extend(projection.hyperlinks.clone());
     target.drawings.extend(projection.drawings.clone());
+    target.images.extend(projection.images.clone());
     target
         .hidden_rows
         .extend(projection.hidden_rows.iter().copied());
@@ -214,6 +230,24 @@ pub(crate) fn drawing_column_scope_affected(drawing: &Drawing, col_index: usize)
         || drawing
             .to_col
             .is_some_and(|to_col| to_col as usize >= col_index)
+}
+
+pub(crate) fn image_row_scope_affected(image: &SheetImage, row_index: usize) -> bool {
+    match &image.anchor {
+        ImageAnchor::OneCell { from, .. } => from.row as usize >= row_index,
+        ImageAnchor::TwoCell { from, to } => {
+            from.row as usize >= row_index || to.row as usize >= row_index
+        }
+    }
+}
+
+pub(crate) fn image_column_scope_affected(image: &SheetImage, col_index: usize) -> bool {
+    match &image.anchor {
+        ImageAnchor::OneCell { from, .. } => from.col as usize >= col_index,
+        ImageAnchor::TwoCell { from, to } => {
+            from.col as usize >= col_index || to.col as usize >= col_index
+        }
+    }
 }
 
 fn filter_cell_projection_map<T: Clone>(

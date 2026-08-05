@@ -166,6 +166,48 @@ pub fn format_options() -> SpreadsheetFormatOptions {
     document_format_policy::format_options()
 }
 
+pub fn sheet_images_for_command(
+    service: &DocumentQueryService,
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<crate::document_data::SheetImage>, Option<usize>), AppError> {
+    const MAX_PAGE_SIZE: usize = 256;
+    let handle = document_handle_for_read(service.documents(), document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
+    let sheet = editor_state
+        .file_data()
+        .sheets
+        .get(sheet_index)
+        .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
+    let limit = limit.clamp(1, MAX_PAGE_SIZE);
+    let end = offset.saturating_add(limit).min(sheet.rich.images.len());
+    let items = sheet
+        .rich
+        .images
+        .get(offset..end)
+        .unwrap_or_default()
+        .to_vec();
+    let next_offset = (end < sheet.rich.images.len()).then_some(end);
+    Ok((items, next_offset))
+}
+
+pub fn image_bytes_for_command(
+    service: &DocumentQueryService,
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+    image_id: &str,
+) -> Result<std::sync::Arc<[u8]>, AppError> {
+    let handle = document_handle_for_read(service.documents(), document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
+    editor_state
+        .image_bytes(sheet_index, image_id)
+        .ok_or_else(|| AppError::DocumentStateInvalid(format!("image {image_id} is unavailable")))
+}
+
 #[cfg(test)]
 fn active_workbook_capabilities(
     service: &DocumentQueryService,

@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use crate::document_data::{ImageAnchor, SheetImage};
 use crate::domain::CellValue;
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,21 @@ pub enum EditorCommand {
     DeleteSheet {
         sheet_index: usize,
     },
+    InsertImage {
+        sheet_index: usize,
+        image: SheetImage,
+        image_name: String,
+        bytes: Arc<[u8]>,
+    },
+    UpdateImage {
+        sheet_index: usize,
+        image_id: String,
+        anchor: ImageAnchor,
+    },
+    DeleteImage {
+        sheet_index: usize,
+        image_id: String,
+    },
 }
 
 /// Canonical mutation after resolving indices and current document state.
@@ -110,6 +128,21 @@ pub enum AppliedOperation {
     },
     DeleteSheet {
         sheet_index: usize,
+    },
+    InsertImage {
+        sheet_index: usize,
+        image: SheetImage,
+        image_name: String,
+        bytes: Arc<[u8]>,
+    },
+    UpdateImage {
+        sheet_index: usize,
+        old_image: SheetImage,
+        new_image: SheetImage,
+    },
+    DeleteImage {
+        sheet_index: usize,
+        image: SheetImage,
     },
 }
 

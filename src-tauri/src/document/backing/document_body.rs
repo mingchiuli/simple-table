@@ -5,8 +5,8 @@ use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, Workbo
 use crate::document::backing::workbook_port::WorkbookBackingPort;
 use crate::document::backing::workbook_state;
 use crate::document::capabilities::{
-    SheetCapabilities, WorkbookCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
+    SheetCapabilities, WorkbookCapabilities, WorkbookImageCapabilities, WorkbookRichCapabilities,
+    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 use crate::document_format::{SpreadsheetFileFormat, extension_of};
 use crate::domain::{AppliedOperation, DocumentCellChange};
@@ -35,6 +35,12 @@ fn excel_workbook_mut(body: &mut ExcelDocumentBody) -> &mut Workbook {
 
 pub struct SpreadsheetDocumentBodySnapshot {
     body: SpreadsheetDocumentBody,
+}
+
+#[derive(Clone)]
+pub struct BodyImageAsset {
+    pub image_name: String,
+    pub bytes: Arc<[u8]>,
 }
 
 pub enum BodyStructureMemento {
@@ -278,6 +284,26 @@ impl SpreadsheetDocumentBody {
             }
             Self::Csv | Self::GeneratedWorkbook => Ok(()),
         }
+    }
+
+    pub fn image_asset(&self, sheet_index: usize, z_index: usize) -> Option<BodyImageAsset> {
+        let Self::Excel(body) = self else {
+            return None;
+        };
+        let image = excel_workbook(body)
+            .sheet(sheet_index)
+            .ok()?
+            .image_collection()
+            .get(z_index)?;
+        Some(BodyImageAsset {
+            image_name: image.image_name().to_string(),
+            bytes: Arc::from(image.image_data()),
+        })
+    }
+
+    pub fn image_bytes(&self, sheet_index: usize, z_index: usize) -> Option<Arc<[u8]>> {
+        self.image_asset(sheet_index, z_index)
+            .map(|asset| asset.bytes)
     }
 
     pub fn patch_formula_changes(
@@ -574,7 +600,10 @@ fn affected_sheet_index(operation: &AppliedOperation) -> Option<usize> {
         | AppliedOperation::DeleteColumn { sheet_index, .. }
         | AppliedOperation::SetCell { sheet_index, .. }
         | AppliedOperation::SetColumnWidth { sheet_index, .. }
-        | AppliedOperation::SetRowHeight { sheet_index, .. } => Some(*sheet_index),
+        | AppliedOperation::SetRowHeight { sheet_index, .. }
+        | AppliedOperation::InsertImage { sheet_index, .. }
+        | AppliedOperation::UpdateImage { sheet_index, .. }
+        | AppliedOperation::DeleteImage { sheet_index, .. } => Some(*sheet_index),
         AppliedOperation::SetCells { changes } => changes.first().map(|change| change.sheet_index),
         AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => None,
     }
@@ -632,12 +661,24 @@ fn csv_workbook_capabilities() -> WorkbookCapabilities {
             blocked_sheet_structure_reasons: vec!["CSV files only persist one sheet".into()],
             blocked_structure_reasons: vec!["CSV files only persist one sheet".into()],
         },
+        rich: WorkbookRichCapabilities {
+            images: WorkbookImageCapabilities {
+                can_insert: false,
+                can_move_resize: false,
+                can_delete: false,
+                blocked_reasons: vec!["CSV files do not support images; save as XLSX first".into()],
+            },
+            ..WorkbookRichCapabilities::default()
+        },
         sheets: vec![sheet_capabilities],
         ..WorkbookCapabilities::default()
     }
 }
 
 fn csv_unsupported_operation_features(operation: &AppliedOperation) -> Vec<String> {
+    if operation.impact().is_image_change() {
+        return vec!["CSV files do not support images; save as XLSX first".into()];
+    }
     if operation.impact().is_layout_change() {
         return vec!["CSV files do not persist row or column dimensions".into()];
     }

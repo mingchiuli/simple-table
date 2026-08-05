@@ -94,7 +94,17 @@ export function runtimeWorkbookCapabilities(
         ...(capabilities.structure.blockedSheetStructureReasons ?? []),
       ],
     },
-    rich: { ...capabilities.rich },
+    rich: {
+      canEditStyles: capabilities.rich.canEditStyles,
+      canEditDrawings: capabilities.rich.canEditDrawings,
+      canEditHyperlinks: capabilities.rich.canEditHyperlinks,
+      images: {
+        canInsert: capabilities.rich.images.canInsert,
+        canMoveResize: capabilities.rich.images.canMoveResize,
+        canDelete: capabilities.rich.images.canDelete,
+        blockedReasons: [...(capabilities.rich.images.blockedReasons ?? [])],
+      },
+    },
     sheets: (capabilities.sheets ?? []).map((sheet) => ({
       canEditCells: sheet.canEditCells,
       canResizeRowsColumns: sheet.canResizeRowsColumns,

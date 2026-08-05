@@ -20,6 +20,6 @@ pub(crate) use file::picked_file_info;
 pub(crate) use file::{desktop_open_file_info, desktop_open_target_claim};
 pub(crate) use recent::{add_recent_file_input, recent_file, recent_files};
 pub(crate) use search::search_response;
-pub(crate) use status::editor_session;
+pub(crate) use status::{domain_image_anchor, editor_session, sheet_image};
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) use update::mobile_update_info;

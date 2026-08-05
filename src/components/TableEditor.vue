@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CellValue, MergeRange } from '@/types';
 import type { ReadOnlyRichProjection } from '@/types';
+import type { ImageAnchor, SheetImage } from '@/types/documentRuntime';
 import { usePlatform } from '@/composables/usePlatform';
 import { GridViewportShell } from '@/components/table-grid';
 import { useGridGeometry } from '@/table-geometry/useGridGeometry';
@@ -36,6 +37,11 @@ const props = defineProps<{
   canResizeRowsColumns?: boolean;
   columnWidths?: Record<number, number>;
   rowHeights?: Record<number, number>;
+  images?: SheetImage[];
+  imageUrls?: Readonly<Record<string, string>>;
+  selectedImageId?: string | null;
+  canMoveResizeImages?: boolean;
+  canDeleteImages?: boolean;
   rich?: ReadOnlyRichProjection;
   extent?: SheetExtent;
   commitColumnResize: (colIndex: number, width: number) => void | Promise<void>;
@@ -50,6 +56,10 @@ const emit = defineEmits<{
   (e: 'cell-editing', rowIndex: number, colIndex: number, value: string): void;
   (e: 'cell-edit-cancel', rowIndex: number, colIndex: number): void;
   (e: 'viewport-change', rowStart: number, rowEnd: number, colStart: number, colEnd: number): void;
+  (e: 'select-image', imageId: string | null): void;
+  (e: 'image-update', imageId: string, anchor: ImageAnchor): void;
+  (e: 'image-delete', imageId: string): void;
+  (e: 'image-assets-request', imageIds: string[]): void;
 }>();
 
 const {
@@ -97,6 +107,8 @@ const {
   getRowOffset,
   getColumnOffset,
   getDataColumnOffset,
+  getDataColumnIndexAt,
+  getRowIndexAt,
   setColumnWidth: setPreviewColumnWidth,
   setRowHeight: setPreviewRowHeight,
   clearColumnWidth: clearPreviewColumnWidth,
@@ -210,6 +222,11 @@ function handleDeleteColumn(index: number) {
   emit('delete-column', index);
 }
 
+function handleGridCellClick(rowIndex: number, colIndex: number) {
+  emit('select-image', null);
+  handleCellClick(rowIndex, colIndex);
+}
+
 </script>
 
 <template>
@@ -226,6 +243,8 @@ function handleDeleteColumn(index: number) {
       :rows="visibleRows"
       :scroll-left="scrollLeft"
       :scroll-top="scrollTop"
+      :viewport-width="viewportWidth"
+      :viewport-height="viewportHeight"
       :total-columns-width="totalColumnsWidth"
       :total-rows-height="totalRowsHeight"
       :cells="visibleCellItems"
@@ -245,16 +264,29 @@ function handleDeleteColumn(index: number) {
       :resize-line-y="resizeLineY"
       :is-touch-device="isTouchDevice"
       :set-scroll-viewport-ref="setScrollViewportRef"
+      :images="images ?? []"
+      :image-urls="imageUrls ?? {}"
+      :selected-image-id="selectedImageId ?? null"
+      :can-move-resize-images="canMoveResizeImages ?? false"
+      :can-delete-images="canDeleteImages ?? false"
+      :get-column-offset="getDataColumnOffset"
+      :get-row-offset="getRowOffset"
+      :get-column-index-at="getDataColumnIndexAt"
+      :get-row-index-at="getRowIndexAt"
       @scroll="handleViewportScroll"
       @delete-row="handleDeleteRow"
       @delete-column="handleDeleteColumn"
-      @cell-click="handleCellClick"
+      @cell-click="handleGridCellClick"
       @cell-double-click="handleCellDoubleClick"
       @input="handleInput"
       @commit="handleCommit"
       @cancel="handleCancel"
       @column-resize-start="startColumnResize"
       @row-resize-start="startRowResize"
+      @image-select="emit('select-image', $event)"
+      @image-update="(imageId, anchor) => emit('image-update', imageId, anchor)"
+      @image-delete="emit('image-delete', $event)"
+      @image-assets-request="emit('image-assets-request', $event)"
     />
   </div>
 </template>

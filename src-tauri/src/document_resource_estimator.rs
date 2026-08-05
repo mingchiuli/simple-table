@@ -67,6 +67,11 @@ pub(crate) fn sheet_metadata_text_usage(sheet: &DocumentSheet) -> MetadataTextUs
         usage.include(&hyperlink.url);
         usage.include_optional(hyperlink.tooltip.as_ref());
     }
+    for image in &sheet.rich.images {
+        usage.include(&image.id);
+        usage.include(&image.media_id);
+        usage.include(&image.mime_type);
+    }
     usage
 }
 
@@ -170,6 +175,17 @@ pub(crate) fn estimate_rich_metadata_bytes(rich: &RichMetadata) -> usize {
                 .sum::<usize>(),
         )
         .saturating_add(rich.drawings.len() * std::mem::size_of::<Drawing>())
+        .saturating_add(
+            rich.images
+                .iter()
+                .map(|image| {
+                    std::mem::size_of_val(image)
+                        + image.id.len()
+                        + image.media_id.len()
+                        + image.mime_type.len()
+                })
+                .sum::<usize>(),
+        )
 }
 
 pub(crate) fn estimate_cell_format_bytes(format: &CellFormat) -> usize {

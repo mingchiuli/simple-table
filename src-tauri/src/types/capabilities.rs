@@ -115,6 +115,20 @@ impl Default for WorkbookStructureCapabilities {
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
+pub struct WorkbookImageCapabilities {
+    #[serde(default)]
+    pub can_insert: bool,
+    #[serde(default)]
+    pub can_move_resize: bool,
+    #[serde(default)]
+    pub can_delete: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_reasons: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct WorkbookRichCapabilities {
     #[serde(default)]
     pub can_edit_styles: bool,
@@ -122,6 +136,7 @@ pub struct WorkbookRichCapabilities {
     pub can_edit_drawings: bool,
     #[serde(default)]
     pub can_edit_hyperlinks: bool,
+    pub images: WorkbookImageCapabilities,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq, Default)]

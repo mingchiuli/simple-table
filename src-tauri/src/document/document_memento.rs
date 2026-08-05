@@ -1,10 +1,12 @@
 use crate::document_data::{DocumentSheet, MergeRange, RichMetadata};
 use std::collections::{HashMap, HashSet};
 
+use crate::document::backing::document_body::BodyImageAsset;
 use crate::document::backing::document_body::BodyStructureMemento;
 use crate::document::backing::rich_projection::{
     RichProjectionScope, filter_rich_projection, restore_rich_projection_scope,
 };
+use crate::document_data::SheetImage;
 use crate::document_resource_estimator::{
     estimate_cell_value_bytes, estimate_rich_metadata_bytes, estimate_sheet_data_bytes,
 };
@@ -29,6 +31,7 @@ pub(crate) enum DocumentMementoSide {
     Cells(CellMemento),
     Layout(LayoutMemento),
     Structure(Box<StructureMemento>),
+    Image(ImageMemento),
 }
 
 impl DocumentMementoSide {
@@ -37,7 +40,32 @@ impl DocumentMementoSide {
             DocumentMementoSide::Cells(memento) => memento.estimated_bytes(),
             DocumentMementoSide::Layout(memento) => memento.estimated_bytes(),
             DocumentMementoSide::Structure(memento) => memento.estimated_bytes(),
+            DocumentMementoSide::Image(memento) => memento.estimated_bytes(),
         }
+    }
+}
+
+pub(crate) struct ImageMemento {
+    pub(crate) sheet_index: usize,
+    pub(crate) image_id: String,
+    pub(crate) image: Option<SheetImage>,
+    pub(crate) asset: Option<BodyImageAsset>,
+}
+
+impl ImageMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.image_id.len()
+            + self
+                .image
+                .as_ref()
+                .map(|image| image.media_id.len() + image.mime_type.len() + 192)
+                .unwrap_or_default()
+            + self
+                .asset
+                .as_ref()
+                .map(|asset| asset.image_name.len() + asset.bytes.len())
+                .unwrap_or_default()
     }
 }
 
@@ -297,6 +325,21 @@ pub(crate) fn protected_rich_cell_positions(sheet: &DocumentSheet) -> Vec<(usize
         );
         if let (Some(row), Some(col)) = (drawing.to_row, drawing.to_col) {
             push_unique_position_2d(&mut positions, &mut seen, row as usize, col as usize);
+        }
+    }
+    for image in &sheet.rich.images {
+        let (from, to) = match &image.anchor {
+            crate::document_data::ImageAnchor::OneCell { from, .. } => (from, None),
+            crate::document_data::ImageAnchor::TwoCell { from, to } => (from, Some(to)),
+        };
+        push_unique_position_2d(
+            &mut positions,
+            &mut seen,
+            from.row as usize,
+            from.col as usize,
+        );
+        if let Some(to) = to {
+            push_unique_position_2d(&mut positions, &mut seen, to.row as usize, to.col as usize);
         }
     }
     positions

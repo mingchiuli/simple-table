@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use crate::domain::{CellValue, format_cell_display, format_cell_search};
 
+pub const MAX_EMBEDDED_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_RENDER_IMAGE_PIXELS: u64 = 40_000_000;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CellFormat {
     pub number_format: Option<String>,
@@ -37,7 +40,6 @@ pub struct Hyperlink {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DrawingKind {
-    Image,
     Chart,
 }
 
@@ -50,6 +52,39 @@ pub struct Drawing {
     pub to_col: Option<u32>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImageMarker {
+    pub row: u32,
+    pub col: u32,
+    pub row_offset_emu: i32,
+    pub col_offset_emu: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageAnchor {
+    OneCell {
+        from: ImageMarker,
+        width_emu: i64,
+        height_emu: i64,
+    },
+    TwoCell {
+        from: ImageMarker,
+        to: ImageMarker,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SheetImage {
+    pub id: String,
+    pub media_id: String,
+    pub mime_type: String,
+    pub intrinsic_width: u32,
+    pub intrinsic_height: u32,
+    pub anchor: ImageAnchor,
+    pub z_index: usize,
+    pub renderable: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RichMetadata {
     pub cell_formats: HashMap<String, CellFormat>,
@@ -59,6 +94,7 @@ pub struct RichMetadata {
     pub freeze_pane: Option<FreezePane>,
     pub hyperlinks: HashMap<String, Hyperlink>,
     pub drawings: Vec<Drawing>,
+    pub images: Vec<SheetImage>,
     pub has_more_drawings: bool,
     pub has_style_metadata: bool,
     pub has_hyperlinks: bool,
@@ -253,6 +289,18 @@ fn rich_projection_extent(rich: &RichMetadata) -> SheetExtent {
                 .max(drawing.from_col) as usize
                 + 1,
         );
+    }
+    for image in &rich.images {
+        let (from, to) = match &image.anchor {
+            ImageAnchor::OneCell { from, .. } => (from, None),
+            ImageAnchor::TwoCell { from, to } => (from, Some(to)),
+        };
+        extent.row_count = extent
+            .row_count
+            .max(to.map_or(from.row, |to| to.row).max(from.row) as usize + 1);
+        extent.column_count = extent
+            .column_count
+            .max(to.map_or(from.col, |to| to.col).max(from.col) as usize + 1);
     }
     extent
 }

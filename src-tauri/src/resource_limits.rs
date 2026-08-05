@@ -486,7 +486,8 @@ fn sheet_resource_usage(sheet: &DocumentSheet) -> SheetResourceUsage {
         + sheet.rich.hyperlinks.len()
         + sheet.rich.hidden_rows.len()
         + sheet.rich.hidden_columns.len()
-        + sheet.rich.drawings.len();
+        + sheet.rich.drawings.len()
+        + sheet.rich.images.len();
     SheetResourceUsage {
         usage: ProjectionUsage {
             dense_slots,
@@ -551,6 +552,16 @@ fn validate_sheet_metadata(
             validate_position(row as usize, col as usize)?;
         }
     }
+    for image in &sheet.rich.images {
+        let markers = match &image.anchor {
+            crate::document_data::ImageAnchor::OneCell { from, .. } => (from, None),
+            crate::document_data::ImageAnchor::TwoCell { from, to } => (from, Some(to)),
+        };
+        validate_position(markers.0.row as usize, markers.0.col as usize)?;
+        if let Some(to) = markers.1 {
+            validate_position(to.row as usize, to.col as usize)?;
+        }
+    }
 
     let rich_entries = sheet.merges.len()
         + sheet
@@ -568,7 +579,8 @@ fn validate_sheet_metadata(
         + sheet.rich.hyperlinks.len()
         + sheet.rich.hidden_rows.len()
         + sheet.rich.hidden_columns.len()
-        + sheet.rich.drawings.len();
+        + sheet.rich.drawings.len()
+        + sheet.rich.images.len();
     usage.rich_entries = checked_add(usage.rich_entries, rich_entries, "rich metadata entries")?;
     let layout_entries = sheet.column_widths.as_ref().map_or(0, HashMap::len)
         + sheet.row_heights.as_ref().map_or(0, HashMap::len);

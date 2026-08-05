@@ -115,7 +115,7 @@ pub fn prepare_new_file(
     let mut work = service
         .work_budget()
         .reserve_preparation(active_document_bytes, estimated_prepared_bytes)?;
-    let editor_state = EditorState::new(file_data);
+    let editor_state = service.codec().create_document(file_data)?;
     work.set_work_bytes(editor_state.estimated_resource_bytes())?;
     prepare_editor_state(service, editor_state, None, reservation, work)
 }

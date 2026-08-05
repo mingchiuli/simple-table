@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::document_data::SheetImage;
 use crate::domain::DocumentCellChange;
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,14 @@ pub enum DocumentRestoreChange {
     },
     SheetInvalidated {
         sheet_index: usize,
+    },
+    ImageUpserted {
+        sheet_index: usize,
+        image: SheetImage,
+    },
+    ImageDeleted {
+        sheet_index: usize,
+        image_id: String,
     },
     ResyncRequired {
         reason: String,

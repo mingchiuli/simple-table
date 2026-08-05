@@ -17,6 +17,7 @@ use crate::application::document_save_service::DocumentSaveService;
 use crate::application::document_service::DocumentLifecycleService;
 use crate::application::editor_command_service::EditorCommandService;
 use crate::application::file_operation_replay::FileOperationReplayCoordinator;
+use crate::application::image_service::ImageService;
 use crate::application::mutation_replay::MutationReplayCoordinator;
 use crate::application::prepared_document_repository::PreparedDocumentRepository;
 use crate::application::search_service::SearchService;
@@ -39,6 +40,7 @@ pub struct ApplicationRuntime {
     document_files: DocumentFileWorkflowService,
     platform_files: Arc<PlatformFileAdapter>,
     recent_files: RecentFileAdapter,
+    images: ImageService,
     #[cfg(any(target_os = "android", target_os = "ios", test))]
     update_queries: UpdateService,
 }
@@ -111,6 +113,7 @@ impl Default for ApplicationRuntime {
                 #[cfg(any(target_os = "android", target_os = "ios"))]
                 mobile_files.clone(),
             ),
+            images: ImageService::default(),
             #[cfg(any(target_os = "android", target_os = "ios", test))]
             update_queries,
         }
@@ -148,6 +151,10 @@ impl ApplicationRuntime {
 
     pub(crate) fn platform_files(&self) -> &PlatformFileAdapter {
         &self.platform_files
+    }
+
+    pub(crate) fn images(&self) -> &ImageService {
+        &self.images
     }
 
     #[cfg(any(target_os = "android", target_os = "ios", test))]

@@ -65,6 +65,14 @@ pub(crate) fn estimate_memento_side_bytes(
             estimate_file_structure_memento_bytes(projection, operation)
                 + body.estimate_structure_memento_bytes(operation, formula_sheet_indexes)
         }
+        AppliedOperation::InsertImage { bytes, .. } => bytes.len().saturating_add(512),
+        AppliedOperation::UpdateImage { .. } => 512,
+        AppliedOperation::DeleteImage {
+            sheet_index, image, ..
+        } => body
+            .image_bytes(*sheet_index, image.z_index)
+            .map(|bytes| bytes.len().saturating_add(512))
+            .unwrap_or(512),
     }
 }
 
@@ -186,6 +194,9 @@ fn estimate_file_structure_memento_bytes(
         | AppliedOperation::SetCells { .. }
         | AppliedOperation::SetColumnWidth { .. }
         | AppliedOperation::SetRowHeight { .. } => std::mem::size_of::<FileStructureMemento>(),
+        AppliedOperation::InsertImage { .. }
+        | AppliedOperation::UpdateImage { .. }
+        | AppliedOperation::DeleteImage { .. } => std::mem::size_of::<FileStructureMemento>(),
     }
 }
 
@@ -215,6 +226,7 @@ fn estimate_protected_rich_cell_count(sheet: &DocumentSheet) -> usize {
         + sheet.rich.cell_styles.len()
         + sheet.rich.hyperlinks.len()
         + sheet.rich.drawings.len() * 2
+        + sheet.rich.images.len() * 2
 }
 
 fn estimate_rich_projection_tail_bytes(
@@ -308,7 +320,10 @@ fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bo
         | AppliedOperation::SetColumnWidth { .. }
         | AppliedOperation::SetRowHeight { .. }
         | AppliedOperation::AddSheet { .. }
-        | AppliedOperation::DeleteSheet { .. } => false,
+        | AppliedOperation::DeleteSheet { .. }
+        | AppliedOperation::InsertImage { .. }
+        | AppliedOperation::UpdateImage { .. }
+        | AppliedOperation::DeleteImage { .. } => false,
     }
 }
 
@@ -458,7 +473,7 @@ mod tests {
                     .into_iter()
                     .collect(),
                     drawings: vec![Drawing {
-                        kind: DrawingKind::Image,
+                        kind: DrawingKind::Chart,
                         from_row: 1,
                         from_col: 1,
                         to_row: Some(3),

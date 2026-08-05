@@ -3,6 +3,7 @@ mod document;
 mod editor;
 mod execution_runtime;
 mod file;
+mod image;
 mod input;
 pub mod ios;
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -14,6 +15,7 @@ pub use document::*;
 pub use editor::*;
 pub use execution_runtime::CommandExecutionRuntime;
 pub use file::*;
+pub use image::*;
 pub use recent::*;
 pub use search::*;
 

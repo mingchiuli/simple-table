@@ -139,6 +139,38 @@ impl ProjectionMutation<'_> {
             AppliedOperation::DeleteSheet { sheet_index } => {
                 file_data.sheets.remove(*sheet_index);
             }
+            AppliedOperation::InsertImage {
+                sheet_index, image, ..
+            } => {
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    let index = image.z_index.min(sheet.rich.images.len());
+                    sheet.rich.images.insert(index, image.clone());
+                    normalize_image_z_indexes(&mut sheet.rich.images);
+                }
+            }
+            AppliedOperation::UpdateImage {
+                sheet_index,
+                new_image,
+                ..
+            } => {
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index)
+                    && let Some(image) = sheet
+                        .rich
+                        .images
+                        .iter_mut()
+                        .find(|image| image.id == new_image.id)
+                {
+                    *image = new_image.clone();
+                }
+            }
+            AppliedOperation::DeleteImage {
+                sheet_index, image, ..
+            } => {
+                if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
+                    sheet.rich.images.retain(|current| current.id != image.id);
+                    normalize_image_z_indexes(&mut sheet.rich.images);
+                }
+            }
         }
     }
 
@@ -157,7 +189,16 @@ impl ProjectionMutation<'_> {
             | AppliedOperation::DeleteColumn { .. }
             | AppliedOperation::AddSheet { .. }
             | AppliedOperation::DeleteSheet { .. } => false,
+            AppliedOperation::InsertImage { .. }
+            | AppliedOperation::UpdateImage { .. }
+            | AppliedOperation::DeleteImage { .. } => false,
         }
+    }
+}
+
+fn normalize_image_z_indexes(images: &mut [crate::document_data::SheetImage]) {
+    for (z_index, image) in images.iter_mut().enumerate() {
+        image.z_index = z_index;
     }
 }
 
@@ -510,7 +551,7 @@ mod tests {
                     hidden_rows: vec![2],
                     hidden_columns: vec![1],
                     drawings: vec![Drawing {
-                        kind: DrawingKind::Image,
+                        kind: DrawingKind::Chart,
                         from_row: 1,
                         from_col: 1,
                         to_row: Some(2),

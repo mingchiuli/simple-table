@@ -15,6 +15,8 @@ import type {
 } from "@/types";
 import { workbookSheetCapabilities } from "@/types";
 import { appErrorMessage } from "@/utils/appError";
+import { discardImageSelection, pickImage } from '@/api';
+import type { ImageAnchor } from '@/types/documentRuntime';
 
 type UseEditorCommandsOptions = {
   fileData: ComputedRef<DocumentProjection | null>;
@@ -208,6 +210,71 @@ export function useEditorCommands({
     );
   }
 
+  async function handleInsertImage() {
+    if (!fileData.value || isEditorCommandBlocked() || !ensureImageEditingAllowed('insert')) return;
+    const documentId = documentSessionStore.documentId;
+    const sheetIndex = currentSheetIndex.value;
+    let token: string | null = null;
+    try {
+      const selection = await pickImage();
+      if (!selection) return;
+      token = selection.token;
+      if (documentSessionStore.documentId !== documentId || currentSheetIndex.value !== sheetIndex) {
+        return;
+      }
+      const anchor = selectedCell.value ?? { row: 0, col: 0 };
+      await commandBus.insertImage(
+        sheetIndex,
+        anchor.row,
+        anchor.col,
+        selection.token,
+        mutationOptions('Failed to insert image'),
+      );
+    } catch (error) {
+      ElMessage.error(`Failed to select image: ${appErrorMessage(error)}`);
+    } finally {
+      if (token) {
+        try {
+          await discardImageSelection(token);
+        } catch (error) {
+          console.error('Failed to discard image selection:', error);
+        }
+      }
+    }
+  }
+
+  async function handleImageUpdate(imageId: string, anchor: ImageAnchor) {
+    if (isEditorCommandBlocked() || !ensureImageEditingAllowed('moveResize')) return;
+    await commandBus.updateImage(
+      currentSheetIndex.value,
+      imageId,
+      anchor,
+      mutationOptions('Failed to update image', { refreshProjectionOnError: true }),
+    );
+  }
+
+  async function handleImageDelete(imageId: string) {
+    if (isEditorCommandBlocked() || !ensureImageEditingAllowed('delete')) return;
+    await commandBus.deleteImage(
+      currentSheetIndex.value,
+      imageId,
+      mutationOptions('Failed to delete image', { refreshProjectionOnError: true }),
+    );
+  }
+
+  function ensureImageEditingAllowed(action: 'insert' | 'moveResize' | 'delete'): boolean {
+    const imageCapabilities = documentStatusStore.capabilities.rich.images;
+    const allowed = action === 'insert'
+      ? imageCapabilities.canInsert
+      : action === 'moveResize'
+        ? imageCapabilities.canMoveResize
+        : imageCapabilities.canDelete;
+    if (allowed) return true;
+    const reason = imageCapabilities.blockedReasons.join(', ');
+    ElMessage.warning(reason || 'Images require an XLSX document; save as XLSX first');
+    return false;
+  }
+
   function ensureStructureEditingAllowed(kind: "rows" | "columns" | "sheets"): boolean {
     const capabilities = documentStatusStore.capabilities;
     const sheetCapabilities = currentSheetCapabilities();
@@ -284,5 +351,8 @@ export function useEditorCommands({
     handleSelectCell,
     handleColumnResize,
     handleRowResize,
+    handleInsertImage,
+    handleImageUpdate,
+    handleImageDelete,
   };
 }

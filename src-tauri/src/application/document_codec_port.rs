@@ -1,4 +1,5 @@
 use crate::document::document_model::SpreadsheetDocument;
+use crate::document_data::DocumentData;
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
 
@@ -24,6 +25,10 @@ pub(crate) trait SavedDocumentDecodePlan: Send {
 }
 
 pub(crate) trait DocumentCodecPort: Send + Sync {
+    fn create_document(&self, projection: DocumentData) -> Result<EditorState, AppError> {
+        Ok(EditorState::new(projection))
+    }
+
     fn plan_open(
         &self,
         source: &OpenDocumentSource,

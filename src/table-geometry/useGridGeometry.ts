@@ -262,6 +262,14 @@ export function useGridGeometry({
     return rowHeaderWidth + getDataColumnOffset(colIndex);
   }
 
+  function getDataColumnIndexAt(left: number): number {
+    return columnGeometry.value.indexAt(Math.max(0, left) + 0.001, previewColumnWidths.value);
+  }
+
+  function getRowIndexAt(top: number): number {
+    return rowGeometry.value.indexAt(Math.max(0, top) + 0.001, previewRowHeights.value);
+  }
+
   function getColumnSpanWidth(startCol: number, endCol: number): number {
     return Math.max(0, getDataColumnOffset(endCol + 1) - getDataColumnOffset(startCol));
   }
@@ -320,6 +328,8 @@ export function useGridGeometry({
     getRowOffset,
     getColumnOffset,
     getDataColumnOffset,
+    getDataColumnIndexAt,
+    getRowIndexAt,
     setColumnWidth,
     setRowHeight,
     clearColumnWidth,

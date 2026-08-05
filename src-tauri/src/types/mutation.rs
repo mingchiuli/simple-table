@@ -7,6 +7,7 @@ use super::cell_change::SheetCellChange;
 use super::document::{SheetExtent, SheetManifest};
 use super::editor_session::EditorStateInfo;
 use super::formula::FormulaStatus;
+use super::image::SheetImage;
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +107,22 @@ pub struct ResyncRequiredPatch {
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ImageUpsertedPatch {
+    pub sheet_index: usize,
+    pub image: SheetImage,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ImageDeletedPatch {
+    pub sheet_index: usize,
+    pub image_id: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[serde(tag = "type", content = "data")]
 #[ts(tag = "type", content = "data")]
 pub enum EditorPatch {
@@ -129,6 +146,10 @@ pub enum EditorPatch {
     ColumnInserted { patch: ColumnInsertedPatch },
     #[serde(rename = "ColumnDeleted")]
     ColumnDeleted { patch: ColumnDeletedPatch },
+    #[serde(rename = "ImageUpserted")]
+    ImageUpserted { patch: ImageUpsertedPatch },
+    #[serde(rename = "ImageDeleted")]
+    ImageDeleted { patch: ImageDeletedPatch },
     #[serde(rename = "ResyncRequired")]
     ResyncRequired { patch: ResyncRequiredPatch },
 }

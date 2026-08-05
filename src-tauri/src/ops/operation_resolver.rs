@@ -240,8 +240,138 @@ impl EditorCommand {
                 require_sheet(file_data, sheet_index)?;
                 Ok(AppliedOperation::DeleteSheet { sheet_index })
             }
+            EditorCommand::InsertImage {
+                sheet_index,
+                mut image,
+                image_name,
+                bytes,
+            } => {
+                validate_image_anchor(&image.anchor)?;
+                let sheet = file_data
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or_else(|| AppError::InvalidSheetIndex(sheet_index))?;
+                if sheet
+                    .rich
+                    .images
+                    .iter()
+                    .any(|existing| existing.id == image.id)
+                {
+                    return Err(AppError::DocumentStateInvalid(format!(
+                        "image {} already exists",
+                        image.id
+                    )));
+                }
+                image.z_index = sheet.rich.images.len();
+                Ok(AppliedOperation::InsertImage {
+                    sheet_index,
+                    image,
+                    image_name,
+                    bytes,
+                })
+            }
+            EditorCommand::UpdateImage {
+                sheet_index,
+                image_id,
+                anchor,
+            } => {
+                validate_image_anchor(&anchor)?;
+                let sheet = file_data
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or_else(|| AppError::InvalidSheetIndex(sheet_index))?;
+                let old_image = sheet
+                    .rich
+                    .images
+                    .iter()
+                    .find(|image| image.id == image_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        AppError::DocumentStateInvalid(format!("image {image_id} does not exist"))
+                    })?;
+                if !old_image.renderable {
+                    return Err(AppError::DocumentStateInvalid(format!(
+                        "image {image_id} uses an unsupported format"
+                    )));
+                }
+                let mut new_image = old_image.clone();
+                new_image.anchor = anchor;
+                Ok(AppliedOperation::UpdateImage {
+                    sheet_index,
+                    old_image,
+                    new_image,
+                })
+            }
+            EditorCommand::DeleteImage {
+                sheet_index,
+                image_id,
+            } => {
+                let sheet = file_data
+                    .sheets
+                    .get(sheet_index)
+                    .ok_or_else(|| AppError::InvalidSheetIndex(sheet_index))?;
+                let image = sheet
+                    .rich
+                    .images
+                    .iter()
+                    .find(|image| image.id == image_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        AppError::DocumentStateInvalid(format!("image {image_id} does not exist"))
+                    })?;
+                Ok(AppliedOperation::DeleteImage { sheet_index, image })
+            }
         }
     }
+}
+
+fn validate_image_anchor(anchor: &crate::document_data::ImageAnchor) -> Result<(), AppError> {
+    const MAX_ROW: u32 = 1_048_575;
+    const MAX_COL: u32 = 16_383;
+    const MAX_IMAGE_EMU: i64 = 100_000 * 9_525;
+    let validate_marker = |marker: &crate::document_data::ImageMarker| {
+        if marker.row > MAX_ROW || marker.col > MAX_COL {
+            return Err(AppError::InvalidCellPosition {
+                row: marker.row as usize,
+                col: marker.col as usize,
+            });
+        }
+        if marker.row_offset_emu < 0 || marker.col_offset_emu < 0 {
+            return Err(AppError::DocumentStateInvalid(
+                "image anchor offsets cannot be negative".to_string(),
+            ));
+        }
+        Ok(())
+    };
+    match anchor {
+        crate::document_data::ImageAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            validate_marker(from)?;
+            if !(1..=MAX_IMAGE_EMU).contains(width_emu) || !(1..=MAX_IMAGE_EMU).contains(height_emu)
+            {
+                return Err(AppError::ResourceLimitExceeded(
+                    "image dimensions are outside the supported range".to_string(),
+                ));
+            }
+        }
+        crate::document_data::ImageAnchor::TwoCell { from, to } => {
+            validate_marker(from)?;
+            validate_marker(to)?;
+            let width_is_positive = to.col > from.col
+                || (to.col == from.col && to.col_offset_emu > from.col_offset_emu);
+            let height_is_positive = to.row > from.row
+                || (to.row == from.row && to.row_offset_emu > from.row_offset_emu);
+            if !width_is_positive || !height_is_positive {
+                return Err(AppError::DocumentStateInvalid(
+                    "two-cell image anchor must have positive width and height".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn require_sheet(file_data: &DocumentData, sheet_index: usize) -> Result<&DocumentSheet, AppError> {
@@ -460,7 +590,7 @@ mod tests {
             hidden_rows: vec![9],
             hidden_columns: vec![7],
             drawings: vec![Drawing {
-                kind: DrawingKind::Image,
+                kind: DrawingKind::Chart,
                 from_row: 11,
                 from_col: 12,
                 to_row: Some(14),

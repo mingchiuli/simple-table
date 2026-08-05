@@ -1,11 +1,11 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document_data::{DocumentData, DocumentSheet, ImageAnchor, ImageMarker};
 use std::collections::HashMap;
 
 use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, WorkbookSheetShape};
 use crate::document::backing::workbook_port::WorkbookBackingPort;
 use crate::document::capabilities::{
-    SheetCapabilities, WorkbookCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
-    WorkbookStructureCapabilities,
+    SheetCapabilities, WorkbookCapabilities, WorkbookImageCapabilities, WorkbookRichCapabilities,
+    WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
 use crate::domain::{AppliedOperation, CellValue, DocumentCellChange};
 use crate::error::AppError;
@@ -82,6 +82,60 @@ pub fn patch_after_operation(
         } => {
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 patch_row_height(worksheet, *row_index, *new_height, backing);
+            }
+        }
+        AppliedOperation::InsertImage {
+            sheet_index,
+            image,
+            image_name,
+            bytes,
+        } => {
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                let marker = marker_type(match &image.anchor {
+                    ImageAnchor::OneCell { from, .. } | ImageAnchor::TwoCell { from, .. } => from,
+                });
+                let mut workbook_image = umya_spreadsheet::Image::default();
+                workbook_image.new_image_with_dimensions(
+                    image.intrinsic_height,
+                    image.intrinsic_width,
+                    image_name,
+                    bytes.as_ref().to_vec(),
+                    marker,
+                );
+                set_image_identity(&mut workbook_image, &image.id);
+                apply_image_anchor(&mut workbook_image, &image.anchor)?;
+                worksheet.add_image(workbook_image);
+            }
+        }
+        AppliedOperation::UpdateImage {
+            sheet_index,
+            old_image,
+            new_image,
+        } => {
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                let workbook_image = worksheet
+                    .image_collection_mut()
+                    .get_mut(old_image.z_index)
+                    .ok_or_else(|| {
+                        AppError::WorkbookPatchFailed(format!(
+                            "workbook image {} is missing",
+                            old_image.id
+                        ))
+                    })?;
+                apply_image_anchor(workbook_image, &new_image.anchor)?;
+            }
+        }
+        AppliedOperation::DeleteImage {
+            sheet_index, image, ..
+        } => {
+            if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
+                if image.z_index >= worksheet.image_collection().len() {
+                    return Err(AppError::WorkbookPatchFailed(format!(
+                        "workbook image {} is missing",
+                        image.id
+                    )));
+                }
+                worksheet.image_collection_mut().remove(image.z_index);
             }
         }
     }
@@ -216,10 +270,82 @@ pub fn apply_structure_operation(
         AppliedOperation::SetCell { .. }
         | AppliedOperation::SetCells { .. }
         | AppliedOperation::SetColumnWidth { .. }
-        | AppliedOperation::SetRowHeight { .. } => {}
+        | AppliedOperation::SetRowHeight { .. }
+        | AppliedOperation::InsertImage { .. }
+        | AppliedOperation::UpdateImage { .. }
+        | AppliedOperation::DeleteImage { .. } => {}
     }
 
     Ok(diagnostics)
+}
+
+fn marker_type(
+    marker: &ImageMarker,
+) -> umya_spreadsheet::structs::drawing::spreadsheet::MarkerType {
+    let mut value = umya_spreadsheet::structs::drawing::spreadsheet::MarkerType::default();
+    value
+        .set_row(marker.row)
+        .set_col(marker.col)
+        .set_row_off(marker.row_offset_emu)
+        .set_col_off(marker.col_offset_emu);
+    value
+}
+
+fn apply_image_anchor(
+    image: &mut umya_spreadsheet::Image,
+    anchor: &ImageAnchor,
+) -> Result<(), AppError> {
+    let picture = image
+        .one_cell_anchor()
+        .and_then(|anchor| anchor.picture())
+        .or_else(|| image.two_cell_anchor().and_then(|anchor| anchor.picture()))
+        .cloned()
+        .ok_or_else(|| {
+            AppError::WorkbookPatchFailed("image picture data is missing".to_string())
+        })?;
+
+    match anchor {
+        ImageAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            let mut value =
+                umya_spreadsheet::structs::drawing::spreadsheet::OneCellAnchor::default();
+            value.set_from_marker(marker_type(from));
+            value.extent_mut().set_cx(*width_emu).set_cy(*height_emu);
+            value.set_picture(picture);
+            image.remove_two_cell_anchor().set_one_cell_anchor(value);
+        }
+        ImageAnchor::TwoCell { from, to } => {
+            let mut value =
+                umya_spreadsheet::structs::drawing::spreadsheet::TwoCellAnchor::default();
+            value
+                .set_from_marker(marker_type(from))
+                .set_to_marker(marker_type(to))
+                .set_picture(picture);
+            image.remove_one_cell_anchor().set_two_cell_anchor(value);
+        }
+    }
+    Ok(())
+}
+
+fn set_image_identity(image: &mut umya_spreadsheet::Image, image_id: &str) {
+    if let Some(anchor) = image.one_cell_anchor_mut()
+        && let Some(picture) = anchor.picture_mut()
+    {
+        picture
+            .non_visual_picture_properties_mut()
+            .non_visual_drawing_properties_mut()
+            .set_name(format!("simple-table-image-{image_id}"));
+    } else if let Some(anchor) = image.two_cell_anchor_mut()
+        && let Some(picture) = anchor.picture_mut()
+    {
+        picture
+            .non_visual_picture_properties_mut()
+            .non_visual_drawing_properties_mut()
+            .set_name(format!("simple-table-image-{image_id}"));
+    }
 }
 
 pub fn workbook_capabilities(
@@ -232,6 +358,7 @@ pub fn workbook_capabilities(
     let mut blocked_row_structure_reasons = Vec::new();
     let mut blocked_column_structure_reasons = Vec::new();
     let mut blocked_sheet_structure_reasons = Vec::new();
+    let mut blocked_image_reasons = Vec::new();
     let mut global_sheet_reasons = SheetCapabilityReasons::default();
 
     if !workbook.defined_names().is_empty() {
@@ -259,6 +386,7 @@ pub fn workbook_capabilities(
         global_sheet_reasons.block_resize("workbook protection");
         global_sheet_reasons.block_row_structure("workbook protection");
         global_sheet_reasons.block_column_structure("workbook protection");
+        push_block_reason(&mut blocked_image_reasons, "workbook protection");
     }
     if workbook.has_threaded_comments() {
         push_detected_feature(&mut detected_features, "threaded comments");
@@ -309,12 +437,21 @@ pub fn workbook_capabilities(
             sheet_reasons.block_row_structure("charts");
             sheet_reasons.block_column_structure("charts");
         }
-        if !worksheet.image_collection().is_empty() || worksheet.has_drawing_object() {
-            push_detected_feature(&mut detected_features, "drawings/images");
-            push_block_reason(&mut blocked_row_structure_reasons, "drawings/images");
-            push_block_reason(&mut blocked_column_structure_reasons, "drawings/images");
-            sheet_reasons.block_row_structure("drawings/images");
-            sheet_reasons.block_column_structure("drawings/images");
+        if !worksheet.image_collection().is_empty() {
+            push_detected_feature(&mut detected_features, "images");
+        }
+        if worksheet.has_drawing_object()
+            && worksheet.image_collection().is_empty()
+            && worksheet.chart_collection().is_empty()
+        {
+            push_detected_feature(&mut detected_features, "unsupported drawings");
+            push_block_reason(&mut blocked_row_structure_reasons, "unsupported drawings");
+            push_block_reason(
+                &mut blocked_column_structure_reasons,
+                "unsupported drawings",
+            );
+            sheet_reasons.block_row_structure("unsupported drawings");
+            sheet_reasons.block_column_structure("unsupported drawings");
         }
         if worksheet.data_validations().is_some() || worksheet.data_validations_2010().is_some() {
             push_detected_feature(&mut detected_features, "data validations");
@@ -362,6 +499,7 @@ pub fn workbook_capabilities(
             sheet_reasons.block_resize("sheet protection");
             sheet_reasons.block_row_structure("sheet protection");
             sheet_reasons.block_column_structure("sheet protection");
+            push_block_reason(&mut blocked_image_reasons, "sheet protection");
         }
         sheets.push(sheet_reasons.into_capabilities());
     }
@@ -372,6 +510,7 @@ pub fn workbook_capabilities(
     normalize_reasons(&mut blocked_row_structure_reasons);
     normalize_reasons(&mut blocked_column_structure_reasons);
     normalize_reasons(&mut blocked_sheet_structure_reasons);
+    normalize_reasons(&mut blocked_image_reasons);
 
     let blocked_structure_reasons = merged_reasons([
         &blocked_row_structure_reasons,
@@ -407,7 +546,15 @@ pub fn workbook_capabilities(
             blocked_structure_reasons,
             blocked_sheet_structure_reasons,
         },
-        rich: WorkbookRichCapabilities::default(),
+        rich: WorkbookRichCapabilities {
+            images: WorkbookImageCapabilities {
+                can_insert: blocked_image_reasons.is_empty(),
+                can_move_resize: blocked_image_reasons.is_empty(),
+                can_delete: blocked_image_reasons.is_empty(),
+                blocked_reasons: blocked_image_reasons,
+            },
+            ..WorkbookRichCapabilities::default()
+        },
         sheets,
     }
 }
@@ -502,6 +649,9 @@ fn operation_blocker_sheet_indexes(
         | AppliedOperation::DeleteRow { sheet_index, .. }
         | AppliedOperation::AddColumn { sheet_index, .. }
         | AppliedOperation::DeleteColumn { sheet_index, .. } => vec![*sheet_index],
+        AppliedOperation::InsertImage { sheet_index, .. }
+        | AppliedOperation::UpdateImage { sheet_index, .. }
+        | AppliedOperation::DeleteImage { sheet_index, .. } => vec![*sheet_index],
         AppliedOperation::SetCells { changes } => {
             let mut indexes: Vec<usize> = changes.iter().map(|change| change.sheet_index).collect();
             indexes.sort_unstable();
@@ -523,7 +673,8 @@ fn push_worksheet_operation_blockers(
         && (operation.impact().is_cell_edit()
             || operation.impact().is_layout_change()
             || operation.impact().is_row_structure_change()
-            || operation.impact().is_column_structure_change())
+            || operation.impact().is_column_structure_change()
+            || operation.impact().is_image_change())
     {
         push_block_reason(reasons, "sheet protection");
     }
@@ -548,9 +699,11 @@ fn push_worksheet_operation_blockers(
     }
     if (operation.impact().is_row_structure_change()
         || operation.impact().is_column_structure_change())
-        && (!worksheet.image_collection().is_empty() || worksheet.has_drawing_object())
+        && worksheet.has_drawing_object()
+        && worksheet.image_collection().is_empty()
+        && worksheet.chart_collection().is_empty()
     {
-        push_block_reason(reasons, "drawings/images");
+        push_block_reason(reasons, "unsupported drawings");
     }
     if (operation.impact().is_row_structure_change()
         || operation.impact().is_column_structure_change())

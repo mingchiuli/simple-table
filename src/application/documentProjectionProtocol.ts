@@ -6,6 +6,7 @@ import type {
   SheetManifest as ProtocolSheetManifest,
   SheetRegionMetadata as ProtocolSheetRegionMetadata,
   SheetRegionProjectionResponse,
+  SheetImage as ProtocolSheetImage,
 } from '@/types/protocol';
 import type {
   CellValue,
@@ -16,6 +17,7 @@ import type {
   SheetManifest,
   SheetRegionMetadata,
   SheetRegionProjection,
+  SheetImage,
 } from '@/types/documentRuntime';
 import { regionBlock } from '@/projection/documentProjection';
 
@@ -120,12 +122,52 @@ export function runtimeEditorPatches(
         return { type: 'ColumnInserted', data: { patch: { ...patch.data.patch } } };
       case 'ColumnDeleted':
         return { type: 'ColumnDeleted', data: { patch: { ...patch.data.patch } } };
+      case 'ImageUpserted':
+        return {
+          type: 'ImageUpserted',
+          data: {
+            patch: {
+              sheetIndex: patch.data.patch.sheetIndex,
+              image: runtimeSheetImage(patch.data.patch.image),
+            },
+          },
+        };
+      case 'ImageDeleted':
+        return { type: 'ImageDeleted', data: { patch: { ...patch.data.patch } } };
       case 'ResyncRequired':
         return { type: 'ResyncRequired', data: { patch: { ...patch.data.patch } } };
       default:
         return assertNever(patch);
     }
   });
+}
+
+export function runtimeSheetImage(image: ProtocolSheetImage): SheetImage {
+  return {
+    id: image.id,
+    mediaId: image.mediaId,
+    mimeType: image.mimeType,
+    intrinsicWidth: image.intrinsicWidth,
+    intrinsicHeight: image.intrinsicHeight,
+    anchor: image.anchor.type === 'OneCell'
+      ? {
+          type: 'OneCell',
+          data: {
+            from: { ...image.anchor.data.from },
+            widthEmu: image.anchor.data.widthEmu,
+            heightEmu: image.anchor.data.heightEmu,
+          },
+        }
+      : {
+          type: 'TwoCell',
+          data: {
+            from: { ...image.anchor.data.from },
+            to: { ...image.anchor.data.to },
+          },
+        },
+    zIndex: image.zIndex,
+    renderable: image.renderable,
+  };
 }
 
 export function runtimeSheetExtents(

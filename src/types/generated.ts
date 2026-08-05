@@ -38,7 +38,7 @@ export type ReadOnlyRichProjection = { cellFormats?: { [key in string]: CellForm
 
 export type DrawingProjection = { kind: DrawingKind, fromRow: number, fromCol: number, toRow?: number | null, toCol?: number | null, };
 
-export type DrawingKind = "image" | "chart";
+export type DrawingKind = "chart";
 
 export type SheetCapabilities = { canEditCells: boolean, canResizeRowsColumns: boolean, canInsertDeleteRows: boolean, canInsertDeleteColumns: boolean, blockedEditReasons?: Array<string>, blockedResizeReasons?: Array<string>, blockedRowStructureReasons?: Array<string>, blockedColumnStructureReasons?: Array<string>, };
 
@@ -46,7 +46,9 @@ export type WorkbookSaveCapabilities = { canNativeSave: boolean, blockedSaveReas
 
 export type WorkbookStructureCapabilities = { canInsertDeleteSheets: boolean, blockedStructureReasons?: Array<string>, blockedSheetStructureReasons?: Array<string>, };
 
-export type WorkbookRichCapabilities = { canEditStyles: boolean, canEditDrawings: boolean, canEditHyperlinks: boolean, };
+export type WorkbookRichCapabilities = { canEditStyles: boolean, canEditDrawings: boolean, canEditHyperlinks: boolean, images: WorkbookImageCapabilities, };
+
+export type WorkbookImageCapabilities = { canInsert: boolean, canMoveResize: boolean, canDelete: boolean, blockedReasons?: Array<string>, };
 
 export type WorkbookCapabilities = { save: WorkbookSaveCapabilities, structure: WorkbookStructureCapabilities, rich: WorkbookRichCapabilities, sheets?: Array<SheetCapabilities>, };
 
@@ -114,7 +116,21 @@ export type ColumnDeletedPatch = { sheetIndex: number, colIndex: number, count: 
 
 export type ResyncRequiredPatch = { reason: string, };
 
-export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetInvalidated", "data": { patch: SheetInvalidatedPatch, } } | { "type": "SheetsReplaced", "data": { patch: SheetsReplacedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
+export type ImageMarker = { row: number, col: number, rowOffsetEmu: number, colOffsetEmu: number, };
+
+export type ImageAnchor = { "type": "OneCell", "data": { from: ImageMarker, widthEmu: number, heightEmu: number, } } | { "type": "TwoCell", "data": { from: ImageMarker, to: ImageMarker, } };
+
+export type SheetImage = { id: string, mediaId: string, mimeType: string, intrinsicWidth: number, intrinsicHeight: number, anchor: ImageAnchor, zIndex: number, renderable: boolean, };
+
+export type SheetImagePage = { items: Array<SheetImage>, nextOffset?: number, };
+
+export type ImageSelection = { token: string, fileName: string, mimeType: string, width: number, height: number, };
+
+export type ImageUpsertedPatch = { sheetIndex: number, image: SheetImage, };
+
+export type ImageDeletedPatch = { sheetIndex: number, imageId: string, };
+
+export type EditorPatch = { "type": "Cells", "data": { changes: Array<SheetCellChange>, } } | { "type": "Layout", "data": { patch: LayoutPatch, } } | { "type": "SheetInserted", "data": { patch: SheetInsertedPatch, } } | { "type": "SheetDeleted", "data": { patch: SheetDeletedPatch, } } | { "type": "SheetInvalidated", "data": { patch: SheetInvalidatedPatch, } } | { "type": "SheetsReplaced", "data": { patch: SheetsReplacedPatch, } } | { "type": "RowInserted", "data": { patch: RowInsertedPatch, } } | { "type": "RowDeleted", "data": { patch: RowDeletedPatch, } } | { "type": "ColumnInserted", "data": { patch: ColumnInsertedPatch, } } | { "type": "ColumnDeleted", "data": { patch: ColumnDeletedPatch, } } | { "type": "ImageUpserted", "data": { patch: ImageUpsertedPatch, } } | { "type": "ImageDeleted", "data": { patch: ImageDeletedPatch, } } | { "type": "ResyncRequired", "data": { patch: ResyncRequiredPatch, } };
 
 export type EditorCommandContext = { documentId: U64String, baseRevision: U64String, };
 
@@ -211,5 +227,12 @@ export type TauriCommandMap = {
   "save_file_ios": { args: { path: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: SavedDocumentResponse },
   "export_file_ios": { args: { defaultName: string, documentId: U64String, baseRevision: U64String, operationId: string }, result: FileOperationReceipt | null },
   "check_update_mobile": { args: { currentVersion: string }, result: UpdateInfo | null },
+  "pick_image": { args: Record<string, never>, result: ImageSelection | null },
+  "discard_image_selection": { args: { token: string }, result: void },
+  "insert_image": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, row: number, col: number, selectionToken: string }, result: EditorMutationResponse },
+  "update_image": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, imageId: string, anchor: ImageAnchor }, result: EditorMutationResponse },
+  "delete_image": { args: { documentId: U64String, baseRevision: U64String, commandId: string, sheetIndex: number, imageId: string }, result: EditorMutationResponse },
+  "get_sheet_images": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, offset: number, limit: number }, result: SheetImagePage },
+  "get_image_bytes": { args: { documentId: U64String, baseRevision: U64String, sheetIndex: number, imageId: string }, result: ArrayBuffer },
 }
 

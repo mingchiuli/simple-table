@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::application::image_service::StagedImage;
 use crate::application::mutation_intent::MutationIntent;
 use crate::application::mutation_replay::{self, MutationReplayCoordinator};
 use crate::application::search_ports::SearchIndexMaintenancePort;
@@ -289,6 +290,99 @@ pub fn delete_sheet(
         base_revision,
         command_id,
         EditorCommand::DeleteSheet { sheet_index },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_image(
+    service: &EditorCommandService,
+    document_id: u64,
+    base_revision: u64,
+    command_id: &str,
+    sheet_index: usize,
+    row: u32,
+    col: u32,
+    staged: StagedImage,
+) -> Result<MutationOutcome, AppError> {
+    const EMU_PER_PIXEL: i64 = 9_525;
+    let scale = (320.0 / f64::from(staged.width))
+        .min(240.0 / f64::from(staged.height))
+        .min(1.0);
+    let display_width = (f64::from(staged.width) * scale).round().max(1.0) as i64;
+    let display_height = (f64::from(staged.height) * scale).round().max(1.0) as i64;
+    let image_id = uuid::Uuid::new_v4().to_string();
+    let image = crate::document_data::SheetImage {
+        id: image_id,
+        media_id: staged.media_id,
+        mime_type: staged.mime_type,
+        intrinsic_width: staged.width,
+        intrinsic_height: staged.height,
+        anchor: crate::document_data::ImageAnchor::OneCell {
+            from: crate::document_data::ImageMarker {
+                row,
+                col,
+                ..Default::default()
+            },
+            width_emu: display_width * EMU_PER_PIXEL,
+            height_emu: display_height * EMU_PER_PIXEL,
+        },
+        z_index: 0,
+        renderable: true,
+    };
+    run_editor_command(
+        service,
+        document_id,
+        base_revision,
+        command_id,
+        EditorCommand::InsertImage {
+            sheet_index,
+            image,
+            image_name: staged.file_name,
+            bytes: staged.bytes,
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_image(
+    service: &EditorCommandService,
+    document_id: u64,
+    base_revision: u64,
+    command_id: &str,
+    sheet_index: usize,
+    image_id: String,
+    anchor: crate::document_data::ImageAnchor,
+) -> Result<MutationOutcome, AppError> {
+    run_editor_command(
+        service,
+        document_id,
+        base_revision,
+        command_id,
+        EditorCommand::UpdateImage {
+            sheet_index,
+            image_id,
+            anchor,
+        },
+    )
+}
+
+pub fn delete_image(
+    service: &EditorCommandService,
+    document_id: u64,
+    base_revision: u64,
+    command_id: &str,
+    sheet_index: usize,
+    image_id: String,
+) -> Result<MutationOutcome, AppError> {
+    run_editor_command(
+        service,
+        document_id,
+        base_revision,
+        command_id,
+        EditorCommand::DeleteImage {
+            sheet_index,
+            image_id,
+        },
     )
 }
 

@@ -5,6 +5,7 @@ import {
   CirclePlus,
   Delete,
   Plus,
+  Picture,
   Refresh,
   RefreshLeft,
   RefreshRight,
@@ -30,6 +31,7 @@ const props = defineProps<{
     canInsertDeleteRows: boolean;
     canInsertDeleteColumns: boolean;
     canInsertDeleteSheets: boolean;
+    canInsertImages: boolean;
   };
   isBusy: boolean;
   isEditorLocked: boolean;
@@ -45,6 +47,7 @@ const emit = defineEmits<{
   (e: 'delete-sheet'): void;
   (e: 'add-row'): void;
   (e: 'add-column'): void;
+  (e: 'insert-image'): void;
   (e: 'undo'): void;
   (e: 'redo'): void;
   (e: 'search', query: string, scope: SearchScope): void;
@@ -105,6 +108,16 @@ function handleCheckUpdate() {
           @search="(query: string, scope: SearchScope) => emit('search', query, scope)"
           @clear-search="emit('clear-search')"
         />
+
+        <el-button
+          size="small"
+          :icon="Picture"
+          :disabled="props.isEditorLocked"
+          :title="props.capabilities.canInsertImages ? 'Insert image' : 'Images require an XLSX document'"
+          @click="emit('insert-image')"
+        >
+          Image
+        </el-button>
       </div>
 
       <EditButtons
@@ -210,6 +223,14 @@ function handleCheckUpdate() {
         title="Add Sheet"
       >
         <el-icon><CirclePlus /></el-icon>
+      </el-button>
+      <el-button
+        :disabled="props.isEditorLocked"
+        @click="emit('insert-image')"
+        size="small"
+        :title="props.capabilities.canInsertImages ? 'Insert image' : 'Images require an XLSX document'"
+      >
+        <el-icon><Picture /></el-icon>
       </el-button>
       <el-button
         :disabled="props.isEditorLocked || props.sheetNames.length <= 1 || !props.capabilities.canInsertDeleteSheets"
@@ -333,7 +354,7 @@ function handleCheckUpdate() {
 
 .mobile-toolbar-actions {
   display: grid;
-  grid-template-columns: repeat(7, minmax(36px, 1fr));
+  grid-template-columns: repeat(8, minmax(36px, 1fr));
   gap: 6px;
   min-width: 0;
 }

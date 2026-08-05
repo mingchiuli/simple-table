@@ -22,6 +22,7 @@ import {
 } from '@/projection/documentProjection';
 import { createRouteLeaveHandler, useRouteFileLoader } from '@/composables/useRouteFileLoader';
 import { useApplicationExitGuard } from '@/composables/useApplicationExit';
+import { useSheetImages } from '@/composables/useSheetImages';
 const route = useRoute();
 const documentSessionStore = useDocumentSessionStore();
 const editorSelectionStore = useEditorSelectionStore();
@@ -81,6 +82,7 @@ const toolbarCapabilities = computed(() => ({
   canInsertDeleteRows: currentSheetCapabilities.value.canInsertDeleteRows,
   canInsertDeleteColumns: currentSheetCapabilities.value.canInsertDeleteColumns,
   canInsertDeleteSheets: capabilities.value.structure.canInsertDeleteSheets,
+  canInsertImages: capabilities.value.rich.images.canInsert,
 }));
 const canEditCells = computed(() => currentSheetCapabilities.value.canEditCells && canInteractWithDocument.value);
 const canResizeRowsColumns = computed(
@@ -196,6 +198,9 @@ const {
   handleSelectCell,
   handleColumnResize,
   handleRowResize,
+  handleInsertImage,
+  handleImageUpdate,
+  handleImageDelete,
 } = useEditorCommands({
   fileData,
   currentSheet,
@@ -203,6 +208,15 @@ const {
   selectedCell,
   flushPendingCellChanges,
   editorValueForCell: getEditorValue,
+});
+
+const selectedImageId = ref<string | null>(null);
+const { images, imageUrls, loadImageAssets } = useSheetImages(currentSheetIndex);
+
+watch([images, currentSheetIndex], ([currentImages]) => {
+  if (selectedImageId.value && !currentImages.some((image) => image.id === selectedImageId.value)) {
+    selectedImageId.value = null;
+  }
 });
 
 // ========== Lifecycle ==========
@@ -234,6 +248,7 @@ watch(() => [route.query.file, route.query.openTargetClaim], () => {
       @delete-sheet="handleDeleteSheet"
       @add-row="handleAddRow"
       @add-column="handleAddColumn"
+      @insert-image="handleInsertImage"
       @undo="handleUndo"
       @redo="handleRedo"
       @search="handleSearch"
@@ -274,6 +289,11 @@ watch(() => [route.query.file, route.query.openTargetClaim], () => {
               :row-heights="currentSheetMetadata?.rowHeights"
               :rich="currentSheetMetadata?.rich"
               :extent="currentSheetExtent"
+              :images="images"
+              :image-urls="imageUrls"
+              :selected-image-id="selectedImageId"
+              :can-move-resize-images="capabilities.rich.images.canMoveResize && canInteractWithDocument"
+              :can-delete-images="capabilities.rich.images.canDelete && canInteractWithDocument"
               :commit-column-resize="handleColumnResize"
               :commit-row-resize="handleRowResize"
               @cell-change="handleCellChange"
@@ -283,6 +303,10 @@ watch(() => [route.query.file, route.query.openTargetClaim], () => {
               @delete-column="handleDeleteColumn"
               @select-cell="handleSelectCell"
               @viewport-change="handleViewportChange"
+              @select-image="selectedImageId = $event"
+              @image-update="handleImageUpdate"
+              @image-delete="handleImageDelete"
+              @image-assets-request="loadImageAssets"
             />
           </div>
         </template>

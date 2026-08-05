@@ -51,6 +51,12 @@ export type RuntimeWorkbookCapabilities = {
     canEditStyles: boolean;
     canEditDrawings: boolean;
     canEditHyperlinks: boolean;
+    images: {
+      canInsert: boolean;
+      canMoveResize: boolean;
+      canDelete: boolean;
+      blockedReasons: string[];
+    };
   };
   sheets: RuntimeSheetCapabilities[];
 };
@@ -144,6 +150,12 @@ export function defaultWorkbookCapabilities(): RuntimeWorkbookCapabilities {
       canEditStyles: false,
       canEditDrawings: false,
       canEditHyperlinks: false,
+      images: {
+        canInsert: false,
+        canMoveResize: false,
+        canDelete: false,
+        blockedReasons: [],
+      },
     },
     sheets: [],
   };

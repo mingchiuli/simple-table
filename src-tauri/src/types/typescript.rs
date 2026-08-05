@@ -19,15 +19,17 @@ use crate::types::{
     EditorPatch, EditorSessionInfo, EditorStateInfo, FileOperationFailure, FileOperationKind,
     FileOperationReceipt, FileOperationResultLookup, FileOperationResultStatus, FormulaDiagnostics,
     FormulaIssue, FormulaIssueKind, FormulaStatus, FreezePaneProjection, HistoryStatus,
-    HyperlinkProjection, LayoutPatch, MergeRange, MutationFailure, MutationResultLookup,
+    HyperlinkProjection, ImageAnchor, ImageDeletedPatch, ImageMarker, ImageSelection,
+    ImageUpsertedPatch, LayoutPatch, MergeRange, MutationFailure, MutationResultLookup,
     MutationResultStatus, NativeSavePlan, OpenDocumentResponse, PreparedOpenDocument,
     ReadOnlyRichProjection, RecentFile, ResyncRequiredPatch, RowDeletedPatch, RowInsertedPatch,
     SavedDocumentIdentity, SavedDocumentResponse, ScalarCellValue, SearchResponse, SearchResult,
-    SearchScope, SetCellRequest, SheetCapabilities, SheetDeletedPatch, SheetExtent,
-    SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection, SheetManifest, SheetRegion,
-    SheetRegionMetadata, SheetRegionProjectionResponse, SheetsReplacedPatch,
-    SpreadsheetFormatOptions, StorageType, UpdateInfo, WorkbookCapabilities,
-    WorkbookRichCapabilities, WorkbookSaveCapabilities, WorkbookStructureCapabilities,
+    SearchScope, SetCellRequest, SheetCapabilities, SheetDeletedPatch, SheetExtent, SheetImage,
+    SheetImagePage, SheetInsertedPatch, SheetInvalidatedPatch, SheetLayoutProjection,
+    SheetManifest, SheetRegion, SheetRegionMetadata, SheetRegionProjectionResponse,
+    SheetsReplacedPatch, SpreadsheetFormatOptions, StorageType, UpdateInfo, WorkbookCapabilities,
+    WorkbookImageCapabilities, WorkbookRichCapabilities, WorkbookSaveCapabilities,
+    WorkbookStructureCapabilities,
 };
 
 /// TypeScript editor protocol emitted for the frontend from Rust definitions.
@@ -62,6 +64,7 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<WorkbookSaveCapabilities>(&mut output, &cfg);
     push_decl::<WorkbookStructureCapabilities>(&mut output, &cfg);
     push_decl::<WorkbookRichCapabilities>(&mut output, &cfg);
+    push_decl::<WorkbookImageCapabilities>(&mut output, &cfg);
     push_decl::<WorkbookCapabilities>(&mut output, &cfg);
     push_decl::<DocumentCapabilities>(&mut output, &cfg);
     push_decl::<NativeSavePlan>(&mut output, &cfg);
@@ -91,6 +94,13 @@ pub fn generated_typescript_contract() -> String {
     push_decl::<ColumnInsertedPatch>(&mut output, &cfg);
     push_decl::<ColumnDeletedPatch>(&mut output, &cfg);
     push_decl::<ResyncRequiredPatch>(&mut output, &cfg);
+    push_decl::<ImageMarker>(&mut output, &cfg);
+    push_decl::<ImageAnchor>(&mut output, &cfg);
+    push_decl::<SheetImage>(&mut output, &cfg);
+    push_decl::<SheetImagePage>(&mut output, &cfg);
+    push_decl::<ImageSelection>(&mut output, &cfg);
+    push_decl::<ImageUpsertedPatch>(&mut output, &cfg);
+    push_decl::<ImageDeletedPatch>(&mut output, &cfg);
     push_decl::<EditorPatch>(&mut output, &cfg);
     push_decl::<EditorCommandContext>(&mut output, &cfg);
     push_decl::<EditorMutationResponse>(&mut output, &cfg);
@@ -184,6 +194,7 @@ fn push_tauri_command_map(output: &mut String) {
         include_str!("../commands/android.rs"),
         include_str!("../commands/ios.rs"),
         include_str!("../commands/mobile.rs"),
+        include_str!("../commands/image.rs"),
     ] {
         let syntax = syn::parse_file(source).expect("parse Tauri command source");
         for item in syntax.items {
@@ -287,6 +298,7 @@ fn command_type(ty: &Type) -> String {
                 "PickedFileInfo" => {
                     "{ path: string, originalPath: string, fileName: string }".to_string()
                 }
+                "Response" => "ArrayBuffer".to_string(),
                 _ => name,
             }
         }

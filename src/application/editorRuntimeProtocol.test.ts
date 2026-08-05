@@ -42,6 +42,11 @@ describe('editorRuntimeProtocol', () => {
           canEditStyles: false,
           canEditDrawings: false,
           canEditHyperlinks: false,
+          images: {
+            canInsert: true,
+            canMoveResize: true,
+            canDelete: true,
+          },
         },
       },
     };

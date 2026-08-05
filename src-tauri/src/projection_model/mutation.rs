@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::document_data::SheetExtent;
+use crate::document_data::{SheetExtent, SheetImage};
 use crate::projection_model::{EditorSessionSnapshot, ProjectedCellChange, SheetManifestSnapshot};
 
 #[derive(Clone, Debug)]
@@ -46,6 +46,14 @@ pub(crate) enum MutationPatch {
         sheet_index: usize,
         col_index: usize,
         count: usize,
+    },
+    ImageUpserted {
+        sheet_index: usize,
+        image: SheetImage,
+    },
+    ImageDeleted {
+        sheet_index: usize,
+        image_id: String,
     },
     ResyncRequired {
         reason: String,

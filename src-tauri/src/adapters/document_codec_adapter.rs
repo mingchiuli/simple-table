@@ -96,6 +96,15 @@ impl DocumentEncodePort for DocumentCodecAdapter {
 }
 
 impl DocumentCodecPort for DocumentCodecAdapter {
+    fn create_document(&self, projection: DocumentData) -> Result<EditorState, AppError> {
+        let workbook = writer::workbook_from_file_data(&projection)?;
+        let body =
+            SpreadsheetDocumentBody::from_workbook(workbook, Arc::new(WorkbookProjectionCodec));
+        Ok(EditorState::from_document(
+            SpreadsheetDocument::from_backing(projection, body),
+        ))
+    }
+
     fn plan_open(
         &self,
         source: &OpenDocumentSource,
@@ -141,6 +150,24 @@ mod tests {
 
         assert_eq!(rows[0][0], CellValue::String("name".to_string()));
         assert_eq!(rows[1][1], CellValue::Number(42.into()));
+    }
+
+    #[test]
+    fn new_xlsx_document_has_native_image_capabilities() {
+        let state = DocumentCodecAdapter
+            .create_document(DocumentData {
+                path: String::new(),
+                file_name: "untitled.xlsx".to_string(),
+                sheets: vec![DocumentSheet {
+                    name: "Sheet1".to_string(),
+                    rows: vec![vec![CellValue::Null; 5]; 5],
+                    ..Default::default()
+                }],
+            })
+            .expect("create XLSX document");
+
+        assert!(state.can_finish_save_without_reparse(true));
+        assert!(state.capabilities().rich.images.can_insert);
     }
 
     #[test]

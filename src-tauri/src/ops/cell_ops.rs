@@ -52,7 +52,47 @@ pub fn do_execute_command(
         | EditorCommand::DeleteSheet { .. } => {
             execute_structural_command(registry, document_id, base_revision, command)
         }
+        EditorCommand::InsertImage { .. }
+        | EditorCommand::UpdateImage { .. }
+        | EditorCommand::DeleteImage { .. } => {
+            execute_image_command(registry, document_id, base_revision, command)
+        }
     }
+}
+
+fn execute_image_command(
+    registry: &ActiveDocumentRepository,
+    document_id: u64,
+    base_revision: u64,
+    command: EditorCommand,
+) -> Result<MutationExecution, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
+    let (execution, retired) = {
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
+        let result = editor_state.execute(command)?;
+        let execution = match result.operation {
+            Some(operation) => {
+                let projected = operation
+                    .patch_projector()
+                    .projected_result_from_current_file(editor_state.file_data());
+                MutationExecution::new(
+                    structural_delta_mutation_outcome(
+                        &editor_state,
+                        &projected,
+                        result.cell_changes,
+                    ),
+                    result.search_index_work,
+                )
+            }
+            None => MutationExecution::new(
+                status_mutation_outcome(&editor_state),
+                SearchIndexWork::None,
+            ),
+        };
+        (execution, result.retired)
+    };
+    drop(retired);
+    Ok(execution)
 }
 
 #[cfg(test)]

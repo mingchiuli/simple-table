@@ -89,6 +89,12 @@ pub(super) fn workbook_capabilities(
             can_edit_styles: value.rich.can_edit_styles,
             can_edit_drawings: value.rich.can_edit_drawings,
             can_edit_hyperlinks: value.rich.can_edit_hyperlinks,
+            images: types::WorkbookImageCapabilities {
+                can_insert: value.rich.images.can_insert,
+                can_move_resize: value.rich.images.can_move_resize,
+                can_delete: value.rich.images.can_delete,
+                blocked_reasons: value.rich.images.blocked_reasons,
+            },
         },
         sheets: value
             .sheets
@@ -128,5 +134,72 @@ pub(super) fn editor_state(
         can_redo: value.can_redo,
         is_dirty: value.is_dirty,
         history: history_status(value.history),
+    }
+}
+
+pub(crate) fn sheet_image(value: crate::document_data::SheetImage) -> types::SheetImage {
+    types::SheetImage {
+        id: value.id,
+        media_id: value.media_id,
+        mime_type: value.mime_type,
+        intrinsic_width: value.intrinsic_width,
+        intrinsic_height: value.intrinsic_height,
+        anchor: image_anchor(value.anchor),
+        z_index: value.z_index,
+        renderable: value.renderable,
+    }
+}
+
+pub(crate) fn domain_image_anchor(value: types::ImageAnchor) -> crate::document_data::ImageAnchor {
+    match value {
+        types::ImageAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => crate::document_data::ImageAnchor::OneCell {
+            from: domain_image_marker(from),
+            width_emu: i64::from(width_emu),
+            height_emu: i64::from(height_emu),
+        },
+        types::ImageAnchor::TwoCell { from, to } => crate::document_data::ImageAnchor::TwoCell {
+            from: domain_image_marker(from),
+            to: domain_image_marker(to),
+        },
+    }
+}
+
+fn image_anchor(value: crate::document_data::ImageAnchor) -> types::ImageAnchor {
+    match value {
+        crate::document_data::ImageAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => types::ImageAnchor::OneCell {
+            from: image_marker(from),
+            width_emu: u32::try_from(width_emu).unwrap_or(u32::MAX),
+            height_emu: u32::try_from(height_emu).unwrap_or(u32::MAX),
+        },
+        crate::document_data::ImageAnchor::TwoCell { from, to } => types::ImageAnchor::TwoCell {
+            from: image_marker(from),
+            to: image_marker(to),
+        },
+    }
+}
+
+fn image_marker(value: crate::document_data::ImageMarker) -> types::ImageMarker {
+    types::ImageMarker {
+        row: value.row,
+        col: value.col,
+        row_offset_emu: value.row_offset_emu,
+        col_offset_emu: value.col_offset_emu,
+    }
+}
+
+fn domain_image_marker(value: types::ImageMarker) -> crate::document_data::ImageMarker {
+    crate::document_data::ImageMarker {
+        row: value.row,
+        col: value.col,
+        row_offset_emu: value.row_offset_emu,
+        col_offset_emu: value.col_offset_emu,
     }
 }

@@ -121,6 +121,14 @@ impl EditorState {
         self.document.projection()
     }
 
+    pub(crate) fn image_bytes(
+        &self,
+        sheet_index: usize,
+        image_id: &str,
+    ) -> Option<std::sync::Arc<[u8]>> {
+        self.document.image_bytes(sheet_index, image_id)
+    }
+
     #[cfg(test)]
     pub fn update_identity(&mut self, path: String, file_name: String) {
         if self.has_save_commit_in_progress() {
@@ -608,6 +616,11 @@ fn operation_resource_sheets(
         AppliedOperation::AddSheet { sheet_index, .. } => {
             sheets.insert(*sheet_index);
         }
+        AppliedOperation::InsertImage { sheet_index, .. }
+        | AppliedOperation::UpdateImage { sheet_index, .. }
+        | AppliedOperation::DeleteImage { sheet_index, .. } => {
+            sheets.insert(*sheet_index);
+        }
     }
     sheets.extend(formula_changes.iter().map(|change| change.sheet_index));
     sheets.into_iter().collect()
@@ -615,14 +628,18 @@ fn operation_resource_sheets(
 
 #[cfg(test)]
 mod tests {
-    use crate::document_data::{CellFormat, DocumentSheet, RichMetadata};
+    use crate::document_data::{
+        CellFormat, DocumentSheet, ImageAnchor, ImageMarker, RichMetadata, SheetImage,
+    };
     use std::collections::HashMap;
     use std::io::Cursor;
+    use std::sync::Arc;
 
     use super::*;
     use crate::document::region_metadata_index::DocumentRegion;
     use crate::document::test_support::read_file_with_workbook_from_bytes;
     use crate::domain::{CellNumber, CellValue, EditorCommand};
+    use sha2::{Digest, Sha256};
     use umya_spreadsheet::{Color, DefinedName, SheetProtection, reader, writer};
 
     fn assert_incremental_content_hash_is_current(state: &EditorState) {
@@ -1252,6 +1269,143 @@ mod tests {
         assert_eq!(state.revision(), revision_before_save + 1);
         assert!(!state.is_dirty());
         assert!(state.can_undo());
+    }
+
+    #[test]
+    fn image_operations_round_trip_through_history_and_xlsx() {
+        let mut source = umya_spreadsheet::new_file();
+        source
+            .sheet_mut(0)
+            .expect("sheet")
+            .cell_mut("A1")
+            .set_value_string("anchor");
+        let mut source_bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut source_bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            source_bytes,
+            String::new(),
+            "images.xlsx".to_string(),
+        )
+        .expect("read source");
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+
+        let png = test_png();
+        let media_id = Sha256::digest(&png)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let original_anchor = ImageAnchor::OneCell {
+            from: ImageMarker {
+                row: 1,
+                col: 2,
+                ..Default::default()
+            },
+            width_emu: 120 * 9_525,
+            height_emu: 80 * 9_525,
+        };
+        state
+            .execute(EditorCommand::InsertImage {
+                sheet_index: 0,
+                image: SheetImage {
+                    id: "image-1".to_string(),
+                    media_id,
+                    mime_type: "image/png".to_string(),
+                    intrinsic_width: 2,
+                    intrinsic_height: 1,
+                    anchor: original_anchor.clone(),
+                    z_index: 0,
+                    renderable: true,
+                },
+                image_name: "test.png".to_string(),
+                bytes: Arc::from(png.clone()),
+            })
+            .expect("insert image");
+        assert_eq!(state.file_data().sheets[0].rich.images.len(), 1);
+        assert_eq!(
+            state.image_bytes(0, "image-1").as_deref(),
+            Some(png.as_slice())
+        );
+        assert_incremental_content_hash_is_current(&state);
+
+        let moved_anchor = ImageAnchor::OneCell {
+            from: ImageMarker {
+                row: 3,
+                col: 4,
+                row_offset_emu: 10_000,
+                col_offset_emu: 20_000,
+            },
+            width_emu: 180 * 9_525,
+            height_emu: 120 * 9_525,
+        };
+        state
+            .execute(EditorCommand::UpdateImage {
+                sheet_index: 0,
+                image_id: "image-1".to_string(),
+                anchor: moved_anchor.clone(),
+            })
+            .expect("move image");
+        assert_eq!(
+            state.file_data().sheets[0].rich.images[0].anchor,
+            moved_anchor
+        );
+
+        state.undo().expect("undo move").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0].rich.images[0].anchor,
+            original_anchor
+        );
+        state.redo().expect("redo move").expect("redo result");
+        assert_eq!(
+            state.file_data().sheets[0].rich.images[0].anchor,
+            moved_anchor
+        );
+
+        state
+            .execute(EditorCommand::DeleteImage {
+                sheet_index: 0,
+                image_id: "image-1".to_string(),
+            })
+            .expect("delete image");
+        assert!(state.file_data().sheets[0].rich.images.is_empty());
+        state.undo().expect("undo delete").expect("undo result");
+        assert_eq!(
+            state.image_bytes(0, "image-1").as_deref(),
+            Some(png.as_slice())
+        );
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("images.xlsx")
+            .expect("save workbook");
+        let reparsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            saved_bytes,
+            String::new(),
+            "images.xlsx".to_string(),
+        )
+        .expect("reopen workbook");
+        let image = &reparsed.file_data.sheets[0].rich.images[0];
+        assert_eq!(image.id, "image-1");
+        assert_eq!(image.anchor, moved_anchor);
+        assert_eq!(
+            reparsed
+                .workbook
+                .expect("workbook")
+                .sheet(0)
+                .expect("sheet")
+                .image_collection()[0]
+                .image_data(),
+            png
+        );
+    }
+
+    fn test_png() -> Vec<u8> {
+        let pixels = image::RgbaImage::from_pixel(2, 1, image::Rgba([20, 120, 220, 255]));
+        let mut output = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut output, image::ImageFormat::Png)
+            .expect("encode png");
+        output.into_inner()
     }
 
     #[test]

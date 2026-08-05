@@ -31,6 +31,7 @@ declare module 'vue' {
     GridCellsLayer: typeof import('./src/components/table-grid/GridCellsLayer.vue')['default']
     GridHeaders: typeof import('./src/components/table-grid/GridHeaders.vue')['default']
     GridViewportShell: typeof import('./src/components/table-grid/GridViewportShell.vue')['default']
+    ImageLayer: typeof import('./src/components/table-grid/ImageLayer.vue')['default']
     MergeCellsLayer: typeof import('./src/components/table-grid/MergeCellsLayer.vue')['default']
     RecentFilesSection: typeof import('./src/components/file/RecentFilesSection.vue')['default']
     ResizeLayer: typeof import('./src/components/table-grid/ResizeLayer.vue')['default']

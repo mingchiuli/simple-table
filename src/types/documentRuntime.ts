@@ -1,5 +1,33 @@
 export type U64String = `${bigint}`;
 
+export type ImageMarker = {
+  row: number;
+  col: number;
+  rowOffsetEmu: number;
+  colOffsetEmu: number;
+};
+
+export type ImageAnchor =
+  | {
+      type: 'OneCell';
+      data: { from: ImageMarker; widthEmu: number; heightEmu: number };
+    }
+  | {
+      type: 'TwoCell';
+      data: { from: ImageMarker; to: ImageMarker };
+    };
+
+export type SheetImage = {
+  id: string;
+  mediaId: string;
+  mimeType: string;
+  intrinsicWidth: number;
+  intrinsicHeight: number;
+  anchor: ImageAnchor;
+  zIndex: number;
+  renderable: boolean;
+};
+
 export type ScalarCellValue = string | number | boolean | null;
 
 export type CellKind = 'blank' | 'text' | 'number' | 'boolean' | 'formula' | 'error';
@@ -77,7 +105,7 @@ export type HyperlinkProjection = {
   location: boolean;
 };
 
-export type DrawingKind = 'image' | 'chart';
+export type DrawingKind = 'chart';
 
 export type DrawingProjection = {
   kind: DrawingKind;
@@ -162,6 +190,8 @@ export type EditorPatch =
   | { type: 'RowDeleted'; data: { patch: RowStructurePatch } }
   | { type: 'ColumnInserted'; data: { patch: ColumnStructurePatch } }
   | { type: 'ColumnDeleted'; data: { patch: ColumnStructurePatch } }
+  | { type: 'ImageUpserted'; data: { patch: { sheetIndex: number; image: SheetImage } } }
+  | { type: 'ImageDeleted'; data: { patch: { sheetIndex: number; imageId: string } } }
   | { type: 'ResyncRequired'; data: { patch: { reason: string } } };
 
 type RowStructurePatch = {

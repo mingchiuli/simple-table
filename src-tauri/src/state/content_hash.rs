@@ -1,6 +1,6 @@
 use crate::document_data::{
-    CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
-    Hyperlink, MergeRange, RichMetadata,
+    CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, FreezePane, Hyperlink, MergeRange,
+    RichMetadata,
 };
 use sha2::{Digest, Sha256};
 
@@ -195,6 +195,11 @@ impl IncrementalContentFingerprint {
             AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => {
                 *self = Self::from_file_data(file_data);
             }
+            AppliedOperation::InsertImage { sheet_index, .. }
+            | AppliedOperation::UpdateImage { sheet_index, .. }
+            | AppliedOperation::DeleteImage { sheet_index, .. } => {
+                self.rebuild_sheet(*sheet_index, file_data);
+            }
         }
     }
 
@@ -267,6 +272,9 @@ impl IncrementalContentFingerprint {
             }
             (DocumentMementoSide::Structure(_), DocumentMementoSide::Structure(_)) => {
                 *self = Self::from_file_data(file_data);
+            }
+            (DocumentMementoSide::Image(target), DocumentMementoSide::Image(_)) => {
+                self.rebuild_sheet(target.sheet_index, file_data);
             }
             _ => *self = Self::from_file_data(file_data),
         }
@@ -690,6 +698,24 @@ fn hash_rich_metadata(sheet_index: usize, rich: &RichMetadata, hash: &mut Conten
             }),
         );
     }
+    xor_hash(
+        hash,
+        &contribution(TAG_IMAGE_COUNT, |hasher| {
+            write_usize(hasher, sheet_index);
+            write_usize(hasher, rich.images.len());
+        }),
+    );
+    for (image_index, image) in rich.images.iter().enumerate() {
+        xor_hash(
+            hash,
+            &contribution(TAG_IMAGE, |hasher| {
+                write_usize(hasher, sheet_index);
+                write_usize(hasher, image_index);
+                write_str(hasher, &image.media_id);
+                hash_image_anchor(&image.anchor, hasher);
+            }),
+        );
+    }
 }
 
 fn hash_cell_format(format: &CellFormat, hasher: &mut Sha256) {
@@ -753,17 +779,38 @@ fn hash_hyperlink(hyperlink: &Hyperlink, hasher: &mut Sha256) {
 }
 
 fn hash_drawing(drawing: &Drawing, hasher: &mut Sha256) {
-    write_tag(
-        hasher,
-        match drawing.kind {
-            DrawingKind::Image => 0,
-            DrawingKind::Chart => 1,
-        },
-    );
+    write_tag(hasher, 1);
     write_u32(hasher, drawing.from_row);
     write_u32(hasher, drawing.from_col);
     write_optional_u32(hasher, drawing.to_row);
     write_optional_u32(hasher, drawing.to_col);
+}
+
+fn hash_image_anchor(anchor: &crate::document_data::ImageAnchor, hasher: &mut Sha256) {
+    match anchor {
+        crate::document_data::ImageAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            write_tag(hasher, 0);
+            hash_image_marker(from, hasher);
+            hasher.update(width_emu.to_le_bytes());
+            hasher.update(height_emu.to_le_bytes());
+        }
+        crate::document_data::ImageAnchor::TwoCell { from, to } => {
+            write_tag(hasher, 1);
+            hash_image_marker(from, hasher);
+            hash_image_marker(to, hasher);
+        }
+    }
+}
+
+fn hash_image_marker(marker: &crate::document_data::ImageMarker, hasher: &mut Sha256) {
+    write_u32(hasher, marker.row);
+    write_u32(hasher, marker.col);
+    hasher.update(marker.row_offset_emu.to_le_bytes());
+    hasher.update(marker.col_offset_emu.to_le_bytes());
 }
 
 fn hash_cell_value(cell: &CellValue, hasher: &mut Sha256) {
@@ -840,6 +887,8 @@ const TAG_HYPERLINK_COUNT: u8 = 21;
 const TAG_HYPERLINK: u8 = 22;
 const TAG_DRAWING_COUNT: u8 = 23;
 const TAG_DRAWING: u8 = 24;
+const TAG_IMAGE_COUNT: u8 = 25;
+const TAG_IMAGE: u8 = 26;
 
 fn contribution(tag: u8, write: impl FnOnce(&mut Sha256)) -> ContentHash {
     let mut hasher = Sha256::new();
@@ -1083,7 +1132,7 @@ mod tests {
 
         let mut drawn = original.clone();
         drawn.sheets[0].rich.drawings.push(Drawing {
-            kind: DrawingKind::Image,
+            kind: DrawingKind::Chart,
             from_row: 0,
             from_col: 0,
             to_row: Some(2),

@@ -173,6 +173,10 @@ export function applyProjectionPatches(
           patch.data.patch.count
         );
         break;
+      case 'ImageUpserted':
+      case 'ImageDeleted':
+        // Image metadata lives in the bounded image catalog, outside cell projection state.
+        break;
       case 'ResyncRequired':
         resyncRequired = true;
         break;

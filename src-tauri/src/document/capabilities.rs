@@ -60,10 +60,19 @@ impl Default for WorkbookStructureCapabilities {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WorkbookImageCapabilities {
+    pub can_insert: bool,
+    pub can_move_resize: bool,
+    pub can_delete: bool,
+    pub blocked_reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorkbookRichCapabilities {
     pub can_edit_styles: bool,
     pub can_edit_drawings: bool,
     pub can_edit_hyperlinks: bool,
+    pub images: WorkbookImageCapabilities,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

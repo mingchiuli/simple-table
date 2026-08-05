@@ -36,12 +36,13 @@ use commands::ios::{
 };
 use commands::{
     abort_prepared_document, add_column, add_recent_file_with_thumbnail, add_row, add_sheet,
-    close_current_document, commit_prepared_document, delete_column, delete_row, delete_sheet,
-    get_active_document, get_current_document_projection, get_document_capabilities,
-    get_editor_state, get_file_operation_result, get_mutation_result, get_native_save_plan,
-    get_recent_files, get_sheet_region_projection, get_spreadsheet_format_options,
+    close_current_document, commit_prepared_document, delete_column, delete_image, delete_row,
+    delete_sheet, discard_image_selection, get_active_document, get_current_document_projection,
+    get_document_capabilities, get_editor_state, get_file_operation_result, get_image_bytes,
+    get_mutation_result, get_native_save_plan, get_recent_files, get_sheet_images,
+    get_sheet_region_projection, get_spreadsheet_format_options, insert_image, pick_image,
     prepare_new_file, redo, remove_recent_file, search, set_cell, set_cells, set_column_width,
-    set_row_height, undo,
+    set_row_height, undo, update_image,
 };
 #[cfg(desktop)]
 use commands::{
@@ -183,6 +184,13 @@ pub fn run() {
             add_sheet,
             delete_sheet,
             get_editor_state,
+            pick_image,
+            discard_image_selection,
+            insert_image,
+            update_image,
+            delete_image,
+            get_sheet_images,
+            get_image_bytes,
             search,
             get_recent_files,
             add_recent_file_with_thumbnail,

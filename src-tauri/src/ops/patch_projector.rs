@@ -229,6 +229,16 @@ fn restore_change_patch(change: DocumentRestoreChange) -> MutationPatch {
         DocumentRestoreChange::SheetInvalidated { sheet_index } => {
             MutationPatch::SheetInvalidated { sheet_index }
         }
+        DocumentRestoreChange::ImageUpserted { sheet_index, image } => {
+            MutationPatch::ImageUpserted { sheet_index, image }
+        }
+        DocumentRestoreChange::ImageDeleted {
+            sheet_index,
+            image_id,
+        } => MutationPatch::ImageDeleted {
+            sheet_index,
+            image_id,
+        },
         DocumentRestoreChange::ResyncRequired { reason } => {
             MutationPatch::ResyncRequired { reason }
         }
@@ -283,6 +293,19 @@ pub fn structural_patches(
                 sheet_index: *sheet_index,
             }]
         }
+        ProjectedOperation::ImageUpserted { sheet_index, image } => {
+            vec![MutationPatch::ImageUpserted {
+                sheet_index: *sheet_index,
+                image: image.clone(),
+            }]
+        }
+        ProjectedOperation::ImageDeleted {
+            sheet_index,
+            image_id,
+        } => vec![MutationPatch::ImageDeleted {
+            sheet_index: *sheet_index,
+            image_id: image_id.clone(),
+        }],
         ProjectedOperation::SetCell { .. }
         | ProjectedOperation::SetCells { .. }
         | ProjectedOperation::SetColumnWidth

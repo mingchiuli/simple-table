@@ -60,6 +60,10 @@ fn estimated_mutation_outcome_bytes(outcome: &MutationOutcome) -> usize {
             | MutationPatch::RowDeleted { .. }
             | MutationPatch::ColumnInserted { .. }
             | MutationPatch::ColumnDeleted { .. } => 96,
+            MutationPatch::ImageUpserted { image, .. } => {
+                image.id.len() + image.media_id.len() + image.mime_type.len() + 256
+            }
+            MutationPatch::ImageDeleted { image_id, .. } => image_id.len() + 96,
         })
         .sum::<usize>();
     std::mem::size_of::<MutationOutcome>()

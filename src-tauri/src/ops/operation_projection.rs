@@ -1,4 +1,5 @@
 use crate::document_data::DocumentData;
+use crate::document_data::SheetImage;
 use crate::domain::{AppliedOperation, CellValue, OperationPatchProjector};
 use crate::projection_model::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
 
@@ -37,6 +38,14 @@ pub enum ProjectedOperation {
     },
     DeleteSheet {
         sheet_index: usize,
+    },
+    ImageUpserted {
+        sheet_index: usize,
+        image: SheetImage,
+    },
+    ImageDeleted {
+        sheet_index: usize,
+        image_id: String,
     },
 }
 
@@ -144,6 +153,42 @@ impl OperationPatchProjector<'_> {
             },
             AppliedOperation::DeleteSheet { sheet_index } => ProjectedOperation::DeleteSheet {
                 sheet_index: *sheet_index,
+            },
+            AppliedOperation::InsertImage {
+                sheet_index, image, ..
+            } => ProjectedOperation::ImageUpserted {
+                sheet_index: *sheet_index,
+                image: file_data
+                    .sheets
+                    .get(*sheet_index)
+                    .and_then(|sheet| sheet.rich.images.iter().find(|item| item.id == image.id))
+                    .cloned()
+                    .unwrap_or_else(|| image.clone()),
+            },
+            AppliedOperation::UpdateImage {
+                sheet_index,
+                new_image,
+                ..
+            } => ProjectedOperation::ImageUpserted {
+                sheet_index: *sheet_index,
+                image: file_data
+                    .sheets
+                    .get(*sheet_index)
+                    .and_then(|sheet| {
+                        sheet
+                            .rich
+                            .images
+                            .iter()
+                            .find(|item| item.id == new_image.id)
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| new_image.clone()),
+            },
+            AppliedOperation::DeleteImage {
+                sheet_index, image, ..
+            } => ProjectedOperation::ImageDeleted {
+                sheet_index: *sheet_index,
+                image_id: image.id.clone(),
             },
         }
     }

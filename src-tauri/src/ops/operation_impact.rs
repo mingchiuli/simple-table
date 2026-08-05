@@ -21,6 +21,11 @@ impl MutationImpact<'_> {
                 new_height,
                 ..
             } => old_height == new_height,
+            AppliedOperation::UpdateImage {
+                old_image,
+                new_image,
+                ..
+            } => old_image == new_image,
             _ => false,
         }
     }
@@ -81,6 +86,15 @@ impl MutationImpact<'_> {
         matches!(
             self.operation,
             AppliedOperation::SetCell { .. } | AppliedOperation::SetCells { .. }
+        )
+    }
+
+    pub fn is_image_change(&self) -> bool {
+        matches!(
+            self.operation,
+            AppliedOperation::InsertImage { .. }
+                | AppliedOperation::UpdateImage { .. }
+                | AppliedOperation::DeleteImage { .. }
         )
     }
 }

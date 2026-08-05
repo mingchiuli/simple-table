@@ -18,6 +18,7 @@ import type {
 } from '@/types/documentRuntime';
 import type { SearchOutcomeStateInput, SearchScope } from '@/types/editorRuntime';
 import type { CellSaveRequest } from '@/types/pendingCellSave';
+import type { ImageAnchor } from '@/types/documentRuntime';
 import { appErrorMessage } from '@/utils/appError';
 import {
   neverCancelled,
@@ -161,6 +162,42 @@ export function createDocumentCommandBus(
     );
   }
 
+  function insertImage(
+    sheetIndex: number,
+    row: number,
+    col: number,
+    selectionToken: string,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.insertImage(context, sheetIndex, row, col, selectionToken),
+      options,
+    );
+  }
+
+  function updateImage(
+    sheetIndex: number,
+    imageId: string,
+    anchor: ImageAnchor,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.updateImage(context, sheetIndex, imageId, anchor),
+      options,
+    );
+  }
+
+  function deleteImage(
+    sheetIndex: number,
+    imageId: string,
+    options: InteractiveCommandOptions,
+  ) {
+    return runInteractiveCommand(
+      (context) => api.deleteImage(context, sheetIndex, imageId),
+      options,
+    );
+  }
+
   async function setCells(
     documentId: U64String,
     changes: CellSaveRequest[],
@@ -244,6 +281,9 @@ export function createDocumentCommandBus(
     redo,
     setColumnWidth,
     setRowHeight,
+    insertImage,
+    updateImage,
+    deleteImage,
     setCells,
     search,
     refreshAfterMutationError: coordinator.refreshAfterMutationError,

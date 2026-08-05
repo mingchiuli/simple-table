@@ -15,7 +15,7 @@ describe("calculateSheetExtent", () => {
         hyperlinks: { B5: { url: "https://example.com", location: false } },
         hiddenRows: [8],
         hiddenColumns: [6],
-        drawings: [{ kind: "image", fromRow: 10, fromCol: 7, toRow: 11, toCol: 8 }],
+        drawings: [{ kind: "chart", fromRow: 10, fromCol: 7, toRow: 11, toCol: 8 }],
       }
     );
 

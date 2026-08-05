@@ -320,7 +320,7 @@ pub(super) fn write_with_official_fs(
         .map_err(|e| AppError::WriteError(format!("Failed to write file: {}", e)))
 }
 
-pub(super) fn read_with_official_fs(app: &AppHandle, path: FilePath) -> Result<Vec<u8>, AppError> {
+pub(crate) fn read_with_official_fs(app: &AppHandle, path: FilePath) -> Result<Vec<u8>, AppError> {
     use tauri_plugin_fs::{FsExt, OpenOptions};
 
     let mut options = OpenOptions::new();
