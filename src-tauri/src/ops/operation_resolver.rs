@@ -250,7 +250,7 @@ impl EditorCommand {
                 let sheet = file_data
                     .sheets
                     .get(sheet_index)
-                    .ok_or_else(|| AppError::InvalidSheetIndex(sheet_index))?;
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
                 if sheet
                     .rich
                     .images
@@ -279,7 +279,7 @@ impl EditorCommand {
                 let sheet = file_data
                     .sheets
                     .get(sheet_index)
-                    .ok_or_else(|| AppError::InvalidSheetIndex(sheet_index))?;
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
                 let old_image = sheet
                     .rich
                     .images
@@ -309,7 +309,7 @@ impl EditorCommand {
                 let sheet = file_data
                     .sheets
                     .get(sheet_index)
-                    .ok_or_else(|| AppError::InvalidSheetIndex(sheet_index))?;
+                    .ok_or(AppError::InvalidSheetIndex(sheet_index))?;
                 let image = sheet
                     .rich
                     .images

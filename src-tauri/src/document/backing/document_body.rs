@@ -671,7 +671,6 @@ fn csv_workbook_capabilities() -> WorkbookCapabilities {
             ..WorkbookRichCapabilities::default()
         },
         sheets: vec![sheet_capabilities],
-        ..WorkbookCapabilities::default()
     }
 }
 
