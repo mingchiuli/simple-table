@@ -464,7 +464,11 @@ async fn save_mobile(
     Ok(EditorReply::Empty)
 }
 
-pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
+pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
+    if store.busy() {
+        return;
+    }
+    set_busy(store, "Preparing copy");
     let _operation = ports.operations.lock().await;
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
@@ -473,8 +477,10 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
         return;
     }
     let Some((document_id, base_revision)) = document_identity(store) else {
+        store.busy.set(false);
         return;
     };
+    set_busy(store, "Preparing copy");
     let suggested_name = document_name(store);
     #[cfg(feature = "desktop")]
     let target_name = match ports
@@ -487,7 +493,7 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
     {
         Ok(Some(path)) => path,
         Ok(None) => {
-            let mut store = store;
+            store.busy.set(false);
             store.status.set("Download cancelled".to_string());
             return;
         }
@@ -521,16 +527,16 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
             let write = ports.files.write_document(file_name, bytes).await;
             match write {
                 Ok(Some(_)) => {
-                    let mut store = store;
+                    store.busy.set(false);
                     store.status.set("Copy downloaded".to_string());
                 }
                 #[cfg(feature = "mobile")]
                 Ok(None) => {
-                    let mut store = store;
+                    store.busy.set(false);
                     store.status.set("Copy sent to device".to_string());
                 }
                 #[cfg(not(feature = "mobile"))]
-                Ok(None) => {}
+                Ok(None) => store.busy.set(false),
                 Err(error) => store.set_error(error),
             }
         }
@@ -589,6 +595,7 @@ pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_ind
         sheet_index,
         row: 0,
         col: 0,
+        focus: false,
     }));
     let viewport = SheetViewport::default();
     refresh_region(
@@ -626,6 +633,7 @@ pub async fn select_search_result(
         sheet_index,
         row: row_start,
         col: col_start,
+        focus: false,
     }));
     refresh_region(
         store,
@@ -943,6 +951,7 @@ fn clamp_selected_cell(mut store: EditorStore) {
             sheet_index: store.active_sheet(),
             row: clamped.0,
             col: clamped.1,
+            focus: false,
         }));
     }
 }
@@ -970,6 +979,7 @@ fn select_last_sheet(mut store: EditorStore) {
         sheet_index: last_sheet,
         row: 0,
         col: 0,
+        focus: false,
     }));
 }
 
@@ -982,6 +992,7 @@ fn reset_current_sheet_viewport(mut store: EditorStore) {
         sheet_index,
         row: 0,
         col: 0,
+        focus: false,
     }));
 }
 

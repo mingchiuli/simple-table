@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -21,46 +22,68 @@ pub fn SpreadsheetGrid() -> Element {
     let mut store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let mut viewport_element = use_signal(|| None::<Rc<MountedData>>);
+    let cell_elements = use_hook(|| {
+        Rc::new(RefCell::new(HashMap::<
+            (usize, usize, usize),
+            Rc<MountedData>,
+        >::new()))
+    });
     let display_cells = use_memo(move || Rc::new(store.display_cell_map(store.active_sheet())));
 
-    use_effect(move || {
-        let Some(request) = *store.grid_scroll_request.read() else {
-            return;
-        };
-        let Some(element) = viewport_element.read().clone() else {
-            return;
-        };
-        let document = store.document.read().clone();
-        let Some(sheet) = document
-            .as_ref()
-            .and_then(|document| document.document.sheets.get(request.sheet_index))
-        else {
-            return;
-        };
-        if store.active_sheet() != request.sheet_index {
-            return;
+    use_effect({
+        let cell_elements = Rc::clone(&cell_elements);
+        move || {
+            let Some(request) = *store.grid_scroll_request.read() else {
+                return;
+            };
+            let Some(element) = viewport_element.read().clone() else {
+                return;
+            };
+            let document = store.document.read().clone();
+            let Some(sheet) = document
+                .as_ref()
+                .and_then(|document| document.document.sheets.get(request.sheet_index))
+            else {
+                return;
+            };
+            if store.active_sheet() != request.sheet_index {
+                return;
+            }
+            let left = scroll_offset(
+                request.col,
+                HEADER_WIDTH,
+                DEFAULT_COLUMN_WIDTH,
+                &sheet.layout.column_widths,
+            );
+            let top = scroll_offset(
+                request.row,
+                HEADER_HEIGHT,
+                DEFAULT_ROW_HEIGHT,
+                &sheet.layout.row_heights,
+            );
+            let target = request.focus.then(|| {
+                cell_elements
+                    .borrow()
+                    .get(&(request.sheet_index, request.row, request.col))
+                    .cloned()
+            });
+            if !request.focus || target.as_ref().is_some_and(Option::is_some) {
+                store.grid_scroll_request.set(None);
+            }
+            spawn(async move {
+                let _ = element
+                    .scroll(
+                        dioxus::html::geometry::PixelsVector2D::new(left, top),
+                        ScrollBehavior::Instant,
+                    )
+                    .await;
+            });
+            if let Some(Some(cell)) = target {
+                spawn(async move {
+                    let _ = cell.set_focus(true).await;
+                });
+            }
         }
-        let left = scroll_offset(
-            request.col,
-            HEADER_WIDTH,
-            DEFAULT_COLUMN_WIDTH,
-            &sheet.layout.column_widths,
-        );
-        let top = scroll_offset(
-            request.row,
-            HEADER_HEIGHT,
-            DEFAULT_ROW_HEIGHT,
-            &sheet.layout.row_heights,
-        );
-        store.grid_scroll_request.set(None);
-        spawn(async move {
-            let _ = element
-                .scroll(
-                    dioxus::html::geometry::PixelsVector2D::new(left, top),
-                    ScrollBehavior::Instant,
-                )
-                .await;
-        });
     });
 
     let document = store.document.read().clone();
@@ -81,6 +104,13 @@ pub fn SpreadsheetGrid() -> Element {
     let col_end = col_start.saturating_add(VISIBLE_COLUMNS).min(column_count);
     let rows: Vec<_> = (row_start..row_end).collect();
     let columns: Vec<_> = (col_start..col_end).collect();
+    cell_elements
+        .borrow_mut()
+        .retain(|(mounted_sheet, row, col), _| {
+            *mounted_sheet == sheet_index
+                && (*row >= row_start && *row < row_end)
+                && (*col >= col_start && *col < col_end)
+        });
     let display_cells = display_cells();
     let selected = store.selected_cell();
     let canvas_width =
@@ -171,6 +201,13 @@ pub fn SpreadsheetGrid() -> Element {
                                     .unwrap_or_default();
                                 let focus_value = value.clone();
                                 let is_selected = selected == (row, col);
+                                let mounted_cells = Rc::clone(&cell_elements);
+                                let enter_cells = Rc::clone(&cell_elements);
+                                let enter_target = cell_after_enter(row, col, row_count);
+                                let enter_value = enter_target
+                                    .and_then(|cell| display_cells.get(&cell))
+                                    .cloned()
+                                    .unwrap_or_default();
                                 rsx! {
                                     input {
                                         key: "{sheet_index}-{row}-{col}",
@@ -179,6 +216,27 @@ pub fn SpreadsheetGrid() -> Element {
                                         aria_label: "{column_label(col)}{row + 1}",
                                         disabled: store.busy(),
                                         value,
+                                        onmounted: move |event| {
+                                            let cell = event.data();
+                                            mounted_cells
+                                                .borrow_mut()
+                                                .insert((sheet_index, row, col), Rc::clone(&cell));
+                                            let should_focus = store
+                                                .grid_scroll_request
+                                                .read()
+                                                .is_some_and(|request| {
+                                                    request.focus
+                                                        && request.sheet_index == sheet_index
+                                                        && request.row == row
+                                                        && request.col == col
+                                                });
+                                            if should_focus {
+                                                store.grid_scroll_request.set(None);
+                                                spawn(async move {
+                                                    let _ = cell.set_focus(true).await;
+                                                });
+                                            }
+                                        },
                                         onfocus: move |_| {
                                             store.selected_cell.set((row, col));
                                             store.selected_image.set(None);
@@ -202,7 +260,29 @@ pub fn SpreadsheetGrid() -> Element {
                                         onkeydown: move |event: Event<KeyboardData>| {
                                             if event.key() == Key::Enter {
                                                 event.prevent_default();
-                                                store.selected_cell.set(((row + 1).min(row_count - 1), col));
+                                                if let Some(next) = enter_target {
+                                                    store.selected_cell.set(next);
+                                                    store.selected_image.set(None);
+                                                    store.formula_text.set(enter_value.clone());
+                                                    let target = enter_cells
+                                                        .borrow()
+                                                        .get(&(sheet_index, next.0, next.1))
+                                                        .cloned();
+                                                    if let Some(target) = target {
+                                                        spawn(async move {
+                                                            let _ = target.set_focus(true).await;
+                                                        });
+                                                    } else {
+                                                        store.grid_scroll_request.set(Some(
+                                                            crate::model::GridScrollRequest {
+                                                            sheet_index,
+                                                            row: next.0,
+                                                            col: next.1,
+                                                            focus: true,
+                                                        },
+                                                        ));
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -220,6 +300,10 @@ pub fn SpreadsheetGrid() -> Element {
             }
         }
     }
+}
+
+fn cell_after_enter(row: usize, col: usize, row_count: usize) -> Option<(usize, usize)> {
+    (row + 1 < row_count).then_some((row + 1, col))
 }
 
 fn scroll_offset(
@@ -416,5 +500,11 @@ mod tests {
         let sizes = HashMap::from([(1, 200), (4, 80)]);
         assert_eq!(axis_offset(3, 120.0, &sizes), 440.0);
         assert_eq!(axis_index_at(441.0, 10, 120.0, &sizes), 3);
+    }
+
+    #[test]
+    fn enter_moves_down_until_the_last_row() {
+        assert_eq!(cell_after_enter(2, 4, 5), Some((3, 4)));
+        assert_eq!(cell_after_enter(4, 4, 5), None);
     }
 }

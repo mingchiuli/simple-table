@@ -180,6 +180,7 @@ pub struct GridScrollRequest {
     pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
+    pub focus: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
