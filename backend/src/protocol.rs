@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -216,6 +216,11 @@ pub enum EditorRequest {
         base_revision: u64,
         target_name: String,
     },
+    PrepareExport {
+        document_id: u64,
+        base_revision: u64,
+        target_name: String,
+    },
     SaveLocal {
         request_id: String,
         document_id: u64,
@@ -276,6 +281,10 @@ pub enum EditorReply {
     },
     SavePrepared {
         save_token: String,
+        file_name: String,
+        bytes: Vec<u8>,
+    },
+    ExportPrepared {
         file_name: String,
         bytes: Vec<u8>,
     },

@@ -89,7 +89,64 @@ pub struct EditorMutationView {
     #[serde(deserialize_with = "deserialize_u64_string")]
     pub revision: u64,
     pub editor_state: EditorStateView,
+    #[serde(default)]
+    pub patches: Vec<EditorPatchView>,
     pub sheet_extents: Option<Vec<SheetExtentView>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum EditorPatchView {
+    #[serde(rename = "Cells")]
+    Cells {
+        #[serde(rename = "changes")]
+        _changes: Vec<Value>,
+    },
+    #[serde(rename = "Layout")]
+    Layout {
+        #[serde(rename = "patch")]
+        _patch: Value,
+    },
+    #[serde(rename = "SheetInserted")]
+    SheetInserted {
+        #[serde(rename = "patch")]
+        _patch: Value,
+    },
+    #[serde(rename = "SheetDeleted")]
+    SheetDeleted {
+        #[serde(rename = "patch")]
+        _patch: Value,
+    },
+    #[serde(rename = "SheetInvalidated")]
+    SheetInvalidated { patch: SheetPatchView },
+    #[serde(rename = "SheetsReplaced")]
+    SheetsReplaced {
+        #[serde(rename = "patch")]
+        _patch: Value,
+    },
+    #[serde(rename = "RowInserted")]
+    RowInserted { patch: SheetPatchView },
+    #[serde(rename = "RowDeleted")]
+    RowDeleted { patch: SheetPatchView },
+    #[serde(rename = "ColumnInserted")]
+    ColumnInserted { patch: SheetPatchView },
+    #[serde(rename = "ColumnDeleted")]
+    ColumnDeleted { patch: SheetPatchView },
+    #[serde(rename = "ImageUpserted")]
+    ImageUpserted { patch: SheetPatchView },
+    #[serde(rename = "ImageDeleted")]
+    ImageDeleted { patch: SheetPatchView },
+    #[serde(rename = "ResyncRequired")]
+    ResyncRequired {
+        #[serde(rename = "patch")]
+        _patch: Value,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetPatchView {
+    pub sheet_index: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]

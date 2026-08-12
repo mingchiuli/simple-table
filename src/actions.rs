@@ -7,8 +7,8 @@ use dioxus::prelude::{ReadableExt, WritableExt, spawn};
 use dioxus_sdk_time::sleep;
 
 use crate::model::{
-    AppPorts, EditorMutationView, EditorStore, GridScrollRequest, OpenDocumentView,
-    SavedDocumentView, SearchView, SheetViewport, request_id,
+    AppPorts, EditorMutationView, EditorPatchView, EditorStore, GridScrollRequest,
+    OpenDocumentView, SavedDocumentView, SearchView, SheetViewport, request_id,
 };
 
 pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
@@ -114,12 +114,25 @@ pub async fn load_local_documents(store: EditorStore, ports: Rc<AppPorts>) {
 }
 
 pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, document_key: String) {
+    let _operation = ports.operations.lock().await;
+    set_busy(store, "Removing local workbook");
     match ports
         .editor
-        .execute(EditorRequest::DeleteLocalDocument { document_key })
+        .execute(EditorRequest::DeleteLocalDocument {
+            document_key: document_key.clone(),
+        })
         .await
     {
-        Ok(_) => load_local_documents(store, ports).await,
+        Ok(EditorReply::Empty) => {
+            let mut store = store;
+            store
+                .local_documents
+                .write()
+                .retain(|document| document.id != document_key);
+            store.busy.set(false);
+            store.status.set("Local workbook removed".to_string());
+        }
+        Ok(_) => store.set_error(unexpected_reply("delete local document")),
         Err(error) => store.set_error(error),
     }
 }
@@ -238,13 +251,20 @@ async fn run_mutation_locked(
         Ok(EditorReply::Mutation { value }) => {
             match serde_json::from_value::<EditorMutationView>(value) {
                 Ok(mutation) => {
+                    let refresh =
+                        MutationRefresh::for_patches(&mutation.patches, store.active_sheet());
                     store.accept_mutation(&mutation);
-                    refresh_document(store, Rc::clone(&ports)).await;
+                    if refresh.document {
+                        refresh_document(store, Rc::clone(&ports)).await;
+                    }
                     if select_added_sheet {
                         select_last_sheet(store);
                     } else if active_sheet_name(store) != previous_sheet_name {
                         reset_current_sheet_viewport(store);
+                    } else {
+                        clamp_selected_cell(store);
                     }
+                    store.search.set(None);
                     let viewport = *store.viewport.read();
                     refresh_region(
                         store,
@@ -255,7 +275,10 @@ async fn run_mutation_locked(
                         viewport.col_end,
                     )
                     .await;
-                    refresh_images(store, Rc::clone(&ports)).await;
+                    sync_formula_text(store);
+                    if refresh.images || select_added_sheet {
+                        refresh_images(store, Rc::clone(&ports)).await;
+                    }
                     schedule_recovery(store, ports);
                     store.busy.set(false);
                     Ok(())
@@ -376,7 +399,11 @@ async fn save_native(
     base_revision: u64,
     target_name: String,
 ) -> Result<EditorReply, crate::protocol::AppErrorDto> {
-    let Some(path) = ports.files.choose_document_path(target_name).await? else {
+    let Some(path) = ports
+        .files
+        .choose_document_path(target_name, crate::ports::file::DocumentDialogMode::Save)
+        .await?
+    else {
         return Ok(EditorReply::Empty);
     };
     let save_token = request_id("save-native");
@@ -422,30 +449,18 @@ async fn save_mobile(
     base_revision: u64,
     target_name: String,
 ) -> Result<EditorReply, crate::protocol::AppErrorDto> {
-    let save_token = request_id("save-mobile");
     let prepared = ports
         .editor
-        .execute(EditorRequest::PrepareSave {
-            request_id: save_token.clone(),
+        .execute(EditorRequest::PrepareExport {
             document_id,
             base_revision,
             target_name,
         })
         .await?;
-    let EditorReply::SavePrepared {
-        save_token,
-        file_name,
-        bytes,
-    } = prepared
-    else {
-        return Err(unexpected_reply("prepare save"));
+    let EditorReply::ExportPrepared { file_name, bytes } = prepared else {
+        return Err(unexpected_reply("prepare export"));
     };
-    let write = ports.files.write_document(file_name, bytes).await;
-    let _ = ports
-        .editor
-        .execute(EditorRequest::AbortSave { save_token })
-        .await;
-    write?;
+    ports.files.write_document(file_name, bytes).await?;
     Ok(EditorReply::Empty)
 }
 
@@ -462,7 +477,14 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
     };
     let suggested_name = document_name(store);
     #[cfg(feature = "desktop")]
-    let target_name = match ports.files.choose_document_path(suggested_name).await {
+    let target_name = match ports
+        .files
+        .choose_document_path(
+            suggested_name,
+            crate::ports::file::DocumentDialogMode::Export,
+        )
+        .await
+    {
         Ok(Some(path)) => path,
         Ok(None) => {
             let mut store = store;
@@ -476,22 +498,16 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
     };
     #[cfg(not(feature = "desktop"))]
     let target_name = suggested_name;
-    let save_token = request_id("download");
     match ports
         .editor
-        .execute(EditorRequest::PrepareSave {
-            request_id: save_token,
+        .execute(EditorRequest::PrepareExport {
             document_id,
             base_revision,
             target_name: target_name.clone(),
         })
         .await
     {
-        Ok(EditorReply::SavePrepared {
-            save_token,
-            file_name,
-            bytes,
-        }) => {
+        Ok(EditorReply::ExportPrepared { file_name, bytes }) => {
             #[cfg(feature = "desktop")]
             let write = {
                 let path = path_for_prepared_name(target_name, &file_name);
@@ -503,10 +519,6 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
             };
             #[cfg(not(feature = "desktop"))]
             let write = ports.files.write_document(file_name, bytes).await;
-            let _ = ports
-                .editor
-                .execute(EditorRequest::AbortSave { save_token })
-                .await;
             match write {
                 Ok(Some(_)) => {
                     let mut store = store;
@@ -654,9 +666,20 @@ pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
         }
     };
 
+    let previous_items = store.images.read().clone();
+    let previous_assets = store.image_assets.read().clone();
     let mut assets = std::collections::HashMap::new();
     for image in &items {
         if !image.renderable {
+            continue;
+        }
+        let unchanged_asset = previous_items.iter().any(|previous| {
+            previous.id == image.id
+                && previous.media_id == image.media_id
+                && previous.mime_type == image.mime_type
+        });
+        if unchanged_asset && let Some(asset) = previous_assets.get(&image.id) {
+            assets.insert(image.id.clone(), Rc::clone(asset));
             continue;
         }
         match ports
@@ -844,6 +867,95 @@ async fn refresh_document(store: EditorStore, ports: Rc<AppPorts>) {
         Ok(_) => store.set_error(unexpected_reply("document")),
         Err(error) => store.set_error(error),
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MutationRefresh {
+    document: bool,
+    images: bool,
+}
+
+impl MutationRefresh {
+    fn for_patches(patches: &[EditorPatchView], active_sheet: usize) -> Self {
+        let mut refresh = Self::default();
+        for patch in patches {
+            match patch {
+                EditorPatchView::Cells { .. } => {}
+                EditorPatchView::Layout { .. } => refresh.document = true,
+                EditorPatchView::ImageUpserted { patch }
+                | EditorPatchView::ImageDeleted { patch }
+                    if patch.sheet_index == active_sheet =>
+                {
+                    refresh.images = true;
+                }
+                EditorPatchView::ImageUpserted { .. } | EditorPatchView::ImageDeleted { .. } => {}
+                EditorPatchView::RowInserted { patch } | EditorPatchView::RowDeleted { patch }
+                    if patch.sheet_index == active_sheet =>
+                {
+                    refresh.document = true;
+                    refresh.images = true;
+                }
+                EditorPatchView::ColumnInserted { patch }
+                | EditorPatchView::ColumnDeleted { patch }
+                    if patch.sheet_index == active_sheet =>
+                {
+                    refresh.document = true;
+                    refresh.images = true;
+                }
+                EditorPatchView::RowInserted { .. }
+                | EditorPatchView::RowDeleted { .. }
+                | EditorPatchView::ColumnInserted { .. }
+                | EditorPatchView::ColumnDeleted { .. } => refresh.document = true,
+                EditorPatchView::SheetInvalidated { patch } => {
+                    refresh.document = true;
+                    refresh.images |= patch.sheet_index == active_sheet;
+                }
+                EditorPatchView::SheetInserted { .. }
+                | EditorPatchView::SheetDeleted { .. }
+                | EditorPatchView::SheetsReplaced { .. }
+                | EditorPatchView::ResyncRequired { .. } => {
+                    refresh.document = true;
+                    refresh.images = true;
+                }
+            }
+        }
+        refresh
+    }
+}
+
+fn clamp_selected_cell(mut store: EditorStore) {
+    let selected = store.selected_cell();
+    let clamped = store
+        .document
+        .read()
+        .as_ref()
+        .and_then(|document| document.document.sheets.get(store.active_sheet()))
+        .map(|sheet| {
+            (
+                selected.0.min(sheet.extent.row_count.saturating_sub(1)),
+                selected.1.min(sheet.extent.column_count.saturating_sub(1)),
+            )
+        })
+        .unwrap_or((0, 0));
+    if selected != clamped {
+        store.selected_cell.set(clamped);
+        store.grid_scroll_request.set(Some(GridScrollRequest {
+            sheet_index: store.active_sheet(),
+            row: clamped.0,
+            col: clamped.1,
+        }));
+    }
+}
+
+fn sync_formula_text(mut store: EditorStore) {
+    let sheet_index = store.active_sheet();
+    let selected = store.selected_cell();
+    let value = store
+        .display_cell_map(sheet_index)
+        .get(&selected)
+        .cloned()
+        .unwrap_or_default();
+    store.formula_text.set(value);
 }
 
 fn select_last_sheet(mut store: EditorStore) {
@@ -1300,6 +1412,55 @@ mod tests {
         assert_eq!(document.editor_session.revision, 2);
     }
 
+    fn patch(value: serde_json::Value) -> EditorPatchView {
+        serde_json::from_value(value).expect("valid patch")
+    }
+
+    #[test]
+    fn mutation_refresh_is_scoped_by_patch_and_active_sheet() {
+        let cells = [patch(serde_json::json!({
+            "type": "Cells",
+            "data": { "changes": [] }
+        }))];
+        assert_eq!(
+            MutationRefresh::for_patches(&cells, 0),
+            MutationRefresh::default()
+        );
+
+        let layout = [patch(serde_json::json!({
+            "type": "Layout",
+            "data": { "patch": { "sheetIndex": 0 } }
+        }))];
+        assert_eq!(
+            MutationRefresh::for_patches(&layout, 0),
+            MutationRefresh {
+                document: true,
+                images: false,
+            }
+        );
+
+        let other_sheet_image = [patch(serde_json::json!({
+            "type": "ImageDeleted",
+            "data": { "patch": { "sheetIndex": 1, "imageId": "image-1" } }
+        }))];
+        assert_eq!(
+            MutationRefresh::for_patches(&other_sheet_image, 0),
+            MutationRefresh::default()
+        );
+
+        let active_row = [patch(serde_json::json!({
+            "type": "RowInserted",
+            "data": { "patch": { "sheetIndex": 0, "rowIndex": 2, "count": 1 } }
+        }))];
+        assert_eq!(
+            MutationRefresh::for_patches(&active_row, 0),
+            MutationRefresh {
+                document: true,
+                images: true,
+            }
+        );
+    }
+
     struct PagedImageEditor {
         offsets: Rc<RefCell<Vec<usize>>>,
     }
@@ -1384,6 +1545,7 @@ mod tests {
         fn choose_document_path(
             &self,
             _suggested_name: String,
+            _mode: crate::ports::file::DocumentDialogMode,
         ) -> crate::ports::file::FileFuture<Result<Option<String>, crate::protocol::AppErrorDto>>
         {
             Box::pin(async { Ok(Some("/tmp/selected".to_string())) })

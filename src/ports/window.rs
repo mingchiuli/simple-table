@@ -1,5 +1,11 @@
+use std::future::Future;
+use std::pin::Pin;
+
+pub type WindowFuture<T> = Pin<Box<dyn Future<Output = T> + 'static>>;
+
 pub trait WindowPort {
     fn open_external(&self, url: &str);
+    fn confirm(&self, title: &str, message: &str) -> WindowFuture<bool>;
 }
 
 pub struct PlatformWindowPort;
@@ -24,5 +30,58 @@ impl WindowPort for PlatformWindowPort {
 
         #[cfg(feature = "server")]
         let _ = url;
+    }
+
+    fn confirm(&self, title: &str, message: &str) -> WindowFuture<bool> {
+        let title = title.to_string();
+        let message = message.to_string();
+        Box::pin(async move {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = title;
+                web_sys::window()
+                    .and_then(|window| window.confirm_with_message(&message).ok())
+                    .unwrap_or(false)
+            }
+
+            #[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
+            {
+                rfd::AsyncMessageDialog::new()
+                    .set_title(title)
+                    .set_description(message)
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show()
+                    .await
+                    == rfd::MessageDialogResult::Yes
+            }
+
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(feature = "desktop"),
+                feature = "mobile"
+            ))]
+            {
+                let mut eval = dioxus::document::eval(
+                    "const payload = await dioxus.recv(); dioxus.send(window.confirm(payload.message));",
+                );
+                if eval
+                    .send(serde_json::json!({ "title": title, "message": message }))
+                    .is_err()
+                {
+                    return false;
+                }
+                eval.recv::<bool>().await.unwrap_or(false)
+            }
+
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(feature = "desktop"),
+                not(feature = "mobile")
+            ))]
+            {
+                let _ = (title, message);
+                false
+            }
+        })
     }
 }

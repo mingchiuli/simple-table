@@ -6,6 +6,13 @@ use crate::protocol::AppErrorDto;
 
 pub type FileFuture<T> = Pin<Box<dyn Future<Output = T> + 'static>>;
 
+#[cfg(feature = "desktop")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentDialogMode {
+    Save,
+    Export,
+}
+
 pub trait FilePort {
     #[cfg(not(feature = "desktop"))]
     fn write_document(
@@ -18,6 +25,7 @@ pub trait FilePort {
     fn choose_document_path(
         &self,
         _suggested_name: String,
+        _mode: DocumentDialogMode,
     ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
         Box::pin(async { Ok(None) })
     }
@@ -81,8 +89,9 @@ mod native {
         fn choose_document_path(
             &self,
             suggested_name: String,
+            mode: DocumentDialogMode,
         ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
-            Box::pin(async move { Ok(choose_path(suggested_name).await) })
+            Box::pin(async move { Ok(choose_path(suggested_name, mode).await) })
         }
 
         fn write_document_to_path(
@@ -94,11 +103,18 @@ mod native {
         }
     }
 
-    async fn choose_path(suggested_name: String) -> Option<String> {
-        rfd::AsyncFileDialog::new()
+    async fn choose_path(suggested_name: String, mode: DocumentDialogMode) -> Option<String> {
+        let dialog = rfd::AsyncFileDialog::new()
             .set_file_name(&suggested_name)
-            .add_filter("Excel workbook", &["xlsx"])
-            .add_filter("CSV", &["csv"])
+            .add_filter("Excel workbook", &["xlsx"]);
+        let dialog = if mode == DocumentDialogMode::Export
+            || suggested_name.to_ascii_lowercase().ends_with(".csv")
+        {
+            dialog.add_filter("CSV", &["csv"])
+        } else {
+            dialog
+        };
+        dialog
             .save_file()
             .await
             .map(|file| file.path().to_string_lossy().into_owned())

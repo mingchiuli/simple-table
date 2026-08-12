@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use crate::Route;
 use crate::actions;
 use crate::model::{AppPorts, EditorStore};
+use crate::ports::window::{PlatformWindowPort, WindowPort};
 
 #[component]
 pub fn HomeView() -> Element {
@@ -103,14 +104,25 @@ pub fn HomeView() -> Element {
                                         class: "icon-button subtle",
                                         title: "Remove local workbook",
                                         aria_label: "Remove {document.name}",
+                                        disabled: busy,
                                         onclick: {
                                             let ports = Rc::clone(&ports);
                                             let document_key = document.id;
+                                            let document_name = document.name;
                                             move |_| {
                                                 let ports = Rc::clone(&ports);
                                                 let document_key = document_key.clone();
+                                                let document_name = document_name.clone();
                                                 spawn(async move {
-                                                    actions::delete_local_document(store, ports, document_key).await;
+                                                    if PlatformWindowPort
+                                                        .confirm(
+                                                            "Remove local workbook",
+                                                            &format!("Permanently remove {document_name}?"),
+                                                        )
+                                                        .await
+                                                    {
+                                                        actions::delete_local_document(store, ports, document_key).await;
+                                                    }
                                                 });
                                             }
                                         },

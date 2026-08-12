@@ -22,6 +22,8 @@ pub fn EditorView() -> Element {
     let mut store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
+    use_effect(move || install_dirty_guard(has_unsaved_changes(store)));
+    use_drop(|| install_dirty_guard(false));
     let document = store.document.read().clone();
 
     if document.is_none() {
@@ -46,8 +48,6 @@ pub fn EditorView() -> Element {
     let sheet_count = document.document.sheets.len();
     let dirty = editor_state.is_dirty || !store.pending_edits.read().is_empty();
     let back_ports = Rc::clone(&ports);
-
-    use_effect(move || install_dirty_guard(dirty));
 
     rsx! {
         main { class: if store.search_open() { "editor-shell search-visible" } else { "editor-shell" },
@@ -796,41 +796,7 @@ async fn confirm_discard(dirty: bool) -> bool {
     if !dirty {
         return true;
     }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        web_sys::window()
-            .and_then(|window| window.confirm_with_message("Discard unsaved changes?").ok())
-            .unwrap_or(false)
-    }
-
-    #[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
-    {
-        rfd::AsyncMessageDialog::new()
-            .set_title("Unsaved changes")
-            .set_description("Discard unsaved changes?")
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show()
-            .await
-            == rfd::MessageDialogResult::Yes
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        not(feature = "desktop"),
-        feature = "mobile"
-    ))]
-    {
-        let mut eval = document::eval("dioxus.send(window.confirm('Discard unsaved changes?'));");
-        eval.recv::<bool>().await.unwrap_or(false)
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        not(feature = "desktop"),
-        not(feature = "mobile")
-    ))]
-    {
-        false
-    }
+    PlatformWindowPort
+        .confirm("Unsaved changes", "Discard unsaved changes?")
+        .await
 }

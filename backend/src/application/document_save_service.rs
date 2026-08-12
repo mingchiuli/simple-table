@@ -82,6 +82,11 @@ pub struct PreparedDocumentSave {
     _work: Option<Box<dyn DocumentWorkLease>>,
 }
 
+pub struct PreparedDocumentExport {
+    pub output_name: String,
+    pub bytes: Vec<u8>,
+}
+
 struct SaveWithoutReparse {
     path: String,
     document_id: u64,
@@ -145,6 +150,29 @@ pub fn prepare_current_file_save(
         saved_decode_plan,
         _work: Some(work),
     })
+}
+
+pub fn prepare_current_file_export(
+    service: &DocumentSaveService,
+    document_id: u64,
+    base_revision: u64,
+    target_path_or_name: &str,
+) -> Result<PreparedDocumentExport, AppError> {
+    let (snapshot, source_bytes, mut work) = {
+        let handle = document_handle_for_read(service.documents(), document_id)?;
+        let editor_state = handle.read_for_command(document_id, base_revision)?;
+        let source_bytes = editor_state.estimated_resource_bytes();
+        let work = service
+            .work_budget()
+            .reserve_save(document_id, source_bytes, source_bytes)?;
+        let snapshot = editor_state.save_snapshot_for_target(target_path_or_name)?;
+        (snapshot, source_bytes, work)
+    };
+
+    work.set_work_bytes(source_bytes.saturating_add(MAX_GENERATED_FILE_BYTES))?;
+    let (output_name, bytes) = service.encoder().encode(&snapshot, target_path_or_name)?;
+    work.set_work_bytes(source_bytes.saturating_add(bytes.len()))?;
+    Ok(PreparedDocumentExport { output_name, bytes })
 }
 
 pub fn commit_current_file_save_projected<T, F, P>(

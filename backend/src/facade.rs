@@ -424,6 +424,22 @@ impl CoreFacade {
                     bytes,
                 })
             }
+            EditorRequest::PrepareExport {
+                document_id,
+                base_revision,
+                target_name,
+            } => {
+                let prepared = document_save_service::prepare_current_file_export(
+                    self.runtime.document_saves(),
+                    document_id,
+                    base_revision,
+                    &target_name,
+                )?;
+                Ok(EditorReply::ExportPrepared {
+                    file_name: prepared.output_name,
+                    bytes: prepared.bytes,
+                })
+            }
             EditorRequest::SaveLocal { .. }
             | EditorRequest::CheckpointRecovery { .. }
             | EditorRequest::ClearRecovery
@@ -746,6 +762,65 @@ mod tests {
             panic!("expected saved reply")
         };
         assert_eq!(value["editorSession"]["editorState"]["isDirty"], false);
+    }
+
+    #[test]
+    fn export_can_be_lossy_without_changing_document_state() {
+        let mut facade = CoreFacade::default();
+        let EditorReply::Document { value } = facade
+            .execute(EditorRequest::NewDocument {
+                request_id: "export-source".to_string(),
+            })
+            .expect("new document")
+        else {
+            panic!("expected document reply")
+        };
+        let document_id = value["editorSession"]["documentId"]
+            .as_str()
+            .expect("document id")
+            .parse::<u64>()
+            .expect("numeric id");
+        let revision = value["editorSession"]["revision"]
+            .as_str()
+            .expect("revision")
+            .parse::<u64>()
+            .expect("numeric revision");
+
+        let error = facade
+            .execute(EditorRequest::PrepareSave {
+                request_id: "lossy-native-save".to_string(),
+                document_id,
+                base_revision: revision,
+                target_name: "copy.csv".to_string(),
+            })
+            .expect_err("native save must reject a lossy target");
+        assert_eq!(error.code, "document_state_invalid");
+
+        let EditorReply::ExportPrepared { file_name, bytes } = facade
+            .execute(EditorRequest::PrepareExport {
+                document_id,
+                base_revision: revision,
+                target_name: "copy.csv".to_string(),
+            })
+            .expect("prepare export")
+        else {
+            panic!("expected export reply")
+        };
+        assert_eq!(file_name, "copy.csv");
+        assert!(!bytes.is_empty());
+
+        let EditorReply::Document { value } = facade
+            .execute(EditorRequest::ActiveDocument)
+            .expect("active document")
+        else {
+            panic!("expected document reply")
+        };
+        assert_eq!(value["document"]["fileName"], "untitled.xlsx");
+        assert_eq!(
+            value["editorSession"]["revision"],
+            serde_json::Value::String(revision.to_string())
+        );
+        assert_eq!(value["editorSession"]["editorState"]["isDirty"], true);
     }
 
     #[test]

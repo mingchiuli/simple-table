@@ -100,6 +100,9 @@ Desktop writes atomically and commits the saved hash only after the write
 succeeds. Web local save writes IndexedDB before committing the saved hash.
 Mobile exposes the WebView handoff as an exported copy and does not commit the
 saved hash because the WebView cannot confirm a durable platform write.
+Exporting a copy uses a separate read-only protocol operation, so choosing a
+different output format never changes the active document identity, revision,
+saved hash, or undo history.
 
 ## Dioxus Alignment
 
