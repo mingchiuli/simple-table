@@ -7,11 +7,34 @@ use crate::protocol::AppErrorDto;
 pub type FileFuture<T> = Pin<Box<dyn Future<Output = T> + 'static>>;
 
 pub trait FilePort {
+    #[cfg(not(feature = "desktop"))]
     fn write_document(
         &self,
         suggested_name: String,
         bytes: Vec<u8>,
     ) -> FileFuture<Result<Option<String>, AppErrorDto>>;
+
+    #[cfg(feature = "desktop")]
+    fn choose_document_path(
+        &self,
+        _suggested_name: String,
+    ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    #[cfg(feature = "desktop")]
+    fn write_document_to_path(
+        &self,
+        _path: String,
+        _bytes: Vec<u8>,
+    ) -> FileFuture<Result<(), AppErrorDto>> {
+        Box::pin(async {
+            Err(AppErrorDto {
+                code: "file_target_unavailable".to_string(),
+                message: "writing to a selected path is unavailable on this platform".to_string(),
+            })
+        })
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -55,34 +78,42 @@ mod native {
     pub struct NativeFilePort;
 
     impl FilePort for NativeFilePort {
-        fn write_document(
+        fn choose_document_path(
             &self,
             suggested_name: String,
-            bytes: Vec<u8>,
         ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
-            Box::pin(async move {
-                let Some(file) = rfd::AsyncFileDialog::new()
-                    .set_file_name(&suggested_name)
-                    .add_filter("Excel workbook", &["xlsx"])
-                    .add_filter("CSV", &["csv"])
-                    .save_file()
-                    .await
-                else {
-                    return Ok(None);
-                };
-                let path = file.path().to_path_buf();
-                tokio::task::spawn_blocking({
-                    let path = path.clone();
-                    move || simple_table_engine::write_native_file_atomically(&path, &bytes)
-                })
-                .await
-                .map_err(|error| AppErrorDto {
-                    code: "write_error".to_string(),
-                    message: error.to_string(),
-                })??;
-                Ok(Some(path.to_string_lossy().into_owned()))
-            })
+            Box::pin(async move { Ok(choose_path(suggested_name).await) })
         }
+
+        fn write_document_to_path(
+            &self,
+            path: String,
+            bytes: Vec<u8>,
+        ) -> FileFuture<Result<(), AppErrorDto>> {
+            Box::pin(write_path(path, bytes))
+        }
+    }
+
+    async fn choose_path(suggested_name: String) -> Option<String> {
+        rfd::AsyncFileDialog::new()
+            .set_file_name(&suggested_name)
+            .add_filter("Excel workbook", &["xlsx"])
+            .add_filter("CSV", &["csv"])
+            .save_file()
+            .await
+            .map(|file| file.path().to_string_lossy().into_owned())
+    }
+
+    async fn write_path(path: String, bytes: Vec<u8>) -> Result<(), AppErrorDto> {
+        tokio::task::spawn_blocking(move || {
+            simple_table_engine::write_native_file_atomically(std::path::Path::new(&path), &bytes)
+        })
+        .await
+        .map_err(|error| AppErrorDto {
+            code: "write_error".to_string(),
+            message: error.to_string(),
+        })??;
+        Ok(())
     }
 }
 

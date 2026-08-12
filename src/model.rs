@@ -20,6 +20,8 @@ pub struct OpenDocumentView {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentManifestView {
+    #[serde(default)]
+    pub path: String,
     pub file_name: String,
     pub sheets: Vec<SheetManifestView>,
 }
@@ -116,6 +118,28 @@ pub struct SheetViewport {
     pub col_end: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridScrollRequest {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedDocumentView {
+    pub document: Option<DocumentManifestView>,
+    pub identity: Option<SavedDocumentIdentityView>,
+    pub editor_session: EditorSessionView,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedDocumentIdentityView {
+    pub path: String,
+    pub file_name: String,
+}
+
 impl Default for SheetViewport {
     fn default() -> Self {
         Self {
@@ -146,6 +170,7 @@ pub struct EditorStore {
     pub edit_generation: Signal<u64>,
     pub pending_edits: Signal<PendingCellEdits>,
     pub viewport: Signal<SheetViewport>,
+    pub grid_scroll_request: Signal<Option<GridScrollRequest>>,
     pub region_generation: Signal<u64>,
 }
 
@@ -172,6 +197,7 @@ impl EditorStore {
             edit_generation: Signal::new(0),
             pending_edits: Signal::new(HashMap::new()),
             viewport: Signal::new(SheetViewport::default()),
+            grid_scroll_request: Signal::new(None),
             region_generation: Signal::new(0),
         }
     }
@@ -208,9 +234,12 @@ impl EditorStore {
         self.selected_cell.set((0, 0));
         self.formula_text.set(String::new());
         self.pending_edits.write().clear();
+        self.search.set(None);
+        self.search_open.set(false);
         self.edit_generation
             .set(self.edit_generation().wrapping_add(1));
         self.viewport.set(SheetViewport::default());
+        self.grid_scroll_request.set(None);
         let region_generation = (*self.region_generation.read()).wrapping_add(1);
         self.region_generation.set(region_generation);
         self.document.set(Some(Rc::new(document)));

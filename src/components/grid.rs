@@ -20,9 +20,48 @@ const EMU_PER_PIXEL: f64 = 9_525.0;
 pub fn SpreadsheetGrid() -> Element {
     let mut store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
-    let mut first_row = use_signal(|| 0usize);
-    let mut first_col = use_signal(|| 0usize);
+    let mut viewport_element = use_signal(|| None::<Rc<MountedData>>);
     let display_cells = use_memo(move || Rc::new(store.display_cell_map(store.active_sheet())));
+
+    use_effect(move || {
+        let Some(request) = *store.grid_scroll_request.read() else {
+            return;
+        };
+        let Some(element) = viewport_element.read().clone() else {
+            return;
+        };
+        let document = store.document.read().clone();
+        let Some(sheet) = document
+            .as_ref()
+            .and_then(|document| document.document.sheets.get(request.sheet_index))
+        else {
+            return;
+        };
+        if store.active_sheet() != request.sheet_index {
+            return;
+        }
+        let left = scroll_offset(
+            request.col,
+            HEADER_WIDTH,
+            DEFAULT_COLUMN_WIDTH,
+            &sheet.layout.column_widths,
+        );
+        let top = scroll_offset(
+            request.row,
+            HEADER_HEIGHT,
+            DEFAULT_ROW_HEIGHT,
+            &sheet.layout.row_heights,
+        );
+        store.grid_scroll_request.set(None);
+        spawn(async move {
+            let _ = element
+                .scroll(
+                    dioxus::html::geometry::PixelsVector2D::new(left, top),
+                    ScrollBehavior::Instant,
+                )
+                .await;
+        });
+    });
 
     let document = store.document.read().clone();
     let Some(document) = document else {
@@ -35,8 +74,9 @@ pub fn SpreadsheetGrid() -> Element {
     let row_count = sheet.extent.row_count.max(1);
     let column_count = sheet.extent.column_count.max(1);
     let layout = Rc::clone(&sheet.layout);
-    let row_start = first_row().min(row_count.saturating_sub(1));
-    let col_start = first_col().min(column_count.saturating_sub(1));
+    let viewport = *store.viewport.read();
+    let row_start = viewport.row_start.min(row_count.saturating_sub(1));
+    let col_start = viewport.col_start.min(column_count.saturating_sub(1));
     let row_end = row_start.saturating_add(VISIBLE_ROWS).min(row_count);
     let col_end = col_start.saturating_add(VISIBLE_COLUMNS).min(column_count);
     let rows: Vec<_> = (row_start..row_end).collect();
@@ -76,6 +116,7 @@ pub fn SpreadsheetGrid() -> Element {
             class: "grid-viewport",
             role: "grid",
             aria_label: "Spreadsheet cells",
+            onmounted: move |event| viewport_element.set(Some(event.data())),
             onscroll: {
                 let ports = Rc::clone(&ports);
                 let layout = Rc::clone(&layout);
@@ -92,15 +133,8 @@ pub fn SpreadsheetGrid() -> Element {
                         DEFAULT_COLUMN_WIDTH,
                         &layout.column_widths,
                     );
-                    if next_row != first_row() || next_col != first_col() {
-                        first_row.set(next_row);
-                        first_col.set(next_col);
-                        store.viewport.set(crate::model::SheetViewport {
-                            row_start: next_row,
-                            row_end: next_row.saturating_add(VISIBLE_ROWS),
-                            col_start: next_col,
-                            col_end: next_col.saturating_add(VISIBLE_COLUMNS),
-                        });
+                    let viewport = *store.viewport.read();
+                    if next_row != viewport.row_start || next_col != viewport.col_start {
                         let ports = Rc::clone(&ports);
                         spawn(async move {
                             actions::refresh_region(
@@ -185,6 +219,19 @@ pub fn SpreadsheetGrid() -> Element {
                 }
             }
         }
+    }
+}
+
+fn scroll_offset(
+    index: usize,
+    header_size: f64,
+    default_size: f64,
+    overrides: &HashMap<usize, u32>,
+) -> f64 {
+    if index == 0 {
+        0.0
+    } else {
+        header_size + axis_offset(index, default_size, overrides)
     }
 }
 

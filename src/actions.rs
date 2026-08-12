@@ -7,7 +7,8 @@ use dioxus::prelude::{ReadableExt, WritableExt, spawn};
 use dioxus_sdk_time::sleep;
 
 use crate::model::{
-    AppPorts, EditorMutationView, EditorStore, OpenDocumentView, SearchView, request_id,
+    AppPorts, EditorMutationView, EditorStore, GridScrollRequest, OpenDocumentView,
+    SavedDocumentView, SearchView, SheetViewport, request_id,
 };
 
 pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
@@ -232,6 +233,7 @@ async fn run_mutation_locked(
 ) -> Result<(), crate::protocol::AppErrorDto> {
     store.busy.set(true);
     let select_added_sheet = matches!(&request, EditorRequest::AddSheet { .. });
+    let previous_sheet_name = active_sheet_name(store);
     let result = match ports.editor.execute(request).await {
         Ok(EditorReply::Mutation { value }) => {
             match serde_json::from_value::<EditorMutationView>(value) {
@@ -240,6 +242,8 @@ async fn run_mutation_locked(
                     refresh_document(store, Rc::clone(&ports)).await;
                     if select_added_sheet {
                         select_last_sheet(store);
+                    } else if active_sheet_name(store) != previous_sheet_name {
+                        reset_current_sheet_viewport(store);
                     }
                     let viewport = *store.viewport.read();
                     refresh_region(
@@ -325,15 +329,11 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
         })
         .await;
 
-    #[cfg(any(feature = "desktop", feature = "mobile"))]
-    let result = save_native(
-        store,
-        Rc::clone(&ports),
-        document_id,
-        base_revision,
-        target_name,
-    )
-    .await;
+    #[cfg(feature = "desktop")]
+    let result = save_native(Rc::clone(&ports), document_id, base_revision, target_name).await;
+
+    #[cfg(all(feature = "mobile", not(feature = "desktop")))]
+    let result = save_mobile(Rc::clone(&ports), document_id, base_revision, target_name).await;
 
     #[cfg(all(
         feature = "server",
@@ -349,11 +349,12 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
 
     match result {
         Ok(EditorReply::Saved { value }) => {
-            if let Some(document) = store.document.write().as_mut().map(Rc::make_mut)
-                && let Some(editor_session) = value.get("editorSession")
-                && let Ok(session) = serde_json::from_value(editor_session.clone())
-            {
-                document.editor_session = session;
+            match serde_json::from_value::<SavedDocumentView>(value) {
+                Ok(saved) => accept_saved_document(store, saved),
+                Err(error) => {
+                    store.set_error(protocol_error(error));
+                    return;
+                }
             }
             let mut store = store;
             store.busy.set(false);
@@ -368,14 +369,16 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
     }
 }
 
-#[cfg(any(feature = "desktop", feature = "mobile"))]
+#[cfg(feature = "desktop")]
 async fn save_native(
-    store: EditorStore,
     ports: Rc<AppPorts>,
     document_id: u64,
     base_revision: u64,
     target_name: String,
 ) -> Result<EditorReply, crate::protocol::AppErrorDto> {
+    let Some(path) = ports.files.choose_document_path(target_name).await? else {
+        return Ok(EditorReply::Empty);
+    };
     let save_token = request_id("save-native");
     let prepared = ports
         .editor
@@ -383,7 +386,7 @@ async fn save_native(
             request_id: save_token.clone(),
             document_id,
             base_revision,
-            target_name: target_name.clone(),
+            target_name: path.clone(),
         })
         .await?;
     let EditorReply::SavePrepared {
@@ -394,23 +397,56 @@ async fn save_native(
     else {
         return Err(unexpected_reply("prepare save"));
     };
-    let path = match ports.files.write_document(file_name, bytes).await? {
-        Some(path) => path,
-        None => {
-            let _ = ports
-                .editor
-                .execute(EditorRequest::AbortSave { save_token })
-                .await;
-            let mut store = store;
-            store.busy.set(false);
-            store.status.set("Save cancelled".to_string());
-            return Ok(EditorReply::Empty);
-        }
-    };
+    let path = path_for_prepared_name(path, &file_name);
+    if let Err(error) = ports
+        .files
+        .write_document_to_path(path.clone(), bytes)
+        .await
+    {
+        let _ = ports
+            .editor
+            .execute(EditorRequest::AbortSave { save_token })
+            .await;
+        return Err(error);
+    }
     ports
         .editor
         .execute(EditorRequest::CommitSave { save_token, path })
         .await
+}
+
+#[cfg(all(feature = "mobile", not(feature = "desktop")))]
+async fn save_mobile(
+    ports: Rc<AppPorts>,
+    document_id: u64,
+    base_revision: u64,
+    target_name: String,
+) -> Result<EditorReply, crate::protocol::AppErrorDto> {
+    let save_token = request_id("save-mobile");
+    let prepared = ports
+        .editor
+        .execute(EditorRequest::PrepareSave {
+            request_id: save_token.clone(),
+            document_id,
+            base_revision,
+            target_name,
+        })
+        .await?;
+    let EditorReply::SavePrepared {
+        save_token,
+        file_name,
+        bytes,
+    } = prepared
+    else {
+        return Err(unexpected_reply("prepare save"));
+    };
+    let write = ports.files.write_document(file_name, bytes).await;
+    let _ = ports
+        .editor
+        .execute(EditorRequest::AbortSave { save_token })
+        .await;
+    write?;
+    Ok(EditorReply::Empty)
 }
 
 pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
@@ -424,7 +460,22 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
-    let target_name = document_name(store);
+    let suggested_name = document_name(store);
+    #[cfg(feature = "desktop")]
+    let target_name = match ports.files.choose_document_path(suggested_name).await {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            let mut store = store;
+            store.status.set("Download cancelled".to_string());
+            return;
+        }
+        Err(error) => {
+            store.set_error(error);
+            return;
+        }
+    };
+    #[cfg(not(feature = "desktop"))]
+    let target_name = suggested_name;
     let save_token = request_id("download");
     match ports
         .editor
@@ -432,7 +483,7 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
             request_id: save_token,
             document_id,
             base_revision,
-            target_name,
+            target_name: target_name.clone(),
         })
         .await
     {
@@ -441,6 +492,16 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
             file_name,
             bytes,
         }) => {
+            #[cfg(feature = "desktop")]
+            let write = {
+                let path = path_for_prepared_name(target_name, &file_name);
+                ports
+                    .files
+                    .write_document_to_path(path.clone(), bytes)
+                    .await
+                    .map(|()| Some(path))
+            };
+            #[cfg(not(feature = "desktop"))]
             let write = ports.files.write_document(file_name, bytes).await;
             let _ = ports
                 .editor
@@ -511,7 +572,65 @@ pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_ind
     }
     store.active_sheet.set(sheet_index);
     store.selected_cell.set((0, 0));
-    refresh_region(store, Rc::clone(&ports), 0, 50, 0, 20).await;
+    store.formula_text.set(String::new());
+    store.grid_scroll_request.set(Some(GridScrollRequest {
+        sheet_index,
+        row: 0,
+        col: 0,
+    }));
+    let viewport = SheetViewport::default();
+    refresh_region(
+        store,
+        Rc::clone(&ports),
+        viewport.row_start,
+        viewport.row_end,
+        viewport.col_start,
+        viewport.col_end,
+    )
+    .await;
+    refresh_images(store, Rc::clone(&ports)).await;
+}
+
+pub async fn select_search_result(
+    mut store: EditorStore,
+    ports: Rc<AppPorts>,
+    sheet_index: usize,
+    row: usize,
+    col: usize,
+) {
+    let _operation = ports.operations.lock().await;
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let row_start = row.saturating_sub(6);
+    let col_start = col.saturating_sub(4);
+    store.active_sheet.set(sheet_index);
+    store.selected_cell.set((row, col));
+    store.formula_text.set(String::new());
+    store.grid_scroll_request.set(Some(GridScrollRequest {
+        sheet_index,
+        row: row_start,
+        col: col_start,
+    }));
+    refresh_region(
+        store,
+        Rc::clone(&ports),
+        row_start,
+        row_start.saturating_add(36),
+        col_start,
+        col_start.saturating_add(16),
+    )
+    .await;
+    if let Some(value) = store
+        .display_cell_map(sheet_index)
+        .get(&(row, col))
+        .cloned()
+    {
+        store.formula_text.set(value);
+    }
     refresh_images(store, Rc::clone(&ports)).await;
 }
 
@@ -520,22 +639,15 @@ pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
         return;
     };
     let sheet_index = store.active_sheet();
-    let items = match ports
-        .editor
-        .execute(EditorRequest::SheetImages {
-            document_id,
-            base_revision,
-            sheet_index,
-            offset: 0,
-            limit: 256,
-        })
-        .await
+    let items = match load_image_catalog(
+        ports.editor.as_ref(),
+        document_id,
+        base_revision,
+        sheet_index,
+    )
+    .await
     {
-        Ok(EditorReply::Images { items, .. }) => items,
-        Ok(_) => {
-            store.set_error(unexpected_reply("image catalog"));
-            return;
-        }
+        Ok(items) => items,
         Err(error) => {
             store.set_error(error);
             return;
@@ -581,6 +693,49 @@ pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
     }
     store.images.set(Rc::new(items));
     store.image_assets.set(Rc::new(assets));
+}
+
+async fn load_image_catalog(
+    editor: &dyn crate::ports::editor::EditorPort,
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+) -> Result<Vec<crate::protocol::SheetImageDto>, crate::protocol::AppErrorDto> {
+    let mut items = Vec::new();
+    let mut offset = 0;
+    loop {
+        let next_offset = match editor
+            .execute(EditorRequest::SheetImages {
+                document_id,
+                base_revision,
+                sheet_index,
+                offset,
+                limit: 256,
+            })
+            .await
+        {
+            Ok(EditorReply::Images {
+                items: page,
+                next_offset,
+            }) => {
+                items.extend(page);
+                next_offset
+            }
+            Ok(_) => return Err(unexpected_reply("image catalog")),
+            Err(error) => return Err(error),
+        };
+        let Some(next_offset) = next_offset else {
+            break;
+        };
+        if next_offset <= offset {
+            return Err(crate::protocol::AppErrorDto {
+                code: "protocol_error".to_string(),
+                message: "image catalog returned a non-advancing page cursor".to_string(),
+            });
+        }
+        offset = next_offset;
+    }
+    Ok(items)
 }
 
 pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool {
@@ -630,24 +785,31 @@ pub async fn refresh_region(
         return;
     };
     let sheet_index = store.active_sheet();
+    let Some(viewport) = normalized_viewport(
+        store,
+        sheet_index,
+        SheetViewport {
+            row_start,
+            row_end,
+            col_start,
+            col_end,
+        },
+    ) else {
+        return;
+    };
     let generation = (*store.region_generation.read()).wrapping_add(1);
     store.region_generation.set(generation);
-    store.viewport.set(crate::model::SheetViewport {
-        row_start,
-        row_end,
-        col_start,
-        col_end,
-    });
+    store.viewport.set(viewport);
     let response = ports
         .editor
         .execute(EditorRequest::Region {
             document_id,
             base_revision,
             sheet_index,
-            row_start,
-            row_end,
-            col_start,
-            col_end,
+            row_start: viewport.row_start,
+            row_end: viewport.row_end,
+            col_start: viewport.col_start,
+            col_end: viewport.col_end,
         })
         .await;
     let request_is_current = || {
@@ -692,6 +854,23 @@ fn select_last_sheet(mut store: EditorStore) {
     store.selected_cell.set((0, 0));
     store.formula_text.set(String::new());
     store.viewport.set(crate::model::SheetViewport::default());
+    store.grid_scroll_request.set(Some(GridScrollRequest {
+        sheet_index: last_sheet,
+        row: 0,
+        col: 0,
+    }));
+}
+
+fn reset_current_sheet_viewport(mut store: EditorStore) {
+    let sheet_index = store.active_sheet();
+    store.selected_cell.set((0, 0));
+    store.formula_text.set(String::new());
+    store.viewport.set(SheetViewport::default());
+    store.grid_scroll_request.set(Some(GridScrollRequest {
+        sheet_index,
+        row: 0,
+        col: 0,
+    }));
 }
 
 fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
@@ -773,6 +952,74 @@ fn document_name(store: EditorStore) -> String {
         .map(|document| document.document.file_name.clone())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "untitled.xlsx".to_string())
+}
+
+fn active_sheet_name(store: EditorStore) -> Option<String> {
+    let document = store.document.read();
+    document
+        .as_ref()?
+        .document
+        .sheets
+        .get(store.active_sheet())
+        .map(|sheet| sheet.name.clone())
+}
+
+fn accept_saved_document(mut store: EditorStore, saved: SavedDocumentView) {
+    if let Some(document) = store.document.write().as_mut().map(Rc::make_mut) {
+        merge_saved_document(document, saved);
+    }
+}
+
+fn merge_saved_document(document: &mut OpenDocumentView, saved: SavedDocumentView) {
+    if let Some(manifest) = saved.document {
+        document.document = manifest;
+    }
+    if let Some(identity) = saved.identity {
+        document.document.path = identity.path;
+        document.document.file_name = identity.file_name;
+    }
+    document.editor_session = saved.editor_session;
+}
+
+fn normalized_viewport(
+    store: EditorStore,
+    sheet_index: usize,
+    viewport: SheetViewport,
+) -> Option<SheetViewport> {
+    let document = store.document.read();
+    let sheet = document.as_ref()?.document.sheets.get(sheet_index)?;
+    Some(clamp_viewport(viewport, sheet.extent))
+}
+
+fn clamp_viewport(viewport: SheetViewport, extent: crate::model::SheetExtentView) -> SheetViewport {
+    let (row_start, row_end) =
+        normalize_axis(viewport.row_start, viewport.row_end, extent.row_count);
+    let (col_start, col_end) =
+        normalize_axis(viewport.col_start, viewport.col_end, extent.column_count);
+    SheetViewport {
+        row_start,
+        row_end,
+        col_start,
+        col_end,
+    }
+}
+
+fn normalize_axis(start: usize, end: usize, extent: usize) -> (usize, usize) {
+    if extent == 0 {
+        return (0, 0);
+    }
+    let length = end.saturating_sub(start).max(1);
+    let start = start.min(extent - 1);
+    (start, start.saturating_add(length).min(extent))
+}
+
+#[cfg(feature = "desktop")]
+fn path_for_prepared_name(selected_path: String, prepared_name: &str) -> String {
+    let mut path = std::path::PathBuf::from(&selected_path);
+    if path.file_name().and_then(|name| name.to_str()) != Some(prepared_name) {
+        path.set_file_name(prepared_name);
+    }
+    path.to_string_lossy().into_owned()
 }
 
 fn rebase_mutation_request(
@@ -910,7 +1157,63 @@ fn unexpected_reply(action: &str) -> crate::protocol::AppErrorDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{
+        DocumentManifestView, EditorSessionView, EditorStateView, SheetExtentView, SheetLayoutView,
+        SheetManifestView,
+    };
+    use crate::ports::editor::{EditorPort, PortFuture};
+    use crate::protocol::{EditorResponse, ImageAnchorDto, ImageMarkerDto, SheetImageDto};
+    use std::cell::RefCell;
     use std::collections::HashMap;
+
+    fn session(revision: u64) -> EditorSessionView {
+        EditorSessionView {
+            document_id: 7,
+            revision,
+            editor_state: EditorStateView {
+                can_undo: false,
+                can_redo: false,
+                is_dirty: false,
+            },
+        }
+    }
+
+    fn manifest(path: &str, file_name: &str) -> DocumentManifestView {
+        DocumentManifestView {
+            path: path.to_string(),
+            file_name: file_name.to_string(),
+            sheets: vec![SheetManifestView {
+                name: "Sheet1".to_string(),
+                extent: SheetExtentView {
+                    row_count: 5,
+                    column_count: 5,
+                },
+                layout: Rc::new(SheetLayoutView::default()),
+            }],
+        }
+    }
+
+    fn image(id: &str) -> SheetImageDto {
+        SheetImageDto {
+            id: id.to_string(),
+            media_id: format!("media-{id}"),
+            mime_type: "image/png".to_string(),
+            intrinsic_width: 1,
+            intrinsic_height: 1,
+            anchor: ImageAnchorDto::OneCell {
+                from: ImageMarkerDto {
+                    row: 0,
+                    col: 0,
+                    row_offset_emu: 0,
+                    col_offset_emu: 0,
+                },
+                width_emu: 9_525,
+                height_emu: 9_525,
+            },
+            z_index: 0,
+            renderable: false,
+        }
+    }
 
     #[test]
     fn committed_edits_do_not_remove_newer_input() {
@@ -932,5 +1235,195 @@ mod tests {
         remove_committed_edits(&mut pending, HashMap::from([(coordinates, edit)]));
 
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn viewport_is_clamped_to_small_and_scrolled_sheet_extents() {
+        assert_eq!(
+            clamp_viewport(
+                SheetViewport::default(),
+                SheetExtentView {
+                    row_count: 5,
+                    column_count: 5,
+                },
+            ),
+            SheetViewport {
+                row_start: 0,
+                row_end: 5,
+                col_start: 0,
+                col_end: 5,
+            }
+        );
+        assert_eq!(
+            clamp_viewport(
+                SheetViewport {
+                    row_start: 99,
+                    row_end: 135,
+                    col_start: 19,
+                    col_end: 35,
+                },
+                SheetExtentView {
+                    row_count: 100,
+                    column_count: 20,
+                },
+            ),
+            SheetViewport {
+                row_start: 99,
+                row_end: 100,
+                col_start: 19,
+                col_end: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn saved_identity_updates_document_name_path_and_session() {
+        let mut document = OpenDocumentView {
+            document: manifest("/tmp/old.xlsx", "old.xlsx"),
+            editor_session: session(1),
+            initial_region: None,
+        };
+        merge_saved_document(
+            &mut document,
+            SavedDocumentView {
+                document: None,
+                identity: Some(crate::model::SavedDocumentIdentityView {
+                    path: "/tmp/new.csv".to_string(),
+                    file_name: "new.csv".to_string(),
+                }),
+                editor_session: session(2),
+            },
+        );
+
+        assert_eq!(document.document.path, "/tmp/new.csv");
+        assert_eq!(document.document.file_name, "new.csv");
+        assert_eq!(document.editor_session.revision, 2);
+    }
+
+    struct PagedImageEditor {
+        offsets: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl EditorPort for PagedImageEditor {
+        fn execute(&self, request: EditorRequest) -> PortFuture<EditorResponse> {
+            let EditorRequest::SheetImages { offset, .. } = request else {
+                panic!("unexpected request");
+            };
+            self.offsets.borrow_mut().push(offset);
+            let response = match offset {
+                0 => Ok(EditorReply::Images {
+                    items: vec![image("first")],
+                    next_offset: Some(256),
+                }),
+                256 => Ok(EditorReply::Images {
+                    items: vec![image("second")],
+                    next_offset: None,
+                }),
+                _ => panic!("unexpected image page offset"),
+            };
+            Box::pin(async move { response })
+        }
+    }
+
+    #[test]
+    fn image_catalog_follows_all_page_cursors() {
+        let offsets = Rc::new(RefCell::new(Vec::new()));
+        let editor = PagedImageEditor {
+            offsets: Rc::clone(&offsets),
+        };
+
+        let items = futures::executor::block_on(load_image_catalog(&editor, 1, 2, 0)).unwrap();
+
+        assert_eq!(*offsets.borrow(), vec![0, 256]);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    struct RecordingSaveEditor {
+        prepared_target: Rc<RefCell<Option<String>>>,
+        committed_path: Rc<RefCell<Option<String>>>,
+    }
+
+    #[cfg(feature = "desktop")]
+    impl EditorPort for RecordingSaveEditor {
+        fn execute(&self, request: EditorRequest) -> PortFuture<EditorResponse> {
+            let response = match request {
+                EditorRequest::PrepareSave { target_name, .. } => {
+                    self.prepared_target.replace(Some(target_name));
+                    Ok(EditorReply::SavePrepared {
+                        save_token: "save-token".to_string(),
+                        file_name: "selected.xlsx".to_string(),
+                        bytes: vec![1, 2, 3],
+                    })
+                }
+                EditorRequest::CommitSave { path, .. } => {
+                    self.committed_path.replace(Some(path));
+                    Ok(EditorReply::Saved {
+                        value: serde_json::Value::Null,
+                    })
+                }
+                request => panic!("unexpected request: {request:?}"),
+            };
+            Box::pin(async move { response })
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    struct RecordingFilePort {
+        written_path: Rc<RefCell<Option<String>>>,
+    }
+
+    #[cfg(feature = "desktop")]
+    impl crate::ports::file::FilePort for RecordingFilePort {
+        fn choose_document_path(
+            &self,
+            _suggested_name: String,
+        ) -> crate::ports::file::FileFuture<Result<Option<String>, crate::protocol::AppErrorDto>>
+        {
+            Box::pin(async { Ok(Some("/tmp/selected".to_string())) })
+        }
+
+        fn write_document_to_path(
+            &self,
+            path: String,
+            bytes: Vec<u8>,
+        ) -> crate::ports::file::FileFuture<Result<(), crate::protocol::AppErrorDto>> {
+            assert_eq!(bytes, vec![1, 2, 3]);
+            self.written_path.replace(Some(path));
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn native_save_prepares_and_commits_the_selected_target() {
+        let prepared_target = Rc::new(RefCell::new(None));
+        let committed_path = Rc::new(RefCell::new(None));
+        let written_path = Rc::new(RefCell::new(None));
+        let ports = Rc::new(AppPorts {
+            editor: Rc::new(RecordingSaveEditor {
+                prepared_target: Rc::clone(&prepared_target),
+                committed_path: Rc::clone(&committed_path),
+            }),
+            files: Rc::new(RecordingFilePort {
+                written_path: Rc::clone(&written_path),
+            }),
+            operations: Rc::new(futures::lock::Mutex::new(())),
+        });
+
+        futures::executor::block_on(save_native(ports, 7, 1, "old.csv".to_string())).unwrap();
+
+        assert_eq!(prepared_target.borrow().as_deref(), Some("/tmp/selected"));
+        assert_eq!(written_path.borrow().as_deref(), Some("/tmp/selected.xlsx"));
+        assert_eq!(
+            committed_path.borrow().as_deref(),
+            Some("/tmp/selected.xlsx")
+        );
     }
 }

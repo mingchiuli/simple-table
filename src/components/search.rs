@@ -78,17 +78,14 @@ pub fn SearchPanel() -> Element {
                                 move |_| {
                                     let ports = Rc::clone(&ports);
                                     spawn(async move {
-                                        actions::select_sheet(store, Rc::clone(&ports), result.sheet_index).await;
-                                        actions::refresh_region(
+                                        actions::select_search_result(
                                             store,
                                             ports,
-                                            result.row.saturating_sub(6),
-                                            result.row.saturating_add(24),
-                                            result.col.saturating_sub(4),
-                                            result.col.saturating_add(12),
+                                            result.sheet_index,
+                                            result.row,
+                                            result.col,
                                         )
                                         .await;
-                                        store.selected_cell.set((result.row, result.col));
                                     });
                                 }
                             },
