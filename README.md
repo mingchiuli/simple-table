@@ -1,115 +1,89 @@
 # Simple Table
 
-> A cross-platform spreadsheet editor for Excel and CSV files, built with Tauri 2 and Vue 3.
+Simple Table is a pure-Rust spreadsheet editor built with Dioxus 0.7.10. One
+codebase targets desktop, iOS, Android, and the Web. The Web build uses Axum
+SSR followed by Dioxus hydration; workbook state remains in a browser-side Rust
+Web Worker and IndexedDB.
 
 ## Features
 
-### Core Features
-- Open and edit Excel files (.xlsx)
-- Open and edit CSV files
-- Multi-sheet support (add/delete sheets)
-- Add/delete rows and columns
-- Save changes to file
-- Search functionality across sheets
-- Undo/Redo support
-- Preserve merged cells
-- Column resizing with persistence
-- Exact unsigned 64-bit document and revision identifiers across the IPC boundary
+- XLSX and CSV open, edit, search, and save flows
+- Cell, sheet, row, column, image, formula, undo/redo, and dirty-state support
+- Dioxus Desktop and Mobile native packages
+- Stateless Axum SSR with a hydrated Web client in one deployable binary
+- Official Dioxus Primitives controls and official Lucide icon data
 
-### Platform Support
-- **Desktop**: macOS, Linux, Windows
-- **Mobile**: Android and iOS Tauri builds
-- Platform detection via `src/composables/usePlatform.ts` and `src/utils/platform.ts`
+## Prerequisites
 
-### Limitations
+- Current stable Rust
+- `wasm32-unknown-unknown` target
+- Dioxus CLI 0.7.10:
+  `cargo install dioxus-cli --version 0.7.10 --locked`
+- wasm-bindgen CLI 0.2.127:
+  `cargo install wasm-bindgen-cli --version 0.2.127 --locked`
+- Android Studio/NDK for Android and Xcode for iOS
 
-- Excel styles, hyperlinks, freeze panes, and drawings are projected read-only. The original XLSX workbook remains the persistence source, so supported edits preserve this metadata, but the app does not edit rich formatting directly.
-- CSV files contain cell values only and cannot persist XLSX-specific layout or rich metadata.
-
-## Installation
-
-### From Release
-
-Download the latest release from the [Releases](https://github.com/mingchiuli/simple-table/releases) page.
-
-#### macOS Installation Note
-
-If you see "The file is damaged and cannot be opened" error on macOS after installation, run the following command in terminal:
+## Development
 
 ```bash
-sudo xattr -rd com.apple.quarantine "/Applications/Simple Table.app"
+cargo xtask desktop
+cargo xtask ios
+cargo xtask android
+cargo xtask web
 ```
 
-### From Source
+`web` launches the SSR and hydration pair for development and builds the
+browser Worker first. The mobile tasks launch the active simulator or connected
+device and accept Dioxus options such as `--device`. Set `DIOXUS_CLI` when the
+required `dx` binary is not in `PATH`.
+
+## Verification And Builds
 
 ```bash
-# Install dependencies
-npm install
-
-# Development
-npm run tauri dev
-
-# Build
-npm run tauri build
+cargo fmt --all -- --check
+cargo xtask check
+cargo test --workspace
+cargo xtask bundle
 ```
 
-## Tech Stack
+The `desktop`, `mobile`, Web hydration, SSR, and Worker targets are checked
+separately. `cargo xtask bundle` is the only Web deployment build. It writes a
+self-contained SSR executable to `target/release/simple-table-web`; generated
+JavaScript, Wasm, CSS, fonts, the favicon, and Worker files are embedded in the
+binary and no adjacent `public/` directory is required.
 
-- **Frontend**: Vue 3 + TypeScript + Element Plus
-- **Backend**: Rust + Tauri 2.0
-- **Excel Processing**: umya-spreadsheet backed workbook patching
-- **State Management**: Pinia
-- **Routing**: Vue Router
-
-## Project Structure
-
-```
-src/                      # Frontend source
-├── components/           # Vue components
-├── views/                # Page components
-├── stores/               # Pinia stores
-├── types/                # TypeScript types
-├── router/               # Vue Router config
-├── composables/          # Vue composables
-├── platform/             # Platform-specific file operations
-│   ├── desktop/         # Desktop (macOS/Linux/Windows)
-│   ├── android/         # Android
-│   └── ios/             # iOS
-└── styles/              # Platform-specific styles
-
-src-tauri/                # Rust backend
-├── src/
-│   ├── commands/         # Tauri commands
-│   ├── ops/              # Operations (cell, sheet, search, undo/redo, indexing)
-│   ├── io/               # File I/O, codecs, platform adapters, workbook patching
-│   ├── recent/           # Recent files management (types, store, thumbnail, ops)
-│   ├── utils.rs          # Utility functions
-│   ├── types/            # Rust types
-│   ├── state/            # Editor state management
-│   └── error/            # Error handling (AppError)
-│   └── lib.rs            # App setup and command registration
+```bash
+docker build -t simple-table .
+docker run --rm -p 8080:8080 simple-table
 ```
 
-The document ownership model, mutation protocol, save transaction, and resource
-boundaries are documented in [docs/architecture.md](docs/architecture.md).
+## Structure
 
-## Platform Architecture
-
-File operations are abstracted through `src/platform/` which provides a unified API:
-
-```ts
-import {
-  getPlatformAPI,
-  pickOpenFile,
-  prepareOpenFile,
-  saveFile,
-  pickSaveLocation,
-} from '@/platform';
+```text
+Cargo.toml              Dioxus application and workspace feature matrix
+Dioxus.toml             Dioxus CLI and native bundle configuration
+assets/                 App CSS, font, favicon, and package icons
+backend/Cargo.toml      Independent simple-table-engine crate
+backend/src/lib.rs      Engine crate root
+backend/src/protocol.rs Bounded editor request/reply contract
+backend/src/            Document, operations, state, I/O, and adapters
+src/main.rs             Shared desktop/mobile/Web/SSR entry point
+src/web_server.rs        Production Axum SSR entry with embedded Web assets
+src/lib.rs              Routes and application composition
+src/components.rs       UI module root; child modules live in components/
+src/ports.rs            Platform boundary root; child modules live in ports/
+src/web_worker.rs       Browser Worker binary and IndexedDB adapter
+src/xtask.rs            Desktop, mobile, Web, check, and bundle tasks
 ```
 
-Platform modules are **dynamically loaded** at runtime based on the current OS. Vite code-splits each platform into separate chunks for optimal bundle size.
+Rust 2018-style module roots (`components.rs`, `ports.rs`, and the engine's
+responsibility roots) are used throughout; the repository contains no `mod.rs`.
+No JavaScript or TypeScript source is checked in. Dioxus and wasm-bindgen
+generate the JavaScript and Wasm needed by browsers under `target/` during Web
+builds.
 
-**Important**: When adding a new platform, implement all methods in `PlatformFileOps` interface in `src/platform/types.ts`.
+See [docs/architecture.md](docs/architecture.md) for ownership and persistence
+details.
 
 ## License
 

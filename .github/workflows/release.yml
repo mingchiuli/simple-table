@@ -3,152 +3,123 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: read
 
 jobs:
-  # ============================================
-  # 发布前质量门禁：避免测试失败后仍创建 Release/上传产物
-  # ============================================
   quality-gate:
     uses: ./.github/workflows/quality.yml
 
-  # ============================================
-  # 第一步：统一创建 Draft Release
-  # ============================================
-  create-release:
+  desktop:
+    name: Desktop bundle (${{ matrix.os }})
     needs: quality-gate
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      release_id: ${{ steps.create.outputs.id }}
-
-    steps:
-      - name: Create or reuse Draft Release
-        id: create
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          if ! gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            gh release create "${{ github.ref_name }}" \
-              --draft \
-              --verify-tag \
-              --title "Simple Table ${{ github.ref_name }}" \
-              --notes "See the assets to download this version and install."
-          fi
-
-          release_id=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq '.id')
-          echo "id=${release_id}" >> "$GITHUB_OUTPUT"
-
-  # ============================================
-  # Desktop 构建 (macOS / Linux / Windows)
-  # ============================================
-  build-desktop:
-    needs: create-release
-    permissions:
-      contents: write
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
-          - platform: 'windows-latest'
-            args: ''
-
-    runs-on: ${{ matrix.platform }}
+          - os: macos-latest
+            package: dmg
+          - os: ubuntu-22.04
+            package: deb
+          - os: windows-latest
+            package: nsis
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - name: Install Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Install Dioxus CLI
+        uses: baptiste0928/cargo-install@v3
         with:
-          node-version: 'lts/*'
+          crate: dioxus-cli
+          version: 0.7.10
+          locked: true
+
+      - name: Build native package
+        run: dx bundle --desktop --release --locked --no-default-features --features desktop --package-types "${{ matrix.package }}" --out-dir release-assets
+
+      - name: Upload native package
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple-table-${{ runner.os }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  web-binary:
+    name: Embedded Web SSR binary
+    needs: quality-gate
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
+
+      - name: Install Dioxus CLI
+        uses: baptiste0928/cargo-install@v3
         with:
-          workspaces: './src-tauri -> target'
+          crate: dioxus-cli
+          version: 0.7.10
+          locked: true
 
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build Tauri app with updater
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing keys for updater
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Install wasm-bindgen CLI
+        uses: baptiste0928/cargo-install@v3
         with:
-          # 使用已创建的 Release ID，不再自行创建 Release
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
-          # Updater configuration
-          uploadUpdaterJson: true
+          crate: wasm-bindgen-cli
+          version: 0.2.127
+          locked: true
 
-  # ============================================
-  # Android 构建
-  # ============================================
-  build-android:
-    needs: create-release
+      - name: Build embedded SSR binary
+        run: cargo xtask bundle
+
+      - name: Name release binary
+        run: cp target/release/simple-table-web simple-table-web-x86_64-unknown-linux-gnu
+
+      - name: Upload Web binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple-table-web-linux-x86_64
+          path: simple-table-web-x86_64-unknown-linux-gnu
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [desktop, web-binary]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Tauri Android
-        uses: ./.github/actions/setup-tauri-android
-
-      - name: Copy custom icons to Android project
-        run: cp -R src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
-
-      - name: Setup Android signing
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: |
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/keystore.jks"
-          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
-            "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" "$RUNNER_TEMP/keystore.jks" \
-            > src-tauri/gen/android/keystore.properties
-          git apply .github/patches/android-release-signing.patch
-
-      - name: Build and upload Android APK
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
         with:
-          mobile: android
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --apk --target aarch64 --split-per-abi --ci
-          releaseAssetNamePattern: app-[arch]-release[ext]
-          uploadUpdaterJson: false
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --generate-notes --title "Simple Table $GITHUB_REF_NAME"

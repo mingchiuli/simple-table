@@ -8,67 +8,39 @@ permissions:
   contents: read
 
 jobs:
-  frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "lts/*"
-          cache: npm
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Run frontend tests
-        run: npm test
-
-      - name: Build frontend
-        run: npm run build
-
-  backend:
-    name: Rust backend
+  rust:
+    name: Rust, SSR, and Web
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-      - name: Install Linux Tauri dependencies
+      - name: Install Linux WebView dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
 
-      - name: Check Rust formatting
-        run: cargo fmt --check
-        working-directory: src-tauri
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-      - name: Check Rust code
-        run: cargo check --quiet
-        working-directory: src-tauri
+      - name: Check all non-mobile targets
+        run: cargo xtask check
 
-      - name: Run strict Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-        working-directory: src-tauri
+      - name: Run tests
+        run: cargo test --locked --no-default-features --features desktop
 
-      - name: Run Rust tests
-        run: cargo test --quiet
-        working-directory: src-tauri
+      - name: Run engine tests
+        run: cargo test --locked -p simple-table-engine
 
   desktop-platforms:
     name: Desktop check (${{ matrix.os }})
@@ -80,69 +52,76 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
 
-      - name: Check Rust code
-        run: cargo check --quiet
-        working-directory: src-tauri
-
-  android:
-    name: Android arm64
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Tauri Android
-        uses: ./.github/actions/setup-tauri-android
-
-      - name: Build Android debug APK
-        uses: tauri-apps/tauri-action@v1
-        with:
-          mobile: android
-          args: --debug --apk --target aarch64 --ci
+      - name: Check desktop target
+        run: cargo check --locked --no-default-features --features desktop
 
   ios:
-    name: iOS arm64 simulator
+    name: iOS simulator check
     runs-on: macos-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "lts/*"
-          cache: npm
+        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          components: clippy
           targets: aarch64-apple-ios-sim
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
+
+      - name: Lint iOS target
+        run: >-
+          cargo clippy --locked --target aarch64-apple-ios-sim
+          --no-default-features --features mobile --all-targets --
+          -Dwarnings -Dclippy::redundant_clone -Dclippy::clone_on_copy
+          -Dclippy::implicit_clone
+
+  android:
+    name: Android arm64 check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          workspaces: "./src-tauri -> target"
+          components: clippy
+          targets: aarch64-linux-android
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
 
-      - name: Initialize iOS project
-        run: npx tauri ios init --ci --skip-targets-install
+      - name: Configure Android NDK
+        shell: bash
+        run: |
+          ndk_bin="${ANDROID_NDK_LATEST_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=${ndk_bin}/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=${ndk_bin}/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${ndk_bin}/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "$ndk_bin" >> "$GITHUB_PATH"
 
-      - name: Build iOS simulator app
-        uses: tauri-apps/tauri-action@v1
-        with:
-          mobile: ios
-          args: --debug --target aarch64-sim --no-sign --ci
+      - name: Lint Android target
+        run: >-
+          cargo clippy --locked --target aarch64-linux-android
+          --no-default-features --features mobile --all-targets --
+          -Dwarnings -Dclippy::redundant_clone -Dclippy::clone_on_copy
+          -Dclippy::implicit_clone

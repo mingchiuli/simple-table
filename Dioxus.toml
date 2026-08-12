@@ -1,0 +1,21 @@
+[application]
+name = "simple-table"
+default_platform = "desktop"
+out_dir = "dist"
+public_dir = "target/generated-public"
+
+[web.app]
+title = "Simple Table"
+
+[web.resource.dev]
+
+[bundle]
+identifier = "com.mingchiu.simpletable"
+publisher = "Chiu"
+icon = [
+    "assets/icons/32x32.png",
+    "assets/icons/128x128.png",
+    "assets/icons/128x128@2x.png",
+    "assets/icons/icon.icns",
+    "assets/icons/icon.ico",
+]

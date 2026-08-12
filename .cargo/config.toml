@@ -1,0 +1,2 @@
+[alias]
+xtask = "run --locked --no-default-features --features tools --bin xtask --"

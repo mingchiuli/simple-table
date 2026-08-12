@@ -1,17 +1,13 @@
-# Dependabot configuration for dependency updates
-
 version: 2
 updates:
-  # Enable version updates for npm
-  - package-ecosystem: "npm"
+  - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: weekly
     open-pull-requests-limit: 10
 
-  # Enable version updates for Cargo (Rust)
-  - package-ecosystem: "cargo"
-    directory: "/src-tauri"
+  - package-ecosystem: github-actions
+    directory: "/"
     schedule:
-      interval: "weekly"
+      interval: weekly
     open-pull-requests-limit: 10
