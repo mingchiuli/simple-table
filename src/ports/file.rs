@@ -117,7 +117,7 @@ mod mobile {
                     "bytes": encoded,
                 }))
                 .map_err(eval_error)?;
-                Ok(Some(suggested_name))
+                Ok(None)
             })
         }
     }

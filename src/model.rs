@@ -108,6 +108,25 @@ pub struct SearchResultView {
     pub cell_position: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SheetViewport {
+    pub row_start: usize,
+    pub row_end: usize,
+    pub col_start: usize,
+    pub col_end: usize,
+}
+
+impl Default for SheetViewport {
+    fn default() -> Self {
+        Self {
+            row_start: 0,
+            row_end: 50,
+            col_start: 0,
+            col_end: 20,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct EditorStore {
     pub document: Signal<Option<Rc<OpenDocumentView>>>,
@@ -126,10 +145,12 @@ pub struct EditorStore {
     pub selected_image: Signal<Option<String>>,
     pub edit_generation: Signal<u64>,
     pub pending_edits: Signal<PendingCellEdits>,
+    pub viewport: Signal<SheetViewport>,
+    pub region_generation: Signal<u64>,
 }
 
 type CellCoordinates = (usize, usize, usize);
-type PendingCellEdits = HashMap<CellCoordinates, (u64, String)>;
+pub(crate) type PendingCellEdits = HashMap<CellCoordinates, (u64, String)>;
 
 impl EditorStore {
     pub fn new() -> Self {
@@ -150,6 +171,8 @@ impl EditorStore {
             selected_image: Signal::new(None),
             edit_generation: Signal::new(0),
             pending_edits: Signal::new(HashMap::new()),
+            viewport: Signal::new(SheetViewport::default()),
+            region_generation: Signal::new(0),
         }
     }
 
@@ -181,10 +204,15 @@ impl EditorStore {
 
     pub fn accept_document(mut self, mut document: OpenDocumentView) {
         self.region.set(document.initial_region.take());
-        self.active_sheet.set(
-            self.active_sheet()
-                .min(document.document.sheets.len().saturating_sub(1)),
-        );
+        self.active_sheet.set(0);
+        self.selected_cell.set((0, 0));
+        self.formula_text.set(String::new());
+        self.pending_edits.write().clear();
+        self.edit_generation
+            .set(self.edit_generation().wrapping_add(1));
+        self.viewport.set(SheetViewport::default());
+        let region_generation = (*self.region_generation.read()).wrapping_add(1);
+        self.region_generation.set(region_generation);
         self.document.set(Some(Rc::new(document)));
         self.images.set(Rc::new(Vec::new()));
         self.image_assets.set(Rc::new(HashMap::new()));
@@ -192,6 +220,15 @@ impl EditorStore {
         self.busy.set(false);
         self.error.set(None);
         self.status.set("Ready".to_string());
+    }
+
+    pub fn refresh_document(mut self, mut document: OpenDocumentView) {
+        document.initial_region = None;
+        self.active_sheet.set(
+            self.active_sheet()
+                .min(document.document.sheets.len().saturating_sub(1)),
+        );
+        self.document.set(Some(Rc::new(document)));
     }
 
     pub fn accept_mutation(mut self, mutation: &EditorMutationView) {
@@ -232,6 +269,7 @@ impl EditorStore {
 pub struct AppPorts {
     pub editor: Rc<dyn EditorPort>,
     pub files: Rc<dyn FilePort>,
+    pub operations: Rc<futures::lock::Mutex<()>>,
 }
 
 impl Clone for AppPorts {
@@ -239,6 +277,7 @@ impl Clone for AppPorts {
         Self {
             editor: Rc::clone(&self.editor),
             files: Rc::clone(&self.files),
+            operations: Rc::clone(&self.operations),
         }
     }
 }

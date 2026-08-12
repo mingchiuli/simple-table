@@ -11,6 +11,7 @@ use crate::model::{
 };
 
 pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
+    let _operation = ports.operations.lock().await;
     set_busy(store, "Creating workbook");
     match ports
         .editor
@@ -22,7 +23,8 @@ pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
         Ok(reply) => {
             let opened = accept_document_reply(store, reply);
             if opened {
-                refresh_images(store, ports).await;
+                refresh_images(store, Rc::clone(&ports)).await;
+                schedule_recovery(store, Rc::clone(&ports));
             }
             opened
         }
@@ -39,6 +41,7 @@ pub async fn open_bytes(
     file_name: String,
     bytes: Vec<u8>,
 ) -> bool {
+    let _operation = ports.operations.lock().await;
     set_busy(store, "Reading workbook");
     match ports
         .editor
@@ -52,7 +55,8 @@ pub async fn open_bytes(
         Ok(reply) => {
             let opened = accept_document_reply(store, reply);
             if opened {
-                refresh_images(store, ports).await;
+                refresh_images(store, Rc::clone(&ports)).await;
+                schedule_recovery(store, Rc::clone(&ports));
             }
             opened
         }
@@ -64,6 +68,7 @@ pub async fn open_bytes(
 }
 
 pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: String) -> bool {
+    let _operation = ports.operations.lock().await;
     set_busy(store, "Opening local workbook");
     match ports
         .editor
@@ -76,7 +81,8 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
         Ok(reply) => {
             let opened = accept_document_reply(store, reply);
             if opened {
-                refresh_images(store, ports).await;
+                refresh_images(store, Rc::clone(&ports)).await;
+                schedule_recovery(store, Rc::clone(&ports));
             }
             opened
         }
@@ -139,63 +145,130 @@ pub fn queue_cell_edit(
             .get(&(sheet_index, row, col))
             .is_some_and(|(pending_generation, _)| *pending_generation == generation);
         if should_commit {
-            flush_pending_edits(store, ports).await;
+            let _ = flush_pending_edits(store, ports).await;
         }
     });
 }
 
-pub async fn flush_pending_edits(mut store: EditorStore, ports: Rc<AppPorts>) {
-    let changes = std::mem::take(&mut *store.pending_edits.write());
+pub async fn flush_pending_edits(
+    store: EditorStore,
+    ports: Rc<AppPorts>,
+) -> Result<(), crate::protocol::AppErrorDto> {
+    let _operation = ports.operations.lock().await;
+    flush_pending_edits_locked(store, Rc::clone(&ports)).await
+}
+
+async fn flush_pending_edits_locked(
+    store: EditorStore,
+    ports: Rc<AppPorts>,
+) -> Result<(), crate::protocol::AppErrorDto> {
+    while !store.pending_edits.read().is_empty() {
+        flush_pending_batch_locked(store, Rc::clone(&ports)).await?;
+    }
+    Ok(())
+}
+
+async fn flush_pending_batch_locked(
+    mut store: EditorStore,
+    ports: Rc<AppPorts>,
+) -> Result<(), crate::protocol::AppErrorDto> {
+    let changes = store.pending_edits.read().clone();
     if changes.is_empty() {
-        return;
+        return Ok(());
     }
     let Some((document_id, base_revision)) = document_identity(store) else {
-        return;
+        let error = crate::protocol::AppErrorDto {
+            code: "document_changed".to_string(),
+            message: "the active document changed before edits were committed".to_string(),
+        };
+        store.set_error(error.clone());
+        return Err(error);
     };
-    let changes = changes
-        .into_iter()
+    let request_changes = changes
+        .iter()
         .map(|((sheet_index, row, col), (_, text))| CellEdit {
-            sheet_index,
-            row,
-            col,
-            text,
+            sheet_index: *sheet_index,
+            row: *row,
+            col: *col,
+            text: text.clone(),
         })
         .collect();
-    run_mutation(
+    let result = run_mutation_locked(
         store,
         Rc::clone(&ports),
         EditorRequest::SetCells {
             request_id: request_id("cells"),
             document_id,
             base_revision,
-            changes,
+            changes: request_changes,
         },
     )
     .await;
+    if result.is_ok() {
+        remove_committed_edits(&mut store.pending_edits.write(), changes);
+    }
+    result
 }
 
-pub async fn run_mutation(mut store: EditorStore, ports: Rc<AppPorts>, request: EditorRequest) {
+pub async fn run_mutation(store: EditorStore, ports: Rc<AppPorts>, mut request: EditorRequest) {
+    let _operation = ports.operations.lock().await;
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    if let Err(error) = rebase_mutation_request(store, &mut request) {
+        store.set_error(error);
+        return;
+    }
+    let _ = run_mutation_locked(store, Rc::clone(&ports), request).await;
+}
+
+async fn run_mutation_locked(
+    mut store: EditorStore,
+    ports: Rc<AppPorts>,
+    request: EditorRequest,
+) -> Result<(), crate::protocol::AppErrorDto> {
     store.busy.set(true);
-    match ports.editor.execute(request).await {
+    let select_added_sheet = matches!(&request, EditorRequest::AddSheet { .. });
+    let result = match ports.editor.execute(request).await {
         Ok(EditorReply::Mutation { value }) => {
             match serde_json::from_value::<EditorMutationView>(value) {
                 Ok(mutation) => {
                     store.accept_mutation(&mutation);
                     refresh_document(store, Rc::clone(&ports)).await;
-                    refresh_region(store, Rc::clone(&ports), 0, 50, 0, 20).await;
+                    if select_added_sheet {
+                        select_last_sheet(store);
+                    }
+                    let viewport = *store.viewport.read();
+                    refresh_region(
+                        store,
+                        Rc::clone(&ports),
+                        viewport.row_start,
+                        viewport.row_end,
+                        viewport.col_start,
+                        viewport.col_end,
+                    )
+                    .await;
                     refresh_images(store, Rc::clone(&ports)).await;
                     schedule_recovery(store, ports);
+                    store.busy.set(false);
+                    Ok(())
                 }
-                Err(error) => store.set_error(protocol_error(error)),
+                Err(error) => Err(protocol_error(error)),
             }
         }
-        Ok(_) => store.set_error(unexpected_reply("mutation")),
-        Err(error) => store.set_error(error),
+        Ok(_) => Err(unexpected_reply("mutation")),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = &result {
+        store.set_error(error.clone());
     }
+    result
 }
 
 pub async fn undo(store: EditorStore, ports: Rc<AppPorts>) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
@@ -212,7 +285,6 @@ pub async fn undo(store: EditorStore, ports: Rc<AppPorts>) {
 }
 
 pub async fn redo(store: EditorStore, ports: Rc<AppPorts>) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
@@ -229,7 +301,13 @@ pub async fn redo(store: EditorStore, ports: Rc<AppPorts>) {
 }
 
 pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
+    let _operation = ports.operations.lock().await;
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return;
+    }
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
@@ -336,7 +414,13 @@ async fn save_native(
 }
 
 pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
+    let _operation = ports.operations.lock().await;
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return;
+    }
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
@@ -367,6 +451,12 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
                     let mut store = store;
                     store.status.set("Copy downloaded".to_string());
                 }
+                #[cfg(feature = "mobile")]
+                Ok(None) => {
+                    let mut store = store;
+                    store.status.set("Copy sent to device".to_string());
+                }
+                #[cfg(not(feature = "mobile"))]
                 Ok(None) => {}
                 Err(error) => store.set_error(error),
             }
@@ -377,7 +467,13 @@ pub async fn download_copy(store: EditorStore, ports: Rc<AppPorts>) {
 }
 
 pub async fn search(store: EditorStore, ports: Rc<AppPorts>, query: String, all_sheets: bool) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
+    let _operation = ports.operations.lock().await;
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return;
+    }
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
@@ -406,11 +502,17 @@ pub async fn search(store: EditorStore, ports: Rc<AppPorts>, query: String, all_
 }
 
 pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_index: usize) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
+    let _operation = ports.operations.lock().await;
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return;
+    }
     store.active_sheet.set(sheet_index);
     store.selected_cell.set((0, 0));
     refresh_region(store, Rc::clone(&ports), 0, 50, 0, 20).await;
-    refresh_images(store, ports).await;
+    refresh_images(store, Rc::clone(&ports)).await;
 }
 
 pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
@@ -481,10 +583,10 @@ pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
     store.image_assets.set(Rc::new(assets));
 }
 
-pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) {
-    flush_pending_edits(store, Rc::clone(&ports)).await;
+pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool {
+    let _operation = ports.operations.lock().await;
     let Some((document_id, base_revision)) = document_identity(store) else {
-        return;
+        return true;
     };
     match ports
         .editor
@@ -503,9 +605,16 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) {
                 .image_assets
                 .set(Rc::new(std::collections::HashMap::new()));
             store.pending_edits.write().clear();
+            true
         }
-        Ok(_) => store.set_error(unexpected_reply("close")),
-        Err(error) => store.set_error(error),
+        Ok(_) => {
+            store.set_error(unexpected_reply("close"));
+            false
+        }
+        Err(error) => {
+            store.set_error(error);
+            false
+        }
     }
 }
 
@@ -520,35 +629,69 @@ pub async fn refresh_region(
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
-    match ports
+    let sheet_index = store.active_sheet();
+    let generation = (*store.region_generation.read()).wrapping_add(1);
+    store.region_generation.set(generation);
+    store.viewport.set(crate::model::SheetViewport {
+        row_start,
+        row_end,
+        col_start,
+        col_end,
+    });
+    let response = ports
         .editor
         .execute(EditorRequest::Region {
             document_id,
             base_revision,
-            sheet_index: store.active_sheet(),
+            sheet_index,
             row_start,
             row_end,
             col_start,
             col_end,
         })
-        .await
-    {
+        .await;
+    let request_is_current = || {
+        *store.region_generation.read() == generation
+            && store.active_sheet() == sheet_index
+            && document_identity(store) == Some((document_id, base_revision))
+    };
+    match response {
         Ok(EditorReply::Region { value }) => match serde_json::from_value(value) {
-            Ok(region) => store.region.set(Some(region)),
-            Err(error) => store.set_error(protocol_error(error)),
+            Ok(region) if request_is_current() => {
+                store.region.set(Some(region));
+            }
+            Ok(_) => {}
+            Err(error) if request_is_current() => store.set_error(protocol_error(error)),
+            Err(_) => {}
         },
-        Ok(_) => store.set_error(unexpected_reply("region")),
-        Err(error) => store.set_error(error),
+        Ok(_) if request_is_current() => store.set_error(unexpected_reply("region")),
+        Err(error) if request_is_current() => store.set_error(error),
+        _ => {}
     }
 }
 
 async fn refresh_document(store: EditorStore, ports: Rc<AppPorts>) {
     match ports.editor.execute(EditorRequest::ActiveDocument).await {
-        Ok(reply) => {
-            accept_document_reply(store, reply);
+        Ok(EditorReply::Document { value }) if !value.is_null() => {
+            match serde_json::from_value::<OpenDocumentView>(value) {
+                Ok(document) => store.refresh_document(document),
+                Err(error) => store.set_error(protocol_error(error)),
+            }
         }
+        Ok(EditorReply::Document { .. }) => {}
+        Ok(_) => store.set_error(unexpected_reply("document")),
         Err(error) => store.set_error(error),
     }
+}
+
+fn select_last_sheet(mut store: EditorStore) {
+    let last_sheet = store.document.read().as_ref().map_or(0, |document| {
+        document.document.sheets.len().saturating_sub(1)
+    });
+    store.active_sheet.set(last_sheet);
+    store.selected_cell.set((0, 0));
+    store.formula_text.set(String::new());
+    store.viewport.set(crate::model::SheetViewport::default());
 }
 
 fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
@@ -565,23 +708,24 @@ fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
             let Some((document_id, base_revision)) = document_identity(store) else {
                 return;
             };
-            if !store
+            let is_dirty = store
                 .document
                 .read()
                 .as_ref()
-                .is_some_and(|document| document.editor_session.editor_state.is_dirty)
-            {
-                return;
+                .is_some_and(|document| document.editor_session.editor_state.is_dirty);
+            if is_dirty {
+                let _ = ports
+                    .editor
+                    .execute(EditorRequest::CheckpointRecovery {
+                        request_id: request_id("recovery"),
+                        document_id,
+                        base_revision,
+                        target_name: document_name(store),
+                    })
+                    .await;
+            } else {
+                let _ = ports.editor.execute(EditorRequest::ClearRecovery).await;
             }
-            let _ = ports
-                .editor
-                .execute(EditorRequest::CheckpointRecovery {
-                    request_id: request_id("recovery"),
-                    document_id,
-                    base_revision,
-                    target_name: document_name(store),
-                })
-                .await;
         });
     }
 
@@ -631,6 +775,118 @@ fn document_name(store: EditorStore) -> String {
         .unwrap_or_else(|| "untitled.xlsx".to_string())
 }
 
+fn rebase_mutation_request(
+    store: EditorStore,
+    request: &mut EditorRequest,
+) -> Result<(), crate::protocol::AppErrorDto> {
+    let Some((current_document_id, current_revision)) = document_identity(store) else {
+        return Err(crate::protocol::AppErrorDto {
+            code: "no_document".to_string(),
+            message: "no workbook is open".to_string(),
+        });
+    };
+    let context = match request {
+        EditorRequest::SetCell {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::SetCells {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::AddRow {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::DeleteRow {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::AddColumn {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::DeleteColumn {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::SetColumnWidth {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::SetRowHeight {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::AddSheet {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::DeleteSheet {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::InsertImage {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::UpdateImage {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::DeleteImage {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::Undo {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::Redo {
+            document_id,
+            base_revision,
+            ..
+        } => Some((document_id, base_revision)),
+        _ => None,
+    };
+    let Some((document_id, base_revision)) = context else {
+        return Err(unexpected_reply("mutation request"));
+    };
+    if *document_id != current_document_id {
+        return Err(crate::protocol::AppErrorDto {
+            code: "document_changed".to_string(),
+            message: "the workbook changed before the action could run".to_string(),
+        });
+    }
+    *base_revision = current_revision;
+    Ok(())
+}
+
+fn remove_committed_edits(
+    pending: &mut crate::model::PendingCellEdits,
+    committed: crate::model::PendingCellEdits,
+) {
+    for (coordinates, edit) in committed {
+        if pending.get(&coordinates) == Some(&edit) {
+            pending.remove(&coordinates);
+        }
+    }
+}
+
 fn set_busy(mut store: EditorStore, status: &str) {
     store.busy.set(true);
     store.error.set(None);
@@ -648,5 +904,33 @@ fn unexpected_reply(action: &str) -> crate::protocol::AppErrorDto {
     crate::protocol::AppErrorDto {
         code: "protocol_error".to_string(),
         message: format!("unexpected {action} response"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn committed_edits_do_not_remove_newer_input() {
+        let coordinates = (0, 2, 3);
+        let mut pending = HashMap::from([(coordinates, (2, "new".to_string()))]);
+        let committed = HashMap::from([(coordinates, (1, "old".to_string()))]);
+
+        remove_committed_edits(&mut pending, committed);
+
+        assert_eq!(pending.get(&coordinates), Some(&(2, "new".to_string())));
+    }
+
+    #[test]
+    fn committed_edits_remove_the_matching_generation() {
+        let coordinates = (0, 2, 3);
+        let edit = (1, "value".to_string());
+        let mut pending = HashMap::from([(coordinates, edit.clone())]);
+
+        remove_committed_edits(&mut pending, HashMap::from([(coordinates, edit)]));
+
+        assert!(pending.is_empty());
     }
 }

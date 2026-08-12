@@ -24,6 +24,7 @@ app = [
     "dep:dioxus",
     "dep:dioxus-primitives",
     "dep:dioxus-sdk-time",
+    "dep:futures",
     "dep:lucide-icons",
     "dep:semver",
     "dep:simple-table-engine",
@@ -44,7 +45,6 @@ web = [
     "dioxus/web",
     "dep:dioxus-web",
     "dioxus-primitives/web",
-    "dep:futures",
     "dep:js-sys",
     "dep:serde-wasm-bindgen",
     "dep:web-sys",
@@ -95,7 +95,7 @@ tempfile = { version = "3", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "File", "FileList", "FileReader", "HtmlAnchorElement", "HtmlInputElement", "MessageEvent", "Response", "Url", "Window", "Worker", "WorkerOptions", "WorkerType"], optional = true }
+web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "ErrorEvent", "Event", "File", "FileList", "FileReader", "HtmlAnchorElement", "HtmlInputElement", "MessageEvent", "Response", "Url", "Window", "Worker", "WorkerOptions", "WorkerType"], optional = true }
 webbrowser = { version = "1.2.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

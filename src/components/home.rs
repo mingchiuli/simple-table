@@ -47,7 +47,7 @@ pub fn HomeView() -> Element {
                             let ports = Rc::clone(&ports);
                             spawn(async move {
                                 if actions::new_document(store, ports).await {
-                                    navigator.push(Route::Table {});
+                                    navigator.replace(Route::Table {});
                                 }
                             });
                         }
@@ -88,7 +88,7 @@ pub fn HomeView() -> Element {
                                                 let document_key = document_key.clone();
                                                 spawn(async move {
                                                     if actions::open_local(store, ports, document_key).await {
-                                                        navigator.push(Route::Table {});
+                                                        navigator.replace(Route::Table {});
                                                     }
                                                 });
                                             }
@@ -155,7 +155,7 @@ fn OpenDocumentControl() -> Element {
                             match file.read_bytes().await {
                                 Ok(bytes) => {
                                     if actions::open_bytes(store, ports, name, bytes.to_vec()).await {
-                                        navigator.push(Route::Table {});
+                                        navigator.replace(Route::Table {});
                                     }
                                 }
                                 Err(error) => store.set_error(crate::protocol::AppErrorDto {

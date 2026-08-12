@@ -6,6 +6,7 @@ use crate::state::content_hash::{ContentHash, IncrementalContentFingerprint};
 pub struct DirtyTracker {
     current: IncrementalContentFingerprint,
     saved_content_hash: ContentHash,
+    save_required: bool,
 }
 
 impl DirtyTracker {
@@ -14,6 +15,7 @@ impl DirtyTracker {
         Self {
             saved_content_hash: current.hash(),
             current,
+            save_required: false,
         }
     }
 
@@ -23,7 +25,7 @@ impl DirtyTracker {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.current.hash() != self.saved_content_hash
+        self.save_required || self.current.hash() != self.saved_content_hash
     }
 
     pub fn replace_current(&mut self, file_data: &DocumentData) {
@@ -52,5 +54,10 @@ impl DirtyTracker {
 
     pub fn mark_saved(&mut self) {
         self.saved_content_hash = self.current.hash();
+        self.save_required = false;
+    }
+
+    pub fn mark_save_required(&mut self) {
+        self.save_required = true;
     }
 }

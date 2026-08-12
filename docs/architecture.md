@@ -91,13 +91,15 @@ the revision-checked mutation protocol.
 
 ```text
 dirty = backend content hash differs from saved hash
+        OR the document is new/recovered and has no confirmed save
         OR pending edit overlay is non-empty
 ```
 
 Every save stages bytes through the backend before crossing a platform port.
 Desktop writes atomically and commits the saved hash only after the write
 succeeds. Web local save writes IndexedDB before committing the saved hash.
-Mobile commits after handing prepared bytes to its WebView download flow.
+Mobile exposes the WebView handoff as an exported copy and does not commit the
+saved hash because the WebView cannot confirm a durable platform write.
 
 ## Dioxus Alignment
 

@@ -196,6 +196,18 @@ pub fn close_current_document(
     }
 }
 
+pub fn mark_current_document_save_required(
+    service: &DocumentLifecycleService,
+    document_id: u64,
+    base_revision: u64,
+) -> Result<(), AppError> {
+    let handle = service.documents().mutation_handle(document_id)?;
+    handle
+        .write_for_command(document_id, base_revision)?
+        .mark_save_required();
+    Ok(())
+}
+
 fn retire_document_runtime(service: &DocumentLifecycleService, document_id: u64) {
     service.search_indexes().cancel_document_jobs(document_id);
     mutation_replay::retire_document(service.mutation_replays(), document_id);

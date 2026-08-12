@@ -82,14 +82,17 @@ mod web {
     use futures::channel::oneshot;
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
-    use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
+    use web_sys::{ErrorEvent, Event, MessageEvent, Worker, WorkerOptions, WorkerType};
 
     use super::*;
 
     struct WorkerClient {
         worker: Worker,
         pending: Rc<RefCell<VecDeque<oneshot::Sender<EditorResponse>>>>,
+        failure: Rc<RefCell<Option<AppErrorDto>>>,
         _on_message: Closure<dyn FnMut(MessageEvent)>,
+        _on_error: Closure<dyn FnMut(ErrorEvent)>,
+        _on_message_error: Closure<dyn FnMut(Event)>,
     }
 
     #[derive(Clone)]
@@ -106,6 +109,7 @@ mod web {
                 let pending = Rc::new(RefCell::new(
                     VecDeque::<oneshot::Sender<EditorResponse>>::new(),
                 ));
+                let failure = Rc::new(RefCell::new(None));
                 let on_message_pending = Rc::clone(&pending);
                 let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
                     let response = event
@@ -129,10 +133,40 @@ mod web {
                     }
                 }) as Box<dyn FnMut(MessageEvent)>);
                 worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+                let on_error_pending = Rc::clone(&pending);
+                let on_error_failure = Rc::clone(&failure);
+                let on_error = Closure::wrap(Box::new(move |event: ErrorEvent| {
+                    fail_worker(
+                        &on_error_pending,
+                        &on_error_failure,
+                        "worker_failed",
+                        &format!(
+                            "{}:{}: {}",
+                            event.filename(),
+                            event.lineno(),
+                            event.message()
+                        ),
+                    );
+                }) as Box<dyn FnMut(ErrorEvent)>);
+                worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+                let on_message_error_pending = Rc::clone(&pending);
+                let on_message_error_failure = Rc::clone(&failure);
+                let on_message_error = Closure::wrap(Box::new(move |_event: Event| {
+                    fail_worker(
+                        &on_message_error_pending,
+                        &on_message_error_failure,
+                        "worker_protocol_error",
+                        "the editor worker returned an unreadable message",
+                    );
+                }) as Box<dyn FnMut(Event)>);
+                worker.set_onmessageerror(Some(on_message_error.as_ref().unchecked_ref()));
                 Ok(WorkerClient {
                     worker,
                     pending,
+                    failure,
                     _on_message: on_message,
+                    _on_error: on_error,
+                    _on_message_error: on_message_error,
                 })
             })();
             Self(Rc::new(client))
@@ -144,6 +178,9 @@ mod web {
             let client = Rc::clone(&self.0);
             Box::pin(async move {
                 let client = client.as_ref().as_ref().map_err(Clone::clone)?;
+                if let Some(error) = client.failure.borrow().clone() {
+                    return Err(error);
+                }
                 let json = serde_json::to_string(&request).map_err(|error| AppErrorDto {
                     code: "worker_protocol_error".to_string(),
                     message: error.to_string(),
@@ -166,6 +203,22 @@ mod web {
         AppErrorDto {
             code: "worker_start_failed".to_string(),
             message: value.as_string().unwrap_or_else(|| format!("{value:?}")),
+        }
+    }
+
+    fn fail_worker(
+        pending: &RefCell<VecDeque<oneshot::Sender<EditorResponse>>>,
+        failure: &RefCell<Option<AppErrorDto>>,
+        code: &str,
+        message: &str,
+    ) {
+        let error = AppErrorDto {
+            code: code.to_string(),
+            message: message.to_string(),
+        };
+        failure.replace(Some(error.clone()));
+        for sender in pending.borrow_mut().drain(..) {
+            let _ = sender.send(Err(error.clone()));
         }
     }
 }

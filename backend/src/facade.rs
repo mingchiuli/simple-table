@@ -37,13 +37,19 @@ impl CoreFacade {
     fn execute_inner(&mut self, request: EditorRequest) -> Result<EditorReply, AppError> {
         match request {
             EditorRequest::NewDocument { request_id } => {
+                let expected = self.active_document_identity()?;
                 let prepared = self.runtime.document_files().prepare_new(&request_id)?;
                 let receipt = document_service::commit_prepared_document(
                     self.runtime.document_lifecycle(),
                     &prepared.token,
-                    None,
-                    None,
+                    expected.map(|identity| identity.0),
+                    expected.map(|identity| identity.1),
                     &request_id,
+                )?;
+                document_service::mark_current_document_save_required(
+                    self.runtime.document_lifecycle(),
+                    receipt.document_id,
+                    receipt.revision,
                 )?;
                 self.document_reply(receipt.document_id, receipt.revision, 0)
             }
@@ -51,26 +57,12 @@ impl CoreFacade {
                 request_id,
                 file_name,
                 bytes,
-            } => {
-                let source_identity = format!("memory:{file_name}:{}", bytes.len());
-                let prepared = self.runtime.document_files().prepare_open(
-                    &request_id,
-                    &source_identity,
-                    Box::new(MemoryOpenSource(OpenDocumentSource {
-                        path: file_name.clone(),
-                        bytes,
-                        file_name: Some(file_name),
-                    })),
-                )?;
-                let receipt = document_service::commit_prepared_document(
-                    self.runtime.document_lifecycle(),
-                    &prepared.token,
-                    None,
-                    None,
-                    &request_id,
-                )?;
-                self.document_reply(receipt.document_id, receipt.revision, 0)
-            }
+            } => self.open_document(request_id, file_name, bytes, false),
+            EditorRequest::OpenRecoveryDocument {
+                request_id,
+                file_name,
+                bytes,
+            } => self.open_document(request_id, file_name, bytes, true),
             EditorRequest::ActiveDocument => {
                 let document = document_query_service::active_document_response(
                     self.runtime.document_queries(),
@@ -434,6 +426,7 @@ impl CoreFacade {
             }
             EditorRequest::SaveLocal { .. }
             | EditorRequest::CheckpointRecovery { .. }
+            | EditorRequest::ClearRecovery
             | EditorRequest::ListLocalDocuments
             | EditorRequest::OpenLocalDocument { .. }
             | EditorRequest::DeleteLocalDocument { .. } => Err(AppError::Internal(
@@ -491,6 +484,54 @@ impl CoreFacade {
         Ok(EditorReply::Document {
             value: serde_json::to_value(response).map_err(serialization_error)?,
         })
+    }
+
+    fn open_document(
+        &mut self,
+        request_id: String,
+        file_name: String,
+        bytes: Vec<u8>,
+        recovered: bool,
+    ) -> Result<EditorReply, AppError> {
+        let expected = self.active_document_identity()?;
+        let source_identity = format!("memory:{file_name}:{}", bytes.len());
+        let prepared = self.runtime.document_files().prepare_open(
+            &request_id,
+            &source_identity,
+            Box::new(MemoryOpenSource(OpenDocumentSource {
+                path: file_name.clone(),
+                bytes,
+                file_name: Some(file_name),
+            })),
+        )?;
+        let receipt = document_service::commit_prepared_document(
+            self.runtime.document_lifecycle(),
+            &prepared.token,
+            expected.map(|identity| identity.0),
+            expected.map(|identity| identity.1),
+            &request_id,
+        )?;
+        if recovered {
+            document_service::mark_current_document_save_required(
+                self.runtime.document_lifecycle(),
+                receipt.document_id,
+                receipt.revision,
+            )?;
+        }
+        self.document_reply(receipt.document_id, receipt.revision, 0)
+    }
+
+    fn active_document_identity(&self) -> Result<Option<(u64, u64)>, AppError> {
+        Ok(
+            document_query_service::active_document_response(self.runtime.document_queries())?.map(
+                |document| {
+                    (
+                        document.editor_session.document_id,
+                        document.editor_session.revision,
+                    )
+                },
+            ),
+        )
     }
 
     fn mutation_reply(
@@ -656,6 +697,7 @@ mod tests {
             .expect("revision")
             .parse::<u64>()
             .expect("numeric revision");
+        assert_eq!(value["editorSession"]["editorState"]["isDirty"], true);
 
         let EditorReply::Mutation { value } = facade
             .execute(EditorRequest::SetCell {
@@ -694,14 +736,67 @@ mod tests {
         };
         assert_eq!(file_name, "book.xlsx");
         assert!(!bytes.is_empty());
-        assert!(matches!(
-            facade
-                .execute(EditorRequest::CommitSave {
-                    save_token,
-                    path: "book.xlsx".to_string(),
-                })
-                .expect("commit save"),
-            EditorReply::Saved { .. }
-        ));
+        let EditorReply::Saved { value } = facade
+            .execute(EditorRequest::CommitSave {
+                save_token,
+                path: "book.xlsx".to_string(),
+            })
+            .expect("commit save")
+        else {
+            panic!("expected saved reply")
+        };
+        assert_eq!(value["editorSession"]["editorState"]["isDirty"], false);
+    }
+
+    #[test]
+    fn recovery_open_requires_an_explicit_save() {
+        let mut facade = CoreFacade::default();
+        let EditorReply::Document { value } = facade
+            .execute(EditorRequest::NewDocument {
+                request_id: "recovery-source".to_string(),
+            })
+            .expect("new document")
+        else {
+            panic!("expected document reply")
+        };
+        let document_id = value["editorSession"]["documentId"]
+            .as_str()
+            .expect("document id")
+            .parse::<u64>()
+            .expect("numeric id");
+        let revision = value["editorSession"]["revision"]
+            .as_str()
+            .expect("revision")
+            .parse::<u64>()
+            .expect("numeric revision");
+        let EditorReply::SavePrepared {
+            save_token, bytes, ..
+        } = facade
+            .execute(EditorRequest::PrepareSave {
+                request_id: "recovery-bytes".to_string(),
+                document_id,
+                base_revision: revision,
+                target_name: "recovered.xlsx".to_string(),
+            })
+            .expect("prepare recovery bytes")
+        else {
+            panic!("expected prepared save")
+        };
+        facade
+            .execute(EditorRequest::AbortSave { save_token })
+            .expect("abort prepared save");
+
+        let EditorReply::Document { value } = facade
+            .execute(EditorRequest::OpenRecoveryDocument {
+                request_id: "open-recovery".to_string(),
+                file_name: "recovered.xlsx".to_string(),
+                bytes,
+            })
+            .expect("open recovery")
+        else {
+            panic!("expected recovered document")
+        };
+
+        assert_eq!(value["editorSession"]["editorState"]["isDirty"], true);
     }
 }

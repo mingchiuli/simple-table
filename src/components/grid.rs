@@ -95,6 +95,12 @@ pub fn SpreadsheetGrid() -> Element {
                     if next_row != first_row() || next_col != first_col() {
                         first_row.set(next_row);
                         first_col.set(next_col);
+                        store.viewport.set(crate::model::SheetViewport {
+                            row_start: next_row,
+                            row_end: next_row.saturating_add(VISIBLE_ROWS),
+                            col_start: next_col,
+                            col_end: next_col.saturating_add(VISIBLE_COLUMNS),
+                        });
                         let ports = Rc::clone(&ports);
                         spawn(async move {
                             actions::refresh_region(
@@ -137,6 +143,7 @@ pub fn SpreadsheetGrid() -> Element {
                                         class: if is_selected { "grid-cell selected" } else { "grid-cell" },
                                         role: "gridcell",
                                         aria_label: "{column_label(col)}{row + 1}",
+                                        disabled: store.busy(),
                                         value,
                                         onfocus: move |_| {
                                             store.selected_cell.set((row, col));

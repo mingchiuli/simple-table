@@ -55,12 +55,14 @@ pub fn EditorView() -> Element {
                 button {
                     class: "brand-button",
                     title: "Back to files",
+                    disabled: store.busy(),
                     onclick: move |_| {
                         let ports = Rc::clone(&back_ports);
                         spawn(async move {
-                            if confirm_discard(dirty).await {
-                                actions::close_document(store, ports).await;
-                                navigator.push(Route::Home {});
+                            if confirm_discard(has_unsaved_changes(store)).await
+                                && actions::close_document(store, ports).await
+                            {
+                                navigator.replace(Route::Home {});
                             }
                         });
                     },
@@ -80,12 +82,15 @@ pub fn EditorView() -> Element {
                 ToolbarButton {
                     class: "tool-button",
                     index: 0usize,
+                    disabled: store.busy(),
                     on_click: {
                         let ports = Rc::clone(&ports);
                         move |_| {
                             let ports = Rc::clone(&ports);
                             spawn(async move {
-                                if confirm_discard(dirty).await && actions::new_document(store, ports).await {
+                                if confirm_discard(has_unsaved_changes(store)).await
+                                    && actions::new_document(store, ports).await
+                                {
                                     navigator.replace(Route::Table {});
                                 }
                             });
@@ -94,21 +99,23 @@ pub fn EditorView() -> Element {
                     title: "New workbook",
                     FilePlus { size: 18 }
                 }
-                OpenDocumentTool { dirty }
+                OpenDocumentTool {}
                 ToolbarSeparator {}
-                ToolbarButton {
-                    class: "tool-button",
-                    index: 2usize,
-                    disabled: store.busy(),
-                    on_click: {
-                        let ports = Rc::clone(&ports);
-                        move |_| {
+                if !cfg!(feature = "mobile") {
+                    ToolbarButton {
+                        class: "tool-button",
+                        index: 2usize,
+                        disabled: store.busy(),
+                        on_click: {
                             let ports = Rc::clone(&ports);
-                            spawn(async move { actions::save_local(store, ports).await });
-                        }
-                    },
-                    title: "Save",
-                    Save { size: 18 }
+                            move |_| {
+                                let ports = Rc::clone(&ports);
+                                spawn(async move { actions::save_local(store, ports).await });
+                            }
+                        },
+                        title: "Save",
+                        Save { size: 18 }
+                    }
                 }
                 ToolbarButton {
                     class: "tool-button",
@@ -128,7 +135,7 @@ pub fn EditorView() -> Element {
                 ToolbarButton {
                     class: "tool-button",
                     index: 4usize,
-                    disabled: !editor_state.can_undo,
+                    disabled: store.busy() || !editor_state.can_undo,
                     on_click: {
                         let ports = Rc::clone(&ports);
                         move |_| {
@@ -142,7 +149,7 @@ pub fn EditorView() -> Element {
                 ToolbarButton {
                     class: "tool-button",
                     index: 5usize,
-                    disabled: !editor_state.can_redo,
+                    disabled: store.busy() || !editor_state.can_redo,
                     on_click: {
                         let ports = Rc::clone(&ports);
                         move |_| {
@@ -210,6 +217,7 @@ pub fn EditorView() -> Element {
                     input {
                         class: "visually-hidden",
                         r#type: "file",
+                        disabled: store.busy(),
                         accept: "image/png,image/jpeg",
                         onchange: {
                             let ports = Rc::clone(&ports);
@@ -274,6 +282,7 @@ pub fn EditorView() -> Element {
                 span { class: "formula-symbol", "fx" }
                 input {
                     aria_label: "Cell value or formula",
+                    disabled: store.busy(),
                     value: store.formula_text,
                     oninput: {
                         let ports = Rc::clone(&ports);
@@ -294,7 +303,7 @@ pub fn EditorView() -> Element {
             }
 
             div { id: "spreadsheet-panel", class: "editor-workspace",
-                SpreadsheetGrid {}
+                SpreadsheetGrid { key: "{document_id}" }
                 SearchPanel {}
             }
 
@@ -334,10 +343,10 @@ pub fn EditorView() -> Element {
                 button {
                     class: "icon-button add-sheet",
                     title: "Add sheet",
+                    disabled: store.busy(),
                     onclick: {
                         let ports = Rc::clone(&ports);
                         move |_| {
-                            store.active_sheet.set(sheet_count);
                             let ports = Rc::clone(&ports);
                             spawn(async move {
                                 actions::run_mutation(
@@ -358,11 +367,10 @@ pub fn EditorView() -> Element {
                 button {
                     class: "icon-button",
                     title: "Delete current sheet",
-                    disabled: sheet_count <= 1,
+                    disabled: store.busy() || sheet_count <= 1,
                     onclick: {
                         let ports = Rc::clone(&ports);
                         move |_| {
-                            store.active_sheet.set(sheet_index.saturating_sub(1));
                             let ports = Rc::clone(&ports);
                             spawn(async move {
                                 actions::run_mutation(
@@ -417,6 +425,7 @@ fn StructureButton(props: StructureButtonProps) -> Element {
             class: "tool-button",
             index: props.index,
             title: props.title,
+            disabled: store.busy(),
             on_click: {
                 let ports = Rc::clone(&ports);
                 move |_| {
@@ -461,7 +470,7 @@ fn StructureButton(props: StructureButtonProps) -> Element {
 }
 
 #[component]
-fn OpenDocumentTool(dirty: bool) -> Element {
+fn OpenDocumentTool() -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
@@ -471,6 +480,7 @@ fn OpenDocumentTool(dirty: bool) -> Element {
             input {
                 class: "visually-hidden",
                 r#type: "file",
+                disabled: store.busy(),
                 accept: ".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv",
                 onchange: {
                     let ports = Rc::clone(&ports);
@@ -478,13 +488,12 @@ fn OpenDocumentTool(dirty: bool) -> Element {
                         let Some(file) = event.files().into_iter().next() else { return; };
                         let ports = Rc::clone(&ports);
                         spawn(async move {
-                            if !confirm_discard(dirty).await {
-                                return;
-                            }
                             let name = file.name();
                             match file.read_bytes().await {
                                 Ok(bytes) => {
-                                    if actions::open_bytes(store, ports, name, bytes.to_vec()).await {
+                                    if confirm_discard(has_unsaved_changes(store)).await
+                                        && actions::open_bytes(store, ports, name, bytes.to_vec()).await
+                                    {
                                         navigator.replace(Route::Table {});
                                     }
                                 }
@@ -772,6 +781,15 @@ fn install_dirty_guard(dirty: bool) {
 
     #[cfg(feature = "server")]
     let _ = dirty;
+}
+
+fn has_unsaved_changes(store: EditorStore) -> bool {
+    store
+        .document
+        .read()
+        .as_ref()
+        .is_some_and(|document| document.editor_session.editor_state.is_dirty)
+        || !store.pending_edits.read().is_empty()
 }
 
 async fn confirm_discard(dirty: bool) -> bool {

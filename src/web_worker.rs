@@ -90,6 +90,18 @@ mod web {
     impl WorkerSession {
         pub(super) async fn execute_web(&self, request: EditorRequest) -> EditorResponse {
             match request {
+                request @ (EditorRequest::NewDocument { .. }
+                | EditorRequest::OpenDocument { .. }) => {
+                    let previous_key = self.active_document_key.borrow().clone();
+                    let response = self.core.borrow_mut().execute(request);
+                    if response.is_ok() {
+                        if let Some(document_key) = previous_key {
+                            let _ = clear_recovery(&document_key).await;
+                        }
+                        self.active_document_key.replace(None);
+                    }
+                    response
+                }
                 EditorRequest::SaveLocal {
                     request_id,
                     document_id,
@@ -108,6 +120,15 @@ mod web {
                     self.checkpoint_recovery(request_id, document_id, base_revision, target_name)
                         .await
                 }
+                EditorRequest::ClearRecovery => {
+                    let document_key = self.active_document_key.borrow().clone();
+                    if let Some(document_key) = document_key
+                        && clear_recovery(&document_key).await?
+                    {
+                        self.active_document_key.replace(None);
+                    }
+                    Ok(EditorReply::Empty)
+                }
                 EditorRequest::ListLocalDocuments => list_documents().await,
                 EditorRequest::OpenLocalDocument {
                     request_id,
@@ -119,6 +140,17 @@ mod web {
                         self.active_document_key.replace(None);
                     }
                     Ok(EditorReply::Empty)
+                }
+                request @ EditorRequest::CloseDocument { .. } => {
+                    let document_key = self.active_document_key.borrow().clone();
+                    if let Some(document_key) = document_key {
+                        clear_recovery(&document_key).await?;
+                    }
+                    let response = self.core.borrow_mut().execute(request);
+                    if response.is_ok() {
+                        self.active_document_key.replace(None);
+                    }
+                    response
                 }
                 request => self.core.borrow_mut().execute(request),
             }
@@ -236,22 +268,32 @@ mod web {
             let stored = get_document(&document_key)
                 .await?
                 .ok_or_else(|| worker_error("not_found", "local document no longer exists"))?;
-            let bytes = stored
+            let recovery = stored
                 .recovery_bytes
                 .clone()
-                .filter(|bytes| !bytes.is_empty())
-                .unwrap_or(stored.saved_bytes);
+                .filter(|bytes| !bytes.is_empty());
+            let recovered = recovery.is_some();
+            let bytes = recovery.unwrap_or(stored.saved_bytes);
             if bytes.is_empty() {
                 return Err(worker_error(
                     "not_found",
                     "local document has no recoverable data",
                 ));
             }
-            let response = self.core.borrow_mut().execute(EditorRequest::OpenDocument {
-                request_id,
-                file_name: stored.name,
-                bytes,
-            });
+            let request = if recovered {
+                EditorRequest::OpenRecoveryDocument {
+                    request_id,
+                    file_name: stored.name,
+                    bytes,
+                }
+            } else {
+                EditorRequest::OpenDocument {
+                    request_id,
+                    file_name: stored.name,
+                    bytes,
+                }
+            };
+            let response = self.core.borrow_mut().execute(request);
             if response.is_ok() {
                 self.active_document_key.replace(Some(document_key));
             }
@@ -344,6 +386,20 @@ mod web {
             .map_err(indexed_db_error)?;
         transaction.done().await.map_err(indexed_db_error)?;
         Ok(())
+    }
+
+    async fn clear_recovery(document_key: &str) -> Result<bool, AppErrorDto> {
+        let Some(mut document) = get_document(document_key).await? else {
+            return Ok(true);
+        };
+        if document.saved_bytes.is_empty() {
+            delete_document(document_key).await?;
+            return Ok(true);
+        }
+        if document.recovery_bytes.take().is_some() {
+            put_document(&document).await?;
+        }
+        Ok(false)
     }
 
     fn content_hash(bytes: &[u8]) -> String {

@@ -70,6 +70,11 @@ pub enum EditorRequest {
         file_name: String,
         bytes: Vec<u8>,
     },
+    OpenRecoveryDocument {
+        request_id: String,
+        file_name: String,
+        bytes: Vec<u8>,
+    },
     ActiveDocument,
     Region {
         document_id: u64,
@@ -223,6 +228,7 @@ pub enum EditorRequest {
         base_revision: u64,
         target_name: String,
     },
+    ClearRecovery,
     ListLocalDocuments,
     OpenLocalDocument {
         request_id: String,

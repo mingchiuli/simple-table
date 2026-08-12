@@ -355,6 +355,10 @@ impl EditorState {
         self.dirty.mark_saved();
     }
 
+    pub(crate) fn mark_save_required(&mut self) {
+        self.dirty.mark_save_required();
+    }
+
     #[cfg(test)]
     pub fn generate_file_bytes_for_target(
         &self,

@@ -73,6 +73,7 @@ pub fn app() -> Element {
         Rc::new(AppPorts {
             editor: ports::editor::platform_editor_port(),
             files: ports::file::platform_file_port(),
+            operations: Rc::new(futures::lock::Mutex::new(())),
         })
     });
     use_context_provider(|| store);
