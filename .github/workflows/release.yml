@@ -54,7 +54,7 @@ jobs:
         run: dx bundle --desktop --release --locked --no-default-features --features desktop --package-types "${{ matrix.package }}" --out-dir release-assets
 
       - name: Upload native package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: simple-table-${{ runner.os }}
           path: release-assets/*
@@ -98,7 +98,7 @@ jobs:
         run: cp target/release/simple-table-web simple-table-web-x86_64-unknown-linux-gnu
 
       - name: Upload Web binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: simple-table-web-linux-x86_64
           path: simple-table-web-x86_64-unknown-linux-gnu
