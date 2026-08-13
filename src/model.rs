@@ -167,7 +167,125 @@ impl FormulaStatusView {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetRegionView {
+    pub region: SheetRegionBoundsView,
     pub cells: Vec<CellView>,
+    #[serde(default)]
+    pub merge_anchor_cells: Vec<CellView>,
+    #[serde(default)]
+    pub metadata: SheetRegionMetadataView,
+}
+
+impl SheetRegionView {
+    pub fn merge_range_at(&self, row: usize, col: usize) -> Option<MergeRangeView> {
+        self.normalized_merge_ranges()
+            .into_iter()
+            .find(|merge| merge.contains(row, col))
+    }
+
+    pub fn normalize_cell(&self, row: usize, col: usize) -> (usize, usize) {
+        self.merge_range_at(row, col)
+            .map_or((row, col), |merge| merge.anchor())
+    }
+
+    pub fn normalized_merge_ranges(&self) -> Vec<MergeRangeView> {
+        let mut merges = self
+            .metadata
+            .merges
+            .iter()
+            .copied()
+            .filter(|merge| merge.is_valid())
+            .collect::<Vec<_>>();
+        merges.sort_unstable_by_key(MergeRangeView::sort_key);
+        let mut accepted = Vec::with_capacity(merges.len());
+        for merge in merges {
+            if accepted
+                .iter()
+                .any(|existing: &MergeRangeView| existing.overlaps(merge))
+            {
+                continue;
+            }
+            accepted.push(merge);
+        }
+        accepted
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetRegionBoundsView {
+    pub sheet_index: usize,
+    pub row_start: usize,
+    pub row_end: usize,
+    pub col_start: usize,
+    pub col_end: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetRegionMetadataView {
+    #[serde(default)]
+    pub merges: Vec<MergeRangeView>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeRangeView {
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize,
+}
+
+impl MergeRangeView {
+    pub fn anchor(self) -> (usize, usize) {
+        (self.start_row, self.start_col)
+    }
+
+    pub fn row_span(self) -> usize {
+        self.end_row
+            .saturating_sub(self.start_row)
+            .saturating_add(1)
+    }
+
+    pub fn col_span(self) -> usize {
+        self.end_col
+            .saturating_sub(self.start_col)
+            .saturating_add(1)
+    }
+
+    pub fn contains(self, row: usize, col: usize) -> bool {
+        row >= self.start_row && row <= self.end_row && col >= self.start_col && col <= self.end_col
+    }
+
+    pub fn intersects(
+        self,
+        row_start: usize,
+        row_end: usize,
+        col_start: usize,
+        col_end: usize,
+    ) -> bool {
+        self.start_row < row_end
+            && self.end_row >= row_start
+            && self.start_col < col_end
+            && self.end_col >= col_start
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.start_row <= other.end_row
+            && self.end_row >= other.start_row
+            && self.start_col <= other.end_col
+            && self.end_col >= other.start_col
+    }
+
+    fn is_valid(self) -> bool {
+        self.start_row <= self.end_row
+            && self.start_col <= self.end_col
+            && (self.start_row != self.end_row || self.start_col != self.end_col)
+    }
+
+    fn sort_key(&self) -> (usize, usize, usize, usize) {
+        (self.start_row, self.start_col, self.end_row, self.end_col)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -444,10 +562,12 @@ impl EditorStore {
             .region
             .read()
             .as_ref()
+            .filter(|region| region.region.sheet_index == sheet_index)
             .map(|region| {
                 region
                     .cells
                     .iter()
+                    .chain(region.merge_anchor_cells.iter())
                     .map(|cell| ((cell.row, cell.col), cell_presentation(&cell.value)))
                     .collect()
             })
@@ -468,10 +588,41 @@ impl EditorStore {
     }
 
     pub fn cell_edit_text(&self, sheet_index: usize, row: usize, col: usize) -> String {
+        let (row, col) = self.normalize_cell(sheet_index, row, col);
         self.cell_presentation_map(sheet_index)
             .get(&(row, col))
             .map(|cell| cell.edit_text.clone())
             .unwrap_or_default()
+    }
+
+    pub fn merge_ranges(&self, sheet_index: usize) -> Vec<MergeRangeView> {
+        self.region
+            .read()
+            .as_ref()
+            .filter(|region| region.region.sheet_index == sheet_index)
+            .map(SheetRegionView::normalized_merge_ranges)
+            .unwrap_or_default()
+    }
+
+    pub fn merge_range_at(
+        &self,
+        sheet_index: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<MergeRangeView> {
+        self.region
+            .read()
+            .as_ref()
+            .filter(|region| region.region.sheet_index == sheet_index)
+            .and_then(|region| region.merge_range_at(row, col))
+    }
+
+    pub fn normalize_cell(&self, sheet_index: usize, row: usize, col: usize) -> (usize, usize) {
+        self.region
+            .read()
+            .as_ref()
+            .filter(|region| region.region.sheet_index == sheet_index)
+            .map_or((row, col), |region| region.normalize_cell(row, col))
     }
 }
 
@@ -654,6 +805,63 @@ mod tests {
         assert_eq!(status.diagnostics().issues[0].col, 1);
     }
 
+    #[test]
+    fn sheet_region_deserializes_merges_and_external_anchor_cells() {
+        let region: SheetRegionView = serde_json::from_value(json!({
+            "region": {
+                "sheetIndex": 0,
+                "rowStart": 8,
+                "rowEnd": 12,
+                "colStart": 1,
+                "colEnd": 3
+            },
+            "cells": [],
+            "mergeAnchorCells": [{
+                "sheetIndex": 0,
+                "row": 2,
+                "col": 1,
+                "value": { "raw": "Merged", "display": "Merged" }
+            }],
+            "metadata": {
+                "merges": [{
+                    "startRow": 2,
+                    "startCol": 1,
+                    "endRow": 10,
+                    "endCol": 2
+                }]
+            },
+            "wireBytes": 256
+        }))
+        .expect("merged region should match the protocol projection");
+
+        assert_eq!(region.normalize_cell(9, 2), (2, 1));
+        assert_eq!(region.merge_anchor_cells.len(), 1);
+        assert_eq!(region.merge_anchor_cells[0].row, 2);
+        assert!(region.metadata.merges[0].intersects(8, 12, 1, 3));
+    }
+
+    #[test]
+    fn normalized_merges_ignore_degenerate_and_overlapping_ranges() {
+        let region = SheetRegionView {
+            region: SheetRegionBoundsView::default(),
+            cells: Vec::new(),
+            merge_anchor_cells: Vec::new(),
+            metadata: SheetRegionMetadataView {
+                merges: vec![
+                    merge(2, 2, 3, 3),
+                    merge(0, 0, 1, 1),
+                    merge(1, 1, 2, 2),
+                    merge(4, 4, 4, 4),
+                ],
+            },
+        };
+
+        assert_eq!(
+            region.normalized_merge_ranges(),
+            vec![merge(0, 0, 1, 1), merge(2, 2, 3, 3)]
+        );
+    }
+
     fn issue(sheet_index: usize, row: usize) -> FormulaIssueView {
         FormulaIssueView {
             sheet_index,
@@ -661,6 +869,15 @@ mod tests {
             col: 0,
             kind: FormulaIssueKindView::InvalidFormula,
             message: "Invalid formula".to_string(),
+        }
+    }
+
+    fn merge(start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> MergeRangeView {
+        MergeRangeView {
+            start_row,
+            start_col,
+            end_row,
+            end_col,
         }
     }
 }

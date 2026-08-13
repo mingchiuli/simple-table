@@ -644,6 +644,8 @@ pub async fn select_search_result(
         col_start.saturating_add(16),
     )
     .await;
+    let (row, col) = store.normalize_cell(sheet_index, row, col);
+    store.selected_cell.set((row, col));
     store
         .formula_text
         .set(store.cell_edit_text(sheet_index, row, col));

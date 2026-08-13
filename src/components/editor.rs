@@ -47,7 +47,25 @@ pub fn EditorView() -> Element {
     let sheet_index = store
         .active_sheet()
         .min(document.document.sheets.len().saturating_sub(1));
-    let selected = store.selected_cell();
+    let selected = store.normalize_cell(
+        sheet_index,
+        store.selected_cell().0,
+        store.selected_cell().1,
+    );
+    let selected_address = store
+        .merge_range_at(sheet_index, selected.0, selected.1)
+        .map_or_else(
+            || format!("{}{}", column_label(selected.1), selected.0 + 1),
+            |merge| {
+                format!(
+                    "{}{}:{}{}",
+                    column_label(merge.start_col),
+                    merge.start_row + 1,
+                    column_label(merge.end_col),
+                    merge.end_row + 1
+                )
+            },
+        );
     let file_name = document.document.file_name.clone();
     let sheet_count = document.document.sheets.len();
     let dirty = editor_state.is_dirty || !store.pending_edits.read().is_empty();
@@ -282,7 +300,7 @@ pub fn EditorView() -> Element {
             }
 
             div { class: "formula-bar",
-                span { class: "cell-address", "{column_label(selected.1)}{selected.0 + 1}" }
+                span { class: "cell-address", title: selected_address, "{selected_address}" }
                 span { class: "formula-symbol", "fx" }
                 input {
                     aria_label: "Cell value or formula",

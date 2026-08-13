@@ -489,10 +489,13 @@ button:disabled,
 
 .cell-address {
   width: 76px;
+  overflow: hidden;
   flex: 0 0 76px;
   color: var(--text-muted);
   font-size: 12px;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .formula-symbol {
@@ -560,6 +563,8 @@ button:disabled,
 .corner-header,
 .column-header,
 .row-header {
+  position: relative;
+  z-index: 4;
   display: grid;
   place-items: center;
   min-width: 0;
@@ -573,6 +578,7 @@ button:disabled,
 }
 
 .grid-cell {
+  position: absolute;
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -584,6 +590,13 @@ button:disabled,
   color: var(--text);
   background: var(--surface);
   text-overflow: ellipsis;
+}
+
+.grid-cell.merged-cell {
+  z-index: 2;
+  padding-block: 0;
+  padding-inline: 10px;
+  text-align: center;
 }
 
 .image-layer {
@@ -648,11 +661,14 @@ button:disabled,
 
 .grid-cell.selected,
 .grid-cell:focus {
-  position: relative;
   z-index: 1;
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   background: #fff;
+}
+
+.grid-cell.merged-cell:focus {
+  z-index: 3;
 }
 
 .grid-cell.formula-error:focus {
