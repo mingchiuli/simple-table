@@ -635,7 +635,7 @@ fn OpenDocumentTool() -> Element {
                 class: "visually-hidden",
                 r#type: "file",
                 disabled: store.busy(),
-                accept: ".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv",
+                accept: ".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv",
                 onchange: {
                     let ports = Rc::clone(&ports);
                     move |event: Event<FormData>| {

@@ -1,6 +1,7 @@
 use crate::document_data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek};
+use std::sync::Arc;
 
 use crate::document_format::SpreadsheetFileFormat;
 use crate::domain::{CellNumber, CellValue};
@@ -19,6 +20,7 @@ use umya_spreadsheet::{Workbook, reader};
 pub struct ReadFileResult {
     pub file_data: DocumentData,
     pub workbook: Option<Workbook>,
+    pub source_excel_bytes: Option<Arc<[u8]>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -55,7 +57,7 @@ pub(crate) fn preflight_input_file(
     let format =
         SpreadsheetFileFormat::from_extension(extension).ok_or(AppError::UnsupportedFormat)?;
     let estimated_parse_bytes = match format {
-        SpreadsheetFileFormat::Xlsx => {
+        SpreadsheetFileFormat::Xlsx | SpreadsheetFileFormat::Xlsm => {
             estimate_xlsx_parse_bytes(bytes.len(), validate_xlsx_archive(bytes)?)
         }
         SpreadsheetFileFormat::Csv => bytes.len().saturating_mul(CSV_PARSE_MEMORY_MULTIPLIER),
@@ -73,7 +75,9 @@ pub(crate) fn read_file_with_workbook_from_preflight(
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
     match preflight.format {
-        SpreadsheetFileFormat::Xlsx => read_xlsx_from_bytes(Cursor::new(bytes), path, file_name),
+        SpreadsheetFileFormat::Xlsx | SpreadsheetFileFormat::Xlsm => {
+            read_excel_from_bytes(bytes, path, file_name)
+        }
         SpreadsheetFileFormat::Csv => read_csv_from_bytes(Cursor::new(bytes), path, file_name),
     }
 }
@@ -110,12 +114,13 @@ fn estimate_xlsx_parse_bytes(input_bytes: usize, uncompressed_bytes: u64) -> usi
         .saturating_add(uncompressed_bytes.saturating_mul(XLSX_UNCOMPRESSED_MEMORY_MULTIPLIER))
 }
 
-fn read_xlsx_from_bytes(
-    cursor: Cursor<Vec<u8>>,
+fn read_excel_from_bytes(
+    bytes: Vec<u8>,
     path: String,
     file_name: String,
 ) -> Result<ReadFileResult, AppError> {
-    let workbook = read_workbook_from_reader(cursor)?;
+    let source_excel_bytes: Arc<[u8]> = bytes.into();
+    let workbook = read_workbook_from_reader(Cursor::new(Arc::clone(&source_excel_bytes)))?;
     validate_workbook_before_projection(&workbook)?;
     let file_data = DocumentData {
         path,
@@ -127,6 +132,7 @@ fn read_xlsx_from_bytes(
     Ok(ReadFileResult {
         file_data,
         workbook: Some(workbook),
+        source_excel_bytes: Some(source_excel_bytes),
     })
 }
 
@@ -171,8 +177,8 @@ fn validate_workbook_before_projection(workbook: &Workbook) -> Result<(), AppErr
     Ok(())
 }
 
-fn read_workbook_from_reader(cursor: Cursor<Vec<u8>>) -> Result<Workbook, AppError> {
-    reader::xlsx::read_reader(cursor, true).map_err(|e| AppError::ReadError(e.to_string()))
+fn read_workbook_from_reader<R: Read + Seek>(reader: R) -> Result<Workbook, AppError> {
+    reader::xlsx::read_reader(reader, true).map_err(|e| AppError::ReadError(e.to_string()))
 }
 
 /// 判断字符串是否带有前导零（如 "007"、"-0123"），需要按字符串处理避免精度丢失
@@ -248,6 +254,7 @@ fn read_csv_from_bytes(
     Ok(ReadFileResult {
         file_data,
         workbook: None,
+        source_excel_bytes: None,
     })
 }
 

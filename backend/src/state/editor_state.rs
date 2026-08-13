@@ -226,8 +226,8 @@ impl EditorState {
     }
 
     #[cfg(test)]
-    pub fn can_finish_save_without_reparse(&self, target_is_xlsx: bool) -> bool {
-        target_is_xlsx && self.document.is_excel_backed()
+    pub fn can_finish_save_without_reparse(&self, target_is_excel: bool) -> bool {
+        target_is_excel && self.document.is_excel_backed()
     }
 
     pub fn save_snapshot_for_target(
@@ -247,6 +247,7 @@ impl EditorState {
         path: String,
         file_name: String,
         clear_history: bool,
+        saved_bytes: std::sync::Arc<[u8]>,
     ) -> Result<RetiredEditorResources, AppError> {
         if self.save_commit != Some(lease) {
             return Err(AppError::DocumentStateInvalid(
@@ -263,6 +264,7 @@ impl EditorState {
 
         self.save_commit = None;
         self.document.update_identity(path, file_name);
+        self.document.update_excel_save_baseline(saved_bytes);
         self.resources.refresh_identity(self.document.projection());
         let previous_history = clear_history.then(|| std::mem::take(&mut self.history));
         self.bump_revision()?;
@@ -1235,7 +1237,7 @@ mod tests {
         writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
         let parsed = read_file_with_workbook_from_bytes(
             "xlsx",
-            bytes,
+            bytes.clone(),
             "/tmp/source.xlsx".to_string(),
             "source.xlsx".to_string(),
         )
@@ -1265,6 +1267,7 @@ mod tests {
                 "/tmp/saved.xlsx".to_string(),
                 "saved.xlsx".to_string(),
                 false,
+                Arc::from(bytes),
             )
             .expect("finish save");
 

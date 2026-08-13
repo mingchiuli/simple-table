@@ -5,7 +5,7 @@ use crate::application::document_encode_port::DocumentEncodePort;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::application::{document_format_policy, document_projection};
-use crate::document_format::{default_spreadsheet_extension, extension_of, is_xlsx_extension};
+use crate::document_format::{default_spreadsheet_extension, extension_of, is_excel_extension};
 use crate::error::AppError;
 use crate::projection_model::SavedDocumentOutcome;
 use crate::resource_limits::{
@@ -93,6 +93,7 @@ struct SaveWithoutReparse {
     revision: u64,
     output_name: String,
     saved_extension: String,
+    saved_bytes: Arc<[u8]>,
 }
 
 pub fn prepare_current_file_save(
@@ -126,7 +127,8 @@ pub fn prepare_current_file_save(
     let target_extension = extension_of(&output_name)
         .or_else(|| extension_of(target_path_or_name))
         .unwrap_or_else(default_extension_string);
-    let finish_without_reparse = is_xlsx_extension(&target_extension) && snapshot.is_excel_backed();
+    let finish_without_reparse =
+        is_excel_extension(&target_extension) && snapshot.is_excel_backed();
     let saved_decode_plan = if finish_without_reparse {
         work.set_work_bytes(source_bytes.saturating_add(bytes.len()))?;
         None
@@ -252,6 +254,7 @@ where
                 revision,
                 output_name,
                 saved_extension: extension,
+                saved_bytes: bytes.into(),
             },
             commit_write,
             project,
@@ -337,6 +340,7 @@ where
         revision,
         output_name,
         saved_extension,
+        saved_bytes,
     } = save;
     let (handle, lease, clear_history) =
         begin_prepared_save_commit(registry, document_id, revision, |editor_state| {
@@ -374,6 +378,7 @@ where
             path,
             output_name,
             clear_history,
+            saved_bytes,
         )?;
         (editor_state.revision(), retired)
     };

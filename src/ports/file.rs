@@ -106,7 +106,7 @@ mod native {
     async fn choose_path(suggested_name: String, mode: DocumentDialogMode) -> Option<String> {
         let dialog = rfd::AsyncFileDialog::new()
             .set_file_name(&suggested_name)
-            .add_filter("Excel workbook", &["xlsx"]);
+            .add_filter("Excel workbook", &["xlsx", "xlsm"]);
         let dialog = if mode == DocumentDialogMode::Export
             || suggested_name.to_ascii_lowercase().ends_with(".csv")
         {

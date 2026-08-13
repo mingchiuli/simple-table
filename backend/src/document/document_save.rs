@@ -4,6 +4,7 @@ use crate::error::AppError;
 use umya_spreadsheet::Workbook;
 
 pub(crate) enum DocumentSaveEncoding<'a> {
+    NativeBytes(&'a [u8]),
     NativeWorkbook(&'a Workbook),
     Projection(&'a DocumentData),
 }
@@ -57,15 +58,19 @@ impl SpreadsheetDocumentSaveSnapshot {
                     .validate_persisted_projection_consistency(projection)?;
                 Ok(DocumentSaveEncoding::Projection(projection))
             }
-            SaveProjectionSnapshot::ValidatedNativeWorkbook => self
-                .body
-                .native_workbook()
-                .map(DocumentSaveEncoding::NativeWorkbook)
-                .ok_or_else(|| {
-                    AppError::Internal(
-                        "validated native save snapshot has no workbook backing".to_string(),
-                    )
-                }),
+            SaveProjectionSnapshot::ValidatedNativeWorkbook => {
+                if let Some(bytes) = self.body.exact_source_bytes() {
+                    return Ok(DocumentSaveEncoding::NativeBytes(bytes));
+                }
+                self.body
+                    .native_workbook()
+                    .map(DocumentSaveEncoding::NativeWorkbook)
+                    .ok_or_else(|| {
+                        AppError::Internal(
+                            "validated native save snapshot has no workbook backing".to_string(),
+                        )
+                    })
+            }
         }
     }
 }

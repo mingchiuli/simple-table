@@ -1,5 +1,5 @@
 use crate::document_data::DocumentData;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, io::Cursor, sync::Arc};
 
 use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, WorkbookSheetShape};
 use crate::document::backing::workbook_port::WorkbookBackingPort;
@@ -12,6 +12,7 @@ use crate::document_format::{SpreadsheetFileFormat, extension_of};
 use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;
+use crate::state::content_hash::{ContentHash, sheet_persistence_hashes};
 use umya_spreadsheet::{Workbook, Worksheet};
 
 pub enum SpreadsheetDocumentBody {
@@ -23,6 +24,8 @@ pub enum SpreadsheetDocumentBody {
 pub struct ExcelDocumentBody {
     workbook: Arc<Workbook>,
     backing: Arc<dyn WorkbookBackingPort>,
+    source_bytes: Option<Arc<[u8]>>,
+    source_sheet_hashes: Vec<ContentHash>,
 }
 
 fn excel_workbook(body: &ExcelDocumentBody) -> &Workbook {
@@ -35,6 +38,7 @@ fn excel_workbook_mut(body: &mut ExcelDocumentBody) -> &mut Workbook {
 
 pub struct SpreadsheetDocumentBodySnapshot {
     body: SpreadsheetDocumentBody,
+    exact_source_bytes: Option<Arc<[u8]>>,
 }
 
 #[derive(Clone)]
@@ -86,6 +90,22 @@ impl SpreadsheetDocumentBody {
         Self::Excel(ExcelDocumentBody {
             workbook: Arc::new(workbook),
             backing,
+            source_bytes: None,
+            source_sheet_hashes: Vec::new(),
+        })
+    }
+
+    pub fn from_opened_workbook(
+        workbook: Workbook,
+        source_bytes: Arc<[u8]>,
+        projection: &DocumentData,
+        backing: Arc<dyn WorkbookBackingPort>,
+    ) -> Self {
+        Self::Excel(ExcelDocumentBody {
+            workbook: Arc::new(workbook),
+            backing,
+            source_bytes: Some(source_bytes),
+            source_sheet_hashes: sheet_persistence_hashes(projection),
         })
     }
 
@@ -93,6 +113,8 @@ impl SpreadsheetDocumentBody {
         match self {
             Self::Excel(body) => {
                 std::mem::size_of::<Workbook>()
+                    + body.source_bytes.as_ref().map_or(0, |bytes| bytes.len())
+                    + body.source_sheet_hashes.len() * std::mem::size_of::<ContentHash>()
                     + (0..excel_workbook(body).sheet_count())
                         .filter_map(|sheet_index| excel_workbook(body).sheet(sheet_index).ok())
                         .map(estimate_worksheet_bytes)
@@ -198,20 +220,49 @@ impl SpreadsheetDocumentBody {
 
     pub fn can_generate_without_projection(&self, target_path_or_name: &str) -> bool {
         SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
-            .is_some_and(SpreadsheetFileFormat::is_xlsx)
+            .is_some_and(SpreadsheetFileFormat::is_excel)
             && self.is_excel_backed()
     }
 
-    pub fn save_snapshot(&self) -> SpreadsheetDocumentBodySnapshot {
-        let body = match self {
-            Self::Excel(body) => Self::Excel(ExcelDocumentBody {
-                workbook: Arc::clone(&body.workbook),
-                backing: Arc::clone(&body.backing),
-            }),
-            Self::Csv => Self::Csv,
-            Self::GeneratedWorkbook => Self::GeneratedWorkbook,
+    pub fn save_snapshot(
+        &self,
+        projection: &DocumentData,
+    ) -> Result<SpreadsheetDocumentBodySnapshot, AppError> {
+        let (body, exact_source_bytes) = match self {
+            Self::Excel(body) => {
+                let current_hashes = sheet_persistence_hashes(projection);
+                let exact_source_bytes = (current_hashes == body.source_sheet_hashes)
+                    .then(|| body.source_bytes.clone())
+                    .flatten();
+                let workbook = if exact_source_bytes.is_some() {
+                    Arc::clone(&body.workbook)
+                } else {
+                    Arc::new(workbook_for_save(body, projection, &current_hashes)?)
+                };
+                (
+                    Self::Excel(ExcelDocumentBody {
+                        workbook,
+                        backing: Arc::clone(&body.backing),
+                        source_bytes: body.source_bytes.clone(),
+                        source_sheet_hashes: body.source_sheet_hashes.clone(),
+                    }),
+                    exact_source_bytes,
+                )
+            }
+            Self::Csv => (Self::Csv, None),
+            Self::GeneratedWorkbook => (Self::GeneratedWorkbook, None),
         };
-        SpreadsheetDocumentBodySnapshot { body }
+        Ok(SpreadsheetDocumentBodySnapshot {
+            body,
+            exact_source_bytes,
+        })
+    }
+
+    pub fn update_excel_save_baseline(&mut self, bytes: Arc<[u8]>, projection: &DocumentData) {
+        if let Self::Excel(body) = self {
+            body.source_bytes = Some(bytes);
+            body.source_sheet_hashes = sheet_persistence_hashes(projection);
+        }
     }
 
     #[cfg(test)]
@@ -418,6 +469,10 @@ impl SpreadsheetDocumentBodySnapshot {
         }
     }
 
+    pub(crate) fn exact_source_bytes(&self) -> Option<&[u8]> {
+        self.exact_source_bytes.as_deref()
+    }
+
     pub fn validate_persisted_projection_consistency(
         &self,
         projection: &DocumentData,
@@ -425,6 +480,50 @@ impl SpreadsheetDocumentBodySnapshot {
         self.body
             .validate_persisted_projection_consistency(projection)
     }
+}
+
+fn workbook_for_save(
+    body: &ExcelDocumentBody,
+    projection: &DocumentData,
+    current_hashes: &[ContentHash],
+) -> Result<Workbook, AppError> {
+    let Some(source_bytes) = &body.source_bytes else {
+        return Ok(excel_workbook(body).clone());
+    };
+    if current_hashes.len() != body.source_sheet_hashes.len()
+        || excel_workbook(body).sheet_count() != body.source_sheet_hashes.len()
+    {
+        return Ok(excel_workbook(body).clone());
+    }
+
+    // A lazy umya workbook retains each untouched worksheet's raw package data.
+    let source =
+        umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(Arc::clone(source_bytes)), false)
+            .map_err(|error| AppError::ReadError(error.to_string()))?;
+    if source.sheet_count() != current_hashes.len() {
+        return Ok(excel_workbook(body).clone());
+    }
+
+    let raw_sheets = source.sheet_collection_no_check().to_vec();
+    let current_sheets = excel_workbook(body).sheet_collection().to_vec();
+    let mut candidate = excel_workbook(body).clone();
+    while candidate.sheet_count() > 0 {
+        candidate
+            .remove_sheet(candidate.sheet_count() - 1)
+            .map_err(|error| AppError::WriteError(error.to_string()))?;
+    }
+    for sheet_index in 0..current_hashes.len() {
+        let sheet = if current_hashes[sheet_index] == body.source_sheet_hashes[sheet_index] {
+            raw_sheets[sheet_index].clone()
+        } else {
+            current_sheets[sheet_index].clone()
+        };
+        candidate
+            .add_sheet(sheet)
+            .map_err(|error| AppError::WriteError(error.to_string()))?;
+    }
+    debug_assert_eq!(candidate.sheet_count(), projection.sheets.len());
+    Ok(candidate)
 }
 
 pub enum BodyRestoreAction {

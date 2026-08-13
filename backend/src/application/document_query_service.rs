@@ -396,4 +396,39 @@ mod tests {
 
         assert!(ensure_native_save_target_allowed(&state, "/tmp/data.csv").is_ok());
     }
+
+    #[test]
+    fn native_save_keeps_the_source_excel_format() {
+        let xlsm = EditorState::with_workbook(
+            DocumentData {
+                path: "/tmp/macros.xlsm".to_string(),
+                file_name: "macros.xlsm".to_string(),
+                sheets: vec![DocumentSheet::default()],
+            },
+            Some(umya_spreadsheet::new_file()),
+        );
+        let xlsx = EditorState::with_workbook(
+            DocumentData {
+                path: "/tmp/book.xlsx".to_string(),
+                file_name: "book.xlsx".to_string(),
+                sheets: vec![DocumentSheet::default()],
+            },
+            Some(umya_spreadsheet::new_file()),
+        );
+
+        assert!(ensure_native_save_target_allowed(&xlsm, "/tmp/macros.xlsm").is_ok());
+        assert!(ensure_native_save_target_allowed(&xlsx, "/tmp/book.xlsx").is_ok());
+        assert!(ensure_native_save_target_allowed(&xlsm, "/tmp/macros.xlsx").is_err());
+        assert!(ensure_native_save_target_allowed(&xlsx, "/tmp/book.xlsm").is_err());
+
+        let csv = EditorState::with_workbook(
+            DocumentData {
+                path: "/tmp/data.csv".to_string(),
+                file_name: "data.csv".to_string(),
+                sheets: vec![DocumentSheet::default()],
+            },
+            None,
+        );
+        assert!(ensure_native_save_target_allowed(&csv, "/tmp/data.xlsm").is_err());
+    }
 }

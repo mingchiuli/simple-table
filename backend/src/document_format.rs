@@ -3,6 +3,7 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpreadsheetFileFormat {
     Xlsx,
+    Xlsm,
     Csv,
 }
 
@@ -12,6 +13,7 @@ impl SpreadsheetFileFormat {
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_ascii_lowercase().as_str() {
             "xlsx" => Some(Self::Xlsx),
+            "xlsm" => Some(Self::Xlsm),
             "csv" => Some(Self::Csv),
             _ => None,
         }
@@ -27,12 +29,13 @@ impl SpreadsheetFileFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Xlsx => "xlsx",
+            Self::Xlsm => "xlsm",
             Self::Csv => "csv",
         }
     }
 
-    pub fn is_xlsx(self) -> bool {
-        matches!(self, Self::Xlsx)
+    pub fn is_excel(self) -> bool {
+        matches!(self, Self::Xlsx | Self::Xlsm)
     }
 }
 
@@ -112,8 +115,8 @@ pub fn default_spreadsheet_extension() -> &'static str {
     DEFAULT_SPREADSHEET_FORMAT.extension()
 }
 
-pub fn is_xlsx_extension(extension: &str) -> bool {
-    SpreadsheetFileFormat::from_extension(extension).is_some_and(SpreadsheetFileFormat::is_xlsx)
+pub fn is_excel_extension(extension: &str) -> bool {
+    SpreadsheetFileFormat::from_extension(extension).is_some_and(SpreadsheetFileFormat::is_excel)
 }
 
 pub fn open_extension_from_path_name_or_bytes(
@@ -175,11 +178,14 @@ mod tests {
             SpreadsheetFileFormat::from_extension("csv"),
             Some(SpreadsheetFileFormat::Csv)
         );
-        assert_eq!(SpreadsheetFileFormat::from_extension("xlsm"), None);
+        assert_eq!(
+            SpreadsheetFileFormat::from_extension("xlsm"),
+            Some(SpreadsheetFileFormat::Xlsm)
+        );
         assert_eq!(default_spreadsheet_extension(), "xlsx");
-        assert!(is_xlsx_extension("XLSX"));
-        assert!(!is_xlsx_extension("csv"));
-        assert!(!is_xlsx_extension("xlsm"));
+        assert!(is_excel_extension("XLSX"));
+        assert!(!is_excel_extension("csv"));
+        assert!(is_excel_extension("xlsm"));
     }
 
     #[test]

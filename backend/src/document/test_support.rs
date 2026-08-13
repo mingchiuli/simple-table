@@ -20,7 +20,7 @@ pub(crate) fn generate_file_bytes_for_target(
 ) -> Result<(String, Vec<u8>), AppError> {
     if let Some(workbook) = workbook
         && crate::document_format::SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
-            .is_some_and(crate::document_format::SpreadsheetFileFormat::is_xlsx)
+            .is_some_and(crate::document_format::SpreadsheetFileFormat::is_excel)
     {
         return writer::generate_excel_bytes_from_workbook_for_target(
             workbook,

@@ -80,6 +80,7 @@ fn generate_file_bytes_for_name(
             let bytes = write_workbook_to_bytes(&workbook)?;
             Ok((format!("{output_stem}.{extension}"), bytes))
         }
+        SpreadsheetFileFormat::Xlsm => Err(AppError::UnsupportedFormat),
         SpreadsheetFileFormat::Csv => {
             let bytes = write_csv_to_bytes(file_data)?;
             Ok((format!("{output_stem}.csv"), bytes))
@@ -98,12 +99,27 @@ pub fn generate_excel_bytes_from_workbook_for_target(
     let extension = format.extension();
     let output_stem = file_stem_from_path_like(&target_name, "untitled");
 
-    if format != SpreadsheetFileFormat::Xlsx {
+    if !format.is_excel() {
         return Err(AppError::UnsupportedFormat);
     }
 
     let bytes = write_workbook_to_bytes(workbook)?;
     Ok((format!("{output_stem}.{extension}"), bytes))
+}
+
+pub fn native_excel_bytes_for_target(
+    bytes: &[u8],
+    target_path_or_name: &str,
+) -> Result<(String, Vec<u8>), AppError> {
+    let target_name = file_name_from_path_like(target_path_or_name, target_path_or_name);
+    let format = SpreadsheetFileFormat::from_path_or_default(&target_name)
+        .filter(|format| format.is_excel())
+        .ok_or(AppError::UnsupportedFormat)?;
+    let output_stem = file_stem_from_path_like(&target_name, "untitled");
+    Ok((
+        format!("{output_stem}.{}", format.extension()),
+        bytes.to_vec(),
+    ))
 }
 
 pub fn workbook_from_file_data(file_data: &DocumentData) -> Result<Workbook, AppError> {

@@ -503,6 +503,42 @@ impl IncrementalContentFingerprint {
     }
 }
 
+pub(crate) fn sheet_persistence_hashes(file_data: &DocumentData) -> Vec<ContentHash> {
+    file_data
+        .sheets
+        .iter()
+        .enumerate()
+        .map(|(sheet_index, sheet)| hash_sheet_persistence(sheet_index, sheet))
+        .collect()
+}
+
+fn hash_sheet_persistence(sheet_index: usize, sheet: &DocumentSheet) -> ContentHash {
+    let mut hash = hash_sheet_content(sheet_index, &SheetFingerprint::from_sheet_data(sheet));
+    for (row_index, row) in sheet.rows.iter().enumerate() {
+        for (col_index, cell) in row.iter().enumerate() {
+            let CellValue::Formula {
+                cached_value,
+                error,
+                ..
+            } = cell
+            else {
+                continue;
+            };
+            xor_hash(
+                &mut hash,
+                &contribution(TAG_FORMULA_RESULT, |hasher| {
+                    write_usize(hasher, sheet_index);
+                    write_usize(hasher, row_index);
+                    write_usize(hasher, col_index);
+                    hash_cell_value(cached_value, hasher);
+                    write_optional_str(hasher, error.as_deref());
+                }),
+            );
+        }
+    }
+    hash
+}
+
 impl IncrementalSheetFingerprint {
     fn from_sheet_data(sheet_index: usize, sheet: &DocumentSheet) -> Self {
         let fingerprint = SheetFingerprint::from_sheet_data(sheet);
@@ -889,6 +925,7 @@ const TAG_DRAWING_COUNT: u8 = 23;
 const TAG_DRAWING: u8 = 24;
 const TAG_IMAGE_COUNT: u8 = 25;
 const TAG_IMAGE: u8 = 26;
+const TAG_FORMULA_RESULT: u8 = 27;
 
 fn contribution(tag: u8, write: impl FnOnce(&mut Sha256)) -> ContentHash {
     let mut hasher = Sha256::new();

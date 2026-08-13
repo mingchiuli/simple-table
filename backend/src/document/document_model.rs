@@ -195,7 +195,7 @@ impl SpreadsheetDocument {
         &self,
         target_path_or_name: &str,
     ) -> Result<SpreadsheetDocumentSaveSnapshot, AppError> {
-        let body = self.body.save_snapshot();
+        let body = self.body.save_snapshot(&self.projection)?;
         if self
             .body
             .can_generate_without_projection(target_path_or_name)
@@ -212,6 +212,11 @@ impl SpreadsheetDocument {
                 self.transaction_failure.clone(),
             ))
         }
+    }
+
+    pub(crate) fn update_excel_save_baseline(&mut self, bytes: std::sync::Arc<[u8]>) {
+        self.body
+            .update_excel_save_baseline(bytes, &self.projection);
     }
 
     #[cfg(test)]

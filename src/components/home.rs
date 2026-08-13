@@ -153,7 +153,7 @@ fn OpenDocumentControl() -> Element {
             input {
                 class: "visually-hidden",
                 r#type: "file",
-                accept: ".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv",
+                accept: ".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv",
                 disabled: busy,
                 onchange: {
                     let ports = Rc::clone(&ports);
