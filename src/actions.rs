@@ -644,13 +644,9 @@ pub async fn select_search_result(
         col_start.saturating_add(16),
     )
     .await;
-    if let Some(value) = store
-        .display_cell_map(sheet_index)
-        .get(&(row, col))
-        .cloned()
-    {
-        store.formula_text.set(value);
-    }
+    store
+        .formula_text
+        .set(store.cell_edit_text(sheet_index, row, col));
     refresh_images(store, Rc::clone(&ports)).await;
 }
 
@@ -959,11 +955,7 @@ fn clamp_selected_cell(mut store: EditorStore) {
 fn sync_formula_text(mut store: EditorStore) {
     let sheet_index = store.active_sheet();
     let selected = store.selected_cell();
-    let value = store
-        .display_cell_map(sheet_index)
-        .get(&selected)
-        .cloned()
-        .unwrap_or_default();
+    let value = store.cell_edit_text(sheet_index, selected.0, selected.1);
     store.formula_text.set(value);
 }
 
@@ -1298,6 +1290,7 @@ mod tests {
                 can_redo: false,
                 is_dirty: false,
             },
+            formula_status: Default::default(),
         }
     }
 

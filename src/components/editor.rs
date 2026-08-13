@@ -2,18 +2,22 @@ use std::rc::Rc;
 
 use crate::protocol::{ImageAnchorDto, ImageMarkerDto, SheetImageDto};
 use crate::ui::icons::{
-    Columns3, Download, ExternalLink, FilePlus, FolderOpen, House, ImagePlus, Move, Plus, Redo2,
-    Rows3, Save, Search, Sheet, Trash2, Undo2,
+    Columns3, Download, ExternalLink, FilePlus, FolderOpen, FunctionSquare, House, ImagePlus, Move,
+    Plus, Redo2, Rows3, Save, Search, Sheet, Trash2, Undo2,
 };
 use dioxus::prelude::*;
+use dioxus_primitives::popover::{PopoverContent, PopoverRoot, PopoverTrigger};
 use dioxus_primitives::tabs::{TabList, TabTrigger, Tabs};
 use dioxus_primitives::toolbar::{Toolbar, ToolbarButton, ToolbarSeparator};
+use dioxus_primitives::{ContentAlign, ContentSide};
 
 use super::grid::{SpreadsheetGrid, column_label};
 use super::search::SearchPanel;
 use crate::Route;
 use crate::actions;
-use crate::model::{AppPorts, EditorStore, request_id};
+use crate::model::{
+    AppPorts, EditorStore, FormulaIssueKindView, FormulaIssueView, FormulaStatusView, request_id,
+};
 use crate::ports::update::{GitHubUpdatePort, UpdatePort};
 use crate::ports::window::{PlatformWindowPort, WindowPort};
 
@@ -390,9 +394,141 @@ pub fn EditorView() -> Element {
                     Trash2 { size: 16 }
                 }
                 div { class: "sheet-strip-spacer" }
+                FormulaStatusPopover {
+                    status: document.editor_session.formula_status.clone(),
+                    sheet_names: document
+                        .document
+                        .sheets
+                        .iter()
+                        .map(|sheet| sheet.name.clone())
+                        .collect(),
+                    active_sheet: sheet_index,
+                }
                 span { class: "status-text", "{store.status}" }
             }
         }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct FormulaStatusPopoverProps {
+    status: FormulaStatusView,
+    sheet_names: Vec<String>,
+    active_sheet: usize,
+}
+
+#[component]
+fn FormulaStatusPopover(props: FormulaStatusPopoverProps) -> Element {
+    let diagnostics = props.status.diagnostics();
+    let total = diagnostics.total_count();
+    let invalid_count = diagnostics.invalid_formula_count;
+    let volatile_count = diagnostics.volatile_formula_count;
+    let unsupported_count = diagnostics.unsupported_dependency_count;
+    let large_range_count = diagnostics.large_range_dependency_count;
+    let skipped_rewrite_count = diagnostics.skipped_reference_rewrite_count;
+    let degraded_message = props.status.degraded_message().map(str::to_string);
+    let samples = props.status.sample_issues(props.active_sheet, 5);
+    let (state_class, state_label, trigger_label) = if degraded_message.is_some() {
+        (
+            "degraded",
+            "Degraded",
+            format!("Formula calculation degraded, {total} diagnostics"),
+        )
+    } else if total > 0 {
+        (
+            "warning",
+            "Warnings",
+            format!("Formula calculation has {total} diagnostics"),
+        )
+    } else {
+        ("ready", "Ready", "Formula calculation ready".to_string())
+    };
+    let trigger_class = format!("formula-status-trigger {state_class}");
+
+    rsx! {
+        PopoverRoot { class: "formula-status", is_modal: false,
+            PopoverTrigger {
+                class: trigger_class,
+                title: trigger_label.clone(),
+                aria_label: trigger_label,
+                FunctionSquare { size: 15 }
+                if total > 0 {
+                    span { class: "formula-status-count", "{total}" }
+                }
+            }
+            PopoverContent {
+                class: "formula-status-popover",
+                side: ContentSide::Top,
+                align: ContentAlign::End,
+                div { class: "formula-status-heading",
+                    h2 { "Formula status" }
+                    span { class: "formula-state {state_class}", "{state_label}" }
+                }
+                if let Some(message) = degraded_message {
+                    p { class: "formula-degraded-message", "{message}" }
+                } else if total == 0 {
+                    p { class: "formula-ready-message", "Formulas are calculating normally." }
+                }
+                dl { class: "formula-diagnostic-counts",
+                    FormulaDiagnosticCount { label: "Invalid", value: invalid_count }
+                    FormulaDiagnosticCount { label: "Volatile", value: volatile_count }
+                    FormulaDiagnosticCount { label: "Dependencies", value: unsupported_count }
+                    FormulaDiagnosticCount { label: "Large ranges", value: large_range_count }
+                    FormulaDiagnosticCount { label: "Skipped rewrites", value: skipped_rewrite_count }
+                }
+                if !samples.is_empty() {
+                    div { class: "formula-issues",
+                        h3 { "Examples" }
+                        ul {
+                            for (index, issue) in samples.iter().enumerate() {
+                                li { key: "{issue.sheet_index}-{issue.row}-{issue.col}-{index}",
+                                    div { class: "formula-issue-meta",
+                                        strong {
+                                            "{formula_issue_location(issue, &props.sheet_names)}"
+                                        }
+                                        span { "{formula_issue_kind_label(issue.kind)}" }
+                                    }
+                                    p { "{issue.message}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct FormulaDiagnosticCountProps {
+    label: &'static str,
+    value: usize,
+}
+
+#[component]
+fn FormulaDiagnosticCount(props: FormulaDiagnosticCountProps) -> Element {
+    rsx! {
+        div {
+            dt { "{props.label}" }
+            dd { "{props.value}" }
+        }
+    }
+}
+
+fn formula_issue_location(issue: &FormulaIssueView, sheet_names: &[String]) -> String {
+    let sheet_name = sheet_names
+        .get(issue.sheet_index)
+        .cloned()
+        .unwrap_or_else(|| format!("Sheet {}", issue.sheet_index + 1));
+    format!("{sheet_name}!{}{}", column_label(issue.col), issue.row + 1)
+}
+
+fn formula_issue_kind_label(kind: FormulaIssueKindView) -> &'static str {
+    match kind {
+        FormulaIssueKindView::InvalidFormula => "Invalid formula",
+        FormulaIssueKindView::VolatileFormula => "Volatile formula",
+        FormulaIssueKindView::UnsupportedDependency => "Unsupported dependency",
+        FormulaIssueKindView::LargeRangeDependency => "Large range",
     }
 }
 

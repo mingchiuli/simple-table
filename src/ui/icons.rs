@@ -23,6 +23,7 @@ lucide_icon!(Download, Download);
 lucide_icon!(ExternalLink, ExternalLink);
 lucide_icon!(FilePlus, FilePlus);
 lucide_icon!(FolderOpen, FolderOpen);
+lucide_icon!(FunctionSquare, FunctionSquare);
 lucide_icon!(Grid2X2Plus, Grid2X2Plus);
 lucide_icon!(HardDriveDownload, HardDriveDownload);
 lucide_icon!(House, House);

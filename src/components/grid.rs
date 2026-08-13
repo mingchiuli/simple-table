@@ -22,13 +22,15 @@ pub fn SpreadsheetGrid() -> Element {
     let mut store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let mut viewport_element = use_signal(|| None::<Rc<MountedData>>);
+    let mut focused_cell = use_signal(|| None::<(usize, usize, usize)>);
     let cell_elements = use_hook(|| {
         Rc::new(RefCell::new(HashMap::<
             (usize, usize, usize),
             Rc<MountedData>,
         >::new()))
     });
-    let display_cells = use_memo(move || Rc::new(store.display_cell_map(store.active_sheet())));
+    let cell_presentations =
+        use_memo(move || Rc::new(store.cell_presentation_map(store.active_sheet())));
 
     use_effect({
         let cell_elements = Rc::clone(&cell_elements);
@@ -111,7 +113,8 @@ pub fn SpreadsheetGrid() -> Element {
                 && (*row >= row_start && *row < row_end)
                 && (*col >= col_start && *col < col_end)
         });
-    let display_cells = display_cells();
+    let cell_presentations = cell_presentations();
+    let focused = *focused_cell.read();
     let selected = store.selected_cell();
     let canvas_width =
         HEADER_WIDTH + axis_offset(column_count, DEFAULT_COLUMN_WIDTH, &layout.column_widths);
@@ -195,25 +198,47 @@ pub fn SpreadsheetGrid() -> Element {
                         div { class: "row-header", role: "rowheader", "{row + 1}" }
                         for col in columns.iter().copied() {
                             {
-                                let value = display_cells
+                                let presentation = cell_presentations
                                     .get(&(row, col))
                                     .cloned()
                                     .unwrap_or_default();
-                                let focus_value = value.clone();
+                                let focus_value = presentation.edit_text.clone();
+                                let value = if focused == Some((sheet_index, row, col)) {
+                                    presentation.edit_text.clone()
+                                } else {
+                                    presentation.display_text.clone()
+                                };
                                 let is_selected = selected == (row, col);
+                                let has_formula_error = presentation.formula_error.is_some();
+                                let class = match (is_selected, has_formula_error) {
+                                    (true, true) => "grid-cell selected formula-error",
+                                    (true, false) => "grid-cell selected",
+                                    (false, true) => "grid-cell formula-error",
+                                    (false, false) => "grid-cell",
+                                };
+                                let aria_label = presentation.formula_error.as_ref().map_or_else(
+                                    || format!("{}{}", column_label(col), row + 1),
+                                    |error| format!(
+                                        "{}{}, formula error: {error}",
+                                        column_label(col),
+                                        row + 1
+                                    ),
+                                );
                                 let mounted_cells = Rc::clone(&cell_elements);
                                 let enter_cells = Rc::clone(&cell_elements);
                                 let enter_target = cell_after_enter(row, col, row_count);
                                 let enter_value = enter_target
-                                    .and_then(|cell| display_cells.get(&cell))
-                                    .cloned()
+                                    .and_then(|cell| cell_presentations.get(&cell))
+                                    .map(|cell| cell.edit_text.clone())
                                     .unwrap_or_default();
                                 rsx! {
                                     input {
                                         key: "{sheet_index}-{row}-{col}",
-                                        class: if is_selected { "grid-cell selected" } else { "grid-cell" },
+                                        class,
                                         role: "gridcell",
-                                        aria_label: "{column_label(col)}{row + 1}",
+                                        aria_label,
+                                        aria_invalid: has_formula_error.then_some("true"),
+                                        title: presentation.formula_error,
                                         disabled: store.busy(),
                                         value,
                                         onmounted: move |event| {
@@ -238,9 +263,15 @@ pub fn SpreadsheetGrid() -> Element {
                                             }
                                         },
                                         onfocus: move |_| {
+                                            focused_cell.set(Some((sheet_index, row, col)));
                                             store.selected_cell.set((row, col));
                                             store.selected_image.set(None);
                                             store.formula_text.set(focus_value.clone());
+                                        },
+                                        onblur: move |_| {
+                                            if *focused_cell.read() == Some((sheet_index, row, col)) {
+                                                focused_cell.set(None);
+                                            }
                                         },
                                         oninput: {
                                             let ports = Rc::clone(&ports);

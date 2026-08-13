@@ -59,6 +59,8 @@ pub struct EditorSessionView {
     #[serde(deserialize_with = "deserialize_u64_string")]
     pub revision: u64,
     pub editor_state: EditorStateView,
+    #[serde(default)]
+    pub formula_status: FormulaStatusView,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -67,6 +69,99 @@ pub struct EditorStateView {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_dirty: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaDiagnosticsView {
+    pub invalid_formula_count: usize,
+    pub volatile_formula_count: usize,
+    pub unsupported_dependency_count: usize,
+    pub large_range_dependency_count: usize,
+    pub skipped_reference_rewrite_count: usize,
+    #[serde(default)]
+    pub issues: Vec<FormulaIssueView>,
+}
+
+impl FormulaDiagnosticsView {
+    pub fn total_count(&self) -> usize {
+        self.invalid_formula_count
+            .saturating_add(self.volatile_formula_count)
+            .saturating_add(self.unsupported_dependency_count)
+            .saturating_add(self.large_range_dependency_count)
+            .saturating_add(self.skipped_reference_rewrite_count)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaIssueView {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub kind: FormulaIssueKindView,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FormulaIssueKindView {
+    InvalidFormula,
+    VolatileFormula,
+    UnsupportedDependency,
+    LargeRangeDependency,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum FormulaStatusView {
+    Ready {
+        #[serde(default)]
+        diagnostics: FormulaDiagnosticsView,
+    },
+    Degraded {
+        message: String,
+        #[serde(default)]
+        diagnostics: FormulaDiagnosticsView,
+    },
+}
+
+impl Default for FormulaStatusView {
+    fn default() -> Self {
+        Self::Ready {
+            diagnostics: FormulaDiagnosticsView::default(),
+        }
+    }
+}
+
+impl FormulaStatusView {
+    pub fn diagnostics(&self) -> &FormulaDiagnosticsView {
+        match self {
+            Self::Ready { diagnostics } | Self::Degraded { diagnostics, .. } => diagnostics,
+        }
+    }
+
+    pub fn degraded_message(&self) -> Option<&str> {
+        match self {
+            Self::Ready { .. } => None,
+            Self::Degraded { message, .. } => Some(message),
+        }
+    }
+
+    pub fn sample_issues(&self, active_sheet: usize, maximum: usize) -> Vec<FormulaIssueView> {
+        let issues = &self.diagnostics().issues;
+        issues
+            .iter()
+            .filter(|issue| issue.sheet_index == active_sheet)
+            .chain(
+                issues
+                    .iter()
+                    .filter(|issue| issue.sheet_index != active_sheet),
+            )
+            .take(maximum)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -83,6 +178,13 @@ pub struct CellView {
     pub value: Value,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CellPresentation {
+    pub display_text: String,
+    pub edit_text: String,
+    pub formula_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorMutationView {
@@ -92,6 +194,8 @@ pub struct EditorMutationView {
     #[serde(default)]
     pub patches: Vec<EditorPatchView>,
     pub sheet_extents: Option<Vec<SheetExtentView>>,
+    #[serde(default)]
+    pub formula_status: FormulaStatusView,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -322,6 +426,7 @@ impl EditorStore {
         if let Some(document) = self.document.write().as_mut().map(Rc::make_mut) {
             document.editor_session.revision = mutation.revision;
             document.editor_session.editor_state = mutation.editor_state.clone();
+            document.editor_session.formula_status = mutation.formula_status.clone();
             if let Some(extents) = &mutation.sheet_extents {
                 for (sheet, extent) in document.document.sheets.iter_mut().zip(extents) {
                     sheet.extent = *extent;
@@ -331,8 +436,11 @@ impl EditorStore {
         self.status.set("Changes saved in memory".to_string());
     }
 
-    pub fn display_cell_map(&self, sheet_index: usize) -> HashMap<(usize, usize), String> {
-        let mut cells: HashMap<(usize, usize), String> = self
+    pub fn cell_presentation_map(
+        &self,
+        sheet_index: usize,
+    ) -> HashMap<(usize, usize), CellPresentation> {
+        let mut cells: HashMap<(usize, usize), CellPresentation> = self
             .region
             .read()
             .as_ref()
@@ -340,16 +448,30 @@ impl EditorStore {
                 region
                     .cells
                     .iter()
-                    .map(|cell| ((cell.row, cell.col), cell_value_text(&cell.value)))
+                    .map(|cell| ((cell.row, cell.col), cell_presentation(&cell.value)))
                     .collect()
             })
             .unwrap_or_default();
         for ((pending_sheet, row, col), (_, value)) in self.pending_edits.read().iter() {
             if *pending_sheet == sheet_index {
-                cells.insert((*row, *col), value.clone());
+                cells.insert(
+                    (*row, *col),
+                    CellPresentation {
+                        display_text: value.clone(),
+                        edit_text: value.clone(),
+                        formula_error: None,
+                    },
+                );
             }
         }
         cells
+    }
+
+    pub fn cell_edit_text(&self, sheet_index: usize, row: usize, col: usize) -> String {
+        self.cell_presentation_map(sheet_index)
+            .get(&(row, col))
+            .map(|cell| cell.edit_text.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -369,16 +491,38 @@ impl Clone for AppPorts {
     }
 }
 
-pub fn cell_value_text(value: &Value) -> String {
-    value
+pub fn cell_presentation(value: &Value) -> CellPresentation {
+    let raw_text = raw_value_text(value.get("raw"));
+    let display_text = value
+        .get("display")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| raw_text.clone());
+    let edit_text = value
         .get("formula")
         .and_then(|formula| formula.get("formula"))
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| value.get("display").and_then(serde_json::Value::as_str))
-        .or_else(|| value.get("raw").and_then(serde_json::Value::as_str))
+        .and_then(Value::as_str)
         .map(str::to_string)
-        .or_else(|| value.get("raw").map(ToString::to_string))
-        .unwrap_or_default()
+        .unwrap_or(raw_text);
+    let formula_error = value
+        .get("formula")
+        .and_then(|formula| formula.get("error"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    CellPresentation {
+        display_text,
+        edit_text,
+        formula_error,
+    }
+}
+
+fn raw_value_text(value: Option<&Value>) -> String {
+    match value {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(value)) => value.clone(),
+        Some(value) => value.to_string(),
+    }
 }
 
 fn deserialize_u64_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -400,4 +544,123 @@ where
 
 pub fn request_id(prefix: &str) -> String {
     format!("{prefix}-{}", uuid::Uuid::new_v4())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn formula_cells_display_result_and_edit_source() {
+        let presentation = cell_presentation(&json!({
+            "raw": 3,
+            "display": "3",
+            "formula": {
+                "formula": "=SUM(A1:A2)",
+                "cachedValue": 3
+            }
+        }));
+
+        assert_eq!(presentation.display_text, "3");
+        assert_eq!(presentation.edit_text, "=SUM(A1:A2)");
+        assert_eq!(presentation.formula_error, None);
+    }
+
+    #[test]
+    fn formatted_values_keep_raw_edit_text() {
+        let presentation = cell_presentation(&json!({
+            "raw": 12.5,
+            "display": "$12.50"
+        }));
+
+        assert_eq!(presentation.display_text, "$12.50");
+        assert_eq!(presentation.edit_text, "12.5");
+    }
+
+    #[test]
+    fn formula_errors_are_exposed_for_cell_styling() {
+        let presentation = cell_presentation(&json!({
+            "raw": null,
+            "display": "#VALUE!",
+            "formula": {
+                "formula": "=UNKNOWN(A1)",
+                "cachedValue": null,
+                "error": "Unknown function UNKNOWN"
+            }
+        }));
+
+        assert_eq!(presentation.display_text, "#VALUE!");
+        assert_eq!(presentation.edit_text, "=UNKNOWN(A1)");
+        assert_eq!(
+            presentation.formula_error.as_deref(),
+            Some("Unknown function UNKNOWN")
+        );
+    }
+
+    #[test]
+    fn diagnostic_samples_prioritize_the_active_sheet_and_apply_the_limit() {
+        let status = FormulaStatusView::Ready {
+            diagnostics: FormulaDiagnosticsView {
+                issues: vec![
+                    issue(0, 0),
+                    issue(1, 1),
+                    issue(0, 2),
+                    issue(1, 3),
+                    issue(2, 4),
+                ],
+                ..Default::default()
+            },
+        };
+
+        let samples = status.sample_issues(1, 3);
+
+        assert_eq!(
+            samples
+                .iter()
+                .map(|issue| (issue.sheet_index, issue.row))
+                .collect::<Vec<_>>(),
+            vec![(1, 1), (1, 3), (0, 0)]
+        );
+    }
+
+    #[test]
+    fn formula_status_deserializes_from_the_protocol_shape() {
+        let status: FormulaStatusView = serde_json::from_value(json!({
+            "state": "degraded",
+            "message": "Formula work limit exceeded",
+            "diagnostics": {
+                "invalidFormulaCount": 2,
+                "volatileFormulaCount": 0,
+                "unsupportedDependencyCount": 1,
+                "largeRangeDependencyCount": 0,
+                "skippedReferenceRewriteCount": 0,
+                "issues": [{
+                    "sheetIndex": 0,
+                    "row": 3,
+                    "col": 1,
+                    "kind": "invalidFormula",
+                    "message": "Invalid formula"
+                }]
+            }
+        }))
+        .expect("formula status should match the protocol projection");
+
+        assert_eq!(
+            status.degraded_message(),
+            Some("Formula work limit exceeded")
+        );
+        assert_eq!(status.diagnostics().total_count(), 3);
+        assert_eq!(status.diagnostics().issues[0].col, 1);
+    }
+
+    fn issue(sheet_index: usize, row: usize) -> FormulaIssueView {
+        FormulaIssueView {
+            sheet_index,
+            row,
+            col: 0,
+            kind: FormulaIssueKindView::InvalidFormula,
+            message: "Invalid formula".to_string(),
+        }
+    }
 }

@@ -641,6 +641,12 @@ button:disabled,
   background: #fbfcfb;
 }
 
+.grid-cell.formula-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  box-shadow: inset 3px 0 var(--danger);
+}
+
 .grid-cell.selected,
 .grid-cell:focus {
   position: relative;
@@ -648,6 +654,10 @@ button:disabled,
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   background: #fff;
+}
+
+.grid-cell.formula-error:focus {
+  outline-color: var(--danger);
 }
 
 .grid-loading {
@@ -850,6 +860,181 @@ button:disabled,
   white-space: nowrap;
 }
 
+.formula-status {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.formula-status-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 29px;
+  gap: 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0 5px;
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+}
+
+.formula-status-trigger:hover,
+.formula-status[data-state="open"] .formula-status-trigger {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.formula-status-trigger.warning {
+  width: auto;
+  min-width: 30px;
+  color: var(--warning);
+}
+
+.formula-status-trigger.degraded {
+  width: auto;
+  min-width: 30px;
+  color: var(--danger);
+}
+
+.formula-status-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.formula-status-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  z-index: 40;
+  width: min(380px, calc(100vw - 16px));
+  max-height: min(520px, calc(100vh - 96px));
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 14px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(23, 32, 28, 0.16);
+}
+
+.formula-status-popover[data-state="closed"] {
+  visibility: hidden;
+}
+
+.formula-status-heading,
+.formula-issue-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.formula-status-heading h2,
+.formula-issues h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.formula-state {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.formula-state.warning {
+  color: var(--warning);
+}
+
+.formula-state.degraded {
+  color: var(--danger);
+}
+
+.formula-ready-message,
+.formula-degraded-message {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.formula-degraded-message {
+  color: var(--danger);
+}
+
+.formula-diagnostic-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 12px 0 0;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+
+.formula-diagnostic-counts div {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 7px 8px;
+}
+
+.formula-diagnostic-counts dt {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-diagnostic-counts dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.formula-issues {
+  margin-top: 14px;
+}
+
+.formula-issues ul {
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.formula-issues li {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.formula-issue-meta strong,
+.formula-issue-meta span {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formula-issue-meta strong {
+  color: var(--accent);
+}
+
+.formula-issue-meta span {
+  color: var(--text-muted);
+}
+
+.formula-issues p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .editor-empty {
   display: grid;
   place-content: center;
@@ -946,6 +1131,14 @@ button:disabled,
     padding-bottom: max(3px, env(safe-area-inset-bottom));
   }
 
+  .formula-status-popover {
+    position: fixed;
+    right: 8px;
+    bottom: calc(48px + env(safe-area-inset-bottom));
+    width: calc(100vw - 16px);
+    max-height: min(460px, calc(100vh - 72px));
+  }
+
   .error-notice {
     right: 10px;
     bottom: calc(52px + env(safe-area-inset-bottom));
@@ -985,6 +1178,14 @@ button:disabled,
   .grid-cell.selected,
   .grid-cell:focus {
     background: #202722;
+  }
+
+  .grid-cell.formula-error {
+    background: var(--danger-soft);
+  }
+
+  .formula-status-popover {
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
   }
 
   .switch-thumb {
