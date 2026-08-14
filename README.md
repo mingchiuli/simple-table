@@ -42,7 +42,7 @@ required `dx` binary is not in `PATH`.
 ```bash
 cargo fmt --all -- --check
 cargo xtask check
-cargo test --workspace
+cargo xtask test
 cargo xtask bundle
 ```
 
@@ -60,27 +60,22 @@ docker run --rm -p 8080:8080 simple-table
 ## Structure
 
 ```text
-Cargo.toml              Dioxus application and workspace feature matrix
-Dioxus.toml             Dioxus CLI and native bundle configuration
-assets/                 App CSS, font, favicon, and package icons
-backend/Cargo.toml      Independent simple-table-engine crate
-backend/src/lib.rs      Engine crate root
-backend/src/protocol.rs Bounded editor request/reply contract
-backend/src/            Document, operations, state, I/O, and adapters
-src/main.rs             Shared desktop/mobile/Web/SSR entry point
-src/web_server.rs        Production Axum SSR entry with embedded Web assets
-src/lib.rs              Routes and application composition
-src/components.rs       UI module root; child modules live in components/
-src/ports.rs            Platform boundary root; child modules live in ports/
-src/web_worker.rs       Browser Worker binary and IndexedDB adapter
-src/xtask.rs            Desktop, mobile, Web, check, and bundle tasks
+Cargo.toml                         Virtual workspace and dependency policy
+Dioxus.toml                        Dioxus CLI and bundle configuration
+apps/simple-table/                 Cross-platform Dioxus app and assets
+apps/simple-table-web-worker/      Browser Worker and IndexedDB adapter
+apps/simple-table-web-server/      Development and embedded production SSR
+crates/simple-table-protocol/      Bounded request/reply contract
+crates/simple-table-engine/        Document, operations, state, I/O, adapters
+xtask/                             Development, verification, and bundle tasks
 ```
 
 Rust 2018-style module roots (`components.rs`, `ports.rs`, and the engine's
 responsibility roots) are used throughout; the repository contains no `mod.rs`.
 No JavaScript or TypeScript source is checked in. Dioxus and wasm-bindgen
 generate the JavaScript and Wasm needed by browsers under `target/` during Web
-builds.
+builds. The official `dioxus-primitives` source is pinned to an audited Git
+revision because it does not currently have a usable crates.io release.
 
 See [docs/architecture.md](docs/architecture.md) for ownership and persistence
 details.

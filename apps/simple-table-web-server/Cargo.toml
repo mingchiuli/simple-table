@@ -1,0 +1,29 @@
+[package]
+name = "simple-table-web-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+embedded = ["dep:mime_guess", "dep:rust-embed", "dep:tempfile"]
+
+[dependencies]
+axum.workspace = true
+dioxus = { workspace = true, features = ["fullstack", "server"] }
+mime_guess = { workspace = true, optional = true }
+rust-embed = { workspace = true, optional = true }
+simple-table = { workspace = true, features = ["server"] }
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+
+[[bin]]
+name = "simple-table-web"
+path = "src/main.rs"
+test = false
+bench = false

@@ -1,9 +1,10 @@
 # Architecture
 
-Simple Table is a two-package Rust workspace: the root package owns the Dioxus
-application and `simple-table-engine` owns the spreadsheet engine and shared
-protocol. Platform features select the renderer and delivery adapters; they do
-not fork the editor model. The SSR server owns no workbook session or bytes.
+Simple Table is a virtual Rust workspace. The Dioxus application, Web Worker,
+and Web server are independent packages under `apps/`; the serializable
+protocol and spreadsheet engine live under `crates/`. Platform features select
+the renderer and delivery adapters without forking the editor model. The SSR
+server owns no workbook session or bytes.
 
 ```text
 Desktop / iOS / Android                  Browser
@@ -28,14 +29,14 @@ Desktop / iOS / Android                  Browser
 
 ### Protocol
 
-`backend/src/protocol.rs` defines bounded, serializable `EditorRequest` and
-`EditorReply` values plus the shared error DTO. The same Rust contract is used
-in process and across the browser Worker boundary.
+`crates/simple-table-protocol/src/lib.rs` defines bounded, serializable
+`EditorRequest` and `EditorReply` values plus the shared error DTO. The same
+Rust contract is used in process and across the browser Worker boundary.
 
 ### Engine
 
-`backend/src/lib.rs` declares `simple-table-engine`; implementation files remain
-under `backend/src/` with their established responsibility boundaries:
+`crates/simple-table-engine/src/lib.rs` declares `simple-table-engine`; its
+implementation files retain their established responsibility boundaries:
 
 - `document/`: workbook model, backing data, patches, restore, and save
 - `ops/`: mutation execution, projections, and operation impact
@@ -49,20 +50,21 @@ reach into internal backend state.
 
 ### Application And Ports
 
-`src/lib.rs` composes the Dioxus app. `src/components.rs` and
-`src/components/` own the rewritten home/editor views, responsive layout, and
-pending-edit coordination. `src/ports.rs` and `src/ports/` isolate native,
-mobile, and browser behavior.
+`apps/simple-table/src/lib.rs` composes the Dioxus app. Its `components.rs` and
+`components/` own the home/editor views, responsive layout, and pending-edit
+coordination. `ports.rs` and `ports/` isolate native, mobile, and browser
+behavior.
 
 Switch, Tabs, and Toolbar come directly from the official Dioxus Components
 `dioxus-primitives` package. The upstream commit is pinned for reproducible
-builds; only app-specific presentation lives in `assets/main.css`.
+builds; only app-specific presentation lives in
+`apps/simple-table/assets/main.css`.
 
 ### Browser Worker
 
-`src/web_worker.rs` is a second binary target in the application package. It
-owns a browser-side `CoreFacade` from `simple-table-engine`, serializes requests,
-and persists saved and recovery snapshots in IndexedDB. The Worker build is generated into
+`apps/simple-table-web-worker` owns a browser-side `CoreFacade`, serializes
+requests using `simple-table-protocol`, and persists saved and recovery
+snapshots in IndexedDB. The Worker build is generated into
 `target/generated-public/workers/`; no JavaScript or Wasm build output is
 checked into the repository.
 
@@ -107,15 +109,15 @@ saved hash, or undo history.
 ## Dioxus Alignment
 
 Platform dependencies are optional and enabled only by their target feature.
-The application uses the engine crate without default features for SSR and Web
-UI builds, so those targets compile only the shared protocol. Desktop, mobile,
-and Worker targets enable the engine's full `engine` feature.
+SSR and Web UI builds depend directly on `simple-table-protocol`; desktop,
+mobile, and Worker packages depend on the complete `simple-table-engine`.
 The `web` feature enables `dioxus-web/hydrate` directly; it does not enable the
 fullstack server feature. The production build first asks `dx` to compile and
 post-process that hydration client, then embeds its complete public output while
-compiling the Axum SSR executable with `embedded-server`. The intermediate
-`web`, `server`, and `worker` features are build boundaries, not alternative
-deployment modes.
+compiling the Axum SSR executable with the Web server's `embedded` feature. The
+application package keeps only the mutually exclusive `desktop`, `mobile`,
+`web`, and `server` build boundaries; Worker and Web server behavior belongs to
+their own packages.
 
 SSR initial state is deterministic on server and client. Browser-only state,
 update checks, Worker startup, and IndexedDB reads begin after hydration. Assets
@@ -147,6 +149,7 @@ Official references:
 
 ## Verification Matrix
 
-`cargo xtask check` covers desktop, SSR, Web Wasm, and the Web Worker Wasm
-targets. Strict Clippy denies Rust warnings and redundant, copy, or implicit
+`cargo xtask check` covers protocol, engine, desktop, SSR, Web Wasm, and the Web
+Worker Wasm targets. `cargo xtask test` runs tests once per compatible target
+feature. Strict Clippy denies Rust warnings and redundant, copy, or implicit
 clones. Mobile is checked separately with the platform commands in `AGENTS.md`.

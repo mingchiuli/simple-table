@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 
 const DX_RELEASE_CLIENT: &str = "target/dx/simple-table/release/web";
@@ -9,12 +9,13 @@ const GENERATED_PUBLIC: &str = "target/generated-public";
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(task) = args.next() else {
-        eprintln!("usage: cargo xtask <check|desktop|ios|android|web|bundle>");
+        eprintln!("usage: cargo xtask <check|test|desktop|ios|android|web|bundle>");
         return ExitCode::FAILURE;
     };
     let extra_args = args.collect::<Vec<_>>();
     let status = match task.as_str() {
         "check" => check_all_targets(),
+        "test" => test_all_targets(),
         "web" => build_worker().and_then(|status| {
             if !status.success() {
                 return Ok(status);
@@ -54,8 +55,7 @@ fn check_all_targets() -> std::io::Result<ExitStatus> {
             "clippy",
             "--locked",
             "-p",
-            "simple-table-engine",
-            "--no-default-features",
+            "simple-table-protocol",
             "--all-targets",
             "--",
         ],
@@ -70,6 +70,8 @@ fn check_all_targets() -> std::io::Result<ExitStatus> {
         &[
             "clippy",
             "--locked",
+            "-p",
+            "simple-table",
             "--no-default-features",
             "--features",
             "desktop",
@@ -79,15 +81,26 @@ fn check_all_targets() -> std::io::Result<ExitStatus> {
         &[
             "clippy",
             "--locked",
-            "--no-default-features",
-            "--features",
-            "embedded-server",
+            "-p",
+            "simple-table-web-server",
             "--all-targets",
             "--",
         ],
         &[
             "clippy",
             "--locked",
+            "-p",
+            "simple-table-web-server",
+            "--features",
+            "embedded",
+            "--all-targets",
+            "--",
+        ],
+        &[
+            "clippy",
+            "--locked",
+            "-p",
+            "simple-table",
             "--target",
             "wasm32-unknown-unknown",
             "--no-default-features",
@@ -99,23 +112,54 @@ fn check_all_targets() -> std::io::Result<ExitStatus> {
         &[
             "clippy",
             "--locked",
+            "-p",
+            "simple-table-web-worker",
             "--target",
             "wasm32-unknown-unknown",
-            "--no-default-features",
-            "--features",
-            "worker",
             "--bin",
             "simple-table-web-worker",
             "--",
         ],
     ];
 
+    run_cargo_matrix(checks, STRICT_LINTS)
+}
+
+fn test_all_targets() -> std::io::Result<ExitStatus> {
+    let tests: &[&[&str]] = &[
+        &["test", "--locked", "-p", "simple-table-protocol"],
+        &["test", "--locked", "-p", "simple-table-engine"],
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "simple-table",
+            "--no-default-features",
+            "--features",
+            "desktop",
+            "--lib",
+        ],
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "simple-table",
+            "--no-default-features",
+            "--features",
+            "server",
+            "--lib",
+        ],
+    ];
+    run_cargo_matrix(tests, &[])
+}
+
+fn run_cargo_matrix(commands: &[&[&str]], trailing_args: &[&str]) -> std::io::Result<ExitStatus> {
     let mut last_status = None;
-    for args in checks {
-        let mut command = Command::new("cargo");
+    for args in commands {
+        let mut command = cargo_command();
         command.args(args.iter().copied());
         if args.last() == Some(&"--") {
-            command.args(STRICT_LINTS);
+            command.args(trailing_args);
         }
         let status = command.status()?;
         if !status.success() {
@@ -123,12 +167,12 @@ fn check_all_targets() -> std::io::Result<ExitStatus> {
         }
         last_status = Some(status);
     }
-    Ok(last_status.expect("check matrix must not be empty"))
+    Ok(last_status.expect("command matrix must not be empty"))
 }
 
 fn check_repository_layout() -> std::io::Result<()> {
     let mut violations = Vec::new();
-    inspect_source_tree(Path::new("."), &mut violations)?;
+    inspect_source_tree(workspace_root(), &mut violations)?;
     if violations.is_empty() {
         return Ok(());
     }
@@ -173,6 +217,8 @@ fn dioxus_serve(
     let mut process = dioxus_command();
     process.args([
         "serve",
+        "--package",
+        "simple-table",
         "--platform",
         platform,
         "--locked",
@@ -190,6 +236,8 @@ fn dioxus_fullstack_serve(extra_args: &[String]) -> std::io::Result<ExitStatus> 
     process.args(extra_args);
     process.args([
         "@client",
+        "--package",
+        "simple-table",
         "--platform",
         "web",
         "--locked",
@@ -199,12 +247,14 @@ fn dioxus_fullstack_serve(extra_args: &[String]) -> std::io::Result<ExitStatus> 
     ]);
     process.args([
         "@server",
+        "--package",
+        "simple-table-web-server",
+        "--bin",
+        "simple-table-web",
         "--platform",
         "server",
         "--locked",
         "--no-default-features",
-        "--features",
-        "server",
     ]);
     process.status()
 }
@@ -224,6 +274,8 @@ fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
             "false",
             "--release",
             "--locked",
+            "--package",
+            "simple-table",
             "--platform",
             "web",
             "--no-default-features",
@@ -240,8 +292,8 @@ fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
     }
 
     copy_directory(
-        &Path::new(DX_RELEASE_CLIENT).join("public"),
-        Path::new(EMBEDDED_PUBLIC),
+        &workspace_path(DX_RELEASE_CLIENT).join("public"),
+        &workspace_path(EMBEDDED_PUBLIC),
     )?;
 
     let server = dioxus_command()
@@ -249,11 +301,13 @@ fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
             "build",
             "--release",
             "--locked",
+            "--package",
+            "simple-table-web-server",
             "--platform",
             "server",
             "--no-default-features",
             "--features",
-            "embedded-server",
+            "embedded",
             "--bin",
             "simple-table-web",
         ])
@@ -263,10 +317,10 @@ fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
     }
 
     let executable_suffix = std::env::consts::EXE_SUFFIX;
-    let source = Path::new(DX_RELEASE_SERVER).join(format!("server{executable_suffix}"));
+    let source = workspace_path(DX_RELEASE_SERVER).join(format!("server{executable_suffix}"));
     let destination =
-        Path::new("target/release").join(format!("simple-table-web{executable_suffix}"));
-    std::fs::create_dir_all("target/release")?;
+        workspace_path("target/release").join(format!("simple-table-web{executable_suffix}"));
+    std::fs::create_dir_all(workspace_path("target/release"))?;
     std::fs::copy(source, &destination)?;
     clean_web_intermediates()?;
     println!("embedded Web server: {}", destination.display());
@@ -275,7 +329,7 @@ fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
 
 fn clean_release_bundle_output() -> std::io::Result<()> {
     clean_web_intermediates()?;
-    let binary = Path::new("target/release")
+    let binary = workspace_path("target/release")
         .join(format!("simple-table-web{}", std::env::consts::EXE_SUFFIX));
     if binary.exists() {
         std::fs::remove_file(binary)?;
@@ -285,10 +339,10 @@ fn clean_release_bundle_output() -> std::io::Result<()> {
 
 fn clean_web_intermediates() -> std::io::Result<()> {
     for output in [
-        Path::new(DX_RELEASE_CLIENT),
-        Path::new(DX_RELEASE_SERVER),
-        Path::new(EMBEDDED_PUBLIC),
-        Path::new(GENERATED_PUBLIC),
+        workspace_path(DX_RELEASE_CLIENT),
+        workspace_path(DX_RELEASE_SERVER),
+        workspace_path(EMBEDDED_PUBLIC),
+        workspace_path(GENERATED_PUBLIC),
     ] {
         if output.exists() {
             std::fs::remove_dir_all(output)?;
@@ -312,22 +366,29 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn cargo_command() -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(workspace_root());
+    command
+}
+
 fn dioxus_command() -> Command {
-    Command::new(std::env::var_os("DIOXUS_CLI").unwrap_or_else(|| "dx".into()))
+    let mut command = Command::new(std::env::var_os("DIOXUS_CLI").unwrap_or_else(|| "dx".into()));
+    command.current_dir(workspace_root());
+    command
 }
 
 fn build_worker() -> std::io::Result<ExitStatus> {
-    let build = Command::new("cargo")
+    let build = cargo_command()
         .args([
             "build",
             "--locked",
+            "--package",
+            "simple-table-web-worker",
             "--target",
             "wasm32-unknown-unknown",
             "--profile",
             "wasm-release",
-            "--no-default-features",
-            "--features",
-            "worker",
             "--bin",
             "simple-table-web-worker",
         ])
@@ -335,15 +396,16 @@ fn build_worker() -> std::io::Result<ExitStatus> {
     if !build.success() {
         return Ok(build);
     }
-    let output = Path::new(GENERATED_PUBLIC).join("workers");
+    let output = workspace_path(GENERATED_PUBLIC).join("workers");
     if output.exists() {
         std::fs::remove_dir_all(&output)?;
     }
     std::fs::create_dir_all(&output)?;
 
-    let input = Path::new("target/wasm32-unknown-unknown/wasm-release")
+    let input = workspace_path("target/wasm32-unknown-unknown/wasm-release")
         .join("simple-table-web-worker.wasm");
     let bindgen = Command::new("wasm-bindgen")
+        .current_dir(workspace_root())
         .arg(input)
         .args(["--target", "web", "--no-typescript", "--out-dir"])
         .arg(&output)
@@ -375,4 +437,14 @@ self.onmessage = (event) => {
 "#,
     )?;
     Ok(bindgen)
+}
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask must be a direct workspace child")
+}
+
+fn workspace_path(path: &str) -> PathBuf {
+    workspace_root().join(path)
 }

@@ -1,16 +1,10 @@
-#[cfg(feature = "app")]
 mod actions;
-#[cfg(feature = "app")]
 mod components;
-#[cfg(feature = "app")]
 mod model;
-#[cfg(feature = "app")]
 mod ports;
-#[cfg(feature = "app")]
 mod ui;
 
-#[cfg(feature = "app")]
-pub use simple_table_engine::protocol;
+pub use simple_table_protocol as protocol;
 
 #[cfg(any(
     all(feature = "desktop", feature = "mobile"),
@@ -19,15 +13,6 @@ pub use simple_table_engine::protocol;
     all(feature = "mobile", feature = "web"),
     all(feature = "mobile", feature = "server"),
     all(feature = "web", feature = "server"),
-    all(feature = "worker", feature = "desktop"),
-    all(feature = "worker", feature = "mobile"),
-    all(feature = "worker", feature = "web"),
-    all(feature = "worker", feature = "server"),
-    all(feature = "tools", feature = "desktop"),
-    all(feature = "tools", feature = "mobile"),
-    all(feature = "tools", feature = "web"),
-    all(feature = "tools", feature = "server"),
-    all(feature = "tools", feature = "worker"),
 ))]
 compile_error!("enable exactly one Simple Table target feature");
 
@@ -36,28 +21,19 @@ compile_error!("enable exactly one Simple Table target feature");
     feature = "mobile",
     feature = "web",
     feature = "server",
-    feature = "worker",
-    feature = "tools"
 )))]
 compile_error!("enable one Simple Table target feature");
 
-#[cfg(feature = "app")]
 use std::rc::Rc;
 
-#[cfg(feature = "app")]
 use dioxus::prelude::*;
 
-#[cfg(feature = "app")]
 use model::{AppPorts, EditorStore};
 
-#[cfg(feature = "app")]
 const APP_CSS: Asset = asset!("/assets/main.css");
-#[cfg(feature = "app")]
 const FAVICON: Asset = asset!("/assets/favicon.png");
-#[cfg(feature = "app")]
 const LUCIDE_FONT: Asset = asset!("/assets/lucide.ttf");
 
-#[cfg(feature = "app")]
 #[derive(Clone, Debug, PartialEq, Routable)]
 enum Route {
     #[route("/")]
@@ -66,7 +42,6 @@ enum Route {
     Table {},
 }
 
-#[cfg(feature = "app")]
 pub fn app() -> Element {
     let store = use_hook(EditorStore::new);
     let ports = use_hook(|| {
@@ -97,13 +72,11 @@ pub fn app() -> Element {
     }
 }
 
-#[cfg(feature = "app")]
 #[component]
 fn Home() -> Element {
     rsx! { components::HomeView {} }
 }
 
-#[cfg(feature = "app")]
 #[component]
 fn Table() -> Element {
     rsx! { components::EditorView {} }

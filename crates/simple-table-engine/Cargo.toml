@@ -1,0 +1,36 @@
+[package]
+name = "simple-table-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+csv.workspace = true
+formualizer-parse.workspace = true
+image.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+sha2.workspace = true
+simple-table-protocol.workspace = true
+thiserror.workspace = true
+umya-spreadsheet.workspace = true
+uuid = { workspace = true, features = ["v4", "serde", "rng-getrandom"] }
+web-time.workspace = true
+zip = { workspace = true, default-features = false, features = ["deflate"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+formualizer-workbook = { workspace = true, default-features = false, features = ["system-clock"] }
+tantivy.workspace = true
+tantivy-jieba.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+formualizer-workbook = { workspace = true, default-features = false, features = ["js-runtime"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }

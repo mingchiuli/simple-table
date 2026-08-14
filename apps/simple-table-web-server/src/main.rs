@@ -1,40 +1,48 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use axum::Router;
+#[cfg(feature = "embedded")]
 use axum::extract::OriginalUri;
+#[cfg(feature = "embedded")]
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+#[cfg(feature = "embedded")]
 use axum::http::{HeaderValue, StatusCode};
+#[cfg(feature = "embedded")]
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use dioxus::server::{DioxusRouterExt, ServeConfig};
+#[cfg(feature = "embedded")]
 use rust_embed::RustEmbed;
 
+#[cfg(feature = "embedded")]
 #[derive(RustEmbed)]
-#[folder = "target/embedded-web-public/"]
+#[folder = "../../target/embedded-web-public/"]
 #[cfg_attr(debug_assertions, allow_missing = true)]
 struct WebAssets;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "embedded")]
     let public_dir = materialize_index()?;
 
-    // SAFETY: this runs before Dioxus, Tokio, or any application thread starts.
-    // The temporary directory remains alive until the server shuts down.
-    unsafe { std::env::set_var("DIOXUS_PUBLIC_PATH", public_dir.path()) };
+    #[cfg(feature = "embedded")]
+    // SAFETY: this runs before the application starts any worker threads.
+    unsafe {
+        std::env::set_var("DIOXUS_PUBLIC_PATH", public_dir.path())
+    };
 
-    let config = ServeConfig::new();
     let router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .serve_dioxus_application(ServeConfig::new(), simple_table::app);
+    #[cfg(feature = "embedded")]
+    let router = router
         .route("/assets/{*path}", get(embedded_asset))
-        .route("/workers/{*path}", get(embedded_asset))
-        .serve_dioxus_application(config, simple_table::app);
+        .route("/workers/{*path}", get(embedded_asset));
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(serve(router))?;
-    Ok(())
+    serve(router).await
 }
 
+#[cfg(feature = "embedded")]
 fn materialize_index() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
     let index = WebAssets::get("index.html")
         .ok_or("embedded index.html is missing; build with `cargo xtask bundle`")?;
@@ -59,6 +67,7 @@ async fn serve(router: Router) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(feature = "embedded")]
 async fn embedded_asset(OriginalUri(uri): OriginalUri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let Some(asset) = WebAssets::get(path) else {

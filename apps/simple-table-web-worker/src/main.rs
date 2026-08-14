@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use simple_table_engine::CoreFacade;
-use simple_table_engine::protocol::{AppErrorDto, EditorRequest, EditorResponse};
+use simple_table_protocol::{AppErrorDto, EditorRequest, EditorResponse};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -66,7 +66,7 @@ mod web {
     use rexie::{ObjectStore, Rexie, TransactionMode};
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
-    use simple_table_engine::protocol::{EditorReply, LocalDocumentSummary};
+    use simple_table_protocol::{EditorReply, LocalDocumentSummary};
     use wasm_bindgen::JsValue;
 
     use super::*;

@@ -1,8 +1,8 @@
 [application]
 name = "simple-table"
 default_platform = "desktop"
-out_dir = "dist"
-public_dir = "target/generated-public"
+out_dir = "../../dist"
+public_dir = "../../target/generated-public"
 
 [web.app]
 title = "Simple Table"

@@ -51,7 +51,7 @@ jobs:
           locked: true
 
       - name: Build native package
-        run: dx bundle --desktop --release --locked --no-default-features --features desktop --package-types "${{ matrix.package }}" --out-dir release-assets
+        run: dx bundle --package simple-table --desktop --release --locked --no-default-features --features desktop --package-types "${{ matrix.package }}" --out-dir release-assets
 
       - name: Upload native package
         uses: actions/upload-artifact@v7

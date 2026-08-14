@@ -1,13 +1,12 @@
-[package]
-name = "simple-table"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-default-run = "simple-table"
-
 [workspace]
-members = ["backend"]
+members = [
+    "apps/simple-table",
+    "apps/simple-table-web-server",
+    "apps/simple-table-web-worker",
+    "crates/simple-table-engine",
+    "crates/simple-table-protocol",
+    "xtask",
+]
 resolver = "3"
 
 [workspace.package]
@@ -15,115 +14,57 @@ version = "0.12.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mingchiuli/simple-table"
+publish = false
 
-[features]
-default = ["desktop"]
-tools = []
-app = [
-    "dep:base64",
-    "dep:dioxus",
-    "dep:dioxus-primitives",
-    "dep:dioxus-sdk-time",
-    "dep:futures",
-    "dep:lucide-icons",
-    "dep:semver",
-    "dep:simple-table-engine",
-]
-engine = ["dep:simple-table-engine", "simple-table-engine/engine"]
-desktop = [
-    "app",
-    "engine",
-    "dioxus/desktop",
-    "dep:reqwest",
-    "dep:rfd",
-    "dep:tokio",
-    "dep:webbrowser",
-]
-mobile = ["app", "engine", "dioxus/mobile", "dep:reqwest", "dep:tokio"]
-web = [
-    "app",
-    "dioxus/web",
-    "dep:dioxus-web",
-    "dioxus-primitives/web",
-    "dep:js-sys",
-    "dep:serde-wasm-bindgen",
-    "dep:web-sys",
-    "dep:wasm-bindgen",
-    "dep:wasm-bindgen-futures",
-]
-server = ["app", "dioxus/server", "dioxus/fullstack", "dep:axum", "dep:tokio"]
-embedded-server = [
-    "server",
-    "dep:mime_guess",
-    "dep:rust-embed",
-    "dep:tempfile",
-]
-worker = [
-    "engine",
-    "dep:js-sys",
-    "dep:rexie",
-    "dep:serde-wasm-bindgen",
-    "dep:sha2",
-    "dep:wasm-bindgen",
-    "dep:wasm-bindgen-futures",
-]
+[workspace.dependencies]
+simple-table = { path = "apps/simple-table", default-features = false }
+simple-table-engine = { path = "crates/simple-table-engine" }
+simple-table-protocol = { path = "crates/simple-table-protocol" }
 
-[dependencies]
-base64 = { version = "0.23", optional = true }
-dioxus = { version = "=0.7.10", features = ["router"], optional = true }
-dioxus-primitives = { git = "https://github.com/DioxusLabs/dioxus-components.git", rev = "bf007c15d0cf4d04d3181cc46cf12325aa773955", default-features = false, optional = true }
-dioxus-sdk-time = { version = "=0.7.0", optional = true }
-dioxus-web = { version = "=0.7.10", features = ["hydrate"], optional = true }
-futures = { version = "0.3.34", optional = true }
-lucide-icons = { version = "1.31.0", optional = true }
-semver = { version = "1", optional = true }
-serde = { version = "1", features = ["derive", "rc"] }
+axum = "0.8"
+base64 = "0.23"
+csv = "1.4"
+dioxus = "=0.7.10"
+# Dioxus Primitives is not published as a usable crates.io release yet.
+dioxus-primitives = { git = "https://github.com/DioxusLabs/dioxus-components.git", rev = "bf007c15d0cf4d04d3181cc46cf12325aa773955", default-features = false }
+dioxus-sdk-time = "0.7.0"
+dioxus-web = "=0.7.10"
+formualizer-parse = "3.0.0"
+formualizer-workbook = { version = "0.8.1", default-features = false }
+futures = "0.3.34"
+getrandom = "0.4"
+image = "0.25"
+js-sys = "0.3"
+lucide-icons = "1.31.0"
+mime_guess = "2"
+reqwest = "0.13.4"
+rexie = "0.6.2"
+rfd = "0.17.2"
+rust-embed = "8.12.0"
+semver = "1"
+serde = "1"
 serde_json = "1"
-simple-table-engine = { path = "backend", default-features = false, optional = true }
-sha2 = { version = "0.11", optional = true }
-uuid = { version = "1", features = ["v4", "serde", "rng-getrandom"] }
+serde-wasm-bindgen = "0.6.5"
+sha2 = "0.11"
+tantivy = "0.26.1"
+tantivy-jieba = "0.20.0"
+tempfile = "3"
+thiserror = "2"
+tokio = "1"
+umya-spreadsheet = "3"
+uuid = "1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
+web-time = "1.1"
+webbrowser = "1.2.4"
+windows-sys = "0.61"
+zip = { version = "8.6", default-features = false }
 
-axum = { version = "0.8", optional = true }
-js-sys = { version = "0.3", optional = true }
-mime_guess = { version = "2", optional = true }
-reqwest = { version = "0.13.4", features = ["json"], optional = true }
-rexie = { version = "0.6.2", optional = true }
-rfd = { version = "0.17.2", optional = true }
-rust-embed = { version = "8.12.0", optional = true }
-serde-wasm-bindgen = { version = "0.6.5", optional = true }
-tempfile = { version = "3", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"], optional = true }
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "ErrorEvent", "Event", "File", "FileList", "FileReader", "HtmlAnchorElement", "HtmlInputElement", "MessageEvent", "Response", "Url", "Window", "Worker", "WorkerOptions", "WorkerType"], optional = true }
-webbrowser = { version = "1.2.4", optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.4", features = ["wasm_js"] }
-
-[[bin]]
-name = "simple-table"
-path = "src/main.rs"
-
-[[bin]]
-name = "simple-table-web-worker"
-path = "src/web_worker.rs"
-required-features = ["worker"]
-test = false
-bench = false
-
-[[bin]]
-name = "simple-table-web"
-path = "src/web_server.rs"
-required-features = ["embedded-server"]
-test = false
-bench = false
-
-[[bin]]
-name = "xtask"
-path = "src/xtask.rs"
-test = false
-bench = false
+[workspace.lints.clippy]
+clone_on_copy = "deny"
+implicit_clone = "deny"
+redundant_clone = "deny"
 
 [profile.wasm-dev]
 inherits = "dev"

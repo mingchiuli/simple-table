@@ -37,10 +37,7 @@ jobs:
         run: cargo xtask check
 
       - name: Run tests
-        run: cargo test --locked --no-default-features --features desktop
-
-      - name: Run engine tests
-        run: cargo test --locked -p simple-table-engine
+        run: cargo xtask test
 
   desktop-platforms:
     name: Desktop check (${{ matrix.os }})
@@ -61,7 +58,7 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Check desktop target
-        run: cargo check --locked --no-default-features --features desktop
+        run: cargo check --locked -p simple-table --no-default-features --features desktop
 
   ios:
     name: iOS simulator check
@@ -82,7 +79,7 @@ jobs:
 
       - name: Lint iOS target
         run: >-
-          cargo clippy --locked --target aarch64-apple-ios-sim
+          cargo clippy --locked -p simple-table --target aarch64-apple-ios-sim
           --no-default-features --features mobile --all-targets --
           -Dwarnings -Dclippy::redundant_clone -Dclippy::clone_on_copy
           -Dclippy::implicit_clone
@@ -121,7 +118,7 @@ jobs:
 
       - name: Lint Android target
         run: >-
-          cargo clippy --locked --target aarch64-linux-android
+          cargo clippy --locked -p simple-table --target aarch64-linux-android
           --no-default-features --features mobile --all-targets --
           -Dwarnings -Dclippy::redundant_clone -Dclippy::clone_on_copy
           -Dclippy::implicit_clone

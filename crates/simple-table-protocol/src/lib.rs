@@ -309,6 +309,7 @@ pub type EditorResponse = Result<EditorReply, AppErrorDto>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn request_round_trip_keeps_u64_values_numeric_inside_rust_protocol() {
@@ -325,6 +326,47 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<EditorRequest>(&json).expect("deserialize"),
             request
+        );
+    }
+
+    #[test]
+    fn protocol_wire_shape_stays_stable() {
+        assert_eq!(PROTOCOL_VERSION, 2);
+        let request = EditorRequest::SetCell {
+            request_id: "edit-1".to_string(),
+            document_id: 9,
+            base_revision: 4,
+            sheet_index: 2,
+            row: 3,
+            col: 5,
+            text: "value".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(request).expect("serialize request"),
+            json!({
+                "type": "setCell",
+                "request_id": "edit-1",
+                "document_id": 9,
+                "base_revision": 4,
+                "sheet_index": 2,
+                "row": 3,
+                "col": 5,
+                "text": "value",
+            })
+        );
+
+        let response: EditorResponse = Err(AppErrorDto {
+            code: "invalid_request".to_string(),
+            message: "bad request".to_string(),
+        });
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize response"),
+            json!({
+                "Err": {
+                    "code": "invalid_request",
+                    "message": "bad request",
+                }
+            })
         );
     }
 }

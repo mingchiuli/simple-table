@@ -6550,7 +6550,6 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 name = "simple-table"
 version = "0.12.0"
 dependencies = [
- "axum",
  "base64 0.23.1",
  "dioxus",
  "dioxus-primitives",
@@ -6560,18 +6559,14 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "lucide-icons",
- "mime_guess",
  "reqwest 0.13.4",
- "rexie",
  "rfd",
- "rust-embed",
  "semver",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
- "sha2 0.11.0",
  "simple-table-engine",
- "tempfile",
+ "simple-table-protocol",
  "tokio",
  "uuid",
  "wasm-bindgen",
@@ -6592,6 +6587,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "simple-table-protocol",
  "tantivy",
  "tantivy-jieba",
  "thiserror 2.0.20",
@@ -6600,6 +6596,45 @@ dependencies = [
  "web-time",
  "windows-sys 0.61.2",
  "zip",
+]
+
+[[package]]
+name = "simple-table-protocol"
+version = "0.12.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "simple-table-web-server"
+version = "0.12.0"
+dependencies = [
+ "axum",
+ "dioxus",
+ "mime_guess",
+ "rust-embed",
+ "simple-table",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "simple-table-web-worker"
+version = "0.12.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "rexie",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "sha2 0.11.0",
+ "simple-table-engine",
+ "simple-table-protocol",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -8681,6 +8716,10 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
+
+[[package]]
+name = "xtask"
+version = "0.12.0"
 
 [[package]]
 name = "xxhash-rust"
