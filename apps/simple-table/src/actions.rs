@@ -1,6 +1,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+#[cfg(feature = "mobile")]
+use crate::protocol::LocalDocumentSummary;
 use crate::protocol::{CellEdit, EditorReply, EditorRequest};
 use base64::Engine;
 use dioxus::prelude::{ReadableExt, WritableExt, spawn};
@@ -10,6 +12,9 @@ use crate::model::{
     AppPorts, EditorMutationView, EditorPatchView, EditorStore, GridScrollRequest,
     OpenDocumentView, SavedDocumentView, SearchView, SheetViewport, request_id,
 };
+
+#[cfg(feature = "mobile")]
+const MOBILE_RECOVERY_ID: &str = "mobile-recovery";
 
 pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
     let _operation = ports.operations.lock().await;
@@ -71,14 +76,43 @@ pub async fn open_bytes(
 pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: String) -> bool {
     let _operation = ports.operations.lock().await;
     set_busy(store, "Opening local workbook");
-    match ports
+
+    #[cfg(feature = "mobile")]
+    let response = if document_key == MOBILE_RECOVERY_ID {
+        match ports.recovery.load().await {
+            Ok(Some(recovery)) => {
+                ports
+                    .editor
+                    .execute(EditorRequest::OpenRecoveryDocument {
+                        request_id: request_id("open-recovery"),
+                        file_name: recovery.name,
+                        bytes: recovery.bytes,
+                    })
+                    .await
+            }
+            Ok(None) => Err(action_error(
+                "mobile_recovery_missing",
+                "the recovered workbook is no longer available",
+            )),
+            Err(error) => Err(error),
+        }
+    } else {
+        Err(action_error(
+            "mobile_recovery_missing",
+            "the requested mobile workbook is unavailable",
+        ))
+    };
+
+    #[cfg(not(feature = "mobile"))]
+    let response = ports
         .editor
         .execute(EditorRequest::OpenLocalDocument {
             request_id: request_id("open-local"),
             document_key,
         })
-        .await
-    {
+        .await;
+
+    match response {
         Ok(reply) => {
             let opened = accept_document_reply(store, reply);
             if opened {
@@ -109,20 +143,51 @@ pub async fn load_local_documents(store: EditorStore, ports: Rc<AppPorts>) {
         _ => {}
     }
 
-    #[cfg(not(feature = "web"))]
+    #[cfg(feature = "mobile")]
+    match ports.recovery.load().await {
+        Ok(Some(recovery)) => {
+            let mut store = store;
+            store.local_documents.set(vec![LocalDocumentSummary {
+                id: MOBILE_RECOVERY_ID.to_string(),
+                name: recovery.name,
+                updated_at_ms: recovery.updated_at_ms,
+                has_recovery: true,
+            }]);
+        }
+        Ok(None) => {
+            let mut store = store;
+            store.local_documents.set(Vec::new());
+        }
+        Err(error) => store.set_error(error),
+    }
+
+    #[cfg(not(any(feature = "web", feature = "mobile")))]
     let _ = (store, ports);
 }
 
 pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, document_key: String) {
     let _operation = ports.operations.lock().await;
     set_busy(store, "Removing local workbook");
-    match ports
+
+    #[cfg(feature = "mobile")]
+    let response = if document_key == MOBILE_RECOVERY_ID {
+        ports.recovery.clear().await.map(|()| EditorReply::Empty)
+    } else {
+        Err(action_error(
+            "mobile_recovery_missing",
+            "the requested mobile workbook is unavailable",
+        ))
+    };
+
+    #[cfg(not(feature = "mobile"))]
+    let response = ports
         .editor
         .execute(EditorRequest::DeleteLocalDocument {
             document_key: document_key.clone(),
         })
-        .await
-    {
+        .await;
+
+    match response {
         Ok(EditorReply::Empty) => {
             let mut store = store;
             store
@@ -339,6 +404,8 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
         return;
     };
     let target_name = document_name(store);
+    #[cfg(all(feature = "mobile", target_os = "android"))]
+    let existing_target = document_path(store);
     set_busy(store, "Saving workbook");
 
     #[cfg(feature = "web")]
@@ -356,7 +423,15 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
     let result = save_native(Rc::clone(&ports), document_id, base_revision, target_name).await;
 
     #[cfg(all(feature = "mobile", not(feature = "desktop")))]
-    let result = save_mobile(Rc::clone(&ports), document_id, base_revision, target_name).await;
+    let result = save_mobile(
+        Rc::clone(&ports),
+        document_id,
+        base_revision,
+        target_name,
+        #[cfg(target_os = "android")]
+        existing_target,
+    )
+    .await;
 
     #[cfg(all(
         feature = "server",
@@ -379,6 +454,8 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
                     return;
                 }
             }
+            #[cfg(feature = "mobile")]
+            let _ = ports.recovery.clear().await;
             let mut store = store;
             store.busy.set(false);
             store.status.set("Saved".to_string());
@@ -442,7 +519,64 @@ async fn save_native(
         .await
 }
 
-#[cfg(all(feature = "mobile", not(feature = "desktop")))]
+#[cfg(all(feature = "mobile", not(feature = "desktop"), target_os = "android"))]
+async fn save_mobile(
+    ports: Rc<AppPorts>,
+    document_id: u64,
+    base_revision: u64,
+    target_name: String,
+    existing_target: Option<String>,
+) -> Result<EditorReply, crate::protocol::AppErrorDto> {
+    let save_token = request_id("save-mobile");
+    let prepared = ports
+        .editor
+        .execute(EditorRequest::PrepareSave {
+            request_id: save_token.clone(),
+            document_id,
+            base_revision,
+            target_name,
+        })
+        .await?;
+    let EditorReply::SavePrepared {
+        save_token,
+        file_name,
+        bytes,
+    } = prepared
+    else {
+        return Err(unexpected_reply("prepare mobile save"));
+    };
+    let path = match ports
+        .files
+        .write_document_to_target(existing_target, file_name, bytes)
+        .await
+    {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            let _ = ports
+                .editor
+                .execute(EditorRequest::AbortSave { save_token })
+                .await;
+            return Ok(EditorReply::Empty);
+        }
+        Err(error) => {
+            let _ = ports
+                .editor
+                .execute(EditorRequest::AbortSave { save_token })
+                .await;
+            return Err(error);
+        }
+    };
+    ports
+        .editor
+        .execute(EditorRequest::CommitSave { save_token, path })
+        .await
+}
+
+#[cfg(all(
+    feature = "mobile",
+    not(feature = "desktop"),
+    not(target_os = "android")
+))]
 async fn save_mobile(
     ports: Rc<AppPorts>,
     document_id: u64,
@@ -782,6 +916,8 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool
         .await
     {
         Ok(EditorReply::Closed) => {
+            #[cfg(feature = "mobile")]
+            let _ = ports.recovery.clear().await;
             store.document.set(None);
             store.region.set(None);
             store.images.set(Rc::new(Vec::new()));
@@ -1025,7 +1161,54 @@ fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
         });
     }
 
-    #[cfg(not(feature = "web"))]
+    #[cfg(feature = "mobile")]
+    {
+        let generation = store.edit_generation().wrapping_add(1);
+        let mut store = store;
+        store.edit_generation.set(generation);
+        spawn(async move {
+            sleep(Duration::from_secs(2)).await;
+            if store.edit_generation() != generation {
+                return;
+            }
+
+            let _operation = ports.operations.lock().await;
+            if store.edit_generation() != generation {
+                return;
+            }
+            let Some((document_id, base_revision)) = document_identity(store) else {
+                return;
+            };
+            let is_dirty = store
+                .document
+                .read()
+                .as_ref()
+                .is_some_and(|document| document.editor_session.editor_state.is_dirty);
+            if !is_dirty {
+                let _ = ports.recovery.clear().await;
+                return;
+            }
+
+            let prepared = ports
+                .editor
+                .execute(EditorRequest::PrepareExport {
+                    document_id,
+                    base_revision,
+                    target_name: document_name(store),
+                })
+                .await;
+            if store.edit_generation() != generation
+                || document_identity(store) != Some((document_id, base_revision))
+            {
+                return;
+            }
+            if let Ok(EditorReply::ExportPrepared { file_name, bytes }) = prepared {
+                let _ = ports.recovery.checkpoint(file_name, bytes).await;
+            }
+        });
+    }
+
+    #[cfg(not(any(feature = "web", feature = "mobile")))]
     let _ = (store, ports);
 }
 
@@ -1069,6 +1252,16 @@ fn document_name(store: EditorStore) -> String {
         .map(|document| document.document.file_name.clone())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "untitled.xlsx".to_string())
+}
+
+#[cfg(all(feature = "mobile", target_os = "android"))]
+fn document_path(store: EditorStore) -> Option<String> {
+    store
+        .document
+        .read()
+        .as_ref()
+        .map(|document| document.document.path.clone())
+        .filter(|path| path.starts_with("content://"))
 }
 
 fn active_sheet_name(store: EditorStore) -> Option<String> {
@@ -1261,6 +1454,14 @@ fn protocol_error(error: serde_json::Error) -> crate::protocol::AppErrorDto {
     crate::protocol::AppErrorDto {
         code: "protocol_error".to_string(),
         message: error.to_string(),
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn action_error(code: &str, message: &str) -> crate::protocol::AppErrorDto {
+    crate::protocol::AppErrorDto {
+        code: code.to_string(),
+        message: message.to_string(),
     }
 }
 

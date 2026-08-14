@@ -6559,6 +6559,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "lucide-icons",
+ "manganis",
  "reqwest 0.13.4",
  "rfd",
  "semver",

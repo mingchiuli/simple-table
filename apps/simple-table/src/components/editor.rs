@@ -123,7 +123,7 @@ pub fn EditorView() -> Element {
                 }
                 OpenDocumentTool {}
                 ToolbarSeparator {}
-                if !cfg!(feature = "mobile") {
+                if !cfg!(feature = "mobile") || cfg!(target_os = "android") {
                     ToolbarButton {
                         class: "tool-button",
                         index: 2usize,

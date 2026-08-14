@@ -2,10 +2,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::protocol::AppErrorDto;
-#[cfg(not(feature = "server"))]
+#[cfg(not(any(feature = "server", feature = "mobile")))]
 use serde::Deserialize;
 
-#[cfg(not(feature = "server"))]
+#[cfg(not(any(feature = "server", feature = "mobile")))]
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/mingchiuli/simple-table/releases/latest";
 
@@ -21,7 +21,7 @@ pub trait UpdatePort {
 
 pub struct GitHubUpdatePort;
 
-#[cfg(not(feature = "server"))]
+#[cfg(not(any(feature = "server", feature = "mobile")))]
 #[derive(Deserialize)]
 struct Release {
     tag_name: String,
@@ -31,10 +31,10 @@ struct Release {
 impl UpdatePort for GitHubUpdatePort {
     fn check(&self) -> Pin<Box<dyn Future<Output = Result<Option<AvailableUpdate>, AppErrorDto>>>> {
         Box::pin(async move {
-            #[cfg(feature = "server")]
+            #[cfg(any(feature = "server", feature = "mobile"))]
             return Ok(None);
 
-            #[cfg(not(feature = "server"))]
+            #[cfg(not(any(feature = "server", feature = "mobile")))]
             {
                 let release = fetch_release().await?;
                 let latest = semver::Version::parse(release.tag_name.trim_start_matches('v'))
@@ -50,10 +50,7 @@ impl UpdatePort for GitHubUpdatePort {
     }
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "desktop", feature = "mobile")
-))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
 async fn fetch_release() -> Result<Release, AppErrorDto> {
     reqwest::Client::new()
         .get(LATEST_RELEASE_API)
@@ -95,7 +92,7 @@ fn js_update_error(error: wasm_bindgen::JsValue) -> AppErrorDto {
     }
 }
 
-#[cfg(not(feature = "server"))]
+#[cfg(not(any(feature = "server", feature = "mobile")))]
 fn update_error(error: impl std::fmt::Display) -> AppErrorDto {
     AppErrorDto {
         code: "update_error".to_string(),

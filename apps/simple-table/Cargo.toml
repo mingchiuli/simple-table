@@ -21,7 +21,6 @@ desktop = [
     "dioxus/desktop",
 ]
 mobile = [
-    "dep:reqwest",
     "dep:simple-table-engine",
     "dep:tokio",
     "dioxus/mobile",
@@ -64,6 +63,9 @@ webbrowser = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+manganis.workspace = true
 
 [[bin]]
 name = "simple-table"

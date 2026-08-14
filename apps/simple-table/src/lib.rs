@@ -48,6 +48,8 @@ pub fn app() -> Element {
         Rc::new(AppPorts {
             editor: ports::editor::platform_editor_port(),
             files: ports::file::platform_file_port(),
+            #[cfg(feature = "mobile")]
+            recovery: ports::recovery::platform_recovery_port(),
             operations: Rc::new(futures::lock::Mutex::new(())),
         })
     });

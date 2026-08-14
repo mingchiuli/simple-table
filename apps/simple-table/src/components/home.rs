@@ -59,12 +59,16 @@ pub fn HomeView() -> Element {
                 OpenDocumentControl {}
             }
 
-            if cfg!(any(feature = "web", feature = "server")) {
+            if cfg!(any(
+                feature = "web",
+                feature = "server",
+                all(feature = "mobile", target_os = "android")
+            )) {
                 section { class: "recent-section",
                     div { class: "section-heading",
                         div {
                             h2 { "Local workbooks" }
-                            p { "Files saved in this browser stay on this device." }
+                            p { "Workbooks available on this device." }
                         }
                         HardDriveDownload { size: 19 }
                     }

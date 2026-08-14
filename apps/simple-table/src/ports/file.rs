@@ -21,6 +21,17 @@ pub trait FilePort {
         bytes: Vec<u8>,
     ) -> FileFuture<Result<Option<String>, AppErrorDto>>;
 
+    #[cfg(all(feature = "mobile", target_os = "android"))]
+    fn write_document_to_target(
+        &self,
+        existing_target: Option<String>,
+        suggested_name: String,
+        bytes: Vec<u8>,
+    ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
+        let _ = existing_target;
+        self.write_document(suggested_name, bytes)
+    }
+
     #[cfg(feature = "desktop")]
     fn choose_document_path(
         &self,
@@ -135,9 +146,6 @@ mod native {
 
 #[cfg(feature = "mobile")]
 mod mobile {
-    use base64::Engine;
-    use dioxus::document;
-
     use super::*;
 
     pub struct MobileFilePort;
@@ -148,27 +156,59 @@ mod mobile {
             suggested_name: String,
             bytes: Vec<u8>,
         ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
-            Box::pin(async move {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-                let eval = document::eval(
-                    "const payload = await dioxus.recv();\n\
-                     const anchor = document.createElement('a');\n\
-                     anchor.href = `data:application/octet-stream;base64,${payload.bytes}`;\n\
-                     anchor.download = payload.name;\n\
-                     document.body.appendChild(anchor);\n\
-                     anchor.click();\n\
-                     anchor.remove();",
-                );
-                eval.send(serde_json::json!({
-                    "name": suggested_name,
-                    "bytes": encoded,
-                }))
-                .map_err(eval_error)?;
-                Ok(None)
-            })
+            #[cfg(target_os = "android")]
+            return Box::pin(crate::ports::android::write_document(
+                None,
+                suggested_name,
+                bytes,
+            ));
+
+            #[cfg(not(target_os = "android"))]
+            Box::pin(write_with_download_link(suggested_name, bytes))
+        }
+
+        #[cfg(target_os = "android")]
+        fn write_document_to_target(
+            &self,
+            existing_target: Option<String>,
+            suggested_name: String,
+            bytes: Vec<u8>,
+        ) -> FileFuture<Result<Option<String>, AppErrorDto>> {
+            Box::pin(crate::ports::android::write_document(
+                existing_target,
+                suggested_name,
+                bytes,
+            ))
         }
     }
 
+    #[cfg(not(target_os = "android"))]
+    async fn write_with_download_link(
+        suggested_name: String,
+        bytes: Vec<u8>,
+    ) -> Result<Option<String>, AppErrorDto> {
+        use base64::Engine;
+        use dioxus::document;
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let eval = document::eval(
+            "const payload = await dioxus.recv();\n\
+             const anchor = document.createElement('a');\n\
+             anchor.href = `data:application/octet-stream;base64,${payload.bytes}`;\n\
+             anchor.download = payload.name;\n\
+             document.body.appendChild(anchor);\n\
+             anchor.click();\n\
+             anchor.remove();",
+        );
+        eval.send(serde_json::json!({
+            "name": suggested_name,
+            "bytes": encoded,
+        }))
+        .map_err(eval_error)?;
+        Ok(None)
+    }
+
+    #[cfg(not(target_os = "android"))]
     fn eval_error(error: dioxus::document::EvalError) -> AppErrorDto {
         AppErrorDto {
             code: "mobile_file_error".to_string(),

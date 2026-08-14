@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::ports::editor::EditorPort;
 use crate::ports::file::FilePort;
+#[cfg(feature = "mobile")]
+use crate::ports::recovery::RecoveryPort;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -629,6 +631,8 @@ impl EditorStore {
 pub struct AppPorts {
     pub editor: Rc<dyn EditorPort>,
     pub files: Rc<dyn FilePort>,
+    #[cfg(feature = "mobile")]
+    pub recovery: Rc<dyn RecoveryPort>,
     pub operations: Rc<futures::lock::Mutex<()>>,
 }
 
@@ -637,6 +641,8 @@ impl Clone for AppPorts {
         Self {
             editor: Rc::clone(&self.editor),
             files: Rc::clone(&self.files),
+            #[cfg(feature = "mobile")]
+            recovery: Rc::clone(&self.recovery),
             operations: Rc::clone(&self.operations),
         }
     }
