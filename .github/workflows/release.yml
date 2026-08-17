@@ -104,9 +104,67 @@ jobs:
           path: simple-table-web-x86_64-unknown-linux-gnu
           if-no-files-found: error
 
+  android:
+    name: Android APK
+    needs: quality-gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Install Dioxus CLI
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: dioxus-cli
+          version: 0.7.10
+          locked: true
+
+      - name: Configure Android NDK
+        shell: bash
+        run: |
+          ndk_bin="${ANDROID_NDK_LATEST_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=${ndk_bin}/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=${ndk_bin}/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${ndk_bin}/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "$ndk_bin" >> "$GITHUB_PATH"
+
+      - name: Ensure Android SDK Platform 36
+        shell: bash
+        run: |
+          # dx's cargo-mobile2 project uses compileSdk = 36; install it if the
+          # runner's preinstalled SDK is older (gradle would auto-download otherwise).
+          if command -v sdkmanager >/dev/null 2>&1; then
+            yes | sdkmanager "platforms;android-36" >/dev/null || true
+          fi
+
+      - name: Build Android APK
+        run: dx bundle --package simple-table --android --release --locked --no-default-features --features mobile --package-types apk --out-dir release-assets
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: simple-table-android
+          path: release-assets/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: [desktop, web-binary]
+    needs: [desktop, web-binary, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -140,12 +140,28 @@ impl ProjectionMutation<'_> {
                 file_data.sheets.remove(*sheet_index);
             }
             AppliedOperation::InsertImage {
-                sheet_index, image, ..
+                sheet_index,
+                image,
+                column_width,
+                row_height,
+                ..
             } => {
                 if let Some(sheet) = file_data.sheets.get_mut(*sheet_index) {
                     let index = image.z_index.min(sheet.rich.images.len());
                     sheet.rich.images.insert(index, image.clone());
                     normalize_image_z_indexes(&mut sheet.rich.images);
+                    if let crate::document_data::ImageAnchor::OneCell { from, .. } = &image.anchor {
+                        if let Some(width) = column_width {
+                            set_layout_value(
+                                &mut sheet.column_widths,
+                                from.col as usize,
+                                Some(*width),
+                            );
+                        }
+                        if let Some(height) = row_height {
+                            set_layout_value(&mut sheet.row_heights, from.row as usize, Some(*height));
+                        }
+                    }
                 }
             }
             AppliedOperation::UpdateImage {
@@ -520,6 +536,7 @@ fn shift_layout_map_on_delete(map: Option<&mut HashMap<usize, u32>>, index: usiz
 mod tests {
     use super::*;
     use crate::document_data::{CellStyle, DrawingKind, Hyperlink};
+    use std::sync::Arc;
 
     fn file_data_with_rich_projection() -> DocumentData {
         DocumentData {
@@ -638,6 +655,57 @@ mod tests {
                     CellValue::String("D2".to_string()),
                 ],
             ]
+        );
+    }
+
+    #[test]
+    fn insert_image_applies_exact_fit_layout() {
+        let mut file_data = DocumentData {
+            path: String::new(),
+            file_name: "images.xlsx".to_string(),
+            sheets: vec![DocumentSheet {
+                name: "Sheet1".to_string(),
+                ..Default::default()
+            }],
+        };
+        let image = crate::document_data::SheetImage {
+            id: "image-1".to_string(),
+            media_id: "media".to_string(),
+            mime_type: "image/png".to_string(),
+            intrinsic_width: 2,
+            intrinsic_height: 1,
+            anchor: crate::document_data::ImageAnchor::OneCell {
+                from: crate::document_data::ImageMarker {
+                    row: 1,
+                    col: 2,
+                    ..Default::default()
+                },
+                width_emu: 200 * 9_525,
+                height_emu: 150 * 9_525,
+            },
+            z_index: 0,
+            renderable: true,
+        };
+        AppliedOperation::InsertImage {
+            sheet_index: 0,
+            image,
+            image_name: "test.png".to_string(),
+            bytes: Arc::from(Vec::<u8>::new()),
+            column_width: Some(200),
+            row_height: Some(150),
+        }
+        .projection_mutation()
+        .execute(&mut file_data);
+
+        let sheet = &file_data.sheets[0];
+        assert_eq!(sheet.rich.images.len(), 1);
+        assert_eq!(
+            sheet.column_widths.as_ref().and_then(|map| map.get(&2).copied()),
+            Some(200)
+        );
+        assert_eq!(
+            sheet.row_heights.as_ref().and_then(|map| map.get(&1).copied()),
+            Some(150)
         );
     }
 }

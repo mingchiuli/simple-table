@@ -134,6 +134,8 @@ pub enum AppliedOperation {
         image: SheetImage,
         image_name: String,
         bytes: Arc<[u8]>,
+        column_width: Option<u32>,
+        row_height: Option<u32>,
     },
     UpdateImage {
         sheet_index: usize,

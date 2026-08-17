@@ -7,7 +7,6 @@ mod file;
 mod formula;
 mod image;
 mod mutation;
-mod recent;
 mod search;
 
 pub use capabilities::*;
@@ -19,7 +18,6 @@ pub use file::*;
 pub use formula::*;
 pub use image::*;
 pub use mutation::*;
-pub use recent::*;
 pub use search::*;
 
 pub(crate) mod u64_string {

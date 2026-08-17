@@ -1,4 +1,5 @@
 use crate::document_data::{DocumentData, DocumentSheet, RichMetadata};
+use crate::document_layout_policy::{MAX_COLUMN_WIDTH_PX, MAX_ROW_HEIGHT_PX};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
@@ -263,11 +264,14 @@ impl EditorCommand {
                     )));
                 }
                 image.z_index = sheet.rich.images.len();
+                let (column_width, row_height) = exact_fit_layout(&image);
                 Ok(AppliedOperation::InsertImage {
                     sheet_index,
                     image,
                     image_name,
                     bytes,
+                    column_width,
+                    row_height,
                 })
             }
             EditorCommand::UpdateImage {
@@ -322,6 +326,32 @@ impl EditorCommand {
                 Ok(AppliedOperation::DeleteImage { sheet_index, image })
             }
         }
+    }
+}
+
+/// Computes the exact-fit column width / row height (pixels) for a newly
+/// inserted one-cell image so the containing cell matches the image's display
+/// size. Insert always anchors images with `OneCell`; `TwoCell` anchors are
+/// left untouched (the cell is sized once, at insert).
+fn exact_fit_layout(image: &crate::document_data::SheetImage) -> (Option<u32>, Option<u32>) {
+    const EMU_PER_PIXEL: i64 = 9_525;
+    match &image.anchor {
+        crate::document_data::ImageAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            let column_width = ((f64::from(from.col_offset_emu) + *width_emu as f64)
+                / EMU_PER_PIXEL as f64)
+                .ceil()
+                .clamp(1.0, MAX_COLUMN_WIDTH_PX as f64) as u32;
+            let row_height = ((f64::from(from.row_offset_emu) + *height_emu as f64)
+                / EMU_PER_PIXEL as f64)
+                .ceil()
+                .clamp(1.0, MAX_ROW_HEIGHT_PX as f64) as u32;
+            (Some(column_width), Some(row_height))
+        }
+        crate::document_data::ImageAnchor::TwoCell { .. } => (None, None),
     }
 }
 
@@ -489,6 +519,7 @@ fn rich_projection_extent(rich: &RichMetadata) -> SheetMutationExtent {
 mod tests {
     use super::*;
     use crate::document_data::{CellStyle, Drawing, DrawingKind, Hyperlink};
+    use std::sync::Arc;
     fn file_data_with_rich(rich: RichMetadata) -> DocumentData {
         DocumentData {
             path: String::new(),
@@ -615,5 +646,55 @@ mod tests {
             .resolve(&file_data),
             Ok(AppliedOperation::DeleteColumn { col_index: 15, .. })
         ));
+    }
+
+    #[test]
+    fn insert_image_resolves_to_exact_fit_layout() {
+        let file_data = DocumentData {
+            path: String::new(),
+            file_name: "images.xlsx".to_string(),
+            sheets: vec![DocumentSheet {
+                name: "Sheet1".to_string(),
+                ..Default::default()
+            }],
+        };
+        let image = crate::document_data::SheetImage {
+            id: "image-1".to_string(),
+            media_id: "media".to_string(),
+            mime_type: "image/png".to_string(),
+            intrinsic_width: 2,
+            intrinsic_height: 1,
+            anchor: crate::document_data::ImageAnchor::OneCell {
+                from: crate::document_data::ImageMarker {
+                    row: 1,
+                    col: 2,
+                    ..Default::default()
+                },
+                width_emu: 200 * 9_525,
+                height_emu: 150 * 9_525,
+            },
+            z_index: 0,
+            renderable: true,
+        };
+        let resolved = EditorCommand::InsertImage {
+            sheet_index: 0,
+            image,
+            image_name: "test.png".to_string(),
+            bytes: Arc::from(Vec::<u8>::new()),
+        }
+        .resolve(&file_data)
+        .expect("resolve");
+
+        match resolved {
+            AppliedOperation::InsertImage {
+                column_width,
+                row_height,
+                ..
+            } => {
+                assert_eq!(column_width, Some(200));
+                assert_eq!(row_height, Some(150));
+            }
+            other => panic!("expected InsertImage, got {other:?}"),
+        }
     }
 }

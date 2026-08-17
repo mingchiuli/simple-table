@@ -1,14 +1,15 @@
 #[cfg(test)]
 use crate::domain::CellEditInput;
+use crate::document_data::ImageAnchor;
 use crate::domain::EditorCommand;
-use crate::domain::{SearchCellIndexUpdate, SearchIndexWork};
+use crate::domain::{AppliedOperation, SearchCellIndexUpdate, SearchIndexWork};
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::{
     cell_delta_mutation_outcome, complete_cell_changes, layout_mutation_outcome,
     resync_required_mutation_outcome, status_mutation_outcome, structural_delta_mutation_outcome,
 };
-use crate::projection_model::ProjectedCellChange;
+use crate::projection_model::{MutationPatch, ProjectedCellChange};
 use crate::state::ActiveDocumentRepository;
 use std::collections::HashMap;
 
@@ -75,14 +76,15 @@ fn execute_image_command(
                 let projected = operation
                     .patch_projector()
                     .projected_result_from_current_file(editor_state.file_data());
-                MutationExecution::new(
-                    structural_delta_mutation_outcome(
-                        &editor_state,
-                        &projected,
-                        result.cell_changes,
-                    ),
-                    result.search_index_work,
-                )
+                let mut outcome = structural_delta_mutation_outcome(
+                    &editor_state,
+                    &projected,
+                    result.cell_changes,
+                );
+                if let Some(layout_patch) = insert_image_layout_patch(&operation) {
+                    outcome.patches.push(layout_patch);
+                }
+                MutationExecution::new(outcome, result.search_index_work)
             }
             None => MutationExecution::new(
                 status_mutation_outcome(&editor_state),
@@ -93,6 +95,41 @@ fn execute_image_command(
     };
     drop(retired);
     Ok(execution)
+}
+
+/// For an image insert that resizes its containing cell, build the `Layout`
+/// patch so the frontend refetches the document and renders the new sizes.
+fn insert_image_layout_patch(operation: &AppliedOperation) -> Option<MutationPatch> {
+    match operation {
+        AppliedOperation::InsertImage {
+            sheet_index,
+            image,
+            column_width,
+            row_height,
+            ..
+        } => {
+            let ImageAnchor::OneCell { from, .. } = &image.anchor else {
+                return None;
+            };
+            let mut column_widths = HashMap::new();
+            let mut row_heights = HashMap::new();
+            if let Some(width) = column_width {
+                column_widths.insert(from.col as usize, Some(*width));
+            }
+            if let Some(height) = row_height {
+                row_heights.insert(from.row as usize, Some(*height));
+            }
+            if column_widths.is_empty() && row_heights.is_empty() {
+                return None;
+            }
+            Some(MutationPatch::Layout {
+                sheet_index: *sheet_index,
+                column_widths,
+                row_heights,
+            })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

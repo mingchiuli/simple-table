@@ -3,15 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::document::DocumentManifest;
 use super::editor_session::EditorSessionInfo;
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PickedFileInfo {
-    pub path: String,
-    pub original_path: String,
-    pub file_name: String,
-}
-
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum FileOperationKind {

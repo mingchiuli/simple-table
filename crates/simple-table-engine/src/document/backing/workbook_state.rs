@@ -89,6 +89,8 @@ pub fn patch_after_operation(
             image,
             image_name,
             bytes,
+            column_width,
+            row_height,
         } => {
             if let Some(worksheet) = sheet_mut(workbook, *sheet_index)? {
                 let marker = marker_type(match &image.anchor {
@@ -105,6 +107,14 @@ pub fn patch_after_operation(
                 set_image_identity(&mut workbook_image, &image.id);
                 apply_image_anchor(&mut workbook_image, &image.anchor)?;
                 worksheet.add_image(workbook_image);
+                if let ImageAnchor::OneCell { from, .. } = &image.anchor {
+                    if let Some(width) = column_width {
+                        patch_column_width(worksheet, from.col as usize, Some(*width), backing);
+                    }
+                    if let Some(height) = row_height {
+                        patch_row_height(worksheet, from.row as usize, Some(*height), backing);
+                    }
+                }
             }
         }
         AppliedOperation::UpdateImage {

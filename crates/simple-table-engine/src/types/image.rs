@@ -38,20 +38,3 @@ pub struct SheetImage {
     pub renderable: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SheetImagePage {
-    pub items: Vec<SheetImage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_offset: Option<usize>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageSelection {
-    pub token: String,
-    pub file_name: String,
-    pub mime_type: String,
-    pub width: u32,
-    pub height: u32,
-}

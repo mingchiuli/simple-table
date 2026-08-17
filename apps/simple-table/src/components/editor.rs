@@ -590,7 +590,7 @@ fn StructureButton(props: StructureButtonProps) -> Element {
                             document_id: props.document_id,
                             base_revision: props.revision,
                             sheet_index: props.sheet_index,
-                            row_index: props.selected.0,
+                            row_index: props.selected.0 + 1,
                         },
                         EditorRequestFactory::DeleteRow => crate::protocol::EditorRequest::DeleteRow {
                             request_id,
@@ -604,7 +604,7 @@ fn StructureButton(props: StructureButtonProps) -> Element {
                             document_id: props.document_id,
                             base_revision: props.revision,
                             sheet_index: props.sheet_index,
-                            col_index: props.selected.1,
+                            col_index: props.selected.1 + 1,
                         },
                         EditorRequestFactory::DeleteColumn => crate::protocol::EditorRequest::DeleteColumn {
                             request_id,

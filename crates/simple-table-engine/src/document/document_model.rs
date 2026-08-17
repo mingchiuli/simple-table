@@ -472,6 +472,10 @@ impl SpreadsheetDocument {
                     image: image.clone(),
                     image_name: asset.image_name.clone(),
                     bytes: asset.bytes.clone(),
+                    // Undo never reverts the layout written by the insert, so
+                    // redo must not touch the row/column sizes either.
+                    column_width: None,
+                    row_height: None,
                 }
             }
             (Some(image), None) => AppliedOperation::DeleteImage {

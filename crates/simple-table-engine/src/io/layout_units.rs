@@ -13,8 +13,11 @@ pub fn px_to_excel_column_width(px: u32) -> f64 {
     px.saturating_sub(5) as f64 / 7.0
 }
 
-pub fn is_default_column_width(width: f64, px: u32) -> bool {
-    px == DEFAULT_COLUMN_WIDTH_PX || (width - EXCEL_DEFAULT_COLUMN_WIDTH).abs() < 0.001
+pub fn is_default_column_width(width: f64, _px: u32) -> bool {
+    // Only the native Excel default column width is dropped; an explicit
+    // width at the engine default (120px) must survive a round-trip so that
+    // an inserted image sized exactly 120px keeps its column width.
+    (width - EXCEL_DEFAULT_COLUMN_WIDTH).abs() < 0.001
 }
 
 pub fn points_to_px(points: f64) -> u32 {

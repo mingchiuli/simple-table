@@ -2,7 +2,6 @@ use crate::document_data::{
     CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
     Hyperlink, ImageAnchor, ImageMarker, MergeRange, RichMetadata, SheetImage,
 };
-use crate::document_layout_policy::DEFAULT_ROW_HEIGHT_PX;
 use crate::domain::{CellNumber, CellValue};
 use crate::error::AppError;
 use crate::io::codec::address::coordinate;
@@ -253,12 +252,15 @@ fn read_row_heights(worksheet: &Worksheet) -> Option<HashMap<usize, u32>> {
         .row_dimensions()
         .into_iter()
         .filter_map(|row| {
-            let px = points_to_px(row.height());
-            if px == DEFAULT_ROW_HEIGHT_PX {
-                None
-            } else {
-                Some((row.row_num().saturating_sub(1) as usize, px))
+            // Only rows with an explicit height are kept. Rows without a `ht`
+            // attribute (height 0, not custom) fall back to the default; an
+            // explicit height at the engine default (72px) must survive a
+            // round-trip so an inserted image sized exactly 72px keeps it.
+            if !row.custom_height() && row.height() <= 0.0 {
+                return None;
             }
+            let px = points_to_px(row.height());
+            Some((row.row_num().saturating_sub(1) as usize, px))
         })
         .collect();
     (!heights.is_empty()).then_some(heights)

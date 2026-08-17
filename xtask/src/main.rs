@@ -9,7 +9,7 @@ const GENERATED_PUBLIC: &str = "target/generated-public";
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(task) = args.next() else {
-        eprintln!("usage: cargo xtask <check|test|desktop|ios|android|web|bundle>");
+        eprintln!("usage: cargo xtask <check|test|desktop|ios|android|web|bundle|bundle-app>");
         return ExitCode::FAILURE;
     };
     let extra_args = args.collect::<Vec<_>>();
@@ -23,6 +23,7 @@ fn main() -> ExitCode {
             dioxus_fullstack_serve(&extra_args)
         }),
         "bundle" => build_embedded_web_server(),
+        "bundle-app" => build_app_bundle(&extra_args),
         "desktop" => dioxus_serve("desktop", "desktop", &extra_args),
         "ios" => dioxus_serve("ios", "mobile", &extra_args),
         "android" => dioxus_serve("android", "mobile", &extra_args),
@@ -256,6 +257,24 @@ fn dioxus_fullstack_serve(extra_args: &[String]) -> std::io::Result<ExitStatus> 
         "--locked",
         "--no-default-features",
     ]);
+    process.status()
+}
+
+fn build_app_bundle(extra_args: &[String]) -> std::io::Result<ExitStatus> {
+    let mut process = dioxus_command();
+    process.args([
+        "bundle",
+        "--release",
+        "--locked",
+        "--package",
+        "simple-table",
+        "--platform",
+        "desktop",
+        "--no-default-features",
+        "--features",
+        "desktop",
+    ]);
+    process.args(extra_args.iter().filter(|arg| arg.as_str() != "--"));
     process.status()
 }
 
