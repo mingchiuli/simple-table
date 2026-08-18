@@ -37,4 +37,3 @@ pub struct SheetImage {
     pub z_index: usize,
     pub renderable: bool,
 }
-

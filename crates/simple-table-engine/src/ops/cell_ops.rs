@@ -1,6 +1,6 @@
+use crate::document_data::ImageAnchor;
 #[cfg(test)]
 use crate::domain::CellEditInput;
-use crate::document_data::ImageAnchor;
 use crate::domain::EditorCommand;
 use crate::domain::{AppliedOperation, SearchCellIndexUpdate, SearchIndexWork};
 use crate::error::AppError;

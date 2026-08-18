@@ -159,7 +159,11 @@ impl ProjectionMutation<'_> {
                             );
                         }
                         if let Some(height) = row_height {
-                            set_layout_value(&mut sheet.row_heights, from.row as usize, Some(*height));
+                            set_layout_value(
+                                &mut sheet.row_heights,
+                                from.row as usize,
+                                Some(*height),
+                            );
                         }
                     }
                 }
@@ -700,11 +704,17 @@ mod tests {
         let sheet = &file_data.sheets[0];
         assert_eq!(sheet.rich.images.len(), 1);
         assert_eq!(
-            sheet.column_widths.as_ref().and_then(|map| map.get(&2).copied()),
+            sheet
+                .column_widths
+                .as_ref()
+                .and_then(|map| map.get(&2).copied()),
             Some(200)
         );
         assert_eq!(
-            sheet.row_heights.as_ref().and_then(|map| map.get(&1).copied()),
+            sheet
+                .row_heights
+                .as_ref()
+                .and_then(|map| map.get(&1).copied()),
             Some(150)
         );
     }
