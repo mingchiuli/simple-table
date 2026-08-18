@@ -69,10 +69,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, x86_64-unknown-linux-musl
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -92,16 +97,16 @@ jobs:
           locked: true
 
       - name: Build embedded SSR binary
-        run: cargo xtask bundle
+        run: cargo xtask bundle --target x86_64-unknown-linux-musl
 
       - name: Name release binary
-        run: cp target/release/simple-table-web simple-table-web-x86_64-unknown-linux-gnu
+        run: cp target/release/simple-table-web simple-table-web-x86_64-unknown-linux-musl
 
       - name: Upload Web binary
         uses: actions/upload-artifact@v7
         with:
-          name: simple-table-web-linux-x86_64
-          path: simple-table-web-x86_64-unknown-linux-gnu
+          name: simple-table-web-linux-x86_64-musl
+          path: simple-table-web-x86_64-unknown-linux-musl
           if-no-files-found: error
 
   android:
@@ -152,8 +157,40 @@ jobs:
             yes | sdkmanager "platforms;android-36" >/dev/null || true
           fi
 
+      - name: Setup Android release signing
+        # dx only runs Gradle `assembleRelease` when a `[bundle.android]` signing
+        # config exists in Dioxus.toml; without it `--release` silently falls back
+        # to a debug APK. Inject the same keystore used by the legacy Tauri build.
+        shell: bash
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE" ]; then
+            echo "::error::ANDROID_KEYSTORE secret is empty; cannot sign the release APK. Configure the same keystore used by the Tauri release workflow." >&2
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE" | base64 -d > keystore.jks
+          python3 - <<'PY'
+          import os, pathlib
+          path = pathlib.Path("Dioxus.toml")
+          text = path.read_text()
+          if "[bundle.android]" not in text:
+              section = (
+                  "[bundle.android]\n"
+                  f'jks_file = "{os.environ["GITHUB_WORKSPACE"]}/keystore.jks"\n'
+                  f'jks_password = "{os.environ["KEYSTORE_PASSWORD"]}"\n'
+                  f'key_alias = "{os.environ["KEY_ALIAS"]}"\n'
+                  f'key_password = "{os.environ["KEY_PASSWORD"]}"\n'
+              )
+              text = text.rstrip() + "\n" + section
+          path.write_text(text)
+          PY
+
       - name: Build Android APK
-        run: dx bundle --package simple-table --android --release --locked --no-default-features --features mobile --package-types apk --out-dir release-assets
+        run: dx bundle --package simple-table --android --release --locked --no-default-features --features mobile --target aarch64-linux-android --package-types apk --out-dir release-assets
 
       - name: Upload APK
         uses: actions/upload-artifact@v7

@@ -22,7 +22,7 @@ fn main() -> ExitCode {
             }
             dioxus_fullstack_serve(&extra_args)
         }),
-        "bundle" => build_embedded_web_server(),
+        "bundle" => build_embedded_web_server(&extra_args),
         "bundle-app" => build_app_bundle(&extra_args),
         "desktop" => dioxus_serve("desktop", "desktop", &extra_args),
         "ios" => dioxus_serve("ios", "mobile", &extra_args),
@@ -278,7 +278,7 @@ fn build_app_bundle(extra_args: &[String]) -> std::io::Result<ExitStatus> {
     process.status()
 }
 
-fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
+fn build_embedded_web_server(extra_args: &[String]) -> std::io::Result<ExitStatus> {
     clean_release_bundle_output()?;
 
     let worker = build_worker()?;
@@ -315,22 +315,27 @@ fn build_embedded_web_server() -> std::io::Result<ExitStatus> {
         &workspace_path(EMBEDDED_PUBLIC),
     )?;
 
-    let server = dioxus_command()
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "--package",
-            "simple-table-web-server",
-            "--platform",
-            "server",
-            "--no-default-features",
-            "--features",
-            "embedded",
-            "--bin",
-            "simple-table-web",
-        ])
-        .status()?;
+    let mut server = dioxus_command();
+    server.args([
+        "build",
+        "--release",
+        "--locked",
+        "--package",
+        "simple-table-web-server",
+        "--platform",
+        "server",
+        "--no-default-features",
+        "--features",
+        "embedded",
+        "--bin",
+        "simple-table-web",
+    ]);
+    // Cross-compile the embedded server for a different target (e.g. the static
+    // `x86_64-unknown-linux-musl` release binary) via `cargo xtask bundle --target <triple>`.
+    if let Some(target) = extract_target(extra_args) {
+        server.args(["--target", target]);
+    }
+    let server = server.status()?;
     if !server.success() {
         return Ok(server);
     }
@@ -383,6 +388,20 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Extract the value of a `--target <triple>` / `--target=<triple>` argument.
+fn extract_target(args: &[String]) -> Option<&str> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if let Some(triple) = arg.strip_prefix("--target=") {
+            return Some(triple);
+        }
+        if arg == "--target" {
+            return iter.next().map(String::as_str);
+        }
+    }
+    None
 }
 
 fn cargo_command() -> Command {
