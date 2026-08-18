@@ -178,9 +178,12 @@ jobs:
           path = pathlib.Path("Dioxus.toml")
           text = path.read_text()
           if "[bundle.android]" not in text:
+              # jks_file is resolved relative to the generated Gradle app module,
+              # which sits 7 levels below the workspace root, so "keystore.jks"
+              # here points back at the repository root where we decoded it.
               section = (
                   "[bundle.android]\n"
-                  f'jks_file = "{os.environ["GITHUB_WORKSPACE"]}/keystore.jks"\n'
+                  'jks_file = "keystore.jks"\n'
                   f'jks_password = "{os.environ["KEYSTORE_PASSWORD"]}"\n'
                   f'key_alias = "{os.environ["KEY_ALIAS"]}"\n'
                   f'key_password = "{os.environ["KEY_PASSWORD"]}"\n'
