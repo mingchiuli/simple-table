@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use crate::protocol::{ImageAnchorDto, ImageMarkerDto, SheetImageDto};
 use crate::ui::icons::{
-    Columns3, Download, ExternalLink, FilePlus, FolderOpen, FunctionSquare, House, ImagePlus, Move,
-    Plus, Redo2, Rows3, Save, Search, Sheet, Trash2, Undo2,
+    ArrowLeft, Columns3, Download, ExternalLink, FilePlus, FolderOpen, FunctionSquare, House,
+    ImagePlus, Move, Plus, Redo2, Rows3, Save, Search, Sheet, Trash2, Undo2,
 };
 use dioxus::prelude::*;
 use dioxus_primitives::popover::{PopoverContent, PopoverRoot, PopoverTrigger};
@@ -47,25 +47,20 @@ pub fn EditorView() -> Element {
     let sheet_index = store
         .active_sheet()
         .min(document.document.sheets.len().saturating_sub(1));
-    let selected = store.normalize_cell(
-        sheet_index,
-        store.selected_cell().0,
-        store.selected_cell().1,
+    let selection = *store.selection.read();
+    let selected = (selection.row, selection.col);
+    let selected_address = selection.merge.map_or_else(
+        || format!("{}{}", column_label(selection.col), selection.row + 1),
+        |merge| {
+            format!(
+                "{}{}:{}{}",
+                column_label(merge.start_col),
+                merge.start_row + 1,
+                column_label(merge.end_col),
+                merge.end_row + 1
+            )
+        },
     );
-    let selected_address = store
-        .merge_range_at(sheet_index, selected.0, selected.1)
-        .map_or_else(
-            || format!("{}{}", column_label(selected.1), selected.0 + 1),
-            |merge| {
-                format!(
-                    "{}{}:{}{}",
-                    column_label(merge.start_col),
-                    merge.start_row + 1,
-                    column_label(merge.end_col),
-                    merge.end_row + 1
-                )
-            },
-        );
     let file_name = document.document.file_name.clone();
     let sheet_count = document.document.sheets.len();
     let dirty = editor_state.is_dirty || !store.pending_edits.read().is_empty();
@@ -75,8 +70,9 @@ pub fn EditorView() -> Element {
         main { class: if store.search_open() { "editor-shell search-visible" } else { "editor-shell" },
             header { class: "editor-titlebar",
                 button {
-                    class: "brand-button",
+                    class: "icon-button editor-back-button",
                     title: "Back to files",
+                    aria_label: "Back to files",
                     disabled: store.busy(),
                     onclick: move |_| {
                         let ports = Rc::clone(&back_ports);
@@ -88,6 +84,9 @@ pub fn EditorView() -> Element {
                             }
                         });
                     },
+                    ArrowLeft { size: 19 }
+                }
+                div { class: "editor-document-title",
                     span { class: "brand-mark compact", Sheet { size: 18 } }
                     span { class: "file-title", "{file_name}" }
                 }

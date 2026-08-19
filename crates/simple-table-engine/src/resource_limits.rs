@@ -9,6 +9,7 @@ use crate::document_resource_estimator::{document_metadata_text_usage, sheet_met
 use crate::domain::CellValue;
 use crate::domain::cell_key::parse_cell_key;
 use crate::error::AppError;
+pub use simple_table_protocol::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
 
 pub const MAX_WORKBOOK_SHEETS: usize = 256;
 pub const MAX_ROWS_PER_SHEET: usize = 250_000;
@@ -31,8 +32,6 @@ pub const MAX_PROJECTED_METADATA_TEXT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_DOCUMENT_PATH_BYTES: usize = 64 * 1024;
 pub const MAX_FILE_NAME_BYTES: usize = 4 * 1024;
 pub const MAX_SHEET_NAME_BYTES: usize = 4 * 1024;
-pub const SHEET_REGION_TILE_ROWS: usize = 128;
-pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 pub const MAX_PREPARED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_SAVE_SOURCE_BYTES: usize = 256 * 1024 * 1024;

@@ -19,6 +19,7 @@ macro_rules! lucide_icon {
 }
 
 lucide_icon!(Columns3, Columns3);
+lucide_icon!(ArrowLeft, ArrowLeft);
 lucide_icon!(Download, Download);
 lucide_icon!(ExternalLink, ExternalLink);
 lucide_icon!(FilePlus, FilePlus);

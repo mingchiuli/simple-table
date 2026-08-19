@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROTOCOL_VERSION: u16 = 2;
+pub const SHEET_REGION_TILE_ROWS: usize = 128;
+pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

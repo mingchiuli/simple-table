@@ -1,3 +1,5 @@
+pub(crate) mod region_cache;
+
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -10,6 +12,8 @@ use crate::ports::editor::EditorPort;
 use crate::ports::file::FilePort;
 #[cfg(feature = "mobile")]
 use crate::ports::recovery::RecoveryPort;
+
+pub use region_cache::{DocumentRevision, RegionCache, RegionTileKey};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,14 +173,21 @@ impl FormulaStatusView {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetRegionView {
+    #[serde(deserialize_with = "deserialize_u64_string")]
+    pub document_id: u64,
+    #[serde(deserialize_with = "deserialize_u64_string")]
+    pub revision: u64,
     pub region: SheetRegionBoundsView,
     pub cells: Vec<CellView>,
     #[serde(default)]
     pub merge_anchor_cells: Vec<CellView>,
     #[serde(default)]
     pub metadata: SheetRegionMetadataView,
+    #[serde(default)]
+    pub wire_bytes: usize,
 }
 
+#[cfg(test)]
 impl SheetRegionView {
     pub fn merge_range_at(&self, row: usize, col: usize) -> Option<MergeRangeView> {
         self.normalized_merge_ranges()
@@ -212,7 +223,7 @@ impl SheetRegionView {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetRegionBoundsView {
     pub sheet_index: usize,
@@ -279,12 +290,14 @@ impl MergeRangeView {
             && self.end_col >= other.start_col
     }
 
+    #[cfg(test)]
     fn is_valid(self) -> bool {
         self.start_row <= self.end_row
             && self.start_col <= self.end_col
             && (self.start_row != self.end_row || self.start_col != self.end_col)
     }
 
+    #[cfg(test)]
     fn sort_key(&self) -> (usize, usize, usize, usize) {
         (self.start_row, self.start_col, self.end_row, self.end_col)
     }
@@ -293,6 +306,8 @@ impl MergeRangeView {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CellView {
+    #[serde(default)]
+    pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
     pub value: Value,
@@ -309,6 +324,8 @@ pub struct CellPresentation {
 #[serde(rename_all = "camelCase")]
 pub struct EditorMutationView {
     #[serde(deserialize_with = "deserialize_u64_string")]
+    pub document_id: u64,
+    #[serde(deserialize_with = "deserialize_u64_string")]
     pub revision: u64,
     pub editor_state: EditorStateView,
     #[serde(default)]
@@ -324,12 +341,12 @@ pub enum EditorPatchView {
     #[serde(rename = "Cells")]
     Cells {
         #[serde(rename = "changes")]
-        _changes: Vec<Value>,
+        changes: Vec<CellView>,
     },
     #[serde(rename = "Layout")]
     Layout {
         #[serde(rename = "patch")]
-        _patch: Value,
+        patch: LayoutPatchView,
     },
     #[serde(rename = "SheetInserted")]
     SheetInserted {
@@ -375,6 +392,16 @@ pub struct SheetPatchView {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LayoutPatchView {
+    pub sheet_index: usize,
+    #[serde(default)]
+    pub column_widths: HashMap<usize, Option<u32>>,
+    #[serde(default)]
+    pub row_heights: HashMap<usize, Option<u32>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchView {
     pub results: Vec<SearchResultView>,
     pub truncated: bool,
@@ -391,8 +418,9 @@ pub struct SearchResultView {
     pub cell_position: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SheetViewport {
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub struct GridRenderWindow {
+    pub sheet_index: usize,
     pub row_start: usize,
     pub row_end: usize,
     pub col_start: usize,
@@ -422,23 +450,32 @@ pub struct SavedDocumentIdentityView {
     pub file_name: String,
 }
 
-impl Default for SheetViewport {
-    fn default() -> Self {
-        Self {
-            row_start: 0,
-            row_end: 50,
-            col_start: 0,
-            col_end: 20,
+impl GridRenderWindow {
+    pub fn bounds(self) -> SheetRegionBoundsView {
+        SheetRegionBoundsView {
+            sheet_index: self.sheet_index,
+            row_start: self.row_start,
+            row_end: self.row_end,
+            col_start: self.col_start,
+            col_end: self.col_end,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GridSelection {
+    pub sheet_index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub merge: Option<MergeRangeView>,
 }
 
 #[derive(Clone, Copy)]
 pub struct EditorStore {
     pub document: Signal<Option<Rc<OpenDocumentView>>>,
-    pub region: Signal<Option<SheetRegionView>>,
+    pub region_cache: Signal<RegionCache>,
     pub active_sheet: Signal<usize>,
-    pub selected_cell: Signal<(usize, usize)>,
+    pub selection: Signal<GridSelection>,
     pub formula_text: Signal<String>,
     pub busy: Signal<bool>,
     pub error: Signal<Option<AppErrorDto>>,
@@ -451,9 +488,8 @@ pub struct EditorStore {
     pub selected_image: Signal<Option<String>>,
     pub edit_generation: Signal<u64>,
     pub pending_edits: Signal<PendingCellEdits>,
-    pub viewport: Signal<SheetViewport>,
+    pub render_window: Signal<GridRenderWindow>,
     pub grid_scroll_request: Signal<Option<GridScrollRequest>>,
-    pub region_generation: Signal<u64>,
 }
 
 type CellCoordinates = (usize, usize, usize);
@@ -463,9 +499,9 @@ impl EditorStore {
     pub fn new() -> Self {
         Self {
             document: Signal::new(None),
-            region: Signal::new(None),
+            region_cache: Signal::new(RegionCache::default()),
             active_sheet: Signal::new(0),
-            selected_cell: Signal::new((0, 0)),
+            selection: Signal::new(GridSelection::default()),
             formula_text: Signal::new(String::new()),
             busy: Signal::new(false),
             error: Signal::new(None),
@@ -478,9 +514,8 @@ impl EditorStore {
             selected_image: Signal::new(None),
             edit_generation: Signal::new(0),
             pending_edits: Signal::new(HashMap::new()),
-            viewport: Signal::new(SheetViewport::default()),
+            render_window: Signal::new(GridRenderWindow::default()),
             grid_scroll_request: Signal::new(None),
-            region_generation: Signal::new(0),
         }
     }
 
@@ -489,7 +524,22 @@ impl EditorStore {
     }
 
     pub fn selected_cell(&self) -> (usize, usize) {
-        (self.selected_cell)()
+        let selection = (self.selection)();
+        (selection.row, selection.col)
+    }
+
+    pub fn select_cell(mut self, sheet_index: usize, row: usize, col: usize) {
+        let merge = self
+            .region_cache
+            .peek()
+            .merge_range_at(sheet_index, row, col);
+        let (row, col) = merge.map_or((row, col), MergeRangeView::anchor);
+        self.selection.set(GridSelection {
+            sheet_index,
+            row,
+            col,
+            merge,
+        });
     }
 
     pub fn busy(&self) -> bool {
@@ -511,19 +561,26 @@ impl EditorStore {
     }
 
     pub fn accept_document(mut self, mut document: OpenDocumentView) {
-        self.region.set(document.initial_region.take());
+        let initial_region = document.initial_region.take();
+        let identity = DocumentRevision {
+            document_id: document.editor_session.document_id,
+            revision: document.editor_session.revision,
+        };
+        let mut cache = RegionCache::new(identity);
+        if let Some(region) = initial_region {
+            cache.insert_region(region.region, vec![region]);
+        }
+        self.region_cache.set(cache);
         self.active_sheet.set(0);
-        self.selected_cell.set((0, 0));
+        self.selection.set(GridSelection::default());
         self.formula_text.set(String::new());
         self.pending_edits.write().clear();
         self.search.set(None);
         self.search_open.set(false);
         self.edit_generation
             .set(self.edit_generation().wrapping_add(1));
-        self.viewport.set(SheetViewport::default());
+        self.render_window.set(GridRenderWindow::default());
         self.grid_scroll_request.set(None);
-        let region_generation = (*self.region_generation.read()).wrapping_add(1);
-        self.region_generation.set(region_generation);
         self.document.set(Some(Rc::new(document)));
         self.images.set(Rc::new(Vec::new()));
         self.image_assets.set(Rc::new(HashMap::new()));
@@ -552,7 +609,19 @@ impl EditorStore {
                     sheet.extent = *extent;
                 }
             }
+            for patch in &mutation.patches {
+                let EditorPatchView::Layout { patch } = patch else {
+                    continue;
+                };
+                let Some(sheet) = document.document.sheets.get_mut(patch.sheet_index) else {
+                    continue;
+                };
+                let layout = Rc::make_mut(&mut sheet.layout);
+                apply_layout_changes(&mut layout.column_widths, &patch.column_widths);
+                apply_layout_changes(&mut layout.row_heights, &patch.row_heights);
+            }
         }
+        self.region_cache.write().apply_mutation(mutation);
         self.status.set("Changes saved in memory".to_string());
     }
 
@@ -560,20 +629,7 @@ impl EditorStore {
         &self,
         sheet_index: usize,
     ) -> HashMap<(usize, usize), CellPresentation> {
-        let mut cells: HashMap<(usize, usize), CellPresentation> = self
-            .region
-            .read()
-            .as_ref()
-            .filter(|region| region.region.sheet_index == sheet_index)
-            .map(|region| {
-                region
-                    .cells
-                    .iter()
-                    .chain(region.merge_anchor_cells.iter())
-                    .map(|cell| ((cell.row, cell.col), cell_presentation(&cell.value)))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut cells = self.region_cache.peek().projection(sheet_index, None).cells;
         for ((pending_sheet, row, col), (_, value)) in self.pending_edits.read().iter() {
             if *pending_sheet == sheet_index {
                 cells.insert(
@@ -597,39 +653,36 @@ impl EditorStore {
             .unwrap_or_default()
     }
 
-    pub fn merge_ranges(&self, sheet_index: usize) -> Vec<MergeRangeView> {
-        self.region
-            .read()
-            .as_ref()
-            .filter(|region| region.region.sheet_index == sheet_index)
-            .map(SheetRegionView::normalized_merge_ranges)
-            .unwrap_or_default()
-    }
-
     pub fn merge_range_at(
         &self,
         sheet_index: usize,
         row: usize,
         col: usize,
     ) -> Option<MergeRangeView> {
-        self.region
-            .read()
-            .as_ref()
-            .filter(|region| region.region.sheet_index == sheet_index)
-            .and_then(|region| region.merge_range_at(row, col))
+        self.region_cache
+            .peek()
+            .merge_range_at(sheet_index, row, col)
     }
 
     pub fn normalize_cell(&self, sheet_index: usize, row: usize, col: usize) -> (usize, usize) {
-        self.region
-            .read()
-            .as_ref()
-            .filter(|region| region.region.sheet_index == sheet_index)
-            .map_or((row, col), |region| region.normalize_cell(row, col))
+        self.merge_range_at(sheet_index, row, col)
+            .map_or((row, col), MergeRangeView::anchor)
+    }
+}
+
+fn apply_layout_changes(target: &mut HashMap<usize, u32>, changes: &HashMap<usize, Option<u32>>) {
+    for (&index, &size) in changes {
+        if let Some(size) = size {
+            target.insert(index, size);
+        } else {
+            target.remove(&index);
+        }
     }
 }
 
 pub struct AppPorts {
     pub editor: Rc<dyn EditorPort>,
+    pub regions: crate::actions::RegionLoader,
     pub files: Rc<dyn FilePort>,
     #[cfg(feature = "mobile")]
     pub recovery: Rc<dyn RecoveryPort>,
@@ -640,6 +693,7 @@ impl Clone for AppPorts {
     fn clone(&self) -> Self {
         Self {
             editor: Rc::clone(&self.editor),
+            regions: self.regions.clone(),
             files: Rc::clone(&self.files),
             #[cfg(feature = "mobile")]
             recovery: Rc::clone(&self.recovery),
@@ -814,6 +868,8 @@ mod tests {
     #[test]
     fn sheet_region_deserializes_merges_and_external_anchor_cells() {
         let region: SheetRegionView = serde_json::from_value(json!({
+            "documentId": "7",
+            "revision": "3",
             "region": {
                 "sheetIndex": 0,
                 "rowStart": 8,
@@ -849,6 +905,8 @@ mod tests {
     #[test]
     fn normalized_merges_ignore_degenerate_and_overlapping_ranges() {
         let region = SheetRegionView {
+            document_id: 7,
+            revision: 3,
             region: SheetRegionBoundsView::default(),
             cells: Vec::new(),
             merge_anchor_cells: Vec::new(),
@@ -860,6 +918,7 @@ mod tests {
                     merge(4, 4, 4, 4),
                 ],
             },
+            wire_bytes: 256,
         };
 
         assert_eq!(

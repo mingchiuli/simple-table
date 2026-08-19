@@ -1,3 +1,5 @@
+mod region_loader;
+
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -9,9 +11,12 @@ use dioxus::prelude::{ReadableExt, WritableExt, spawn};
 use dioxus_sdk_time::sleep;
 
 use crate::model::{
-    AppPorts, EditorMutationView, EditorPatchView, EditorStore, GridScrollRequest,
-    OpenDocumentView, SavedDocumentView, SearchView, SheetViewport, request_id,
+    AppPorts, EditorMutationView, EditorPatchView, EditorStore, GridRenderWindow,
+    GridScrollRequest, GridSelection, OpenDocumentView, SavedDocumentView, SearchView,
+    SheetRegionBoundsView, request_id,
 };
+
+pub(crate) use region_loader::RegionLoader;
 
 #[cfg(feature = "mobile")]
 const MOBILE_RECOVERY_ID: &str = "mobile-recovery";
@@ -27,7 +32,7 @@ pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
         .await
     {
         Ok(reply) => {
-            let opened = accept_document_reply(store, reply);
+            let opened = accept_document_reply(store, &ports.regions, reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
                 schedule_recovery(store, Rc::clone(&ports));
@@ -59,7 +64,7 @@ pub async fn open_bytes(
         .await
     {
         Ok(reply) => {
-            let opened = accept_document_reply(store, reply);
+            let opened = accept_document_reply(store, &ports.regions, reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
                 schedule_recovery(store, Rc::clone(&ports));
@@ -114,7 +119,7 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
 
     match response {
         Ok(reply) => {
-            let opened = accept_document_reply(store, reply);
+            let opened = accept_document_reply(store, &ports.regions, reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
                 schedule_recovery(store, Rc::clone(&ports));
@@ -316,6 +321,24 @@ async fn run_mutation_locked(
         Ok(EditorReply::Mutation { value }) => {
             match serde_json::from_value::<EditorMutationView>(value) {
                 Ok(mutation) => {
+                    let Some((document_id, revision)) = document_identity(store) else {
+                        let error = crate::protocol::AppErrorDto {
+                            code: "document_closed".to_string(),
+                            message: "the workbook is no longer open".to_string(),
+                        };
+                        store.set_error(error.clone());
+                        return Err(error);
+                    };
+                    if mutation.document_id != document_id || mutation.revision < revision {
+                        let error = crate::protocol::AppErrorDto {
+                            code: "stale_mutation_response".to_string(),
+                            message:
+                                "the mutation response did not match the current workbook revision"
+                                    .to_string(),
+                        };
+                        store.set_error(error.clone());
+                        return Err(error);
+                    }
                     let refresh =
                         MutationRefresh::for_patches(&mutation.patches, store.active_sheet());
                     store.accept_mutation(&mutation);
@@ -330,16 +353,7 @@ async fn run_mutation_locked(
                         clamp_selected_cell(store);
                     }
                     store.search.set(None);
-                    let viewport = *store.viewport.read();
-                    refresh_region(
-                        store,
-                        Rc::clone(&ports),
-                        viewport.row_start,
-                        viewport.row_end,
-                        viewport.col_start,
-                        viewport.col_end,
-                    )
-                    .await;
+                    schedule_current_window(store, &ports);
                     sync_formula_text(store);
                     if refresh.images || select_added_sheet {
                         refresh_images(store, Rc::clone(&ports)).await;
@@ -723,7 +737,14 @@ pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_ind
         return;
     }
     store.active_sheet.set(sheet_index);
-    store.selected_cell.set((0, 0));
+    store.selection.set(GridSelection {
+        sheet_index,
+        ..GridSelection::default()
+    });
+    store.render_window.set(GridRenderWindow {
+        sheet_index,
+        ..GridRenderWindow::default()
+    });
     store.formula_text.set(String::new());
     store.grid_scroll_request.set(Some(GridScrollRequest {
         sheet_index,
@@ -731,16 +752,6 @@ pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_ind
         col: 0,
         focus: false,
     }));
-    let viewport = SheetViewport::default();
-    refresh_region(
-        store,
-        Rc::clone(&ports),
-        viewport.row_start,
-        viewport.row_end,
-        viewport.col_start,
-        viewport.col_end,
-    )
-    .await;
     refresh_images(store, Rc::clone(&ports)).await;
 }
 
@@ -761,7 +772,12 @@ pub async fn select_search_result(
     let row_start = row.saturating_sub(6);
     let col_start = col.saturating_sub(4);
     store.active_sheet.set(sheet_index);
-    store.selected_cell.set((row, col));
+    store.selection.set(GridSelection {
+        sheet_index,
+        row,
+        col,
+        merge: None,
+    });
     store.formula_text.set(String::new());
     store.grid_scroll_request.set(Some(GridScrollRequest {
         sheet_index,
@@ -769,17 +785,27 @@ pub async fn select_search_result(
         col: col_start,
         focus: false,
     }));
-    refresh_region(
-        store,
-        Rc::clone(&ports),
-        row_start,
-        row_start.saturating_add(36),
-        col_start,
-        col_start.saturating_add(16),
-    )
-    .await;
-    let (row, col) = store.normalize_cell(sheet_index, row, col);
-    store.selected_cell.set((row, col));
+    if let Some(extent) = sheet_extent(store, sheet_index)
+        && let Err(error) = ports
+            .regions
+            .ensure_region(
+                store,
+                SheetRegionBoundsView {
+                    sheet_index,
+                    row_start: row,
+                    row_end: row.saturating_add(1),
+                    col_start: col,
+                    col_end: col.saturating_add(1),
+                },
+                extent,
+            )
+            .await
+    {
+        store.set_error(error);
+        return;
+    }
+    store.select_cell(sheet_index, row, col);
+    let (row, col) = store.selected_cell();
     store
         .formula_text
         .set(store.cell_edit_text(sheet_index, row, col));
@@ -919,7 +945,8 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool
             #[cfg(feature = "mobile")]
             let _ = ports.recovery.clear().await;
             store.document.set(None);
-            store.region.set(None);
+            store.region_cache.write().clear();
+            ports.regions.reset();
             store.images.set(Rc::new(Vec::new()));
             store
                 .image_assets
@@ -935,65 +962,6 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool
             store.set_error(error);
             false
         }
-    }
-}
-
-pub async fn refresh_region(
-    mut store: EditorStore,
-    ports: Rc<AppPorts>,
-    row_start: usize,
-    row_end: usize,
-    col_start: usize,
-    col_end: usize,
-) {
-    let Some((document_id, base_revision)) = document_identity(store) else {
-        return;
-    };
-    let sheet_index = store.active_sheet();
-    let Some(viewport) = normalized_viewport(
-        store,
-        sheet_index,
-        SheetViewport {
-            row_start,
-            row_end,
-            col_start,
-            col_end,
-        },
-    ) else {
-        return;
-    };
-    let generation = (*store.region_generation.read()).wrapping_add(1);
-    store.region_generation.set(generation);
-    store.viewport.set(viewport);
-    let response = ports
-        .editor
-        .execute(EditorRequest::Region {
-            document_id,
-            base_revision,
-            sheet_index,
-            row_start: viewport.row_start,
-            row_end: viewport.row_end,
-            col_start: viewport.col_start,
-            col_end: viewport.col_end,
-        })
-        .await;
-    let request_is_current = || {
-        *store.region_generation.read() == generation
-            && store.active_sheet() == sheet_index
-            && document_identity(store) == Some((document_id, base_revision))
-    };
-    match response {
-        Ok(EditorReply::Region { value }) => match serde_json::from_value(value) {
-            Ok(region) if request_is_current() => {
-                store.region.set(Some(region));
-            }
-            Ok(_) => {}
-            Err(error) if request_is_current() => store.set_error(protocol_error(error)),
-            Err(_) => {}
-        },
-        Ok(_) if request_is_current() => store.set_error(unexpected_reply("region")),
-        Err(error) if request_is_current() => store.set_error(error),
-        _ => {}
     }
 }
 
@@ -1023,7 +991,7 @@ impl MutationRefresh {
         for patch in patches {
             match patch {
                 EditorPatchView::Cells { .. } => {}
-                EditorPatchView::Layout { .. } => refresh.document = true,
+                EditorPatchView::Layout { .. } => {}
                 EditorPatchView::ImageUpserted { patch }
                 | EditorPatchView::ImageDeleted { patch }
                     if patch.sheet_index == active_sheet =>
@@ -1080,7 +1048,7 @@ fn clamp_selected_cell(mut store: EditorStore) {
         })
         .unwrap_or((0, 0));
     if selected != clamped {
-        store.selected_cell.set(clamped);
+        store.select_cell(store.active_sheet(), clamped.0, clamped.1);
         store.grid_scroll_request.set(Some(GridScrollRequest {
             sheet_index: store.active_sheet(),
             row: clamped.0,
@@ -1102,9 +1070,15 @@ fn select_last_sheet(mut store: EditorStore) {
         document.document.sheets.len().saturating_sub(1)
     });
     store.active_sheet.set(last_sheet);
-    store.selected_cell.set((0, 0));
+    store.selection.set(GridSelection {
+        sheet_index: last_sheet,
+        ..GridSelection::default()
+    });
     store.formula_text.set(String::new());
-    store.viewport.set(crate::model::SheetViewport::default());
+    store.render_window.set(GridRenderWindow {
+        sheet_index: last_sheet,
+        ..GridRenderWindow::default()
+    });
     store.grid_scroll_request.set(Some(GridScrollRequest {
         sheet_index: last_sheet,
         row: 0,
@@ -1115,9 +1089,15 @@ fn select_last_sheet(mut store: EditorStore) {
 
 fn reset_current_sheet_viewport(mut store: EditorStore) {
     let sheet_index = store.active_sheet();
-    store.selected_cell.set((0, 0));
+    store.selection.set(GridSelection {
+        sheet_index,
+        ..GridSelection::default()
+    });
     store.formula_text.set(String::new());
-    store.viewport.set(SheetViewport::default());
+    store.render_window.set(GridRenderWindow {
+        sheet_index,
+        ..GridRenderWindow::default()
+    });
     store.grid_scroll_request.set(Some(GridScrollRequest {
         sheet_index,
         row: 0,
@@ -1212,19 +1192,25 @@ fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
     let _ = (store, ports);
 }
 
-fn accept_document_reply(mut store: EditorStore, reply: EditorReply) -> bool {
+fn accept_document_reply(
+    mut store: EditorStore,
+    regions: &RegionLoader,
+    reply: EditorReply,
+) -> bool {
     let EditorReply::Document { value } = reply else {
         store.set_error(unexpected_reply("document"));
         return false;
     };
     if value.is_null() {
+        regions.reset();
         store.document.set(None);
-        store.region.set(None);
+        store.region_cache.write().clear();
         store.busy.set(false);
         return false;
     }
     match serde_json::from_value::<OpenDocumentView>(value) {
         Ok(document) => {
+            regions.reset();
             store.accept_document(document);
             true
         }
@@ -1291,36 +1277,28 @@ fn merge_saved_document(document: &mut OpenDocumentView, saved: SavedDocumentVie
     document.editor_session = saved.editor_session;
 }
 
-fn normalized_viewport(
-    store: EditorStore,
-    sheet_index: usize,
-    viewport: SheetViewport,
-) -> Option<SheetViewport> {
-    let document = store.document.read();
-    let sheet = document.as_ref()?.document.sheets.get(sheet_index)?;
-    Some(clamp_viewport(viewport, sheet.extent))
+fn sheet_extent(store: EditorStore, sheet_index: usize) -> Option<crate::model::SheetExtentView> {
+    store
+        .document
+        .peek()
+        .as_ref()?
+        .document
+        .sheets
+        .get(sheet_index)
+        .map(|sheet| sheet.extent)
 }
 
-fn clamp_viewport(viewport: SheetViewport, extent: crate::model::SheetExtentView) -> SheetViewport {
-    let (row_start, row_end) =
-        normalize_axis(viewport.row_start, viewport.row_end, extent.row_count);
-    let (col_start, col_end) =
-        normalize_axis(viewport.col_start, viewport.col_end, extent.column_count);
-    SheetViewport {
-        row_start,
-        row_end,
-        col_start,
-        col_end,
+fn schedule_current_window(store: EditorStore, ports: &AppPorts) {
+    let window = *store.render_window.peek();
+    if window.row_end <= window.row_start || window.col_end <= window.col_start {
+        return;
     }
-}
-
-fn normalize_axis(start: usize, end: usize, extent: usize) -> (usize, usize) {
-    if extent == 0 {
-        return (0, 0);
-    }
-    let length = end.saturating_sub(start).max(1);
-    let start = start.min(extent - 1);
-    (start, start.saturating_add(length).min(extent))
+    let Some(extent) = sheet_extent(store, window.sheet_index) else {
+        return;
+    };
+    ports
+        .regions
+        .schedule_viewport(store, window.bounds(), extent);
 }
 
 #[cfg(feature = "desktop")]
@@ -1557,45 +1535,6 @@ mod tests {
     }
 
     #[test]
-    fn viewport_is_clamped_to_small_and_scrolled_sheet_extents() {
-        assert_eq!(
-            clamp_viewport(
-                SheetViewport::default(),
-                SheetExtentView {
-                    row_count: 5,
-                    column_count: 5,
-                },
-            ),
-            SheetViewport {
-                row_start: 0,
-                row_end: 5,
-                col_start: 0,
-                col_end: 5,
-            }
-        );
-        assert_eq!(
-            clamp_viewport(
-                SheetViewport {
-                    row_start: 99,
-                    row_end: 135,
-                    col_start: 19,
-                    col_end: 35,
-                },
-                SheetExtentView {
-                    row_count: 100,
-                    column_count: 20,
-                },
-            ),
-            SheetViewport {
-                row_start: 99,
-                row_end: 100,
-                col_start: 19,
-                col_end: 20,
-            }
-        );
-    }
-
-    #[test]
     fn saved_identity_updates_document_name_path_and_session() {
         let mut document = OpenDocumentView {
             document: manifest("/tmp/old.xlsx", "old.xlsx"),
@@ -1640,10 +1579,7 @@ mod tests {
         }))];
         assert_eq!(
             MutationRefresh::for_patches(&layout, 0),
-            MutationRefresh {
-                document: true,
-                images: false,
-            }
+            MutationRefresh::default()
         );
 
         let other_sheet_image = [patch(serde_json::json!({
@@ -1775,11 +1711,13 @@ mod tests {
         let prepared_target = Rc::new(RefCell::new(None));
         let committed_path = Rc::new(RefCell::new(None));
         let written_path = Rc::new(RefCell::new(None));
+        let editor: Rc<dyn EditorPort> = Rc::new(RecordingSaveEditor {
+            prepared_target: Rc::clone(&prepared_target),
+            committed_path: Rc::clone(&committed_path),
+        });
         let ports = Rc::new(AppPorts {
-            editor: Rc::new(RecordingSaveEditor {
-                prepared_target: Rc::clone(&prepared_target),
-                committed_path: Rc::clone(&committed_path),
-            }),
+            regions: RegionLoader::new(Rc::clone(&editor)),
+            editor,
             files: Rc::new(RecordingFilePort {
                 written_path: Rc::clone(&written_path),
             }),

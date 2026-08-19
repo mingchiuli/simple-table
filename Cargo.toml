@@ -71,6 +71,12 @@ redundant_clone = "deny"
 inherits = "dev"
 opt-level = 1
 
+[profile.dev.package.simple-table]
+opt-level = 1
+
+[profile.dev.package.simple-table-engine]
+opt-level = 1
+
 [profile.server-dev]
 inherits = "dev"
 
