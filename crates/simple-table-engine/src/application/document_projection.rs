@@ -164,10 +164,19 @@ pub(crate) fn snapshot_sheet_region(
     let extent = editor_state
         .sheet_extent(region.sheet_index)
         .ok_or(AppError::InvalidSheetIndex(region.sheet_index))?;
-    if region.row_end > extent.row_count || region.col_end > extent.column_count {
-        return Err(AppError::DocumentStateInvalid(
-            "sheet region exceeds the current sheet extent".to_string(),
-        ));
+    let query_row_count = extent.row_count.max(1);
+    let query_column_count = extent.column_count.max(1);
+    if region.row_end > query_row_count || region.col_end > query_column_count {
+        return Err(AppError::DocumentStateInvalid(format!(
+            "sheet region {}:{}..{},{}..{} exceeds the current sheet extent {}x{}",
+            region.sheet_index,
+            region.row_start,
+            region.row_end,
+            region.col_start,
+            region.col_end,
+            query_row_count,
+            query_column_count,
+        )));
     }
     let metadata = editor_state.region_metadata(&region);
     let cells = project_region_cells(sheet, &region);

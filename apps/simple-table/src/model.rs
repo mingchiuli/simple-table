@@ -44,9 +44,9 @@ pub struct SheetManifestView {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetLayoutView {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_index_map")]
     pub column_widths: HashMap<usize, u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_index_map")]
     pub row_heights: HashMap<usize, u32>,
 }
 
@@ -394,9 +394,9 @@ pub struct SheetPatchView {
 #[serde(rename_all = "camelCase")]
 pub struct LayoutPatchView {
     pub sheet_index: usize,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_index_map")]
     pub column_widths: HashMap<usize, Option<u32>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_index_map")]
     pub row_heights: HashMap<usize, Option<u32>>,
 }
 
@@ -753,6 +753,22 @@ where
     }
 }
 
+fn deserialize_index_map<'de, D, V>(deserializer: D) -> Result<HashMap<usize, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    HashMap::<String, V>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(index, value)| {
+            index
+                .parse()
+                .map(|index| (index, value))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
+}
+
 pub fn request_id(prefix: &str) -> String {
     format!("{prefix}-{}", uuid::Uuid::new_v4())
 }
@@ -787,6 +803,26 @@ mod tests {
 
         assert_eq!(presentation.display_text, "$12.50");
         assert_eq!(presentation.edit_text, "12.5");
+    }
+
+    #[test]
+    fn index_keyed_layout_maps_deserialize_from_protocol_values() {
+        let layout: SheetLayoutView = serde_json::from_value(json!({
+            "columnWidths": { "0": 120 },
+            "rowHeights": { "2": 30 }
+        }))
+        .expect("document layout should accept JSON object keys");
+        let patch: LayoutPatchView = serde_json::from_value(json!({
+            "sheetIndex": 0,
+            "columnWidths": { "0": 120 },
+            "rowHeights": { "2": null }
+        }))
+        .expect("layout patch should accept JSON object keys");
+
+        assert_eq!(layout.column_widths.get(&0), Some(&120));
+        assert_eq!(layout.row_heights.get(&2), Some(&30));
+        assert_eq!(patch.column_widths.get(&0), Some(&Some(120)));
+        assert_eq!(patch.row_heights.get(&2), Some(&None));
     }
 
     #[test]

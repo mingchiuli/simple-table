@@ -100,8 +100,9 @@ dirty = backend content hash differs from saved hash
 Every save stages bytes through the backend before crossing a platform port.
 Desktop writes atomically and commits the saved hash only after the write
 succeeds. Web local save writes IndexedDB before committing the saved hash.
-Mobile exposes the WebView handoff as an exported copy and does not commit the
-saved hash because the WebView cannot confirm a durable platform write.
+Android writes through `MediaStore.Downloads`; iOS writes atomically to the app
+Documents directory. Both mobile targets commit the saved hash only after the
+platform write succeeds and retain a durable target for subsequent saves.
 Exporting a copy uses a separate read-only protocol operation, so choosing a
 different output format never changes the active document identity, revision,
 saved hash, or undo history.
@@ -129,6 +130,11 @@ wasm-bindgen generate that glue under `target/`; it is a delivery artifact, not
 application source. Platform bridges that call WebView/browser APIs remain in
 Rust through Dioxus, `web-sys`, and `wasm-bindgen`.
 
+The provenance of each integration is recorded in
+[Platform Integration Provenance](platform-integrations.md). It distinguishes
+direct upstream features, project adapters over official platform APIs, and the
+temporary mobile file-selection compatibility path.
+
 Official references:
 
 - [Dioxus platform features](https://dioxuslabs.com/learn/0.7/guides/platforms/)
@@ -140,9 +146,10 @@ Official references:
 
 ## Known Constraints
 
-- iOS and Android compile checks cover shared Rust and Dioxus code. File picker,
-  download, external-link, and close-guard flows still require device-level
-  acceptance tests.
+- iOS and Android compile checks cover shared Rust and Dioxus code but do not
+  replace device acceptance tests. Open/cancel, image selection, first and
+  repeated saves, export, recovery, external-link, and close-guard flows must be
+  verified on both platforms before release.
 - Dioxus Desktop 0.7.10 reaches `block` 0.1.6 through its macOS WebView stack.
   Rust reports that upstream crate as future-incompatible; replacing it locally
   would diverge from the supported Dioxus desktop dependency graph.

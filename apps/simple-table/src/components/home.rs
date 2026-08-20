@@ -62,7 +62,7 @@ pub fn HomeView() -> Element {
             if cfg!(any(
                 feature = "web",
                 feature = "server",
-                all(feature = "mobile", target_os = "android")
+                feature = "mobile"
             )) {
                 section { class: "recent-section",
                     div { class: "section-heading",
@@ -150,6 +150,35 @@ fn OpenDocumentControl() -> Element {
     let navigator = use_navigator();
     let busy = store.busy();
 
+    #[cfg(feature = "mobile")]
+    return rsx! {
+        button {
+            class: "secondary-command",
+            disabled: busy,
+            onclick: move |_| {
+                let ports = Rc::clone(&ports);
+                spawn(async move {
+                    match ports
+                        .files
+                        .pick_file(crate::ports::file::MobileFileKind::Workbook)
+                        .await
+                    {
+                        Ok(Some(file)) => {
+                            if actions::open_bytes(store, ports, file.name, file.bytes).await {
+                                navigator.replace(Route::Table {});
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => store.set_error(error),
+                    }
+                });
+            },
+            FolderOpen { size: 19 }
+            span { "Open file" }
+        }
+    };
+
+    #[cfg(not(feature = "mobile"))]
     rsx! {
         label { class: if busy { "secondary-command disabled" } else { "secondary-command" },
             FolderOpen { size: 19 }

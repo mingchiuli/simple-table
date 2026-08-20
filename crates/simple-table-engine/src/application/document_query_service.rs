@@ -220,6 +220,34 @@ mod tests {
     }
 
     #[test]
+    fn empty_sheet_exposes_one_editable_region_cell() {
+        let state = EditorState::with_workbook(
+            DocumentData {
+                path: String::new(),
+                file_name: "empty.xlsx".to_string(),
+                sheets: vec![DocumentSheet {
+                    name: "Sheet1".to_string(),
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let region = DocumentRegion {
+            sheet_index: 0,
+            row_start: 0,
+            row_end: 1,
+            col_start: 0,
+            col_end: 1,
+        };
+
+        let snapshot = document_projection::snapshot_sheet_region(&state, region)
+            .expect("an empty sheet keeps one editable cell");
+
+        assert_eq!(snapshot.region, region);
+        assert!(snapshot.cells.is_empty());
+    }
+
+    #[test]
     fn region_projection_reports_and_enforces_final_serialized_size() {
         let state = EditorState::with_workbook(
             DocumentData {

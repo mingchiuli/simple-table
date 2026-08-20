@@ -122,21 +122,19 @@ pub fn EditorView() -> Element {
                 }
                 OpenDocumentTool {}
                 ToolbarSeparator {}
-                if !cfg!(feature = "mobile") || cfg!(target_os = "android") {
-                    ToolbarButton {
-                        class: "tool-button",
-                        index: 2usize,
-                        disabled: store.busy(),
-                        on_click: {
+                ToolbarButton {
+                    class: "tool-button",
+                    index: 2usize,
+                    disabled: store.busy(),
+                    on_click: {
+                        let ports = Rc::clone(&ports);
+                        move |_| {
                             let ports = Rc::clone(&ports);
-                            move |_| {
-                                let ports = Rc::clone(&ports);
-                                spawn(async move { actions::save_local(store, ports).await });
-                            }
-                        },
-                        title: "Save",
-                        Save { size: 18 }
-                    }
+                            spawn(async move { actions::save_local(store, ports).await });
+                        }
+                    },
+                    title: "Save",
+                    Save { size: 18 }
                 }
                 ToolbarButton {
                     class: "tool-button",
@@ -233,46 +231,11 @@ pub fn EditorView() -> Element {
                         .layout.row_heights.get(&selected.0).copied().unwrap_or(30),
                 }
                 ToolbarSeparator {}
-                label { class: "tool-button file-tool", title: "Insert image",
-                    ImagePlus { size: 18 }
-                    input {
-                        class: "visually-hidden",
-                        r#type: "file",
-                        disabled: store.busy(),
-                        accept: "image/png,image/jpeg",
-                        onchange: {
-                            let ports = Rc::clone(&ports);
-                            move |event: Event<FormData>| {
-                                let Some(file) = event.files().into_iter().next() else { return; };
-                                let ports = Rc::clone(&ports);
-                                spawn(async move {
-                                    match file.read_bytes().await {
-                                        Ok(bytes) => {
-                                            actions::run_mutation(
-                                                store,
-                                                ports,
-                                                crate::protocol::EditorRequest::InsertImage {
-                                                    request_id: request_id("image"),
-                                                    document_id,
-                                                    base_revision: revision,
-                                                    sheet_index,
-                                                    row: selected.0 as u32,
-                                                    col: selected.1 as u32,
-                                                    file_name: file.name(),
-                                                    bytes: bytes.to_vec(),
-                                                },
-                                            )
-                                            .await;
-                                        }
-                                        Err(error) => store.set_error(crate::protocol::AppErrorDto {
-                                            code: "read_error".to_string(),
-                                            message: error.to_string(),
-                                        }),
-                                    }
-                                });
-                            }
-                        }
-                    }
+                InsertImageTool {
+                    document_id,
+                    revision,
+                    sheet_index,
+                    selected,
                 }
                 if let Some(image_id) = store.selected_image.read().clone()
                     && let Some(image) = store.images.read().iter().find(|image| image.id == image_id).cloned()
@@ -288,7 +251,7 @@ pub fn EditorView() -> Element {
                 div { class: "toolbar-fill" }
                 ToolbarButton {
                     class: if store.search_open() { "tool-button active" } else { "tool-button" },
-                    index: 10usize,
+                    index: 11usize,
                     on_click: move |_| {
                         let open = store.search_open();
                         store.search_open.set(!open);
@@ -622,11 +585,155 @@ fn StructureButton(props: StructureButtonProps) -> Element {
     }
 }
 
+#[derive(Props, Clone, PartialEq)]
+struct InsertImageToolProps {
+    document_id: u64,
+    revision: u64,
+    sheet_index: usize,
+    selected: (usize, usize),
+}
+
+#[component]
+fn InsertImageTool(props: InsertImageToolProps) -> Element {
+    let store = use_context::<EditorStore>();
+    let ports = use_context::<Rc<AppPorts>>();
+
+    #[cfg(feature = "mobile")]
+    return rsx! {
+        ToolbarButton {
+            class: "tool-button",
+            index: 10usize,
+            title: "Insert image",
+            disabled: store.busy(),
+            on_click: {
+                let ports = Rc::clone(&ports);
+                move |_| {
+                    let ports = Rc::clone(&ports);
+                    spawn(async move {
+                        match ports
+                            .files
+                            .pick_file(crate::ports::file::MobileFileKind::Image)
+                            .await
+                        {
+                            Ok(Some(file)) => {
+                                actions::run_mutation(
+                                    store,
+                                    ports,
+                                    crate::protocol::EditorRequest::InsertImage {
+                                        request_id: request_id("image"),
+                                        document_id: props.document_id,
+                                        base_revision: props.revision,
+                                        sheet_index: props.sheet_index,
+                                        row: props.selected.0 as u32,
+                                        col: props.selected.1 as u32,
+                                        file_name: file.name,
+                                        bytes: file.bytes,
+                                    },
+                                )
+                                .await;
+                            }
+                            Ok(None) => {}
+                            Err(error) => store.set_error(error),
+                        }
+                    });
+                }
+            },
+            ImagePlus { size: 18 }
+        }
+    };
+
+    #[cfg(not(feature = "mobile"))]
+    rsx! {
+        label { class: "tool-button file-tool", title: "Insert image",
+            ImagePlus { size: 18 }
+            input {
+                class: "visually-hidden",
+                r#type: "file",
+                disabled: store.busy(),
+                accept: "image/png,image/jpeg",
+                onchange: {
+                    let ports = Rc::clone(&ports);
+                    move |event: Event<FormData>| {
+                        let Some(file) = event.files().into_iter().next() else { return; };
+                        let ports = Rc::clone(&ports);
+                        spawn(async move {
+                            match file.read_bytes().await {
+                                Ok(bytes) => {
+                                    actions::run_mutation(
+                                        store,
+                                        ports,
+                                        crate::protocol::EditorRequest::InsertImage {
+                                            request_id: request_id("image"),
+                                            document_id: props.document_id,
+                                            base_revision: props.revision,
+                                            sheet_index: props.sheet_index,
+                                            row: props.selected.0 as u32,
+                                            col: props.selected.1 as u32,
+                                            file_name: file.name(),
+                                            bytes: bytes.to_vec(),
+                                        },
+                                    )
+                                    .await;
+                                }
+                                Err(error) => store.set_error(crate::protocol::AppErrorDto {
+                                    code: "read_error".to_string(),
+                                    message: error.to_string(),
+                                }),
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn OpenDocumentTool() -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
+    #[cfg(feature = "mobile")]
+    return rsx! {
+        ToolbarButton {
+            class: "tool-button",
+            index: 1usize,
+            title: "Open workbook",
+            disabled: store.busy(),
+            on_click: {
+                let ports = Rc::clone(&ports);
+                move |_| {
+                    let ports = Rc::clone(&ports);
+                    spawn(async move {
+                        match ports
+                            .files
+                            .pick_file(crate::ports::file::MobileFileKind::Workbook)
+                            .await
+                        {
+                            Ok(Some(file)) => {
+                                if confirm_discard(has_unsaved_changes(store)).await
+                                    && actions::open_bytes(
+                                        store,
+                                        ports,
+                                        file.name,
+                                        file.bytes,
+                                    )
+                                    .await
+                                {
+                                    navigator.replace(Route::Table {});
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => store.set_error(error),
+                        }
+                    });
+                }
+            },
+            FolderOpen { size: 18 }
+        }
+    };
+
+    #[cfg(not(feature = "mobile"))]
     rsx! {
         label { class: "tool-button file-tool", title: "Open workbook",
             FolderOpen { size: 18 }
@@ -816,6 +923,34 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                     }
                 },
                 Move { size: 17 }
+            }
+            button {
+                class: "tool-button",
+                title: "Delete image",
+                aria_label: "Delete image",
+                onclick: {
+                    let ports = Rc::clone(&ports);
+                    let image_id = props.image.id.clone();
+                    move |_| {
+                        let ports = Rc::clone(&ports);
+                        let image_id = image_id.clone();
+                        spawn(async move {
+                            actions::run_mutation(
+                                store,
+                                ports,
+                                crate::protocol::EditorRequest::DeleteImage {
+                                    request_id: request_id("delete-image"),
+                                    document_id: props.document_id,
+                                    base_revision: props.revision,
+                                    sheet_index: props.sheet_index,
+                                    image_id,
+                                },
+                            )
+                            .await;
+                        });
+                    }
+                },
+                Trash2 { size: 17 }
             }
             label { title: "Image width",
                 span { "W" }

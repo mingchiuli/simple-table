@@ -10,7 +10,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.13.2"
+version = "0.13.3"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mingchiuli/simple-table"
@@ -29,6 +29,7 @@ dioxus = "=0.7.10"
 dioxus-primitives = { git = "https://github.com/DioxusLabs/dioxus-components.git", rev = "bf007c15d0cf4d04d3181cc46cf12325aa773955", default-features = false }
 dioxus-sdk-time = "0.7.0"
 dioxus-web = "=0.7.10"
+dirs = "6"
 formualizer-parse = "3.0.0"
 formualizer-workbook = { version = "0.8.1", default-features = false }
 futures = "0.3.34"

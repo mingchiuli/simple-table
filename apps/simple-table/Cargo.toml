@@ -67,6 +67,9 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 [target.'cfg(target_os = "android")'.dependencies]
 manganis.workspace = true
 
+[target.'cfg(target_os = "ios")'.dependencies]
+dirs.workspace = true
+
 [[bin]]
 name = "simple-table"
 path = "src/main.rs"

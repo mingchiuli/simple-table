@@ -24,3 +24,7 @@ icon = [
 min_sdk = 29
 target_sdk = 36
 compile_sdk = 36
+
+[ios.plist]
+UIFileSharingEnabled = true
+LSSupportsOpeningDocumentsInPlace = true

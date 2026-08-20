@@ -20,17 +20,17 @@ pub trait RecoveryPort {
 }
 
 pub fn platform_recovery_port() -> Rc<dyn RecoveryPort> {
-    #[cfg(target_os = "android")]
-    return Rc::new(android::AndroidRecoveryPort);
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Rc::new(mobile::MobileRecoveryPort);
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Rc::new(UnavailableRecoveryPort)
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct UnavailableRecoveryPort;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl RecoveryPort for UnavailableRecoveryPort {
     fn load(&self) -> RecoveryFuture<Result<Option<RecoveryDocument>, AppErrorDto>> {
         Box::pin(async { Ok(None) })
@@ -49,8 +49,8 @@ impl RecoveryPort for UnavailableRecoveryPort {
     }
 }
 
-#[cfg(target_os = "android")]
-mod android {
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,9 +71,9 @@ mod android {
         updated_at_ms: u64,
     }
 
-    pub struct AndroidRecoveryPort;
+    pub struct MobileRecoveryPort;
 
-    impl RecoveryPort for AndroidRecoveryPort {
+    impl RecoveryPort for MobileRecoveryPort {
         fn load(&self) -> RecoveryFuture<Result<Option<RecoveryDocument>, AppErrorDto>> {
             Box::pin(async {
                 tokio::task::spawn_blocking(load_recovery)
@@ -147,7 +147,13 @@ mod android {
     }
 
     fn recovery_directory() -> Result<PathBuf, AppErrorDto> {
-        crate::ports::android::app_files_dir().map(|path| path.join(RECOVERY_DIRECTORY))
+        #[cfg(target_os = "android")]
+        return crate::ports::android::app_files_dir().map(|path| path.join(RECOVERY_DIRECTORY));
+
+        #[cfg(target_os = "ios")]
+        dirs::data_local_dir()
+            .map(|path| path.join("Simple Table").join(RECOVERY_DIRECTORY))
+            .ok_or_else(|| recovery_error("the iOS application data directory is unavailable"))
     }
 
     fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppErrorDto> {

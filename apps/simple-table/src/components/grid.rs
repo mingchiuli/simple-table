@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::protocol::{EditorRequest, ImageAnchorDto};
-use crate::ui::icons::Trash2;
+use crate::ui::icons::{Trash2, X};
 use dioxus::prelude::*;
 use dioxus_sdk_time::sleep;
 
@@ -44,6 +44,7 @@ pub fn SpreadsheetGrid() -> Element {
     let ports = use_context::<Rc<AppPorts>>();
     let mut viewport_element = use_signal(|| None::<Rc<MountedData>>);
     let mut editing_cell = use_signal(|| None::<(usize, usize, usize)>);
+    let mut previewed_image = use_signal(|| None::<String>);
     let last_scroll = use_hook(|| Rc::new(RefCell::new(ScrollSnapshot::default())));
     let pending_scroll = use_hook(|| Rc::new(RefCell::new(ScrollSnapshot::default())));
     let scroll_scheduled = use_hook(|| Rc::new(Cell::new(false)));
@@ -174,23 +175,22 @@ pub fn SpreadsheetGrid() -> Element {
     let editing = *editing_cell.read();
     let canvas_width = HEADER_WIDTH + column_geometry.total_size(extent.column_count);
     let canvas_height = HEADER_HEIGHT + row_geometry.total_size(extent.row_count);
-    let window_left = column_geometry.offset(window.col_start);
-    let window_top = row_geometry.offset(window.row_start);
-    let column_template = format!(
-        "{HEADER_WIDTH}px {}",
-        columns
-            .iter()
-            .map(|col| format!("{}px", column_geometry.size(*col)))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    let row_template = format!(
-        "{HEADER_HEIGHT}px {}",
-        rows.iter()
-            .map(|row| format!("{}px", row_geometry.size(*row)))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    let column_window_left = HEADER_WIDTH + column_geometry.offset(window.col_start);
+    let row_window_top = row_geometry.offset(window.row_start);
+    let column_template = columns
+        .iter()
+        .map(|col| format!("{}px", column_geometry.size(*col)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let row_template = rows
+        .iter()
+        .map(|row| format!("{}px", row_geometry.size(*row)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let preview_source = previewed_image
+        .read()
+        .as_ref()
+        .and_then(|image_id| store.image_assets.read().get(image_id).cloned());
 
     rsx! {
         div {
@@ -280,26 +280,34 @@ pub fn SpreadsheetGrid() -> Element {
                 class: "grid-canvas",
                 style: "width: {canvas_width}px; height: {canvas_height}px;",
                 div {
-                    class: "grid-window",
-                    style: "left: {window_left}px; top: {window_top}px; grid-template-columns: {column_template}; grid-template-rows: {row_template};",
+                    class: "grid-column-header-track",
                     div {
                         class: "corner-header",
-                        style: "grid-row: 1; grid-column: 1;",
                         aria_hidden: "true"
                     }
-                    for (column_index, col) in columns.iter().copied().enumerate() {
-                        div {
-                            class: "column-header",
-                            role: "columnheader",
-                            style: "grid-row: 1; grid-column: {column_index + 2};",
-                            "{column_label(col)}"
+                    div {
+                        class: "grid-column-header-window",
+                        style: "left: {column_window_left}px; grid-template-columns: {column_template};",
+                        for (column_index, col) in columns.iter().copied().enumerate() {
+                            div {
+                                key: "column-header-{col}",
+                                class: "column-header",
+                                role: "columnheader",
+                                style: "grid-column: {column_index + 1};",
+                                "{column_label(col)}"
+                            }
                         }
                     }
+                }
+                div {
+                    class: "grid-row-header-window",
+                    style: "margin-top: {row_window_top}px; grid-template-rows: {row_template};",
                     for (row_index, row) in rows.iter().copied().enumerate() {
                         div {
+                            key: "row-header-{row}",
                             class: "row-header",
                             role: "rowheader",
-                            style: "grid-row: {row_index + 2}; grid-column: 1;",
+                            style: "grid-row: {row_index + 1};",
                             "{row + 1}"
                         }
                     }
@@ -429,7 +437,14 @@ pub fn SpreadsheetGrid() -> Element {
                     revision: document.editor_session.revision,
                     row_geometry: Rc::clone(&row_geometry),
                     column_geometry: Rc::clone(&column_geometry),
+                    on_preview: move |image_id| previewed_image.set(Some(image_id)),
                 }
+            }
+        }
+        if let Some(source) = preview_source {
+            ImagePreview {
+                source,
+                on_close: move |_| previewed_image.set(None),
             }
         }
     }
@@ -660,6 +675,7 @@ struct ImageLayerProps {
     revision: u64,
     row_geometry: Rc<SparseAxisGeometry>,
     column_geometry: Rc<SparseAxisGeometry>,
+    on_preview: EventHandler<String>,
 }
 
 #[component]
@@ -682,8 +698,13 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
                     let image_id = image.id.clone();
                     let select_id = image_id.clone();
                     let delete_id = image_id.clone();
+                    let preview_id = image_id.clone();
+                    let keyboard_id = image_id.clone();
                     let is_selected = selected.as_deref() == Some(image_id.as_str());
                     let source = assets.get(&image_id).cloned();
+                    let can_preview = source.is_some();
+                    let click_preview = props.on_preview;
+                    let keyboard_preview = props.on_preview;
                     rsx! {
                         div {
                             key: "{image_id}",
@@ -692,9 +713,28 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
                             tabindex: 0,
                             aria_label: "Embedded image",
                             style: "left: {rect.left}px; top: {rect.top}px; width: {rect.width}px; height: {rect.height}px; z-index: {image.z_index + 10};",
-                            onclick: move |_| store.selected_image.set(Some(select_id.clone())),
+                            onclick: move |event| {
+                                event.stop_propagation();
+                                store.selected_image.set(Some(select_id.clone()));
+                            },
+                            ondoubleclick: move |event| {
+                                event.stop_propagation();
+                                if can_preview {
+                                    click_preview.call(preview_id.clone());
+                                }
+                            },
+                            onkeydown: move |event: Event<KeyboardData>| {
+                                if event.key() == Key::Enter && can_preview {
+                                    event.prevent_default();
+                                    keyboard_preview.call(keyboard_id.clone());
+                                }
+                            },
                             if let Some(source) = source {
-                                img { src: source.as_ref(), alt: "Embedded workbook image" }
+                                img {
+                                    src: source.as_ref(),
+                                    alt: "Embedded workbook image",
+                                    draggable: false,
+                                }
                             } else {
                                 div { class: "image-placeholder", "Image" }
                             }
@@ -730,6 +770,61 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct ImagePreviewProps {
+    source: Rc<str>,
+    on_close: EventHandler<()>,
+}
+
+#[component]
+fn ImagePreview(props: ImagePreviewProps) -> Element {
+    let close_from_backdrop = props.on_close;
+    let close_from_button = props.on_close;
+    let close_from_keyboard = props.on_close;
+
+    rsx! {
+        div {
+            class: "image-preview-backdrop",
+            role: "dialog",
+            aria_modal: "true",
+            aria_label: "Image preview",
+            tabindex: -1,
+            onclick: move |_| close_from_backdrop.call(()),
+            onkeydown: move |event: Event<KeyboardData>| {
+                if event.key() == Key::Escape {
+                    event.prevent_default();
+                    close_from_keyboard.call(());
+                }
+            },
+            onmounted: move |event| {
+                let element = event.data();
+                spawn(async move {
+                    let _ = element.set_focus(true).await;
+                });
+            },
+            button {
+                class: "icon-button image-preview-close",
+                title: "Close image preview",
+                aria_label: "Close image preview",
+                onclick: move |event| {
+                    event.stop_propagation();
+                    close_from_button.call(());
+                },
+                X { size: 20 }
+            }
+            div {
+                class: "image-preview-content",
+                onclick: move |event| event.stop_propagation(),
+                img {
+                    src: props.source.as_ref(),
+                    alt: "Workbook image preview",
+                    draggable: false,
                 }
             }
         }

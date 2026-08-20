@@ -11,7 +11,8 @@ Web Worker and IndexedDB.
 - Cell, sheet, row, column, image, formula, undo/redo, and dirty-state support
 - Dioxus Desktop and Mobile native packages
 - Stateless Axum SSR with a hydrated Web client in one deployable binary
-- Official Dioxus Primitives controls and official Lucide icon data
+- Official Dioxus Primitives controls and Lucide icon data from an upstream
+  Rust library
 
 ## Prerequisites
 
@@ -78,7 +79,10 @@ builds. The official `dioxus-primitives` source is pinned to an audited Git
 revision because it does not currently have a usable crates.io release.
 
 See [docs/architecture.md](docs/architecture.md) for ownership and persistence
-details.
+details. [docs/platform-integrations.md](docs/platform-integrations.md) marks
+which capabilities come directly from official upstream APIs, which use
+official platform APIs through project adapters, and which are project-owned
+compatibility implementations.
 
 ## License
 

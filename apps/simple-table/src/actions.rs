@@ -341,6 +341,9 @@ async fn run_mutation_locked(
                     }
                     let refresh =
                         MutationRefresh::for_patches(&mutation.patches, store.active_sheet());
+                    if refresh.document {
+                        ports.regions.reset();
+                    }
                     store.accept_mutation(&mutation);
                     if refresh.document {
                         refresh_document(store, Rc::clone(&ports)).await;
@@ -418,7 +421,7 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
         return;
     };
     let target_name = document_name(store);
-    #[cfg(all(feature = "mobile", target_os = "android"))]
+    #[cfg(feature = "mobile")]
     let existing_target = document_path(store);
     set_busy(store, "Saving workbook");
 
@@ -442,7 +445,6 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
         document_id,
         base_revision,
         target_name,
-        #[cfg(target_os = "android")]
         existing_target,
     )
     .await;
@@ -533,7 +535,7 @@ async fn save_native(
         .await
 }
 
-#[cfg(all(feature = "mobile", not(feature = "desktop"), target_os = "android"))]
+#[cfg(all(feature = "mobile", not(feature = "desktop")))]
 async fn save_mobile(
     ports: Rc<AppPorts>,
     document_id: u64,
@@ -584,32 +586,6 @@ async fn save_mobile(
         .editor
         .execute(EditorRequest::CommitSave { save_token, path })
         .await
-}
-
-#[cfg(all(
-    feature = "mobile",
-    not(feature = "desktop"),
-    not(target_os = "android")
-))]
-async fn save_mobile(
-    ports: Rc<AppPorts>,
-    document_id: u64,
-    base_revision: u64,
-    target_name: String,
-) -> Result<EditorReply, crate::protocol::AppErrorDto> {
-    let prepared = ports
-        .editor
-        .execute(EditorRequest::PrepareExport {
-            document_id,
-            base_revision,
-            target_name,
-        })
-        .await?;
-    let EditorReply::ExportPrepared { file_name, bytes } = prepared else {
-        return Err(unexpected_reply("prepare export"));
-    };
-    ports.files.write_document(file_name, bytes).await?;
-    Ok(EditorReply::Empty)
 }
 
 pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
@@ -1240,14 +1216,20 @@ fn document_name(store: EditorStore) -> String {
         .unwrap_or_else(|| "untitled.xlsx".to_string())
 }
 
-#[cfg(all(feature = "mobile", target_os = "android"))]
+#[cfg(feature = "mobile")]
 fn document_path(store: EditorStore) -> Option<String> {
     store
         .document
         .read()
         .as_ref()
         .map(|document| document.document.path.clone())
-        .filter(|path| path.starts_with("content://"))
+        .filter(|path| {
+            #[cfg(target_os = "android")]
+            return path.starts_with("content://");
+
+            #[cfg(not(target_os = "android"))]
+            !path.is_empty()
+        })
 }
 
 fn active_sheet_name(store: EditorStore) -> Option<String> {
