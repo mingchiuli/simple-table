@@ -2505,7 +2505,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2684,9 +2684,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-eval"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c348157c11af98a536017697b3b8ed43d3dbf0ae468afd184b7f5bf0d84b803f"
+checksum = "2cd0eb78ad72fe587394b3e3fdfcb93d9d2db0e4807bd683f5110eb2a0b3c6c6"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2713,9 +2713,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-macros"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f915cd1966320b08f94267cbb6090afafea535fd71bc0c3c26e87e466c5bbf0"
+checksum = "a67732d75ef8f38846b8b358d35badfc3e2fcf376692b4d52763a47791e2d3b3"
 dependencies = [
  "formualizer-common",
  "proc-macro2",
@@ -2736,9 +2736,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-workbook"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d84d1996ec83f841082b1fc2178794c80750a8355381ea8891864704f6d79e9e"
+checksum = "18961c1529269e9d4d8a9fa2a0d5df0406d43458ee9ed777bcd0c6a17ebcf2a9"
 dependencies = [
  "chrono",
  "formualizer-common",
@@ -5619,7 +5619,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6152,7 +6152,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6210,7 +6210,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7136,7 +7136,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8185,7 +8185,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
