@@ -315,9 +315,9 @@ pub struct CellView {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CellPresentation {
-    pub display_text: String,
-    pub edit_text: String,
-    pub formula_error: Option<String>,
+    pub display_text: Rc<str>,
+    pub edit_text: Rc<str>,
+    pub formula_error: Option<Rc<str>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -493,7 +493,7 @@ pub struct EditorStore {
 }
 
 type CellCoordinates = (usize, usize, usize);
-pub(crate) type PendingCellEdits = HashMap<CellCoordinates, (u64, String)>;
+pub(crate) type PendingCellEdits = HashMap<CellCoordinates, (u64, Rc<str>)>;
 
 impl EditorStore {
     pub fn new() -> Self {
@@ -599,17 +599,25 @@ impl EditorStore {
         self.document.set(Some(Rc::new(document)));
     }
 
-    pub fn accept_mutation(mut self, mutation: &EditorMutationView) {
+    pub fn accept_mutation(mut self, mutation: EditorMutationView) {
+        let EditorMutationView {
+            document_id,
+            revision,
+            editor_state,
+            patches,
+            sheet_extents,
+            formula_status,
+        } = mutation;
         if let Some(document) = self.document.write().as_mut().map(Rc::make_mut) {
-            document.editor_session.revision = mutation.revision;
-            document.editor_session.editor_state = mutation.editor_state.clone();
-            document.editor_session.formula_status = mutation.formula_status.clone();
-            if let Some(extents) = &mutation.sheet_extents {
+            document.editor_session.revision = revision;
+            document.editor_session.editor_state = editor_state;
+            document.editor_session.formula_status = formula_status;
+            if let Some(extents) = &sheet_extents {
                 for (sheet, extent) in document.document.sheets.iter_mut().zip(extents) {
                     sheet.extent = *extent;
                 }
             }
-            for patch in &mutation.patches {
+            for patch in &patches {
                 let EditorPatchView::Layout { patch } = patch else {
                     continue;
                 };
@@ -621,7 +629,9 @@ impl EditorStore {
                 apply_layout_changes(&mut layout.row_heights, &patch.row_heights);
             }
         }
-        self.region_cache.write().apply_mutation(mutation);
+        self.region_cache
+            .write()
+            .apply_mutation_parts(document_id, revision, &patches);
         self.status.set("Changes saved in memory".to_string());
     }
 
@@ -635,8 +645,8 @@ impl EditorStore {
                 cells.insert(
                     (*row, *col),
                     CellPresentation {
-                        display_text: value.clone(),
-                        edit_text: value.clone(),
+                        display_text: Rc::clone(value),
+                        edit_text: Rc::clone(value),
                         formula_error: None,
                     },
                 );
@@ -649,7 +659,7 @@ impl EditorStore {
         let (row, col) = self.normalize_cell(sheet_index, row, col);
         self.cell_presentation_map(sheet_index)
             .get(&(row, col))
-            .map(|cell| cell.edit_text.clone())
+            .map(|cell| cell.edit_text.to_string())
             .unwrap_or_default()
     }
 
@@ -707,19 +717,19 @@ pub fn cell_presentation(value: &Value) -> CellPresentation {
     let display_text = value
         .get("display")
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(Rc::<str>::from)
         .unwrap_or_else(|| raw_text.clone());
     let edit_text = value
         .get("formula")
         .and_then(|formula| formula.get("formula"))
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(Rc::<str>::from)
         .unwrap_or(raw_text);
     let formula_error = value
         .get("formula")
         .and_then(|formula| formula.get("error"))
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(Rc::<str>::from);
 
     CellPresentation {
         display_text,
@@ -728,11 +738,11 @@ pub fn cell_presentation(value: &Value) -> CellPresentation {
     }
 }
 
-fn raw_value_text(value: Option<&Value>) -> String {
+fn raw_value_text(value: Option<&Value>) -> Rc<str> {
     match value {
-        None | Some(Value::Null) => String::new(),
-        Some(Value::String(value)) => value.clone(),
-        Some(value) => value.to_string(),
+        None | Some(Value::Null) => Rc::from(""),
+        Some(Value::String(value)) => Rc::from(value.as_str()),
+        Some(value) => Rc::from(value.to_string()),
     }
 }
 
@@ -789,8 +799,8 @@ mod tests {
             }
         }));
 
-        assert_eq!(presentation.display_text, "3");
-        assert_eq!(presentation.edit_text, "=SUM(A1:A2)");
+        assert_eq!(presentation.display_text.as_ref(), "3");
+        assert_eq!(presentation.edit_text.as_ref(), "=SUM(A1:A2)");
         assert_eq!(presentation.formula_error, None);
     }
 
@@ -801,8 +811,8 @@ mod tests {
             "display": "$12.50"
         }));
 
-        assert_eq!(presentation.display_text, "$12.50");
-        assert_eq!(presentation.edit_text, "12.5");
+        assert_eq!(presentation.display_text.as_ref(), "$12.50");
+        assert_eq!(presentation.edit_text.as_ref(), "12.5");
     }
 
     #[test]
@@ -837,8 +847,8 @@ mod tests {
             }
         }));
 
-        assert_eq!(presentation.display_text, "#VALUE!");
-        assert_eq!(presentation.edit_text, "=UNKNOWN(A1)");
+        assert_eq!(presentation.display_text.as_ref(), "#VALUE!");
+        assert_eq!(presentation.edit_text.as_ref(), "=UNKNOWN(A1)");
         assert_eq!(
             presentation.formula_error.as_deref(),
             Some("Unknown function UNKNOWN")

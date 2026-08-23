@@ -1,15 +1,20 @@
 use std::rc::Rc;
 
 use crate::protocol::{ImageAnchorDto, ImageMarkerDto, SheetImageDto};
-use crate::ui::icons::{
-    ArrowLeft, Columns3, Download, ExternalLink, FilePlus, FolderOpen, FunctionSquare, House,
-    ImagePlus, Move, Plus, Redo2, Rows3, Save, Search, Sheet, Trash2, Undo2,
-};
 use dioxus::prelude::*;
-use dioxus_primitives::popover::{PopoverContent, PopoverRoot, PopoverTrigger};
-use dioxus_primitives::tabs::{TabList, TabTrigger, Tabs};
-use dioxus_primitives::toolbar::{Toolbar, ToolbarButton, ToolbarSeparator};
-use dioxus_primitives::{ContentAlign, ContentSide};
+use dioxus::router::Navigator;
+use simple_table_components::icons::{
+    ArrowLeft, Columns3, Download, ExternalLink, FilePlus, FolderOpen, House, ImagePlus, Move,
+    Plus, Redo2, Rows3, Save, Search, Sheet, Sigma, Trash2, Undo2,
+};
+use simple_table_components::{
+    AlertDialog, AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogDescription,
+    AlertDialogTitle, Button, ButtonSize, ButtonVariant, ContentAlign, ContentSide, Input, Label,
+    PopoverContent, PopoverRoot, PopoverTrigger, TabList, TabTrigger, Tabs, TabsVariant, Toolbar,
+    ToolbarSeparator,
+};
+#[cfg(not(feature = "mobile"))]
+use simple_table_components::{Tooltip, TooltipContent, TooltipTrigger};
 
 use super::grid::{SpreadsheetGrid, column_label};
 use super::search::SearchPanel;
@@ -20,12 +25,21 @@ use crate::model::{
 };
 use crate::ports::update::{GitHubUpdatePort, UpdatePort};
 use crate::ports::window::{PlatformWindowPort, WindowPort};
+use crate::ui::ToolbarIconButton;
+
+#[derive(Clone, PartialEq)]
+enum PendingEditorAction {
+    Close,
+    New,
+    Open { name: String, bytes: Vec<u8> },
+}
 
 #[component]
 pub fn EditorView() -> Element {
     let mut store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
+    let mut pending_action = use_signal(|| None::<PendingEditorAction>);
     use_effect(move || install_dirty_guard(has_unsaved_changes(store)));
     use_drop(|| install_dirty_guard(false));
     let document = store.document.read().clone();
@@ -36,7 +50,15 @@ pub fn EditorView() -> Element {
                 div { class: "brand-mark large", Sheet { size: 28 } }
                 h1 { "No workbook open" }
                 p { "Create a workbook or open an Excel or CSV file." }
-                Link { class: "primary-command", to: Route::Home {}, House { size: 18 } "Back to files" }
+                Button {
+                    class: "primary-command",
+                    size: ButtonSize::Lg,
+                    onclick: move |_| {
+                        navigator.replace(Route::Home {});
+                    },
+                    House { size: 18 }
+                    "Back to files"
+                }
             }
         };
     }
@@ -65,24 +87,25 @@ pub fn EditorView() -> Element {
     let sheet_count = document.document.sheets.len();
     let dirty = editor_state.is_dirty || !store.pending_edits.read().is_empty();
     let back_ports = Rc::clone(&ports);
+    let confirmed_action = pending_action.read().clone();
 
     rsx! {
         main { class: if store.search_open() { "editor-shell search-visible" } else { "editor-shell" },
             header { class: "editor-titlebar",
-                button {
+                Button {
                     class: "icon-button editor-back-button",
-                    title: "Back to files",
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::IconSm,
                     aria_label: "Back to files",
                     disabled: store.busy(),
                     onclick: move |_| {
-                        let ports = Rc::clone(&back_ports);
-                        spawn(async move {
-                            if confirm_discard(has_unsaved_changes(store)).await
-                                && actions::close_document(store, ports).await
-                            {
-                                navigator.replace(Route::Home {});
-                            }
-                        });
+                        request_editor_action(
+                            PendingEditorAction::Close,
+                            pending_action,
+                            store,
+                            Rc::clone(&back_ports),
+                            navigator,
+                        );
                     },
                     ArrowLeft { size: 19 }
                 }
@@ -100,31 +123,29 @@ pub fn EditorView() -> Element {
             }
 
             Toolbar { class: "editor-toolbar", aria_label: "Workbook tools",
-                ToolbarButton {
-                    class: "tool-button",
+                ToolbarIconButton {
                     index: 0usize,
+                    label: "New workbook",
                     disabled: store.busy(),
                     on_click: {
                         let ports = Rc::clone(&ports);
                         move |_| {
-                            let ports = Rc::clone(&ports);
-                            spawn(async move {
-                                if confirm_discard(has_unsaved_changes(store)).await
-                                    && actions::new_document(store, ports).await
-                                {
-                                    navigator.replace(Route::Table {});
-                                }
-                            });
+                            request_editor_action(
+                                PendingEditorAction::New,
+                                pending_action,
+                                store,
+                                Rc::clone(&ports),
+                                navigator,
+                            );
                         }
                     },
-                    title: "New workbook",
                     FilePlus { size: 18 }
                 }
-                OpenDocumentTool {}
+                OpenDocumentTool { pending_action }
                 ToolbarSeparator {}
-                ToolbarButton {
-                    class: "tool-button",
+                ToolbarIconButton {
                     index: 2usize,
+                    label: "Save",
                     disabled: store.busy(),
                     on_click: {
                         let ports = Rc::clone(&ports);
@@ -133,12 +154,11 @@ pub fn EditorView() -> Element {
                             spawn(async move { actions::save_local(store, ports).await });
                         }
                     },
-                    title: "Save",
                     Save { size: 18 }
                 }
-                ToolbarButton {
-                    class: "tool-button",
+                ToolbarIconButton {
                     index: 3usize,
+                    label: "Download a copy",
                     disabled: store.busy(),
                     on_click: {
                         let ports = Rc::clone(&ports);
@@ -147,13 +167,12 @@ pub fn EditorView() -> Element {
                             spawn(async move { actions::download_copy(store, ports).await });
                         }
                     },
-                    title: "Download a copy",
                     Download { size: 18 }
                 }
                 ToolbarSeparator {}
-                ToolbarButton {
-                    class: "tool-button",
+                ToolbarIconButton {
                     index: 4usize,
+                    label: "Undo",
                     disabled: store.busy() || !editor_state.can_undo,
                     on_click: {
                         let ports = Rc::clone(&ports);
@@ -162,12 +181,11 @@ pub fn EditorView() -> Element {
                             spawn(async move { actions::undo(store, ports).await });
                         }
                     },
-                    title: "Undo",
                     Undo2 { size: 18 }
                 }
-                ToolbarButton {
-                    class: "tool-button",
+                ToolbarIconButton {
                     index: 5usize,
+                    label: "Redo",
                     disabled: store.busy() || !editor_state.can_redo,
                     on_click: {
                         let ports = Rc::clone(&ports);
@@ -176,7 +194,6 @@ pub fn EditorView() -> Element {
                             spawn(async move { actions::redo(store, ports).await });
                         }
                     },
-                    title: "Redo",
                     Redo2 { size: 18 }
                 }
                 ToolbarSeparator {}
@@ -249,14 +266,14 @@ pub fn EditorView() -> Element {
                     }
                 }
                 div { class: "toolbar-fill" }
-                ToolbarButton {
-                    class: if store.search_open() { "tool-button active" } else { "tool-button" },
+                ToolbarIconButton {
                     index: 11usize,
+                    label: "Find in workbook",
+                    active: store.search_open(),
                     on_click: move |_| {
                         let open = store.search_open();
                         store.search_open.set(!open);
                     },
-                    title: "Find in workbook",
                     Search { size: 18 }
                 }
             }
@@ -264,7 +281,7 @@ pub fn EditorView() -> Element {
             div { class: "formula-bar",
                 span { class: "cell-address", title: selected_address, "{selected_address}" }
                 span { class: "formula-symbol", "fx" }
-                input {
+                Input {
                     aria_label: "Cell value or formula",
                     disabled: store.busy(),
                     value: store.formula_text,
@@ -294,6 +311,7 @@ pub fn EditorView() -> Element {
             div { class: "sheet-strip",
                 Tabs {
                     class: "sheet-tabs",
+                    variant: TabsVariant::Ghost,
                     value: Some(document.document.sheets[sheet_index].name.clone()),
                     default_value: document.document.sheets[sheet_index].name.clone(),
                     horizontal: true,
@@ -324,9 +342,11 @@ pub fn EditorView() -> Element {
                         }
                     }
                 }
-                button {
+                Button {
                     class: "icon-button add-sheet",
-                    title: "Add sheet",
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::IconSm,
+                    aria_label: "Add sheet",
                     disabled: store.busy(),
                     onclick: {
                         let ports = Rc::clone(&ports);
@@ -348,9 +368,11 @@ pub fn EditorView() -> Element {
                     },
                     Plus { size: 17 }
                 }
-                button {
+                Button {
                     class: "icon-button",
-                    title: "Delete current sheet",
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::IconSm,
+                    aria_label: "Delete current sheet",
                     disabled: store.busy() || sheet_count <= 1,
                     onclick: {
                         let ports = Rc::clone(&ports);
@@ -385,6 +407,41 @@ pub fn EditorView() -> Element {
                     active_sheet: sheet_index,
                 }
                 span { class: "status-text", "{store.status}" }
+            }
+            AlertDialog {
+                open: Some(pending_action.read().is_some()),
+                on_open_change: move |open: bool| {
+                    if !open {
+                        pending_action.set(None);
+                    }
+                },
+                AlertDialogTitle { "Unsaved changes" }
+                AlertDialogDescription {
+                    "Discard the current workbook changes and continue?"
+                }
+                AlertDialogActions {
+                    AlertDialogCancel {
+                        on_click: move |_| pending_action.set(None),
+                        "Cancel"
+                    }
+                    AlertDialogAction {
+                        on_click: {
+                            let ports = Rc::clone(&ports);
+                            move |_| {
+                                let Some(action) = confirmed_action.clone() else {
+                                    return;
+                                };
+                                spawn(run_editor_action(
+                                    action,
+                                    store,
+                                    Rc::clone(&ports),
+                                    navigator,
+                                ));
+                            }
+                        },
+                        "Discard and continue"
+                    }
+                }
             }
         }
     }
@@ -431,7 +488,7 @@ fn FormulaStatusPopover(props: FormulaStatusPopoverProps) -> Element {
                 class: trigger_class,
                 title: trigger_label.clone(),
                 aria_label: trigger_label,
-                FunctionSquare { size: 15 }
+                Sigma { size: 15 }
                 if total > 0 {
                     span { class: "formula-status-count", "{total}" }
                 }
@@ -537,10 +594,9 @@ fn StructureButton(props: StructureButtonProps) -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     rsx! {
-        ToolbarButton {
-            class: "tool-button",
+        ToolbarIconButton {
             index: props.index,
-            title: props.title,
+            label: props.title,
             disabled: store.busy(),
             on_click: {
                 let ports = Rc::clone(&ports);
@@ -600,10 +656,9 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
 
     #[cfg(feature = "mobile")]
     return rsx! {
-        ToolbarButton {
-            class: "tool-button",
+        ToolbarIconButton {
             index: 10usize,
-            title: "Insert image",
+            label: "Insert image",
             disabled: store.busy(),
             on_click: {
                 let ports = Rc::clone(&ports);
@@ -644,61 +699,69 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
 
     #[cfg(not(feature = "mobile"))]
     rsx! {
-        label { class: "tool-button file-tool", title: "Insert image",
-            ImagePlus { size: 18 }
-            input {
-                class: "visually-hidden",
-                r#type: "file",
-                disabled: store.busy(),
-                accept: "image/png,image/jpeg",
-                onchange: {
-                    let ports = Rc::clone(&ports);
-                    move |event: Event<FormData>| {
-                        let Some(file) = event.files().into_iter().next() else { return; };
-                        let ports = Rc::clone(&ports);
-                        spawn(async move {
-                            match file.read_bytes().await {
-                                Ok(bytes) => {
-                                    actions::run_mutation(
-                                        store,
-                                        ports,
-                                        crate::protocol::EditorRequest::InsertImage {
-                                            request_id: request_id("image"),
-                                            document_id: props.document_id,
-                                            base_revision: props.revision,
-                                            sheet_index: props.sheet_index,
-                                            row: props.selected.0 as u32,
-                                            col: props.selected.1 as u32,
-                                            file_name: file.name(),
-                                            bytes: bytes.to_vec(),
-                                        },
-                                    )
-                                    .await;
-                                }
-                                Err(error) => store.set_error(crate::protocol::AppErrorDto {
-                                    code: "read_error".to_string(),
-                                    message: error.to_string(),
-                                }),
+        Tooltip { disabled: store.busy(),
+            TooltipTrigger {
+                Label {
+                    class: "tool-button file-tool",
+                    html_for: "insert-workbook-image",
+                    aria_label: "Insert image",
+                    ImagePlus { size: 18 }
+                    input {
+                        id: "insert-workbook-image",
+                        class: "visually-hidden",
+                        r#type: "file",
+                        disabled: store.busy(),
+                        accept: "image/png,image/jpeg",
+                        onchange: {
+                            let ports = Rc::clone(&ports);
+                            move |event: Event<FormData>| {
+                                let Some(file) = event.files().into_iter().next() else { return; };
+                                let ports = Rc::clone(&ports);
+                                spawn(async move {
+                                    match file.read_bytes().await {
+                                        Ok(bytes) => {
+                                            actions::run_mutation(
+                                                store,
+                                                ports,
+                                                crate::protocol::EditorRequest::InsertImage {
+                                                    request_id: request_id("image"),
+                                                    document_id: props.document_id,
+                                                    base_revision: props.revision,
+                                                    sheet_index: props.sheet_index,
+                                                    row: props.selected.0 as u32,
+                                                    col: props.selected.1 as u32,
+                                                    file_name: file.name(),
+                                                    bytes: bytes.to_vec(),
+                                                },
+                                            )
+                                            .await;
+                                        }
+                                        Err(error) => store.set_error(crate::protocol::AppErrorDto {
+                                            code: "read_error".to_string(),
+                                            message: error.to_string(),
+                                        }),
+                                    }
+                                });
                             }
-                        });
+                        }
                     }
                 }
             }
+            TooltipContent { side: ContentSide::Bottom, "Insert image" }
         }
     }
 }
 
 #[component]
-fn OpenDocumentTool() -> Element {
+fn OpenDocumentTool(mut pending_action: Signal<Option<PendingEditorAction>>) -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
     #[cfg(feature = "mobile")]
     return rsx! {
-        ToolbarButton {
-            class: "tool-button",
+        ToolbarIconButton {
             index: 1usize,
-            title: "Open workbook",
+            label: "Open workbook",
             disabled: store.busy(),
             on_click: {
                 let ports = Rc::clone(&ports);
@@ -711,17 +774,16 @@ fn OpenDocumentTool() -> Element {
                             .await
                         {
                             Ok(Some(file)) => {
-                                if confirm_discard(has_unsaved_changes(store)).await
-                                    && actions::open_bytes(
-                                        store,
-                                        ports,
-                                        file.name,
-                                        file.bytes,
-                                    )
-                                    .await
-                                {
-                                    navigator.replace(Route::Table {});
-                                }
+                                request_editor_action(
+                                    PendingEditorAction::Open {
+                                        name: file.name,
+                                        bytes: file.bytes,
+                                    },
+                                    pending_action,
+                                    store,
+                                    ports,
+                                    navigator,
+                                );
                             }
                             Ok(None) => {}
                             Err(error) => store.set_error(error),
@@ -735,37 +797,51 @@ fn OpenDocumentTool() -> Element {
 
     #[cfg(not(feature = "mobile"))]
     rsx! {
-        label { class: "tool-button file-tool", title: "Open workbook",
-            FolderOpen { size: 18 }
-            input {
-                class: "visually-hidden",
-                r#type: "file",
-                disabled: store.busy(),
-                accept: ".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv",
-                onchange: {
-                    let ports = Rc::clone(&ports);
-                    move |event: Event<FormData>| {
-                        let Some(file) = event.files().into_iter().next() else { return; };
-                        let ports = Rc::clone(&ports);
-                        spawn(async move {
-                            let name = file.name();
-                            match file.read_bytes().await {
-                                Ok(bytes) => {
-                                    if confirm_discard(has_unsaved_changes(store)).await
-                                        && actions::open_bytes(store, ports, name, bytes.to_vec()).await
-                                    {
-                                        navigator.replace(Route::Table {});
+        Tooltip { disabled: store.busy(),
+            TooltipTrigger {
+                Label {
+                    class: "tool-button file-tool",
+                    html_for: "editor-open-workbook",
+                    aria_label: "Open workbook",
+                    FolderOpen { size: 18 }
+                    input {
+                        id: "editor-open-workbook",
+                        class: "visually-hidden",
+                        r#type: "file",
+                        disabled: store.busy(),
+                        accept: ".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv",
+                        onchange: {
+                            let ports = Rc::clone(&ports);
+                            move |event: Event<FormData>| {
+                                let Some(file) = event.files().into_iter().next() else { return; };
+                                let ports = Rc::clone(&ports);
+                                spawn(async move {
+                                    let name = file.name();
+                                    match file.read_bytes().await {
+                                        Ok(bytes) => {
+                                            request_editor_action(
+                                                PendingEditorAction::Open {
+                                                    name,
+                                                    bytes: bytes.to_vec(),
+                                                },
+                                                pending_action,
+                                                store,
+                                                ports,
+                                                navigator,
+                                            );
+                                        }
+                                        Err(error) => store.set_error(crate::protocol::AppErrorDto {
+                                            code: "read_error".to_string(),
+                                            message: error.to_string(),
+                                        }),
                                     }
-                                }
-                                Err(error) => store.set_error(crate::protocol::AppErrorDto {
-                                    code: "read_error".to_string(),
-                                    message: error.to_string(),
-                                }),
+                                });
                             }
-                        });
+                        }
                     }
                 }
             }
+            TooltipContent { side: ContentSide::Bottom, "Open workbook" }
         }
     }
 }
@@ -786,9 +862,10 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
     let ports = use_context::<Rc<AppPorts>>();
     rsx! {
         div { class: "dimension-controls",
-            label { title: "Selected column width",
+            Label { html_for: "selected-column-width", title: "Selected column width",
                 span { "W" }
-                input {
+                Input {
+                    id: "selected-column-width",
                     r#type: "number",
                     min: 24,
                     max: 600,
@@ -818,9 +895,10 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
                     }
                 }
             }
-            label { title: "Selected row height",
+            Label { html_for: "selected-row-height", title: "Selected row height",
                 span { "H" }
-                input {
+                Input {
+                    id: "selected-row-height",
                     r#type: "number",
                     min: 18,
                     max: 300,
@@ -886,9 +964,10 @@ fn ImageTools(props: ImageToolsProps) -> Element {
 
     rsx! {
         div { class: "image-tools",
-            button {
+            Button {
                 class: "tool-button",
-                title: "Move image to selected cell",
+                variant: ButtonVariant::Ghost,
+                size: ButtonSize::IconSm,
                 aria_label: "Move image to selected cell",
                 onclick: {
                     let ports = Rc::clone(&ports);
@@ -924,9 +1003,10 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                 },
                 Move { size: 17 }
             }
-            button {
+            Button {
                 class: "tool-button",
-                title: "Delete image",
+                variant: ButtonVariant::Ghost,
+                size: ButtonSize::IconSm,
                 aria_label: "Delete image",
                 onclick: {
                     let ports = Rc::clone(&ports);
@@ -952,9 +1032,10 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                 },
                 Trash2 { size: 17 }
             }
-            label { title: "Image width",
+            Label { html_for: "selected-image-width", title: "Image width",
                 span { "W" }
-                input {
+                Input {
+                    id: "selected-image-width",
                     r#type: "number",
                     min: 24,
                     max: 2000,
@@ -992,9 +1073,10 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                     }
                 }
             }
-            label { title: "Image height",
+            Label { html_for: "selected-image-height", title: "Image height",
                 span { "H" }
-                input {
+                Input {
+                    id: "selected-image-height",
                     r#type: "number",
                     min: 24,
                     max: 2000,
@@ -1047,9 +1129,11 @@ fn UpdateButton() -> Element {
     });
     rsx! {
         if let Some(available) = update() {
-            button {
+            Button {
                 class: "update-button",
-                title: "Open release page",
+                variant: ButtonVariant::Outline,
+                size: ButtonSize::Xs,
+                aria_label: "Open release page",
                 onclick: move |_| PlatformWindowPort.open_external(&available.url),
                 ExternalLink { size: 15 }
                 "Update {available.version}"
@@ -1080,11 +1164,41 @@ fn has_unsaved_changes(store: EditorStore) -> bool {
         || !store.pending_edits.read().is_empty()
 }
 
-async fn confirm_discard(dirty: bool) -> bool {
-    if !dirty {
-        return true;
+fn request_editor_action(
+    action: PendingEditorAction,
+    mut pending_action: Signal<Option<PendingEditorAction>>,
+    store: EditorStore,
+    ports: Rc<AppPorts>,
+    navigator: Navigator,
+) {
+    if has_unsaved_changes(store) {
+        pending_action.set(Some(action));
+    } else {
+        spawn(run_editor_action(action, store, ports, navigator));
     }
-    PlatformWindowPort
-        .confirm("Unsaved changes", "Discard unsaved changes?")
-        .await
+}
+
+async fn run_editor_action(
+    action: PendingEditorAction,
+    store: EditorStore,
+    ports: Rc<AppPorts>,
+    navigator: Navigator,
+) {
+    match action {
+        PendingEditorAction::Close => {
+            if actions::close_document(store, ports).await {
+                navigator.replace(Route::Home {});
+            }
+        }
+        PendingEditorAction::New => {
+            if actions::new_document(store, ports).await {
+                navigator.replace(Route::Table {});
+            }
+        }
+        PendingEditorAction::Open { name, bytes } => {
+            if actions::open_bytes(store, ports, name, bytes).await {
+                navigator.replace(Route::Table {});
+            }
+        }
+    }
 }

@@ -1,0 +1,22 @@
+[package]
+name = "simple-table-components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+web = ["dioxus-primitives/web"]
+
+[dependencies]
+dioxus.workspace = true
+dioxus-icons = "0.1.0"
+dioxus-primitives = { git = "https://github.com/DioxusLabs/dioxus-components.git", rev = "bf007c15d0cf4d04d3181cc46cf12325aa773955", default-features = false }
+
+[dev-dependencies]
+dioxus-ssr.workspace = true

@@ -68,15 +68,21 @@ apps/simple-table-web-worker/      Browser Worker and IndexedDB adapter
 apps/simple-table-web-server/      Development and embedded production SSR
 crates/simple-table-protocol/      Bounded request/reply contract
 crates/simple-table-engine/        Document, operations, state, I/O, adapters
+crates/simple-table-components/    Official styled components and UI facade
 xtask/                             Development, verification, and bundle tasks
 ```
 
 Rust 2018-style module roots (`components.rs`, `ports.rs`, and the engine's
-responsibility roots) are used throughout; the repository contains no `mod.rs`.
-No JavaScript or TypeScript source is checked in. Dioxus and wasm-bindgen
-generate the JavaScript and Wasm needed by browsers under `target/` during Web
-builds. The official `dioxus-primitives` source is pinned to an audited Git
-revision because it does not currently have a usable crates.io release.
+responsibility roots) are used for project-owned code. The official
+Dioxus Components generated tree retains its upstream `mod.rs` layout. No
+JavaScript or TypeScript source is checked in. Dioxus and wasm-bindgen generate
+the JavaScript and Wasm needed by browsers under `target/` during Web builds.
+
+Styled controls come from the official Dioxus Components registry and icons
+come from the official `dioxus-icons` crate. Both are isolated behind
+`simple-table-components`; application code does not depend on
+`dioxus-primitives` or icon packages directly. Run `cargo xtask components` to
+refresh the generated source at the audited upstream revision.
 
 See [docs/architecture.md](docs/architecture.md) for ownership and persistence
 details. [docs/platform-integrations.md](docs/platform-integrations.md) marks

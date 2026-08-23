@@ -32,7 +32,6 @@ use model::{AppPorts, EditorStore};
 
 const APP_CSS: Asset = asset!("/assets/main.css");
 const FAVICON: Asset = asset!("/assets/favicon.png");
-const LUCIDE_FONT: Asset = asset!("/assets/lucide.ttf");
 
 #[derive(Clone, Debug, PartialEq, Routable)]
 enum Route {
@@ -57,22 +56,27 @@ pub fn app() -> Element {
     });
     use_context_provider(|| store);
     use_context_provider(|| Rc::clone(&ports));
+    #[cfg(all(feature = "mobile", target_os = "android"))]
+    use_effect(|| {
+        let _ = ports::android::configure_system_bars();
+    });
+    let platform_class = if cfg!(target_os = "android") {
+        "app-root platform-android"
+    } else {
+        "app-root"
+    };
 
     rsx! {
+        dioxus::document::Stylesheet { href: simple_table_components::DX_COMPONENTS_THEME }
         dioxus::document::Stylesheet { href: APP_CSS }
-        dioxus::document::Style {
-            r#"
-                @font-face {{
-                    font-family: "Lucide Icons";
-                    src: url("{LUCIDE_FONT}") format("truetype");
-                    font-display: block;
-                }}
-            "#
-        }
         dioxus::document::Link { rel: "icon", r#type: "image/png", href: FAVICON }
         dioxus::document::Title { "Simple Table" }
-        Router::<Route> {}
-        components::ErrorNotice {}
+        simple_table_components::ToastProvider {
+            div { class: platform_class,
+                Router::<Route> {}
+                components::ErrorToastBridge {}
+            }
+        }
     }
 }
 

@@ -2021,6 +2021,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dioxus-icons"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ae929a4cdde2e51fca98ccb8a8fe2ea11640e5026c57486b15dbd5618ba7e56"
+dependencies = [
+ "dioxus",
+ "dioxus-signals",
+ "lazy-js-bundle",
+]
+
+[[package]]
 name = "dioxus-interpreter-js"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2505,7 +2516,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2750,16 +2761,6 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "fs4"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
-dependencies = [
- "rustix",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3259,9 +3260,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "839c0e8a181239723652be9062bb56ca5bf5f64011f73b623f6f4fc59086a228"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4284,18 +4285,6 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "lucide-icons"
-version = "1.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77354a0b4473e47ad0b6204ed26d8ec1bd8a31eb9051867bc43e944e2ed0f673"
-
-[[package]]
-name = "lz4_flex"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
 
 [[package]]
 name = "mac"
@@ -5619,7 +5608,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6112,16 +6101,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-stemmers"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e46a2036019fdb888131db7a4c847a1063a7493f971ed94ea82c67eada63ca54"
-dependencies = [
- "serde",
- "serde_derive",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6152,7 +6131,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6210,7 +6189,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6548,18 +6527,16 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple-table"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "base64 0.23.1",
  "dioxus",
- "dioxus-primitives",
  "dioxus-sdk-time",
  "dioxus-web",
  "dirs",
  "futures",
  "getrandom 0.4.3",
  "js-sys",
- "lucide-icons",
  "manganis",
  "reqwest 0.13.4",
  "rfd",
@@ -6567,6 +6544,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "simple-table-components",
  "simple-table-engine",
  "simple-table-protocol",
  "tokio",
@@ -6578,8 +6556,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "simple-table-components"
+version = "0.14.0"
+dependencies = [
+ "dioxus",
+ "dioxus-icons",
+ "dioxus-primitives",
+ "dioxus-ssr",
+]
+
+[[package]]
 name = "simple-table-engine"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "csv",
  "formualizer-parse",
@@ -6602,7 +6590,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-protocol"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6610,7 +6598,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-web-server"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "axum",
  "dioxus",
@@ -6623,7 +6611,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-web-worker"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -6930,20 +6918,16 @@ dependencies = [
  "downcast-rs 2.0.2",
  "fastdivide",
  "fnv",
- "fs4",
  "htmlescape",
  "itertools",
  "levenshtein_automata",
  "log",
  "lru",
- "lz4_flex",
  "measure_time",
- "memmap2",
  "once_cell",
  "oneshot",
  "rayon",
  "regex",
- "rust-stemmers",
  "rustc-hash 2.1.3",
  "serde",
  "serde_json",
@@ -6956,7 +6940,6 @@ dependencies = [
  "tantivy-query-grammar",
  "tantivy-stacker",
  "tantivy-tokenizer-api",
- "tempfile",
  "thiserror 2.0.20",
  "time",
  "typetag",
@@ -7048,7 +7031,6 @@ dependencies = [
  "tantivy-bitpacker",
  "tantivy-common",
  "tantivy-fst",
- "zstd",
 ]
 
 [[package]]
@@ -7133,10 +7115,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8185,7 +8167,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8708,7 +8690,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.13.3"
+version = "0.14.0"
 
 [[package]]
 name = "xxhash-rust"

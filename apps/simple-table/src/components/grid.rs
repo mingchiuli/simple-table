@@ -6,9 +6,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::protocol::{EditorRequest, ImageAnchorDto};
-use crate::ui::icons::{Trash2, X};
 use dioxus::prelude::*;
 use dioxus_sdk_time::sleep;
+use simple_table_components::icons::{Trash2, X};
+use simple_table_components::{Button, ButtonSize, ButtonVariant, Dialog, DialogTitle};
 
 use self::geometry::SparseAxisGeometry;
 use crate::actions;
@@ -155,8 +156,8 @@ pub fn SpreadsheetGrid() -> Element {
             projection.cells.insert(
                 (*row, *col),
                 CellPresentation {
-                    display_text: value.clone(),
-                    edit_text: value.clone(),
+                    display_text: Rc::clone(value),
+                    edit_text: Rc::clone(value),
                     formula_error: None,
                 },
             );
@@ -339,7 +340,7 @@ pub fn SpreadsheetGrid() -> Element {
                         );
                         let enter_value = enter_target
                             .and_then(|next| projection.cells.get(&next))
-                            .map(|cell| cell.edit_text.clone())
+                            .map(|cell| cell.edit_text.to_string())
                             .unwrap_or_default();
                         rsx! {
                             if is_editing {
@@ -352,9 +353,9 @@ pub fn SpreadsheetGrid() -> Element {
                                     aria_rowspan,
                                     aria_colspan,
                                     aria_invalid: has_formula_error.then_some("true"),
-                                    title: presentation.formula_error,
+                                    title: presentation.formula_error.as_deref(),
                                     disabled: store.busy(),
-                                    value: presentation.edit_text,
+                                    value: presentation.edit_text.as_ref(),
                                     onmounted: move |event| {
                                         let element = event.data();
                                         spawn(async move {
@@ -417,12 +418,12 @@ pub fn SpreadsheetGrid() -> Element {
                                     aria_rowspan,
                                     aria_colspan,
                                     aria_invalid: has_formula_error.then_some("true"),
-                                    title: presentation.formula_error,
+                                    title: presentation.formula_error.as_deref(),
                                     tabindex: if is_selected { 0 } else { -1 },
                                     onclick: move |_| {
                                         store.select_cell(sheet_index, row, col);
                                         store.selected_image.set(None);
-                                        store.formula_text.set(presentation.edit_text.clone());
+                                        store.formula_text.set(presentation.edit_text.to_string());
                                         editing_cell.set(Some((sheet_index, row, col)));
                                     },
                                     "{presentation.display_text}"
@@ -739,13 +740,14 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
                                 div { class: "image-placeholder", "Image" }
                             }
                             if is_selected {
-                                button {
+                                Button {
                                     class: "image-delete",
-                                    title: "Delete image",
+                                    variant: ButtonVariant::Destructive,
+                                    size: ButtonSize::IconXs,
                                     aria_label: "Delete image",
                                     onclick: {
                                         let ports = Rc::clone(&ports);
-                                        move |event| {
+                                        move |event: Event<MouseData>| {
                                             event.stop_propagation();
                                             let ports = Rc::clone(&ports);
                                             let image_id = delete_id.clone();
@@ -784,43 +786,26 @@ struct ImagePreviewProps {
 
 #[component]
 fn ImagePreview(props: ImagePreviewProps) -> Element {
-    let close_from_backdrop = props.on_close;
-    let close_from_button = props.on_close;
-    let close_from_keyboard = props.on_close;
-
     rsx! {
-        div {
-            class: "image-preview-backdrop",
-            role: "dialog",
-            aria_modal: "true",
-            aria_label: "Image preview",
-            tabindex: -1,
-            onclick: move |_| close_from_backdrop.call(()),
-            onkeydown: move |event: Event<KeyboardData>| {
-                if event.key() == Key::Escape {
-                    event.prevent_default();
-                    close_from_keyboard.call(());
+        Dialog {
+            class: "image-preview-dialog",
+            open: Some(true),
+            on_open_change: move |open: bool| {
+                if !open {
+                    props.on_close.call(());
                 }
             },
-            onmounted: move |event| {
-                let element = event.data();
-                spawn(async move {
-                    let _ = element.set_focus(true).await;
-                });
-            },
-            button {
+            DialogTitle { class: "visually-hidden", "Image preview" }
+            Button {
                 class: "icon-button image-preview-close",
-                title: "Close image preview",
+                variant: ButtonVariant::Ghost,
+                size: ButtonSize::IconLg,
                 aria_label: "Close image preview",
-                onclick: move |event| {
-                    event.stop_propagation();
-                    close_from_button.call(());
-                },
+                onclick: move |_| props.on_close.call(()),
                 X { size: 20 }
             }
             div {
                 class: "image-preview-content",
-                onclick: move |event| event.stop_propagation(),
                 img {
                     src: props.source.as_ref(),
                     alt: "Workbook image preview",

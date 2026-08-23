@@ -54,20 +54,20 @@ pub(crate) fn run(
     command_id: &str,
     intent: MutationIntent,
     execute: impl FnOnce(MutationIntent) -> Result<MutationOutcome, AppError>,
-) -> Result<MutationOutcome, AppError> {
+) -> Result<Arc<MutationOutcome>, AppError> {
     validate_command_id(command_id)?;
     let fingerprint = intent.fingerprint(base_revision)?;
     let reservation = match reserve(coordinator, document_id, command_id, fingerprint)? {
         ReservationResult::Replay(result) => {
             return match result {
-                TerminalMutationResult::Completed(response) => Ok((*response).clone()),
+                TerminalMutationResult::Completed(response) => Ok(response),
                 TerminalMutationResult::Failed(error) => Err(error),
             };
         }
         ReservationResult::Execute(reservation) => reservation,
     };
 
-    let result = execute(intent);
+    let result = execute(intent).map(Arc::new);
     reservation.finish(result)
 }
 
@@ -87,8 +87,8 @@ struct InFlightReservation {
 impl InFlightReservation {
     fn finish(
         mut self,
-        result: Result<MutationOutcome, AppError>,
-    ) -> Result<MutationOutcome, AppError> {
+        result: Result<Arc<MutationOutcome>, AppError>,
+    ) -> Result<Arc<MutationOutcome>, AppError> {
         let prepared = match &result {
             Ok(response) => prepare_replay_response(&self.command_id, response),
             Err(error) => Some(prepare_replay_failure(&self.command_id, error)),
@@ -96,7 +96,7 @@ impl InFlightReservation {
         let replayed_response = prepared
             .as_ref()
             .and_then(|prepared| match &prepared.result {
-                TerminalMutationResult::Completed(response) => Some((**response).clone()),
+                TerminalMutationResult::Completed(response) => Some(Arc::clone(response)),
                 TerminalMutationResult::Failed(_) => None,
             });
         let mut cache = lock_cache(&self.coordinator)?;
@@ -243,7 +243,7 @@ struct PreparedReplayResponse {
 
 fn prepare_replay_response(
     command_id: &str,
-    response: &MutationOutcome,
+    response: &Arc<MutationOutcome>,
 ) -> Option<PreparedReplayResponse> {
     let entry_bytes = command_id
         .len()
@@ -252,7 +252,7 @@ fn prepare_replay_response(
     let payload =
         prepare_mutation_replay_payload(response, MAX_REPLAY_BYTES.checked_sub(entry_bytes)?)?;
     Some(PreparedReplayResponse {
-        result: TerminalMutationResult::Completed(Arc::new(payload.outcome)),
+        result: TerminalMutationResult::Completed(payload.outcome),
         bytes: entry_bytes.saturating_add(payload.retained_bytes),
     })
 }
@@ -447,6 +447,7 @@ mod tests {
         .expect("replayed mutation");
 
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first.revision, second.revision);
         retire_document(&coordinator, 91);
     }
@@ -898,7 +899,9 @@ mod tests {
                 .retired_documents
                 .contains(&98)
         );
-        reservation.finish(Ok(response())).expect("mutation result");
+        reservation
+            .finish(Ok(Arc::new(response())))
+            .expect("mutation result");
 
         let cache = coordinator.cache.lock().expect("cache");
         assert!(cache.entries.is_empty());

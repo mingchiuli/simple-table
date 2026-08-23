@@ -680,7 +680,7 @@ mod tests {
         let response = do_set_cell(&registry, document_id, revision, 0, 0, 0, "0.5".to_string())
             .expect("set formatted cell");
         let json = serde_json::to_value(crate::protocol_projection::mutation_response(
-            response.outcome,
+            &response.outcome,
         ))
         .expect("serialize response");
 

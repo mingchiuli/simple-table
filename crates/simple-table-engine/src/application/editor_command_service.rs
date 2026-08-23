@@ -96,7 +96,7 @@ pub fn execute(
     base_revision: u64,
     command_id: &str,
     command: EditorCommand,
-) -> Result<MutationOutcome, AppError> {
+) -> Result<Arc<MutationOutcome>, AppError> {
     run_mutation(
         service,
         document_id,
@@ -111,7 +111,7 @@ pub fn undo(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-) -> Result<MutationOutcome, AppError> {
+) -> Result<Arc<MutationOutcome>, AppError> {
     run_mutation(
         service,
         document_id,
@@ -126,7 +126,7 @@ pub fn redo(
     document_id: u64,
     base_revision: u64,
     command_id: &str,
-) -> Result<MutationOutcome, AppError> {
+) -> Result<Arc<MutationOutcome>, AppError> {
     run_mutation(
         service,
         document_id,
@@ -142,7 +142,7 @@ fn run_mutation(
     base_revision: u64,
     command_id: &str,
     intent: MutationIntent,
-) -> Result<MutationOutcome, AppError> {
+) -> Result<Arc<MutationOutcome>, AppError> {
     mutation_replay::run(
         service.mutation_replays(),
         document_id,

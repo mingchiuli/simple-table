@@ -519,7 +519,7 @@ mod tests {
             response.patches.as_slice(),
             [MutationPatch::RowInserted { .. }]
         ));
-        let wire = crate::protocol_projection::mutation_response(response);
+        let wire = crate::protocol_projection::mutation_response(&response);
         assert!(serde_json::to_vec(&wire).unwrap().len() < 64 * 1024);
     }
 
@@ -544,7 +544,7 @@ mod tests {
                 }],
             }],
         );
-        let response = crate::protocol_projection::mutation_response(response);
+        let response = crate::protocol_projection::mutation_response(&response);
 
         assert!(matches!(
             response.patches.as_slice(),

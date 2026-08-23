@@ -1,24 +1,25 @@
 use crate::domain::CellValue;
+use std::sync::Arc;
 
 use super::mutation::{MutationOutcome, MutationPatch};
 
 pub(crate) struct MutationReplayPayload {
-    pub(crate) outcome: MutationOutcome,
+    pub(crate) outcome: Arc<MutationOutcome>,
     pub(crate) retained_bytes: usize,
 }
 
 pub(crate) fn prepare_mutation_replay_payload(
-    outcome: &MutationOutcome,
+    outcome: &Arc<MutationOutcome>,
     maximum_bytes: usize,
 ) -> Option<MutationReplayPayload> {
     let original_bytes = estimated_mutation_outcome_bytes(outcome);
     let (outcome, retained_bytes) = if original_bytes <= maximum_bytes {
-        (outcome.clone(), original_bytes)
+        (Arc::clone(outcome), original_bytes)
     } else {
-        let mut compact = outcome.clone();
+        let mut compact = (**outcome).clone();
         compact.require_resync("mutation response exceeded replay budget");
         let compact_bytes = estimated_mutation_outcome_bytes(&compact);
-        (compact, compact_bytes)
+        (Arc::new(compact), compact_bytes)
     };
 
     (retained_bytes <= maximum_bytes).then_some(MutationReplayPayload {

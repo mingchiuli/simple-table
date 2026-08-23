@@ -1,8 +1,11 @@
 use std::rc::Rc;
 
-use crate::ui::icons::{Search, X};
 use dioxus::prelude::*;
-use dioxus_primitives::switch::{Switch, SwitchThumb};
+use simple_table_components::icons::{Search, X};
+use simple_table_components::{
+    Button, ButtonSize, ButtonVariant, Input, Item, ItemContent, ItemDescription, ItemGroup,
+    ItemSize, ItemTitle, ScrollArea, ScrollDirection, Switch,
+};
 
 use crate::actions;
 use crate::model::{AppPorts, EditorStore};
@@ -23,9 +26,10 @@ pub fn SearchPanel() -> Element {
         aside { class: "search-panel", aria_label: "Search workbook",
             header {
                 h2 { "Find" }
-                button {
+                Button {
                     class: "icon-button",
-                    title: "Close search",
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::IconSm,
                     aria_label: "Close search",
                     onclick: move |_| store.search_open.set(false),
                     X { size: 17 }
@@ -44,54 +48,73 @@ pub fn SearchPanel() -> Element {
                 },
                 div { class: "search-input-wrap",
                     Search { size: 17 }
-                    input {
+                    Input {
                         value: query,
                         placeholder: "Search cells",
                         aria_label: "Search cells",
-                        oninput: move |event| query.set(event.value()),
+                        oninput: move |event: Event<FormData>| query.set(event.value()),
                     }
                 }
                 div { class: "search-scope",
                     span { "All sheets" }
                     Switch {
-                        class: "switch-control",
                         checked: Some(all_sheets()),
                         on_checked_change: move |checked| all_sheets.set(checked),
                         aria_label: "Search all sheets",
-                        SwitchThumb { class: "switch-thumb" }
                     }
                 }
-                button { class: "search-submit", r#type: "submit", "Search" }
+                Button { class: "search-submit", r#type: "submit", "Search" }
             }
 
-            div { class: "search-results",
+            ScrollArea { class: "search-results", direction: ScrollDirection::Vertical,
                 if let Some(response) = response {
                     div { class: "result-count",
                         "{response.results.len()} results"
                         if response.truncated { span { " (limited)" } }
                     }
+                    ItemGroup {
                     for result in response.results {
-                        button {
-                            class: "search-result",
-                            onclick: {
-                                let ports = Rc::clone(&ports);
-                                move |_| {
-                                    let ports = Rc::clone(&ports);
-                                    spawn(async move {
-                                        actions::select_search_result(
-                                            store,
-                                            ports,
-                                            result.sheet_index,
-                                            result.row,
-                                            result.col,
-                                        )
-                                        .await;
-                                    });
+                        {
+                            let ports = Rc::clone(&ports);
+                            let sheet_index = result.sheet_index;
+                            let row = result.row;
+                            let col = result.col;
+                            let sheet_name = result.sheet_name;
+                            let cell_position = result.cell_position;
+                            let value = result.value;
+                            rsx! {
+                                Item {
+                                    size: ItemSize::Sm,
+                                    r#as: move |attributes: Vec<Attribute>| {
+                                        let ports = Rc::clone(&ports);
+                                        rsx! {
+                                            button {
+                                                class: "search-result",
+                                                onclick: move |_| {
+                                                    let ports = Rc::clone(&ports);
+                                                    spawn(async move {
+                                                        actions::select_search_result(
+                                                            store,
+                                                            ports,
+                                                            sheet_index,
+                                                            row,
+                                                            col,
+                                                        )
+                                                        .await;
+                                                    });
+                                                },
+                                                ..attributes,
+                                                ItemContent {
+                                                    ItemTitle { class: "result-location", "{sheet_name} · {cell_position}" }
+                                                    ItemDescription { class: "result-value", "{value}" }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                            },
-                            span { class: "result-location", "{result.sheet_name} · {result.cell_position}" }
-                            span { class: "result-value", "{result.value}" }
+                            }
                         }
+                    }
                     }
                 } else {
                     p { class: "search-empty", "Enter a value to search the workbook." }

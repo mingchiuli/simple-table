@@ -27,8 +27,8 @@ implemented by this project.
 | Capability | Classification | Ownership and implementation |
 | --- | --- | --- |
 | Desktop, mobile, SSR, hydration, routing, events, and `asset!` | **Official - Dioxus** | Public Dioxus 0.7.10 APIs and renderers are used directly. Target composition and application behavior are **Project**. |
-| Switch, Tabs, and Toolbar primitives | **Official - Dioxus** | Imported directly from the official `dioxus-primitives` repository at the audited commit in `Cargo.toml`. App styling, labels, enabled state, and commands are **Project**. |
-| Toolbar icons | **Upstream library + Project** | Icon data comes from `lucide-icons`; the Dioxus adapter, sizing, accessibility labels, and button behavior are **Project**. |
+| Styled controls | **Official - Dioxus** | Generated from the official Dioxus Components registry at the audited commit and isolated behind `simple-table-components`. App composition, labels, enabled state, commands, and theme overrides are **Project**. |
+| Control icons | **Official - Dioxus** | SVG icon components come from the official `dioxus-icons` Lucide set through the `simple-table-components` facade. Accessible labels and button behavior are **Project**. |
 | Desktop and Web workbook/image selection | **Official - Dioxus** | RSX file inputs use Dioxus `onchange`, `FormData`, and file-reading APIs. Validation and engine requests are **Project**. |
 | Desktop save/export dialog | **Upstream library + Project** | `rfd::AsyncFileDialog` supplies the native dialog. Path policy, atomic writes, save tokens, and document identity are **Project**. |
 | Web download | **Official - browser + Project** | Browser Blob/object-URL APIs are called through `web-sys`; the Rust port and export workflow are **Project**. |
@@ -73,7 +73,8 @@ normally.
 
 This is **Compatibility**, not a Dioxus patch:
 
-- no Dioxus source is modified or vendored;
+- the mobile compatibility path does not modify Dioxus or the generated
+  official component source;
 - no Cargo `[patch]` overrides Dioxus;
 - no JavaScript or TypeScript source is checked in; the short WebView program
   remains inside the Rust platform port;
@@ -109,9 +110,11 @@ and product semantics remain **Project** code.
 ## Dependency Policy
 
 The repository does not carry local Dioxus patches. The exact Dioxus release is
-pinned in the workspace. `dioxus-primitives` is an official upstream Git
-dependency pinned to an audited revision because no suitable crates.io release
-is available; a Git revision pin is not a source patch.
+pinned in the workspace. Official styled component source is generated into an
+isolated crate, while its internal `dioxus-primitives` dependency is pinned to
+the same audited upstream revision. Application code depends only on that
+crate's facade. `cargo xtask components` is the repeatable regeneration and
+upgrade entry point.
 
 Before a mobile release, compile checks must be supplemented with device tests
 for open/cancel, insert image, first save, repeated save, export copy, recovery,

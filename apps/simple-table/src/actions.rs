@@ -220,7 +220,7 @@ pub fn queue_cell_edit(
     store
         .pending_edits
         .write()
-        .insert((sheet_index, row, col), (generation, text));
+        .insert((sheet_index, row, col), (generation, text.into()));
     spawn(async move {
         sleep(Duration::from_millis(500)).await;
         let should_commit = store
@@ -274,12 +274,12 @@ async fn flush_pending_batch_locked(
             sheet_index: *sheet_index,
             row: *row,
             col: *col,
-            text: text.clone(),
+            text: text.to_string(),
         })
         .collect();
     let result = run_mutation_locked(
         store,
-        Rc::clone(&ports),
+        ports,
         EditorRequest::SetCells {
             request_id: request_id("cells"),
             document_id,
@@ -344,7 +344,7 @@ async fn run_mutation_locked(
                     if refresh.document {
                         ports.regions.reset();
                     }
-                    store.accept_mutation(&mutation);
+                    store.accept_mutation(mutation);
                     if refresh.document {
                         refresh_document(store, Rc::clone(&ports)).await;
                     }
@@ -1497,18 +1497,23 @@ mod tests {
     #[test]
     fn committed_edits_do_not_remove_newer_input() {
         let coordinates = (0, 2, 3);
-        let mut pending = HashMap::from([(coordinates, (2, "new".to_string()))]);
-        let committed = HashMap::from([(coordinates, (1, "old".to_string()))]);
+        let mut pending = HashMap::from([(coordinates, (2, Rc::<str>::from("new")))]);
+        let committed = HashMap::from([(coordinates, (1, Rc::<str>::from("old")))]);
 
         remove_committed_edits(&mut pending, committed);
 
-        assert_eq!(pending.get(&coordinates), Some(&(2, "new".to_string())));
+        assert_eq!(
+            pending
+                .get(&coordinates)
+                .map(|(generation, text)| (*generation, text.as_ref())),
+            Some((2, "new"))
+        );
     }
 
     #[test]
     fn committed_edits_remove_the_matching_generation() {
         let coordinates = (0, 2, 3);
-        let edit = (1, "value".to_string());
+        let edit = (1, Rc::<str>::from("value"));
         let mut pending = HashMap::from([(coordinates, edit.clone())]);
 
         remove_committed_edits(&mut pending, HashMap::from([(coordinates, edit)]));

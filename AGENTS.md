@@ -47,6 +47,9 @@ cargo clippy -p simple-table --target aarch64-linux-android \
 - `crates/simple-table-engine/src/lib.rs` is the engine crate root. Its sibling
   modules retain the document, operations, state, I/O, application, and adapter
   responsibility boundaries.
+- `crates/simple-table-components/` is the only UI-library boundary. Its
+  `src/components/` tree and official theme asset are CLI-generated upstream
+  source; `src/lib.rs` is the project facade.
 - `apps/simple-table/src/lib.rs`, `components.rs`, and `components/` own Dioxus
   routes, views, and state coordination.
 - `apps/simple-table/src/ports.rs` and `ports/` isolate platform behavior.
@@ -57,14 +60,18 @@ cargo clippy -p simple-table --target aarch64-linux-android \
   production Axum SSR.
 - `xtask/src/main.rs` owns repeatable multi-stage builds.
 
-Do not add `mod.rs`; declare a directory module with the adjacent modern module
-file, for example `src/components.rs` plus `src/components/editor.rs`.
+Do not add `mod.rs` to project-owned code; declare a directory module with the
+adjacent modern module file, for example `src/components.rs` plus
+`src/components/editor.rs`. The official generated component tree is the only
+exception and retains its upstream module layout.
 
-Switch, Tabs, and Toolbar come directly from the official
-`dioxus-primitives` package. The dependency is pinned to an audited upstream
-commit; app-specific appearance remains in `apps/simple-table/assets/main.css`.
-Local UI code is limited to the Lucide icon adapter in
-`apps/simple-table/src/ui/`.
+Finished controls come from the official Dioxus Components registry and icons
+come from the official `dioxus-icons` crate. Both are isolated behind
+`simple-table-components`; the app must not depend on or import
+`dioxus-primitives`, `dioxus-icons`, or other icon packages directly. Keep
+generated sources unchanged, app composition in `apps/simple-table/src/ui.rs`,
+and app appearance in `apps/simple-table/assets/main.css`. Refresh generated
+sources only with `cargo xtask components`.
 
 ## Editor Invariants
 
@@ -82,8 +89,9 @@ Local UI code is limited to the Lucide icon adapter in
 - Use `AppError` in the backend and `AppErrorDto` across the protocol boundary.
 - Put business logic in the existing engine responsibility module, not views.
 - Keep platform behavior behind modules in `apps/simple-table/src/ports/`.
-- Prefer official Dioxus Primitives and Lucide assets for controls. Do not copy
-  upstream component implementations into the app.
+- Prefer official styled Dioxus Components and official Dioxus Lucide icons for
+  controls. Do not copy or customize upstream component implementations in the
+  app or generated component tree.
 - Keep JavaScript and TypeScript out of source control. The `web` and `bundle`
   tasks generate browser Worker binding glue under `target/generated-public/`.
 - `cargo xtask bundle` is the only Web deployment build. It must produce the

@@ -1,18 +1,27 @@
 use std::rc::Rc;
 
-use crate::ui::icons::{FilePlus, FolderOpen, Grid2X2Plus, HardDriveDownload, Trash2};
 use dioxus::prelude::*;
+#[cfg(not(feature = "mobile"))]
+use simple_table_components::Label;
+use simple_table_components::icons::{
+    FilePlus, FolderOpen, Grid2x2Plus, HardDriveDownload, Trash2,
+};
+use simple_table_components::{
+    AlertDialog, AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogDescription,
+    AlertDialogTitle, Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Item, ItemActions,
+    ItemContent, ItemGroup, ItemMedia, ItemMediaVariant, ItemSize, ItemTitle,
+};
 
 use crate::Route;
 use crate::actions;
 use crate::model::{AppPorts, EditorStore};
-use crate::ports::window::{PlatformWindowPort, WindowPort};
 
 #[component]
 pub fn HomeView() -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
+    let mut pending_delete = use_signal(|| None::<(String, String)>);
 
     use_effect({
         let ports = Rc::clone(&ports);
@@ -25,22 +34,24 @@ pub fn HomeView() -> Element {
     let busy = store.busy();
     let version = env!("CARGO_PKG_VERSION");
     let local_documents = store.local_documents.read().clone();
+    let delete_target = pending_delete.read().clone();
     rsx! {
         main { class: "home-shell",
             header { class: "home-header",
                 div { class: "brand-lockup",
-                    div { class: "brand-mark", Grid2X2Plus { size: 22 } }
+                    div { class: "brand-mark", Grid2x2Plus { size: 22 } }
                     div {
                         h1 { "Simple Table" }
                         p { "Spreadsheet editor" }
                     }
                 }
-                span { class: "platform-badge", "Rust / Dioxus" }
+                Badge { class: "platform-badge", variant: BadgeVariant::Outline, "Rust / Dioxus" }
             }
 
             section { class: "home-actions", aria_label: "Create or open a spreadsheet",
-                button {
+                Button {
                     class: "primary-command",
+                    size: ButtonSize::Lg,
                     disabled: busy,
                     onclick: {
                         let ports = Rc::clone(&ports);
@@ -79,11 +90,16 @@ pub fn HomeView() -> Element {
                             p { "No local workbooks yet" }
                         }
                     } else {
-                        div { class: "document-list",
+                        ItemGroup { class: "document-list",
                             for document in local_documents {
-                                div { class: "document-row", key: "{document.id}",
-                                    button {
+                                Item { class: "document-row", key: "{document.id}", size: ItemSize::Sm,
+                                    ItemMedia { variant: ItemMediaVariant::Icon,
+                                        FolderOpen { size: 18 }
+                                    }
+                                    ItemContent {
+                                    Button {
                                         class: "document-open",
+                                        variant: ButtonVariant::Ghost,
                                         disabled: busy,
                                         onclick: {
                                             let ports = Rc::clone(&ports);
@@ -98,39 +114,31 @@ pub fn HomeView() -> Element {
                                                 });
                                             }
                                         },
-                                        span { class: "file-icon", FolderOpen { size: 18 } }
-                                        span { class: "document-name", "{document.name}" }
+                                        ItemTitle { class: "document-name", "{document.name}" }
                                         if document.has_recovery {
-                                            span { class: "recovery-label", "Recovered" }
+                                            Badge { class: "recovery-label", variant: BadgeVariant::Secondary, "Recovered" }
                                         }
                                     }
-                                    button {
+                                    }
+                                    ItemActions {
+                                    Button {
                                         class: "icon-button subtle",
-                                        title: "Remove local workbook",
+                                        variant: ButtonVariant::Ghost,
+                                        size: ButtonSize::IconSm,
                                         aria_label: "Remove {document.name}",
                                         disabled: busy,
                                         onclick: {
-                                            let ports = Rc::clone(&ports);
                                             let document_key = document.id;
                                             let document_name = document.name;
                                             move |_| {
-                                                let ports = Rc::clone(&ports);
-                                                let document_key = document_key.clone();
-                                                let document_name = document_name.clone();
-                                                spawn(async move {
-                                                    if PlatformWindowPort
-                                                        .confirm(
-                                                            "Remove local workbook",
-                                                            &format!("Permanently remove {document_name}?"),
-                                                        )
-                                                        .await
-                                                    {
-                                                        actions::delete_local_document(store, ports, document_key).await;
-                                                    }
-                                                });
+                                                pending_delete.set(Some((
+                                                    document_key.clone(),
+                                                    document_name.clone(),
+                                                )));
                                             }
                                         },
                                         Trash2 { size: 17 }
+                                    }
                                     }
                                 }
                             }
@@ -139,6 +147,41 @@ pub fn HomeView() -> Element {
                 }
             }
             footer { class: "home-footer", "v{version}" }
+            AlertDialog {
+                open: Some(pending_delete.read().is_some()),
+                on_open_change: move |open: bool| {
+                    if !open {
+                        pending_delete.set(None);
+                    }
+                },
+                AlertDialogTitle { "Remove local workbook" }
+                AlertDialogDescription {
+                    if let Some((_, name)) = pending_delete.read().as_ref() {
+                        "Permanently remove {name}? This cannot be undone."
+                    }
+                }
+                AlertDialogActions {
+                    AlertDialogCancel {
+                        on_click: move |_| pending_delete.set(None),
+                        "Cancel"
+                    }
+                    AlertDialogAction {
+                        on_click: {
+                            let ports = Rc::clone(&ports);
+                            move |_| {
+                                let Some((document_key, _)) = delete_target.clone() else {
+                                    return;
+                                };
+                                let ports = Rc::clone(&ports);
+                                spawn(async move {
+                                    actions::delete_local_document(store, ports, document_key).await;
+                                });
+                            }
+                        },
+                        "Remove"
+                    }
+                }
+            }
         }
     }
 }
@@ -152,8 +195,10 @@ fn OpenDocumentControl() -> Element {
 
     #[cfg(feature = "mobile")]
     return rsx! {
-        button {
+        Button {
             class: "secondary-command",
+            variant: ButtonVariant::Outline,
+            size: ButtonSize::Lg,
             disabled: busy,
             onclick: move |_| {
                 let ports = Rc::clone(&ports);
@@ -180,10 +225,13 @@ fn OpenDocumentControl() -> Element {
 
     #[cfg(not(feature = "mobile"))]
     rsx! {
-        label { class: if busy { "secondary-command disabled" } else { "secondary-command" },
+        Label {
+            class: if busy { "secondary-command disabled" } else { "secondary-command" },
+            html_for: "home-open-workbook",
             FolderOpen { size: 19 }
             span { "Open file" }
             input {
+                id: "home-open-workbook",
                 class: "visually-hidden",
                 r#type: "file",
                 accept: ".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv",

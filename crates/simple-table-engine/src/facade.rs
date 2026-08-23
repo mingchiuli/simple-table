@@ -552,9 +552,9 @@ impl CoreFacade {
 
     fn mutation_reply(
         &self,
-        outcome: crate::projection_model::MutationOutcome,
+        outcome: std::sync::Arc<crate::projection_model::MutationOutcome>,
     ) -> Result<EditorReply, AppError> {
-        let response = crate::protocol_projection::mutation_response(outcome);
+        let response = crate::protocol_projection::mutation_response(&outcome);
         Ok(EditorReply::Mutation {
             value: serde_json::to_value(response).map_err(serialization_error)?,
         })

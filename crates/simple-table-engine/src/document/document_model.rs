@@ -373,17 +373,20 @@ impl SpreadsheetDocument {
                 bytes,
                 image_name,
                 ..
-            } => DocumentMementoSide::Image(ImageMemento {
-                sheet_index: *sheet_index,
-                image_id: image.id.clone(),
-                image: self.current_image(*sheet_index, &image.id),
-                asset: self.current_image(*sheet_index, &image.id).map(|_| {
-                    crate::document::backing::document_body::BodyImageAsset {
-                        image_name: image_name.clone(),
-                        bytes: bytes.clone(),
-                    }
-                }),
-            }),
+            } => {
+                let current_image = self.current_image(*sheet_index, &image.id);
+                DocumentMementoSide::Image(ImageMemento {
+                    sheet_index: *sheet_index,
+                    image_id: image.id.clone(),
+                    asset: current_image.as_ref().map(|_| {
+                        crate::document::backing::document_body::BodyImageAsset {
+                            image_name: image_name.clone(),
+                            bytes: bytes.clone(),
+                        }
+                    }),
+                    image: current_image,
+                })
+            }
             AppliedOperation::UpdateImage {
                 sheet_index,
                 new_image,

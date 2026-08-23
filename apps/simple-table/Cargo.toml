@@ -7,6 +7,10 @@ repository.workspace = true
 publish.workspace = true
 default-run = "simple-table"
 
+[package.metadata.cargo-machete]
+# Hydration and the Wasm random backend are enabled through dependency features.
+ignored = ["dioxus-web", "getrandom"]
+
 [lints]
 workspace = true
 
@@ -32,20 +36,18 @@ web = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
-    "dioxus-primitives/web",
     "dioxus/web",
+    "simple-table-components/web",
 ]
 server = ["dioxus/fullstack", "dioxus/server"]
 
 [dependencies]
 base64.workspace = true
 dioxus = { workspace = true, features = ["router"] }
-dioxus-primitives.workspace = true
 dioxus-sdk-time.workspace = true
 dioxus-web = { workspace = true, features = ["hydrate"], optional = true }
 futures.workspace = true
 js-sys = { workspace = true, optional = true }
-lucide-icons.workspace = true
 reqwest = { workspace = true, features = ["json"], optional = true }
 rfd = { workspace = true, optional = true }
 semver.workspace = true
@@ -53,6 +55,7 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 serde-wasm-bindgen = { workspace = true, optional = true }
 simple-table-engine = { workspace = true, optional = true }
+simple-table-components.workspace = true
 simple-table-protocol.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 uuid = { workspace = true, features = ["v4", "serde", "rng-getrandom"] }

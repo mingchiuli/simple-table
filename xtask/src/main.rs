@@ -5,17 +5,41 @@ const DX_RELEASE_CLIENT: &str = "target/dx/simple-table/release/web";
 const DX_RELEASE_SERVER: &str = "target/dx/simple-table-web/release/web";
 const EMBEDDED_PUBLIC: &str = "target/embedded-web-public";
 const GENERATED_PUBLIC: &str = "target/generated-public";
+const COMPONENT_CRATE: &str = "crates/simple-table-components";
+const COMPONENT_SOURCE: &str = "crates/simple-table-components/src/components";
+const DIOXUS_COMPONENTS_GIT: &str = "https://github.com/DioxusLabs/dioxus-components.git";
+const DIOXUS_COMPONENTS_REVISION: &str = "bf007c15d0cf4d04d3181cc46cf12325aa773955";
+const DIOXUS_COMPONENTS: &[&str] = &[
+    "alert_dialog",
+    "badge",
+    "button",
+    "dialog",
+    "input",
+    "item",
+    "label",
+    "popover",
+    "scroll_area",
+    "separator",
+    "switch",
+    "tabs",
+    "toast",
+    "toolbar",
+    "tooltip",
+];
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(task) = args.next() else {
-        eprintln!("usage: cargo xtask <check|test|desktop|ios|android|web|bundle|bundle-app>");
+        eprintln!(
+            "usage: cargo xtask <check|test|components|desktop|ios|android|web|bundle|bundle-app>"
+        );
         return ExitCode::FAILURE;
     };
     let extra_args = args.collect::<Vec<_>>();
     let status = match task.as_str() {
         "check" => check_all_targets(),
         "test" => test_all_targets(),
+        "components" => refresh_components(),
         "web" => build_worker().and_then(|status| {
             if !status.success() {
                 return Ok(status);
@@ -174,6 +198,7 @@ fn run_cargo_matrix(commands: &[&[&str]], trailing_args: &[&str]) -> std::io::Re
 fn check_repository_layout() -> std::io::Result<()> {
     let mut violations = Vec::new();
     inspect_source_tree(workspace_root(), &mut violations)?;
+    check_component_boundary(&mut violations)?;
     if violations.is_empty() {
         return Ok(());
     }
@@ -200,7 +225,7 @@ fn inspect_source_tree(path: &Path, violations: &mut Vec<String>) -> std::io::Re
             continue;
         }
         let extension = path.extension().and_then(|value| value.to_str());
-        if name == "mod.rs"
+        if (name == "mod.rs" && !path.starts_with(workspace_path(COMPONENT_SOURCE)))
             || matches!(extension, Some("js" | "jsx" | "ts" | "tsx"))
             || matches!(name.as_ref(), "package.json" | "package-lock.json")
         {
@@ -208,6 +233,75 @@ fn inspect_source_tree(path: &Path, violations: &mut Vec<String>) -> std::io::Re
         }
     }
     Ok(())
+}
+
+fn check_component_boundary(violations: &mut Vec<String>) -> std::io::Result<()> {
+    let component_manifest =
+        std::fs::read_to_string(workspace_path(COMPONENT_CRATE).join("Cargo.toml"))?;
+    if !component_manifest.contains(DIOXUS_COMPONENTS_REVISION) {
+        violations.push(format!(
+            "{COMPONENT_CRATE}/Cargo.toml must pin dioxus-primitives to {DIOXUS_COMPONENTS_REVISION}"
+        ));
+    }
+
+    let app_manifest = std::fs::read_to_string(workspace_path("apps/simple-table/Cargo.toml"))?;
+    for forbidden in ["dioxus-primitives", "dioxus-icons", "lucide-icons"] {
+        if app_manifest.contains(forbidden) {
+            violations.push(format!(
+                "apps/simple-table/Cargo.toml must use simple-table-components instead of {forbidden}"
+            ));
+        }
+    }
+    inspect_forbidden_ui_imports(
+        &workspace_path("apps/simple-table/src"),
+        &["dioxus_primitives", "dioxus_icons", "lucide_icons"],
+        violations,
+    )
+}
+
+fn inspect_forbidden_ui_imports(
+    path: &Path,
+    forbidden: &[&str],
+    violations: &mut Vec<String>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            inspect_forbidden_ui_imports(&path, forbidden, violations)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+            let source = std::fs::read_to_string(&path)?;
+            for forbidden in forbidden {
+                if source.contains(forbidden) {
+                    violations.push(format!(
+                        "{} must use the simple-table-components facade instead of {forbidden}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn refresh_components() -> std::io::Result<ExitStatus> {
+    let mut process = Command::new(std::env::var_os("DIOXUS_CLI").unwrap_or_else(|| "dx".into()));
+    process
+        .current_dir(workspace_path(COMPONENT_CRATE))
+        .args(["components", "add"])
+        .args(DIOXUS_COMPONENTS)
+        .args([
+            "--git",
+            DIOXUS_COMPONENTS_GIT,
+            "--rev",
+            DIOXUS_COMPONENTS_REVISION,
+            "--module-path",
+            "src/components",
+            "--global-assets-path",
+            "assets",
+            "--force",
+        ]);
+    process.status()
 }
 
 fn dioxus_serve(

@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use simple_table_protocol::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
 
 use super::{
-    CellPresentation, CellView, EditorMutationView, EditorPatchView, MergeRangeView,
-    SheetRegionBoundsView, SheetRegionView, cell_presentation,
+    CellPresentation, CellView, EditorPatchView, MergeRangeView, SheetRegionBoundsView,
+    SheetRegionView, cell_presentation,
 };
 
 const MAX_TILES_PER_SHEET: usize = 8;
@@ -219,20 +219,25 @@ impl RegionCache {
         }
     }
 
-    pub fn apply_mutation(&mut self, mutation: &EditorMutationView) {
+    pub fn apply_mutation_parts(
+        &mut self,
+        document_id: u64,
+        revision: u64,
+        patches: &[EditorPatchView],
+    ) {
         let Some(identity) = self.identity else {
             return;
         };
-        if identity.document_id != mutation.document_id || mutation.revision < identity.revision {
+        if identity.document_id != document_id || revision < identity.revision {
             self.clear();
             self.identity = Some(DocumentRevision {
-                document_id: mutation.document_id,
-                revision: mutation.revision,
+                document_id,
+                revision,
             });
             return;
         }
 
-        for patch in &mutation.patches {
+        for patch in patches {
             match patch {
                 EditorPatchView::Cells { changes } => {
                     for change in changes {
@@ -253,8 +258,8 @@ impl RegionCache {
             }
         }
         self.identity = Some(DocumentRevision {
-            document_id: mutation.document_id,
-            revision: mutation.revision,
+            document_id,
+            revision,
         });
     }
 
@@ -448,9 +453,11 @@ mod tests {
         assert!(cache.insert_region(second.region, vec![second]));
 
         let projection = cache.projection(0, None);
-        assert_eq!(projection.cells[&(0, 0)].display_text, "first");
+        assert_eq!(projection.cells[&(0, 0)].display_text.as_ref(), "first");
         assert_eq!(
-            projection.cells[&(SHEET_REGION_TILE_ROWS, 0)].display_text,
+            projection.cells[&(SHEET_REGION_TILE_ROWS, 0)]
+                .display_text
+                .as_ref(),
             "second"
         );
     }
@@ -554,7 +561,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(projection.cells[&(2, 1)].display_text, "Merged");
+        assert_eq!(projection.cells[&(2, 1)].display_text.as_ref(), "Merged");
         assert_eq!(projection.merges.len(), 1);
     }
 }

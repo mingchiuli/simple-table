@@ -5,6 +5,14 @@ use manganis::jni::JNIEnv;
 use manganis::jni::objects::{JObject, JValue};
 
 const CONTENT_SCHEME: &str = "content://";
+const APPEARANCE_LIGHT_STATUS_BARS: i32 = 0x08;
+const APPEARANCE_LIGHT_NAVIGATION_BARS: i32 = 0x10;
+const SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR: i32 = 0x10;
+const SYSTEM_UI_FLAG_LIGHT_STATUS_BAR: i32 = 0x2000;
+
+pub fn configure_system_bars() -> Result<(), String> {
+    with_raw_activity(configure_system_bars_inner)
+}
 
 pub async fn write_document(
     existing_target: Option<String>,
@@ -64,9 +72,72 @@ pub fn app_files_dir() -> Result<PathBuf, AppErrorDto> {
 fn with_activity<T>(
     operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, String>,
 ) -> Result<T, AppErrorDto> {
+    with_raw_activity(operation).map_err(android_error)
+}
+
+fn with_raw_activity<T>(
+    operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, String>,
+) -> Result<T, String> {
     manganis::android::with_activity(|env, activity| Some(operation(env, activity)))
-        .ok_or_else(|| android_error("Android activity is unavailable"))?
-        .map_err(android_error)
+        .ok_or_else(|| "Android activity is unavailable".to_string())?
+}
+
+fn configure_system_bars_inner(env: &mut JNIEnv<'_>, activity: &JObject<'_>) -> Result<(), String> {
+    let sdk_int = env
+        .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
+        .map_err(jni_error)?
+        .i()
+        .map_err(jni_error)?;
+    let window = env
+        .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])
+        .map_err(jni_error)?
+        .l()
+        .map_err(jni_error)?;
+
+    if sdk_int >= 30 {
+        let controller = env
+            .call_method(
+                window,
+                "getInsetsController",
+                "()Landroid/view/WindowInsetsController;",
+                &[],
+            )
+            .map_err(jni_error)?
+            .l()
+            .map_err(jni_error)?;
+        if controller.is_null() {
+            return Err("Android window insets controller is unavailable".to_string());
+        }
+        let mask = APPEARANCE_LIGHT_STATUS_BARS | APPEARANCE_LIGHT_NAVIGATION_BARS;
+        env.call_method(
+            controller,
+            "setSystemBarsAppearance",
+            "(II)V",
+            &[JValue::Int(mask), JValue::Int(mask)],
+        )
+        .map_err(jni_error)?;
+    } else {
+        let decor_view = env
+            .call_method(window, "getDecorView", "()Landroid/view/View;", &[])
+            .map_err(jni_error)?
+            .l()
+            .map_err(jni_error)?;
+        let current = env
+            .call_method(&decor_view, "getSystemUiVisibility", "()I", &[])
+            .map_err(jni_error)?
+            .i()
+            .map_err(jni_error)?;
+        let mask = SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        env.call_method(
+            decor_view,
+            "setSystemUiVisibility",
+            "(I)V",
+            &[JValue::Int(current | mask)],
+        )
+        .map_err(jni_error)?;
+    }
+
+    Ok(())
 }
 
 fn insert_download<'local>(

@@ -55,10 +55,13 @@ reach into internal backend state.
 coordination. `ports.rs` and `ports/` isolate native, mobile, and browser
 behavior.
 
-Switch, Tabs, and Toolbar come directly from the official Dioxus Components
-`dioxus-primitives` package. The upstream commit is pinned for reproducible
-builds; only app-specific presentation lives in
-`apps/simple-table/assets/main.css`.
+`crates/simple-table-components` isolates the official styled Dioxus Components
+source and official Dioxus Lucide icons from application code. Its generated
+component tree retains the upstream layout and is refreshed with
+`cargo xtask components` at the audited revision. `src/lib.rs` is the stable
+project facade, `apps/simple-table/src/ui.rs` contains thin compositions, and
+app-specific presentation lives in `apps/simple-table/assets/main.css`. This
+keeps upstream regeneration independent from business views and theme changes.
 
 ### Browser Worker
 
