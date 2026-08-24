@@ -22,13 +22,14 @@ pub fn ToolbarIconButton(props: ToolbarIconButtonProps) -> Element {
     } else {
         "tool-button"
     };
+    let tooltip_disabled = props.disabled || cfg!(feature = "mobile");
     let trigger_label = props.label.clone();
     let content_label = props.label.clone();
     let children = props.children.clone();
     let on_click = props.on_click;
 
     rsx! {
-        Tooltip { disabled: props.disabled,
+        Tooltip { disabled: tooltip_disabled,
             TooltipTrigger {
                 r#as: move |attributes: Vec<Attribute>| {
                     let children = children.clone();

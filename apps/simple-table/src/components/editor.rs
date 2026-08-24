@@ -13,6 +13,8 @@ use simple_table_components::{
     PopoverContent, PopoverRoot, PopoverTrigger, TabList, TabTrigger, Tabs, TabsVariant, Toolbar,
     ToolbarSeparator,
 };
+#[cfg(feature = "mobile")]
+use simple_table_components::{Dialog, DialogTitle};
 #[cfg(not(feature = "mobile"))]
 use simple_table_components::{Tooltip, TooltipContent, TooltipTrigger};
 
@@ -40,6 +42,8 @@ pub fn EditorView() -> Element {
     let ports = use_context::<Rc<AppPorts>>();
     let navigator = use_navigator();
     let mut pending_action = use_signal(|| None::<PendingEditorAction>);
+    #[cfg(feature = "mobile")]
+    let mut pending_save_name = use_signal(|| None::<String>);
     use_effect(move || install_dirty_guard(has_unsaved_changes(store)));
     use_drop(|| install_dirty_guard(false));
     let document = store.document.read().clone();
@@ -84,10 +88,16 @@ pub fn EditorView() -> Element {
         },
     );
     let file_name = document.document.file_name.clone();
+    #[cfg(feature = "mobile")]
+    let needs_save_name = document.document.path.is_empty();
     let sheet_count = document.document.sheets.len();
     let dirty = editor_state.is_dirty || !store.pending_edits.read().is_empty();
     let back_ports = Rc::clone(&ports);
     let confirmed_action = pending_action.read().clone();
+    #[cfg(feature = "mobile")]
+    let save_name_dialog = rsx! { MobileSaveDialog { pending_name: pending_save_name } };
+    #[cfg(not(feature = "mobile"))]
+    let save_name_dialog = rsx! {};
 
     rsx! {
         main { class: if store.search_open() { "editor-shell search-visible" } else { "editor-shell" },
@@ -149,7 +159,14 @@ pub fn EditorView() -> Element {
                     disabled: store.busy(),
                     on_click: {
                         let ports = Rc::clone(&ports);
+                        #[cfg(feature = "mobile")]
+                        let suggested_name = file_name;
                         move |_| {
+                            #[cfg(feature = "mobile")]
+                            if needs_save_name {
+                                pending_save_name.set(Some(suggested_name.clone()));
+                                return;
+                            }
                             let ports = Rc::clone(&ports);
                             spawn(async move { actions::save_local(store, ports).await });
                         }
@@ -440,6 +457,69 @@ pub fn EditorView() -> Element {
                             }
                         },
                         "Discard and continue"
+                    }
+                }
+            }
+            {save_name_dialog}
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
+#[component]
+fn MobileSaveDialog(mut pending_name: Signal<Option<String>>) -> Element {
+    let store = use_context::<EditorStore>();
+    let ports = use_context::<Rc<AppPorts>>();
+    let Some(name) = pending_name.read().clone() else {
+        return rsx! {};
+    };
+    let target_name = name.trim().to_string();
+    let can_save = !target_name.is_empty();
+
+    rsx! {
+        Dialog {
+            open: Some(true),
+            on_open_change: move |open: bool| {
+                if !open {
+                    pending_name.set(None);
+                }
+            },
+            DialogTitle { "Save workbook" }
+            form {
+                class: "save-name-form",
+                onsubmit: {
+                    let ports = Rc::clone(&ports);
+                    move |event: FormEvent| {
+                        event.prevent_default();
+                        if target_name.is_empty() {
+                            return;
+                        }
+                        pending_name.set(None);
+                        let ports = Rc::clone(&ports);
+                        let target_name = target_name.clone();
+                        spawn(async move {
+                            actions::save_local_as(store, ports, target_name).await;
+                        });
+                    }
+                },
+                Label { html_for: "mobile-save-name", "File name" }
+                Input {
+                    id: "mobile-save-name",
+                    value: name,
+                    oninput: move |event: FormEvent| {
+                        pending_name.set(Some(event.value()));
+                    }
+                }
+                div { class: "save-name-actions",
+                    Button {
+                        r#type: "button",
+                        variant: ButtonVariant::Outline,
+                        onclick: move |_| pending_name.set(None),
+                        "Cancel"
+                    }
+                    Button { r#type: "submit", disabled: !can_save,
+                        Save { size: 16 }
+                        "Save"
                     }
                 }
             }

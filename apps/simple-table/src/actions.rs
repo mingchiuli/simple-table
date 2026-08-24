@@ -409,7 +409,20 @@ pub async fn redo(store: EditorStore, ports: Rc<AppPorts>) {
     .await;
 }
 
-pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
+pub async fn save_local(store: EditorStore, ports: Rc<AppPorts>) {
+    save_local_to_target(store, ports, None).await;
+}
+
+#[cfg(feature = "mobile")]
+pub async fn save_local_as(store: EditorStore, ports: Rc<AppPorts>, target_name: String) {
+    save_local_to_target(store, ports, Some(target_name)).await;
+}
+
+async fn save_local_to_target(
+    mut store: EditorStore,
+    ports: Rc<AppPorts>,
+    target_name: Option<String>,
+) {
     let _operation = ports.operations.lock().await;
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
@@ -420,7 +433,7 @@ pub async fn save_local(mut store: EditorStore, ports: Rc<AppPorts>) {
     let Some((document_id, base_revision)) = document_identity(store) else {
         return;
     };
-    let target_name = document_name(store);
+    let target_name = target_name.unwrap_or_else(|| document_name(store));
     #[cfg(feature = "mobile")]
     let existing_target = document_path(store);
     set_busy(store, "Saving workbook");
@@ -1718,6 +1731,109 @@ mod tests {
         assert_eq!(
             committed_path.borrow().as_deref(),
             Some("/tmp/selected.xlsx")
+        );
+    }
+
+    #[cfg(feature = "mobile")]
+    struct RecordingMobileSaveEditor {
+        prepared_target: Rc<RefCell<Option<String>>>,
+        committed_path: Rc<RefCell<Option<String>>>,
+    }
+
+    #[cfg(feature = "mobile")]
+    impl EditorPort for RecordingMobileSaveEditor {
+        fn execute(&self, request: EditorRequest) -> PortFuture<EditorResponse> {
+            let response = match request {
+                EditorRequest::PrepareSave { target_name, .. } => {
+                    self.prepared_target.replace(Some(target_name));
+                    Ok(EditorReply::SavePrepared {
+                        save_token: "save-token".to_string(),
+                        file_name: "quarterly plan.xlsx".to_string(),
+                        bytes: vec![1, 2, 3],
+                    })
+                }
+                EditorRequest::CommitSave { path, .. } => {
+                    self.committed_path.replace(Some(path));
+                    Ok(EditorReply::Saved {
+                        value: serde_json::Value::Null,
+                    })
+                }
+                request => panic!("unexpected request: {request:?}"),
+            };
+            Box::pin(async move { response })
+        }
+    }
+
+    #[cfg(feature = "mobile")]
+    struct RecordingMobileFilePort {
+        written_name: Rc<RefCell<Option<String>>>,
+    }
+
+    #[cfg(feature = "mobile")]
+    impl crate::ports::file::FilePort for RecordingMobileFilePort {
+        fn pick_file(
+            &self,
+            _kind: crate::ports::file::MobileFileKind,
+        ) -> crate::ports::file::FileFuture<
+            Result<Option<crate::ports::file::PickedFile>, crate::protocol::AppErrorDto>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn write_document(
+            &self,
+            _suggested_name: String,
+            _bytes: Vec<u8>,
+        ) -> crate::ports::file::FileFuture<Result<Option<String>, crate::protocol::AppErrorDto>>
+        {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn write_document_to_target(
+            &self,
+            existing_target: Option<String>,
+            suggested_name: String,
+            bytes: Vec<u8>,
+        ) -> crate::ports::file::FileFuture<Result<Option<String>, crate::protocol::AppErrorDto>>
+        {
+            assert_eq!(existing_target, None);
+            assert_eq!(bytes, vec![1, 2, 3]);
+            self.written_name.replace(Some(suggested_name));
+            Box::pin(async { Ok(Some("content://documents/quarterly-plan".to_string())) })
+        }
+    }
+
+    #[cfg(feature = "mobile")]
+    #[test]
+    fn mobile_save_uses_the_requested_name_and_commits_the_written_target() {
+        let prepared_target = Rc::new(RefCell::new(None));
+        let committed_path = Rc::new(RefCell::new(None));
+        let written_name = Rc::new(RefCell::new(None));
+        let editor: Rc<dyn EditorPort> = Rc::new(RecordingMobileSaveEditor {
+            prepared_target: Rc::clone(&prepared_target),
+            committed_path: Rc::clone(&committed_path),
+        });
+        let ports = Rc::new(AppPorts {
+            regions: RegionLoader::new(Rc::clone(&editor)),
+            editor,
+            files: Rc::new(RecordingMobileFilePort {
+                written_name: Rc::clone(&written_name),
+            }),
+            recovery: crate::ports::recovery::platform_recovery_port(),
+            operations: Rc::new(futures::lock::Mutex::new(())),
+        });
+
+        futures::executor::block_on(save_mobile(ports, 7, 1, "quarterly plan".to_string(), None))
+            .unwrap();
+
+        assert_eq!(prepared_target.borrow().as_deref(), Some("quarterly plan"));
+        assert_eq!(
+            written_name.borrow().as_deref(),
+            Some("quarterly plan.xlsx")
+        );
+        assert_eq!(
+            committed_path.borrow().as_deref(),
+            Some("content://documents/quarterly-plan")
         );
     }
 }

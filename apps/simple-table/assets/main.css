@@ -418,6 +418,31 @@ button:disabled,
   font-size: 11px;
 }
 
+.save-name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+
+.save-name-form label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.save-name-form input {
+  width: 100%;
+  height: 40px;
+}
+
+.save-name-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .editor-toolbar.editor-toolbar {
   display: flex;
   align-items: center;
