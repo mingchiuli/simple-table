@@ -22,7 +22,7 @@ Web Worker and IndexedDB.
   `cargo install dioxus-cli --version 0.7.10 --locked`
 - wasm-bindgen CLI 0.2.127:
   `cargo install wasm-bindgen-cli --version 0.2.127 --locked`
-- Android Studio/NDK for Android and Xcode for iOS
+- Android Studio/NDK with JDK 17 or 21 for Android, and Xcode for iOS
 
 ## Development
 
@@ -36,7 +36,9 @@ cargo xtask web
 `web` launches the SSR and hydration pair for development and builds the
 browser Worker first. The mobile tasks launch the active simulator or connected
 device and accept Dioxus options such as `--device`. Set `DIOXUS_CLI` when the
-required `dx` binary is not in `PATH`.
+required `dx` binary is not in `PATH`. The Android task keeps a compatible
+`JAVA_HOME`; otherwise it selects Android Studio's bundled JBR 21 and reports
+an actionable error when neither is available.
 
 ## Verification And Builds
 

@@ -120,12 +120,14 @@ Platform dependencies are optional and enabled only by their target feature.
 SSR and Web UI builds depend directly on `simple-table-protocol`; desktop,
 mobile, and Worker packages depend on the complete `simple-table-engine`.
 The `web` feature enables `dioxus-web/hydrate` directly; it does not enable the
-fullstack server feature. The production build first asks `dx` to compile and
-post-process that hydration client, then embeds its complete public output while
-compiling the Axum SSR executable with the Web server's `embedded` feature. The
-application package keeps only the mutually exclusive `desktop`, `mobile`,
-`web`, and `server` build boundaries; Worker and Web server behavior belongs to
-their own packages.
+fullstack server feature. The UI facade mounts its hidden overlay asset provider
+after hydration so upstream component hooks do not add server-only entries to
+the initial hydration stream. The production build first asks `dx` to compile
+and post-process that hydration client, then embeds its complete public output
+while compiling the Axum SSR executable with the Web server's `embedded`
+feature. The application package keeps only the mutually exclusive `desktop`,
+`mobile`, `web`, and `server` build boundaries; Worker and Web server behavior
+belongs to their own packages.
 
 SSR initial state is deterministic on server and client. Browser-only state,
 update checks, Worker startup, and IndexedDB reads begin after hydration. Assets

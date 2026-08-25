@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
+use std::{env, io};
 
 const DX_RELEASE_CLIENT: &str = "target/dx/simple-table/release/web";
 const DX_RELEASE_SERVER: &str = "target/dx/simple-table-web/release/web";
@@ -50,7 +51,7 @@ fn main() -> ExitCode {
         "bundle-app" => build_app_bundle(&extra_args),
         "desktop" => dioxus_serve("desktop", "desktop", &extra_args),
         "ios" => dioxus_serve("ios", "mobile", &extra_args),
-        "android" => dioxus_serve("android", "mobile", &extra_args),
+        "android" => dioxus_android_serve(&extra_args),
         other => {
             eprintln!("unknown xtask: {other}");
             return ExitCode::FAILURE;
@@ -309,6 +310,23 @@ fn dioxus_serve(
     feature: &str,
     extra_args: &[String],
 ) -> std::io::Result<ExitStatus> {
+    dioxus_serve_command(platform, feature, extra_args).status()
+}
+
+fn dioxus_android_serve(extra_args: &[String]) -> io::Result<ExitStatus> {
+    let java = android_java_installation()?;
+    eprintln!(
+        "Android build using JDK {} from {}: {}",
+        java.major,
+        java.source,
+        java.home.display()
+    );
+    dioxus_serve_command("android", "mobile", extra_args)
+        .env("JAVA_HOME", java.home)
+        .status()
+}
+
+fn dioxus_serve_command(platform: &str, feature: &str, extra_args: &[String]) -> Command {
     let mut process = dioxus_command();
     process.args([
         "serve",
@@ -322,7 +340,113 @@ fn dioxus_serve(
         feature,
     ]);
     process.args(extra_args);
-    process.status()
+    process
+}
+
+struct JavaInstallation {
+    home: PathBuf,
+    major: u32,
+    source: &'static str,
+}
+
+fn android_java_installation() -> io::Result<JavaInstallation> {
+    for (source, home) in android_java_candidates() {
+        let Some(major) = java_major_version(&home) else {
+            continue;
+        };
+        if matches!(major, 17 | 21) {
+            return Ok(JavaInstallation {
+                home,
+                major,
+                source,
+            });
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "Android builds require JDK 17 or 21; install Android Studio with its bundled JBR 21 or set JAVA_HOME to a compatible JDK",
+    ))
+}
+
+fn android_java_candidates() -> Vec<(&'static str, PathBuf)> {
+    let mut candidates = Vec::new();
+    if let Some(home) = env::var_os("JAVA_HOME") {
+        candidates.push(("JAVA_HOME", PathBuf::from(home)));
+    }
+    if let Some(home) = env::var_os("STUDIO_JDK") {
+        candidates.push(("STUDIO_JDK", PathBuf::from(home)));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push((
+            "Android Studio JBR",
+            PathBuf::from("/Applications/Android Studio.app/Contents/jbr/Contents/Home"),
+        ));
+        if let Some(home) = macos_java_home_21() {
+            candidates.push(("macOS java_home", home));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push((
+            "Android Studio JBR",
+            PathBuf::from("/opt/android-studio/jbr"),
+        ));
+        candidates.push((
+            "Android Studio JBR",
+            PathBuf::from("/usr/local/android-studio/jbr"),
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for variable in ["ProgramFiles", "LOCALAPPDATA"] {
+            if let Some(root) = env::var_os(variable) {
+                let suffix = if variable == "ProgramFiles" {
+                    Path::new("Android/Android Studio/jbr")
+                } else {
+                    Path::new("Programs/Android Studio/jbr")
+                };
+                candidates.push(("Android Studio JBR", PathBuf::from(root).join(suffix)));
+            }
+        }
+    }
+
+    candidates
+}
+
+#[cfg(target_os = "macos")]
+fn macos_java_home_21() -> Option<PathBuf> {
+    let output = Command::new("/usr/libexec/java_home")
+        .args(["-v", "21"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+}
+
+fn java_major_version(home: &Path) -> Option<u32> {
+    let executable = home
+        .join("bin")
+        .join(if cfg!(windows) { "java.exe" } else { "java" });
+    let output = Command::new(executable).arg("-version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version_output = String::from_utf8_lossy(&output.stderr);
+    let version = version_output
+        .lines()
+        .find_map(|line| line.split('"').nth(1))?;
+    let mut parts = version.split(['.', '-']);
+    let first = parts.next()?.parse::<u32>().ok()?;
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
 }
 
 fn dioxus_fullstack_serve(extra_args: &[String]) -> std::io::Result<ExitStatus> {
