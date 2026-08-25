@@ -3,15 +3,16 @@ pub(crate) mod region_cache;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::protocol::{AppErrorDto, LocalDocumentSummary, SheetImageDto};
+use crate::protocol::{AppErrorDto, HistoryStatus, SheetImageDto, WorkbookCapabilities};
 use dioxus::prelude::*;
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::ports::editor::EditorPort;
 use crate::ports::file::FilePort;
 #[cfg(feature = "mobile")]
 use crate::ports::recovery::RecoveryPort;
+#[cfg(not(feature = "mobile"))]
+use crate::ports::workspace::LocalWorkspacePort;
 
 pub use region_cache::{DocumentRevision, RegionCache, RegionTileKey};
 
@@ -66,6 +67,8 @@ pub struct EditorSessionView {
     pub revision: u64,
     pub editor_state: EditorStateView,
     #[serde(default)]
+    pub capabilities: WorkbookCapabilities,
+    #[serde(default)]
     pub formula_status: FormulaStatusView,
     #[serde(default)]
     pub filters: Vec<SheetFilterView>,
@@ -113,6 +116,8 @@ pub struct EditorStateView {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_dirty: bool,
+    #[serde(default)]
+    pub history: HistoryStatus,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -356,7 +361,9 @@ pub struct CellView {
     pub sheet_index: usize,
     pub row: usize,
     pub col: usize,
-    pub value: Value,
+    pub display_text: String,
+    pub edit_text: String,
+    pub formula_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -366,70 +373,33 @@ pub struct CellPresentation {
     pub formula_error: Option<Rc<str>>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct EditorMutationView {
-    #[serde(deserialize_with = "deserialize_u64_string")]
     pub document_id: u64,
-    #[serde(deserialize_with = "deserialize_u64_string")]
     pub revision: u64,
     pub editor_state: EditorStateView,
-    #[serde(default)]
+    pub capabilities: WorkbookCapabilities,
     pub patches: Vec<EditorPatchView>,
     pub sheet_extents: Option<Vec<SheetExtentView>>,
-    #[serde(default)]
     pub formula_status: FormulaStatusView,
-    #[serde(default)]
     pub filters: Vec<SheetFilterView>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "data")]
+#[derive(Clone, Debug)]
 pub enum EditorPatchView {
-    #[serde(rename = "Cells")]
-    Cells {
-        #[serde(rename = "changes")]
-        changes: Vec<CellView>,
-    },
-    #[serde(rename = "Layout")]
-    Layout {
-        #[serde(rename = "patch")]
-        patch: LayoutPatchView,
-    },
-    #[serde(rename = "SheetInserted")]
-    SheetInserted {
-        #[serde(rename = "patch")]
-        _patch: Value,
-    },
-    #[serde(rename = "SheetDeleted")]
-    SheetDeleted {
-        #[serde(rename = "patch")]
-        _patch: Value,
-    },
-    #[serde(rename = "SheetInvalidated")]
+    Cells { changes: Vec<CellView> },
+    Layout { patch: LayoutPatchView },
+    SheetInserted,
+    SheetDeleted,
     SheetInvalidated { patch: SheetPatchView },
-    #[serde(rename = "SheetsReplaced")]
-    SheetsReplaced {
-        #[serde(rename = "patch")]
-        _patch: Value,
-    },
-    #[serde(rename = "RowInserted")]
+    SheetsReplaced,
     RowInserted { patch: SheetPatchView },
-    #[serde(rename = "RowDeleted")]
     RowDeleted { patch: SheetPatchView },
-    #[serde(rename = "ColumnInserted")]
     ColumnInserted { patch: SheetPatchView },
-    #[serde(rename = "ColumnDeleted")]
     ColumnDeleted { patch: SheetPatchView },
-    #[serde(rename = "ImageUpserted")]
     ImageUpserted { patch: SheetPatchView },
-    #[serde(rename = "ImageDeleted")]
     ImageDeleted { patch: SheetPatchView },
-    #[serde(rename = "ResyncRequired")]
-    ResyncRequired {
-        #[serde(rename = "patch")]
-        _patch: Value,
-    },
+    ResyncRequired,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -498,6 +468,346 @@ pub struct SavedDocumentIdentityView {
     pub file_name: String,
 }
 
+impl From<crate::protocol::OpenDocumentResponse> for OpenDocumentView {
+    fn from(value: crate::protocol::OpenDocumentResponse) -> Self {
+        Self {
+            document: value.document.into(),
+            editor_session: value.editor_session.into(),
+            initial_region: value.initial_region.map(Into::into),
+        }
+    }
+}
+
+impl From<crate::protocol::DocumentManifest> for DocumentManifestView {
+    fn from(value: crate::protocol::DocumentManifest) -> Self {
+        Self {
+            path: value.path,
+            file_name: value.file_name,
+            sheets: value.sheets.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<crate::protocol::SheetManifest> for SheetManifestView {
+    fn from(value: crate::protocol::SheetManifest) -> Self {
+        Self {
+            name: value.name,
+            extent: value.extent.into(),
+            layout: Rc::new(value.layout.into()),
+        }
+    }
+}
+
+impl From<crate::protocol::SheetLayoutProjection> for SheetLayoutView {
+    fn from(value: crate::protocol::SheetLayoutProjection) -> Self {
+        Self {
+            column_widths: value.column_widths,
+            row_heights: value.row_heights,
+        }
+    }
+}
+
+impl From<crate::protocol::SheetExtent> for SheetExtentView {
+    fn from(value: crate::protocol::SheetExtent) -> Self {
+        Self {
+            row_count: value.row_count,
+            column_count: value.column_count,
+        }
+    }
+}
+
+impl From<crate::protocol::EditorSessionInfo> for EditorSessionView {
+    fn from(value: crate::protocol::EditorSessionInfo) -> Self {
+        Self {
+            document_id: value.document_id,
+            revision: value.revision,
+            editor_state: value.editor_state.into(),
+            capabilities: value.capabilities,
+            formula_status: value.formula_status.into(),
+            filters: value.filters.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<crate::protocol::EditorStateInfo> for EditorStateView {
+    fn from(value: crate::protocol::EditorStateInfo) -> Self {
+        Self {
+            can_undo: value.can_undo,
+            can_redo: value.can_redo,
+            is_dirty: value.is_dirty,
+            history: value.history,
+        }
+    }
+}
+
+impl From<crate::protocol::SheetFilterInfo> for SheetFilterView {
+    fn from(value: crate::protocol::SheetFilterInfo) -> Self {
+        Self {
+            sheet_index: value.sheet_index,
+            range: CellRangeView {
+                start_row: value.range.start_row,
+                end_row: value.range.end_row,
+                start_col: value.range.start_col,
+                end_col: value.range.end_col,
+            },
+            conditions: value.conditions.into_iter().map(Into::into).collect(),
+            hidden_rows: value.hidden_rows,
+        }
+    }
+}
+
+impl From<crate::protocol::FilterConditionInfo> for FilterConditionView {
+    fn from(value: crate::protocol::FilterConditionInfo) -> Self {
+        Self {
+            col: value.col,
+            operator: match value.operator {
+                crate::protocol::FilterOperatorInfo::Equals => FilterOperatorView::Equals,
+                crate::protocol::FilterOperatorInfo::NotEquals => FilterOperatorView::NotEquals,
+                crate::protocol::FilterOperatorInfo::Contains => FilterOperatorView::Contains,
+                crate::protocol::FilterOperatorInfo::Blank => FilterOperatorView::Blank,
+                crate::protocol::FilterOperatorInfo::NotBlank => FilterOperatorView::NotBlank,
+            },
+            value: value.value,
+        }
+    }
+}
+
+impl From<crate::protocol::FormulaStatus> for FormulaStatusView {
+    fn from(value: crate::protocol::FormulaStatus) -> Self {
+        match value {
+            crate::protocol::FormulaStatus::Ready { diagnostics } => Self::Ready {
+                diagnostics: diagnostics.into(),
+            },
+            crate::protocol::FormulaStatus::Degraded {
+                message,
+                diagnostics,
+            } => Self::Degraded {
+                message,
+                diagnostics: diagnostics.into(),
+            },
+        }
+    }
+}
+
+impl From<crate::protocol::FormulaDiagnostics> for FormulaDiagnosticsView {
+    fn from(value: crate::protocol::FormulaDiagnostics) -> Self {
+        Self {
+            invalid_formula_count: value.invalid_formula_count,
+            volatile_formula_count: value.volatile_formula_count,
+            unsupported_dependency_count: value.unsupported_dependency_count,
+            large_range_dependency_count: value.large_range_dependency_count,
+            skipped_reference_rewrite_count: value.skipped_reference_rewrite_count,
+            issues: value.issues.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<crate::protocol::FormulaIssue> for FormulaIssueView {
+    fn from(value: crate::protocol::FormulaIssue) -> Self {
+        Self {
+            sheet_index: value.sheet_index,
+            row: value.row,
+            col: value.col,
+            kind: match value.kind {
+                crate::protocol::FormulaIssueKind::InvalidFormula => {
+                    FormulaIssueKindView::InvalidFormula
+                }
+                crate::protocol::FormulaIssueKind::VolatileFormula => {
+                    FormulaIssueKindView::VolatileFormula
+                }
+                crate::protocol::FormulaIssueKind::UnsupportedDependency => {
+                    FormulaIssueKindView::UnsupportedDependency
+                }
+                crate::protocol::FormulaIssueKind::LargeRangeDependency => {
+                    FormulaIssueKindView::LargeRangeDependency
+                }
+            },
+            message: value.message,
+        }
+    }
+}
+
+impl From<crate::protocol::SheetRegionProjectionResponse> for SheetRegionView {
+    fn from(value: crate::protocol::SheetRegionProjectionResponse) -> Self {
+        Self {
+            document_id: value.document_id,
+            revision: value.revision,
+            region: value.region.into(),
+            cells: value.cells.into_iter().map(Into::into).collect(),
+            merge_anchor_cells: value
+                .merge_anchor_cells
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            metadata: value.metadata.into(),
+            wire_bytes: value.wire_bytes,
+        }
+    }
+}
+
+impl From<crate::protocol::SheetRowsRegionProjectionResponse> for SheetRowsRegionView {
+    fn from(value: crate::protocol::SheetRowsRegionProjectionResponse) -> Self {
+        Self {
+            regions: value.regions.into_iter().map(Into::into).collect(),
+            _wire_bytes: value.wire_bytes,
+        }
+    }
+}
+
+impl From<crate::protocol::SheetRegion> for SheetRegionBoundsView {
+    fn from(value: crate::protocol::SheetRegion) -> Self {
+        Self {
+            sheet_index: value.sheet_index,
+            row_start: value.row_start,
+            row_end: value.row_end,
+            col_start: value.col_start,
+            col_end: value.col_end,
+        }
+    }
+}
+
+impl From<crate::protocol::SheetRegionMetadata> for SheetRegionMetadataView {
+    fn from(value: crate::protocol::SheetRegionMetadata) -> Self {
+        Self {
+            merges: value.merges.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<crate::protocol::MergeRange> for MergeRangeView {
+    fn from(value: crate::protocol::MergeRange) -> Self {
+        Self {
+            start_row: value.start_row as usize,
+            start_col: usize::from(value.start_col),
+            end_row: value.end_row as usize,
+            end_col: usize::from(value.end_col),
+        }
+    }
+}
+
+impl From<crate::protocol::SheetCellChange> for CellView {
+    fn from(value: crate::protocol::SheetCellChange) -> Self {
+        Self {
+            sheet_index: value.sheet_index,
+            row: value.row,
+            col: value.col,
+            display_text: value.display_text,
+            edit_text: value.edit_text,
+            formula_error: value.formula_error,
+        }
+    }
+}
+
+impl From<crate::protocol::EditorMutationResponse> for EditorMutationView {
+    fn from(value: crate::protocol::EditorMutationResponse) -> Self {
+        Self {
+            document_id: value.document_id,
+            revision: value.revision,
+            editor_state: value.editor_state.into(),
+            capabilities: value.capabilities,
+            patches: value.patches.into_iter().map(Into::into).collect(),
+            sheet_extents: value
+                .sheet_extents
+                .map(|extents| extents.into_iter().map(Into::into).collect()),
+            formula_status: value.formula_status.into(),
+            filters: value.filters.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<crate::protocol::EditorPatch> for EditorPatchView {
+    fn from(value: crate::protocol::EditorPatch) -> Self {
+        use crate::protocol::EditorPatch;
+
+        match value {
+            EditorPatch::Cells { changes } => Self::Cells {
+                changes: changes.into_iter().map(Into::into).collect(),
+            },
+            EditorPatch::Layout { patch } => Self::Layout {
+                patch: LayoutPatchView {
+                    sheet_index: patch.sheet_index,
+                    column_widths: patch.column_widths,
+                    row_heights: patch.row_heights,
+                },
+            },
+            EditorPatch::SheetInserted { .. } => Self::SheetInserted,
+            EditorPatch::SheetDeleted { .. } => Self::SheetDeleted,
+            EditorPatch::SheetInvalidated { patch } => Self::SheetInvalidated {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::SheetsReplaced { .. } => Self::SheetsReplaced,
+            EditorPatch::RowInserted { patch } => Self::RowInserted {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::RowDeleted { patch } => Self::RowDeleted {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::ColumnInserted { patch } => Self::ColumnInserted {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::ColumnDeleted { patch } => Self::ColumnDeleted {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::ImageUpserted { patch } => Self::ImageUpserted {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::ImageDeleted { patch } => Self::ImageDeleted {
+                patch: SheetPatchView {
+                    sheet_index: patch.sheet_index,
+                },
+            },
+            EditorPatch::ResyncRequired { .. } => Self::ResyncRequired,
+        }
+    }
+}
+
+impl From<crate::protocol::SearchResponse> for SearchView {
+    fn from(value: crate::protocol::SearchResponse) -> Self {
+        Self {
+            results: value.results.into_iter().map(Into::into).collect(),
+            truncated: value.truncated,
+        }
+    }
+}
+
+impl From<crate::protocol::SearchResult> for SearchResultView {
+    fn from(value: crate::protocol::SearchResult) -> Self {
+        Self {
+            sheet_index: value.sheet_index,
+            sheet_name: value.sheet_name,
+            row: value.row,
+            col: value.col,
+            value: value.value,
+            cell_position: value.cell_position,
+        }
+    }
+}
+
+impl From<crate::protocol::SavedDocumentResponse> for SavedDocumentView {
+    fn from(value: crate::protocol::SavedDocumentResponse) -> Self {
+        Self {
+            document: value.document.map(Into::into),
+            identity: value.identity.map(|identity| SavedDocumentIdentityView {
+                path: identity.path,
+                file_name: identity.file_name,
+            }),
+            editor_session: value.editor_session.into(),
+        }
+    }
+}
+
 impl GridRenderWindow {
     pub fn bounds(self) -> SheetRegionBoundsView {
         SheetRegionBoundsView {
@@ -543,6 +853,14 @@ pub struct GridSelection {
     pub row: usize,
     pub col: usize,
     pub merge: Option<MergeRangeView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalDocumentSummary {
+    pub id: String,
+    pub name: String,
+    pub updated_at_ms: u64,
+    pub has_recovery: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -725,6 +1043,7 @@ impl EditorStore {
             document_id,
             revision,
             editor_state,
+            capabilities,
             patches,
             sheet_extents,
             formula_status,
@@ -733,6 +1052,7 @@ impl EditorStore {
         if let Some(document) = self.document.write().as_mut().map(Rc::make_mut) {
             document.editor_session.revision = revision;
             document.editor_session.editor_state = editor_state;
+            document.editor_session.capabilities = capabilities;
             document.editor_session.formula_status = formula_status;
             document.editor_session.filters = filters;
             if let Some(extents) = &sheet_extents {
@@ -841,6 +1161,8 @@ pub struct AppPorts {
     pub editor: Rc<dyn EditorPort>,
     pub regions: crate::actions::RegionLoader,
     pub files: Rc<dyn FilePort>,
+    #[cfg(not(feature = "mobile"))]
+    pub workspace: Rc<dyn LocalWorkspacePort>,
     #[cfg(feature = "mobile")]
     pub recovery: Rc<dyn RecoveryPort>,
     pub operations: Rc<futures::lock::Mutex<()>>,
@@ -852,6 +1174,8 @@ impl Clone for AppPorts {
             editor: Rc::clone(&self.editor),
             regions: self.regions.clone(),
             files: Rc::clone(&self.files),
+            #[cfg(not(feature = "mobile"))]
+            workspace: Rc::clone(&self.workspace),
             #[cfg(feature = "mobile")]
             recovery: Rc::clone(&self.recovery),
             operations: Rc::clone(&self.operations),
@@ -859,37 +1183,11 @@ impl Clone for AppPorts {
     }
 }
 
-pub fn cell_presentation(value: &Value) -> CellPresentation {
-    let raw_text = raw_value_text(value.get("raw"));
-    let display_text = value
-        .get("display")
-        .and_then(Value::as_str)
-        .map(Rc::<str>::from)
-        .unwrap_or_else(|| raw_text.clone());
-    let edit_text = value
-        .get("formula")
-        .and_then(|formula| formula.get("formula"))
-        .and_then(Value::as_str)
-        .map(Rc::<str>::from)
-        .unwrap_or(raw_text);
-    let formula_error = value
-        .get("formula")
-        .and_then(|formula| formula.get("error"))
-        .and_then(Value::as_str)
-        .map(Rc::<str>::from);
-
+pub fn cell_presentation(value: &CellView) -> CellPresentation {
     CellPresentation {
-        display_text,
-        edit_text,
-        formula_error,
-    }
-}
-
-fn raw_value_text(value: Option<&Value>) -> Rc<str> {
-    match value {
-        None | Some(Value::Null) => Rc::from(""),
-        Some(Value::String(value)) => Rc::from(value.as_str()),
-        Some(value) => Rc::from(value.to_string()),
+        display_text: Rc::from(value.display_text.as_str()),
+        edit_text: Rc::from(value.edit_text.as_str()),
+        formula_error: value.formula_error.as_deref().map(Rc::from),
     }
 }
 
@@ -962,14 +1260,14 @@ mod tests {
 
     #[test]
     fn formula_cells_display_result_and_edit_source() {
-        let presentation = cell_presentation(&json!({
-            "raw": 3,
-            "display": "3",
-            "formula": {
-                "formula": "=SUM(A1:A2)",
-                "cachedValue": 3
-            }
-        }));
+        let presentation = cell_presentation(&CellView {
+            sheet_index: 0,
+            row: 0,
+            col: 0,
+            display_text: "3".to_string(),
+            edit_text: "=SUM(A1:A2)".to_string(),
+            formula_error: None,
+        });
 
         assert_eq!(presentation.display_text.as_ref(), "3");
         assert_eq!(presentation.edit_text.as_ref(), "=SUM(A1:A2)");
@@ -978,10 +1276,14 @@ mod tests {
 
     #[test]
     fn formatted_values_keep_raw_edit_text() {
-        let presentation = cell_presentation(&json!({
-            "raw": 12.5,
-            "display": "$12.50"
-        }));
+        let presentation = cell_presentation(&CellView {
+            sheet_index: 0,
+            row: 0,
+            col: 0,
+            display_text: "$12.50".to_string(),
+            edit_text: "12.5".to_string(),
+            formula_error: None,
+        });
 
         assert_eq!(presentation.display_text.as_ref(), "$12.50");
         assert_eq!(presentation.edit_text.as_ref(), "12.5");
@@ -1009,15 +1311,14 @@ mod tests {
 
     #[test]
     fn formula_errors_are_exposed_for_cell_styling() {
-        let presentation = cell_presentation(&json!({
-            "raw": null,
-            "display": "#VALUE!",
-            "formula": {
-                "formula": "=UNKNOWN(A1)",
-                "cachedValue": null,
-                "error": "Unknown function UNKNOWN"
-            }
-        }));
+        let presentation = cell_presentation(&CellView {
+            sheet_index: 0,
+            row: 0,
+            col: 0,
+            display_text: "#VALUE!".to_string(),
+            edit_text: "=UNKNOWN(A1)".to_string(),
+            formula_error: Some("Unknown function UNKNOWN".to_string()),
+        });
 
         assert_eq!(presentation.display_text.as_ref(), "#VALUE!");
         assert_eq!(presentation.edit_text.as_ref(), "=UNKNOWN(A1)");
@@ -1100,7 +1401,9 @@ mod tests {
                 "sheetIndex": 0,
                 "row": 2,
                 "col": 1,
-                "value": { "raw": "Merged", "display": "Merged" }
+                "displayText": "Merged",
+                "editText": "Merged",
+                "formulaError": null
             }],
             "metadata": {
                 "merges": [{

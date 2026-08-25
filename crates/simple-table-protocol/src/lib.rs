@@ -1,7 +1,9 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+mod dto;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+use serde::{Deserialize, Serialize};
+
+pub use dto::*;
+
 pub const SHEET_REGION_TILE_ROWS: usize = 128;
 pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 
@@ -31,52 +33,9 @@ pub enum FilterOperatorDto {
     NotBlank,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalDocumentSummary {
-    pub id: String,
-    pub name: String,
-    pub updated_at_ms: u64,
-    pub has_recovery: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageMarkerDto {
-    pub row: u32,
-    pub col: u32,
-    pub row_offset_emu: i32,
-    pub col_offset_emu: i32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", content = "data")]
-pub enum ImageAnchorDto {
-    OneCell {
-        from: ImageMarkerDto,
-        #[serde(rename = "widthEmu")]
-        width_emu: u32,
-        #[serde(rename = "heightEmu")]
-        height_emu: u32,
-    },
-    TwoCell {
-        from: ImageMarkerDto,
-        to: ImageMarkerDto,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SheetImageDto {
-    pub id: String,
-    pub media_id: String,
-    pub mime_type: String,
-    pub intrinsic_width: u32,
-    pub intrinsic_height: u32,
-    pub anchor: ImageAnchorDto,
-    pub z_index: usize,
-    pub renderable: bool,
-}
+pub type ImageMarkerDto = ImageMarker;
+pub type ImageAnchorDto = ImageAnchor;
+pub type SheetImageDto = SheetImage;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -87,12 +46,10 @@ pub enum EditorRequest {
     OpenDocument {
         request_id: String,
         file_name: String,
-        bytes: Vec<u8>,
     },
     OpenRecoveryDocument {
         request_id: String,
         file_name: String,
-        bytes: Vec<u8>,
     },
     ActiveDocument,
     Region {
@@ -216,7 +173,6 @@ pub enum EditorRequest {
         row: u32,
         col: u32,
         file_name: String,
-        bytes: Vec<u8>,
     },
     SheetImages {
         document_id: u64,
@@ -274,27 +230,6 @@ pub enum EditorRequest {
         base_revision: u64,
         target_name: String,
     },
-    SaveLocal {
-        request_id: String,
-        document_id: u64,
-        base_revision: u64,
-        target_name: String,
-    },
-    CheckpointRecovery {
-        request_id: String,
-        document_id: u64,
-        base_revision: u64,
-        target_name: String,
-    },
-    ClearRecovery,
-    ListLocalDocuments,
-    OpenLocalDocument {
-        request_id: String,
-        document_key: String,
-    },
-    DeleteLocalDocument {
-        document_key: String,
-    },
     CommitSave {
         save_token: String,
         path: String,
@@ -314,41 +249,34 @@ pub enum EditorRequest {
 pub enum EditorReply {
     Empty,
     Document {
-        value: Value,
+        value: Option<OpenDocumentResponse>,
     },
     Region {
-        value: Value,
+        value: SheetRegionProjectionResponse,
     },
     RowsRegion {
-        value: Value,
+        value: SheetRowsRegionProjectionResponse,
     },
     Mutation {
-        value: Value,
+        value: EditorMutationResponse,
     },
     Search {
-        value: Value,
+        value: SearchResponse,
     },
     Images {
         items: Vec<SheetImageDto>,
         next_offset: Option<usize>,
     },
-    Bytes {
-        bytes: Vec<u8>,
-    },
+    Bytes,
     SavePrepared {
         save_token: String,
         file_name: String,
-        bytes: Vec<u8>,
     },
     ExportPrepared {
         file_name: String,
-        bytes: Vec<u8>,
     },
     Saved {
-        value: Value,
-    },
-    LocalDocuments {
-        documents: Vec<LocalDocumentSummary>,
+        value: SavedDocumentResponse,
     },
     Closed,
 }
@@ -360,7 +288,76 @@ pub struct AppErrorDto {
     pub message: String,
 }
 
-pub type EditorResponse = Result<EditorReply, AppErrorDto>;
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditorCommand {
+    pub request: EditorRequest,
+    pub attachment: Option<Vec<u8>>,
+}
+
+impl EditorCommand {
+    pub fn new(request: EditorRequest) -> Self {
+        Self {
+            request,
+            attachment: None,
+        }
+    }
+
+    pub fn with_attachment(request: EditorRequest, attachment: Vec<u8>) -> Self {
+        Self {
+            request,
+            attachment: Some(attachment),
+        }
+    }
+}
+
+impl From<EditorRequest> for EditorCommand {
+    fn from(request: EditorRequest) -> Self {
+        Self::new(request)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditorOutput {
+    pub reply: EditorReply,
+    pub attachment: Option<Vec<u8>>,
+}
+
+impl EditorOutput {
+    pub fn new(reply: EditorReply) -> Self {
+        Self {
+            reply,
+            attachment: None,
+        }
+    }
+
+    pub fn with_attachment(reply: EditorReply, attachment: Vec<u8>) -> Self {
+        Self {
+            reply,
+            attachment: Some(attachment),
+        }
+    }
+}
+
+pub type EditorResponse = Result<EditorOutput, AppErrorDto>;
+
+pub(crate) mod u64_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -405,7 +402,6 @@ mod tests {
 
     #[test]
     fn protocol_wire_shape_stays_stable() {
-        assert_eq!(PROTOCOL_VERSION, 3);
         let request = EditorRequest::SetCell {
             request_id: "edit-1".to_string(),
             document_id: 9,
@@ -429,7 +425,7 @@ mod tests {
             })
         );
 
-        let response: EditorResponse = Err(AppErrorDto {
+        let response: Result<EditorReply, AppErrorDto> = Err(AppErrorDto {
             code: "invalid_request".to_string(),
             message: "bad request".to_string(),
         });

@@ -3,20 +3,321 @@ mod region_loader;
 use std::rc::Rc;
 use std::time::Duration;
 
-#[cfg(feature = "mobile")]
-use crate::protocol::LocalDocumentSummary;
-use crate::protocol::{CellEdit, EditorReply, EditorRequest};
+use crate::protocol::{
+    CellEdit, EditorCommand, EditorReply, EditorRequest, FilterOperatorDto, ImageAnchorDto,
+    SortDirectionDto,
+};
 use base64::Engine;
 use dioxus::prelude::{ReadableExt, WritableExt, spawn};
 use dioxus_sdk_time::sleep;
+#[cfg(not(feature = "mobile"))]
+use simple_table_web_protocol::{WebWorkspaceReply, WebWorkspaceRequest};
 
+#[cfg(any(feature = "web", feature = "mobile"))]
+use crate::model::LocalDocumentSummary;
 use crate::model::{
     AppPorts, EditorMutationView, EditorPatchView, EditorStore, GridRenderWindow,
-    GridScrollRequest, GridSelection, OpenDocumentView, SavedDocumentView, SearchView,
-    SheetRegionBoundsView, request_id,
+    GridScrollRequest, GridSelection, OpenDocumentView, SavedDocumentView, SheetRegionBoundsView,
+    request_id,
 };
 
 pub(crate) use region_loader::RegionLoader;
+
+pub enum MutationIntent {
+    AddRow {
+        sheet_index: usize,
+        row_index: usize,
+    },
+    DeleteRow {
+        sheet_index: usize,
+        row_index: usize,
+    },
+    AddColumn {
+        sheet_index: usize,
+        col_index: usize,
+    },
+    DeleteColumn {
+        sheet_index: usize,
+        col_index: usize,
+    },
+    SortRows {
+        sheet_index: usize,
+        anchor_row: usize,
+        anchor_col: usize,
+        direction: SortDirectionDto,
+    },
+    SetFilter {
+        sheet_index: usize,
+        anchor_row: usize,
+        col: usize,
+        operator: FilterOperatorDto,
+        value: String,
+    },
+    ClearFilter {
+        sheet_index: usize,
+        col: Option<usize>,
+    },
+    SetColumnWidth {
+        sheet_index: usize,
+        col_index: usize,
+        width: Option<u32>,
+    },
+    SetRowHeight {
+        sheet_index: usize,
+        row_index: usize,
+        height: Option<u32>,
+    },
+    AddSheet,
+    DeleteSheet {
+        sheet_index: usize,
+    },
+    InsertImage {
+        sheet_index: usize,
+        row: u32,
+        col: u32,
+        file_name: String,
+        bytes: Vec<u8>,
+    },
+    UpdateImage {
+        sheet_index: usize,
+        image_id: String,
+        anchor: ImageAnchorDto,
+    },
+    DeleteImage {
+        sheet_index: usize,
+        image_id: String,
+    },
+    Undo,
+    Redo,
+}
+
+impl MutationIntent {
+    fn status(&self) -> &'static str {
+        match self {
+            Self::Undo => "Undoing change",
+            Self::Redo => "Redoing change",
+            Self::SortRows { .. } => "Sorting rows",
+            Self::SetFilter { .. } | Self::ClearFilter { .. } => "Updating filters",
+            _ => "Applying changes",
+        }
+    }
+
+    fn into_command(self, document_id: u64, base_revision: u64) -> EditorCommand {
+        let (request, attachment) = match self {
+            Self::AddRow {
+                sheet_index,
+                row_index,
+            } => (
+                EditorRequest::AddRow {
+                    request_id: request_id("add-row"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    row_index,
+                },
+                None,
+            ),
+            Self::DeleteRow {
+                sheet_index,
+                row_index,
+            } => (
+                EditorRequest::DeleteRow {
+                    request_id: request_id("delete-row"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    row_index,
+                },
+                None,
+            ),
+            Self::AddColumn {
+                sheet_index,
+                col_index,
+            } => (
+                EditorRequest::AddColumn {
+                    request_id: request_id("add-column"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    col_index,
+                },
+                None,
+            ),
+            Self::DeleteColumn {
+                sheet_index,
+                col_index,
+            } => (
+                EditorRequest::DeleteColumn {
+                    request_id: request_id("delete-column"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    col_index,
+                },
+                None,
+            ),
+            Self::SortRows {
+                sheet_index,
+                anchor_row,
+                anchor_col,
+                direction,
+            } => (
+                EditorRequest::SortRows {
+                    request_id: request_id("sort"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    anchor_row,
+                    anchor_col,
+                    direction,
+                },
+                None,
+            ),
+            Self::SetFilter {
+                sheet_index,
+                anchor_row,
+                col,
+                operator,
+                value,
+            } => (
+                EditorRequest::SetFilter {
+                    request_id: request_id("set-filter"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    anchor_row,
+                    col,
+                    operator,
+                    value,
+                },
+                None,
+            ),
+            Self::ClearFilter { sheet_index, col } => (
+                EditorRequest::ClearFilter {
+                    request_id: request_id("clear-filter"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    col,
+                },
+                None,
+            ),
+            Self::SetColumnWidth {
+                sheet_index,
+                col_index,
+                width,
+            } => (
+                EditorRequest::SetColumnWidth {
+                    request_id: request_id("column-width"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    col_index,
+                    width,
+                },
+                None,
+            ),
+            Self::SetRowHeight {
+                sheet_index,
+                row_index,
+                height,
+            } => (
+                EditorRequest::SetRowHeight {
+                    request_id: request_id("row-height"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    row_index,
+                    height,
+                },
+                None,
+            ),
+            Self::AddSheet => (
+                EditorRequest::AddSheet {
+                    request_id: request_id("add-sheet"),
+                    document_id,
+                    base_revision,
+                },
+                None,
+            ),
+            Self::DeleteSheet { sheet_index } => (
+                EditorRequest::DeleteSheet {
+                    request_id: request_id("delete-sheet"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                },
+                None,
+            ),
+            Self::InsertImage {
+                sheet_index,
+                row,
+                col,
+                file_name,
+                bytes,
+            } => (
+                EditorRequest::InsertImage {
+                    request_id: request_id("image"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    row,
+                    col,
+                    file_name,
+                },
+                Some(bytes),
+            ),
+            Self::UpdateImage {
+                sheet_index,
+                image_id,
+                anchor,
+            } => (
+                EditorRequest::UpdateImage {
+                    request_id: request_id("update-image"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    image_id,
+                    anchor,
+                },
+                None,
+            ),
+            Self::DeleteImage {
+                sheet_index,
+                image_id,
+            } => (
+                EditorRequest::DeleteImage {
+                    request_id: request_id("delete-image"),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    image_id,
+                },
+                None,
+            ),
+            Self::Undo => (
+                EditorRequest::Undo {
+                    request_id: request_id("undo"),
+                    document_id,
+                    base_revision,
+                },
+                None,
+            ),
+            Self::Redo => (
+                EditorRequest::Redo {
+                    request_id: request_id("redo"),
+                    document_id,
+                    base_revision,
+                },
+                None,
+            ),
+        };
+        EditorCommand {
+            request,
+            attachment,
+        }
+    }
+}
 
 #[cfg(feature = "mobile")]
 const MOBILE_RECOVERY_ID: &str = "mobile-recovery";
@@ -56,15 +357,17 @@ pub async fn open_bytes(
     let _busy = store.begin_operation("Reading workbook");
     match ports
         .editor
-        .execute(EditorRequest::OpenDocument {
-            request_id: request_id("open"),
-            file_name,
+        .execute_command(EditorCommand::with_attachment(
+            EditorRequest::OpenDocument {
+                request_id: request_id("open"),
+                file_name,
+            },
             bytes,
-        })
+        ))
         .await
     {
-        Ok(reply) => {
-            let opened = accept_document_reply(store, &ports.regions, reply);
+        Ok(output) => {
+            let opened = accept_document_reply(store, &ports.regions, output.reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
                 schedule_recovery(store, Rc::clone(&ports));
@@ -85,16 +388,17 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
     #[cfg(feature = "mobile")]
     let response = if document_key == MOBILE_RECOVERY_ID {
         match ports.recovery.load().await {
-            Ok(Some(recovery)) => {
-                ports
-                    .editor
-                    .execute(EditorRequest::OpenRecoveryDocument {
+            Ok(Some(recovery)) => ports
+                .editor
+                .execute_command(EditorCommand::with_attachment(
+                    EditorRequest::OpenRecoveryDocument {
                         request_id: request_id("open-recovery"),
                         file_name: recovery.name,
-                        bytes: recovery.bytes,
-                    })
-                    .await
-            }
+                    },
+                    recovery.bytes,
+                ))
+                .await
+                .map(|output| output.reply),
             Ok(None) => Err(action_error(
                 "mobile_recovery_missing",
                 "the recovered workbook is no longer available",
@@ -110,12 +414,16 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
 
     #[cfg(not(feature = "mobile"))]
     let response = ports
-        .editor
-        .execute(EditorRequest::OpenLocalDocument {
+        .workspace
+        .execute(WebWorkspaceRequest::OpenLocalDocument {
             request_id: request_id("open-local"),
             document_key,
         })
-        .await;
+        .await
+        .and_then(|reply| match reply {
+            WebWorkspaceReply::Document(value) => Ok(EditorReply::Document { value: Some(value) }),
+            _ => Err(unexpected_reply("open local document")),
+        });
 
     match response {
         Ok(reply) => {
@@ -136,13 +444,23 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
 pub async fn load_local_documents(store: EditorStore, ports: Rc<AppPorts>) {
     #[cfg(feature = "web")]
     match ports
-        .editor
-        .execute(EditorRequest::ListLocalDocuments)
+        .workspace
+        .execute(WebWorkspaceRequest::ListLocalDocuments)
         .await
     {
-        Ok(EditorReply::LocalDocuments { documents }) => {
+        Ok(WebWorkspaceReply::LocalDocuments(documents)) => {
             let mut store = store;
-            store.local_documents.set(documents);
+            store.local_documents.set(
+                documents
+                    .into_iter()
+                    .map(|document| LocalDocumentSummary {
+                        id: document.id,
+                        name: document.name,
+                        updated_at_ms: document.updated_at_ms,
+                        has_recovery: document.has_recovery,
+                    })
+                    .collect(),
+            );
         }
         Err(error) if error.code != "client_not_hydrated" => store.set_error(error),
         _ => {}
@@ -186,11 +504,15 @@ pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, docu
 
     #[cfg(not(feature = "mobile"))]
     let response = ports
-        .editor
-        .execute(EditorRequest::DeleteLocalDocument {
+        .workspace
+        .execute(WebWorkspaceRequest::DeleteLocalDocument {
             document_key: document_key.clone(),
         })
-        .await;
+        .await
+        .and_then(|reply| match reply {
+            WebWorkspaceReply::Empty => Ok(EditorReply::Empty),
+            _ => Err(unexpected_reply("delete local document")),
+        });
 
     match response {
         Ok(EditorReply::Empty) => {
@@ -280,12 +602,12 @@ async fn flush_pending_batch_locked(
     let result = run_mutation_locked(
         store,
         ports,
-        EditorRequest::SetCells {
+        EditorCommand::new(EditorRequest::SetCells {
             request_id: request_id("cells"),
             document_id,
             base_revision,
             changes: request_changes,
-        },
+        }),
     )
     .await;
     if result.is_ok() {
@@ -294,78 +616,80 @@ async fn flush_pending_batch_locked(
     result
 }
 
-pub async fn run_mutation(store: EditorStore, ports: Rc<AppPorts>, mut request: EditorRequest) {
+pub async fn run_mutation(store: EditorStore, ports: Rc<AppPorts>, intent: MutationIntent) {
     let _operation = ports.operations.lock().await;
-    let _busy = store.begin_operation(mutation_status(&request));
+    let _busy = store.begin_operation(intent.status());
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
     {
         return;
     }
-    if let Err(error) = rebase_mutation_request(store, &mut request) {
+    let Some((document_id, base_revision)) = document_identity(store) else {
+        let error = crate::protocol::AppErrorDto {
+            code: "no_document".to_string(),
+            message: "no workbook is open".to_string(),
+        };
         store.set_error(error);
         return;
-    }
-    let _ = run_mutation_locked(store, Rc::clone(&ports), request).await;
+    };
+    let command = intent.into_command(document_id, base_revision);
+    let _ = run_mutation_locked(store, Rc::clone(&ports), command).await;
 }
 
 async fn run_mutation_locked(
     mut store: EditorStore,
     ports: Rc<AppPorts>,
-    request: EditorRequest,
+    command: EditorCommand,
 ) -> Result<(), crate::protocol::AppErrorDto> {
-    let select_added_sheet = matches!(&request, EditorRequest::AddSheet { .. });
+    let select_added_sheet = matches!(&command.request, EditorRequest::AddSheet { .. });
     let previous_sheet_name = active_sheet_name(store);
-    let result = match ports.editor.execute(request).await {
-        Ok(EditorReply::Mutation { value }) => {
-            match serde_json::from_value::<EditorMutationView>(value) {
-                Ok(mutation) => {
-                    let Some((document_id, revision)) = document_identity(store) else {
-                        let error = crate::protocol::AppErrorDto {
-                            code: "document_closed".to_string(),
-                            message: "the workbook is no longer open".to_string(),
-                        };
-                        store.set_error(error.clone());
-                        return Err(error);
-                    };
-                    if mutation.document_id != document_id || mutation.revision < revision {
-                        let error = crate::protocol::AppErrorDto {
-                            code: "stale_mutation_response".to_string(),
-                            message:
-                                "the mutation response did not match the current workbook revision"
-                                    .to_string(),
-                        };
-                        store.set_error(error.clone());
-                        return Err(error);
-                    }
-                    let refresh =
-                        MutationRefresh::for_patches(&mutation.patches, store.active_sheet());
-                    if refresh.document {
-                        ports.regions.reset();
-                    }
-                    store.accept_mutation(mutation);
-                    if refresh.document {
-                        refresh_document(store, Rc::clone(&ports)).await;
-                    }
-                    if select_added_sheet {
-                        select_last_sheet(store);
-                    } else if active_sheet_name(store) != previous_sheet_name {
-                        reset_current_sheet_viewport(store);
-                    } else {
-                        clamp_selected_cell(store);
-                    }
-                    store.search.set(None);
-                    schedule_current_window(store, &ports);
-                    sync_formula_text(store);
-                    if refresh.images || select_added_sheet {
-                        refresh_images(store, Rc::clone(&ports)).await;
-                    }
-                    schedule_recovery(store, ports);
-                    Ok(())
-                }
-                Err(error) => Err(protocol_error(error)),
+    let result = match ports.editor.execute_command(command).await {
+        Ok(crate::protocol::EditorOutput {
+            reply: EditorReply::Mutation { value },
+            ..
+        }) => {
+            let mutation: EditorMutationView = value.into();
+            let Some((document_id, revision)) = document_identity(store) else {
+                let error = crate::protocol::AppErrorDto {
+                    code: "document_closed".to_string(),
+                    message: "the workbook is no longer open".to_string(),
+                };
+                store.set_error(error.clone());
+                return Err(error);
+            };
+            if mutation.document_id != document_id || mutation.revision < revision {
+                let error = crate::protocol::AppErrorDto {
+                    code: "stale_mutation_response".to_string(),
+                    message: "the mutation response did not match the current workbook revision"
+                        .to_string(),
+                };
+                store.set_error(error.clone());
+                return Err(error);
             }
+            let refresh = MutationRefresh::for_patches(&mutation.patches, store.active_sheet());
+            if refresh.document {
+                ports.regions.reset();
+            }
+            store.accept_mutation(mutation);
+            if refresh.document {
+                refresh_document(store, Rc::clone(&ports)).await;
+            }
+            if select_added_sheet {
+                select_last_sheet(store);
+            } else if active_sheet_name(store) != previous_sheet_name {
+                reset_current_sheet_viewport(store);
+            } else {
+                clamp_selected_cell(store);
+            }
+            store.search.set(None);
+            schedule_current_window(store, &ports);
+            sync_formula_text(store);
+            if refresh.images || select_added_sheet {
+                refresh_images(store, Rc::clone(&ports)).await;
+            }
+            schedule_recovery(store, ports);
+            Ok(())
         }
         Ok(_) => Err(unexpected_reply("mutation")),
         Err(error) => Err(error),
@@ -377,35 +701,11 @@ async fn run_mutation_locked(
 }
 
 pub async fn undo(store: EditorStore, ports: Rc<AppPorts>) {
-    let Some((document_id, base_revision)) = document_identity(store) else {
-        return;
-    };
-    run_mutation(
-        store,
-        ports,
-        EditorRequest::Undo {
-            request_id: request_id("undo"),
-            document_id,
-            base_revision,
-        },
-    )
-    .await;
+    run_mutation(store, ports, MutationIntent::Undo).await;
 }
 
 pub async fn redo(store: EditorStore, ports: Rc<AppPorts>) {
-    let Some((document_id, base_revision)) = document_identity(store) else {
-        return;
-    };
-    run_mutation(
-        store,
-        ports,
-        EditorRequest::Redo {
-            request_id: request_id("redo"),
-            document_id,
-            base_revision,
-        },
-    )
-    .await;
+    run_mutation(store, ports, MutationIntent::Redo).await;
 }
 
 pub async fn save_local(store: EditorStore, ports: Rc<AppPorts>) {
@@ -438,14 +738,19 @@ async fn save_local_to_target(
     let existing_target = document_path(store);
     #[cfg(feature = "web")]
     let result = ports
-        .editor
-        .execute(EditorRequest::SaveLocal {
+        .workspace
+        .execute(WebWorkspaceRequest::SaveLocal {
             request_id: request_id("save-local"),
             document_id,
             base_revision,
             target_name,
         })
-        .await;
+        .await
+        .and_then(|reply| match reply {
+            WebWorkspaceReply::Saved(value) => Ok(EditorReply::Saved { value }),
+            WebWorkspaceReply::Empty => Ok(EditorReply::Empty),
+            _ => Err(unexpected_reply("save local document")),
+        });
 
     #[cfg(feature = "desktop")]
     let result = save_native(Rc::clone(&ports), document_id, base_revision, target_name).await;
@@ -474,13 +779,7 @@ async fn save_local_to_target(
 
     match result {
         Ok(EditorReply::Saved { value }) => {
-            match serde_json::from_value::<SavedDocumentView>(value) {
-                Ok(saved) => accept_saved_document(store, saved),
-                Err(error) => {
-                    store.set_error(protocol_error(error));
-                    return;
-                }
-            }
+            accept_saved_document(store, value.into());
             #[cfg(feature = "mobile")]
             let _ = ports.recovery.clear().await;
             let mut store = store;
@@ -512,21 +811,23 @@ async fn save_native(
     let save_token = request_id("save-native");
     let prepared = ports
         .editor
-        .execute(EditorRequest::PrepareSave {
+        .execute_command(EditorCommand::new(EditorRequest::PrepareSave {
             request_id: save_token.clone(),
             document_id,
             base_revision,
             target_name: path.clone(),
-        })
+        }))
         .await?;
     let EditorReply::SavePrepared {
         save_token,
         file_name,
-        bytes,
-    } = prepared
+    } = prepared.reply
     else {
         return Err(unexpected_reply("prepare save"));
     };
+    let bytes = prepared
+        .attachment
+        .ok_or_else(|| unexpected_reply("prepare save bytes"))?;
     let path = path_for_prepared_name(path, &file_name);
     if let Err(error) = ports
         .files
@@ -556,21 +857,23 @@ async fn save_mobile(
     let save_token = request_id("save-mobile");
     let prepared = ports
         .editor
-        .execute(EditorRequest::PrepareSave {
+        .execute_command(EditorCommand::new(EditorRequest::PrepareSave {
             request_id: save_token.clone(),
             document_id,
             base_revision,
             target_name,
-        })
+        }))
         .await?;
     let EditorReply::SavePrepared {
         save_token,
         file_name,
-        bytes,
-    } = prepared
+    } = prepared.reply
     else {
         return Err(unexpected_reply("prepare mobile save"));
     };
+    let bytes = prepared
+        .attachment
+        .ok_or_else(|| unexpected_reply("prepare mobile save bytes"))?;
     let path = match ports
         .files
         .write_document_to_target(existing_target, file_name, bytes)
@@ -637,14 +940,22 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
     let target_name = suggested_name;
     match ports
         .editor
-        .execute(EditorRequest::PrepareExport {
+        .execute_command(EditorCommand::new(EditorRequest::PrepareExport {
             document_id,
             base_revision,
             target_name: target_name.clone(),
-        })
+        }))
         .await
     {
-        Ok(EditorReply::ExportPrepared { file_name, bytes }) => {
+        Ok(output) => {
+            let EditorReply::ExportPrepared { file_name } = output.reply else {
+                store.set_error(unexpected_reply("download"));
+                return;
+            };
+            let Some(bytes) = output.attachment else {
+                store.set_error(unexpected_reply("download bytes"));
+                return;
+            };
             #[cfg(feature = "desktop")]
             let write = {
                 let path = path_for_prepared_name(target_name, &file_name);
@@ -669,7 +980,6 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
                 Err(error) => store.set_error(error),
             }
         }
-        Ok(_) => store.set_error(unexpected_reply("download")),
         Err(error) => store.set_error(error),
     }
 }
@@ -697,15 +1007,12 @@ pub async fn search(store: EditorStore, ports: Rc<AppPorts>, query: String, all_
         })
         .await
     {
-        Ok(EditorReply::Search { value }) => match serde_json::from_value::<SearchView>(value) {
-            Ok(response) => {
-                let mut store = store;
-                store.search.set(Some(response));
-                store.search_open.set(true);
-                store.status.set("Search complete".to_string());
-            }
-            Err(error) => store.set_error(protocol_error(error)),
-        },
+        Ok(EditorReply::Search { value }) => {
+            let mut store = store;
+            store.search.set(Some(value.into()));
+            store.search_open.set(true);
+            store.status.set("Search complete".to_string());
+        }
         Ok(_) => store.set_error(unexpected_reply("search")),
         Err(error) => store.set_error(error),
     }
@@ -837,15 +1144,19 @@ pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
         }
         match ports
             .editor
-            .execute(EditorRequest::ImageBytes {
+            .execute_command(EditorCommand::new(EditorRequest::ImageBytes {
                 document_id,
                 base_revision,
                 sheet_index,
                 image_id: image.id.clone(),
-            })
+            }))
             .await
         {
-            Ok(EditorReply::Bytes { bytes }) => {
+            Ok(output) if matches!(output.reply, EditorReply::Bytes) => {
+                let Some(bytes) = output.attachment else {
+                    store.set_error(unexpected_reply("image bytes"));
+                    return;
+                };
                 let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
                 assets.insert(
                     image.id.clone(),
@@ -964,12 +1275,7 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool
 
 async fn refresh_document(store: EditorStore, ports: Rc<AppPorts>) {
     match ports.editor.execute(EditorRequest::ActiveDocument).await {
-        Ok(EditorReply::Document { value }) if !value.is_null() => {
-            match serde_json::from_value::<OpenDocumentView>(value) {
-                Ok(document) => store.refresh_document(document),
-                Err(error) => store.set_error(protocol_error(error)),
-            }
-        }
+        Ok(EditorReply::Document { value: Some(value) }) => store.refresh_document(value.into()),
         Ok(EditorReply::Document { .. }) => {}
         Ok(_) => store.set_error(unexpected_reply("document")),
         Err(error) => store.set_error(error),
@@ -1017,10 +1323,10 @@ impl MutationRefresh {
                     refresh.document = true;
                     refresh.images |= patch.sheet_index == active_sheet;
                 }
-                EditorPatchView::SheetInserted { .. }
-                | EditorPatchView::SheetDeleted { .. }
-                | EditorPatchView::SheetsReplaced { .. }
-                | EditorPatchView::ResyncRequired { .. } => {
+                EditorPatchView::SheetInserted
+                | EditorPatchView::SheetDeleted
+                | EditorPatchView::SheetsReplaced
+                | EditorPatchView::ResyncRequired => {
                     refresh.document = true;
                     refresh.images = true;
                 }
@@ -1124,8 +1430,8 @@ fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
                 .is_some_and(|document| document.editor_session.editor_state.is_dirty);
             if is_dirty {
                 let _ = ports
-                    .editor
-                    .execute(EditorRequest::CheckpointRecovery {
+                    .workspace
+                    .execute(WebWorkspaceRequest::CheckpointRecovery {
                         request_id: request_id("recovery"),
                         document_id,
                         base_revision,
@@ -1133,7 +1439,10 @@ fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
                     })
                     .await;
             } else {
-                let _ = ports.editor.execute(EditorRequest::ClearRecovery).await;
+                let _ = ports
+                    .workspace
+                    .execute(WebWorkspaceRequest::ClearRecovery)
+                    .await;
             }
         });
     }
@@ -1168,18 +1477,21 @@ fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
 
             let prepared = ports
                 .editor
-                .execute(EditorRequest::PrepareExport {
+                .execute_command(EditorCommand::new(EditorRequest::PrepareExport {
                     document_id,
                     base_revision,
                     target_name: document_name(store),
-                })
+                }))
                 .await;
             if store.edit_generation() != generation
                 || document_identity(store) != Some((document_id, base_revision))
             {
                 return;
             }
-            if let Ok(EditorReply::ExportPrepared { file_name, bytes }) = prepared {
+            if let Ok(output) = prepared
+                && let EditorReply::ExportPrepared { file_name } = output.reply
+                && let Some(bytes) = output.attachment
+            {
                 let _ = ports.recovery.checkpoint(file_name, bytes).await;
             }
         });
@@ -1198,23 +1510,15 @@ fn accept_document_reply(
         store.set_error(unexpected_reply("document"));
         return false;
     };
-    if value.is_null() {
+    let Some(value) = value else {
         regions.reset();
         store.document.set(None);
         store.region_cache.write().clear();
         return false;
-    }
-    match serde_json::from_value::<OpenDocumentView>(value) {
-        Ok(document) => {
-            regions.reset();
-            store.accept_document(document);
-            true
-        }
-        Err(error) => {
-            store.set_error(protocol_error(error));
-            false
-        }
-    }
+    };
+    regions.reset();
+    store.accept_document(value.into());
+    true
 }
 
 fn document_identity(store: EditorStore) -> Option<(u64, u64)> {
@@ -1328,122 +1632,6 @@ fn path_for_prepared_name(selected_path: String, prepared_name: &str) -> String 
     path.to_string_lossy().into_owned()
 }
 
-fn rebase_mutation_request(
-    store: EditorStore,
-    request: &mut EditorRequest,
-) -> Result<(), crate::protocol::AppErrorDto> {
-    let Some((current_document_id, current_revision)) = document_identity(store) else {
-        return Err(crate::protocol::AppErrorDto {
-            code: "no_document".to_string(),
-            message: "no workbook is open".to_string(),
-        });
-    };
-    let context = match request {
-        EditorRequest::SetCell {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::SetCells {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::AddRow {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::DeleteRow {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::AddColumn {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::DeleteColumn {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::SortRows {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::SetFilter {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::ClearFilter {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::SetColumnWidth {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::SetRowHeight {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::AddSheet {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::DeleteSheet {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::InsertImage {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::UpdateImage {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::DeleteImage {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::Undo {
-            document_id,
-            base_revision,
-            ..
-        }
-        | EditorRequest::Redo {
-            document_id,
-            base_revision,
-            ..
-        } => Some((document_id, base_revision)),
-        _ => None,
-    };
-    let Some((document_id, base_revision)) = context else {
-        return Err(unexpected_reply("mutation request"));
-    };
-    if *document_id != current_document_id {
-        return Err(crate::protocol::AppErrorDto {
-            code: "document_changed".to_string(),
-            message: "the workbook changed before the action could run".to_string(),
-        });
-    }
-    *base_revision = current_revision;
-    Ok(())
-}
-
 fn remove_committed_edits(
     pending: &mut crate::model::PendingCellEdits,
     committed: crate::model::PendingCellEdits,
@@ -1452,23 +1640,6 @@ fn remove_committed_edits(
         if pending.get(&coordinates) == Some(&edit) {
             pending.remove(&coordinates);
         }
-    }
-}
-
-fn mutation_status(request: &EditorRequest) -> &'static str {
-    match request {
-        EditorRequest::Undo { .. } => "Undoing change",
-        EditorRequest::Redo { .. } => "Redoing change",
-        EditorRequest::SortRows { .. } => "Sorting rows",
-        EditorRequest::SetFilter { .. } | EditorRequest::ClearFilter { .. } => "Updating filters",
-        _ => "Applying changes",
-    }
-}
-
-fn protocol_error(error: serde_json::Error) -> crate::protocol::AppErrorDto {
-    crate::protocol::AppErrorDto {
-        code: "protocol_error".to_string(),
-        message: error.to_string(),
     }
 }
 
@@ -1495,7 +1666,9 @@ mod tests {
         SheetManifestView,
     };
     use crate::ports::editor::{EditorPort, PortFuture};
-    use crate::protocol::{EditorResponse, ImageAnchorDto, ImageMarkerDto, SheetImageDto};
+    #[cfg(any(feature = "desktop", feature = "mobile"))]
+    use crate::protocol::{EditorCommand, EditorOutput, SavedDocumentResponse};
+    use crate::protocol::{ImageAnchorDto, ImageMarkerDto, SheetImageDto};
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -1507,7 +1680,9 @@ mod tests {
                 can_undo: false,
                 can_redo: false,
                 is_dirty: false,
+                history: Default::default(),
             },
+            capabilities: Default::default(),
             formula_status: Default::default(),
             filters: Vec::new(),
         }
@@ -1578,6 +1753,31 @@ mod tests {
     }
 
     #[test]
+    fn mutation_intent_binds_current_context_and_keeps_binary_out_of_the_request() {
+        let command = MutationIntent::InsertImage {
+            sheet_index: 2,
+            row: 3,
+            col: 4,
+            file_name: "chart.png".to_string(),
+            bytes: vec![1, 2, 3],
+        }
+        .into_command(17, 29);
+
+        assert_eq!(command.attachment, Some(vec![1, 2, 3]));
+        assert!(matches!(
+            command.request,
+            EditorRequest::InsertImage {
+                document_id: 17,
+                base_revision: 29,
+                sheet_index: 2,
+                row: 3,
+                col: 4,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn saved_identity_updates_document_name_path_and_session() {
         let mut document = OpenDocumentView {
             document: manifest("/tmp/old.xlsx", "old.xlsx"),
@@ -1601,43 +1801,39 @@ mod tests {
         assert_eq!(document.editor_session.revision, 2);
     }
 
-    fn patch(value: serde_json::Value) -> EditorPatchView {
-        serde_json::from_value(value).expect("valid patch")
-    }
-
     #[test]
     fn mutation_refresh_is_scoped_by_patch_and_active_sheet() {
-        let cells = [patch(serde_json::json!({
-            "type": "Cells",
-            "data": { "changes": [] }
-        }))];
+        let cells = [EditorPatchView::Cells {
+            changes: Vec::new(),
+        }];
         assert_eq!(
             MutationRefresh::for_patches(&cells, 0),
             MutationRefresh::default()
         );
 
-        let layout = [patch(serde_json::json!({
-            "type": "Layout",
-            "data": { "patch": { "sheetIndex": 0 } }
-        }))];
+        let layout = [EditorPatchView::Layout {
+            patch: crate::model::LayoutPatchView {
+                sheet_index: 0,
+                column_widths: HashMap::new(),
+                row_heights: HashMap::new(),
+            },
+        }];
         assert_eq!(
             MutationRefresh::for_patches(&layout, 0),
             MutationRefresh::default()
         );
 
-        let other_sheet_image = [patch(serde_json::json!({
-            "type": "ImageDeleted",
-            "data": { "patch": { "sheetIndex": 1, "imageId": "image-1" } }
-        }))];
+        let other_sheet_image = [EditorPatchView::ImageDeleted {
+            patch: crate::model::SheetPatchView { sheet_index: 1 },
+        }];
         assert_eq!(
             MutationRefresh::for_patches(&other_sheet_image, 0),
             MutationRefresh::default()
         );
 
-        let active_row = [patch(serde_json::json!({
-            "type": "RowInserted",
-            "data": { "patch": { "sheetIndex": 0, "rowIndex": 2, "count": 1 } }
-        }))];
+        let active_row = [EditorPatchView::RowInserted {
+            patch: crate::model::SheetPatchView { sheet_index: 0 },
+        }];
         assert_eq!(
             MutationRefresh::for_patches(&active_row, 0),
             MutationRefresh {
@@ -1652,7 +1848,10 @@ mod tests {
     }
 
     impl EditorPort for PagedImageEditor {
-        fn execute(&self, request: EditorRequest) -> PortFuture<EditorResponse> {
+        fn execute(
+            &self,
+            request: EditorRequest,
+        ) -> PortFuture<Result<EditorReply, crate::protocol::AppErrorDto>> {
             let EditorRequest::SheetImages { offset, .. } = request else {
                 panic!("unexpected request");
             };
@@ -1699,25 +1898,67 @@ mod tests {
 
     #[cfg(feature = "desktop")]
     impl EditorPort for RecordingSaveEditor {
-        fn execute(&self, request: EditorRequest) -> PortFuture<EditorResponse> {
+        fn execute(
+            &self,
+            request: EditorRequest,
+        ) -> PortFuture<Result<EditorReply, crate::protocol::AppErrorDto>> {
             let response = match request {
-                EditorRequest::PrepareSave { target_name, .. } => {
-                    self.prepared_target.replace(Some(target_name));
-                    Ok(EditorReply::SavePrepared {
-                        save_token: "save-token".to_string(),
-                        file_name: "selected.xlsx".to_string(),
-                        bytes: vec![1, 2, 3],
-                    })
-                }
                 EditorRequest::CommitSave { path, .. } => {
                     self.committed_path.replace(Some(path));
                     Ok(EditorReply::Saved {
-                        value: serde_json::Value::Null,
+                        value: saved_response(),
                     })
                 }
                 request => panic!("unexpected request: {request:?}"),
             };
             Box::pin(async move { response })
+        }
+
+        fn execute_command(
+            &self,
+            command: EditorCommand,
+        ) -> PortFuture<crate::protocol::EditorResponse> {
+            let EditorCommand {
+                request,
+                attachment,
+            } = command;
+            assert!(attachment.is_none());
+            let EditorRequest::PrepareSave { target_name, .. } = request else {
+                panic!("unexpected command request: {request:?}");
+            };
+            self.prepared_target.replace(Some(target_name));
+            Box::pin(async {
+                Ok(EditorOutput::with_attachment(
+                    EditorReply::SavePrepared {
+                        save_token: "save-token".to_string(),
+                        file_name: "selected.xlsx".to_string(),
+                    },
+                    vec![1, 2, 3],
+                ))
+            })
+        }
+    }
+
+    #[cfg(any(feature = "desktop", feature = "mobile"))]
+    fn saved_response() -> SavedDocumentResponse {
+        SavedDocumentResponse {
+            document: None,
+            identity: None,
+            editor_session: crate::protocol::EditorSessionInfo {
+                document_id: 7,
+                revision: 2,
+                editor_state: crate::protocol::EditorStateInfo {
+                    can_undo: false,
+                    can_redo: false,
+                    is_dirty: false,
+                    history: Default::default(),
+                },
+                capabilities: Default::default(),
+                formula_status: crate::protocol::FormulaStatus::Ready {
+                    diagnostics: Default::default(),
+                },
+                filters: Vec::new(),
+            },
         }
     }
 
@@ -1764,6 +2005,7 @@ mod tests {
             files: Rc::new(RecordingFilePort {
                 written_path: Rc::clone(&written_path),
             }),
+            workspace: crate::ports::workspace::platform_workspace_port(),
             operations: Rc::new(futures::lock::Mutex::new(())),
         });
 
@@ -1785,25 +2027,44 @@ mod tests {
 
     #[cfg(feature = "mobile")]
     impl EditorPort for RecordingMobileSaveEditor {
-        fn execute(&self, request: EditorRequest) -> PortFuture<EditorResponse> {
+        fn execute(
+            &self,
+            request: EditorRequest,
+        ) -> PortFuture<Result<EditorReply, crate::protocol::AppErrorDto>> {
             let response = match request {
-                EditorRequest::PrepareSave { target_name, .. } => {
-                    self.prepared_target.replace(Some(target_name));
-                    Ok(EditorReply::SavePrepared {
-                        save_token: "save-token".to_string(),
-                        file_name: "quarterly plan.xlsx".to_string(),
-                        bytes: vec![1, 2, 3],
-                    })
-                }
                 EditorRequest::CommitSave { path, .. } => {
                     self.committed_path.replace(Some(path));
                     Ok(EditorReply::Saved {
-                        value: serde_json::Value::Null,
+                        value: saved_response(),
                     })
                 }
                 request => panic!("unexpected request: {request:?}"),
             };
             Box::pin(async move { response })
+        }
+
+        fn execute_command(
+            &self,
+            command: EditorCommand,
+        ) -> PortFuture<crate::protocol::EditorResponse> {
+            let EditorCommand {
+                request,
+                attachment,
+            } = command;
+            assert!(attachment.is_none());
+            let EditorRequest::PrepareSave { target_name, .. } = request else {
+                panic!("unexpected command request: {request:?}");
+            };
+            self.prepared_target.replace(Some(target_name));
+            Box::pin(async {
+                Ok(EditorOutput::with_attachment(
+                    EditorReply::SavePrepared {
+                        save_token: "save-token".to_string(),
+                        file_name: "quarterly plan.xlsx".to_string(),
+                    },
+                    vec![1, 2, 3],
+                ))
+            })
         }
     }
 

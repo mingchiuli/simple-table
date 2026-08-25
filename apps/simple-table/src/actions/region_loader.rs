@@ -453,12 +453,7 @@ impl RegionLoader {
                 "the editor returned an unexpected physical row response",
             ));
         };
-        let response = serde_json::from_value::<SheetRowsRegionView>(value).map_err(|error| {
-            loader_error(
-                "protocol_error",
-                format!("invalid physical row response: {error}"),
-            )
-        })?;
+        let response: SheetRowsRegionView = value.into();
         if response.regions.len() != jobs.len()
             || response.regions.iter().zip(jobs).any(|(region, job)| {
                 region.document_id != job.key.identity.document_id
@@ -499,12 +494,7 @@ impl RegionLoader {
                 "the editor returned an unexpected region response",
             ));
         };
-        let region = serde_json::from_value::<SheetRegionView>(value).map_err(|error| {
-            loader_error(
-                "protocol_error",
-                format!("invalid region response: {error}"),
-            )
-        })?;
+        let region: SheetRegionView = value.into();
         if region.document_id != identity.document_id
             || region.revision != identity.revision
             || region.region != bounds
@@ -759,7 +749,9 @@ mod tests {
                 "sheetIndex": 0,
                 "row": 20,
                 "col": 5,
-                "value": { "raw": "outside" }
+                "displayText": "outside",
+                "editText": "outside",
+                "formulaError": null
             }],
             "metadata": {},
             "wireBytes": 100

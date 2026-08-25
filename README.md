@@ -46,6 +46,7 @@ an actionable error when neither is available.
 cargo fmt --all -- --check
 cargo xtask check
 cargo xtask test
+cargo xtask test-web
 cargo xtask bundle
 ```
 

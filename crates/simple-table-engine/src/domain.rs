@@ -9,7 +9,7 @@ mod search_query;
 mod table_operation;
 
 pub(crate) use cell_display::{format_cell_display, format_cell_search};
-pub use cell_value::{CellNumber, CellValue, normalize_formula_text, parse_cell_text};
+pub use cell_value::{CellNumber, CellValue, parse_cell_text};
 pub use document_change::DocumentCellChange;
 pub use editor_operation::{
     AppliedOperation, CellEditInput, EditorCommand, MutationImpact, OperationPatchProjector,

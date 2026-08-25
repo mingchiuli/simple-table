@@ -8,6 +8,8 @@ pub struct ToolbarIconButtonProps {
     pub index: usize,
     pub label: String,
     #[props(default)]
+    pub tooltip: Option<String>,
+    #[props(default)]
     pub disabled: bool,
     #[props(default)]
     pub active: bool,
@@ -22,9 +24,10 @@ pub fn ToolbarIconButton(props: ToolbarIconButtonProps) -> Element {
     } else {
         "tool-button"
     };
-    let tooltip_disabled = props.disabled || cfg!(feature = "mobile");
+    let tooltip_disabled = cfg!(feature = "mobile");
     let trigger_label = props.label.clone();
-    let content_label = props.label.clone();
+    let content_label = props.tooltip.clone().unwrap_or_else(|| props.label.clone());
+    let trigger_tooltip = content_label.clone();
     let children = props.children.clone();
     let on_click = props.on_click;
 
@@ -34,6 +37,7 @@ pub fn ToolbarIconButton(props: ToolbarIconButtonProps) -> Element {
                 r#as: move |attributes: Vec<Attribute>| {
                     let children = children.clone();
                     let label = trigger_label.clone();
+                    let tooltip = trigger_tooltip.clone();
                     rsx! {
                         ToolbarButton {
                             attributes,
@@ -42,6 +46,7 @@ pub fn ToolbarIconButton(props: ToolbarIconButtonProps) -> Element {
                             disabled: props.disabled,
                             on_click: move || on_click.call(()),
                             aria_label: label,
+                            title: tooltip,
                             {children}
                         }
                     }

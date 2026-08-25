@@ -57,6 +57,7 @@ serde-wasm-bindgen = { workspace = true, optional = true }
 simple-table-engine = { workspace = true, optional = true }
 simple-table-components.workspace = true
 simple-table-protocol.workspace = true
+simple-table-web-protocol.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 uuid = { workspace = true, features = ["v4", "serde", "rng-getrandom"] }
 wasm-bindgen = { workspace = true, optional = true }

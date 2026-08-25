@@ -151,7 +151,7 @@ impl RegionCache {
                 {
                     projection
                         .cells
-                        .insert((cell.row, cell.col), cell_presentation(&cell.value));
+                        .insert((cell.row, cell.col), cell_presentation(cell));
                 }
                 merges.extend(fragment.metadata.merges.iter().copied().filter(|merge| {
                     bounds.is_none_or(|bounds| {
@@ -251,10 +251,10 @@ impl RegionCache {
                 | EditorPatchView::ColumnInserted { patch }
                 | EditorPatchView::ColumnDeleted { patch } => self.clear_sheet(patch.sheet_index),
                 EditorPatchView::ImageUpserted { .. } | EditorPatchView::ImageDeleted { .. } => {}
-                EditorPatchView::SheetInserted { .. }
-                | EditorPatchView::SheetDeleted { .. }
-                | EditorPatchView::SheetsReplaced { .. }
-                | EditorPatchView::ResyncRequired { .. } => self.clear(),
+                EditorPatchView::SheetInserted
+                | EditorPatchView::SheetDeleted
+                | EditorPatchView::SheetsReplaced
+                | EditorPatchView::ResyncRequired => self.clear(),
             }
         }
         self.identity = Some(DocumentRevision {
@@ -413,8 +413,6 @@ fn region_contains(outer: SheetRegionBoundsView, inner: SheetRegionBoundsView) -
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
     use crate::model::SheetRegionMetadataView;
 
@@ -433,7 +431,9 @@ mod tests {
                 sheet_index: 0,
                 row: row_start,
                 col: 0,
-                value: json!({"raw": value}),
+                display_text: value.to_string(),
+                edit_text: value.to_string(),
+                formula_error: None,
             }],
             merge_anchor_cells: Vec::new(),
             metadata: SheetRegionMetadataView::default(),
@@ -540,7 +540,9 @@ mod tests {
             sheet_index: 0,
             row: 2,
             col: 1,
-            value: json!({"raw": "Merged"}),
+            display_text: "Merged".to_string(),
+            edit_text: "Merged".to_string(),
+            formula_error: None,
         });
         item.metadata.merges.push(MergeRangeView {
             start_row: 2,

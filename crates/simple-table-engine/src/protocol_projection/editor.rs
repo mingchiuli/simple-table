@@ -8,7 +8,6 @@ use super::status::{editor_state, formula_status, sheet_filter, workbook_capabil
 
 pub(crate) fn mutation_response(value: &MutationOutcome) -> types::EditorMutationResponse {
     let mut response = types::EditorMutationResponse {
-        protocol_version: types::EDITOR_MUTATION_PROTOCOL_VERSION,
         document_id: value.document_id,
         revision: value.revision,
         formula_status: formula_status(value.session.formula_status.clone(), 100),

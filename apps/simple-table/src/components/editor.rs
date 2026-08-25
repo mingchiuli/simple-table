@@ -26,7 +26,7 @@ use crate::Route;
 use crate::actions;
 use crate::model::{
     AppPorts, EditorStore, FilterConditionView, FilterOperatorView, FormulaIssueKindView,
-    FormulaIssueView, FormulaStatusView, request_id,
+    FormulaIssueView, FormulaStatusView,
 };
 use crate::ports::update::{GitHubUpdatePort, UpdatePort};
 use crate::ports::window::{PlatformWindowPort, WindowPort};
@@ -71,11 +71,46 @@ pub fn EditorView() -> Element {
     }
     let document = document.expect("checked above");
     let document_id = document.editor_session.document_id;
-    let revision = document.editor_session.revision;
     let editor_state = document.editor_session.editor_state.clone();
     let sheet_index = store
         .active_sheet()
         .min(document.document.sheets.len().saturating_sub(1));
+    let capabilities = document.editor_session.capabilities.clone();
+    let sheet_capabilities = capabilities
+        .sheets
+        .get(sheet_index)
+        .cloned()
+        .unwrap_or_default();
+    let save_tooltip = blocked_tooltip(
+        capabilities.save.can_native_save,
+        &capabilities.save.blocked_save_reasons,
+        "This workbook cannot be saved without losing unsupported content",
+    );
+    let row_structure_tooltip = blocked_tooltip(
+        sheet_capabilities.can_insert_delete_rows,
+        &sheet_capabilities.blocked_row_structure_reasons,
+        "Row structure changes are unavailable for this sheet",
+    );
+    let column_structure_tooltip = blocked_tooltip(
+        sheet_capabilities.can_insert_delete_columns,
+        &sheet_capabilities.blocked_column_structure_reasons,
+        "Column structure changes are unavailable for this sheet",
+    );
+    let resize_tooltip = blocked_tooltip(
+        sheet_capabilities.can_resize_rows_columns,
+        &sheet_capabilities.blocked_resize_reasons,
+        "Row and column resizing is unavailable for this sheet",
+    );
+    let image_tooltip = blocked_tooltip(
+        capabilities.rich.images.can_insert,
+        &capabilities.rich.images.blocked_reasons,
+        "Images cannot be inserted into this workbook",
+    );
+    let sheet_structure_tooltip = blocked_tooltip(
+        capabilities.structure.can_insert_delete_sheets,
+        &capabilities.structure.blocked_sheet_structure_reasons,
+        "Sheet structure changes are unavailable for this workbook",
+    );
     let selection = *store.selection.read();
     let selected = (selection.row, selection.col);
     let selected_address = selection.merge.map_or_else(
@@ -159,7 +194,8 @@ pub fn EditorView() -> Element {
                 ToolbarIconButton {
                     index: 2usize,
                     label: "Save",
-                    disabled: store.busy(),
+                    tooltip: save_tooltip.clone(),
+                    disabled: store.busy() || !capabilities.save.can_native_save,
                     on_click: {
                         let ports = Rc::clone(&ports);
                         #[cfg(feature = "mobile")]
@@ -179,7 +215,8 @@ pub fn EditorView() -> Element {
                 ToolbarIconButton {
                     index: 3usize,
                     label: "Download a copy",
-                    disabled: store.busy(),
+                    tooltip: save_tooltip,
+                    disabled: store.busy() || !capabilities.save.can_native_save,
                     on_click: {
                         let ports = Rc::clone(&ports);
                         move |_| {
@@ -216,78 +253,82 @@ pub fn EditorView() -> Element {
                     },
                     Redo2 { size: 18 }
                 }
+                if editor_state.history.is_truncated {
+                    span {
+                        class: "history-status",
+                        title: editor_state.history.reason.as_deref().unwrap_or("Older undo history was discarded"),
+                        "History limited"
+                    }
+                }
                 ToolbarSeparator {}
                 StructureButton {
                     index: 6,
                     title: "Insert row",
                     icon: rsx! { Rows3 { size: 18 } },
                     request: EditorRequestFactory::AddRow,
-                    document_id,
-                    revision,
                     sheet_index,
                     selected,
+                    enabled: sheet_capabilities.can_insert_delete_rows,
+                    blocked_reason: row_structure_tooltip.clone(),
                 }
                 StructureButton {
                     index: 7,
                     title: "Delete row",
                     icon: rsx! { Trash2 { size: 17 } },
                     request: EditorRequestFactory::DeleteRow,
-                    document_id,
-                    revision,
                     sheet_index,
                     selected,
+                    enabled: sheet_capabilities.can_insert_delete_rows,
+                    blocked_reason: row_structure_tooltip,
                 }
                 StructureButton {
                     index: 8,
                     title: "Insert column",
                     icon: rsx! { Columns3 { size: 18 } },
                     request: EditorRequestFactory::AddColumn,
-                    document_id,
-                    revision,
                     sheet_index,
                     selected,
+                    enabled: sheet_capabilities.can_insert_delete_columns,
+                    blocked_reason: column_structure_tooltip.clone(),
                 }
                 StructureButton {
                     index: 9,
                     title: "Delete column",
                     icon: rsx! { Trash2 { size: 17 } },
                     request: EditorRequestFactory::DeleteColumn,
-                    document_id,
-                    revision,
                     sheet_index,
                     selected,
+                    enabled: sheet_capabilities.can_insert_delete_columns,
+                    blocked_reason: column_structure_tooltip,
                 }
                 DimensionControls {
-                    document_id,
-                    revision,
                     sheet_index,
                     selected,
                     width: document.document.sheets[sheet_index]
                         .layout.column_widths.get(&selected.1).copied().unwrap_or(120),
                     height: document.document.sheets[sheet_index]
                         .layout.row_heights.get(&selected.0).copied().unwrap_or(30),
+                    enabled: sheet_capabilities.can_resize_rows_columns,
+                    blocked_reason: resize_tooltip,
                 }
                 ToolbarSeparator {}
                 TableDataTools {
                     document_id,
-                    revision,
                     sheet_index,
                     selected,
                 }
                 ToolbarSeparator {}
                 InsertImageTool {
-                    document_id,
-                    revision,
                     sheet_index,
                     selected,
+                    enabled: capabilities.rich.images.can_insert,
+                    blocked_reason: image_tooltip,
                 }
                 if let Some(image_id) = store.selected_image.read().clone()
                     && let Some(image) = store.images.read().iter().find(|image| image.id == image_id).cloned()
                 {
                     ImageTools {
                         image,
-                        document_id,
-                        revision,
                         sheet_index,
                         selected,
                     }
@@ -310,7 +351,12 @@ pub fn EditorView() -> Element {
                 span { class: "formula-symbol", "fx" }
                 Input {
                     aria_label: "Cell value or formula",
-                    disabled: store.busy(),
+                    title: blocked_tooltip(
+                        sheet_capabilities.can_edit_cells,
+                        &sheet_capabilities.blocked_edit_reasons,
+                        "Cell editing is unavailable for this sheet",
+                    ),
+                    disabled: store.busy() || !sheet_capabilities.can_edit_cells,
                     value: store.formula_text,
                     oninput: {
                         let ports = Rc::clone(&ports);
@@ -374,7 +420,8 @@ pub fn EditorView() -> Element {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::IconSm,
                     aria_label: "Add sheet",
-                    disabled: store.busy(),
+                    title: sheet_structure_tooltip.clone(),
+                    disabled: store.busy() || !capabilities.structure.can_insert_delete_sheets,
                     onclick: {
                         let ports = Rc::clone(&ports);
                         move |_| {
@@ -383,11 +430,7 @@ pub fn EditorView() -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::AddSheet {
-                                        request_id: request_id("add-sheet"),
-                                        document_id,
-                                        base_revision: revision,
-                                    },
+                                    actions::MutationIntent::AddSheet,
                                 )
                                 .await;
                             });
@@ -400,7 +443,10 @@ pub fn EditorView() -> Element {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::IconSm,
                     aria_label: "Delete current sheet",
-                    disabled: store.busy() || sheet_count <= 1,
+                    title: sheet_structure_tooltip,
+                    disabled: store.busy()
+                        || sheet_count <= 1
+                        || !capabilities.structure.can_insert_delete_sheets,
                     onclick: {
                         let ports = Rc::clone(&ports);
                         move |_| {
@@ -409,10 +455,7 @@ pub fn EditorView() -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::DeleteSheet {
-                                        request_id: request_id("delete-sheet"),
-                                        document_id,
-                                        base_revision: revision,
+                                    actions::MutationIntent::DeleteSheet {
                                         sheet_index,
                                     },
                                 )
@@ -480,7 +523,6 @@ pub fn EditorView() -> Element {
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct TableDataToolsProps {
     document_id: u64,
-    revision: u64,
     sheet_index: usize,
     selected: (usize, usize),
     #[props(default)]
@@ -491,7 +533,7 @@ pub(super) struct TableDataToolsProps {
 pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
-    let (active_condition, has_filters) = {
+    let (active_condition, has_filters, can_edit_cells, blocked_reason) = {
         let document = store.document.read();
         let filter = document
             .as_ref()
@@ -510,7 +552,28 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                 .find(|condition| condition.col == props.selected.1)
                 .cloned()
         });
-        (condition, filter.is_some())
+        let capabilities = document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .editor_session
+                    .capabilities
+                    .sheets
+                    .get(props.sheet_index)
+            })
+            .cloned()
+            .unwrap_or_default();
+        let blocked_reason = capabilities
+            .blocked_edit_reasons
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Table operations are unavailable for this sheet".to_string());
+        (
+            condition,
+            filter.is_some(),
+            capabilities.can_edit_cells,
+            blocked_reason,
+        )
     };
     let active = active_condition.is_some();
     let draft_key = filter_draft_key(
@@ -538,10 +601,7 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                 actions::run_mutation(
                     store,
                     ports,
-                    crate::protocol::EditorRequest::SetFilter {
-                        request_id: request_id("set-filter"),
-                        document_id: props.document_id,
-                        base_revision: props.revision,
+                    actions::MutationIntent::SetFilter {
                         sheet_index: props.sheet_index,
                         anchor_row: props.selected.0,
                         col: props.selected.1,
@@ -561,10 +621,7 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                 actions::run_mutation(
                     store,
                     ports,
-                    crate::protocol::EditorRequest::ClearFilter {
-                        request_id: request_id("clear-filter"),
-                        document_id: props.document_id,
-                        base_revision: props.revision,
+                    actions::MutationIntent::ClearFilter {
                         sheet_index: props.sheet_index,
                         col: Some(props.selected.1),
                     },
@@ -581,10 +638,7 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                 actions::run_mutation(
                     store,
                     ports,
-                    crate::protocol::EditorRequest::ClearFilter {
-                        request_id: request_id("clear-filters"),
-                        document_id: props.document_id,
-                        base_revision: props.revision,
+                    actions::MutationIntent::ClearFilter {
                         sheet_index: props.sheet_index,
                         col: None,
                     },
@@ -598,8 +652,13 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
         PopoverRoot { class: root_class, is_modal: false,
             PopoverTrigger {
                 class: trigger_class,
-                title: "Sort and filter selected column",
+                title: if can_edit_cells {
+                    "Sort and filter selected column"
+                } else {
+                    blocked_reason.as_str()
+                },
                 aria_label: "Sort and filter selected column",
+                aria_disabled: (!can_edit_cells).then_some("true"),
                 Funnel { size: 18 }
             }
             PopoverContent {
@@ -612,7 +671,8 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                 div { class: "table-sort-actions",
                     Button {
                         variant: ButtonVariant::Ghost,
-                        disabled: store.busy(),
+                        disabled: store.busy() || !can_edit_cells,
+                        title: (!can_edit_cells).then_some(blocked_reason.as_str()),
                         onclick: {
                             let ports = Rc::clone(&ports);
                             move |_| {
@@ -621,10 +681,7 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                                     actions::run_mutation(
                                         store,
                                         ports,
-                                        crate::protocol::EditorRequest::SortRows {
-                                            request_id: request_id("sort-ascending"),
-                                            document_id: props.document_id,
-                                            base_revision: props.revision,
+                                        actions::MutationIntent::SortRows {
                                             sheet_index: props.sheet_index,
                                             anchor_row: props.selected.0,
                                             anchor_col: props.selected.1,
@@ -639,7 +696,8 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                     }
                     Button {
                         variant: ButtonVariant::Ghost,
-                        disabled: store.busy(),
+                        disabled: store.busy() || !can_edit_cells,
+                        title: (!can_edit_cells).then_some(blocked_reason.as_str()),
                         onclick: {
                             let ports = Rc::clone(&ports);
                             move |_| {
@@ -648,10 +706,7 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                                     actions::run_mutation(
                                         store,
                                         ports,
-                                        crate::protocol::EditorRequest::SortRows {
-                                            request_id: request_id("sort-descending"),
-                                            document_id: props.document_id,
-                                            base_revision: props.revision,
+                                        actions::MutationIntent::SortRows {
                                             sheet_index: props.sheet_index,
                                             anchor_row: props.selected.0,
                                             anchor_col: props.selected.1,
@@ -670,6 +725,8 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                         key: "{draft_key}",
                         active_condition,
                         has_filters,
+                        enabled: can_edit_cells,
+                        blocked_reason: blocked_reason.clone(),
                         on_apply: apply_filter,
                         on_clear: clear_filter,
                         on_clear_all: clear_filters,
@@ -684,6 +741,8 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
 struct TableFilterFormProps {
     active_condition: Option<FilterConditionView>,
     has_filters: bool,
+    enabled: bool,
+    blocked_reason: String,
     on_apply: Callback<(FilterOperatorDto, String)>,
     on_clear: Callback<()>,
     on_clear_all: Callback<()>,
@@ -714,6 +773,8 @@ fn TableFilterForm(props: TableFilterFormProps) -> Element {
             select {
                 id: "table-filter-operator",
                 value: operator,
+                disabled: !props.enabled,
+                title: (!props.enabled).then_some(props.blocked_reason.as_str()),
                 onchange: move |event| operator.set(event.value()),
                 option { value: "contains", "Contains" }
                 option { value: "equals", "Equals" }
@@ -726,12 +787,15 @@ fn TableFilterForm(props: TableFilterFormProps) -> Element {
                     aria_label: "Filter value",
                     placeholder: "Value",
                     value: filter_value,
+                    disabled: !props.enabled,
+                    title: (!props.enabled).then_some(props.blocked_reason.as_str()),
                     oninput: move |event: Event<FormData>| filter_value.set(event.value()),
                 }
             }
             div { class: "table-filter-actions",
                 Button {
-                    disabled: store.busy(),
+                    disabled: store.busy() || !props.enabled,
+                    title: (!props.enabled).then_some(props.blocked_reason.as_str()),
                     onclick: {
                         move |_| {
                             let operator = match operator().as_str() {
@@ -749,7 +813,8 @@ fn TableFilterForm(props: TableFilterFormProps) -> Element {
                 }
                 Button {
                     variant: ButtonVariant::Ghost,
-                    disabled: store.busy() || !active,
+                    disabled: store.busy() || !active || !props.enabled,
+                    title: (!props.enabled).then_some(props.blocked_reason.as_str()),
                     onclick: {
                         move |_| props.on_clear.call(())
                     },
@@ -757,7 +822,8 @@ fn TableFilterForm(props: TableFilterFormProps) -> Element {
                 }
                 Button {
                     variant: ButtonVariant::Ghost,
-                    disabled: store.busy() || !props.has_filters,
+                    disabled: store.busy() || !props.has_filters || !props.enabled,
+                    title: (!props.enabled).then_some(props.blocked_reason.as_str()),
                     onclick: {
                         move |_| props.on_clear_all.call(())
                     },
@@ -978,6 +1044,15 @@ fn formula_issue_kind_label(kind: FormulaIssueKindView) -> &'static str {
     }
 }
 
+fn blocked_tooltip(enabled: bool, reasons: &[String], fallback: &str) -> Option<String> {
+    (!enabled).then(|| {
+        reasons
+            .first()
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    })
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum EditorRequestFactory {
     AddRow,
@@ -992,10 +1067,10 @@ struct StructureButtonProps {
     title: &'static str,
     icon: Element,
     request: EditorRequestFactory,
-    document_id: u64,
-    revision: u64,
     sheet_index: usize,
     selected: (usize, usize),
+    enabled: bool,
+    blocked_reason: Option<String>,
 }
 
 #[component]
@@ -1006,43 +1081,31 @@ fn StructureButton(props: StructureButtonProps) -> Element {
         ToolbarIconButton {
             index: props.index,
             label: props.title,
-            disabled: store.busy(),
+            tooltip: props.blocked_reason.clone(),
+            disabled: store.busy() || !props.enabled,
             on_click: {
                 let ports = Rc::clone(&ports);
                 move |_| {
-                    let request_id = request_id("structure");
-                    let request = match props.request {
-                        EditorRequestFactory::AddRow => crate::protocol::EditorRequest::AddRow {
-                            request_id,
-                            document_id: props.document_id,
-                            base_revision: props.revision,
+                    let intent = match props.request {
+                        EditorRequestFactory::AddRow => actions::MutationIntent::AddRow {
                             sheet_index: props.sheet_index,
                             row_index: props.selected.0 + 1,
                         },
-                        EditorRequestFactory::DeleteRow => crate::protocol::EditorRequest::DeleteRow {
-                            request_id,
-                            document_id: props.document_id,
-                            base_revision: props.revision,
+                        EditorRequestFactory::DeleteRow => actions::MutationIntent::DeleteRow {
                             sheet_index: props.sheet_index,
                             row_index: props.selected.0,
                         },
-                        EditorRequestFactory::AddColumn => crate::protocol::EditorRequest::AddColumn {
-                            request_id,
-                            document_id: props.document_id,
-                            base_revision: props.revision,
+                        EditorRequestFactory::AddColumn => actions::MutationIntent::AddColumn {
                             sheet_index: props.sheet_index,
                             col_index: props.selected.1 + 1,
                         },
-                        EditorRequestFactory::DeleteColumn => crate::protocol::EditorRequest::DeleteColumn {
-                            request_id,
-                            document_id: props.document_id,
-                            base_revision: props.revision,
+                        EditorRequestFactory::DeleteColumn => actions::MutationIntent::DeleteColumn {
                             sheet_index: props.sheet_index,
                             col_index: props.selected.1,
                         },
                     };
                     let ports = Rc::clone(&ports);
-                    spawn(async move { actions::run_mutation(store, ports, request).await });
+                    spawn(async move { actions::run_mutation(store, ports, intent).await });
                 }
             },
             {props.icon}
@@ -1052,10 +1115,10 @@ fn StructureButton(props: StructureButtonProps) -> Element {
 
 #[derive(Props, Clone, PartialEq)]
 struct InsertImageToolProps {
-    document_id: u64,
-    revision: u64,
     sheet_index: usize,
     selected: (usize, usize),
+    enabled: bool,
+    blocked_reason: Option<String>,
 }
 
 #[component]
@@ -1068,7 +1131,8 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
         ToolbarIconButton {
             index: 10usize,
             label: "Insert image",
-            disabled: store.busy(),
+            tooltip: props.blocked_reason.clone(),
+            disabled: store.busy() || !props.enabled,
             on_click: {
                 let ports = Rc::clone(&ports);
                 move |_| {
@@ -1083,10 +1147,7 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::InsertImage {
-                                        request_id: request_id("image"),
-                                        document_id: props.document_id,
-                                        base_revision: props.revision,
+                                    actions::MutationIntent::InsertImage {
                                         sheet_index: props.sheet_index,
                                         row: props.selected.0 as u32,
                                         col: props.selected.1 as u32,
@@ -1108,18 +1169,19 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
 
     #[cfg(not(feature = "mobile"))]
     rsx! {
-        Tooltip { disabled: store.busy(),
+        Tooltip { disabled: cfg!(feature = "mobile"),
             TooltipTrigger {
                 Label {
                     class: "tool-button file-tool",
                     html_for: "insert-workbook-image",
                     aria_label: "Insert image",
+                    title: props.blocked_reason.as_deref().unwrap_or("Insert image"),
                     ImagePlus { size: 18 }
                     input {
                         id: "insert-workbook-image",
                         class: "visually-hidden",
                         r#type: "file",
-                        disabled: store.busy(),
+                        disabled: store.busy() || !props.enabled,
                         accept: "image/png,image/jpeg",
                         onchange: {
                             let ports = Rc::clone(&ports);
@@ -1132,10 +1194,7 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
                                             actions::run_mutation(
                                                 store,
                                                 ports,
-                                                crate::protocol::EditorRequest::InsertImage {
-                                                    request_id: request_id("image"),
-                                                    document_id: props.document_id,
-                                                    base_revision: props.revision,
+                                                actions::MutationIntent::InsertImage {
                                                     sheet_index: props.sheet_index,
                                                     row: props.selected.0 as u32,
                                                     col: props.selected.1 as u32,
@@ -1156,7 +1215,10 @@ fn InsertImageTool(props: InsertImageToolProps) -> Element {
                     }
                 }
             }
-            TooltipContent { side: ContentSide::Bottom, "Insert image" }
+            TooltipContent {
+                side: ContentSide::Bottom,
+                {props.blocked_reason.as_deref().unwrap_or("Insert image")}
+            }
         }
     }
 }
@@ -1257,12 +1319,12 @@ fn OpenDocumentTool(mut pending_action: Signal<Option<PendingEditorAction>>) -> 
 
 #[derive(Props, Clone, PartialEq)]
 struct DimensionControlsProps {
-    document_id: u64,
-    revision: u64,
     sheet_index: usize,
     selected: (usize, usize),
     width: u32,
     height: u32,
+    enabled: bool,
+    blocked_reason: Option<String>,
 }
 
 #[component]
@@ -1271,7 +1333,9 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
     let ports = use_context::<Rc<AppPorts>>();
     rsx! {
         div { class: "dimension-controls",
-            Label { html_for: "selected-column-width", title: "Selected column width",
+            Label {
+                html_for: "selected-column-width",
+                title: props.blocked_reason.as_deref().unwrap_or("Selected column width"),
                 span { "W" }
                 Input {
                     id: "selected-column-width",
@@ -1280,6 +1344,7 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
                     max: 600,
                     value: props.width,
                     aria_label: "Selected column width",
+                    disabled: store.busy() || !props.enabled,
                     onchange: {
                         let ports = Rc::clone(&ports);
                         move |event: Event<FormData>| {
@@ -1289,10 +1354,7 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::SetColumnWidth {
-                                        request_id: request_id("column-width"),
-                                        document_id: props.document_id,
-                                        base_revision: props.revision,
+                                    actions::MutationIntent::SetColumnWidth {
                                         sheet_index: props.sheet_index,
                                         col_index: props.selected.1,
                                         width: Some(width.clamp(24, 600)),
@@ -1304,7 +1366,9 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
                     }
                 }
             }
-            Label { html_for: "selected-row-height", title: "Selected row height",
+            Label {
+                html_for: "selected-row-height",
+                title: props.blocked_reason.as_deref().unwrap_or("Selected row height"),
                 span { "H" }
                 Input {
                     id: "selected-row-height",
@@ -1313,6 +1377,7 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
                     max: 300,
                     value: props.height,
                     aria_label: "Selected row height",
+                    disabled: store.busy() || !props.enabled,
                     onchange: {
                         let ports = Rc::clone(&ports);
                         move |event: Event<FormData>| {
@@ -1322,10 +1387,7 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::SetRowHeight {
-                                        request_id: request_id("row-height"),
-                                        document_id: props.document_id,
-                                        base_revision: props.revision,
+                                    actions::MutationIntent::SetRowHeight {
                                         sheet_index: props.sheet_index,
                                         row_index: props.selected.0,
                                         height: Some(height.clamp(18, 300)),
@@ -1344,8 +1406,6 @@ fn DimensionControls(props: DimensionControlsProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 struct ImageToolsProps {
     image: SheetImageDto,
-    document_id: u64,
-    revision: u64,
     sheet_index: usize,
     selected: (usize, usize),
 }
@@ -1356,6 +1416,17 @@ fn ImageTools(props: ImageToolsProps) -> Element {
 
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
+    let image_capabilities = store
+        .document
+        .read()
+        .as_ref()
+        .map(|document| document.editor_session.capabilities.rich.images.clone())
+        .unwrap_or_default();
+    let blocked_reason = image_capabilities
+        .blocked_reasons
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Image changes are unavailable for this workbook".to_string());
     let (from, width_emu, height_emu) = match &props.image.anchor {
         ImageAnchorDto::OneCell {
             from,
@@ -1378,6 +1449,8 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                 variant: ButtonVariant::Ghost,
                 size: ButtonSize::IconSm,
                 aria_label: "Move image to selected cell",
+                title: (!image_capabilities.can_move_resize).then_some(blocked_reason.as_str()),
+                disabled: store.busy() || !image_capabilities.can_move_resize,
                 onclick: {
                     let ports = Rc::clone(&ports);
                     let image_id = props.image.id.clone();
@@ -1388,10 +1461,7 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                             actions::run_mutation(
                                 store,
                                 ports,
-                                crate::protocol::EditorRequest::UpdateImage {
-                                    request_id: request_id("move-image"),
-                                    document_id: props.document_id,
-                                    base_revision: props.revision,
+                                actions::MutationIntent::UpdateImage {
                                     sheet_index: props.sheet_index,
                                     image_id,
                                     anchor: ImageAnchorDto::OneCell {
@@ -1417,6 +1487,8 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                 variant: ButtonVariant::Ghost,
                 size: ButtonSize::IconSm,
                 aria_label: "Delete image",
+                title: (!image_capabilities.can_delete).then_some(blocked_reason.as_str()),
+                disabled: store.busy() || !image_capabilities.can_delete,
                 onclick: {
                     let ports = Rc::clone(&ports);
                     let image_id = props.image.id.clone();
@@ -1427,10 +1499,7 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                             actions::run_mutation(
                                 store,
                                 ports,
-                                crate::protocol::EditorRequest::DeleteImage {
-                                    request_id: request_id("delete-image"),
-                                    document_id: props.document_id,
-                                    base_revision: props.revision,
+                                actions::MutationIntent::DeleteImage {
                                     sheet_index: props.sheet_index,
                                     image_id,
                                 },
@@ -1450,6 +1519,8 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                     max: 2000,
                     value: width_px,
                     aria_label: "Image width",
+                    title: (!image_capabilities.can_move_resize).then_some(blocked_reason.as_str()),
+                    disabled: store.busy() || !image_capabilities.can_move_resize,
                     onchange: {
                         let ports = Rc::clone(&ports);
                         let image_id = props.image.id.clone();
@@ -1463,10 +1534,7 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::UpdateImage {
-                                        request_id: request_id("resize-image"),
-                                        document_id: props.document_id,
-                                        base_revision: props.revision,
+                                    actions::MutationIntent::UpdateImage {
                                         sheet_index: props.sheet_index,
                                         image_id,
                                         anchor: ImageAnchorDto::OneCell {
@@ -1491,6 +1559,8 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                     max: 2000,
                     value: height_px,
                     aria_label: "Image height",
+                    title: (!image_capabilities.can_move_resize).then_some(blocked_reason.as_str()),
+                    disabled: store.busy() || !image_capabilities.can_move_resize,
                     onchange: {
                         let ports = Rc::clone(&ports);
                         let image_id = props.image.id.clone();
@@ -1503,10 +1573,7 @@ fn ImageTools(props: ImageToolsProps) -> Element {
                                 actions::run_mutation(
                                     store,
                                     ports,
-                                    crate::protocol::EditorRequest::UpdateImage {
-                                        request_id: request_id("resize-image"),
-                                        document_id: props.document_id,
-                                        base_revision: props.revision,
+                                    actions::MutationIntent::UpdateImage {
                                         sheet_index: props.sheet_index,
                                         image_id,
                                         anchor: ImageAnchorDto::OneCell {

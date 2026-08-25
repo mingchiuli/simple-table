@@ -724,12 +724,9 @@ mod tests {
         assert_eq!(json["documentId"], document_id.to_string());
         assert_eq!(json["revision"], (revision + 1).to_string());
         assert_eq!(
-            json["patches"][0]["data"]["changes"][0]["value"]["display"],
+            json["patches"][0]["data"]["changes"][0]["displayText"],
             "50%"
         );
-        assert_eq!(
-            json["patches"][0]["data"]["changes"][0]["value"]["format"]["numberFormat"],
-            "0%"
-        );
+        assert_eq!(json["patches"][0]["data"]["changes"][0]["editText"], "0.5");
     }
 }

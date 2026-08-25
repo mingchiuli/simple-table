@@ -86,22 +86,6 @@ impl CellValue {
         }
     }
 
-    pub fn kind(&self) -> &'static str {
-        match self {
-            CellValue::Null => "blank",
-            CellValue::String(_) => "text",
-            CellValue::Number(_) => "number",
-            CellValue::Boolean(_) => "boolean",
-            CellValue::Formula { error, .. } => {
-                if error.is_some() {
-                    "error"
-                } else {
-                    "formula"
-                }
-            }
-        }
-    }
-
     pub fn formula(formula: impl Into<String>, cached_value: CellValue) -> Self {
         CellValue::Formula {
             formula: normalize_formula_text(formula.into()),

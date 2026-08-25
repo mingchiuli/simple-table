@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::protocol::{EditorRequest, ImageAnchorDto};
+use crate::protocol::ImageAnchorDto;
 use dioxus::prelude::*;
 use dioxus_sdk_time::sleep;
 use simple_table_components::icons::{Trash2, X};
@@ -15,7 +15,7 @@ use self::geometry::SparseAxisGeometry;
 use crate::actions;
 use crate::model::{
     AppPorts, CellPresentation, EditorStore, GridRenderWindow, MergeRangeView, SheetExtentView,
-    SheetRegionBoundsView, request_id,
+    SheetRegionBoundsView,
 };
 
 const DEFAULT_ROW_HEIGHT: f64 = 30.0;
@@ -76,6 +76,19 @@ pub fn SpreadsheetGrid() -> Element {
         .active_sheet()
         .min(document.document.sheets.len().saturating_sub(1));
     let sheet = &document.document.sheets[sheet_index];
+    let sheet_capabilities = document
+        .editor_session
+        .capabilities
+        .sheets
+        .get(sheet_index)
+        .cloned()
+        .unwrap_or_default();
+    let can_edit_cells = sheet_capabilities.can_edit_cells;
+    let blocked_edit_reason = sheet_capabilities
+        .blocked_edit_reasons
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Cell editing is unavailable for this sheet".to_string());
     let physical_extent = SheetExtentView {
         row_count: sheet.extent.row_count.max(1),
         column_count: sheet.extent.column_count.max(1),
@@ -138,7 +151,9 @@ pub fn SpreadsheetGrid() -> Element {
             if request.focus {
                 let physical_row = visible_rows[target.0];
                 store.select_cell(sheet_index, physical_row, target.1);
-                editing_cell.set(Some((sheet_index, physical_row, target.1)));
+                if can_edit_cells {
+                    editing_cell.set(Some((sheet_index, physical_row, target.1)));
+                }
             }
             let mut snapshot = *last_scroll.borrow();
             snapshot.left = left;
@@ -357,7 +372,6 @@ pub fn SpreadsheetGrid() -> Element {
                                 span { "{column_label(col)}" }
                                 super::editor::TableDataTools {
                                     document_id: document.editor_session.document_id,
-                                    revision: document.editor_session.revision,
                                     sheet_index,
                                     selected: (selection.row, col),
                                     compact: true,
@@ -386,7 +400,8 @@ pub fn SpreadsheetGrid() -> Element {
                         let presentation = projection.cells.get(&(row, col)).cloned().unwrap_or_default();
                         let is_selected = selection.sheet_index == sheet_index
                             && (selection.row, selection.col) == (row, col);
-                        let is_editing = is_editing_cell(editing, sheet_index, row, col);
+                        let is_editing = can_edit_cells
+                            && is_editing_cell(editing, sheet_index, row, col);
                         let has_formula_error = presentation.formula_error.is_some();
                         let class = cell_class(is_selected, has_formula_error, item.merge.is_some(), is_editing);
                         let address = item.address();
@@ -420,7 +435,7 @@ pub fn SpreadsheetGrid() -> Element {
                                     aria_colspan,
                                     aria_invalid: has_formula_error.then_some("true"),
                                     title: presentation.formula_error.as_deref(),
-                                    disabled: store.busy(),
+                                    disabled: store.busy() || !can_edit_cells,
                                     value: presentation.edit_text.as_ref(),
                                     onmounted: move |event| {
                                         let element = event.data();
@@ -484,13 +499,17 @@ pub fn SpreadsheetGrid() -> Element {
                                     aria_rowspan,
                                     aria_colspan,
                                     aria_invalid: has_formula_error.then_some("true"),
-                                    title: presentation.formula_error.as_deref(),
+                                    title: presentation.formula_error.as_deref().or(
+                                        (!can_edit_cells).then_some(blocked_edit_reason.as_str())
+                                    ),
                                     tabindex: if is_selected { 0 } else { -1 },
                                     onclick: move |_| {
                                         store.select_cell(sheet_index, row, col);
                                         store.selected_image.set(None);
                                         store.formula_text.set(presentation.edit_text.to_string());
-                                        editing_cell.set(Some((sheet_index, row, col)));
+                                        if can_edit_cells {
+                                            editing_cell.set(Some((sheet_index, row, col)));
+                                        }
                                     },
                                     "{presentation.display_text}"
                                 }
@@ -501,8 +520,6 @@ pub fn SpreadsheetGrid() -> Element {
                 if !filtered {
                     ImageLayer {
                         sheet_index,
-                        document_id: document.editor_session.document_id,
-                        revision: document.editor_session.revision,
                         row_geometry: Rc::clone(&row_geometry),
                         column_geometry: Rc::clone(&column_geometry),
                         on_preview: move |image_id| previewed_image.set(Some(image_id)),
@@ -822,8 +839,6 @@ fn is_editing_cell(
 #[derive(Props, Clone, PartialEq)]
 struct ImageLayerProps {
     sheet_index: usize,
-    document_id: u64,
-    revision: u64,
     row_geometry: Rc<SparseAxisGeometry>,
     column_geometry: Rc<SparseAxisGeometry>,
     on_preview: EventHandler<String>,
@@ -836,6 +851,17 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
     let images = store.images.read().clone();
     let assets = store.image_assets.read().clone();
     let selected = store.selected_image.read().clone();
+    let image_capabilities = store
+        .document
+        .read()
+        .as_ref()
+        .map(|document| document.editor_session.capabilities.rich.images.clone())
+        .unwrap_or_default();
+    let blocked_delete_reason = image_capabilities
+        .blocked_reasons
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Images cannot be deleted from this workbook".to_string());
 
     rsx! {
         div { class: "image-layer", aria_label: "Workbook images",
@@ -895,6 +921,9 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
                                     variant: ButtonVariant::Destructive,
                                     size: ButtonSize::IconXs,
                                     aria_label: "Delete image",
+                                    title: (!image_capabilities.can_delete)
+                                        .then_some(blocked_delete_reason.as_str()),
+                                    disabled: store.busy() || !image_capabilities.can_delete,
                                     onclick: {
                                         let ports = Rc::clone(&ports);
                                         move |event: Event<MouseData>| {
@@ -905,10 +934,7 @@ fn ImageLayer(props: ImageLayerProps) -> Element {
                                                 actions::run_mutation(
                                                     store,
                                                     ports,
-                                                    EditorRequest::DeleteImage {
-                                                        request_id: request_id("delete-image"),
-                                                        document_id: props.document_id,
-                                                        base_revision: props.revision,
+                                                    actions::MutationIntent::DeleteImage {
                                                         sheet_index: props.sheet_index,
                                                         image_id,
                                                     },

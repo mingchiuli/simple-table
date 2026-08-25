@@ -39,6 +39,9 @@ jobs:
       - name: Run tests
         run: cargo xtask test
 
+      - name: Run Web protocol and Worker tests
+        run: cargo xtask test-web
+
   desktop-platforms:
     name: Desktop check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

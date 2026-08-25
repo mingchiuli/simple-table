@@ -32,7 +32,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(task) = args.next() else {
         eprintln!(
-            "usage: cargo xtask <check|test|components|desktop|ios|android|web|bundle|bundle-app>"
+            "usage: cargo xtask <check|test|test-web|components|desktop|ios|android|web|bundle|bundle-app>"
         );
         return ExitCode::FAILURE;
     };
@@ -40,6 +40,7 @@ fn main() -> ExitCode {
     let status = match task.as_str() {
         "check" => check_all_targets(),
         "test" => test_all_targets(),
+        "test-web" => test_web(),
         "components" => refresh_components(),
         "web" => build_worker().and_then(|status| {
             if !status.success() {
@@ -142,8 +143,7 @@ fn check_all_targets() -> std::io::Result<ExitStatus> {
             "simple-table-web-worker",
             "--target",
             "wasm32-unknown-unknown",
-            "--bin",
-            "simple-table-web-worker",
+            "--lib",
             "--",
         ],
     ];
@@ -174,6 +174,29 @@ fn test_all_targets() -> std::io::Result<ExitStatus> {
             "--features",
             "server",
             "--lib",
+        ],
+    ];
+    run_cargo_matrix(tests, &[])
+}
+
+fn test_web() -> std::io::Result<ExitStatus> {
+    let tests: &[&[&str]] = &[
+        &["test", "--locked", "--package", "simple-table-web-protocol"],
+        &[
+            "test",
+            "--locked",
+            "--package",
+            "simple-table-web-worker",
+            "--lib",
+        ],
+        &[
+            "check",
+            "--locked",
+            "--package",
+            "simple-table-web-worker",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--tests",
         ],
     ];
     run_cargo_matrix(tests, &[])
@@ -645,8 +668,7 @@ fn build_worker() -> std::io::Result<ExitStatus> {
             "wasm32-unknown-unknown",
             "--profile",
             "wasm-release",
-            "--bin",
-            "simple-table-web-worker",
+            "--lib",
         ])
         .status()?;
     if !build.success() {
@@ -659,7 +681,7 @@ fn build_worker() -> std::io::Result<ExitStatus> {
     std::fs::create_dir_all(&output)?;
 
     let input = workspace_path("target/wasm32-unknown-unknown/wasm-release")
-        .join("simple-table-web-worker.wasm");
+        .join("simple_table_web_worker.wasm");
     let bindgen = Command::new("wasm-bindgen")
         .current_dir(workspace_root())
         .arg(input)
@@ -669,6 +691,13 @@ fn build_worker() -> std::io::Result<ExitStatus> {
         .status()?;
     if !bindgen.success() {
         return Ok(bindgen);
+    }
+
+    let binding = std::fs::read_to_string(output.join("simple_table_web_worker.js"))?;
+    if !binding.contains("execute(request_json, attachment)") {
+        return Err(io::Error::other(
+            "generated Worker binding does not expose the binary attachment parameter",
+        ));
     }
 
     std::fs::write(
@@ -683,11 +712,21 @@ let queue = Promise.resolve();
 self.onmessage = (event) => {
     queue = queue.then(async () => {
         const editor = await session;
-        self.postMessage(await editor.execute(event.data));
+        const output = await editor.execute(event.data.metadata, event.data.attachment);
+        const transfer = output.attachment ? [output.attachment] : [];
+        self.postMessage(output, transfer);
     }).catch((error) => {
-        self.postMessage(JSON.stringify({
-            Err: { code: "worker_error", message: String(error) },
-        }));
+        let messageId = "";
+        try {
+            messageId = JSON.parse(event.data.metadata).messageId || "";
+        } catch (_) {}
+        self.postMessage({
+            metadata: JSON.stringify({
+                protocolVersion: 1,
+                messageId,
+                response: { Err: { code: "worker_error", message: String(error) } },
+            }),
+        });
     });
 };
 "#,

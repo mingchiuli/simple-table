@@ -80,11 +80,19 @@ pub(super) fn sheet_region(value: DocumentRegion) -> types::SheetRegion {
 }
 
 pub(super) fn projected_cell_change(value: ProjectedCellChange) -> types::SheetCellChange {
-    let format = value.format.map(cell_format);
-    let style = value.style.map(cell_style);
     let display = value
         .display
         .unwrap_or_else(|| value.value.to_display_string());
-    types::SheetCellChange::new(value.sheet_index, value.row, value.col, value.value)
-        .with_display_projection(display, format, style)
+    let (edit_text, formula_error) = match value.value {
+        crate::domain::CellValue::Formula { formula, error, .. } => (formula, error),
+        value => (value.to_display_string(), None),
+    };
+    types::SheetCellChange {
+        sheet_index: value.sheet_index,
+        row: value.row,
+        col: value.col,
+        display_text: display,
+        edit_text,
+        formula_error,
+    }
 }

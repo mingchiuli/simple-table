@@ -29,9 +29,11 @@ Desktop / iOS / Android                  Browser
 
 ### Protocol
 
-`crates/simple-table-protocol/src/lib.rs` defines bounded, serializable
-`EditorRequest` and `EditorReply` values plus the shared error DTO. The same
-Rust contract is used in process and across the browser Worker boundary.
+`crates/simple-table-protocol` owns the typed editor requests, replies,
+projections, capabilities, and shared error DTO used by every platform.
+`crates/simple-table-web-protocol` separately owns Worker envelopes and
+IndexedDB workspace commands. Workbook and image bytes are attachments on the
+editor command boundary; they are never encoded into the JSON metadata.
 
 ### Engine
 
@@ -45,8 +47,9 @@ implementation files retain their established responsibility boundaries:
 - `application/`: use-case services and ports
 - `adapters/`: codec and search implementations
 
-`CoreFacade::execute` is the application boundary. Platform UI code does not
-reach into internal backend state.
+`CoreFacade::execute` accepts an editor command plus an optional binary
+attachment and returns a typed reply plus an optional attachment. Platform UI
+code does not reach into internal backend state.
 
 ### Application And Ports
 
@@ -54,6 +57,12 @@ reach into internal backend state.
 `components/` own the home/editor views, responsive layout, and pending-edit
 coordination. `ports.rs` and `ports/` isolate native, mobile, and browser
 behavior.
+
+Views express edits as context-free mutation intents. The action coordinator
+flushes pending cell edits, acquires the serialized operation lock, and only
+then binds the current document ID and revision to an editor request. Controls
+consume engine-projected workbook capabilities; unavailable operations stay
+disabled and expose the first blocking reason.
 
 `crates/simple-table-components` isolates the official styled Dioxus Components
 source and official Dioxus Lucide icons from application code. Its generated
@@ -65,9 +74,13 @@ keeps upstream regeneration independent from business views and theme changes.
 
 ### Browser Worker
 
-`apps/simple-table-web-worker` owns a browser-side `CoreFacade`, serializes
-requests using `simple-table-protocol`, and persists saved and recovery
-snapshots in IndexedDB. The Worker build is generated into
+`apps/simple-table-web-worker` owns a browser-side `CoreFacade` and persists
+saved and recovery snapshots in IndexedDB. One shared Worker client correlates
+editor and workspace requests by message ID. JSON envelopes carry typed
+metadata from `simple-table-web-protocol`; transferable `ArrayBuffer` values
+carry workbook and image bytes without JSON array expansion. IndexedDB records
+are schema-versioned, and version 1 records are read and lazily rewritten
+without discarding saved or recovery bytes. The Worker build is generated into
 `target/generated-public/workers/`; no JavaScript or Wasm build output is
 checked into the repository.
 
@@ -166,6 +179,8 @@ Official references:
 ## Verification Matrix
 
 `cargo xtask check` covers protocol, engine, desktop, SSR, Web Wasm, and the Web
-Worker Wasm targets. `cargo xtask test` runs tests once per compatible target
-feature. Strict Clippy denies Rust warnings and redundant, copy, or implicit
-clones. Mobile is checked separately with the platform commands in `AGENTS.md`.
+Worker Wasm targets. `cargo xtask test` runs native protocol, engine, desktop,
+and SSR tests. `cargo xtask test-web` runs the Web protocol and Worker tests and
+checks the Worker test target for Wasm. Both test commands are required in CI.
+Strict Clippy denies Rust warnings and redundant, copy, or implicit clones.
+Mobile is checked separately with the platform commands in `AGENTS.md`.
