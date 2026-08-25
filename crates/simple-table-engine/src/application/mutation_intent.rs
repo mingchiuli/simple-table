@@ -140,6 +140,52 @@ impl FingerprintWriter {
                 self.write_index(*sheet_index)?;
                 self.write_text(image_id)?;
             }
+            EditorCommand::SortRows {
+                sheet_index,
+                anchor_row,
+                anchor_col,
+                direction,
+            } => {
+                self.write_tag(15);
+                self.write_index(*sheet_index)?;
+                self.write_index(*anchor_row)?;
+                self.write_index(*anchor_col)?;
+                self.write_tag(match direction {
+                    crate::domain::SortDirection::Ascending => 0,
+                    crate::domain::SortDirection::Descending => 1,
+                });
+            }
+            EditorCommand::SetFilter {
+                sheet_index,
+                anchor_row,
+                col,
+                operator,
+                value,
+            } => {
+                self.write_tag(16);
+                self.write_index(*sheet_index)?;
+                self.write_index(*anchor_row)?;
+                self.write_index(*col)?;
+                self.write_tag(match operator {
+                    crate::domain::FilterOperator::Equals => 0,
+                    crate::domain::FilterOperator::NotEquals => 1,
+                    crate::domain::FilterOperator::Contains => 2,
+                    crate::domain::FilterOperator::Blank => 3,
+                    crate::domain::FilterOperator::NotBlank => 4,
+                });
+                self.write_text(value)?;
+            }
+            EditorCommand::ClearFilter { sheet_index, col } => {
+                self.write_tag(17);
+                self.write_index(*sheet_index)?;
+                match col {
+                    Some(col) => {
+                        self.write_tag(1);
+                        self.write_index(*col)?;
+                    }
+                    None => self.write_tag(0),
+                }
+            }
         }
         Ok(())
     }

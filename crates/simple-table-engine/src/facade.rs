@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::protocol::{
-    AppErrorDto, CellEdit, EditorReply, EditorRequest, EditorResponse, ImageAnchorDto,
-    ImageMarkerDto, SheetImageDto,
+    AppErrorDto, CellEdit, EditorReply, EditorRequest, EditorResponse, FilterOperatorDto,
+    ImageAnchorDto, ImageMarkerDto, SheetImageDto, SortDirectionDto,
 };
 
 use crate::application::document_codec_port::OpenDocumentSource;
@@ -99,6 +99,31 @@ impl CoreFacade {
                     crate::resource_limits::MAX_SHEET_REGION_RESPONSE_BYTES,
                 )?;
                 Ok(EditorReply::Region {
+                    value: serde_json::to_value(response).map_err(serialization_error)?,
+                })
+            }
+            EditorRequest::RowsRegion {
+                document_id,
+                base_revision,
+                sheet_index,
+                rows,
+                col_start,
+                col_end,
+            } => {
+                let snapshots = document_query_service::sheet_rows_region_projection_for_command(
+                    self.runtime.document_queries(),
+                    document_id,
+                    base_revision,
+                    sheet_index,
+                    &rows,
+                    col_start,
+                    col_end,
+                )?;
+                let response = crate::protocol_projection::sheet_rows_region_response(
+                    snapshots,
+                    crate::resource_limits::MAX_SHEET_REGION_RESPONSE_BYTES,
+                )?;
+                Ok(EditorReply::RowsRegion {
                     value: serde_json::to_value(response).map_err(serialization_error)?,
                 })
             }
@@ -207,6 +232,67 @@ impl CoreFacade {
                     sheet_index,
                     col_index,
                 },
+            ),
+            EditorRequest::SortRows {
+                request_id,
+                document_id,
+                base_revision,
+                sheet_index,
+                anchor_row,
+                anchor_col,
+                direction,
+            } => self.editor_command_reply(
+                document_id,
+                base_revision,
+                &request_id,
+                EditorCommand::SortRows {
+                    sheet_index,
+                    anchor_row,
+                    anchor_col,
+                    direction: match direction {
+                        SortDirectionDto::Ascending => crate::domain::SortDirection::Ascending,
+                        SortDirectionDto::Descending => crate::domain::SortDirection::Descending,
+                    },
+                },
+            ),
+            EditorRequest::SetFilter {
+                request_id,
+                document_id,
+                base_revision,
+                sheet_index,
+                anchor_row,
+                col,
+                operator,
+                value,
+            } => self.editor_command_reply(
+                document_id,
+                base_revision,
+                &request_id,
+                EditorCommand::SetFilter {
+                    sheet_index,
+                    anchor_row,
+                    col,
+                    operator: match operator {
+                        FilterOperatorDto::Equals => crate::domain::FilterOperator::Equals,
+                        FilterOperatorDto::NotEquals => crate::domain::FilterOperator::NotEquals,
+                        FilterOperatorDto::Contains => crate::domain::FilterOperator::Contains,
+                        FilterOperatorDto::Blank => crate::domain::FilterOperator::Blank,
+                        FilterOperatorDto::NotBlank => crate::domain::FilterOperator::NotBlank,
+                    },
+                    value,
+                },
+            ),
+            EditorRequest::ClearFilter {
+                request_id,
+                document_id,
+                base_revision,
+                sheet_index,
+                col,
+            } => self.editor_command_reply(
+                document_id,
+                base_revision,
+                &request_id,
+                EditorCommand::ClearFilter { sheet_index, col },
             ),
             EditorRequest::SetColumnWidth {
                 request_id,

@@ -91,3 +91,10 @@ pub struct SheetRegionProjectionResponse {
     pub metadata: SheetRegionMetadata,
     pub wire_bytes: usize,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetRowsRegionProjectionResponse {
+    pub regions: Vec<SheetRegionProjectionResponse>,
+    pub wire_bytes: usize,
+}

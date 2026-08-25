@@ -39,6 +39,7 @@ pub fn mutation_outcome(
             formula_status: editor_state.formula_status(),
             capabilities: editor_state.capabilities(),
             editor_state: editor_state_snapshot(editor_state),
+            filters: editor_state.filter_states(),
         },
         patches,
         sheet_extents: Some(editor_state.sheet_extents()),
@@ -305,6 +306,9 @@ pub fn structural_patches(
         } => vec![MutationPatch::ImageDeleted {
             sheet_index: *sheet_index,
             image_id: image_id.clone(),
+        }],
+        ProjectedOperation::SortRows { sheet_index } => vec![MutationPatch::SheetInvalidated {
+            sheet_index: *sheet_index,
         }],
         ProjectedOperation::SetCell { .. }
         | ProjectedOperation::SetCells { .. }

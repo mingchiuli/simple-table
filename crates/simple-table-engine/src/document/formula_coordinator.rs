@@ -211,7 +211,8 @@ impl FormulaCoordinator {
             | AppliedOperation::AddColumn { .. }
             | AppliedOperation::DeleteColumn { .. }
             | AppliedOperation::AddSheet { .. }
-            | AppliedOperation::DeleteSheet { .. } => self
+            | AppliedOperation::DeleteSheet { .. }
+            | AppliedOperation::SortRows(_) => self
                 .formula_cell_positions(projection)
                 .into_iter()
                 .collect(),
@@ -487,7 +488,8 @@ impl<'a> FormulaStructureTarget<'a> {
             | AppliedOperation::SetRowHeight { .. }
             | AppliedOperation::InsertImage { .. }
             | AppliedOperation::UpdateImage { .. }
-            | AppliedOperation::DeleteImage { .. } => None,
+            | AppliedOperation::DeleteImage { .. }
+            | AppliedOperation::SortRows(_) => None,
         }
     }
 }

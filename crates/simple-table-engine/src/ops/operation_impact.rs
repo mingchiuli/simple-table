@@ -26,6 +26,11 @@ impl MutationImpact<'_> {
                 new_image,
                 ..
             } => old_image == new_image,
+            AppliedOperation::SortRows(sort) => sort
+                .permutation
+                .iter()
+                .enumerate()
+                .all(|(destination, source)| destination == *source),
             _ => false,
         }
     }
@@ -39,6 +44,7 @@ impl MutationImpact<'_> {
                 | AppliedOperation::DeleteColumn { .. }
                 | AppliedOperation::AddSheet { .. }
                 | AppliedOperation::DeleteSheet { .. }
+                | AppliedOperation::SortRows(_)
         )
     }
 
@@ -51,6 +57,7 @@ impl MutationImpact<'_> {
                 | AppliedOperation::DeleteColumn { .. }
                 | AppliedOperation::AddSheet { .. }
                 | AppliedOperation::DeleteSheet { .. }
+                | AppliedOperation::SortRows(_)
         )
     }
 
@@ -85,7 +92,9 @@ impl MutationImpact<'_> {
     pub fn is_cell_edit(&self) -> bool {
         matches!(
             self.operation,
-            AppliedOperation::SetCell { .. } | AppliedOperation::SetCells { .. }
+            AppliedOperation::SetCell { .. }
+                | AppliedOperation::SetCells { .. }
+                | AppliedOperation::SortRows(_)
         )
     }
 

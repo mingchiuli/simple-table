@@ -1,4 +1,5 @@
 use crate::document::document_memento::DocumentMemento;
+use crate::state::table_filter::TableFilterState;
 use std::collections::VecDeque;
 
 pub(crate) const MAX_HISTORY_ENTRIES: usize = 100;
@@ -18,15 +19,28 @@ pub(crate) struct HistoryStatus {
 }
 
 pub(crate) struct HistoryEntry {
-    pub(crate) memento: DocumentMemento,
+    pub(crate) document: Option<DocumentMemento>,
+    pub(crate) filters_before: TableFilterState,
+    pub(crate) filters_after: TableFilterState,
     pub(crate) estimated_bytes: usize,
 }
 
 impl HistoryEntry {
-    pub(crate) fn new(memento: DocumentMemento) -> Self {
-        let estimated_bytes = memento.estimated_bytes().max(1);
+    pub(crate) fn new(
+        document: Option<DocumentMemento>,
+        filters_before: TableFilterState,
+        filters_after: TableFilterState,
+    ) -> Self {
+        let estimated_bytes = document
+            .as_ref()
+            .map_or(0, DocumentMemento::estimated_bytes)
+            .saturating_add(filters_before.estimated_bytes())
+            .saturating_add(filters_after.estimated_bytes())
+            .max(1);
         Self {
-            memento,
+            document,
+            filters_before,
+            filters_after,
             estimated_bytes,
         }
     }
@@ -215,10 +229,13 @@ mod tests {
     fn entry(estimated_bytes: usize) -> HistoryEntry {
         let side =
             || DocumentMementoSide::Layout(LayoutMemento::new(0, HashMap::new(), HashMap::new()));
-        HistoryEntry {
-            memento: DocumentMemento::new(side(), side()),
-            estimated_bytes,
-        }
+        let mut entry = HistoryEntry::new(
+            Some(DocumentMemento::new(side(), side())),
+            TableFilterState::default(),
+            TableFilterState::default(),
+        );
+        entry.estimated_bytes = estimated_bytes;
+        entry
     }
 
     #[test]

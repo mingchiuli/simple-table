@@ -110,6 +110,10 @@ Exporting a copy uses a separate read-only protocol operation, so choosing a
 different output format never changes the active document identity, revision,
 saved hash, or undo history.
 
+Sorting and filtering follow the engine-owned rules documented in
+[Sort And Filter Semantics](sort-and-filter.md). Sorts are document edits;
+filters are session state on the same undo/redo timeline.
+
 ## Dioxus Alignment
 
 Platform dependencies are optional and enabled only by their target feature.

@@ -319,7 +319,11 @@ impl SpreadsheetDocument {
         DocumentMemento::new(before, after)
     }
 
-    pub fn capture_memento_side(&mut self, operation: &AppliedOperation) -> DocumentMementoSide {
+    pub fn capture_memento_side(
+        &mut self,
+        operation: &AppliedOperation,
+        after_operation: bool,
+    ) -> DocumentMementoSide {
         match operation {
             AppliedOperation::SetCell {
                 sheet_index,
@@ -407,6 +411,22 @@ impl SpreadsheetDocument {
                     .current_image(*sheet_index, &image.id)
                     .and_then(|current| self.body.image_asset(*sheet_index, current.z_index)),
             }),
+            AppliedOperation::SortRows(sort) => {
+                DocumentMementoSide::Sort(crate::document::document_memento::SortMemento {
+                    sheet_index: sort.sheet_index,
+                    range: sort.range,
+                    permutation: if after_operation {
+                        sort.permutation.clone()
+                    } else {
+                        sort.inverse_permutation.clone()
+                    },
+                    formulas: if after_operation {
+                        sort.after_formulas.clone()
+                    } else {
+                        sort.before_formulas.clone()
+                    },
+                })
+            }
         }
     }
 
@@ -437,7 +457,34 @@ impl SpreadsheetDocument {
             DocumentMementoSide::Layout(memento) => self.restore_layout(memento),
             DocumentMementoSide::Structure(memento) => self.restore_structure(memento),
             DocumentMementoSide::Image(memento) => self.restore_image(memento),
+            DocumentMementoSide::Sort(memento) => self.restore_sort(memento),
         }
+    }
+
+    fn restore_sort(
+        &mut self,
+        memento: &crate::document::document_memento::SortMemento,
+    ) -> Result<DocumentRestoreResult, AppError> {
+        let operation = AppliedOperation::SortRows(crate::domain::ResolvedSort {
+            sheet_index: memento.sheet_index,
+            range: memento.range,
+            permutation: memento.permutation.clone(),
+            inverse_permutation: Vec::new(),
+            before_formulas: Vec::new(),
+            after_formulas: memento.formulas.clone(),
+        });
+        self.apply_operation_to_body_and_projection(&operation)?;
+        let formula_changes = self.recalculate_after_operation(&operation);
+        self.patch_workbook_formula_changes(&formula_changes)?;
+        self.fail_post_patch_restore_if_injected()?;
+        self.validate_persisted_projection_consistency()?;
+        self.validate_projection_sheets([memento.sheet_index])?;
+        self.refresh_region_metadata_index();
+        Ok(DocumentRestoreResult {
+            changes: vec![DocumentRestoreChange::SheetInvalidated {
+                sheet_index: memento.sheet_index,
+            }],
+        })
     }
 
     fn current_image(
@@ -743,7 +790,8 @@ impl SpreadsheetDocument {
             | AppliedOperation::SetRowHeight { .. }
             | AppliedOperation::InsertImage { .. }
             | AppliedOperation::UpdateImage { .. }
-            | AppliedOperation::DeleteImage { .. } => FileStructureMemento::empty(sheet_count),
+            | AppliedOperation::DeleteImage { .. }
+            | AppliedOperation::SortRows(_) => FileStructureMemento::empty(sheet_count),
         }
     }
 
@@ -1050,6 +1098,9 @@ fn touched_sheet_indexes(
         | AppliedOperation::SetRowHeight { sheet_index, .. } => {
             sheets.insert(*sheet_index);
         }
+        AppliedOperation::SortRows(sort) => {
+            sheets.insert(sort.sheet_index);
+        }
         AppliedOperation::InsertImage { sheet_index, .. }
         | AppliedOperation::UpdateImage { sheet_index, .. }
         | AppliedOperation::DeleteImage { sheet_index, .. } => {
@@ -1111,7 +1162,8 @@ fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bo
         | AppliedOperation::DeleteSheet { .. }
         | AppliedOperation::InsertImage { .. }
         | AppliedOperation::UpdateImage { .. }
-        | AppliedOperation::DeleteImage { .. } => false,
+        | AppliedOperation::DeleteImage { .. }
+        | AppliedOperation::SortRows(_) => false,
     }
 }
 

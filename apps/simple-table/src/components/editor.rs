@@ -1,11 +1,13 @@
 use std::rc::Rc;
 
-use crate::protocol::{ImageAnchorDto, ImageMarkerDto, SheetImageDto};
+use crate::protocol::{
+    FilterOperatorDto, ImageAnchorDto, ImageMarkerDto, SheetImageDto, SortDirectionDto,
+};
 use dioxus::prelude::*;
 use dioxus::router::Navigator;
 use simple_table_components::icons::{
-    ArrowLeft, Columns3, Download, ExternalLink, FilePlus, FolderOpen, House, ImagePlus, Move,
-    Plus, Redo2, Rows3, Save, Search, Sheet, Sigma, Trash2, Undo2,
+    ArrowDownAZ, ArrowDownZA, ArrowLeft, Columns3, Download, ExternalLink, FilePlus, FolderOpen,
+    Funnel, House, ImagePlus, Move, Plus, Redo2, Rows3, Save, Search, Sheet, Sigma, Trash2, Undo2,
 };
 use simple_table_components::{
     AlertDialog, AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogDescription,
@@ -23,7 +25,8 @@ use super::search::SearchPanel;
 use crate::Route;
 use crate::actions;
 use crate::model::{
-    AppPorts, EditorStore, FormulaIssueKindView, FormulaIssueView, FormulaStatusView, request_id,
+    AppPorts, EditorStore, FilterOperatorView, FormulaIssueKindView, FormulaIssueView,
+    FormulaStatusView, request_id,
 };
 use crate::ports::update::{GitHubUpdatePort, UpdatePort};
 use crate::ports::window::{PlatformWindowPort, WindowPort};
@@ -265,6 +268,13 @@ pub fn EditorView() -> Element {
                         .layout.row_heights.get(&selected.0).copied().unwrap_or(30),
                 }
                 ToolbarSeparator {}
+                TableDataTools {
+                    document_id,
+                    revision,
+                    sheet_index,
+                    selected,
+                }
+                ToolbarSeparator {}
                 InsertImageTool {
                     document_id,
                     revision,
@@ -462,6 +472,266 @@ pub fn EditorView() -> Element {
             }
             {save_name_dialog}
         }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct TableDataToolsProps {
+    document_id: u64,
+    revision: u64,
+    sheet_index: usize,
+    selected: (usize, usize),
+    #[props(default)]
+    compact: bool,
+}
+
+#[component]
+pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
+    let store = use_context::<EditorStore>();
+    let ports = use_context::<Rc<AppPorts>>();
+    let active_condition = store.sheet_filter(props.sheet_index).and_then(|filter| {
+        filter
+            .conditions
+            .into_iter()
+            .find(|condition| condition.col == props.selected.1)
+    });
+    let initial_value = active_condition
+        .as_ref()
+        .map(|condition| condition.value.clone())
+        .unwrap_or_default();
+    let initial_operator = active_condition
+        .as_ref()
+        .map_or("contains", |condition| {
+            filter_operator_value(condition.operator)
+        })
+        .to_string();
+    let mut filter_value = use_signal(move || initial_value);
+    let mut operator = use_signal(move || initial_operator);
+    use_effect(move || {
+        let _ = store.selection.read();
+        let _ = store.document.read();
+        let condition = store.sheet_filter(props.sheet_index).and_then(|filter| {
+            filter
+                .conditions
+                .into_iter()
+                .find(|condition| condition.col == props.selected.1)
+        });
+        filter_value.set(
+            condition
+                .as_ref()
+                .map(|condition| condition.value.clone())
+                .unwrap_or_default(),
+        );
+        operator.set(
+            condition
+                .as_ref()
+                .map_or("contains", |condition| {
+                    filter_operator_value(condition.operator)
+                })
+                .to_string(),
+        );
+    });
+    let active = active_condition.is_some();
+    let root_class = if props.compact {
+        "table-data-tools column-data-tools"
+    } else {
+        "table-data-tools"
+    };
+    let trigger_class = match (props.compact, active) {
+        (true, true) => "column-filter-trigger active",
+        (true, false) => "column-filter-trigger",
+        (false, true) => "tool-button active",
+        (false, false) => "tool-button",
+    };
+
+    rsx! {
+        PopoverRoot { class: root_class, is_modal: false,
+            PopoverTrigger {
+                class: trigger_class,
+                title: "Sort and filter selected column",
+                aria_label: "Sort and filter selected column",
+                Funnel { size: 18 }
+            }
+            PopoverContent {
+                class: "table-data-popover",
+                side: ContentSide::Bottom,
+                align: ContentAlign::Start,
+                div { class: "table-data-heading",
+                    h2 { "Column {column_label(props.selected.1)}" }
+                }
+                div { class: "table-sort-actions",
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        disabled: store.busy(),
+                        onclick: {
+                            let ports = Rc::clone(&ports);
+                            move |_| {
+                                let ports = Rc::clone(&ports);
+                                spawn(async move {
+                                    actions::run_mutation(
+                                        store,
+                                        ports,
+                                        crate::protocol::EditorRequest::SortRows {
+                                            request_id: request_id("sort-ascending"),
+                                            document_id: props.document_id,
+                                            base_revision: props.revision,
+                                            sheet_index: props.sheet_index,
+                                            anchor_row: props.selected.0,
+                                            anchor_col: props.selected.1,
+                                            direction: SortDirectionDto::Ascending,
+                                        },
+                                    ).await;
+                                });
+                            }
+                        },
+                        ArrowDownAZ { size: 17 }
+                        "Sort ascending"
+                    }
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        disabled: store.busy(),
+                        onclick: {
+                            let ports = Rc::clone(&ports);
+                            move |_| {
+                                let ports = Rc::clone(&ports);
+                                spawn(async move {
+                                    actions::run_mutation(
+                                        store,
+                                        ports,
+                                        crate::protocol::EditorRequest::SortRows {
+                                            request_id: request_id("sort-descending"),
+                                            document_id: props.document_id,
+                                            base_revision: props.revision,
+                                            sheet_index: props.sheet_index,
+                                            anchor_row: props.selected.0,
+                                            anchor_col: props.selected.1,
+                                            direction: SortDirectionDto::Descending,
+                                        },
+                                    ).await;
+                                });
+                            }
+                        },
+                        ArrowDownZA { size: 17 }
+                        "Sort descending"
+                    }
+                }
+                div { class: "table-filter-form",
+                    Label { html_for: "table-filter-operator", "Filter" }
+                    select {
+                        id: "table-filter-operator",
+                        value: operator,
+                        onchange: move |event| operator.set(event.value()),
+                        option { value: "contains", "Contains" }
+                        option { value: "equals", "Equals" }
+                        option { value: "not-equals", "Does not equal" }
+                        option { value: "blank", "Is blank" }
+                        option { value: "not-blank", "Is not blank" }
+                    }
+                    if !matches!(operator().as_str(), "blank" | "not-blank") {
+                        Input {
+                            aria_label: "Filter value",
+                            placeholder: "Value",
+                            value: filter_value,
+                            oninput: move |event: Event<FormData>| filter_value.set(event.value()),
+                        }
+                    }
+                    div { class: "table-filter-actions",
+                        Button {
+                            disabled: store.busy(),
+                            onclick: {
+                                let ports = Rc::clone(&ports);
+                                move |_| {
+                                    let ports = Rc::clone(&ports);
+                                    let operator = match operator().as_str() {
+                                        "equals" => FilterOperatorDto::Equals,
+                                        "not-equals" => FilterOperatorDto::NotEquals,
+                                        "blank" => FilterOperatorDto::Blank,
+                                        "not-blank" => FilterOperatorDto::NotBlank,
+                                        _ => FilterOperatorDto::Contains,
+                                    };
+                                    let value = filter_value();
+                                    spawn(async move {
+                                        actions::run_mutation(
+                                            store,
+                                            ports,
+                                            crate::protocol::EditorRequest::SetFilter {
+                                                request_id: request_id("set-filter"),
+                                                document_id: props.document_id,
+                                                base_revision: props.revision,
+                                                sheet_index: props.sheet_index,
+                                                anchor_row: props.selected.0,
+                                                col: props.selected.1,
+                                                operator,
+                                                value,
+                                            },
+                                        ).await;
+                                    });
+                                }
+                            },
+                            "Apply"
+                        }
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            disabled: store.busy() || !active,
+                            onclick: {
+                                let ports = Rc::clone(&ports);
+                                move |_| {
+                                    let ports = Rc::clone(&ports);
+                                    spawn(async move {
+                                        actions::run_mutation(
+                                            store,
+                                            ports,
+                                            crate::protocol::EditorRequest::ClearFilter {
+                                                request_id: request_id("clear-filter"),
+                                                document_id: props.document_id,
+                                                base_revision: props.revision,
+                                                sheet_index: props.sheet_index,
+                                                col: Some(props.selected.1),
+                                            },
+                                        ).await;
+                                    });
+                                }
+                            },
+                            "Clear column"
+                        }
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            disabled: store.busy() || store.sheet_filter(props.sheet_index).is_none(),
+                            onclick: {
+                                let ports = Rc::clone(&ports);
+                                move |_| {
+                                    let ports = Rc::clone(&ports);
+                                    spawn(async move {
+                                        actions::run_mutation(
+                                            store,
+                                            ports,
+                                            crate::protocol::EditorRequest::ClearFilter {
+                                                request_id: request_id("clear-filters"),
+                                                document_id: props.document_id,
+                                                base_revision: props.revision,
+                                                sheet_index: props.sheet_index,
+                                                col: None,
+                                            },
+                                        ).await;
+                                    });
+                                }
+                            },
+                            "Clear all"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn filter_operator_value(operator: FilterOperatorView) -> &'static str {
+    match operator {
+        FilterOperatorView::Equals => "equals",
+        FilterOperatorView::NotEquals => "not-equals",
+        FilterOperatorView::Contains => "contains",
+        FilterOperatorView::Blank => "blank",
+        FilterOperatorView::NotBlank => "not-blank",
     }
 }
 

@@ -6,6 +6,7 @@ mod editor_operation;
 mod search_document;
 mod search_index_work;
 mod search_query;
+mod table_operation;
 
 pub(crate) use cell_display::{format_cell_display, format_cell_search};
 pub use cell_value::{CellNumber, CellValue, normalize_formula_text, parse_cell_text};
@@ -19,3 +20,7 @@ pub use search_document::{
 };
 pub use search_index_work::{SearchCellIndexUpdate, SearchIndexWork};
 pub(crate) use search_query::{SearchHit, SearchOutcome, SearchScope};
+pub use table_operation::{CellRange, FilterOperator, ResolvedSort, SortDirection};
+pub(crate) use table_operation::{
+    FormulaTextAtCell, apply_sort_to_projection, current_region, resolve_sort,
+};

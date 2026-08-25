@@ -10,7 +10,9 @@ use crate::document_data::SheetImage;
 use crate::document_resource_estimator::{
     estimate_cell_value_bytes, estimate_rich_metadata_bytes, estimate_sheet_data_bytes,
 };
-use crate::domain::{CellValue, DocumentCellChange, cell_key::parse_cell_key};
+use crate::domain::{
+    CellRange, CellValue, DocumentCellChange, FormulaTextAtCell, cell_key::parse_cell_key,
+};
 
 pub(crate) struct DocumentMemento {
     pub(crate) before: DocumentMementoSide,
@@ -32,6 +34,7 @@ pub(crate) enum DocumentMementoSide {
     Layout(LayoutMemento),
     Structure(Box<StructureMemento>),
     Image(ImageMemento),
+    Sort(SortMemento),
 }
 
 impl DocumentMementoSide {
@@ -41,7 +44,27 @@ impl DocumentMementoSide {
             DocumentMementoSide::Layout(memento) => memento.estimated_bytes(),
             DocumentMementoSide::Structure(memento) => memento.estimated_bytes(),
             DocumentMementoSide::Image(memento) => memento.estimated_bytes(),
+            DocumentMementoSide::Sort(memento) => memento.estimated_bytes(),
         }
+    }
+}
+
+pub(crate) struct SortMemento {
+    pub(crate) sheet_index: usize,
+    pub(crate) range: CellRange,
+    pub(crate) permutation: Vec<usize>,
+    pub(crate) formulas: Vec<FormulaTextAtCell>,
+}
+
+impl SortMemento {
+    fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.permutation.len() * std::mem::size_of::<usize>()
+            + self
+                .formulas
+                .iter()
+                .map(|formula| std::mem::size_of::<FormulaTextAtCell>() + formula.formula.len())
+                .sum::<usize>()
     }
 }
 

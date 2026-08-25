@@ -12,6 +12,39 @@ pub(crate) fn editor_session(
         formula_status: formula_status(value.formula_status, 100),
         capabilities: workbook_capabilities(value.capabilities),
         editor_state: editor_state(value.editor_state),
+        filters: value.filters.into_iter().map(sheet_filter).collect(),
+    }
+}
+
+pub(super) fn sheet_filter(
+    value: crate::state::table_filter::SheetFilterState,
+) -> types::SheetFilterInfo {
+    types::SheetFilterInfo {
+        sheet_index: value.sheet_index,
+        range: types::CellRangeInfo {
+            start_row: value.range.start_row,
+            end_row: value.range.end_row,
+            start_col: value.range.start_col,
+            end_col: value.range.end_col,
+        },
+        conditions: value
+            .conditions
+            .into_iter()
+            .map(|condition| types::FilterConditionInfo {
+                col: condition.col,
+                operator: match condition.operator {
+                    crate::domain::FilterOperator::Equals => types::FilterOperatorInfo::Equals,
+                    crate::domain::FilterOperator::NotEquals => {
+                        types::FilterOperatorInfo::NotEquals
+                    }
+                    crate::domain::FilterOperator::Contains => types::FilterOperatorInfo::Contains,
+                    crate::domain::FilterOperator::Blank => types::FilterOperatorInfo::Blank,
+                    crate::domain::FilterOperator::NotBlank => types::FilterOperatorInfo::NotBlank,
+                },
+                value: condition.value,
+            })
+            .collect(),
+        hidden_rows: value.hidden_rows,
     }
 }
 

@@ -7,8 +7,8 @@ use crate::document::formula_coordinator::FormulaWorkLimits;
 use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
 use crate::document_data::{DocumentData, SheetExtent};
 use crate::domain::{
-    AppliedOperation, DocumentCellChange, EditorCommand, SearchIndexWork, SearchScanCursor,
-    SearchTextChunk,
+    AppliedOperation, DocumentCellChange, EditorCommand, FilterOperator, SearchIndexWork,
+    SearchScanCursor, SearchTextChunk,
 };
 use crate::error::AppError;
 use crate::formula::status::FormulaStatus;
@@ -24,7 +24,8 @@ use crate::state::history_store::{
 #[cfg(test)]
 use crate::state::history_store::{MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 use crate::state::search_document::collect_sheet_search_text_chunk;
-use std::collections::HashSet;
+use crate::state::table_filter::{SheetFilterState, TableFilterState};
+use std::collections::{BTreeSet, HashSet};
 #[cfg(test)]
 use umya_spreadsheet::Workbook;
 
@@ -59,6 +60,7 @@ pub struct EditorState {
     resources: ResourceLedger,
     resource_estimate_floor: usize,
     save_commit: Option<SaveCommitLease>,
+    filters: TableFilterState,
 }
 
 #[derive(Default)]
@@ -104,6 +106,7 @@ impl EditorState {
             resources,
             resource_estimate_floor: 0,
             save_commit: None,
+            filters: TableFilterState::default(),
         }
     }
 
@@ -162,6 +165,7 @@ impl EditorState {
         self.bump_revision()?;
         self.dirty.replace_current(self.document.projection());
         self.resources.replace_all(self.document.projection());
+        self.filters.recompute(self.document.projection());
         Ok(RetiredEditorResources {
             _document: Some(previous_document),
             _history: previous_history,
@@ -326,6 +330,7 @@ impl EditorState {
             .estimated_bytes()
             .saturating_add(self.document.estimated_runtime_bytes())
             .saturating_add(self.history.estimated_bytes())
+            .saturating_add(self.filters.estimated_bytes())
             .max(self.resource_estimate_floor)
     }
 
@@ -398,7 +403,8 @@ impl EditorState {
         self.ensure_memento_budget(&operation)?;
         self.ensure_revision_available()?;
         let should_mark_search_stale = operation.impact().requires_search_rebuild();
-        let before = self.document.capture_memento_side(&operation);
+        let filters_before = self.filters.history_snapshot();
+        let before = self.document.capture_memento_side(&operation, false);
 
         let result = self.document.execute_operation(&operation, &before)?;
         let cell_changes = result.cell_changes;
@@ -407,13 +413,19 @@ impl EditorState {
             .refresh_sheets(self.document.projection(), resource_sheets);
         self.dirty
             .apply_operation(&operation, &cell_changes, self.document.projection());
+        self.filters
+            .after_operation(self.document.projection(), &operation);
 
         let retired_history = if before.estimated_bytes() > MAX_SINGLE_HISTORY_ENTRY_BYTES {
             self.history.clear_all()
         } else {
-            let after = self.document.capture_memento_side(&operation);
+            let after = self.document.capture_memento_side(&operation, true);
             let memento = SpreadsheetDocument::create_memento(before, after);
-            let entry = HistoryEntry::new(memento);
+            let entry = HistoryEntry::new(
+                Some(memento),
+                filters_before,
+                self.filters.history_snapshot(),
+            );
             self.history.record(entry)
         };
 
@@ -446,6 +458,78 @@ impl EditorState {
         self.restore_history(HistoryRestoreDirection::Redo)
     }
 
+    pub(crate) fn filter_states(&self) -> Vec<SheetFilterState> {
+        self.filters.snapshots()
+    }
+
+    pub(crate) fn set_filter(
+        &mut self,
+        sheet_index: usize,
+        anchor_row: usize,
+        col: usize,
+        operator: FilterOperator,
+        value: String,
+    ) -> Result<ExecutedOperation, AppError> {
+        self.ensure_not_saving()?;
+        self.ensure_transaction_available()?;
+        self.ensure_revision_available()?;
+        let before = self.filters.clone();
+        self.filters.set_condition(
+            self.document.projection(),
+            sheet_index,
+            anchor_row,
+            col,
+            operator,
+            value,
+        )?;
+        if before == self.filters {
+            return Ok(ExecutedOperation {
+                operation: None,
+                cell_changes: Vec::new(),
+                restore: None,
+                search_index_work: SearchIndexWork::None,
+                retired: RetiredEditorResources::default(),
+            });
+        }
+        let entry = HistoryEntry::new(
+            None,
+            before.history_snapshot(),
+            self.filters.history_snapshot(),
+        );
+        let retired = self.history.record(entry);
+        self.bump_revision()?;
+        Ok(filter_execution(sheet_index, retired))
+    }
+
+    pub(crate) fn clear_filter(
+        &mut self,
+        sheet_index: usize,
+        col: Option<usize>,
+    ) -> Result<ExecutedOperation, AppError> {
+        self.ensure_not_saving()?;
+        self.ensure_transaction_available()?;
+        self.ensure_revision_available()?;
+        let before = self.filters.clone();
+        self.filters.clear(sheet_index, col);
+        if before == self.filters {
+            return Ok(ExecutedOperation {
+                operation: None,
+                cell_changes: Vec::new(),
+                restore: None,
+                search_index_work: SearchIndexWork::None,
+                retired: RetiredEditorResources::default(),
+            });
+        }
+        let entry = HistoryEntry::new(
+            None,
+            before.history_snapshot(),
+            self.filters.history_snapshot(),
+        );
+        let retired = self.history.record(entry);
+        self.bump_revision()?;
+        Ok(filter_execution(sheet_index, retired))
+    }
+
     fn restore_history(
         &mut self,
         direction: HistoryRestoreDirection,
@@ -460,17 +544,43 @@ impl EditorState {
         let Some(entry) = entry else {
             return Ok(None);
         };
-        let (target, rollback) = history_restore_sides(&entry.memento, direction);
-        let restore = match self.document.restore_memento_side(target) {
-            Ok(restore) => restore,
-            Err(error) => {
-                rollback_failed_history_restore(&mut self.document, rollback, &error)?;
-                return Err(error);
-            }
+        let has_document_memento = entry.document.is_some();
+        let (target_filters, rollback_filters) = match direction {
+            HistoryRestoreDirection::Undo => (&entry.filters_before, &entry.filters_after),
+            HistoryRestoreDirection::Redo => (&entry.filters_after, &entry.filters_before),
         };
-
-        self.dirty
-            .apply_history_restore(target, rollback, self.document.projection());
+        let filter_sheet_indexes = changed_filter_sheet_indexes(target_filters, rollback_filters);
+        let mut restore = DocumentRestoreResult::default();
+        if let Some(memento) = &entry.document {
+            let (target, rollback) = history_restore_sides(memento, direction);
+            restore = match self.document.restore_memento_side(target) {
+                Ok(restore) => restore,
+                Err(error) => {
+                    rollback_failed_history_restore(&mut self.document, rollback, &error)?;
+                    return Err(error);
+                }
+            };
+            self.dirty
+                .apply_history_restore(target, rollback, self.document.projection());
+        }
+        self.filters = target_filters.clone();
+        self.filters.recompute(self.document.projection());
+        for sheet_index in filter_sheet_indexes {
+            if !restore.changes.iter().any(|change| {
+                matches!(
+                    change,
+                    crate::document::document_restore::DocumentRestoreChange::SheetInvalidated {
+                        sheet_index: current
+                    } if *current == sheet_index
+                )
+            }) {
+                restore.changes.push(
+                    crate::document::document_restore::DocumentRestoreChange::SheetInvalidated {
+                        sheet_index,
+                    },
+                );
+            }
+        }
         let retired_history = match direction {
             HistoryRestoreDirection::Undo => {
                 let entry = self
@@ -494,7 +604,11 @@ impl EditorState {
             operation: None,
             cell_changes: Vec::new(),
             restore: Some(restore),
-            search_index_work: SearchIndexWork::RebuildAll,
+            search_index_work: if has_document_memento {
+                SearchIndexWork::RebuildAll
+            } else {
+                SearchIndexWork::None
+            },
             retired: RetiredEditorResources::from_history_entries(retired_history),
         }))
     }
@@ -558,6 +672,43 @@ impl EditorState {
         }
         Ok(())
     }
+}
+
+fn filter_execution(sheet_index: usize, retired: RetiredHistoryEntries) -> ExecutedOperation {
+    ExecutedOperation {
+        operation: None,
+        cell_changes: Vec::new(),
+        restore: Some(DocumentRestoreResult {
+            changes: vec![
+                crate::document::document_restore::DocumentRestoreChange::SheetInvalidated {
+                    sheet_index,
+                },
+            ],
+        }),
+        search_index_work: SearchIndexWork::None,
+        retired: RetiredEditorResources::from_history_entries(retired),
+    }
+}
+
+fn changed_filter_sheet_indexes(
+    left: &TableFilterState,
+    right: &TableFilterState,
+) -> BTreeSet<usize> {
+    let left: std::collections::BTreeMap<_, _> = left
+        .snapshots()
+        .into_iter()
+        .map(|state| (state.sheet_index, state))
+        .collect();
+    let right: std::collections::BTreeMap<_, _> = right
+        .snapshots()
+        .into_iter()
+        .map(|state| (state.sheet_index, state))
+        .collect();
+    left.keys()
+        .chain(right.keys())
+        .filter(|sheet_index| left.get(sheet_index) != right.get(sheet_index))
+        .copied()
+        .collect()
 }
 
 fn rollback_failed_history_restore(
@@ -626,6 +777,9 @@ fn operation_resource_sheets(
         | AppliedOperation::UpdateImage { sheet_index, .. }
         | AppliedOperation::DeleteImage { sheet_index, .. } => {
             sheets.insert(*sheet_index);
+        }
+        AppliedOperation::SortRows(sort) => {
+            sheets.insert(sort.sheet_index);
         }
     }
     sheets.extend(formula_changes.iter().map(|change| change.sheet_index));
@@ -3137,5 +3291,208 @@ mod tests {
         assert!(error.to_string().contains("too large for safe undo"));
         assert!(!state.can_undo());
         assert_eq!(state.file_data().sheets.len(), 2);
+    }
+
+    fn sortable_state() -> EditorState {
+        EditorState::new(DocumentData {
+            path: String::new(),
+            file_name: "sortable.xlsx".to_string(),
+            sheets: vec![DocumentSheet {
+                name: "Sheet1".to_string(),
+                rows: vec![
+                    vec![
+                        CellValue::String("Name".to_string()),
+                        CellValue::String("Value".to_string()),
+                    ],
+                    vec![
+                        CellValue::String("b".to_string()),
+                        CellValue::Number(CellNumber::from(20)),
+                    ],
+                    vec![
+                        CellValue::String("A".to_string()),
+                        CellValue::Number(CellNumber::from(10)),
+                    ],
+                    vec![
+                        CellValue::String("a".to_string()),
+                        CellValue::Number(CellNumber::from(30)),
+                    ],
+                    vec![CellValue::Null, CellValue::Number(CellNumber::from(40))],
+                ],
+                ..Default::default()
+            }],
+        })
+    }
+
+    #[test]
+    fn sort_and_filter_share_one_undo_redo_timeline() {
+        let mut state = sortable_state();
+        state
+            .execute(EditorCommand::SortRows {
+                sheet_index: 0,
+                anchor_row: 1,
+                anchor_col: 0,
+                direction: crate::domain::SortDirection::Ascending,
+            })
+            .expect("sort rows");
+        assert_eq!(
+            state.file_data().sheets[0].rows[1][0].to_display_string(),
+            "A"
+        );
+        assert!(state.is_dirty());
+
+        state
+            .set_filter(0, 0, 0, FilterOperator::Equals, "a".to_string())
+            .expect("set filter");
+        assert_eq!(state.filter_states()[0].hidden_rows, vec![3, 4]);
+
+        state.undo().expect("undo filter").expect("undo result");
+        assert!(state.filter_states().is_empty());
+        assert_eq!(
+            state.file_data().sheets[0].rows[1][0].to_display_string(),
+            "A"
+        );
+
+        state.undo().expect("undo sort").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[1][0].to_display_string(),
+            "b"
+        );
+        assert!(!state.is_dirty());
+
+        state.redo().expect("redo sort").expect("redo result");
+        state.redo().expect("redo filter").expect("redo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[1][0].to_display_string(),
+            "A"
+        );
+        assert_eq!(state.filter_states()[0].hidden_rows, vec![3, 4]);
+        assert!(state.is_dirty());
+    }
+
+    #[test]
+    fn filter_history_does_not_change_document_dirty_state() {
+        let mut state = sortable_state();
+
+        state
+            .set_filter(0, 0, 0, FilterOperator::Contains, "a".to_string())
+            .expect("set filter");
+        assert!(!state.is_dirty());
+        state.undo().expect("undo filter").expect("undo result");
+        assert!(!state.is_dirty());
+        state.redo().expect("redo filter").expect("redo result");
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn sorted_row_order_is_written_to_xlsx() {
+        let mut state = sortable_state();
+        state
+            .execute(EditorCommand::SortRows {
+                sheet_index: 0,
+                anchor_row: 1,
+                anchor_col: 0,
+                direction: crate::domain::SortDirection::Ascending,
+            })
+            .expect("sort rows");
+        let (_, bytes) = state
+            .generate_file_bytes_for_target("sorted.xlsx")
+            .expect("save sorted workbook");
+
+        let reopened = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "sorted.xlsx".to_string(),
+        )
+        .expect("reopen sorted workbook");
+
+        assert_eq!(
+            reopened.file_data.sheets[0].rows[1][0].to_display_string(),
+            "A"
+        );
+        assert_eq!(
+            reopened.file_data.sheets[0].rows[2][0].to_display_string(),
+            "a"
+        );
+        assert_eq!(
+            reopened.file_data.sheets[0].rows[3][0].to_display_string(),
+            "b"
+        );
+        assert_eq!(reopened.file_data.sheets[0].rows[4][0], CellValue::Null);
+    }
+
+    #[test]
+    fn native_sort_undo_redo_moves_formulas_styles_and_hyperlinks() {
+        let mut source = umya_spreadsheet::new_file();
+        {
+            let sheet = source.sheet_mut(0).expect("sheet");
+            sheet.cell_mut("A1").set_value_string("Name");
+            sheet.cell_mut("B1").set_value_string("Reference");
+            sheet.cell_mut("A2").set_value_string("b");
+            sheet
+                .cell_mut("A2")
+                .style_mut()
+                .set_background_color(Color::COLOR_RED_STR);
+            sheet
+                .cell_mut("A2")
+                .hyperlink_mut()
+                .set_url("https://example.com/b");
+            sheet.cell_mut("B2").set_formula("A2");
+            sheet.cell_mut("A3").set_value_string("a");
+            sheet.cell_mut("B3").set_formula("A3");
+        }
+        let mut bytes = Vec::new();
+        writer::xlsx::write_writer(&source, &mut bytes).expect("write source");
+        let parsed = read_file_with_workbook_from_bytes(
+            "xlsx",
+            bytes,
+            String::new(),
+            "native-sort.xlsx".to_string(),
+        )
+        .expect("read source");
+        let mut state = EditorState::with_workbook(parsed.file_data, parsed.workbook);
+
+        state
+            .execute(EditorCommand::SortRows {
+                sheet_index: 0,
+                anchor_row: 1,
+                anchor_col: 0,
+                direction: crate::domain::SortDirection::Ascending,
+            })
+            .expect("sort rows");
+        state.undo().expect("undo sort").expect("undo result");
+        assert_eq!(
+            state.file_data().sheets[0].rows[1][0].to_display_string(),
+            "b"
+        );
+        state.redo().expect("redo sort").expect("redo result");
+
+        let (_, saved_bytes) = state
+            .generate_file_bytes_for_target("native-sort.xlsx")
+            .expect("save native sorted workbook");
+        let saved = reader::xlsx::read_reader(Cursor::new(saved_bytes), true).expect("read saved");
+        let sheet = saved.sheet(0).expect("saved sheet");
+
+        assert_eq!(sheet.cell("A2").expect("A2").value(), "a");
+        assert_eq!(sheet.cell("A3").expect("A3").value(), "b");
+        assert_eq!(sheet.cell("B2").expect("B2").formula(), "A2");
+        assert_eq!(sheet.cell("B3").expect("B3").formula(), "A3");
+        assert_eq!(
+            sheet
+                .cell("A3")
+                .expect("A3")
+                .style()
+                .background_color()
+                .map(|color| color.argb_str()),
+            Some(Color::COLOR_RED_STR.to_string())
+        );
+        assert_eq!(
+            sheet
+                .cell("A3")
+                .expect("A3")
+                .hyperlink()
+                .map(|hyperlink| hyperlink.url()),
+            Some("https://example.com/b")
+        );
     }
 }

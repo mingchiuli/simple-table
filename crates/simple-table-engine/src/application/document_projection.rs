@@ -26,6 +26,7 @@ pub(crate) fn editor_session_snapshot(editor_state: &EditorState) -> EditorSessi
             is_dirty: editor_state.is_dirty(),
             history: editor_state.history_status(),
         },
+        filters: editor_state.filter_states(),
     }
 }
 
@@ -131,6 +132,7 @@ fn saved_editor_session_snapshot(
             is_dirty: false,
             history,
         },
+        filters: editor_state.filter_states(),
     })
 }
 

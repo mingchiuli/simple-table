@@ -26,6 +26,9 @@ pub fn do_execute_command(
     command: EditorCommand,
 ) -> Result<MutationExecution, AppError> {
     match &command {
+        EditorCommand::SetFilter { .. } | EditorCommand::ClearFilter { .. } => {
+            execute_filter_command(registry, document_id, base_revision, command)
+        }
         EditorCommand::SetCell { .. } | EditorCommand::SetCells { .. } => {
             execute_cell_delta(registry, document_id, base_revision, command)
         }
@@ -50,7 +53,8 @@ pub fn do_execute_command(
         | EditorCommand::AddColumn { .. }
         | EditorCommand::DeleteColumn { .. }
         | EditorCommand::AddSheet { .. }
-        | EditorCommand::DeleteSheet { .. } => {
+        | EditorCommand::DeleteSheet { .. }
+        | EditorCommand::SortRows { .. } => {
             execute_structural_command(registry, document_id, base_revision, command)
         }
         EditorCommand::InsertImage { .. }
@@ -59,6 +63,38 @@ pub fn do_execute_command(
             execute_image_command(registry, document_id, base_revision, command)
         }
     }
+}
+
+fn execute_filter_command(
+    registry: &ActiveDocumentRepository,
+    document_id: u64,
+    base_revision: u64,
+    command: EditorCommand,
+) -> Result<MutationExecution, AppError> {
+    let handle = mutation_handle(registry, document_id)?;
+    let (execution, retired) = {
+        let mut editor_state = handle.write_for_command(document_id, base_revision)?;
+        let result = match command {
+            EditorCommand::SetFilter {
+                sheet_index,
+                anchor_row,
+                col,
+                operator,
+                value,
+            } => editor_state.set_filter(sheet_index, anchor_row, col, operator, value)?,
+            EditorCommand::ClearFilter { sheet_index, col } => {
+                editor_state.clear_filter(sheet_index, col)?
+            }
+            _ => unreachable!("filter executor receives only filter commands"),
+        };
+        let execution = MutationExecution::new(
+            crate::ops::patch_projector::restore_mutation_outcome(&editor_state, result.restore),
+            result.search_index_work,
+        );
+        (execution, result.retired)
+    };
+    drop(retired);
+    Ok(execution)
 }
 
 fn execute_image_command(

@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-pub const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 4;
+pub const EDITOR_MUTATION_PROTOCOL_VERSION: u16 = 5;
 use std::collections::HashMap;
 
 use super::capabilities::WorkbookCapabilities;
 use super::cell_change::SheetCellChange;
 use super::document::{SheetExtent, SheetManifest};
-use super::editor_session::EditorStateInfo;
+use super::editor_session::{EditorStateInfo, SheetFilterInfo};
 use super::formula::FormulaStatus;
 use super::image::SheetImage;
 
@@ -154,6 +154,8 @@ pub struct EditorMutationResponse {
     #[serde(default)]
     pub capabilities: WorkbookCapabilities,
     pub editor_state: EditorStateInfo,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<SheetFilterInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<EditorPatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

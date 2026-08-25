@@ -47,6 +47,9 @@ pub enum ProjectedOperation {
         sheet_index: usize,
         image_id: String,
     },
+    SortRows {
+        sheet_index: usize,
+    },
 }
 
 impl OperationPatchProjector<'_> {
@@ -189,6 +192,9 @@ impl OperationPatchProjector<'_> {
             } => ProjectedOperation::ImageDeleted {
                 sheet_index: *sheet_index,
                 image_id: image.id.clone(),
+            },
+            AppliedOperation::SortRows(sort) => ProjectedOperation::SortRows {
+                sheet_index: sort.sheet_index,
             },
         }
     }

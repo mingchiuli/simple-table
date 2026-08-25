@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
 use crate::domain::{
-    AppliedOperation, CellValue, EditorCommand, ResolvedCellEdit, parse_cell_text,
+    AppliedOperation, CellValue, EditorCommand, ResolvedCellEdit, parse_cell_text, resolve_sort,
 };
 use crate::error::AppError;
 use crate::resource_limits::{
@@ -171,6 +171,23 @@ impl EditorCommand {
                     sheet_index,
                     col_index,
                 })
+            }
+            EditorCommand::SortRows {
+                sheet_index,
+                anchor_row,
+                anchor_col,
+                direction,
+            } => Ok(AppliedOperation::SortRows(resolve_sort(
+                sheet_index,
+                require_sheet(file_data, sheet_index)?,
+                anchor_row,
+                anchor_col,
+                direction,
+            )?)),
+            EditorCommand::SetFilter { .. } | EditorCommand::ClearFilter { .. } => {
+                Err(AppError::Internal(
+                    "session filter command reached the document operation resolver".to_string(),
+                ))
             }
             EditorCommand::SetColumnWidth {
                 sheet_index,

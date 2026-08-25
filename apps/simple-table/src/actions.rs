@@ -1291,9 +1291,23 @@ fn schedule_current_window(store: EditorStore, ports: &AppPorts) {
     let Some(extent) = sheet_extent(store, window.sheet_index) else {
         return;
     };
-    ports
-        .regions
-        .schedule_viewport(store, window.bounds(), extent);
+    let visible_rows = store.visible_rows(window.sheet_index, extent.row_count.max(1));
+    if visible_rows.len() == extent.row_count.max(1) {
+        ports
+            .regions
+            .schedule_viewport(store, window.bounds(), extent);
+    } else {
+        ports.regions.schedule_visible_rows(
+            store,
+            window.sheet_index,
+            visible_rows
+                .get(window.row_start..window.row_end.min(visible_rows.len()))
+                .unwrap_or_default(),
+            window.col_start,
+            window.col_end,
+            extent,
+        );
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -1342,6 +1356,21 @@ fn rebase_mutation_request(
             ..
         }
         | EditorRequest::DeleteColumn {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::SortRows {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::SetFilter {
+            document_id,
+            base_revision,
+            ..
+        }
+        | EditorRequest::ClearFilter {
             document_id,
             base_revision,
             ..
@@ -1467,6 +1496,7 @@ mod tests {
                 is_dirty: false,
             },
             formula_status: Default::default(),
+            filters: Vec::new(),
         }
     }
 

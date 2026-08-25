@@ -17,6 +17,116 @@ pub struct FormulaReferenceRewrite {
     pub skipped: bool,
 }
 
+pub(crate) fn translate_formula_for_move(
+    ast_service: &mut FormulaAstService,
+    formula: &str,
+    row_delta: isize,
+    col_delta: isize,
+) -> Result<String, String> {
+    let parsed = ast_service.parse(formula)?;
+    let mut edits = Vec::new();
+    let mut reference_nodes = Vec::new();
+    parsed.collect_reference_nodes(&mut reference_nodes);
+    for node in reference_nodes {
+        let ASTNodeType::Reference { reference, .. } = &node.node_type else {
+            continue;
+        };
+        let translated = translate_reference_for_move(reference, row_delta, col_delta)?;
+        let token = node
+            .source_token
+            .as_ref()
+            .ok_or_else(|| "formula reference has no source location".to_string())?;
+        let (start, end) = parsed
+            .source()
+            .original_span(token.start, token.end)
+            .ok_or_else(|| "formula reference source location is invalid".to_string())?;
+        edits.push(FormulaTextEdit {
+            start,
+            end,
+            replacement: translated.normalise(),
+        });
+    }
+    apply_formula_text_edits(formula, edits)
+        .ok_or_else(|| "formula reference edits overlap".to_string())
+}
+
+fn translate_reference_for_move(
+    reference: &ReferenceType,
+    row_delta: isize,
+    col_delta: isize,
+) -> Result<ReferenceType, String> {
+    match reference {
+        ReferenceType::Cell {
+            sheet,
+            row,
+            col,
+            row_abs,
+            col_abs,
+        } => Ok(ReferenceType::Cell {
+            sheet: sheet.clone(),
+            row: translate_axis(*row, *row_abs, row_delta)?,
+            col: translate_axis(*col, *col_abs, col_delta)?,
+            row_abs: *row_abs,
+            col_abs: *col_abs,
+        }),
+        ReferenceType::Range {
+            sheet,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+            start_row_abs,
+            start_col_abs,
+            end_row_abs,
+            end_col_abs,
+        } => Ok(ReferenceType::Range {
+            sheet: sheet.clone(),
+            start_row: translate_optional_axis(*start_row, *start_row_abs, row_delta)?,
+            start_col: translate_optional_axis(*start_col, *start_col_abs, col_delta)?,
+            end_row: translate_optional_axis(*end_row, *end_row_abs, row_delta)?,
+            end_col: translate_optional_axis(*end_col, *end_col_abs, col_delta)?,
+            start_row_abs: *start_row_abs,
+            start_col_abs: *start_col_abs,
+            end_row_abs: *end_row_abs,
+            end_col_abs: *end_col_abs,
+        }),
+        ReferenceType::Cell3D { .. } => {
+            Err("3D cell references are not supported by sort".to_string())
+        }
+        ReferenceType::Range3D { .. } => {
+            Err("3D range references are not supported by sort".to_string())
+        }
+        ReferenceType::External(_) => {
+            Err("external references are not supported by sort".to_string())
+        }
+        ReferenceType::Table(_) => Err("table references are not supported by sort".to_string()),
+        ReferenceType::NamedRange(_) => Err("named ranges are not supported by sort".to_string()),
+    }
+}
+
+fn translate_optional_axis(
+    value: Option<u32>,
+    absolute: bool,
+    delta: isize,
+) -> Result<Option<u32>, String> {
+    value
+        .map(|value| translate_axis(value, absolute, delta))
+        .transpose()
+}
+
+fn translate_axis(value: u32, absolute: bool, delta: isize) -> Result<u32, String> {
+    if absolute || delta == 0 {
+        return Ok(value);
+    }
+    let value = isize::try_from(value).map_err(|_| "formula reference is too large")?;
+    let translated = value
+        .checked_add(delta)
+        .filter(|value| *value >= 1)
+        .ok_or_else(|| "formula movement would create an invalid reference".to_string())?;
+    u32::try_from(translated)
+        .map_err(|_| "formula reference exceeds the supported range".to_string())
+}
+
 pub fn adjust_formula_references(
     ast_service: &mut FormulaAstService,
     formula: &str,
@@ -799,5 +909,26 @@ mod tests {
             )),
             "=if( #REF!>0 , \"Inputs!A1\" , Other!A1 )"
         );
+    }
+
+    #[test]
+    fn translates_relative_formula_references_when_a_sorted_row_moves() {
+        let mut ast_service = FormulaAstService::new();
+
+        let translated =
+            translate_formula_for_move(&mut ast_service, "=A2+$B$1+C$3+$D4+SUM(A2:B3)", 2, 1)
+                .expect("translate formula");
+
+        assert_eq!(translated, "=B4+$B$1+D$3+$D6+SUM(B4:C5)");
+    }
+
+    #[test]
+    fn rejects_formula_moves_that_cross_the_sheet_origin() {
+        let mut ast_service = FormulaAstService::new();
+
+        let error = translate_formula_for_move(&mut ast_service, "=A1", -1, 0)
+            .expect_err("relative reference would become invalid");
+
+        assert!(error.contains("invalid reference"));
     }
 }

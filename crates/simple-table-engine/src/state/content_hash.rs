@@ -200,6 +200,9 @@ impl IncrementalContentFingerprint {
             | AppliedOperation::DeleteImage { sheet_index, .. } => {
                 self.rebuild_sheet(*sheet_index, file_data);
             }
+            AppliedOperation::SortRows(sort) => {
+                self.rebuild_sheet(sort.sheet_index, file_data);
+            }
         }
     }
 
@@ -274,6 +277,9 @@ impl IncrementalContentFingerprint {
                 *self = Self::from_file_data(file_data);
             }
             (DocumentMementoSide::Image(target), DocumentMementoSide::Image(_)) => {
+                self.rebuild_sheet(target.sheet_index, file_data);
+            }
+            (DocumentMementoSide::Sort(target), DocumentMementoSide::Sort(_)) => {
                 self.rebuild_sheet(target.sheet_index, file_data);
             }
             _ => *self = Self::from_file_data(file_data),

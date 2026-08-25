@@ -67,6 +67,44 @@ pub struct EditorSessionView {
     pub editor_state: EditorStateView,
     #[serde(default)]
     pub formula_status: FormulaStatusView,
+    #[serde(default)]
+    pub filters: Vec<SheetFilterView>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CellRangeView {
+    pub start_row: usize,
+    pub end_row: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterOperatorView {
+    Equals,
+    NotEquals,
+    Contains,
+    Blank,
+    NotBlank,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterConditionView {
+    pub col: usize,
+    pub operator: FilterOperatorView,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetFilterView {
+    pub sheet_index: usize,
+    pub range: CellRangeView,
+    pub conditions: Vec<FilterConditionView>,
+    pub hidden_rows: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -185,6 +223,14 @@ pub struct SheetRegionView {
     pub metadata: SheetRegionMetadataView,
     #[serde(default)]
     pub wire_bytes: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetRowsRegionView {
+    pub regions: Vec<SheetRegionView>,
+    #[serde(default, rename = "wireBytes")]
+    pub _wire_bytes: usize,
 }
 
 #[cfg(test)]
@@ -333,6 +379,8 @@ pub struct EditorMutationView {
     pub sheet_extents: Option<Vec<SheetExtentView>>,
     #[serde(default)]
     pub formula_status: FormulaStatusView,
+    #[serde(default)]
+    pub filters: Vec<SheetFilterView>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -607,11 +655,13 @@ impl EditorStore {
             patches,
             sheet_extents,
             formula_status,
+            filters,
         } = mutation;
         if let Some(document) = self.document.write().as_mut().map(Rc::make_mut) {
             document.editor_session.revision = revision;
             document.editor_session.editor_state = editor_state;
             document.editor_session.formula_status = formula_status;
+            document.editor_session.filters = filters;
             if let Some(extents) = &sheet_extents {
                 for (sheet, extent) in document.document.sheets.iter_mut().zip(extents) {
                     sheet.extent = *extent;
@@ -633,6 +683,30 @@ impl EditorStore {
             .write()
             .apply_mutation_parts(document_id, revision, &patches);
         self.status.set("Changes saved in memory".to_string());
+    }
+
+    pub fn sheet_filter(&self, sheet_index: usize) -> Option<SheetFilterView> {
+        self.document
+            .peek()
+            .as_ref()?
+            .editor_session
+            .filters
+            .iter()
+            .find(|filter| filter.sheet_index == sheet_index)
+            .cloned()
+    }
+
+    pub fn visible_rows(&self, sheet_index: usize, row_count: usize) -> Vec<usize> {
+        let hidden = self
+            .sheet_filter(sheet_index)
+            .map(|filter| {
+                filter
+                    .hidden_rows
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .unwrap_or_default();
+        (0..row_count).filter(|row| !hidden.contains(row)).collect()
     }
 
     pub fn cell_presentation_map(

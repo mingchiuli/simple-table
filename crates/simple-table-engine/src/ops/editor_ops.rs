@@ -24,6 +24,7 @@ pub fn do_get_editor_state(
                 formula_status: editor_state.formula_status(),
                 capabilities: editor_state.capabilities(),
                 editor_state: editor_state_snapshot(&editor_state),
+                filters: editor_state.filter_states(),
             }))
         }
         (None, None) => Ok(None),

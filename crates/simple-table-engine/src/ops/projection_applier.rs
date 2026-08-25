@@ -3,7 +3,10 @@ use crate::document_data::{
 };
 use std::collections::HashMap;
 
-use crate::domain::{AppliedOperation, CellValue, ProjectionMutation, cell_key::parse_cell_key};
+use crate::domain::{
+    AppliedOperation, CellValue, ProjectionMutation, apply_sort_to_projection,
+    cell_key::parse_cell_key,
+};
 
 impl ProjectionMutation<'_> {
     pub fn execute(&self, file_data: &mut DocumentData) {
@@ -104,6 +107,16 @@ impl ProjectionMutation<'_> {
                     shift_layout_map_on_delete(sheet.column_widths.as_mut(), *col_index);
                     shift_column_merges_on_delete(&mut sheet.merges, *col_index);
                     shift_rich_columns_on_delete(&mut sheet.rich, *col_index);
+                }
+            }
+            AppliedOperation::SortRows(sort) => {
+                if let Some(sheet) = file_data.sheets.get_mut(sort.sheet_index) {
+                    apply_sort_to_projection(
+                        sheet,
+                        sort.range,
+                        &sort.permutation,
+                        &sort.after_formulas,
+                    );
                 }
             }
             AppliedOperation::SetColumnWidth {
@@ -209,6 +222,7 @@ impl ProjectionMutation<'_> {
             | AppliedOperation::DeleteColumn { .. }
             | AppliedOperation::AddSheet { .. }
             | AppliedOperation::DeleteSheet { .. } => false,
+            AppliedOperation::SortRows(_) => false,
             AppliedOperation::InsertImage { .. }
             | AppliedOperation::UpdateImage { .. }
             | AppliedOperation::DeleteImage { .. } => false,

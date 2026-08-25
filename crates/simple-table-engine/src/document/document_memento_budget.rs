@@ -73,6 +73,22 @@ pub(crate) fn estimate_memento_side_bytes(
             .image_bytes(*sheet_index, image.z_index)
             .map(|bytes| bytes.len().saturating_add(512))
             .unwrap_or(512),
+        AppliedOperation::SortRows(sort) => {
+            let permutation_bytes = sort
+                .permutation
+                .len()
+                .saturating_mul(std::mem::size_of::<usize>())
+                .saturating_mul(2);
+            let formula_bytes = sort
+                .before_formulas
+                .iter()
+                .chain(&sort.after_formulas)
+                .map(|formula| formula.formula.len().saturating_add(24))
+                .sum::<usize>();
+            permutation_bytes
+                .saturating_add(formula_bytes)
+                .saturating_add(256)
+        }
     }
 }
 
@@ -194,6 +210,7 @@ fn estimate_file_structure_memento_bytes(
         | AppliedOperation::SetCells { .. }
         | AppliedOperation::SetColumnWidth { .. }
         | AppliedOperation::SetRowHeight { .. } => std::mem::size_of::<FileStructureMemento>(),
+        AppliedOperation::SortRows(_) => std::mem::size_of::<FileStructureMemento>(),
         AppliedOperation::InsertImage { .. }
         | AppliedOperation::UpdateImage { .. }
         | AppliedOperation::DeleteImage { .. } => std::mem::size_of::<FileStructureMemento>(),
@@ -323,7 +340,8 @@ fn operation_may_change_formula_capabilities(operation: &AppliedOperation) -> bo
         | AppliedOperation::DeleteSheet { .. }
         | AppliedOperation::InsertImage { .. }
         | AppliedOperation::UpdateImage { .. }
-        | AppliedOperation::DeleteImage { .. } => false,
+        | AppliedOperation::DeleteImage { .. }
+        | AppliedOperation::SortRows(_) => false,
     }
 }
 

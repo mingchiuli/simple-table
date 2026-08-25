@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const SHEET_REGION_TILE_ROWS: usize = 128;
 pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
 
@@ -12,6 +12,23 @@ pub struct CellEdit {
     pub row: usize,
     pub col: usize,
     pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SortDirectionDto {
+    Ascending,
+    Descending,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterOperatorDto {
+    Equals,
+    NotEquals,
+    Contains,
+    Blank,
+    NotBlank,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +104,14 @@ pub enum EditorRequest {
         col_start: usize,
         col_end: usize,
     },
+    RowsRegion {
+        document_id: u64,
+        base_revision: u64,
+        sheet_index: usize,
+        rows: Vec<usize>,
+        col_start: usize,
+        col_end: usize,
+    },
     SetCell {
         request_id: String,
         document_id: u64,
@@ -129,6 +154,32 @@ pub enum EditorRequest {
         base_revision: u64,
         sheet_index: usize,
         col_index: usize,
+    },
+    SortRows {
+        request_id: String,
+        document_id: u64,
+        base_revision: u64,
+        sheet_index: usize,
+        anchor_row: usize,
+        anchor_col: usize,
+        direction: SortDirectionDto,
+    },
+    SetFilter {
+        request_id: String,
+        document_id: u64,
+        base_revision: u64,
+        sheet_index: usize,
+        anchor_row: usize,
+        col: usize,
+        operator: FilterOperatorDto,
+        value: String,
+    },
+    ClearFilter {
+        request_id: String,
+        document_id: u64,
+        base_revision: u64,
+        sheet_index: usize,
+        col: Option<usize>,
     },
     SetColumnWidth {
         request_id: String,
@@ -268,6 +319,9 @@ pub enum EditorReply {
     Region {
         value: Value,
     },
+    RowsRegion {
+        value: Value,
+    },
     Mutation {
         value: Value,
     },
@@ -332,8 +386,26 @@ mod tests {
     }
 
     #[test]
+    fn sparse_rows_region_round_trip_keeps_physical_row_indexes() {
+        let request = EditorRequest::RowsRegion {
+            document_id: 9,
+            base_revision: 4,
+            sheet_index: 2,
+            rows: vec![0, 1_024, 249_999],
+            col_start: 3,
+            col_end: 35,
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+
+        assert_eq!(
+            serde_json::from_str::<EditorRequest>(&json).expect("deserialize"),
+            request
+        );
+    }
+
+    #[test]
     fn protocol_wire_shape_stays_stable() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert_eq!(PROTOCOL_VERSION, 3);
         let request = EditorRequest::SetCell {
             request_id: "edit-1".to_string(),
             document_id: 9,

@@ -4,7 +4,7 @@ use crate::types;
 
 use super::cell::{projected_cell_change, sheet_extent, sheet_manifest};
 use super::size::serialized_json_bytes;
-use super::status::{editor_state, formula_status, workbook_capabilities};
+use super::status::{editor_state, formula_status, sheet_filter, workbook_capabilities};
 
 pub(crate) fn mutation_response(value: &MutationOutcome) -> types::EditorMutationResponse {
     let mut response = types::EditorMutationResponse {
@@ -14,6 +14,13 @@ pub(crate) fn mutation_response(value: &MutationOutcome) -> types::EditorMutatio
         formula_status: formula_status(value.session.formula_status.clone(), 100),
         capabilities: workbook_capabilities(value.session.capabilities.clone()),
         editor_state: editor_state(value.session.editor_state.clone()),
+        filters: value
+            .session
+            .filters
+            .iter()
+            .cloned()
+            .map(sheet_filter)
+            .collect(),
         patches: value.patches.iter().map(mutation_patch).collect(),
         sheet_extents: value
             .sheet_extents

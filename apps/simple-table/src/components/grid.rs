@@ -1,7 +1,7 @@
 mod geometry;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -34,7 +34,11 @@ struct ScrollSnapshot {
     height: f64,
 }
 
-struct GridAxes<'a> {
+struct GridViewport<'a> {
+    sheet_index: usize,
+    extent: SheetExtentView,
+    physical_extent: SheetExtentView,
+    visible_rows: &'a [usize],
     rows: &'a SparseAxisGeometry,
     columns: &'a SparseAxisGeometry,
 }
@@ -49,6 +53,20 @@ pub fn SpreadsheetGrid() -> Element {
     let last_scroll = use_hook(|| Rc::new(RefCell::new(ScrollSnapshot::default())));
     let pending_scroll = use_hook(|| Rc::new(RefCell::new(ScrollSnapshot::default())));
     let scroll_scheduled = use_hook(|| Rc::new(Cell::new(false)));
+    let visible_rows = use_memo(move || {
+        let document = store.document.read();
+        let Some(document) = document.as_ref() else {
+            return Rc::new(vec![0]);
+        };
+        let sheet_index = store
+            .active_sheet()
+            .min(document.document.sheets.len().saturating_sub(1));
+        let row_count = document.document.sheets[sheet_index]
+            .extent
+            .row_count
+            .max(1);
+        Rc::new(store.visible_rows(sheet_index, row_count))
+    });
 
     let document = store.document.read().clone();
     let Some(document) = document else {
@@ -58,13 +76,31 @@ pub fn SpreadsheetGrid() -> Element {
         .active_sheet()
         .min(document.document.sheets.len().saturating_sub(1));
     let sheet = &document.document.sheets[sheet_index];
-    let extent = SheetExtentView {
+    let physical_extent = SheetExtentView {
         row_count: sheet.extent.row_count.max(1),
         column_count: sheet.extent.column_count.max(1),
     };
+    let visible_rows = visible_rows();
+    let filtered = store.sheet_filter(sheet_index).is_some();
+    let visible_row_heights = visible_rows
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, physical)| {
+            sheet
+                .layout
+                .row_heights
+                .get(physical)
+                .copied()
+                .map(|height| (ordinal, height))
+        })
+        .collect::<HashMap<_, _>>();
+    let extent = SheetExtentView {
+        row_count: visible_rows.len().max(1),
+        column_count: physical_extent.column_count,
+    };
     let row_geometry = Rc::new(SparseAxisGeometry::new(
         DEFAULT_ROW_HEIGHT,
-        &sheet.layout.row_heights,
+        &visible_row_heights,
     ));
     let column_geometry = Rc::new(SparseAxisGeometry::new(
         DEFAULT_COLUMN_WIDTH,
@@ -76,6 +112,7 @@ pub fn SpreadsheetGrid() -> Element {
         let row_geometry = Rc::clone(&row_geometry);
         let column_geometry = Rc::clone(&column_geometry);
         let last_scroll = Rc::clone(&last_scroll);
+        let visible_rows = Rc::clone(&visible_rows);
         move || {
             let Some(request) = *store.grid_scroll_request.read() else {
                 return;
@@ -86,17 +123,22 @@ pub fn SpreadsheetGrid() -> Element {
             let Some(element) = viewport_element.read().clone() else {
                 return;
             };
-            let target = if request.focus {
+            let physical_target = if request.focus {
                 store.normalize_cell(request.sheet_index, request.row, request.col)
             } else {
                 (request.row, request.col)
             };
+            let target_row = visible_rows
+                .binary_search(&physical_target.0)
+                .unwrap_or_else(|index| index.min(visible_rows.len().saturating_sub(1)));
+            let target = (target_row, physical_target.1);
             let left = scroll_offset(target.1, HEADER_WIDTH, &column_geometry);
             let top = scroll_offset(target.0, HEADER_HEIGHT, &row_geometry);
             store.grid_scroll_request.set(None);
             if request.focus {
-                store.select_cell(sheet_index, target.0, target.1);
-                editing_cell.set(Some((sheet_index, target.0, target.1)));
+                let physical_row = visible_rows[target.0];
+                store.select_cell(sheet_index, physical_row, target.1);
+                editing_cell.set(Some((sheet_index, physical_row, target.1)));
             }
             let mut snapshot = *last_scroll.borrow();
             snapshot.left = left;
@@ -105,9 +147,11 @@ pub fn SpreadsheetGrid() -> Element {
             update_render_window(
                 store,
                 &ports,
-                sheet_index,
-                extent,
-                &GridAxes {
+                &GridViewport {
+                    sheet_index,
+                    extent,
+                    physical_extent,
+                    visible_rows: &visible_rows,
                     rows: &row_geometry,
                     columns: &column_geometry,
                 },
@@ -138,9 +182,19 @@ pub fn SpreadsheetGrid() -> Element {
             col_end: 1.min(extent.column_count),
         };
     }
-    let rows = (window.row_start..window.row_end).collect::<Vec<_>>();
+    let row_ordinals = (window.row_start..window.row_end).collect::<Vec<_>>();
+    let rows = visible_rows
+        .get(window.row_start..window.row_end)
+        .unwrap_or_default()
+        .to_vec();
     let columns = (window.col_start..window.col_end).collect::<Vec<_>>();
-    let bounds = window.bounds();
+    let bounds = SheetRegionBoundsView {
+        sheet_index,
+        row_start: rows.first().copied().unwrap_or(0),
+        row_end: rows.last().copied().map_or(1, |row| row.saturating_add(1)),
+        col_start: window.col_start,
+        col_end: window.col_end,
+    };
     let mut projection = store
         .region_cache
         .read()
@@ -163,12 +217,17 @@ pub fn SpreadsheetGrid() -> Element {
             );
         }
     }
-    let cell_items = build_grid_cell_items(
+    let merges = if filtered {
+        &[][..]
+    } else {
+        projection.merges.as_slice()
+    };
+    let cell_items = build_grid_cell_items_mapped(
+        &rows,
         window.row_start,
-        window.row_end,
         window.col_start,
         window.col_end,
-        &projection.merges,
+        merges,
         &row_geometry,
         &column_geometry,
     );
@@ -183,7 +242,7 @@ pub fn SpreadsheetGrid() -> Element {
         .map(|col| format!("{}px", column_geometry.size(*col)))
         .collect::<Vec<_>>()
         .join(" ");
-    let row_template = rows
+    let row_template = row_ordinals
         .iter()
         .map(|row| format!("{}px", row_geometry.size(*row)))
         .collect::<Vec<_>>()
@@ -203,6 +262,7 @@ pub fn SpreadsheetGrid() -> Element {
                 let row_geometry = Rc::clone(&row_geometry);
                 let column_geometry = Rc::clone(&column_geometry);
                 let last_scroll = Rc::clone(&last_scroll);
+                let visible_rows = Rc::clone(&visible_rows);
                 move |event| {
                     let element = event.data();
                     viewport_element.set(Some(Rc::clone(&element)));
@@ -210,6 +270,7 @@ pub fn SpreadsheetGrid() -> Element {
                     let row_geometry = Rc::clone(&row_geometry);
                     let column_geometry = Rc::clone(&column_geometry);
                     let last_scroll = Rc::clone(&last_scroll);
+                    let visible_rows = Rc::clone(&visible_rows);
                     spawn(async move {
                         if let Ok(rect) = element.get_client_rect().await {
                             let snapshot = ScrollSnapshot {
@@ -221,9 +282,11 @@ pub fn SpreadsheetGrid() -> Element {
                             update_render_window(
                                 store,
                                 &ports,
-                                sheet_index,
-                                extent,
-                                &GridAxes {
+                                &GridViewport {
+                                    sheet_index,
+                                    extent,
+                                    physical_extent,
+                                    visible_rows: &visible_rows,
                                     rows: &row_geometry,
                                     columns: &column_geometry,
                                 },
@@ -241,6 +304,7 @@ pub fn SpreadsheetGrid() -> Element {
                 let last_scroll = Rc::clone(&last_scroll);
                 let pending_scroll = Rc::clone(&pending_scroll);
                 let scroll_scheduled = Rc::clone(&scroll_scheduled);
+                let visible_rows = Rc::clone(&visible_rows);
                 move |event: Event<ScrollData>| {
                     let snapshot = ScrollSnapshot {
                         top: event.data().scroll_top(),
@@ -258,15 +322,18 @@ pub fn SpreadsheetGrid() -> Element {
                     let column_geometry = Rc::clone(&column_geometry);
                     let pending_scroll = Rc::clone(&pending_scroll);
                     let scroll_scheduled = Rc::clone(&scroll_scheduled);
+                    let visible_rows = Rc::clone(&visible_rows);
                     spawn(async move {
                         sleep(SCROLL_FRAME).await;
                         let snapshot = *pending_scroll.borrow();
                         update_render_window(
                             store,
                             &ports,
-                            sheet_index,
-                            extent,
-                            &GridAxes {
+                            &GridViewport {
+                                sheet_index,
+                                extent,
+                                physical_extent,
+                                visible_rows: &visible_rows,
                                 rows: &row_geometry,
                                 columns: &column_geometry,
                             },
@@ -292,10 +359,17 @@ pub fn SpreadsheetGrid() -> Element {
                         for (column_index, col) in columns.iter().copied().enumerate() {
                             div {
                                 key: "column-header-{col}",
-                                class: "column-header",
+                                class: "column-header has-data-tools",
                                 role: "columnheader",
                                 style: "grid-column: {column_index + 1};",
-                                "{column_label(col)}"
+                                span { "{column_label(col)}" }
+                                super::editor::TableDataTools {
+                                    document_id: document.editor_session.document_id,
+                                    revision: document.editor_session.revision,
+                                    sheet_index,
+                                    selected: (selection.row, col),
+                                    compact: true,
+                                }
                             }
                         }
                     }
@@ -331,12 +405,12 @@ pub fn SpreadsheetGrid() -> Element {
                         let aria_rowspan = item.merge.map(|merge| merge.row_span().to_string());
                         let aria_colspan = item.merge.map(|merge| merge.col_span().to_string());
                         let style = item.style();
-                        let enter_target = cell_after_enter(
+                        let enter_target = cell_after_enter_visible(
                             row,
                             col,
-                            extent.row_count,
+                            &visible_rows,
                             item.merge,
-                            &projection.merges,
+                            merges,
                         );
                         let enter_value = enter_target
                             .and_then(|next| projection.cells.get(&next))
@@ -432,13 +506,15 @@ pub fn SpreadsheetGrid() -> Element {
                         }
                     }
                 }
-                ImageLayer {
-                    sheet_index,
-                    document_id: document.editor_session.document_id,
-                    revision: document.editor_session.revision,
-                    row_geometry: Rc::clone(&row_geometry),
-                    column_geometry: Rc::clone(&column_geometry),
-                    on_preview: move |image_id| previewed_image.set(Some(image_id)),
+                if !filtered {
+                    ImageLayer {
+                        sheet_index,
+                        document_id: document.editor_session.document_id,
+                        revision: document.editor_session.revision,
+                        row_geometry: Rc::clone(&row_geometry),
+                        column_geometry: Rc::clone(&column_geometry),
+                        on_preview: move |image_id| previewed_image.set(Some(image_id)),
+                    }
                 }
             }
         }
@@ -454,9 +530,7 @@ pub fn SpreadsheetGrid() -> Element {
 fn update_render_window(
     mut store: EditorStore,
     ports: &AppPorts,
-    sheet_index: usize,
-    extent: SheetExtentView,
-    axes: &GridAxes<'_>,
+    viewport: &GridViewport<'_>,
     scroll: ScrollSnapshot,
     force: bool,
 ) {
@@ -468,13 +542,15 @@ fn update_render_window(
     let col_start_px = (scroll.left - HEADER_WIDTH).max(0.0);
     let col_end_px = (scroll.left + scroll.width - HEADER_WIDTH).max(col_start_px);
     let (visible_row_start, visible_row_end) =
-        axes.rows
-            .range_for_pixels(row_start_px, row_end_px, extent.row_count);
+        viewport
+            .rows
+            .range_for_pixels(row_start_px, row_end_px, viewport.extent.row_count);
     let (visible_col_start, visible_col_end) =
-        axes.columns
-            .range_for_pixels(col_start_px, col_end_px, extent.column_count);
+        viewport
+            .columns
+            .range_for_pixels(col_start_px, col_end_px, viewport.extent.column_count);
     let current = *store.render_window.peek();
-    let visible_is_retained = current.sheet_index == sheet_index
+    let visible_is_retained = current.sheet_index == viewport.sheet_index
         && current.row_start <= visible_row_start
         && current.row_end >= visible_row_end
         && current.col_start <= visible_col_start
@@ -483,18 +559,18 @@ fn update_render_window(
         return;
     }
 
-    let (row_start, row_end) = axes.rows.range_for_pixels(
+    let (row_start, row_end) = viewport.rows.range_for_pixels(
         (row_start_px - OVERSCAN_PIXELS).max(0.0),
         row_end_px + OVERSCAN_PIXELS,
-        extent.row_count,
+        viewport.extent.row_count,
     );
-    let (col_start, col_end) = axes.columns.range_for_pixels(
+    let (col_start, col_end) = viewport.columns.range_for_pixels(
         (col_start_px - OVERSCAN_PIXELS).max(0.0),
         col_end_px + OVERSCAN_PIXELS,
-        extent.column_count,
+        viewport.extent.column_count,
     );
     let next = GridRenderWindow {
-        sheet_index,
+        sheet_index: viewport.sheet_index,
         row_start,
         row_end,
         col_start,
@@ -503,11 +579,47 @@ fn update_render_window(
     if next != current {
         store.render_window.set(next);
     }
-    ports
-        .regions
-        .schedule_viewport(store, next.bounds(), extent);
+    if viewport.visible_rows.len() == viewport.physical_extent.row_count {
+        ports
+            .regions
+            .schedule_viewport(store, next.bounds(), viewport.physical_extent);
+    } else {
+        ports.regions.schedule_visible_rows(
+            store,
+            viewport.sheet_index,
+            viewport
+                .visible_rows
+                .get(row_start..row_end)
+                .unwrap_or_default(),
+            col_start,
+            col_end,
+            viewport.physical_extent,
+        );
+    }
 }
 
+fn cell_after_enter_visible(
+    row: usize,
+    col: usize,
+    visible_rows: &[usize],
+    current_merge: Option<MergeRangeView>,
+    merges: &[MergeRangeView],
+) -> Option<(usize, usize)> {
+    let current_end = current_merge.map_or(row, |merge| merge.end_row);
+    let next_row = visible_rows
+        .iter()
+        .copied()
+        .find(|candidate| *candidate > current_end)?;
+    Some(
+        merges
+            .iter()
+            .copied()
+            .find(|merge| merge.contains(next_row, col))
+            .map_or((next_row, col), MergeRangeView::anchor),
+    )
+}
+
+#[cfg(test)]
 fn cell_after_enter(
     row: usize,
     col: usize,
@@ -605,6 +717,52 @@ fn build_grid_cell_items(
             grid_cell_item(merge.start_row, merge.start_col, Some(merge), rows, columns)
         }),
     );
+    items
+}
+
+fn build_grid_cell_items_mapped(
+    physical_rows: &[usize],
+    ordinal_start: usize,
+    col_start: usize,
+    col_end: usize,
+    merges: &[MergeRangeView],
+    rows: &SparseAxisGeometry,
+    columns: &SparseAxisGeometry,
+) -> Vec<GridCellItem> {
+    if physical_rows
+        .iter()
+        .enumerate()
+        .all(|(offset, row)| *row == ordinal_start + offset)
+    {
+        return build_grid_cell_items(
+            ordinal_start,
+            ordinal_start + physical_rows.len(),
+            col_start,
+            col_end,
+            merges,
+            rows,
+            columns,
+        );
+    }
+    let mut items = Vec::with_capacity(
+        physical_rows
+            .len()
+            .saturating_mul(col_end.saturating_sub(col_start)),
+    );
+    for (offset, physical_row) in physical_rows.iter().copied().enumerate() {
+        let ordinal = ordinal_start + offset;
+        for col in col_start..col_end {
+            items.push(GridCellItem {
+                row: physical_row,
+                col,
+                left: HEADER_WIDTH + columns.offset(col),
+                top: HEADER_HEIGHT + rows.offset(ordinal),
+                width: columns.offset(col.saturating_add(1)) - columns.offset(col),
+                height: rows.offset(ordinal.saturating_add(1)) - rows.offset(ordinal),
+                merge: None,
+            });
+        }
+    }
     items
 }
 
@@ -934,6 +1092,25 @@ mod tests {
         assert_eq!(
             cell_after_enter(1, 1, 8, Some(current), &[current, destination]),
             Some((4, 0))
+        );
+    }
+
+    #[test]
+    fn filtered_grid_uses_visible_ordinals_with_physical_cell_coordinates() {
+        let rows = SparseAxisGeometry::new(30.0, &HashMap::new());
+        let columns = SparseAxisGeometry::new(120.0, &HashMap::new());
+        let visible_rows = [0, 3, 7];
+
+        let items = build_grid_cell_items_mapped(&visible_rows, 0, 0, 1, &[], &rows, &columns);
+
+        assert_eq!(
+            items.iter().map(|item| item.row).collect::<Vec<_>>(),
+            visible_rows
+        );
+        assert_eq!(items[1].top, HEADER_HEIGHT + 30.0);
+        assert_eq!(
+            cell_after_enter_visible(0, 0, &visible_rows, None, &[]),
+            Some((3, 0))
         );
     }
 

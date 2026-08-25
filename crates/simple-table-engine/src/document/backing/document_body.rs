@@ -704,6 +704,7 @@ fn affected_sheet_index(operation: &AppliedOperation) -> Option<usize> {
         | AppliedOperation::UpdateImage { sheet_index, .. }
         | AppliedOperation::DeleteImage { sheet_index, .. } => Some(*sheet_index),
         AppliedOperation::SetCells { changes } => changes.first().map(|change| change.sheet_index),
+        AppliedOperation::SortRows(sort) => Some(sort.sheet_index),
         AppliedOperation::AddSheet { .. } | AppliedOperation::DeleteSheet { .. } => None,
     }
 }

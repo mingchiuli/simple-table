@@ -1,6 +1,7 @@
 use crate::document::capabilities::WorkbookCapabilities;
 use crate::formula::status::FormulaStatus;
 use crate::state::history_store::HistoryStatus;
+use crate::state::table_filter::SheetFilterState;
 
 #[derive(Clone, Debug)]
 pub(crate) struct EditorStateSnapshot {
@@ -17,4 +18,5 @@ pub(crate) struct EditorSessionSnapshot {
     pub formula_status: FormulaStatus,
     pub capabilities: WorkbookCapabilities,
     pub editor_state: EditorStateSnapshot,
+    pub filters: Vec<SheetFilterState>,
 }

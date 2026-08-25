@@ -148,6 +148,7 @@ pub fn patch_after_operation(
                 worksheet.image_collection_mut().remove(image.z_index);
             }
         }
+        AppliedOperation::SortRows(_) => {}
     }
 
     Ok(())
@@ -277,6 +278,17 @@ pub fn apply_structure_operation(
                 invalidate_sheet_references_before_delete(workbook, ast_service, *sheet_index)?;
             remove_sheet(workbook, *sheet_index)?;
         }
+        AppliedOperation::SortRows(sort) => {
+            if let Some(worksheet) = sheet_mut(workbook, sort.sheet_index)? {
+                apply_native_row_permutation(
+                    worksheet,
+                    sort.range,
+                    &sort.permutation,
+                    &sort.after_formulas,
+                    backing,
+                )?;
+            }
+        }
         AppliedOperation::SetCell { .. }
         | AppliedOperation::SetCells { .. }
         | AppliedOperation::SetColumnWidth { .. }
@@ -287,6 +299,91 @@ pub fn apply_structure_operation(
     }
 
     Ok(diagnostics)
+}
+
+fn apply_native_row_permutation(
+    worksheet: &mut Worksheet,
+    range: crate::domain::CellRange,
+    permutation: &[usize],
+    formulas: &[crate::domain::FormulaTextAtCell],
+    backing: &dyn WorkbookBackingPort,
+) -> Result<(), AppError> {
+    let body_start = range.body_start_row();
+    let mut visited = vec![false; permutation.len()];
+    for start in 0..permutation.len() {
+        if visited[start] || permutation[start] == start {
+            visited[start] = true;
+            continue;
+        }
+        let saved = take_native_row_segment(
+            worksheet,
+            body_start + start,
+            range.start_col,
+            range.end_col,
+        );
+        let mut destination = start;
+        loop {
+            visited[destination] = true;
+            let source = permutation[destination];
+            if source == start {
+                put_native_row_segment(worksheet, body_start + destination, range.start_col, saved);
+                break;
+            }
+            let cells = take_native_row_segment(
+                worksheet,
+                body_start + source,
+                range.start_col,
+                range.end_col,
+            );
+            put_native_row_segment(worksheet, body_start + destination, range.start_col, cells);
+            destination = source;
+        }
+    }
+    for formula in formulas {
+        backing.write_cell(
+            worksheet,
+            formula.row as u32 + 1,
+            formula.col as u32 + 1,
+            &CellValue::formula(&formula.formula, CellValue::Null),
+        );
+    }
+    Ok(())
+}
+
+fn take_native_row_segment(
+    worksheet: &mut Worksheet,
+    row: usize,
+    start_col: usize,
+    end_col: usize,
+) -> Vec<Option<umya_spreadsheet::Cell>> {
+    (start_col..=end_col)
+        .map(|col| {
+            let coordinate = (col as u32 + 1, row as u32 + 1);
+            let cell = worksheet.cell(coordinate).cloned();
+            if cell.is_some() {
+                worksheet.remove_cell(coordinate);
+            }
+            cell
+        })
+        .collect()
+}
+
+fn put_native_row_segment(
+    worksheet: &mut Worksheet,
+    row: usize,
+    start_col: usize,
+    cells: Vec<Option<umya_spreadsheet::Cell>>,
+) {
+    for (offset, cell) in cells.into_iter().enumerate() {
+        let Some(mut cell) = cell else {
+            continue;
+        };
+        let col = start_col + offset;
+        cell.coordinate_mut()
+            .set_col_num(col as u32 + 1)
+            .set_row_num(row as u32 + 1);
+        worksheet.set_cell(cell);
+    }
 }
 
 fn marker_type(
@@ -659,6 +756,7 @@ fn operation_blocker_sheet_indexes(
         | AppliedOperation::DeleteRow { sheet_index, .. }
         | AppliedOperation::AddColumn { sheet_index, .. }
         | AppliedOperation::DeleteColumn { sheet_index, .. } => vec![*sheet_index],
+        AppliedOperation::SortRows(sort) => vec![sort.sheet_index],
         AppliedOperation::InsertImage { sheet_index, .. }
         | AppliedOperation::UpdateImage { sheet_index, .. }
         | AppliedOperation::DeleteImage { sheet_index, .. } => vec![*sheet_index],
@@ -679,6 +777,11 @@ fn push_worksheet_operation_blockers(
     worksheet: &Worksheet,
     operation: &AppliedOperation,
 ) {
+    let reorders_cells = operation.impact().is_row_structure_change()
+        || operation.impact().is_column_structure_change()
+        || matches!(operation, AppliedOperation::SortRows(_));
+    let reorders_rows = operation.impact().is_row_structure_change()
+        || matches!(operation, AppliedOperation::SortRows(_));
     if worksheet.sheet_protection().is_some()
         && (operation.impact().is_cell_edit()
             || operation.impact().is_layout_change()
@@ -692,54 +795,37 @@ fn push_worksheet_operation_blockers(
     if operation.impact().is_structure_change() && !worksheet.defined_names().is_empty() {
         push_block_reason(reasons, "sheet defined names");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
-        && worksheet.has_table()
-    {
+    if reorders_cells && worksheet.has_table() {
         push_block_reason(reasons, "tables");
     }
     if operation.impact().is_structure_change() && worksheet.has_pivot_table() {
         push_block_reason(reasons, "pivot tables");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
-        && !worksheet.chart_collection().is_empty()
-    {
+    if reorders_cells && !worksheet.chart_collection().is_empty() {
         push_block_reason(reasons, "charts");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
+    if reorders_cells
         && worksheet.has_drawing_object()
         && worksheet.image_collection().is_empty()
         && worksheet.chart_collection().is_empty()
     {
         push_block_reason(reasons, "unsupported drawings");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
+    if reorders_cells
         && (worksheet.data_validations().is_some() || worksheet.data_validations_2010().is_some())
     {
         push_block_reason(reasons, "data validations");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
-        && !worksheet.conditional_formatting_collection().is_empty()
-    {
+    if reorders_cells && !worksheet.conditional_formatting_collection().is_empty() {
         push_block_reason(reasons, "conditional formatting");
     }
-    if operation.impact().is_row_structure_change() && worksheet.auto_filter().is_some() {
+    if reorders_rows && worksheet.auto_filter().is_some() {
         push_block_reason(reasons, "auto filters");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
-        && worksheet.has_comments()
-    {
+    if reorders_cells && worksheet.has_comments() {
         push_block_reason(reasons, "comments");
     }
-    if (operation.impact().is_row_structure_change()
-        || operation.impact().is_column_structure_change())
-        && worksheet.has_threaded_comments()
-    {
+    if reorders_cells && worksheet.has_threaded_comments() {
         push_block_reason(reasons, "threaded comments");
     }
 }

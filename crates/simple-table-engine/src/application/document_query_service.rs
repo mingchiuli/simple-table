@@ -64,6 +64,47 @@ pub fn sheet_region_projection_for_command(
     sheet_region_snapshot_for_command(service, document_id, base_revision, region)
 }
 
+pub fn sheet_rows_region_projection_for_command(
+    service: &DocumentQueryService,
+    document_id: u64,
+    base_revision: u64,
+    sheet_index: usize,
+    rows: &[usize],
+    col_start: usize,
+    col_end: usize,
+) -> Result<Vec<SheetRegionSnapshot>, AppError> {
+    if rows.is_empty() || rows.len() > document_projection::MAX_REGION_ROWS {
+        return Err(AppError::ResourceLimitExceeded(format!(
+            "rows_region accepts between 1 and {} physical rows",
+            document_projection::MAX_REGION_ROWS
+        )));
+    }
+    if rows.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(AppError::DocumentStateInvalid(
+            "rows_region physical rows must be sorted and unique".to_string(),
+        ));
+    }
+    let regions = rows
+        .iter()
+        .map(|row| DocumentRegion {
+            sheet_index,
+            row_start: *row,
+            row_end: row.saturating_add(1),
+            col_start,
+            col_end,
+        })
+        .collect::<Vec<_>>();
+    for region in &regions {
+        document_projection::validate_sheet_region(region)?;
+    }
+    let handle = document_handle_for_read(service.documents(), document_id)?;
+    let editor_state = handle.read_for_command(document_id, base_revision)?;
+    regions
+        .into_iter()
+        .map(|region| document_projection::snapshot_sheet_region(&editor_state, region))
+        .collect()
+}
+
 fn sheet_region_snapshot_for_command(
     service: &DocumentQueryService,
     document_id: u64,
@@ -340,6 +381,59 @@ mod tests {
         )
         .expect("sized response");
         assert!(response.wire_bytes > 0);
+    }
+
+    #[test]
+    fn sparse_rows_region_reads_physical_rows_under_one_lock() {
+        let state = EditorState::with_workbook(
+            DocumentData {
+                path: String::new(),
+                file_name: "rows-region.xlsx".to_string(),
+                sheets: vec![DocumentSheet {
+                    rows: vec![
+                        vec![CellValue::String("row-0".to_string())],
+                        vec![CellValue::String("row-1".to_string())],
+                        vec![CellValue::String("row-2".to_string())],
+                    ],
+                    ..Default::default()
+                }],
+            },
+            None,
+        );
+        let document_id = state.document_id();
+        let revision = state.revision();
+        let registry = ActiveDocumentRepository::default();
+        registry.replace_active_for_test(state);
+        let service = DocumentQueryService::new(registry.clone());
+
+        let snapshots = sheet_rows_region_projection_for_command(
+            &service,
+            document_id,
+            revision,
+            0,
+            &[0, 2],
+            0,
+            1,
+        )
+        .expect("read sparse rows");
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].region.row_start, 0);
+        assert_eq!(snapshots[1].region.row_start, 2);
+        assert_eq!(snapshots[1].cells[0].value.to_display_string(), "row-2");
+        assert!(registry.is_write_available_for_test());
+        assert!(
+            sheet_rows_region_projection_for_command(
+                &service,
+                document_id,
+                revision,
+                0,
+                &[2, 2],
+                0,
+                1,
+            )
+            .is_err()
+        );
     }
 
     #[test]

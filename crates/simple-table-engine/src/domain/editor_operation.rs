@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::document_data::{ImageAnchor, SheetImage};
 use crate::domain::CellValue;
+use crate::domain::{FilterOperator, ResolvedSort, SortDirection};
 
 #[derive(Debug, Clone)]
 pub struct CellEditInput {
@@ -41,6 +42,23 @@ pub enum EditorCommand {
     DeleteColumn {
         sheet_index: usize,
         col_index: usize,
+    },
+    SortRows {
+        sheet_index: usize,
+        anchor_row: usize,
+        anchor_col: usize,
+        direction: SortDirection,
+    },
+    SetFilter {
+        sheet_index: usize,
+        anchor_row: usize,
+        col: usize,
+        operator: FilterOperator,
+        value: String,
+    },
+    ClearFilter {
+        sheet_index: usize,
+        col: Option<usize>,
     },
     SetColumnWidth {
         sheet_index: usize,
@@ -108,6 +126,7 @@ pub enum AppliedOperation {
         sheet_index: usize,
         col_index: usize,
     },
+    SortRows(ResolvedSort),
     SetColumnWidth {
         sheet_index: usize,
         col_index: usize,

@@ -105,6 +105,38 @@ pub(crate) fn sheet_region_response(
     ))
 }
 
+pub(crate) fn sheet_rows_region_response(
+    values: Vec<SheetRegionSnapshot>,
+    maximum_bytes: usize,
+) -> Result<types::SheetRowsRegionProjectionResponse, AppError> {
+    let regions = values
+        .into_iter()
+        .map(|value| sheet_region_response(value, maximum_bytes))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut response = types::SheetRowsRegionProjectionResponse {
+        regions,
+        wire_bytes: 0,
+    };
+    let mut estimate = serialized_json_bytes(&response)?;
+    for _ in 0..8 {
+        response.wire_bytes = estimate;
+        let actual = serialized_json_bytes(&response)?;
+        if actual == estimate {
+            if actual > maximum_bytes {
+                return Err(AppError::RegionResponseTooLarge {
+                    wire_bytes: actual,
+                    maximum_bytes,
+                });
+            }
+            return Ok(response);
+        }
+        estimate = actual;
+    }
+    Err(AppError::Internal(
+        "failed to converge while sizing rows region response".to_string(),
+    ))
+}
+
 fn document_manifest(value: DocumentManifestSnapshot) -> types::DocumentManifest {
     types::DocumentManifest {
         path: value.path,
