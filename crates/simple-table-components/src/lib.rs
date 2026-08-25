@@ -24,3 +24,23 @@ pub use dioxus_primitives::toast::{ToastOptions, use_toast};
 pub use dioxus_primitives::{ContentAlign, ContentSide};
 
 pub static DX_COMPONENTS_THEME: Asset = asset!("/assets/dx-components-theme.css");
+
+#[component]
+pub fn OverlayAssetProvider(enabled: bool) -> Element {
+    let mut mounted = use_signal(|| false);
+    use_effect(move || {
+        if enabled {
+            mounted.set(true);
+        }
+    });
+
+    rsx! {
+        div { hidden: true, aria_hidden: "true",
+            if mounted() {
+                PopoverRoot { open: Some(false), is_modal: false,
+                    PopoverContent {}
+                }
+            }
+        }
+    }
+}

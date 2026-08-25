@@ -6532,6 +6532,7 @@ dependencies = [
  "base64 0.23.1",
  "dioxus",
  "dioxus-sdk-time",
+ "dioxus-ssr",
  "dioxus-web",
  "dirs",
  "futures",
@@ -6552,6 +6553,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
  "webbrowser",
 ]
 

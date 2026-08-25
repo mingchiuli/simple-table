@@ -28,7 +28,7 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 
-use model::{AppPorts, EditorStore};
+use model::{AppPorts, use_editor_store};
 
 const APP_CSS: Asset = asset!("/assets/main.css");
 const FAVICON: Asset = asset!("/assets/favicon.png");
@@ -42,7 +42,7 @@ enum Route {
 }
 
 pub fn app() -> Element {
-    let store = use_hook(EditorStore::new);
+    let store = use_editor_store();
     let ports = use_hook(|| {
         let editor = ports::editor::platform_editor_port();
         Rc::new(AppPorts {
@@ -73,6 +73,9 @@ pub fn app() -> Element {
         dioxus::document::Title { "Simple Table" }
         simple_table_components::ToastProvider {
             div { class: platform_class,
+                simple_table_components::OverlayAssetProvider {
+                    enabled: !cfg!(feature = "server"),
+                }
                 Router::<Route> {}
                 components::ErrorToastBridge {}
             }

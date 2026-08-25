@@ -25,8 +25,8 @@ use super::search::SearchPanel;
 use crate::Route;
 use crate::actions;
 use crate::model::{
-    AppPorts, EditorStore, FilterOperatorView, FormulaIssueKindView, FormulaIssueView,
-    FormulaStatusView, request_id,
+    AppPorts, EditorStore, FilterConditionView, FilterOperatorView, FormulaIssueKindView,
+    FormulaIssueView, FormulaStatusView, request_id,
 };
 use crate::ports::update::{GitHubUpdatePort, UpdatePort};
 use crate::ports::window::{PlatformWindowPort, WindowPort};
@@ -435,8 +435,9 @@ pub fn EditorView() -> Element {
                 }
                 span { class: "status-text", "{store.status}" }
             }
+            if pending_action.read().is_some() {
             AlertDialog {
-                open: Some(pending_action.read().is_some()),
+                open: Some(true),
                 on_open_change: move |open: bool| {
                     if !open {
                         pending_action.set(None);
@@ -470,6 +471,7 @@ pub fn EditorView() -> Element {
                     }
                 }
             }
+            }
             {save_name_dialog}
         }
     }
@@ -489,49 +491,34 @@ pub(super) struct TableDataToolsProps {
 pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
     let store = use_context::<EditorStore>();
     let ports = use_context::<Rc<AppPorts>>();
-    let active_condition = store.sheet_filter(props.sheet_index).and_then(|filter| {
-        filter
-            .conditions
-            .into_iter()
-            .find(|condition| condition.col == props.selected.1)
-    });
-    let initial_value = active_condition
-        .as_ref()
-        .map(|condition| condition.value.clone())
-        .unwrap_or_default();
-    let initial_operator = active_condition
-        .as_ref()
-        .map_or("contains", |condition| {
-            filter_operator_value(condition.operator)
-        })
-        .to_string();
-    let mut filter_value = use_signal(move || initial_value);
-    let mut operator = use_signal(move || initial_operator);
-    use_effect(move || {
-        let _ = store.selection.read();
-        let _ = store.document.read();
-        let condition = store.sheet_filter(props.sheet_index).and_then(|filter| {
+    let (active_condition, has_filters) = {
+        let document = store.document.read();
+        let filter = document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .editor_session
+                    .filters
+                    .iter()
+                    .find(|filter| filter.sheet_index == props.sheet_index)
+            })
+            .cloned();
+        let condition = filter.as_ref().and_then(|filter| {
             filter
                 .conditions
-                .into_iter()
+                .iter()
                 .find(|condition| condition.col == props.selected.1)
+                .cloned()
         });
-        filter_value.set(
-            condition
-                .as_ref()
-                .map(|condition| condition.value.clone())
-                .unwrap_or_default(),
-        );
-        operator.set(
-            condition
-                .as_ref()
-                .map_or("contains", |condition| {
-                    filter_operator_value(condition.operator)
-                })
-                .to_string(),
-        );
-    });
+        (condition, filter.is_some())
+    };
     let active = active_condition.is_some();
+    let draft_key = filter_draft_key(
+        props.document_id,
+        props.sheet_index,
+        props.selected.1,
+        active_condition.as_ref(),
+    );
     let root_class = if props.compact {
         "table-data-tools column-data-tools"
     } else {
@@ -543,6 +530,69 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
         (false, true) => "tool-button active",
         (false, false) => "tool-button",
     };
+    let apply_filter = Callback::new({
+        let ports = Rc::clone(&ports);
+        move |(operator, value)| {
+            let ports = Rc::clone(&ports);
+            spawn(async move {
+                actions::run_mutation(
+                    store,
+                    ports,
+                    crate::protocol::EditorRequest::SetFilter {
+                        request_id: request_id("set-filter"),
+                        document_id: props.document_id,
+                        base_revision: props.revision,
+                        sheet_index: props.sheet_index,
+                        anchor_row: props.selected.0,
+                        col: props.selected.1,
+                        operator,
+                        value,
+                    },
+                )
+                .await;
+            });
+        }
+    });
+    let clear_filter = Callback::new({
+        let ports = Rc::clone(&ports);
+        move |_| {
+            let ports = Rc::clone(&ports);
+            spawn(async move {
+                actions::run_mutation(
+                    store,
+                    ports,
+                    crate::protocol::EditorRequest::ClearFilter {
+                        request_id: request_id("clear-filter"),
+                        document_id: props.document_id,
+                        base_revision: props.revision,
+                        sheet_index: props.sheet_index,
+                        col: Some(props.selected.1),
+                    },
+                )
+                .await;
+            });
+        }
+    });
+    let clear_filters = Callback::new({
+        let ports = Rc::clone(&ports);
+        move |_| {
+            let ports = Rc::clone(&ports);
+            spawn(async move {
+                actions::run_mutation(
+                    store,
+                    ports,
+                    crate::protocol::EditorRequest::ClearFilter {
+                        request_id: request_id("clear-filters"),
+                        document_id: props.document_id,
+                        base_revision: props.revision,
+                        sheet_index: props.sheet_index,
+                        col: None,
+                    },
+                )
+                .await;
+            });
+        }
+    });
 
     rsx! {
         PopoverRoot { class: root_class, is_modal: false,
@@ -615,113 +665,122 @@ pub(super) fn TableDataTools(props: TableDataToolsProps) -> Element {
                         "Sort descending"
                     }
                 }
-                div { class: "table-filter-form",
-                    Label { html_for: "table-filter-operator", "Filter" }
-                    select {
-                        id: "table-filter-operator",
-                        value: operator,
-                        onchange: move |event| operator.set(event.value()),
-                        option { value: "contains", "Contains" }
-                        option { value: "equals", "Equals" }
-                        option { value: "not-equals", "Does not equal" }
-                        option { value: "blank", "Is blank" }
-                        option { value: "not-blank", "Is not blank" }
-                    }
-                    if !matches!(operator().as_str(), "blank" | "not-blank") {
-                        Input {
-                            aria_label: "Filter value",
-                            placeholder: "Value",
-                            value: filter_value,
-                            oninput: move |event: Event<FormData>| filter_value.set(event.value()),
-                        }
-                    }
-                    div { class: "table-filter-actions",
-                        Button {
-                            disabled: store.busy(),
-                            onclick: {
-                                let ports = Rc::clone(&ports);
-                                move |_| {
-                                    let ports = Rc::clone(&ports);
-                                    let operator = match operator().as_str() {
-                                        "equals" => FilterOperatorDto::Equals,
-                                        "not-equals" => FilterOperatorDto::NotEquals,
-                                        "blank" => FilterOperatorDto::Blank,
-                                        "not-blank" => FilterOperatorDto::NotBlank,
-                                        _ => FilterOperatorDto::Contains,
-                                    };
-                                    let value = filter_value();
-                                    spawn(async move {
-                                        actions::run_mutation(
-                                            store,
-                                            ports,
-                                            crate::protocol::EditorRequest::SetFilter {
-                                                request_id: request_id("set-filter"),
-                                                document_id: props.document_id,
-                                                base_revision: props.revision,
-                                                sheet_index: props.sheet_index,
-                                                anchor_row: props.selected.0,
-                                                col: props.selected.1,
-                                                operator,
-                                                value,
-                                            },
-                                        ).await;
-                                    });
-                                }
-                            },
-                            "Apply"
-                        }
-                        Button {
-                            variant: ButtonVariant::Ghost,
-                            disabled: store.busy() || !active,
-                            onclick: {
-                                let ports = Rc::clone(&ports);
-                                move |_| {
-                                    let ports = Rc::clone(&ports);
-                                    spawn(async move {
-                                        actions::run_mutation(
-                                            store,
-                                            ports,
-                                            crate::protocol::EditorRequest::ClearFilter {
-                                                request_id: request_id("clear-filter"),
-                                                document_id: props.document_id,
-                                                base_revision: props.revision,
-                                                sheet_index: props.sheet_index,
-                                                col: Some(props.selected.1),
-                                            },
-                                        ).await;
-                                    });
-                                }
-                            },
-                            "Clear column"
-                        }
-                        Button {
-                            variant: ButtonVariant::Ghost,
-                            disabled: store.busy() || store.sheet_filter(props.sheet_index).is_none(),
-                            onclick: {
-                                let ports = Rc::clone(&ports);
-                                move |_| {
-                                    let ports = Rc::clone(&ports);
-                                    spawn(async move {
-                                        actions::run_mutation(
-                                            store,
-                                            ports,
-                                            crate::protocol::EditorRequest::ClearFilter {
-                                                request_id: request_id("clear-filters"),
-                                                document_id: props.document_id,
-                                                base_revision: props.revision,
-                                                sheet_index: props.sheet_index,
-                                                col: None,
-                                            },
-                                        ).await;
-                                    });
-                                }
-                            },
-                            "Clear all"
-                        }
+                for (draft_key, active_condition) in [(draft_key, active_condition)] {
+                    TableFilterForm {
+                        key: "{draft_key}",
+                        active_condition,
+                        has_filters,
+                        on_apply: apply_filter,
+                        on_clear: clear_filter,
+                        on_clear_all: clear_filters,
                     }
                 }
             }
         }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct TableFilterFormProps {
+    active_condition: Option<FilterConditionView>,
+    has_filters: bool,
+    on_apply: Callback<(FilterOperatorDto, String)>,
+    on_clear: Callback<()>,
+    on_clear_all: Callback<()>,
+}
+
+#[component]
+fn TableFilterForm(props: TableFilterFormProps) -> Element {
+    let store = use_context::<EditorStore>();
+    let initial_value = props
+        .active_condition
+        .as_ref()
+        .map(|condition| condition.value.clone())
+        .unwrap_or_default();
+    let initial_operator = props
+        .active_condition
+        .as_ref()
+        .map_or("contains", |condition| {
+            filter_operator_value(condition.operator)
+        })
+        .to_string();
+    let mut filter_value = use_signal(move || initial_value);
+    let mut operator = use_signal(move || initial_operator);
+    let active = props.active_condition.is_some();
+
+    rsx! {
+        div { class: "table-filter-form",
+            Label { html_for: "table-filter-operator", "Filter" }
+            select {
+                id: "table-filter-operator",
+                value: operator,
+                onchange: move |event| operator.set(event.value()),
+                option { value: "contains", "Contains" }
+                option { value: "equals", "Equals" }
+                option { value: "not-equals", "Does not equal" }
+                option { value: "blank", "Is blank" }
+                option { value: "not-blank", "Is not blank" }
+            }
+            if !matches!(operator().as_str(), "blank" | "not-blank") {
+                Input {
+                    aria_label: "Filter value",
+                    placeholder: "Value",
+                    value: filter_value,
+                    oninput: move |event: Event<FormData>| filter_value.set(event.value()),
+                }
+            }
+            div { class: "table-filter-actions",
+                Button {
+                    disabled: store.busy(),
+                    onclick: {
+                        move |_| {
+                            let operator = match operator().as_str() {
+                                "equals" => FilterOperatorDto::Equals,
+                                "not-equals" => FilterOperatorDto::NotEquals,
+                                "blank" => FilterOperatorDto::Blank,
+                                "not-blank" => FilterOperatorDto::NotBlank,
+                                _ => FilterOperatorDto::Contains,
+                            };
+                            let value = filter_value();
+                            props.on_apply.call((operator, value));
+                        }
+                    },
+                    "Apply"
+                }
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    disabled: store.busy() || !active,
+                    onclick: {
+                        move |_| props.on_clear.call(())
+                    },
+                    "Clear column"
+                }
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    disabled: store.busy() || !props.has_filters,
+                    onclick: {
+                        move |_| props.on_clear_all.call(())
+                    },
+                    "Clear all"
+                }
+            }
+        }
+    }
+}
+
+fn filter_draft_key(
+    document_id: u64,
+    sheet_index: usize,
+    col: usize,
+    condition: Option<&FilterConditionView>,
+) -> String {
+    match condition {
+        Some(condition) => format!(
+            "{document_id}:{sheet_index}:{col}:{}:{}",
+            filter_operator_value(condition.operator),
+            condition.value
+        ),
+        None => format!("{document_id}:{sheet_index}:{col}:none"),
     }
 }
 
@@ -1550,5 +1609,29 @@ async fn run_editor_action(
                 navigator.replace(Route::Table {});
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_draft_key_uses_authoritative_condition_identity() {
+        let condition = FilterConditionView {
+            col: 2,
+            operator: FilterOperatorView::Contains,
+            value: "north".to_string(),
+        };
+
+        let original = filter_draft_key(7, 1, 2, Some(&condition));
+        assert_eq!(original, filter_draft_key(7, 1, 2, Some(&condition)));
+        assert_ne!(original, filter_draft_key(7, 1, 3, None));
+
+        let changed = FilterConditionView {
+            value: "south".to_string(),
+            ..condition
+        };
+        assert_ne!(original, filter_draft_key(7, 1, 2, Some(&changed)));
     }
 }

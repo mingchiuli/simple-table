@@ -23,7 +23,7 @@ const MOBILE_RECOVERY_ID: &str = "mobile-recovery";
 
 pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
     let _operation = ports.operations.lock().await;
-    set_busy(store, "Creating workbook");
+    let _busy = store.begin_operation("Creating workbook");
     match ports
         .editor
         .execute(EditorRequest::NewDocument {
@@ -53,7 +53,7 @@ pub async fn open_bytes(
     bytes: Vec<u8>,
 ) -> bool {
     let _operation = ports.operations.lock().await;
-    set_busy(store, "Reading workbook");
+    let _busy = store.begin_operation("Reading workbook");
     match ports
         .editor
         .execute(EditorRequest::OpenDocument {
@@ -80,7 +80,7 @@ pub async fn open_bytes(
 
 pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: String) -> bool {
     let _operation = ports.operations.lock().await;
-    set_busy(store, "Opening local workbook");
+    let _busy = store.begin_operation("Opening local workbook");
 
     #[cfg(feature = "mobile")]
     let response = if document_key == MOBILE_RECOVERY_ID {
@@ -172,7 +172,7 @@ pub async fn load_local_documents(store: EditorStore, ports: Rc<AppPorts>) {
 
 pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, document_key: String) {
     let _operation = ports.operations.lock().await;
-    set_busy(store, "Removing local workbook");
+    let _busy = store.begin_operation("Removing local workbook");
 
     #[cfg(feature = "mobile")]
     let response = if document_key == MOBILE_RECOVERY_ID {
@@ -199,7 +199,6 @@ pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, docu
                 .local_documents
                 .write()
                 .retain(|document| document.id != document_key);
-            store.busy.set(false);
             store.status.set("Local workbook removed".to_string());
         }
         Ok(_) => store.set_error(unexpected_reply("delete local document")),
@@ -239,6 +238,7 @@ pub async fn flush_pending_edits(
     ports: Rc<AppPorts>,
 ) -> Result<(), crate::protocol::AppErrorDto> {
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation("Applying changes");
     flush_pending_edits_locked(store, Rc::clone(&ports)).await
 }
 
@@ -296,6 +296,7 @@ async fn flush_pending_batch_locked(
 
 pub async fn run_mutation(store: EditorStore, ports: Rc<AppPorts>, mut request: EditorRequest) {
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation(mutation_status(&request));
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
@@ -314,7 +315,6 @@ async fn run_mutation_locked(
     ports: Rc<AppPorts>,
     request: EditorRequest,
 ) -> Result<(), crate::protocol::AppErrorDto> {
-    store.busy.set(true);
     let select_added_sheet = matches!(&request, EditorRequest::AddSheet { .. });
     let previous_sheet_name = active_sheet_name(store);
     let result = match ports.editor.execute(request).await {
@@ -362,7 +362,6 @@ async fn run_mutation_locked(
                         refresh_images(store, Rc::clone(&ports)).await;
                     }
                     schedule_recovery(store, ports);
-                    store.busy.set(false);
                     Ok(())
                 }
                 Err(error) => Err(protocol_error(error)),
@@ -419,11 +418,12 @@ pub async fn save_local_as(store: EditorStore, ports: Rc<AppPorts>, target_name:
 }
 
 async fn save_local_to_target(
-    mut store: EditorStore,
+    store: EditorStore,
     ports: Rc<AppPorts>,
     target_name: Option<String>,
 ) {
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation("Saving workbook");
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
@@ -436,8 +436,6 @@ async fn save_local_to_target(
     let target_name = target_name.unwrap_or_else(|| document_name(store));
     #[cfg(feature = "mobile")]
     let existing_target = document_path(store);
-    set_busy(store, "Saving workbook");
-
     #[cfg(feature = "web")]
     let result = ports
         .editor
@@ -486,11 +484,10 @@ async fn save_local_to_target(
             #[cfg(feature = "mobile")]
             let _ = ports.recovery.clear().await;
             let mut store = store;
-            store.busy.set(false);
             store.status.set("Saved".to_string());
         }
         Ok(EditorReply::Empty) => {
-            store.busy.set(false);
+            let mut store = store;
             store.status.set("Save cancelled".to_string());
         }
         Ok(_) => store.set_error(unexpected_reply("save")),
@@ -605,8 +602,8 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
     if store.busy() {
         return;
     }
-    set_busy(store, "Preparing copy");
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation("Preparing copy");
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
@@ -614,10 +611,8 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
         return;
     }
     let Some((document_id, base_revision)) = document_identity(store) else {
-        store.busy.set(false);
         return;
     };
-    set_busy(store, "Preparing copy");
     let suggested_name = document_name(store);
     #[cfg(feature = "desktop")]
     let target_name = match ports
@@ -630,7 +625,6 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
     {
         Ok(Some(path)) => path,
         Ok(None) => {
-            store.busy.set(false);
             store.status.set("Download cancelled".to_string());
             return;
         }
@@ -664,16 +658,14 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
             let write = ports.files.write_document(file_name, bytes).await;
             match write {
                 Ok(Some(_)) => {
-                    store.busy.set(false);
                     store.status.set("Copy downloaded".to_string());
                 }
                 #[cfg(feature = "mobile")]
                 Ok(None) => {
-                    store.busy.set(false);
                     store.status.set("Copy sent to device".to_string());
                 }
                 #[cfg(not(feature = "mobile"))]
-                Ok(None) => store.busy.set(false),
+                Ok(None) => {}
                 Err(error) => store.set_error(error),
             }
         }
@@ -684,6 +676,7 @@ pub async fn download_copy(mut store: EditorStore, ports: Rc<AppPorts>) {
 
 pub async fn search(store: EditorStore, ports: Rc<AppPorts>, query: String, all_sheets: bool) {
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation("Searching workbook");
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
@@ -709,6 +702,7 @@ pub async fn search(store: EditorStore, ports: Rc<AppPorts>, query: String, all_
                 let mut store = store;
                 store.search.set(Some(response));
                 store.search_open.set(true);
+                store.status.set("Search complete".to_string());
             }
             Err(error) => store.set_error(protocol_error(error)),
         },
@@ -719,6 +713,7 @@ pub async fn search(store: EditorStore, ports: Rc<AppPorts>, query: String, all_
 
 pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_index: usize) {
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation("Switching worksheet");
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
@@ -742,6 +737,7 @@ pub async fn select_sheet(mut store: EditorStore, ports: Rc<AppPorts>, sheet_ind
         focus: false,
     }));
     refresh_images(store, Rc::clone(&ports)).await;
+    store.status.set("Ready".to_string());
 }
 
 pub async fn select_search_result(
@@ -752,6 +748,7 @@ pub async fn select_search_result(
     col: usize,
 ) {
     let _operation = ports.operations.lock().await;
+    let _busy = store.begin_operation("Opening search result");
     if flush_pending_edits_locked(store, Rc::clone(&ports))
         .await
         .is_err()
@@ -799,6 +796,7 @@ pub async fn select_search_result(
         .formula_text
         .set(store.cell_edit_text(sheet_index, row, col));
     refresh_images(store, Rc::clone(&ports)).await;
+    store.status.set("Ready".to_string());
 }
 
 pub async fn refresh_images(mut store: EditorStore, ports: Rc<AppPorts>) {
@@ -918,6 +916,16 @@ async fn load_image_catalog(
 
 pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool {
     let _operation = ports.operations.lock().await;
+    if document_identity(store).is_none() {
+        return true;
+    }
+    let _busy = store.begin_operation("Closing workbook");
+    if flush_pending_edits_locked(store, Rc::clone(&ports))
+        .await
+        .is_err()
+    {
+        return false;
+    }
     let Some((document_id, base_revision)) = document_identity(store) else {
         return true;
     };
@@ -1194,7 +1202,6 @@ fn accept_document_reply(
         regions.reset();
         store.document.set(None);
         store.region_cache.write().clear();
-        store.busy.set(false);
         return false;
     }
     match serde_json::from_value::<OpenDocumentView>(value) {
@@ -1284,14 +1291,16 @@ fn sheet_extent(store: EditorStore, sheet_index: usize) -> Option<crate::model::
 }
 
 fn schedule_current_window(store: EditorStore, ports: &AppPorts) {
-    let window = *store.render_window.peek();
-    if window.row_end <= window.row_start || window.col_end <= window.col_start {
-        return;
-    }
-    let Some(extent) = sheet_extent(store, window.sheet_index) else {
+    let sheet_index = store.active_sheet();
+    let Some(extent) = sheet_extent(store, sheet_index) else {
         return;
     };
-    let visible_rows = store.visible_rows(window.sheet_index, extent.row_count.max(1));
+    let visible_rows = store.visible_rows(sheet_index, extent.row_count.max(1));
+    let window =
+        store
+            .render_window
+            .peek()
+            .clamped(sheet_index, visible_rows.len(), extent.column_count);
     if visible_rows.len() == extent.row_count.max(1) {
         ports
             .regions
@@ -1299,7 +1308,7 @@ fn schedule_current_window(store: EditorStore, ports: &AppPorts) {
     } else {
         ports.regions.schedule_visible_rows(
             store,
-            window.sheet_index,
+            sheet_index,
             visible_rows
                 .get(window.row_start..window.row_end.min(visible_rows.len()))
                 .unwrap_or_default(),
@@ -1446,10 +1455,14 @@ fn remove_committed_edits(
     }
 }
 
-fn set_busy(mut store: EditorStore, status: &str) {
-    store.busy.set(true);
-    store.error.set(None);
-    store.status.set(status.to_string());
+fn mutation_status(request: &EditorRequest) -> &'static str {
+    match request {
+        EditorRequest::Undo { .. } => "Undoing change",
+        EditorRequest::Redo { .. } => "Redoing change",
+        EditorRequest::SortRows { .. } => "Sorting rows",
+        EditorRequest::SetFilter { .. } | EditorRequest::ClearFilter { .. } => "Updating filters",
+        _ => "Applying changes",
+    }
 }
 
 fn protocol_error(error: serde_json::Error) -> crate::protocol::AppErrorDto {

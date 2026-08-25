@@ -147,8 +147,9 @@ pub fn HomeView() -> Element {
                 }
             }
             footer { class: "home-footer", "v{version}" }
+            if pending_delete.read().is_some() {
             AlertDialog {
-                open: Some(pending_delete.read().is_some()),
+                open: Some(true),
                 on_open_change: move |open: bool| {
                     if !open {
                         pending_delete.set(None);
@@ -181,6 +182,7 @@ pub fn HomeView() -> Element {
                         "Remove"
                     }
                 }
+            }
             }
         }
     }

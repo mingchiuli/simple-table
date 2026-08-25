@@ -169,19 +169,11 @@ pub fn SpreadsheetGrid() -> Element {
         }
     });
 
-    let mut window = *store.render_window.read();
-    if window.sheet_index != sheet_index
-        || window.row_end <= window.row_start
-        || window.col_end <= window.col_start
-    {
-        window = GridRenderWindow {
-            sheet_index,
-            row_start: 0,
-            row_end: 1.min(extent.row_count),
-            col_start: 0,
-            col_end: 1.min(extent.column_count),
-        };
-    }
+    let window =
+        store
+            .render_window
+            .read()
+            .clamped(sheet_index, extent.row_count, extent.column_count);
     let row_ordinals = (window.row_start..window.row_end).collect::<Vec<_>>();
     let rows = visible_rows
         .get(window.row_start..window.row_end)

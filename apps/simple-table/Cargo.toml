@@ -62,7 +62,11 @@ uuid = { workspace = true, features = ["v4", "serde", "rng-getrandom"] }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "Document", "Element", "ErrorEvent", "Event", "File", "FileList", "FileReader", "HtmlAnchorElement", "HtmlInputElement", "MessageEvent", "Response", "Url", "Window", "Worker", "WorkerOptions", "WorkerType"], optional = true }
+web-time.workspace = true
 webbrowser = { workspace = true, optional = true }
+
+[dev-dependencies]
+dioxus-ssr.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }

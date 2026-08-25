@@ -508,6 +508,33 @@ impl GridRenderWindow {
             col_end: self.col_end,
         }
     }
+
+    pub fn clamped(self, sheet_index: usize, row_count: usize, column_count: usize) -> Self {
+        let row_count = row_count.max(1);
+        let column_count = column_count.max(1);
+        if self.sheet_index != sheet_index
+            || self.row_end <= self.row_start
+            || self.col_end <= self.col_start
+        {
+            return Self {
+                sheet_index,
+                row_start: 0,
+                row_end: 1,
+                col_start: 0,
+                col_end: 1,
+            };
+        }
+
+        let row_start = self.row_start.min(row_count - 1);
+        let col_start = self.col_start.min(column_count - 1);
+        Self {
+            sheet_index,
+            row_start,
+            row_end: self.row_end.min(row_count).max(row_start + 1),
+            col_start,
+            col_end: self.col_end.min(column_count).max(col_start + 1),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -525,7 +552,7 @@ pub struct EditorStore {
     pub active_sheet: Signal<usize>,
     pub selection: Signal<GridSelection>,
     pub formula_text: Signal<String>,
-    pub busy: Signal<bool>,
+    operation: Signal<OperationState>,
     pub error: Signal<Option<AppErrorDto>>,
     pub status: Signal<String>,
     pub search: Signal<Option<SearchView>>,
@@ -543,30 +570,68 @@ pub struct EditorStore {
 type CellCoordinates = (usize, usize, usize);
 pub(crate) type PendingCellEdits = HashMap<CellCoordinates, (u64, Rc<str>)>;
 
-impl EditorStore {
-    pub fn new() -> Self {
-        Self {
-            document: Signal::new(None),
-            region_cache: Signal::new(RegionCache::default()),
-            active_sheet: Signal::new(0),
-            selection: Signal::new(GridSelection::default()),
-            formula_text: Signal::new(String::new()),
-            busy: Signal::new(false),
-            error: Signal::new(None),
-            status: Signal::new("Ready".to_string()),
-            search: Signal::new(None),
-            search_open: Signal::new(false),
-            local_documents: Signal::new(Vec::new()),
-            images: Signal::new(Rc::new(Vec::new())),
-            image_assets: Signal::new(Rc::new(HashMap::new())),
-            selected_image: Signal::new(None),
-            edit_generation: Signal::new(0),
-            pending_edits: Signal::new(HashMap::new()),
-            render_window: Signal::new(GridRenderWindow::default()),
-            grid_scroll_request: Signal::new(None),
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct OperationState {
+    next_id: u64,
+    active_id: Option<u64>,
+}
+
+impl OperationState {
+    fn begin(&mut self) -> u64 {
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        self.active_id = Some(self.next_id);
+        self.next_id
+    }
+
+    fn finish(&mut self, id: u64) {
+        if self.active_id == Some(id) {
+            self.active_id = None;
         }
     }
 
+    fn is_active(self) -> bool {
+        self.active_id.is_some()
+    }
+}
+
+#[must_use = "the operation guard must live until the asynchronous action finishes"]
+pub(crate) struct OperationGuard {
+    operation: Signal<OperationState>,
+    id: u64,
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        if let Ok(mut operation) = self.operation.try_write() {
+            operation.finish(self.id);
+        }
+    }
+}
+
+pub(crate) fn use_editor_store() -> EditorStore {
+    EditorStore {
+        document: use_signal(|| None),
+        region_cache: use_signal(RegionCache::default),
+        active_sheet: use_signal(|| 0),
+        selection: use_signal(GridSelection::default),
+        formula_text: use_signal(String::new),
+        operation: use_signal(OperationState::default),
+        error: use_signal(|| None),
+        status: use_signal(|| "Ready".to_string()),
+        search: use_signal(|| None),
+        search_open: use_signal(|| false),
+        local_documents: use_signal(Vec::new),
+        images: use_signal(|| Rc::new(Vec::new())),
+        image_assets: use_signal(|| Rc::new(HashMap::new())),
+        selected_image: use_signal(|| None),
+        edit_generation: use_signal(|| 0),
+        pending_edits: use_signal(HashMap::new),
+        render_window: use_signal(GridRenderWindow::default),
+        grid_scroll_request: use_signal(|| None),
+    }
+}
+
+impl EditorStore {
     pub fn active_sheet(&self) -> usize {
         (self.active_sheet)()
     }
@@ -591,7 +656,17 @@ impl EditorStore {
     }
 
     pub fn busy(&self) -> bool {
-        (self.busy)()
+        self.operation.read().is_active()
+    }
+
+    pub(crate) fn begin_operation(mut self, status: &str) -> OperationGuard {
+        let id = self.operation.write().begin();
+        self.error.set(None);
+        self.status.set(status.to_string());
+        OperationGuard {
+            operation: self.operation,
+            id,
+        }
     }
 
     pub fn search_open(&self) -> bool {
@@ -605,7 +680,6 @@ impl EditorStore {
     pub fn set_error(mut self, error: AppErrorDto) {
         self.status.set("Action failed".to_string());
         self.error.set(Some(error));
-        self.busy.set(false);
     }
 
     pub fn accept_document(mut self, mut document: OpenDocumentView) {
@@ -633,7 +707,6 @@ impl EditorStore {
         self.images.set(Rc::new(Vec::new()));
         self.image_assets.set(Rc::new(HashMap::new()));
         self.selected_image.set(None);
-        self.busy.set(false);
         self.error.set(None);
         self.status.set("Ready".to_string());
     }
@@ -863,6 +936,31 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn stale_operation_completion_does_not_clear_the_current_operation() {
+        let mut operation = OperationState::default();
+        let first = operation.begin();
+        let second = operation.begin();
+
+        operation.finish(first);
+
+        assert!(operation.is_active());
+        assert_eq!(operation.active_id, Some(second));
+        operation.finish(second);
+        assert!(!operation.is_active());
+    }
+
+    #[test]
+    fn operation_completion_is_idempotent() {
+        let mut operation = OperationState::default();
+        let id = operation.begin();
+
+        operation.finish(id);
+        operation.finish(id);
+
+        assert!(!operation.is_active());
+    }
+
+    #[test]
     fn formula_cells_display_result_and_edit_source() {
         let presentation = cell_presentation(&json!({
             "raw": 3,
@@ -1044,6 +1142,42 @@ mod tests {
         assert_eq!(
             region.normalized_merge_ranges(),
             vec![merge(0, 0, 1, 1), merge(2, 2, 3, 3)]
+        );
+    }
+
+    #[test]
+    fn render_window_is_clamped_when_a_mutation_shrinks_the_sheet() {
+        let window = GridRenderWindow {
+            sheet_index: 0,
+            row_start: 0,
+            row_end: 5,
+            col_start: 0,
+            col_end: 5,
+        };
+
+        assert_eq!(
+            window.clamped(0, 4, 3),
+            GridRenderWindow {
+                sheet_index: 0,
+                row_start: 0,
+                row_end: 4,
+                col_start: 0,
+                col_end: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_render_window_starts_at_the_requested_sheet_origin() {
+        assert_eq!(
+            GridRenderWindow::default().clamped(2, 10, 10),
+            GridRenderWindow {
+                sheet_index: 2,
+                row_start: 0,
+                row_end: 1,
+                col_start: 0,
+                col_end: 1,
+            }
         );
     }
 

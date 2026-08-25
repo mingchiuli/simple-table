@@ -1,10 +1,10 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
 
 use dioxus::prelude::{ReadableExt, WritableExt, spawn};
 use futures::channel::oneshot;
+use web_time::{Duration, Instant};
 
 use crate::model::region_cache::tiles_for_region;
 use crate::model::{
@@ -32,7 +32,8 @@ struct RegionLoaderInner {
 
 #[derive(Default)]
 struct LoaderState {
-    running: bool,
+    generation: u64,
+    running_generation: Option<u64>,
     queue: VecDeque<RegionJob>,
     scheduled: HashSet<RegionJobKey>,
     required_waiters: HashMap<RegionJobKey, Vec<Waiter>>,
@@ -81,7 +82,7 @@ impl RegionLoader {
             .filter(|tile| !store.region_cache.peek().contains(identity, *tile))
             .map(|bounds| RegionJobKey { identity, bounds })
             .collect::<HashSet<_>>();
-        let should_start = {
+        let generation = {
             let mut state = self.0.state.borrow_mut();
             state.viewport = desired.clone();
             let required = state
@@ -108,8 +109,8 @@ impl RegionLoader {
             trim_queue(&mut state);
             start_needed(&mut state)
         };
-        if should_start {
-            self.start();
+        if let Some(generation) = generation {
+            self.start(generation);
         }
     }
 
@@ -138,7 +139,7 @@ impl RegionLoader {
             .filter(|tile| !store.region_cache.peek().contains(identity, *tile))
             .map(|bounds| RegionJobKey { identity, bounds })
             .collect::<HashSet<_>>();
-        let should_start = {
+        let generation = {
             let mut state = self.0.state.borrow_mut();
             state.viewport = desired.clone();
             let required = state
@@ -165,8 +166,8 @@ impl RegionLoader {
             trim_queue(&mut state);
             start_needed(&mut state)
         };
-        if should_start {
-            self.start();
+        if let Some(generation) = generation {
+            self.start(generation);
         }
     }
 
@@ -184,7 +185,7 @@ impl RegionLoader {
         };
         let tiles = tiles_for_region(bounds, extent.row_count, extent.column_count);
         let mut receivers = Vec::new();
-        let should_start = {
+        let generation = {
             let mut state = self.0.state.borrow_mut();
             for bounds in tiles {
                 if store.region_cache.peek().contains(identity, bounds) {
@@ -204,8 +205,8 @@ impl RegionLoader {
             trim_queue(&mut state);
             start_needed(&mut state)
         };
-        if should_start {
-            self.start();
+        if let Some(generation) = generation {
+            self.start(generation);
         }
 
         for receiver in receivers {
@@ -221,6 +222,8 @@ impl RegionLoader {
 
     pub fn reset(&self) {
         let mut state = self.0.state.borrow_mut();
+        state.generation = state.generation.wrapping_add(1).max(1);
+        state.running_generation = None;
         state.queue.clear();
         state.viewport.clear();
         state.scheduled.clear();
@@ -235,17 +238,27 @@ impl RegionLoader {
         }
     }
 
-    fn start(&self) {
+    fn start(&self, generation: u64) {
         let loader = self.clone();
         spawn(async move {
-            loader.run().await;
+            loader.run(generation).await;
         });
     }
 
-    async fn run(self) {
+    async fn run(self, generation: u64) {
+        let _running = RunningGuard {
+            loader: self.clone(),
+            generation,
+        };
         loop {
-            let Some(job) = self.0.state.borrow_mut().queue.pop_front() else {
-                self.0.state.borrow_mut().running = false;
+            let job = {
+                let mut state = self.0.state.borrow_mut();
+                if state.running_generation != Some(generation) {
+                    return;
+                }
+                state.queue.pop_front()
+            };
+            let Some(job) = job else {
                 return;
             };
 
@@ -257,6 +270,9 @@ impl RegionLoader {
             };
             let all_waiters = {
                 let mut state = self.0.state.borrow_mut();
+                if state.running_generation != Some(generation) {
+                    return;
+                }
                 jobs.iter()
                     .flat_map(|job| {
                         state.scheduled.remove(&job.key);
@@ -503,6 +519,20 @@ impl RegionLoader {
     }
 }
 
+struct RunningGuard {
+    loader: RegionLoader,
+    generation: u64,
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        let mut state = self.loader.0.state.borrow_mut();
+        if state.running_generation == Some(self.generation) {
+            state.running_generation = None;
+        }
+    }
+}
+
 fn sparse_row_regions(
     sheet_index: usize,
     rows: &[usize],
@@ -553,12 +583,12 @@ fn valid_region_payload(region: &SheetRegionView) -> bool {
             .all(|cell| cell.sheet_index == region.region.sheet_index)
 }
 
-fn start_needed(state: &mut LoaderState) -> bool {
-    if state.running || state.queue.is_empty() {
-        false
+fn start_needed(state: &mut LoaderState) -> Option<u64> {
+    if state.running_generation.is_some() || state.queue.is_empty() {
+        None
     } else {
-        state.running = true;
-        true
+        state.running_generation = Some(state.generation);
+        Some(state.generation)
     }
 }
 
