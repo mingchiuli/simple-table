@@ -82,7 +82,7 @@ pub fn app() -> Element {
                     enabled: !cfg!(feature = "server"),
                 }
                 Router::<Route> {}
-                components::ErrorToastBridge {}
+                components::ToastBridge {}
             }
         }
     }

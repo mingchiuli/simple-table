@@ -1,3 +1,4 @@
+mod recovery;
 mod region_loader;
 
 use std::rc::Rc;
@@ -336,7 +337,7 @@ pub async fn new_document(store: EditorStore, ports: Rc<AppPorts>) -> bool {
             let opened = accept_document_reply(store, &ports.regions, reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
-                schedule_recovery(store, Rc::clone(&ports));
+                recovery::schedule(store, Rc::clone(&ports));
             }
             opened
         }
@@ -370,7 +371,7 @@ pub async fn open_bytes(
             let opened = accept_document_reply(store, &ports.regions, output.reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
-                schedule_recovery(store, Rc::clone(&ports));
+                recovery::schedule(store, Rc::clone(&ports));
             }
             opened
         }
@@ -430,7 +431,7 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
             let opened = accept_document_reply(store, &ports.regions, reply);
             if opened {
                 refresh_images(store, Rc::clone(&ports)).await;
-                schedule_recovery(store, Rc::clone(&ports));
+                recovery::schedule(store, Rc::clone(&ports));
             }
             opened
         }
@@ -688,7 +689,7 @@ async fn run_mutation_locked(
             if refresh.images || select_added_sheet {
                 refresh_images(store, Rc::clone(&ports)).await;
             }
-            schedule_recovery(store, ports);
+            recovery::schedule(store, ports);
             Ok(())
         }
         Ok(_) => Err(unexpected_reply("mutation")),
@@ -780,8 +781,9 @@ async fn save_local_to_target(
     match result {
         Ok(EditorReply::Saved { value }) => {
             accept_saved_document(store, value.into());
+            recovery::mark_healthy(store);
             #[cfg(feature = "mobile")]
-            let _ = ports.recovery.clear().await;
+            recovery::schedule_cleanup(store, Rc::clone(&ports));
             let mut store = store;
             store.status.set("Saved".to_string());
         }
@@ -1250,8 +1252,6 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool
         .await
     {
         Ok(EditorReply::Closed) => {
-            #[cfg(feature = "mobile")]
-            let _ = ports.recovery.clear().await;
             store.document.set(None);
             store.region_cache.write().clear();
             ports.regions.reset();
@@ -1260,6 +1260,10 @@ pub async fn close_document(mut store: EditorStore, ports: Rc<AppPorts>) -> bool
                 .image_assets
                 .set(Rc::new(std::collections::HashMap::new()));
             store.pending_edits.write().clear();
+            #[cfg(feature = "mobile")]
+            recovery::schedule_cleanup(store, Rc::clone(&ports));
+            #[cfg(not(feature = "mobile"))]
+            recovery::mark_healthy(store);
             true
         }
         Ok(_) => {
@@ -1407,98 +1411,6 @@ fn reset_current_sheet_viewport(mut store: EditorStore) {
         col: 0,
         focus: false,
     }));
-}
-
-fn schedule_recovery(store: EditorStore, ports: Rc<AppPorts>) {
-    #[cfg(feature = "web")]
-    {
-        let generation = store.edit_generation().wrapping_add(1);
-        let mut store = store;
-        store.edit_generation.set(generation);
-        spawn(async move {
-            sleep(Duration::from_secs(2)).await;
-            if store.edit_generation() != generation {
-                return;
-            }
-            let Some((document_id, base_revision)) = document_identity(store) else {
-                return;
-            };
-            let is_dirty = store
-                .document
-                .read()
-                .as_ref()
-                .is_some_and(|document| document.editor_session.editor_state.is_dirty);
-            if is_dirty {
-                let _ = ports
-                    .workspace
-                    .execute(WebWorkspaceRequest::CheckpointRecovery {
-                        request_id: request_id("recovery"),
-                        document_id,
-                        base_revision,
-                        target_name: document_name(store),
-                    })
-                    .await;
-            } else {
-                let _ = ports
-                    .workspace
-                    .execute(WebWorkspaceRequest::ClearRecovery)
-                    .await;
-            }
-        });
-    }
-
-    #[cfg(feature = "mobile")]
-    {
-        let generation = store.edit_generation().wrapping_add(1);
-        let mut store = store;
-        store.edit_generation.set(generation);
-        spawn(async move {
-            sleep(Duration::from_secs(2)).await;
-            if store.edit_generation() != generation {
-                return;
-            }
-
-            let _operation = ports.operations.lock().await;
-            if store.edit_generation() != generation {
-                return;
-            }
-            let Some((document_id, base_revision)) = document_identity(store) else {
-                return;
-            };
-            let is_dirty = store
-                .document
-                .read()
-                .as_ref()
-                .is_some_and(|document| document.editor_session.editor_state.is_dirty);
-            if !is_dirty {
-                let _ = ports.recovery.clear().await;
-                return;
-            }
-
-            let prepared = ports
-                .editor
-                .execute_command(EditorCommand::new(EditorRequest::PrepareExport {
-                    document_id,
-                    base_revision,
-                    target_name: document_name(store),
-                }))
-                .await;
-            if store.edit_generation() != generation
-                || document_identity(store) != Some((document_id, base_revision))
-            {
-                return;
-            }
-            if let Ok(output) = prepared
-                && let EditorReply::ExportPrepared { file_name } = output.reply
-                && let Some(bytes) = output.attachment
-            {
-                let _ = ports.recovery.checkpoint(file_name, bytes).await;
-            }
-        });
-    }
-
-    #[cfg(not(any(feature = "web", feature = "mobile")))]
-    let _ = (store, ports);
 }
 
 fn accept_document_reply(

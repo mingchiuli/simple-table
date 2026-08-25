@@ -22,7 +22,7 @@ jobs:
         include:
           - os: macos-latest
             package: dmg
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             package: deb
           - os: windows-latest
             package: nsis
@@ -63,7 +63,7 @@ jobs:
   web-binary:
     name: Embedded Web SSR binary
     needs: quality-gate
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository

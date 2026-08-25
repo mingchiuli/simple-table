@@ -863,6 +863,12 @@ pub struct LocalDocumentSummary {
     pub has_recovery: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiNotice {
+    pub title: String,
+    pub message: String,
+}
+
 #[derive(Clone, Copy)]
 pub struct EditorStore {
     pub document: Signal<Option<Rc<OpenDocumentView>>>,
@@ -872,6 +878,8 @@ pub struct EditorStore {
     pub formula_text: Signal<String>,
     operation: Signal<OperationState>,
     pub error: Signal<Option<AppErrorDto>>,
+    pub warning: Signal<Option<UiNotice>>,
+    recovery_failure_active: Signal<bool>,
     pub status: Signal<String>,
     pub search: Signal<Option<SearchView>>,
     pub search_open: Signal<bool>,
@@ -935,6 +943,8 @@ pub(crate) fn use_editor_store() -> EditorStore {
         formula_text: use_signal(String::new),
         operation: use_signal(OperationState::default),
         error: use_signal(|| None),
+        warning: use_signal(|| None),
+        recovery_failure_active: use_signal(|| false),
         status: use_signal(|| "Ready".to_string()),
         search: use_signal(|| None),
         search_open: use_signal(|| false),
@@ -1000,6 +1010,19 @@ impl EditorStore {
         self.error.set(Some(error));
     }
 
+    #[cfg(any(feature = "web", feature = "mobile", test))]
+    pub(crate) fn report_recovery_failure(mut self, notice: UiNotice) {
+        if !*self.recovery_failure_active.peek() {
+            self.recovery_failure_active.set(true);
+            self.warning.set(Some(notice));
+        }
+    }
+
+    pub(crate) fn mark_recovery_healthy(mut self) {
+        self.recovery_failure_active.set(false);
+        self.warning.set(None);
+    }
+
     pub fn accept_document(mut self, mut document: OpenDocumentView) {
         let initial_region = document.initial_region.take();
         let identity = DocumentRevision {
@@ -1026,6 +1049,8 @@ impl EditorStore {
         self.image_assets.set(Rc::new(HashMap::new()));
         self.selected_image.set(None);
         self.error.set(None);
+        self.warning.set(None);
+        self.recovery_failure_active.set(false);
         self.status.set("Ready".to_string());
     }
 

@@ -8,11 +8,12 @@ pub use home::HomeView;
 
 use dioxus::prelude::*;
 use simple_table_components::{ToastOptions, use_toast};
+use std::time::Duration;
 
 use crate::model::EditorStore;
 
 #[component]
-pub fn ErrorToastBridge() -> Element {
+pub fn ToastBridge() -> Element {
     let mut store = use_context::<EditorStore>();
     let toasts = use_toast();
     use_effect(move || {
@@ -24,6 +25,18 @@ pub fn ErrorToastBridge() -> Element {
                 ToastOptions::new()
                     .description(error.message)
                     .permanent(true),
+            );
+        }
+    });
+    use_effect(move || {
+        let warning = store.warning.read().clone();
+        if let Some(warning) = warning {
+            store.warning.set(None);
+            toasts.warning(
+                warning.title,
+                ToastOptions::new()
+                    .description(warning.message)
+                    .duration(Duration::from_secs(8)),
             );
         }
     });
@@ -51,7 +64,7 @@ mod tests {
         use_context_provider(|| store);
         rsx! {
             ToastProvider {
-                ErrorToastBridge {}
+                ToastBridge {}
             }
         }
     }
@@ -74,6 +87,31 @@ mod tests {
         assert!(html.contains("late_error"));
         assert!(html.contains("Raised after the initial render"));
         assert!(store.error.read().is_none());
+        TEST_STORE.with(|slot| slot.replace(None));
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn warning_created_after_mount_is_forwarded_to_a_non_permanent_toast() {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let _runtime_guard = runtime.enter();
+        let mut dom = VirtualDom::new(ToastHarness);
+        dom.rebuild_in_place();
+        dom.render_immediate_to_vec();
+        let store = TEST_STORE.with(|slot| slot.borrow().expect("captured editor store"));
+
+        store.report_recovery_failure(crate::model::UiNotice {
+            title: "Automatic recovery unavailable".to_string(),
+            message: "Save the workbook manually".to_string(),
+        });
+        dom.render_immediate_to_vec();
+        dom.render_immediate_to_vec();
+        let html = dioxus_ssr::render(&dom);
+
+        assert!(html.contains("Automatic recovery unavailable"));
+        assert!(html.contains("Save the workbook manually"));
+        assert!(!html.contains("data-permanent=\"true\""));
+        assert!(store.warning.read().is_none());
         TEST_STORE.with(|slot| slot.replace(None));
     }
 

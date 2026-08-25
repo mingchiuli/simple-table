@@ -190,13 +190,13 @@ fn test_web() -> std::io::Result<ExitStatus> {
             "--lib",
         ],
         &[
-            "check",
+            "test",
             "--locked",
             "--package",
             "simple-table-web-worker",
             "--target",
             "wasm32-unknown-unknown",
-            "--tests",
+            "--lib",
         ],
     ];
     run_cargo_matrix(tests, &[])

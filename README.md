@@ -22,6 +22,7 @@ Web Worker and IndexedDB.
   `cargo install dioxus-cli --version 0.7.10 --locked`
 - wasm-bindgen CLI 0.2.127:
   `cargo install wasm-bindgen-cli --version 0.2.127 --locked`
+- Chrome and a matching ChromeDriver available in `PATH` for browser tests
 - Android Studio/NDK with JDK 17 or 21 for Android, and Xcode for iOS
 
 ## Development
@@ -51,10 +52,12 @@ cargo xtask bundle
 ```
 
 The `desktop`, `mobile`, Web hydration, SSR, and Worker targets are checked
-separately. `cargo xtask bundle` is the only Web deployment build. It writes a
-self-contained SSR executable to `target/release/simple-table-web`; generated
-JavaScript, Wasm, CSS, fonts, the favicon, and Worker files are embedded in the
-binary and no adjacent `public/` directory is required.
+separately. `cargo xtask test-web` runs the Worker persistence tests in a real
+browser against IndexedDB. `cargo xtask bundle` is the only Web deployment
+build. It writes a self-contained SSR executable to
+`target/release/simple-table-web`; generated JavaScript, Wasm, CSS, fonts, the
+favicon, and Worker files are embedded in the binary and no adjacent `public/`
+directory is required.
 
 ```bash
 docker build -t simple-table .

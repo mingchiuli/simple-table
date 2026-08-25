@@ -24,7 +24,7 @@ cargo xtask bundle        # production embedded SSR binary
 cargo fmt --all -- --check
 cargo xtask check          # desktop + SSR + Web Wasm + Worker Wasm
 cargo xtask test           # protocol + engine + app feature test matrix
-cargo xtask test-web       # Web protocol + Worker tests and Wasm test check
+cargo xtask test-web       # Web protocol + Worker + browser IndexedDB tests
 ```
 
 The target features are mutually exclusive. Build and lint them separately;

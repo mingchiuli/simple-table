@@ -180,7 +180,8 @@ Official references:
 
 `cargo xtask check` covers protocol, engine, desktop, SSR, Web Wasm, and the Web
 Worker Wasm targets. `cargo xtask test` runs native protocol, engine, desktop,
-and SSR tests. `cargo xtask test-web` runs the Web protocol and Worker tests and
-checks the Worker test target for Wasm. Both test commands are required in CI.
-Strict Clippy denies Rust warnings and redundant, copy, or implicit clones.
-Mobile is checked separately with the platform commands in `AGENTS.md`.
+and SSR tests. `cargo xtask test-web` runs the Web protocol and Worker unit
+tests, then executes the Worker persistence suite in a browser against real
+IndexedDB. Both test commands are required in CI. Strict Clippy denies Rust
+warnings and redundant, copy, or implicit clones. Mobile is checked separately
+with the platform commands in `AGENTS.md`.
