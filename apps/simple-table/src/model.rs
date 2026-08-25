@@ -11,6 +11,8 @@ use crate::ports::editor::EditorPort;
 use crate::ports::file::FilePort;
 #[cfg(feature = "mobile")]
 use crate::ports::recovery::RecoveryPort;
+use crate::ports::update::UpdatePort;
+use crate::ports::window::WindowPort;
 #[cfg(not(feature = "mobile"))]
 use crate::ports::workspace::LocalWorkspacePort;
 
@@ -1186,6 +1188,8 @@ pub struct AppPorts {
     pub editor: Rc<dyn EditorPort>,
     pub regions: crate::actions::RegionLoader,
     pub files: Rc<dyn FilePort>,
+    pub update: Rc<dyn UpdatePort>,
+    pub window: Rc<dyn WindowPort>,
     #[cfg(not(feature = "mobile"))]
     pub workspace: Rc<dyn LocalWorkspacePort>,
     #[cfg(feature = "mobile")]
@@ -1199,6 +1203,8 @@ impl Clone for AppPorts {
             editor: Rc::clone(&self.editor),
             regions: self.regions.clone(),
             files: Rc::clone(&self.files),
+            update: Rc::clone(&self.update),
+            window: Rc::clone(&self.window),
             #[cfg(not(feature = "mobile"))]
             workspace: Rc::clone(&self.workspace),
             #[cfg(feature = "mobile")]

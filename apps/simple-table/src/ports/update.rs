@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 
 use crate::protocol::AppErrorDto;
 #[cfg(not(any(feature = "server", feature = "mobile")))]
@@ -20,6 +21,10 @@ pub trait UpdatePort {
 }
 
 pub struct GitHubUpdatePort;
+
+pub fn platform_update_port() -> Rc<dyn UpdatePort> {
+    Rc::new(GitHubUpdatePort)
+}
 
 #[cfg(not(any(feature = "server", feature = "mobile")))]
 #[derive(Deserialize)]

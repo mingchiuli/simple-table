@@ -21,9 +21,9 @@ use crate::model::{AppPorts, EditorStore};
 use crate::protocol::AppErrorDto;
 
 #[cfg(any(feature = "web", feature = "mobile", test))]
-use super::document_identity;
+use super::shared::document_identity;
 #[cfg(any(feature = "web", feature = "mobile"))]
-use super::document_name;
+use super::shared::document_name;
 
 #[cfg(any(feature = "web", feature = "mobile"))]
 const RECOVERY_DEBOUNCE: Duration = Duration::from_secs(2);

@@ -52,6 +52,8 @@ pub fn app() -> Element {
             regions: actions::RegionLoader::new(Rc::clone(&editor)),
             editor,
             files: ports::file::platform_file_port(),
+            update: ports::update::platform_update_port(),
+            window: ports::window::platform_window_port(),
             #[cfg(not(feature = "mobile"))]
             workspace,
             #[cfg(feature = "mobile")]
