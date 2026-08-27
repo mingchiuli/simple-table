@@ -10,6 +10,7 @@
   --border: #d9e0dc;
   --border-strong: #bcc8c1;
   --accent: #16784a;
+  --accent-strong: #0f663e;
   --accent-hover: #0f663e;
   --accent-soft: #e9f5ee;
   --focus: #2563eb;
@@ -227,6 +228,24 @@ button:disabled,
   background: var(--accent-hover);
 }
 
+:root .app-root [data-style="primary"] {
+  border: 1px solid var(--accent);
+  color: #fff;
+  background-color: var(--accent);
+  box-shadow: none;
+}
+
+:root .app-root [data-style="primary"]:not(:disabled):hover {
+  background-color: var(--accent-hover);
+}
+
+:root .app-root .secondary-command {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background-color: var(--surface);
+  box-shadow: none;
+}
+
 .secondary-command {
   border: 1px solid var(--border-strong);
   color: var(--text);
@@ -350,7 +369,7 @@ button:disabled,
 
 .editor-shell {
   display: grid;
-  grid-template-rows: 42px 43px 36px minmax(0, 1fr)
+  grid-template-rows: 42px 43px 40px minmax(0, 1fr)
     calc(38px + var(--safe-area-bottom));
   width: 100%;
   height: 100%;
@@ -619,6 +638,7 @@ button:disabled,
 .formula-bar {
   min-width: 0;
   border-bottom: 1px solid var(--border);
+  padding-right: 6px;
   background: var(--surface);
 }
 
@@ -645,17 +665,27 @@ button:disabled,
 
 .formula-bar input {
   min-width: 0;
-  height: 100%;
+  height: 30px;
   flex: 1;
-  border: 0;
-  border-left: 1px solid var(--border);
+  margin: 4px 0 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   padding: 0 10px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.formula-bar input:hover:not(:disabled) {
   color: var(--text);
   background: var(--surface);
 }
 
-.formula-bar input:focus {
+.formula-bar input:focus,
+.formula-bar input:focus-visible {
   outline: 0;
+  color: var(--text);
+  background: var(--surface);
   box-shadow: inset 0 -2px var(--accent);
 }
 
@@ -760,22 +790,31 @@ button:disabled,
   height: 29px;
 }
 
-.column-filter-trigger {
+.column-header .column-filter-trigger {
   display: grid;
   place-items: center;
   width: 24px;
   height: 24px;
+  min-width: 24px;
   padding: 0;
   border: 0;
   border-left: 1px solid transparent;
+  border-radius: 0;
   color: var(--text-muted);
   background: transparent;
+  box-shadow: none;
   cursor: pointer;
 }
 
-.column-filter-trigger:hover,
-.column-filter-trigger:focus-visible,
-.column-filter-trigger.active {
+.column-header .column-filter-trigger svg {
+  width: 14px;
+  height: 14px;
+  transform: translateY(2px);
+}
+
+.column-header .column-filter-trigger:hover,
+.column-header .column-filter-trigger:focus-visible,
+.column-header .column-filter-trigger.active {
   border-left-color: var(--border);
   color: var(--accent-strong);
   background: var(--surface);
@@ -1131,6 +1170,7 @@ button:disabled,
 
 .status-text {
   overflow: hidden;
+  flex: 0 0 auto;
   max-width: 220px;
   color: var(--text-muted);
   font-size: 11px;
@@ -1361,8 +1401,8 @@ button:disabled,
   }
 
   .editor-shell {
-    grid-template-rows: 42px 43px 38px minmax(0, 1fr)
-      calc(42px + var(--safe-area-bottom));
+    grid-template-rows: 46px 48px 40px minmax(0, 1fr)
+      calc(46px + var(--safe-area-bottom));
   }
 
   .file-title {
@@ -1377,25 +1417,42 @@ button:disabled,
   }
 
   .editor-toolbar.editor-toolbar {
-    padding-inline: 6px;
+    gap: 3px;
+    padding: 5px 6px;
+    scroll-padding-inline: 6px;
+    overscroll-behavior-inline: contain;
   }
 
-  .formula-bar {
+  .editor-toolbar .tool-button {
+    width: 38px;
     height: 38px;
-    padding-right: 6px;
+    flex-basis: 38px;
   }
 
-  .formula-bar input {
-    height: 30px;
-    margin: 4px 0 4px 4px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: none;
+  .editor-toolbar [role="separator"] {
+    margin-inline: 2px;
   }
 
   .cell-address {
-    width: 62px;
-    flex-basis: 62px;
+    width: 58px;
+    flex-basis: 58px;
+  }
+
+  .formula-symbol {
+    width: 34px;
+    flex-basis: 34px;
+  }
+
+  .editor-titlebar .icon-button,
+  .sheet-strip .icon-button {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .sheet-tab,
+  .formula-status .formula-status-trigger {
+    height: 34px;
   }
 
   .editor-workspace,
@@ -1451,6 +1508,7 @@ button:disabled,
     --border: #37423c;
     --border-strong: #536158;
     --accent: #39a66f;
+    --accent-strong: #53c98e;
     --accent-hover: #46b87e;
     --accent-soft: #173b28;
     --warning: #f0b957;
