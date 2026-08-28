@@ -6555,7 +6555,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple-table"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "base64 0.23.1",
  "dioxus",
@@ -6588,7 +6588,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-components"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "dioxus",
  "dioxus-icons",
@@ -6598,7 +6598,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-engine"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "csv",
  "formualizer-parse",
@@ -6621,7 +6621,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-protocol"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -6629,7 +6629,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-web-protocol"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -6638,7 +6638,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-web-server"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "axum",
  "dioxus",
@@ -6651,7 +6651,7 @@ dependencies = [
 
 [[package]]
 name = "simple-table-web-worker"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "futures",
  "getrandom 0.4.3",
@@ -8773,7 +8773,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.14.2"
+version = "0.14.3"
 
 [[package]]
 name = "xxhash-rust"
