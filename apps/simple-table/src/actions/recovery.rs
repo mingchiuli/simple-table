@@ -148,6 +148,7 @@ fn failure_notice(kind: RecoveryFailureKind, error: AppErrorDto) -> UiNotice {
                 "Recent changes could not be written to recovery storage: {}. Save the workbook manually.",
                 error.message
             ),
+            permanent: true,
         },
         RecoveryFailureKind::Cleanup => UiNotice {
             title: "Recovery cleanup failed".to_string(),
@@ -155,6 +156,7 @@ fn failure_notice(kind: RecoveryFailureKind, error: AppErrorDto) -> UiNotice {
                 "An older recovery copy could not be removed: {}.",
                 error.message
             ),
+            permanent: false,
         },
     }
 }
@@ -442,8 +444,8 @@ mod tests {
                     .warning
                     .read()
                     .as_ref()
-                    .map(|notice| notice.title.as_str()),
-                Some("Automatic recovery unavailable")
+                    .map(|notice| (notice.title.as_str(), notice.permanent)),
+                Some(("Automatic recovery unavailable", true))
             );
 
             store.warning.set(None);
@@ -473,8 +475,8 @@ mod tests {
                     .warning
                     .read()
                     .as_ref()
-                    .map(|notice| notice.title.as_str()),
-                Some("Recovery cleanup failed")
+                    .map(|notice| (notice.title.as_str(), notice.permanent)),
+                Some(("Recovery cleanup failed", false))
             );
         });
     }

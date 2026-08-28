@@ -218,6 +218,31 @@ button:disabled,
   text-decoration: none;
 }
 
+.home-actions .primary-command,
+.home-actions .secondary-command {
+  width: 160px;
+  height: 42px;
+  min-height: 42px;
+  flex-shrink: 0;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.home-actions .primary-command svg,
+.home-actions .secondary-command svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+
+.home-actions .primary-command:disabled,
+.home-actions .secondary-command.disabled {
+  opacity: 0.5;
+}
+
 .primary-command {
   border: 1px solid var(--accent);
   color: #fff;
@@ -1057,10 +1082,24 @@ button:disabled,
 }
 
 .search-input-wrap input {
+  width: 100%;
   min-width: 0;
+  height: 100%;
   flex: 1;
   border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
   outline: 0;
+}
+
+.search-input-wrap input:hover:not(:disabled),
+.search-input-wrap input:focus-visible {
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
 }
 
 .search-scope {
@@ -1353,6 +1392,112 @@ button:disabled,
   overflow-wrap: anywhere;
 }
 
+#app-notifications {
+  right: calc(16px + var(--safe-area-right));
+  bottom: calc(16px + var(--safe-area-bottom));
+  width: min(
+    340px,
+    calc(
+      100vw - 32px - var(--safe-area-left) - var(--safe-area-right)
+    )
+  );
+  max-width: none;
+}
+
+#app-notifications ol,
+#app-notifications li {
+  width: 100%;
+}
+
+#app-notifications ol {
+  gap: 8px;
+}
+
+#app-notifications [data-type] {
+  width: 100%;
+  min-height: 64px;
+  height: auto;
+  margin-top: 0;
+  border: 1px solid var(--border-strong);
+  border-inline-start: 3px solid var(--focus);
+  border-radius: 6px;
+  padding: 12px 14px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(23, 32, 28, 0.14);
+  filter: none;
+  opacity: 1;
+  transform: none;
+  animation: app-toast-fade-in 140ms ease-out;
+}
+
+@keyframes app-toast-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+#app-notifications [data-type="error"] {
+  border-inline-start-color: var(--danger);
+}
+
+#app-notifications [data-type="warning"] {
+  border-inline-start-color: var(--warning);
+}
+
+#app-notifications [data-type="success"] {
+  border-inline-start-color: var(--accent);
+}
+
+#app-notifications [data-type="info"] {
+  border-inline-start-color: var(--focus);
+}
+
+#app-notifications [data-type]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+#app-notifications [data-type] [role="alert"] {
+  min-width: 0;
+  margin-right: 10px;
+}
+
+#app-notifications [data-type] [role="alert"] > div:first-child {
+  margin: 0 0 3px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+#app-notifications [data-type] [role="alert"] > div + div {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+#app-notifications [data-type] > button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+#app-notifications [data-type] > button:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
 .editor-empty {
   display: grid;
   place-content: center;
@@ -1394,10 +1539,18 @@ button:disabled,
     grid-template-columns: 1fr 1fr;
   }
 
-  .primary-command,
-  .secondary-command {
+  .home-actions .primary-command,
+  .home-actions .secondary-command {
     width: 100%;
     padding: 0 10px;
+  }
+
+  #app-notifications {
+    right: calc(12px + var(--safe-area-right));
+    bottom: calc(12px + var(--safe-area-bottom));
+    width: calc(
+      100vw - 24px - var(--safe-area-left) - var(--safe-area-right)
+    );
   }
 
   .editor-shell {
@@ -1562,4 +1715,15 @@ button:disabled,
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
   }
 
+  #app-notifications [data-type] {
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app-notifications [data-type] {
+    animation: none;
+    transition: none;
+  }
 }

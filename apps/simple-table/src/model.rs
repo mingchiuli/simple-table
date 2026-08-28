@@ -869,6 +869,7 @@ pub struct LocalDocumentSummary {
 pub struct UiNotice {
     pub title: String,
     pub message: String,
+    pub permanent: bool,
 }
 
 #[derive(Clone, Copy)]

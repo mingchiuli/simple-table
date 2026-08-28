@@ -79,6 +79,8 @@ pub fn app() -> Element {
         dioxus::document::Link { rel: "icon", r#type: "image/png", href: FAVICON }
         dioxus::document::Title { "Simple Table" }
         simple_table_components::ToastProvider {
+            id: "app-notifications",
+            max_toasts: 3usize,
             div { class: platform_class,
                 simple_table_components::OverlayAssetProvider {
                     enabled: !cfg!(feature = "server"),
