@@ -2692,9 +2692,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-common"
-version = "3.1.0"
+version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60f3573d662109a76fecb20b0fcdbcba1bec598da970087e4728245c94ca243"
+checksum = "dbadf259bc87f6052459556f625bf1a4c758714513019b198f3ffd7d11fc4fae"
 dependencies = [
  "chrono",
 ]
@@ -2742,9 +2742,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-parse"
-version = "3.1.0"
+version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b55480a969159aee1eff5be72c42eeaad6eb3d69d1bd4c21718d7f48628beda"
+checksum = "3c7cebdea0c3da7467fe6d75f1ffb5953da59a8c4a52b373e193e2bb253fa6e1"
 dependencies = [
  "formualizer-common",
  "once_cell",
