@@ -34,7 +34,7 @@ dioxus-ssr = "=0.7.10"
 dioxus-web = "=0.7.10"
 dirs = "6"
 formualizer-parse = "3.0.0"
-formualizer-workbook = { version = "0.8.4", default-features = false }
+formualizer-workbook = { version = "0.9.1", default-features = false }
 futures = "0.3.34"
 getrandom = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
