@@ -132,7 +132,7 @@ pub fn sheet_images_for_command(
     sheet_index: usize,
     offset: usize,
     limit: usize,
-) -> Result<(Vec<crate::document_data::SheetImage>, Option<usize>), AppError> {
+) -> Result<(Vec<crate::document::data::SheetImage>, Option<usize>), AppError> {
     const MAX_PAGE_SIZE: usize = 256;
     let handle = document_handle_for_read(service.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
@@ -177,9 +177,9 @@ fn document_handle_for_read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::document_format_policy::ensure_native_save_target_allowed;
+    use crate::application::save_target_policy::ensure_native_save_target_allowed;
+    use crate::document::data::{DocumentData, DocumentSheet, MergeRange};
     use crate::document::region_metadata_index::DocumentRegion;
-    use crate::document_data::{DocumentData, DocumentSheet, MergeRange};
     use crate::domain::CellValue;
 
     #[test]
@@ -215,11 +215,11 @@ mod tests {
                 .map(|sheet| sheet.extent)
                 .collect::<Vec<_>>(),
             vec![
-                crate::document_data::SheetExtent {
+                crate::document::data::SheetExtent {
                     row_count: 1,
                     column_count: 1,
                 },
-                crate::document_data::SheetExtent {
+                crate::document::data::SheetExtent {
                     row_count: 1,
                     column_count: 1,
                 },

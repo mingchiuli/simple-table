@@ -85,7 +85,7 @@ pub fn do_redo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{DocumentData, DocumentSheet};
     use crate::domain::CellValue;
     use crate::state::editor_state::EditorState;
 

@@ -1,6 +1,6 @@
+use crate::document::data::{DocumentSheet, MergeRange, SheetExtent};
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::region_metadata_index::DocumentRegion;
-use crate::document_data::{DocumentSheet, MergeRange, SheetExtent};
 use crate::error::AppError;
 use crate::resource_limits::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
 use crate::snapshot::{
@@ -137,7 +137,7 @@ fn saved_editor_session_snapshot(
 }
 
 fn document_manifest_from_data(
-    source: &crate::document_data::DocumentData,
+    source: &crate::document::data::DocumentData,
 ) -> DocumentManifestSnapshot {
     DocumentManifestSnapshot {
         path: source.path.clone(),

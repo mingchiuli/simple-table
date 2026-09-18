@@ -1,4 +1,4 @@
-use crate::document_data::DocumentData;
+use crate::document::data::DocumentData;
 use std::collections::{HashSet, VecDeque};
 
 use formualizer_workbook::{Workbook, WorkbookMode};
@@ -470,7 +470,7 @@ fn formula_sheet_names(file_data: &DocumentData) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::document_data::DocumentSheet;
+    use crate::document::data::DocumentSheet;
     use crate::domain::CellNumber;
 
     use super::*;

@@ -1,4 +1,4 @@
-use crate::document_data::{CellFormat, CellStyle, DocumentData, DocumentSheet, MergeRange};
+use crate::document::data::{CellFormat, CellStyle, DocumentData, DocumentSheet, MergeRange};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
@@ -318,7 +318,7 @@ fn bucket_range(start: usize, end: usize, size: usize) -> std::ops::RangeInclusi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::RichMetadata;
+    use crate::document::data::RichMetadata;
 
     #[test]
     fn projects_only_metadata_intersecting_the_requested_region() {

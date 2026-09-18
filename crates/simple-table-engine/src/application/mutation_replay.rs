@@ -383,7 +383,7 @@ fn wait_for_completion<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentData;
+    use crate::document::data::DocumentData;
     use crate::domain::{CellEditInput, EditorCommand};
     use crate::ops::patch_projector::status_mutation_outcome;
     use crate::snapshot::MutationLookupStatus;

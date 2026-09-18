@@ -1,5 +1,5 @@
+use crate::document::data::{CellFormat, CellStyle, MergeRange, SheetExtent};
 use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
-use crate::document_data::{CellFormat, CellStyle, MergeRange, SheetExtent};
 use crate::snapshot::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
 use crate::types;
 

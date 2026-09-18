@@ -1,4 +1,4 @@
-use crate::document_data::{
+use crate::document::data::{
     DocumentData, DocumentSheet, Drawing, FreezePane, MergeRange, RichMetadata,
 };
 use std::collections::HashSet;
@@ -12,7 +12,7 @@ use crate::document::document_memento::{
     RowStructureMemento, SheetShapeMemento, SheetTailMemento,
 };
 use crate::document::formula_coordinator::FormulaCoordinator;
-use crate::document_resource_estimator::{
+use crate::document::resource_estimator::{
     estimate_cell_format_bytes, estimate_cell_style_bytes, estimate_cell_value_bytes,
     estimate_freeze_pane_bytes, estimate_hyperlink_bytes, estimate_sheet_data_bytes,
 };
@@ -367,7 +367,7 @@ fn push_unique_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{CellStyle, DrawingKind, Hyperlink};
+    use crate::document::data::{CellStyle, DrawingKind, Hyperlink};
 
     fn freeze(top_left_cell: &str) -> FreezePane {
         FreezePane {

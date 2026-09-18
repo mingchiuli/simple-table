@@ -673,7 +673,7 @@ impl CoreFacade {
     }
 }
 
-fn image_dto(value: crate::document_data::SheetImage) -> SheetImageDto {
+fn image_dto(value: crate::document::data::SheetImage) -> SheetImageDto {
     SheetImageDto {
         id: value.id,
         media_id: value.media_id,
@@ -681,7 +681,7 @@ fn image_dto(value: crate::document_data::SheetImage) -> SheetImageDto {
         intrinsic_width: value.intrinsic_width,
         intrinsic_height: value.intrinsic_height,
         anchor: match value.anchor {
-            crate::document_data::ImageAnchor::OneCell {
+            crate::document::data::ImageAnchor::OneCell {
                 from,
                 width_emu,
                 height_emu,
@@ -690,7 +690,7 @@ fn image_dto(value: crate::document_data::SheetImage) -> SheetImageDto {
                 width_emu: u32::try_from(width_emu).unwrap_or(u32::MAX),
                 height_emu: u32::try_from(height_emu).unwrap_or(u32::MAX),
             },
-            crate::document_data::ImageAnchor::TwoCell { from, to } => ImageAnchorDto::TwoCell {
+            crate::document::data::ImageAnchor::TwoCell { from, to } => ImageAnchorDto::TwoCell {
                 from: image_marker_dto(from),
                 to: image_marker_dto(to),
             },
@@ -700,7 +700,7 @@ fn image_dto(value: crate::document_data::SheetImage) -> SheetImageDto {
     }
 }
 
-fn image_marker_dto(value: crate::document_data::ImageMarker) -> ImageMarkerDto {
+fn image_marker_dto(value: crate::document::data::ImageMarker) -> ImageMarkerDto {
     ImageMarkerDto {
         row: value.row,
         col: value.col,
@@ -709,26 +709,26 @@ fn image_marker_dto(value: crate::document_data::ImageMarker) -> ImageMarkerDto 
     }
 }
 
-fn domain_image_anchor(value: ImageAnchorDto) -> crate::document_data::ImageAnchor {
+fn domain_image_anchor(value: ImageAnchorDto) -> crate::document::data::ImageAnchor {
     match value {
         ImageAnchorDto::OneCell {
             from,
             width_emu,
             height_emu,
-        } => crate::document_data::ImageAnchor::OneCell {
+        } => crate::document::data::ImageAnchor::OneCell {
             from: domain_image_marker(from),
             width_emu: i64::from(width_emu),
             height_emu: i64::from(height_emu),
         },
-        ImageAnchorDto::TwoCell { from, to } => crate::document_data::ImageAnchor::TwoCell {
+        ImageAnchorDto::TwoCell { from, to } => crate::document::data::ImageAnchor::TwoCell {
             from: domain_image_marker(from),
             to: domain_image_marker(to),
         },
     }
 }
 
-fn domain_image_marker(value: ImageMarkerDto) -> crate::document_data::ImageMarker {
-    crate::document_data::ImageMarker {
+fn domain_image_marker(value: ImageMarkerDto) -> crate::document::data::ImageMarker {
+    crate::document::data::ImageMarker {
         row: value.row,
         col: value.col,
         row_offset_emu: value.row_offset_emu,

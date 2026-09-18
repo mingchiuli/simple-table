@@ -1,6 +1,6 @@
+use crate::document::data::DocumentData;
 use crate::document::document_memento::FileStructureMemento;
 use crate::document::document_restore::{DocumentRestoreChange, RestoredSheet};
-use crate::document_data::DocumentData;
 
 pub(crate) enum CurrentStructureShape {
     Empty,

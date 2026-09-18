@@ -18,6 +18,8 @@ use crate::model::{
     SheetRegionBoundsView,
 };
 
+// UI-owned rendered defaults. The engine's Excel fallback sizes live in
+// `simple-table-engine`'s `document::layout_policy` and may differ.
 const DEFAULT_ROW_HEIGHT: f64 = 30.0;
 const DEFAULT_COLUMN_WIDTH: f64 = 120.0;
 const HEADER_HEIGHT: f64 = 31.0;

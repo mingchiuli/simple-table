@@ -1,5 +1,5 @@
+use crate::document::data::DocumentData;
 use crate::document::document_memento::DocumentMementoSide;
-use crate::document_data::DocumentData;
 use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::state::content_hash::{ContentHash, IncrementalContentFingerprint};
 

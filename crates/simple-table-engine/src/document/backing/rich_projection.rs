@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use crate::document::data::{Drawing, ImageAnchor, RichMetadata, SheetImage};
 #[cfg(test)]
 use crate::document::region_metadata_index::DocumentRegion;
-use crate::document_data::{Drawing, ImageAnchor, RichMetadata, SheetImage};
 use crate::domain::cell_key::parse_cell_key;
 
 #[derive(Clone, Copy)]
@@ -269,7 +269,7 @@ fn cell_key_matches(key: &str, matches: impl Fn(usize, usize) -> bool) -> bool {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::document_data::{CellStyle, FreezePane};
+    use crate::document::data::{CellStyle, FreezePane};
 
     use super::*;
 

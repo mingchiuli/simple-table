@@ -1,6 +1,7 @@
 use crate::document::backing::document_body::{BodyRestoreAction, SpreadsheetDocumentBody};
 use crate::document::backing::workbook_patch::WorkbookSheetShape;
 use crate::document::capabilities::{SheetCapabilities, WorkbookCapabilities};
+use crate::document::data::{DocumentData, DocumentSheet};
 use crate::document::document_memento::{
     CellMemento, ColumnStructureMemento, DocumentMemento, DocumentMementoSide,
     FileStructureMemento, ImageMemento, LayoutMemento, ProjectionSheetSnapshot,
@@ -15,8 +16,7 @@ use crate::document::formula_coordinator::{FormulaCoordinator, FormulaWorkLimits
 use crate::document::region_metadata_index::{
     DocumentRegion, DocumentRegionMetadata, RegionMetadataIndex,
 };
-use crate::document_data::{DocumentData, DocumentSheet};
-use crate::document_resource_estimator::estimate_document_metadata_bytes;
+use crate::document::resource_estimator::estimate_document_metadata_bytes;
 use crate::domain::{AppliedOperation, CellValue, DocumentCellChange, ResolvedCellEdit};
 use crate::error::AppError;
 use crate::formula::cell_ref::FormulaCellRef;
@@ -491,7 +491,7 @@ impl SpreadsheetDocument {
         &self,
         sheet_index: usize,
         image_id: &str,
-    ) -> Option<crate::document_data::SheetImage> {
+    ) -> Option<crate::document::data::SheetImage> {
         self.projection
             .sheets
             .get(sheet_index)?

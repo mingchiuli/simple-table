@@ -1,11 +1,13 @@
-use crate::document_data::{DocumentData, DocumentSheet, SheetExtent};
+use crate::document::data::{DocumentData, DocumentSheet, SheetExtent};
 use std::collections::HashMap;
 
-use crate::document_layout_policy::{
+use crate::document::layout_policy::{
     MAX_COLUMN_WIDTH_PX, MAX_ROW_HEIGHT_PX, MIN_COLUMN_WIDTH_PX, MIN_ROW_HEIGHT_PX,
     is_supported_column_width, is_supported_row_height,
 };
-use crate::document_resource_estimator::{document_metadata_text_usage, sheet_metadata_text_usage};
+use crate::document::resource_estimator::{
+    document_metadata_text_usage, sheet_metadata_text_usage,
+};
 use crate::domain::CellValue;
 use crate::domain::cell_key::parse_cell_key;
 use crate::error::AppError;
@@ -559,8 +561,8 @@ fn validate_sheet_metadata(
     }
     for image in &sheet.rich.images {
         let markers = match &image.anchor {
-            crate::document_data::ImageAnchor::OneCell { from, .. } => (from, None),
-            crate::document_data::ImageAnchor::TwoCell { from, to } => (from, Some(to)),
+            crate::document::data::ImageAnchor::OneCell { from, .. } => (from, None),
+            crate::document::data::ImageAnchor::TwoCell { from, to } => (from, Some(to)),
         };
         validate_position(markers.0.row as usize, markers.0.col as usize)?;
         if let Some(to) = markers.1 {
@@ -745,7 +747,7 @@ mod tests {
         };
         file_data.sheets[0].rich.hyperlinks.insert(
             "A1".to_string(),
-            crate::document_data::Hyperlink {
+            crate::document::data::Hyperlink {
                 url: "x".repeat(MAX_METADATA_STRING_BYTES + 1),
                 tooltip: None,
                 location: false,

@@ -1,4 +1,4 @@
-use crate::document_data::{
+use crate::document::data::{
     CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
     Hyperlink, ImageAnchor, ImageMarker, MergeRange, RichMetadata, SheetImage,
 };
@@ -453,11 +453,11 @@ fn read_images(worksheet: &Worksheet) -> Vec<SheetImage> {
                     .unwrap_or((0, 0));
             let renderable = matches!(mime_type.as_str(), "image/png" | "image/jpeg")
                 && !bytes.is_empty()
-                && bytes.len() <= crate::document_data::MAX_EMBEDDED_IMAGE_BYTES
+                && bytes.len() <= crate::document::data::MAX_EMBEDDED_IMAGE_BYTES
                 && intrinsic_width > 0
                 && intrinsic_height > 0
                 && u64::from(intrinsic_width) * u64::from(intrinsic_height)
-                    <= crate::document_data::MAX_RENDER_IMAGE_PIXELS;
+                    <= crate::document::data::MAX_RENDER_IMAGE_PIXELS;
             SheetImage {
                 id: image_session_id(image, z_index, &media_id),
                 media_id,

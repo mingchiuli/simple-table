@@ -454,8 +454,8 @@ mod tests {
         build_sheet_index, build_sheet_index_with_cancel,
     };
     use crate::adapters::search_query_engine::SearchQueryPlan;
-    use crate::document_data::DocumentSheet;
-    use crate::document_data::{CellFormat, RichMetadata};
+    use crate::document::data::DocumentSheet;
+    use crate::document::data::{CellFormat, RichMetadata};
     use crate::domain::SearchScanCursor;
     use crate::domain::{CellNumber, CellValue, SearchCellText};
     use crate::state::search_document::collect_sheet_search_text_chunk;

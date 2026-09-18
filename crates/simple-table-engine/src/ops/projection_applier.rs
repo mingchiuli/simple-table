@@ -1,4 +1,4 @@
-use crate::document_data::{
+use crate::document::data::{
     DocumentData, DocumentSheet, Drawing, FreezePane, MergeRange, RichMetadata,
 };
 use std::collections::HashMap;
@@ -163,7 +163,8 @@ impl ProjectionMutation<'_> {
                     let index = image.z_index.min(sheet.rich.images.len());
                     sheet.rich.images.insert(index, image.clone());
                     normalize_image_z_indexes(&mut sheet.rich.images);
-                    if let crate::document_data::ImageAnchor::OneCell { from, .. } = &image.anchor {
+                    if let crate::document::data::ImageAnchor::OneCell { from, .. } = &image.anchor
+                    {
                         if let Some(width) = column_width {
                             set_layout_value(
                                 &mut sheet.column_widths,
@@ -230,7 +231,7 @@ impl ProjectionMutation<'_> {
     }
 }
 
-fn normalize_image_z_indexes(images: &mut [crate::document_data::SheetImage]) {
+fn normalize_image_z_indexes(images: &mut [crate::document::data::SheetImage]) {
     for (z_index, image) in images.iter_mut().enumerate() {
         image.z_index = z_index;
     }
@@ -553,7 +554,7 @@ fn shift_layout_map_on_delete(map: Option<&mut HashMap<usize, u32>>, index: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{CellStyle, DrawingKind, Hyperlink};
+    use crate::document::data::{CellStyle, DrawingKind, Hyperlink};
     use std::sync::Arc;
 
     fn file_data_with_rich_projection() -> DocumentData {
@@ -686,14 +687,14 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let image = crate::document_data::SheetImage {
+        let image = crate::document::data::SheetImage {
             id: "image-1".to_string(),
             media_id: "media".to_string(),
             mime_type: "image/png".to_string(),
             intrinsic_width: 2,
             intrinsic_height: 1,
-            anchor: crate::document_data::ImageAnchor::OneCell {
-                from: crate::document_data::ImageMarker {
+            anchor: crate::document::data::ImageAnchor::OneCell {
+                from: crate::document::data::ImageMarker {
                     row: 1,
                     col: 2,
                     ..Default::default()

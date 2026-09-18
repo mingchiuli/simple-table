@@ -492,7 +492,7 @@ fn nonzero_random_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{DocumentData, DocumentSheet};
 
     fn editor_state(name: &str) -> EditorState {
         EditorState::with_workbook(

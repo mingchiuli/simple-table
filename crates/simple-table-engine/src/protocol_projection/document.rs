@@ -149,7 +149,7 @@ fn document_manifest(value: DocumentManifestSnapshot) -> types::DocumentManifest
 mod tests {
     use super::*;
     use crate::application::document_snapshot;
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{DocumentData, DocumentSheet};
     use crate::state::editor_state::EditorState;
 
     #[test]

@@ -364,8 +364,8 @@ mod tests {
     use super::*;
     use crate::adapters::search_document_source_adapter::RepositorySearchDocumentSource;
     use crate::adapters::search_index_registry::SearchIndexRegistry;
-    use crate::document_data::{CellFormat, RichMetadata};
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{CellFormat, RichMetadata};
+    use crate::document::data::{DocumentData, DocumentSheet};
     use crate::domain::CellNumber;
     use crate::domain::EditorCommand;
     use crate::domain::SearchScope;

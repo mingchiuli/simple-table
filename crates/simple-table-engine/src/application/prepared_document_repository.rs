@@ -634,7 +634,7 @@ fn hash_text(digest: &mut Sha256, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{DocumentData, DocumentSheet};
     use crate::resource_limits::{
         MAX_ACTIVE_AND_PREPARED_DOCUMENT_BYTES, MAX_PREPARED_DOCUMENT_BYTES,
     };

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::document::backing::workbook_port::WorkbookBackingPort;
-use crate::document_data::DocumentData;
+use crate::document::data::DocumentData;
 use crate::error::AppError;
 use crate::io::codec::writer;
 use crate::io::projection_codec::WorkbookProjectionCodec;
@@ -19,8 +19,8 @@ pub(crate) fn generate_file_bytes_for_target(
     target_path_or_name: &str,
 ) -> Result<(String, Vec<u8>), AppError> {
     if let Some(workbook) = workbook
-        && crate::document_format::SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
-            .is_some_and(crate::document_format::SpreadsheetFileFormat::is_excel)
+        && crate::document::format::SpreadsheetFileFormat::from_path_or_default(target_path_or_name)
+            .is_some_and(crate::document::format::SpreadsheetFileFormat::is_excel)
     {
         return writer::generate_excel_bytes_from_workbook_for_target(
             workbook,

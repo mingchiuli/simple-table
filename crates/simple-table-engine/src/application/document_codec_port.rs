@@ -1,5 +1,5 @@
+use crate::document::data::DocumentData;
 use crate::document::document_model::SpreadsheetDocument;
-use crate::document_data::DocumentData;
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
 

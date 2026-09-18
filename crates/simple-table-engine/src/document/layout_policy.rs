@@ -1,5 +1,13 @@
-pub const DEFAULT_COLUMN_WIDTH_PX: u32 = 120;
-pub const DEFAULT_ROW_HEIGHT_PX: u32 = 72;
+//! Layout dimension bounds and conversion fallbacks.
+//!
+//! The `FALLBACK_*` constants are used when an Excel source reports no usable
+//! size (`<= 0`). They are not the UI defaults: the app owns the rendered
+//! defaults (see `apps/simple-table/src/components/grid.rs`).
+
+/// Width used when an Excel column reports no usable width.
+pub const FALLBACK_COLUMN_WIDTH_PX: u32 = 120;
+/// Height used when an Excel row reports no usable height.
+pub const FALLBACK_ROW_HEIGHT_PX: u32 = 72;
 
 pub const MIN_COLUMN_WIDTH_PX: u32 = 1;
 pub const MAX_COLUMN_WIDTH_PX: u32 = 4_096;

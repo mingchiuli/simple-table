@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::document_data::{ImageAnchor, SheetImage};
+use crate::document::data::{ImageAnchor, SheetImage};
 use crate::domain::CellValue;
 use crate::domain::{FilterOperator, ResolvedSort, SortDirection};
 

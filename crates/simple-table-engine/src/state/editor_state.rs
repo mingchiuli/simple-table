@@ -1,11 +1,11 @@
 use crate::document::capabilities::WorkbookCapabilities;
+use crate::document::data::{DocumentData, SheetExtent};
 use crate::document::document_memento::{DocumentMemento, DocumentMementoSide};
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_restore::DocumentRestoreResult;
 use crate::document::document_save::SpreadsheetDocumentSaveSnapshot;
 use crate::document::formula_coordinator::FormulaWorkLimits;
 use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
-use crate::document_data::{DocumentData, SheetExtent};
 use crate::domain::{
     AppliedOperation, DocumentCellChange, EditorCommand, FilterOperator, SearchIndexWork,
     SearchScanCursor, SearchTextChunk,
@@ -788,7 +788,7 @@ fn operation_resource_sheets(
 
 #[cfg(test)]
 mod tests {
-    use crate::document_data::{
+    use crate::document::data::{
         CellFormat, DocumentSheet, ImageAnchor, ImageMarker, RichMetadata, SheetImage,
     };
     use std::collections::HashMap;

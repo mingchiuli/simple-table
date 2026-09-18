@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::document_data::SheetImage;
+use crate::document::data::SheetImage;
 use crate::domain::DocumentCellChange;
 
 #[derive(Debug, Clone)]

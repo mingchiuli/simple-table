@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use web_time::{Duration, Instant};
 
-use crate::document_data::{MAX_EMBEDDED_IMAGE_BYTES, MAX_RENDER_IMAGE_PIXELS};
+use crate::document::data::{MAX_EMBEDDED_IMAGE_BYTES, MAX_RENDER_IMAGE_PIXELS};
 use crate::error::AppError;
 use image::ImageFormat;
 use sha2::{Digest, Sha256};

@@ -1,4 +1,4 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document::data::{DocumentData, DocumentSheet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,7 +7,7 @@ use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, Docu
 use crate::application::prepared_document_repository::{
     self, PrepareReservation, PreparedDocumentFingerprint, PreparedDocumentRepository,
 };
-use crate::document_format::default_spreadsheet_extension;
+use crate::document::format::default_spreadsheet_extension;
 use crate::error::AppError;
 use crate::resource_limits::{
     ResourceLedger, validate_active_and_prepared_document_bytes, validate_file_data,

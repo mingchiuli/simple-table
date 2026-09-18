@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::document_data::{SheetExtent, SheetImage};
+use crate::document::data::{SheetExtent, SheetImage};
 use crate::snapshot::{EditorSessionSnapshot, ProjectedCellChange, SheetManifestSnapshot};
 
 #[derive(Clone, Debug)]

@@ -1,4 +1,4 @@
-use crate::document_data::{DocumentSheet, MergeRange, RichMetadata};
+use crate::document::data::{DocumentSheet, MergeRange, RichMetadata};
 use std::collections::{HashMap, HashSet};
 
 use crate::document::backing::document_body::BodyImageAsset;
@@ -6,8 +6,8 @@ use crate::document::backing::document_body::BodyStructureMemento;
 use crate::document::backing::rich_projection::{
     RichProjectionScope, filter_rich_projection, restore_rich_projection_scope,
 };
-use crate::document_data::SheetImage;
-use crate::document_resource_estimator::{
+use crate::document::data::SheetImage;
+use crate::document::resource_estimator::{
     estimate_cell_value_bytes, estimate_rich_metadata_bytes, estimate_sheet_data_bytes,
 };
 use crate::domain::{
@@ -352,8 +352,8 @@ pub(crate) fn protected_rich_cell_positions(sheet: &DocumentSheet) -> Vec<(usize
     }
     for image in &sheet.rich.images {
         let (from, to) = match &image.anchor {
-            crate::document_data::ImageAnchor::OneCell { from, .. } => (from, None),
-            crate::document_data::ImageAnchor::TwoCell { from, to } => (from, Some(to)),
+            crate::document::data::ImageAnchor::OneCell { from, .. } => (from, None),
+            crate::document::data::ImageAnchor::TwoCell { from, to } => (from, Some(to)),
         };
         push_unique_position_2d(
             &mut positions,

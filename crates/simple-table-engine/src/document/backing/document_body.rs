@@ -1,4 +1,4 @@
-use crate::document_data::DocumentData;
+use crate::document::data::DocumentData;
 use std::{collections::BTreeSet, io::Cursor, sync::Arc};
 
 use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, WorkbookSheetShape};
@@ -8,7 +8,7 @@ use crate::document::capabilities::{
     SheetCapabilities, WorkbookCapabilities, WorkbookImageCapabilities, WorkbookRichCapabilities,
     WorkbookSaveCapabilities, WorkbookStructureCapabilities,
 };
-use crate::document_format::{SpreadsheetFileFormat, extension_of};
+use crate::document::format::{SpreadsheetFileFormat, extension_of};
 use crate::domain::{AppliedOperation, DocumentCellChange};
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;

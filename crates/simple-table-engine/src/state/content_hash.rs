@@ -1,4 +1,4 @@
-use crate::document_data::{
+use crate::document::data::{
     CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, FreezePane, Hyperlink, MergeRange,
     RichMetadata,
 };
@@ -828,9 +828,9 @@ fn hash_drawing(drawing: &Drawing, hasher: &mut Sha256) {
     write_optional_u32(hasher, drawing.to_col);
 }
 
-fn hash_image_anchor(anchor: &crate::document_data::ImageAnchor, hasher: &mut Sha256) {
+fn hash_image_anchor(anchor: &crate::document::data::ImageAnchor, hasher: &mut Sha256) {
     match anchor {
-        crate::document_data::ImageAnchor::OneCell {
+        crate::document::data::ImageAnchor::OneCell {
             from,
             width_emu,
             height_emu,
@@ -840,7 +840,7 @@ fn hash_image_anchor(anchor: &crate::document_data::ImageAnchor, hasher: &mut Sh
             hasher.update(width_emu.to_le_bytes());
             hasher.update(height_emu.to_le_bytes());
         }
-        crate::document_data::ImageAnchor::TwoCell { from, to } => {
+        crate::document::data::ImageAnchor::TwoCell { from, to } => {
             write_tag(hasher, 1);
             hash_image_marker(from, hasher);
             hash_image_marker(to, hasher);
@@ -848,7 +848,7 @@ fn hash_image_anchor(anchor: &crate::document_data::ImageAnchor, hasher: &mut Sh
     }
 }
 
-fn hash_image_marker(marker: &crate::document_data::ImageMarker, hasher: &mut Sha256) {
+fn hash_image_marker(marker: &crate::document::data::ImageMarker, hasher: &mut Sha256) {
     write_u32(hasher, marker.row);
     write_u32(hasher, marker.col);
     hasher.update(marker.row_offset_emu.to_le_bytes());
@@ -1071,7 +1071,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{ContentFingerprint, hash_content_fingerprint};
-    use crate::document_data::{
+    use crate::document::data::{
         CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, DrawingKind, FreezePane,
         Hyperlink,
     };

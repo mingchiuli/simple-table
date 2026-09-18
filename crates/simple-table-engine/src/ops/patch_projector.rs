@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
+use crate::document::data::{DocumentData, SheetExtent};
 use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreResult};
-use crate::document_data::{DocumentData, SheetExtent};
 use crate::domain::{CellValue, DocumentCellChange};
 use crate::ops::operation_projection::ProjectedOperation;
 use crate::snapshot::{
@@ -441,7 +441,7 @@ fn estimated_cell_value_bytes(value: &CellValue) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentSheet;
+    use crate::document::data::DocumentSheet;
     use crate::resource_limits::MAX_MUTATION_RESPONSE_BYTES;
     use std::collections::HashMap;
 

@@ -1,9 +1,9 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document::data::{DocumentData, DocumentSheet};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek};
 use std::sync::Arc;
 
-use crate::document_format::SpreadsheetFileFormat;
+use crate::document::format::SpreadsheetFileFormat;
 use crate::domain::{CellNumber, CellValue};
 use crate::error::AppError;
 use crate::io::input_limits::{

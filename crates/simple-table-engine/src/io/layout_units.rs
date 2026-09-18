@@ -1,10 +1,10 @@
-use crate::document_layout_policy::{DEFAULT_COLUMN_WIDTH_PX, DEFAULT_ROW_HEIGHT_PX};
+use crate::document::layout_policy::{FALLBACK_COLUMN_WIDTH_PX, FALLBACK_ROW_HEIGHT_PX};
 
 const EXCEL_DEFAULT_COLUMN_WIDTH: f64 = 8.38;
 
 pub fn excel_column_width_to_px(width: f64) -> u32 {
     if width <= 0.0 {
-        return DEFAULT_COLUMN_WIDTH_PX;
+        return FALLBACK_COLUMN_WIDTH_PX;
     }
     ((width * 7.0) + 5.0).round().max(1.0) as u32
 }
@@ -15,14 +15,14 @@ pub fn px_to_excel_column_width(px: u32) -> f64 {
 
 pub fn is_default_column_width(width: f64, _px: u32) -> bool {
     // Only the native Excel default column width is dropped; an explicit
-    // width at the engine default (120px) must survive a round-trip so that
-    // an inserted image sized exactly 120px keeps its column width.
+    // width at the fallback size (120px) must survive a round-trip so that an
+    // inserted image sized exactly 120px keeps its column width.
     (width - EXCEL_DEFAULT_COLUMN_WIDTH).abs() < 0.001
 }
 
 pub fn points_to_px(points: f64) -> u32 {
     if points <= 0.0 {
-        return DEFAULT_ROW_HEIGHT_PX;
+        return FALLBACK_ROW_HEIGHT_PX;
     }
     (points * 96.0 / 72.0).round().max(1.0) as u32
 }
@@ -51,5 +51,11 @@ mod tests {
     #[test]
     fn row_height_conversion_uses_pixels() {
         assert_eq!(points_to_px(54.0), 72);
+    }
+
+    #[test]
+    fn unusable_excel_sizes_fall_back_to_engine_defaults() {
+        assert_eq!(excel_column_width_to_px(0.0), FALLBACK_COLUMN_WIDTH_PX);
+        assert_eq!(points_to_px(0.0), FALLBACK_ROW_HEIGHT_PX);
     }
 }

@@ -168,7 +168,7 @@ pub(super) fn editor_state(value: crate::snapshot::EditorStateSnapshot) -> types
     }
 }
 
-pub(crate) fn sheet_image(value: crate::document_data::SheetImage) -> types::SheetImage {
+pub(crate) fn sheet_image(value: crate::document::data::SheetImage) -> types::SheetImage {
     types::SheetImage {
         id: value.id,
         media_id: value.media_id,
@@ -181,9 +181,9 @@ pub(crate) fn sheet_image(value: crate::document_data::SheetImage) -> types::She
     }
 }
 
-fn image_anchor(value: crate::document_data::ImageAnchor) -> types::ImageAnchor {
+fn image_anchor(value: crate::document::data::ImageAnchor) -> types::ImageAnchor {
     match value {
-        crate::document_data::ImageAnchor::OneCell {
+        crate::document::data::ImageAnchor::OneCell {
             from,
             width_emu,
             height_emu,
@@ -192,14 +192,14 @@ fn image_anchor(value: crate::document_data::ImageAnchor) -> types::ImageAnchor 
             width_emu: u32::try_from(width_emu).unwrap_or(u32::MAX),
             height_emu: u32::try_from(height_emu).unwrap_or(u32::MAX),
         },
-        crate::document_data::ImageAnchor::TwoCell { from, to } => types::ImageAnchor::TwoCell {
+        crate::document::data::ImageAnchor::TwoCell { from, to } => types::ImageAnchor::TwoCell {
             from: image_marker(from),
             to: image_marker(to),
         },
     }
 }
 
-fn image_marker(value: crate::document_data::ImageMarker) -> types::ImageMarker {
+fn image_marker(value: crate::document::data::ImageMarker) -> types::ImageMarker {
     types::ImageMarker {
         row: value.row,
         col: value.col,

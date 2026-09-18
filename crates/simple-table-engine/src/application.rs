@@ -1,7 +1,6 @@
 pub(crate) mod document_codec_port;
 pub(crate) mod document_encode_port;
 pub(crate) mod document_file_workflow;
-pub(crate) mod document_format_policy;
 pub mod document_open_service;
 pub mod document_query_service;
 pub mod document_save_service;
@@ -15,5 +14,6 @@ pub(crate) mod mutation_intent;
 pub(crate) mod mutation_replay;
 pub(crate) mod prepared_document_repository;
 pub(crate) mod prepared_source_port;
+pub(crate) mod save_target_policy;
 pub(crate) mod search_ports;
 pub mod search_service;

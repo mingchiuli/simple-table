@@ -5,10 +5,10 @@ use crate::application::document_codec_port::{
 };
 use crate::application::document_encode_port::DocumentEncodePort;
 use crate::document::backing::document_body::SpreadsheetDocumentBody;
+use crate::document::data::DocumentData;
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::document_save::{DocumentSaveEncoding, SpreadsheetDocumentSaveSnapshot};
-use crate::document_data::DocumentData;
-use crate::document_format::{file_name_from_path_like, open_extension_from_path_name_or_bytes};
+use crate::document::format::{file_name_from_path_like, open_extension_from_path_name_or_bytes};
 use crate::error::AppError;
 use crate::io::codec::reader::{
     InputFilePreflight, preflight_input_file, read_file_with_workbook_from_preflight,
@@ -154,7 +154,7 @@ impl DocumentCodecPort for DocumentCodecAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{DocumentData, DocumentSheet};
     use crate::domain::{CellValue, EditorCommand};
     use std::io::{Cursor, Read};
 

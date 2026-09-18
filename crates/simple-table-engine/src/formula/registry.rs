@@ -1,4 +1,4 @@
-use crate::document_data::DocumentData;
+use crate::document::data::DocumentData;
 use std::collections::HashSet;
 
 use formualizer_workbook::Workbook;

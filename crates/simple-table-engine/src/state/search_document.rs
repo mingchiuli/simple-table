@@ -1,4 +1,4 @@
-use crate::document_data::DocumentSheet;
+use crate::document::data::DocumentSheet;
 use crate::domain::{SearchCellText, SearchScanCursor, SearchTextChunk};
 
 pub(crate) fn collect_sheet_search_text_chunk(

@@ -1,4 +1,4 @@
-use crate::document_data::{
+use crate::document::data::{
     CellFormat, CellStyle, DocumentData, DocumentSheet, Drawing, FreezePane, Hyperlink, MergeRange,
     RichMetadata,
 };

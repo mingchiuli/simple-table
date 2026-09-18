@@ -1,5 +1,5 @@
-use crate::document_data::{DocumentData, DocumentSheet, RichMetadata};
-use crate::document_layout_policy::{MAX_COLUMN_WIDTH_PX, MAX_ROW_HEIGHT_PX};
+use crate::document::data::{DocumentData, DocumentSheet, RichMetadata};
+use crate::document::layout_policy::{MAX_COLUMN_WIDTH_PX, MAX_ROW_HEIGHT_PX};
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
@@ -350,10 +350,10 @@ impl EditorCommand {
 /// inserted one-cell image so the containing cell matches the image's display
 /// size. Insert always anchors images with `OneCell`; `TwoCell` anchors are
 /// left untouched (the cell is sized once, at insert).
-fn exact_fit_layout(image: &crate::document_data::SheetImage) -> (Option<u32>, Option<u32>) {
+fn exact_fit_layout(image: &crate::document::data::SheetImage) -> (Option<u32>, Option<u32>) {
     const EMU_PER_PIXEL: i64 = 9_525;
     match &image.anchor {
-        crate::document_data::ImageAnchor::OneCell {
+        crate::document::data::ImageAnchor::OneCell {
             from,
             width_emu,
             height_emu,
@@ -368,15 +368,15 @@ fn exact_fit_layout(image: &crate::document_data::SheetImage) -> (Option<u32>, O
                 .clamp(1.0, MAX_ROW_HEIGHT_PX as f64) as u32;
             (Some(column_width), Some(row_height))
         }
-        crate::document_data::ImageAnchor::TwoCell { .. } => (None, None),
+        crate::document::data::ImageAnchor::TwoCell { .. } => (None, None),
     }
 }
 
-fn validate_image_anchor(anchor: &crate::document_data::ImageAnchor) -> Result<(), AppError> {
+fn validate_image_anchor(anchor: &crate::document::data::ImageAnchor) -> Result<(), AppError> {
     const MAX_ROW: u32 = 1_048_575;
     const MAX_COL: u32 = 16_383;
     const MAX_IMAGE_EMU: i64 = 100_000 * 9_525;
-    let validate_marker = |marker: &crate::document_data::ImageMarker| {
+    let validate_marker = |marker: &crate::document::data::ImageMarker| {
         if marker.row > MAX_ROW || marker.col > MAX_COL {
             return Err(AppError::InvalidCellPosition {
                 row: marker.row as usize,
@@ -391,7 +391,7 @@ fn validate_image_anchor(anchor: &crate::document_data::ImageAnchor) -> Result<(
         Ok(())
     };
     match anchor {
-        crate::document_data::ImageAnchor::OneCell {
+        crate::document::data::ImageAnchor::OneCell {
             from,
             width_emu,
             height_emu,
@@ -404,7 +404,7 @@ fn validate_image_anchor(anchor: &crate::document_data::ImageAnchor) -> Result<(
                 ));
             }
         }
-        crate::document_data::ImageAnchor::TwoCell { from, to } => {
+        crate::document::data::ImageAnchor::TwoCell { from, to } => {
             validate_marker(from)?;
             validate_marker(to)?;
             let width_is_positive = to.col > from.col
@@ -535,7 +535,7 @@ fn rich_projection_extent(rich: &RichMetadata) -> SheetMutationExtent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{CellStyle, Drawing, DrawingKind, Hyperlink};
+    use crate::document::data::{CellStyle, Drawing, DrawingKind, Hyperlink};
     use std::sync::Arc;
     fn file_data_with_rich(rich: RichMetadata) -> DocumentData {
         DocumentData {
@@ -625,7 +625,7 @@ mod tests {
             EditorCommand::SetRowHeight {
                 sheet_index: 0,
                 row_index: 0,
-                height: Some(crate::document_layout_policy::MAX_ROW_HEIGHT_PX + 1),
+                height: Some(crate::document::layout_policy::MAX_ROW_HEIGHT_PX + 1),
             }
             .resolve(&file_data),
             Err(AppError::ResourceLimitExceeded(_))
@@ -675,14 +675,14 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let image = crate::document_data::SheetImage {
+        let image = crate::document::data::SheetImage {
             id: "image-1".to_string(),
             media_id: "media".to_string(),
             mime_type: "image/png".to_string(),
             intrinsic_width: 2,
             intrinsic_height: 1,
-            anchor: crate::document_data::ImageAnchor::OneCell {
-                from: crate::document_data::ImageMarker {
+            anchor: crate::document::data::ImageAnchor::OneCell {
+                from: crate::document::data::ImageMarker {
                     row: 1,
                     col: 2,
                     ..Default::default()

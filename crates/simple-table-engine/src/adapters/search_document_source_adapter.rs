@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-use crate::document_data::DocumentSheet;
+use crate::document::data::DocumentSheet;
 use std::sync::Arc;
 
 use crate::application::search_ports::SearchDocumentSourcePort;

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document::data::{DocumentData, DocumentSheet};
 use crate::domain::{AppliedOperation, CellRange, CellValue, FilterOperator, current_region};
 use crate::error::AppError;
 

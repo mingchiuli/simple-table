@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use crate::document::data::{CellFormat, CellStyle, SheetExtent};
 use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
-use crate::document_data::{CellFormat, CellStyle, SheetExtent};
 use crate::domain::CellValue;
 use crate::snapshot::EditorSessionSnapshot;
 

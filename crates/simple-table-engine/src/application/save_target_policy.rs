@@ -1,4 +1,4 @@
-use crate::document_format::{SpreadsheetFileFormat, default_spreadsheet_extension, extension_of};
+use crate::document::format::{SpreadsheetFileFormat, default_spreadsheet_extension, extension_of};
 use crate::error::AppError;
 use crate::state::editor_state::EditorState;
 

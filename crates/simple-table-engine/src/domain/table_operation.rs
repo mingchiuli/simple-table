@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::document_data::{DocumentSheet, ImageAnchor};
+use crate::document::data::{DocumentSheet, ImageAnchor};
 use crate::domain::CellValue;
 use crate::error::AppError;
 use crate::formula::ast::FormulaAstService;

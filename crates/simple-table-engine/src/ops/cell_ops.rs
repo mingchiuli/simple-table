@@ -1,4 +1,4 @@
-use crate::document_data::ImageAnchor;
+use crate::document::data::ImageAnchor;
 #[cfg(test)]
 use crate::domain::CellEditInput;
 use crate::domain::EditorCommand;
@@ -442,7 +442,7 @@ fn row_height_patch(sheet_index: usize, row_index: usize, height: Option<u32>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::{CellFormat, DocumentData, DocumentSheet, RichMetadata};
+    use crate::document::data::{CellFormat, DocumentData, DocumentSheet, RichMetadata};
     use crate::domain::{CellNumber, CellValue};
     use crate::snapshot::MutationPatch;
     use crate::state::ActiveDocumentRepository;

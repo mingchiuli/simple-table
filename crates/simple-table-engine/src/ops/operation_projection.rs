@@ -1,5 +1,5 @@
-use crate::document_data::DocumentData;
-use crate::document_data::SheetImage;
+use crate::document::data::DocumentData;
+use crate::document::data::SheetImage;
 use crate::domain::{AppliedOperation, CellValue, OperationPatchProjector};
 use crate::snapshot::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
 
@@ -147,7 +147,7 @@ impl OperationPatchProjector<'_> {
                     })
                     .unwrap_or_else(|| SheetManifestSnapshot {
                         name: name.clone(),
-                        extent: crate::document_data::SheetExtent {
+                        extent: crate::document::data::SheetExtent {
                             row_count: *row_count,
                             column_count: *column_count,
                         },

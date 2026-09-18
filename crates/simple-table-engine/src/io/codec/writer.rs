@@ -1,8 +1,8 @@
-use crate::document_data::{DocumentData, DocumentSheet};
+use crate::document::data::{DocumentData, DocumentSheet};
 use std::io::Write;
 use std::str::FromStr;
 
-use crate::document_format::{
+use crate::document::format::{
     SpreadsheetFileFormat, file_name_from_path_like, file_stem_from_path_like,
 };
 use crate::domain::CellValue;
@@ -369,7 +369,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::document_data::MergeRange;
+    use crate::document::data::MergeRange;
     use crate::domain::CellNumber;
     use crate::io::codec::reader::read_file_with_workbook_from_bytes;
 

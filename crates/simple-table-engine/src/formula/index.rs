@@ -1,4 +1,4 @@
-use crate::document_data::DocumentData;
+use crate::document::data::DocumentData;
 use std::collections::{HashMap, HashSet};
 
 use formualizer_parse::parser::ReferenceType;
@@ -831,7 +831,7 @@ fn to_zero_based(index: u32) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentSheet;
+    use crate::document::data::DocumentSheet;
 
     #[test]
     fn excessive_formula_references_use_dependency_fallback() {

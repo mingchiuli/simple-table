@@ -1,4 +1,4 @@
-use crate::document_data::DocumentData;
+use crate::document::data::DocumentData;
 use formualizer_parse::parser::ReferenceType;
 
 use crate::document::backing::workbook_patch::StructurePatchDiagnostics;
@@ -614,7 +614,7 @@ fn append_unique_changes(target: &mut Vec<DocumentCellChange>, changes: Vec<Docu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_data::DocumentSheet;
+    use crate::document::data::DocumentSheet;
     use crate::domain::CellValue;
 
     fn sheet(name: &str, rows: Vec<Vec<CellValue>>) -> DocumentSheet {

@@ -1,4 +1,4 @@
-use crate::document_data::{DocumentData, DocumentSheet, ImageAnchor, ImageMarker};
+use crate::document::data::{DocumentData, DocumentSheet, ImageAnchor, ImageMarker};
 use std::collections::HashMap;
 
 use crate::document::backing::workbook_patch::{StructurePatchDiagnostics, WorkbookSheetShape};

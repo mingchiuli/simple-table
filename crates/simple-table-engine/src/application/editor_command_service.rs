@@ -64,14 +64,14 @@ pub fn insert_image_command(
     let display_width = (f64::from(staged.width) * scale).round().max(1.0) as i64;
     let display_height = (f64::from(staged.height) * scale).round().max(1.0) as i64;
     let image_id = uuid::Uuid::new_v4().to_string();
-    let image = crate::document_data::SheetImage {
+    let image = crate::document::data::SheetImage {
         id: image_id,
         media_id: staged.media_id,
         mime_type: staged.mime_type,
         intrinsic_width: staged.width,
         intrinsic_height: staged.height,
-        anchor: crate::document_data::ImageAnchor::OneCell {
-            from: crate::document_data::ImageMarker {
+        anchor: crate::document::data::ImageAnchor::OneCell {
+            from: crate::document::data::ImageMarker {
                 row,
                 col,
                 ..Default::default()

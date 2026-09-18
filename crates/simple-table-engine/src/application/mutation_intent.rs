@@ -234,9 +234,9 @@ impl FingerprintWriter {
 
     fn write_image_anchor(
         &mut self,
-        anchor: &crate::document_data::ImageAnchor,
+        anchor: &crate::document::data::ImageAnchor,
     ) -> Result<(), AppError> {
-        use crate::document_data::ImageAnchor;
+        use crate::document::data::ImageAnchor;
         match anchor {
             ImageAnchor::OneCell {
                 from,
@@ -257,7 +257,7 @@ impl FingerprintWriter {
         Ok(())
     }
 
-    fn write_image_marker(&mut self, marker: &crate::document_data::ImageMarker) {
+    fn write_image_marker(&mut self, marker: &crate::document::data::ImageMarker) {
         self.write_u64(u64::from(marker.row));
         self.write_u64(u64::from(marker.col));
         self.0.update(marker.row_offset_emu.to_le_bytes());

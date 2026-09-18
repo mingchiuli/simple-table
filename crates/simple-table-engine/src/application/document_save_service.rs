@@ -4,8 +4,8 @@ use crate::application::document_codec_port::{DocumentCodecPort, SavedDocumentDe
 use crate::application::document_encode_port::DocumentEncodePort;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::search_ports::SearchIndexMaintenancePort;
-use crate::application::{document_format_policy, document_snapshot};
-use crate::document_format::{default_spreadsheet_extension, extension_of, is_excel_extension};
+use crate::application::{document_snapshot, save_target_policy};
+use crate::document::format::{default_spreadsheet_extension, extension_of, is_excel_extension};
 use crate::error::AppError;
 use crate::resource_limits::{
     MAX_GENERATED_FILE_BYTES, validate_document_identity, validate_prepared_document_bytes,
@@ -105,10 +105,7 @@ pub fn prepare_current_file_save(
     let (snapshot, source_bytes, mut work) = {
         let handle = document_handle_for_read(service.documents(), document_id)?;
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        document_format_policy::ensure_native_save_target_allowed(
-            &editor_state,
-            target_path_or_name,
-        )?;
+        save_target_policy::ensure_native_save_target_allowed(&editor_state, target_path_or_name)?;
         if editor_state.has_save_commit_in_progress() {
             return Err(AppError::DocumentStateInvalid(
                 "save is already in progress".to_string(),
@@ -423,7 +420,7 @@ mod tests {
     use crate::application::search_ports::{
         NoopSearchIndexMaintenancePort, SearchIndexMaintenancePort,
     };
-    use crate::document_data::{DocumentData, DocumentSheet};
+    use crate::document::data::{DocumentData, DocumentSheet};
     use crate::domain::SearchIndexWork;
     use crate::state::editor_state::EditorState;
 
