@@ -2,7 +2,7 @@ use crate::document::data::{DocumentSheet, MergeRange, SheetExtent};
 use crate::document::document_model::SpreadsheetDocument;
 use crate::document::region_metadata_index::DocumentRegion;
 use crate::error::AppError;
-use crate::resource_limits::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
+use crate::resource_limits::{REGION_BUCKET_COLUMNS, REGION_BUCKET_ROWS};
 use crate::snapshot::{
     DocumentManifestSnapshot, EditorSessionSnapshot, EditorStateSnapshot, OpenDocumentSnapshot,
     ProjectedCellChange, SavedDocumentIdentity, SavedDocumentOutcome, SheetLayoutSnapshot,
@@ -229,9 +229,9 @@ fn initial_sheet_region(sheet_index: usize, extent: &SheetExtent) -> DocumentReg
     DocumentRegion {
         sheet_index,
         row_start: 0,
-        row_end: extent.row_count.min(SHEET_REGION_TILE_ROWS),
+        row_end: extent.row_count.min(REGION_BUCKET_ROWS),
         col_start: 0,
-        col_end: extent.column_count.min(SHEET_REGION_TILE_COLUMNS),
+        col_end: extent.column_count.min(REGION_BUCKET_COLUMNS),
     }
 }
 

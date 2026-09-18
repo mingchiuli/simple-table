@@ -2,7 +2,7 @@ use crate::document::data::{CellFormat, CellStyle, DocumentData, DocumentSheet, 
 use std::collections::HashMap;
 
 use crate::domain::cell_key::parse_cell_key;
-use crate::resource_limits::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
+use crate::resource_limits::{REGION_BUCKET_COLUMNS, REGION_BUCKET_ROWS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentRegion {
@@ -154,10 +154,7 @@ impl CellKeyBuckets {
                 continue;
             };
             buckets
-                .entry((
-                    row / SHEET_REGION_TILE_ROWS,
-                    col / SHEET_REGION_TILE_COLUMNS,
-                ))
+                .entry((row / REGION_BUCKET_ROWS, col / REGION_BUCKET_COLUMNS))
                 .or_default()
                 .push(IndexedCellKey {
                     row,
@@ -172,8 +169,8 @@ impl CellKeyBuckets {
         &'a self,
         region: &'a DocumentRegion,
     ) -> impl Iterator<Item = &'a str> + 'a {
-        let row_buckets = bucket_range(region.row_start, region.row_end, SHEET_REGION_TILE_ROWS);
-        let col_buckets = bucket_range(region.col_start, region.col_end, SHEET_REGION_TILE_COLUMNS);
+        let row_buckets = bucket_range(region.row_start, region.row_end, REGION_BUCKET_ROWS);
+        let col_buckets = bucket_range(region.col_start, region.col_end, REGION_BUCKET_COLUMNS);
         row_buckets.flat_map(move |row_bucket| {
             col_buckets.clone().flat_map(move |col_bucket| {
                 self.buckets

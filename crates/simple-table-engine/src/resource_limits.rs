@@ -11,7 +11,7 @@ use crate::document::resource_estimator::{
 use crate::domain::CellValue;
 use crate::domain::cell_key::parse_cell_key;
 use crate::error::AppError;
-pub use simple_table_protocol::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
+pub use simple_table_protocol::{REGION_BUCKET_COLUMNS, REGION_BUCKET_ROWS};
 
 pub const MAX_WORKBOOK_SHEETS: usize = 256;
 pub const MAX_ROWS_PER_SHEET: usize = 250_000;

@@ -4,8 +4,15 @@ use serde::{Deserialize, Serialize};
 
 pub use dto::*;
 
-pub const SHEET_REGION_TILE_ROWS: usize = 128;
-pub const SHEET_REGION_TILE_COLUMNS: usize = 32;
+/// Shared region granularity across the engine and the client.
+///
+/// The engine buckets region metadata by this grid and caps the initial region
+/// to one bucket; the client aligns region requests and its tile cache to the
+/// same grid so responses stay cacheable. The values are part of the region
+/// contract and must not be changed without a protocol review.
+pub const REGION_BUCKET_ROWS: usize = 128;
+/// See [`REGION_BUCKET_ROWS`].
+pub const REGION_BUCKET_COLUMNS: usize = 32;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

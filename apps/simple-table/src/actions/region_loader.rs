@@ -13,7 +13,7 @@ use crate::model::{
 };
 use crate::ports::editor::EditorPort;
 use crate::protocol::{AppErrorDto, EditorReply, EditorRequest};
-use simple_table_protocol::SHEET_REGION_TILE_COLUMNS;
+use simple_table_protocol::REGION_BUCKET_COLUMNS;
 
 const MAX_QUEUED_REGIONS: usize = 1_024;
 const MAX_ROWS_PER_REGION_REQUEST: usize = 1_024;
@@ -533,20 +533,20 @@ fn sparse_row_regions(
     if col_start >= extent.column_count {
         return HashSet::new();
     }
-    let first_col = col_start / SHEET_REGION_TILE_COLUMNS * SHEET_REGION_TILE_COLUMNS;
+    let first_col = col_start / REGION_BUCKET_COLUMNS * REGION_BUCKET_COLUMNS;
     rows.iter()
         .copied()
         .filter(|row| *row < extent.row_count)
         .flat_map(|row| {
             (first_col..col_end.min(extent.column_count))
-                .step_by(SHEET_REGION_TILE_COLUMNS)
+                .step_by(REGION_BUCKET_COLUMNS)
                 .map(move |col| SheetRegionBoundsView {
                     sheet_index,
                     row_start: row,
                     row_end: row + 1,
                     col_start: col,
                     col_end: col
-                        .saturating_add(SHEET_REGION_TILE_COLUMNS)
+                        .saturating_add(REGION_BUCKET_COLUMNS)
                         .min(extent.column_count),
                 })
         })

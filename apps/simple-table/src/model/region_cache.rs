@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use simple_table_protocol::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
+use simple_table_protocol::{REGION_BUCKET_COLUMNS, REGION_BUCKET_ROWS};
 
 use super::{
     CellPresentation, CellView, EditorPatchView, MergeRangeView, SheetRegionBoundsView,
@@ -345,17 +345,15 @@ pub fn tile_bounds(
     row_count: usize,
     column_count: usize,
 ) -> SheetRegionBoundsView {
-    let row_start = row / SHEET_REGION_TILE_ROWS * SHEET_REGION_TILE_ROWS;
-    let col_start = col / SHEET_REGION_TILE_COLUMNS * SHEET_REGION_TILE_COLUMNS;
+    let row_start = row / REGION_BUCKET_ROWS * REGION_BUCKET_ROWS;
+    let col_start = col / REGION_BUCKET_COLUMNS * REGION_BUCKET_COLUMNS;
     SheetRegionBoundsView {
         sheet_index,
         row_start,
-        row_end: row_start
-            .saturating_add(SHEET_REGION_TILE_ROWS)
-            .min(row_count),
+        row_end: row_start.saturating_add(REGION_BUCKET_ROWS).min(row_count),
         col_start,
         col_end: col_start
-            .saturating_add(SHEET_REGION_TILE_COLUMNS)
+            .saturating_add(REGION_BUCKET_COLUMNS)
             .min(column_count),
     }
 }
@@ -369,9 +367,9 @@ pub fn tiles_for_region(
         return Vec::new();
     }
     let mut tiles = Vec::new();
-    let mut row = bounds.row_start / SHEET_REGION_TILE_ROWS * SHEET_REGION_TILE_ROWS;
+    let mut row = bounds.row_start / REGION_BUCKET_ROWS * REGION_BUCKET_ROWS;
     while row < bounds.row_end.min(row_count) {
-        let mut col = bounds.col_start / SHEET_REGION_TILE_COLUMNS * SHEET_REGION_TILE_COLUMNS;
+        let mut col = bounds.col_start / REGION_BUCKET_COLUMNS * REGION_BUCKET_COLUMNS;
         while col < bounds.col_end.min(column_count) {
             tiles.push(tile_bounds(
                 bounds.sheet_index,
@@ -380,9 +378,9 @@ pub fn tiles_for_region(
                 row_count,
                 column_count,
             ));
-            col = col.saturating_add(SHEET_REGION_TILE_COLUMNS);
+            col = col.saturating_add(REGION_BUCKET_COLUMNS);
         }
-        row = row.saturating_add(SHEET_REGION_TILE_ROWS);
+        row = row.saturating_add(REGION_BUCKET_ROWS);
     }
     tiles
 }
@@ -423,9 +421,9 @@ mod tests {
             region: SheetRegionBoundsView {
                 sheet_index: 0,
                 row_start,
-                row_end: row_start + SHEET_REGION_TILE_ROWS,
+                row_end: row_start + REGION_BUCKET_ROWS,
                 col_start: 0,
-                col_end: SHEET_REGION_TILE_COLUMNS,
+                col_end: REGION_BUCKET_COLUMNS,
             },
             cells: vec![CellView {
                 sheet_index: 0,
@@ -448,14 +446,14 @@ mod tests {
             revision: 3,
         });
         let first = region(0, "first");
-        let second = region(SHEET_REGION_TILE_ROWS, "second");
+        let second = region(REGION_BUCKET_ROWS, "second");
         assert!(cache.insert_region(first.region, vec![first]));
         assert!(cache.insert_region(second.region, vec![second]));
 
         let projection = cache.projection(0, None);
         assert_eq!(projection.cells[&(0, 0)].display_text.as_ref(), "first");
         assert_eq!(
-            projection.cells[&(SHEET_REGION_TILE_ROWS, 0)]
+            projection.cells[&(REGION_BUCKET_ROWS, 0)]
                 .display_text
                 .as_ref(),
             "second"
@@ -486,7 +484,7 @@ mod tests {
         };
         cache.set_visible([pinned]);
         for index in 0..=MAX_TILES_PER_SHEET {
-            let item = region(index * SHEET_REGION_TILE_ROWS, "value");
+            let item = region(index * REGION_BUCKET_ROWS, "value");
             cache.insert_region(item.region, vec![item]);
         }
 
@@ -501,12 +499,12 @@ mod tests {
             revision: 3,
         });
         for index in 0..MAX_TILES_PER_SHEET {
-            let item = region(index * SHEET_REGION_TILE_ROWS, "value");
+            let item = region(index * REGION_BUCKET_ROWS, "value");
             cache.insert_region(item.region, vec![item]);
         }
         let first_bounds = region(0, "first").region;
         cache.projection(0, Some(first_bounds));
-        let additional = region(MAX_TILES_PER_SHEET * SHEET_REGION_TILE_ROWS, "new");
+        let additional = region(MAX_TILES_PER_SHEET * REGION_BUCKET_ROWS, "new");
         cache.insert_region(additional.region, vec![additional]);
 
         assert!(
@@ -516,7 +514,7 @@ mod tests {
         );
         assert!(!cache.tiles.contains_key(&RegionTileKey {
             sheet_index: 0,
-            row_start: SHEET_REGION_TILE_ROWS,
+            row_start: REGION_BUCKET_ROWS,
             col_start: 0,
         }));
     }
