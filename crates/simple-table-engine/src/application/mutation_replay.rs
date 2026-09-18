@@ -1,7 +1,8 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::application::mutation_intent::{MutationFingerprint, MutationIntent};
+use crate::application::replay::{TerminalCache, TerminalEntry, entry_overhead};
 use crate::error::AppError;
 #[cfg(test)]
 use crate::snapshot::MutationLookup;
@@ -11,15 +12,6 @@ const MAX_REPLAY_ENTRIES: usize = 128;
 const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IN_FLIGHT_MUTATIONS: usize = 64;
 const MAX_COMMAND_ID_BYTES: usize = 128;
-
-#[derive(Clone)]
-struct ReplayEntry {
-    document_id: u64,
-    command_id: String,
-    fingerprint: MutationFingerprint,
-    result: TerminalMutationResult,
-    bytes: usize,
-}
 
 #[derive(Clone)]
 enum TerminalMutationResult {
@@ -33,12 +25,20 @@ struct InFlightMutation {
     fingerprint: MutationFingerprint,
 }
 
-#[derive(Default)]
 struct MutationReplayCache {
-    entries: VecDeque<ReplayEntry>,
+    terminal: TerminalCache<(u64, String), TerminalMutationResult>,
     in_flight: Vec<InFlightMutation>,
     retired_documents: HashSet<u64>,
-    bytes: usize,
+}
+
+impl Default for MutationReplayCache {
+    fn default() -> Self {
+        Self {
+            terminal: TerminalCache::new(MAX_REPLAY_ENTRIES, MAX_REPLAY_BYTES),
+            in_flight: Vec::new(),
+            retired_documents: HashSet::new(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -176,7 +176,7 @@ fn reserve_with_coordinator(
             if entry.fingerprint != fingerprint {
                 return Err(reused_command_id_error());
             }
-            return Ok(ReservationResult::Replay(entry.result.clone()));
+            return Ok(ReservationResult::Replay(entry.value.clone()));
         }
 
         if let Some(in_flight) = cache
@@ -218,22 +218,12 @@ fn insert_response(
     fingerprint: MutationFingerprint,
     prepared: PreparedReplayResponse,
 ) {
-    while cache.entries.len() >= MAX_REPLAY_ENTRIES
-        || cache.bytes.saturating_add(prepared.bytes) > MAX_REPLAY_BYTES
-    {
-        let Some(expired) = cache.entries.pop_front() else {
-            break;
-        };
-        cache.bytes = cache.bytes.saturating_sub(expired.bytes);
-    }
-    cache.bytes = cache.bytes.saturating_add(prepared.bytes);
-    cache.entries.push_back(ReplayEntry {
-        document_id,
-        command_id: command_id.to_string(),
+    cache.terminal.insert(
+        (document_id, command_id.to_string()),
         fingerprint,
-        result: prepared.result,
-        bytes: prepared.bytes,
-    });
+        prepared.result,
+        prepared.bytes,
+    );
 }
 
 struct PreparedReplayResponse {
@@ -247,8 +237,7 @@ fn prepare_replay_response(
 ) -> Option<PreparedReplayResponse> {
     let entry_bytes = command_id
         .len()
-        .saturating_add(std::mem::size_of::<MutationFingerprint>())
-        .saturating_add(std::mem::size_of::<ReplayEntry>());
+        .saturating_add(entry_overhead::<(u64, String), TerminalMutationResult>());
     let payload =
         prepare_mutation_replay_payload(response, MAX_REPLAY_BYTES.checked_sub(entry_bytes)?)?;
     Some(PreparedReplayResponse {
@@ -263,7 +252,7 @@ fn prepare_replay_failure(command_id: &str, error: &AppError) -> PreparedReplayR
         bytes: command_id
             .len()
             .saturating_add(error.to_string().len())
-            .saturating_add(std::mem::size_of::<ReplayEntry>()),
+            .saturating_add(entry_overhead::<(u64, String), TerminalMutationResult>()),
     }
 }
 
@@ -276,10 +265,7 @@ fn retire_document_with_coordinator(
     document_id: u64,
 ) -> Result<(), AppError> {
     let mut cache = lock_cache(coordinator)?;
-    cache
-        .entries
-        .retain(|entry| entry.document_id != document_id);
-    cache.bytes = cache.entries.iter().map(|entry| entry.bytes).sum();
+    cache.terminal.retain(|key, _| key.0 != document_id);
     if cache
         .in_flight
         .iter()
@@ -307,7 +293,7 @@ pub(crate) fn get(
     {
         return Ok(MutationLookup::pending());
     }
-    let result = find_entry(&cache, document_id, command_id).map(|entry| entry.result.clone());
+    let result = find_entry(&cache, document_id, command_id).map(|entry| entry.value.clone());
     drop(cache);
     Ok(match result {
         Some(TerminalMutationResult::Completed(response)) => {
@@ -322,11 +308,10 @@ fn find_entry<'a>(
     cache: &'a MutationReplayCache,
     document_id: u64,
     command_id: &str,
-) -> Option<&'a ReplayEntry> {
+) -> Option<&'a TerminalEntry<(u64, String), TerminalMutationResult>> {
     cache
-        .entries
-        .iter()
-        .find(|entry| entry.document_id == document_id && entry.command_id == command_id)
+        .terminal
+        .find(|key| key.0 == document_id && key.1 == command_id)
 }
 
 fn remove_in_flight(cache: &mut MutationReplayCache, document_id: u64, command_id: &str) {
@@ -777,8 +762,8 @@ mod tests {
         let small = request_fingerprint(0, set_cells_request(&small_edits)).expect("small hash");
         let large = request_fingerprint(0, set_cells_request(&large_edits)).expect("large hash");
 
-        assert_eq!(small.len(), 32);
-        assert_eq!(large.len(), 32);
+        assert_eq!(small.as_bytes().len(), 32);
+        assert_eq!(large.as_bytes().len(), 32);
         assert_ne!(small, large);
     }
 
@@ -904,7 +889,7 @@ mod tests {
             .expect("mutation result");
 
         let cache = coordinator.cache.lock().expect("cache");
-        assert!(cache.entries.is_empty());
+        assert!(cache.terminal.is_empty());
         assert!(cache.in_flight.is_empty());
         assert!(!cache.retired_documents.contains(&98));
     }

@@ -14,6 +14,7 @@ pub(crate) mod mutation_intent;
 pub(crate) mod mutation_replay;
 pub(crate) mod prepared_document_repository;
 pub(crate) mod prepared_source_port;
+pub(crate) mod replay;
 pub(crate) mod save_target_policy;
 pub(crate) mod search_ports;
 pub mod search_service;

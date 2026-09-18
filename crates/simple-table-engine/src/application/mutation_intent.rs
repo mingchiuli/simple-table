@@ -1,9 +1,8 @@
-use sha2::{Digest, Sha256};
-
+use crate::application::replay::{Fingerprint, FingerprintWriter};
 use crate::domain::EditorCommand;
 use crate::error::AppError;
 
-pub(crate) type MutationFingerprint = [u8; 32];
+pub(crate) type MutationFingerprint = Fingerprint;
 
 #[derive(Debug, Clone)]
 pub(crate) enum MutationIntent {
@@ -14,11 +13,11 @@ pub(crate) enum MutationIntent {
 
 impl MutationIntent {
     pub(crate) fn fingerprint(&self, base_revision: u64) -> Result<MutationFingerprint, AppError> {
-        let mut fingerprint = FingerprintWriter::default();
-        fingerprint.write_u64(base_revision);
+        let mut fingerprint = MutationFingerprintWriter::default();
+        fingerprint.0.write_u64(base_revision);
         match self {
-            Self::Undo => fingerprint.write_tag(0),
-            Self::Redo => fingerprint.write_tag(1),
+            Self::Undo => fingerprint.0.write_tag(0),
+            Self::Redo => fingerprint.0.write_tag(1),
             Self::Execute(command) => fingerprint.write_editor_command(command)?,
         }
         Ok(fingerprint.finish())
@@ -26,9 +25,9 @@ impl MutationIntent {
 }
 
 #[derive(Default)]
-struct FingerprintWriter(Sha256);
+struct MutationFingerprintWriter(FingerprintWriter);
 
-impl FingerprintWriter {
+impl MutationFingerprintWriter {
     fn write_editor_command(&mut self, command: &EditorCommand) -> Result<(), AppError> {
         match command {
             EditorCommand::SetCell {
@@ -37,62 +36,62 @@ impl FingerprintWriter {
                 col,
                 text,
             } => {
-                self.write_tag(2);
-                self.write_index(*sheet_index)?;
-                self.write_index(*row)?;
-                self.write_index(*col)?;
-                self.write_text(text)?;
+                self.0.write_tag(2);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*row)?;
+                self.0.write_index(*col)?;
+                self.0.write_text(text);
             }
             EditorCommand::SetCells { changes } => {
-                self.write_tag(3);
-                self.write_index(changes.len())?;
+                self.0.write_tag(3);
+                self.0.write_index(changes.len())?;
                 for edit in changes {
-                    self.write_index(edit.sheet_index)?;
-                    self.write_index(edit.row)?;
-                    self.write_index(edit.col)?;
-                    self.write_text(&edit.text)?;
+                    self.0.write_index(edit.sheet_index)?;
+                    self.0.write_index(edit.row)?;
+                    self.0.write_index(edit.col)?;
+                    self.0.write_text(&edit.text);
                 }
             }
             EditorCommand::AddRow {
                 sheet_index,
                 row_index,
             } => {
-                self.write_tag(4);
-                self.write_index(*sheet_index)?;
-                self.write_index(*row_index)?;
+                self.0.write_tag(4);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*row_index)?;
             }
             EditorCommand::DeleteRow {
                 sheet_index,
                 row_index,
             } => {
-                self.write_tag(5);
-                self.write_index(*sheet_index)?;
-                self.write_index(*row_index)?;
+                self.0.write_tag(5);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*row_index)?;
             }
             EditorCommand::AddColumn {
                 sheet_index,
                 col_index,
             } => {
-                self.write_tag(6);
-                self.write_index(*sheet_index)?;
-                self.write_index(*col_index)?;
+                self.0.write_tag(6);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*col_index)?;
             }
             EditorCommand::DeleteColumn {
                 sheet_index,
                 col_index,
             } => {
-                self.write_tag(7);
-                self.write_index(*sheet_index)?;
-                self.write_index(*col_index)?;
+                self.0.write_tag(7);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*col_index)?;
             }
             EditorCommand::SetColumnWidth {
                 sheet_index,
                 col_index,
                 width,
             } => {
-                self.write_tag(8);
-                self.write_index(*sheet_index)?;
-                self.write_index(*col_index)?;
+                self.0.write_tag(8);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*col_index)?;
                 self.write_optional_u32(*width);
             }
             EditorCommand::SetRowHeight {
@@ -100,26 +99,26 @@ impl FingerprintWriter {
                 row_index,
                 height,
             } => {
-                self.write_tag(9);
-                self.write_index(*sheet_index)?;
-                self.write_index(*row_index)?;
+                self.0.write_tag(9);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*row_index)?;
                 self.write_optional_u32(*height);
             }
             EditorCommand::AddSheet { name } => {
-                self.write_tag(10);
+                self.0.write_tag(10);
                 self.write_optional_text(name.as_deref())?;
             }
             EditorCommand::DeleteSheet { sheet_index } => {
-                self.write_tag(11);
-                self.write_index(*sheet_index)?;
+                self.0.write_tag(11);
+                self.0.write_index(*sheet_index)?;
             }
             EditorCommand::InsertImage {
                 sheet_index, image, ..
             } => {
-                self.write_tag(12);
-                self.write_index(*sheet_index)?;
-                self.write_text(&image.id)?;
-                self.write_text(&image.media_id)?;
+                self.0.write_tag(12);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_text(&image.id);
+                self.0.write_text(&image.media_id);
                 self.write_image_anchor(&image.anchor)?;
             }
             EditorCommand::UpdateImage {
@@ -127,18 +126,18 @@ impl FingerprintWriter {
                 image_id,
                 anchor,
             } => {
-                self.write_tag(13);
-                self.write_index(*sheet_index)?;
-                self.write_text(image_id)?;
+                self.0.write_tag(13);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_text(image_id);
                 self.write_image_anchor(anchor)?;
             }
             EditorCommand::DeleteImage {
                 sheet_index,
                 image_id,
             } => {
-                self.write_tag(14);
-                self.write_index(*sheet_index)?;
-                self.write_text(image_id)?;
+                self.0.write_tag(14);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_text(image_id);
             }
             EditorCommand::SortRows {
                 sheet_index,
@@ -146,11 +145,11 @@ impl FingerprintWriter {
                 anchor_col,
                 direction,
             } => {
-                self.write_tag(15);
-                self.write_index(*sheet_index)?;
-                self.write_index(*anchor_row)?;
-                self.write_index(*anchor_col)?;
-                self.write_tag(match direction {
+                self.0.write_tag(15);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*anchor_row)?;
+                self.0.write_index(*anchor_col)?;
+                self.0.write_tag(match direction {
                     crate::domain::SortDirection::Ascending => 0,
                     crate::domain::SortDirection::Descending => 1,
                 });
@@ -162,62 +161,41 @@ impl FingerprintWriter {
                 operator,
                 value,
             } => {
-                self.write_tag(16);
-                self.write_index(*sheet_index)?;
-                self.write_index(*anchor_row)?;
-                self.write_index(*col)?;
-                self.write_tag(match operator {
+                self.0.write_tag(16);
+                self.0.write_index(*sheet_index)?;
+                self.0.write_index(*anchor_row)?;
+                self.0.write_index(*col)?;
+                self.0.write_tag(match operator {
                     crate::domain::FilterOperator::Equals => 0,
                     crate::domain::FilterOperator::NotEquals => 1,
                     crate::domain::FilterOperator::Contains => 2,
                     crate::domain::FilterOperator::Blank => 3,
                     crate::domain::FilterOperator::NotBlank => 4,
                 });
-                self.write_text(value)?;
+                self.0.write_text(value);
             }
             EditorCommand::ClearFilter { sheet_index, col } => {
-                self.write_tag(17);
-                self.write_index(*sheet_index)?;
+                self.0.write_tag(17);
+                self.0.write_index(*sheet_index)?;
                 match col {
                     Some(col) => {
-                        self.write_tag(1);
-                        self.write_index(*col)?;
+                        self.0.write_tag(1);
+                        self.0.write_index(*col)?;
                     }
-                    None => self.write_tag(0),
+                    None => self.0.write_tag(0),
                 }
             }
         }
         Ok(())
     }
 
-    fn write_tag(&mut self, tag: u8) {
-        self.0.update([tag]);
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0.update(value.to_le_bytes());
-    }
-
-    fn write_index(&mut self, value: usize) -> Result<(), AppError> {
-        self.write_u64(u64::try_from(value).map_err(|_| {
-            AppError::ResourceLimitExceeded("mutation index exceeds u64 range".to_string())
-        })?);
-        Ok(())
-    }
-
-    fn write_text(&mut self, value: &str) -> Result<(), AppError> {
-        self.write_index(value.len())?;
-        self.0.update(value.as_bytes());
-        Ok(())
-    }
-
     fn write_optional_text(&mut self, value: Option<&str>) -> Result<(), AppError> {
         match value {
             Some(value) => {
-                self.write_tag(1);
-                self.write_text(value)?;
+                self.0.write_tag(1);
+                self.0.write_text(value);
             }
-            None => self.write_tag(0),
+            None => self.0.write_tag(0),
         }
         Ok(())
     }
@@ -225,10 +203,10 @@ impl FingerprintWriter {
     fn write_optional_u32(&mut self, value: Option<u32>) {
         match value {
             Some(value) => {
-                self.write_tag(1);
-                self.0.update(value.to_le_bytes());
+                self.0.write_tag(1);
+                self.0.write_u32(value);
             }
-            None => self.write_tag(0),
+            None => self.0.write_tag(0),
         }
     }
 
@@ -243,13 +221,13 @@ impl FingerprintWriter {
                 width_emu,
                 height_emu,
             } => {
-                self.write_tag(0);
+                self.0.write_tag(0);
                 self.write_image_marker(from);
-                self.0.update(width_emu.to_le_bytes());
-                self.0.update(height_emu.to_le_bytes());
+                self.0.write_i64(*width_emu);
+                self.0.write_i64(*height_emu);
             }
             ImageAnchor::TwoCell { from, to } => {
-                self.write_tag(1);
+                self.0.write_tag(1);
                 self.write_image_marker(from);
                 self.write_image_marker(to);
             }
@@ -258,14 +236,14 @@ impl FingerprintWriter {
     }
 
     fn write_image_marker(&mut self, marker: &crate::document::data::ImageMarker) {
-        self.write_u64(u64::from(marker.row));
-        self.write_u64(u64::from(marker.col));
-        self.0.update(marker.row_offset_emu.to_le_bytes());
-        self.0.update(marker.col_offset_emu.to_le_bytes());
+        self.0.write_u64(u64::from(marker.row));
+        self.0.write_u64(u64::from(marker.col));
+        self.0.write_i32(marker.row_offset_emu);
+        self.0.write_i32(marker.col_offset_emu);
     }
 
     fn finish(self) -> MutationFingerprint {
-        self.0.finalize().into()
+        self.0.finish()
     }
 }
 

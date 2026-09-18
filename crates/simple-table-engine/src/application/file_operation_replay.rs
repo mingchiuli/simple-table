@@ -1,17 +1,17 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use sha2::{Digest, Sha256};
-
+use crate::application::replay::{Fingerprint, FingerprintWriter, TerminalCache, entry_overhead};
 use crate::error::AppError;
 use crate::snapshot::{FileOperationKind, FileOperationReceipt};
 
 const MAX_TERMINAL_FILE_OPERATIONS: usize = 128;
+const MAX_TERMINAL_FILE_OPERATION_BYTES: usize = 512 * 1024;
 const MAX_IN_FLIGHT_FILE_OPERATIONS: usize = 16;
 const MAX_OPERATION_ID_BYTES: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FileOperationFingerprint([u8; 32]);
+pub(crate) struct FileOperationFingerprint(Fingerprint);
 
 impl FileOperationFingerprint {
     pub(crate) fn open(
@@ -19,39 +19,51 @@ impl FileOperationFingerprint {
         expected_document_id: Option<u64>,
         expected_revision: Option<u64>,
     ) -> Self {
-        let mut digest = Sha256::new();
-        digest.update(b"open\0");
-        hash_text(&mut digest, token);
-        hash_optional_u64(&mut digest, expected_document_id);
-        hash_optional_u64(&mut digest, expected_revision);
-        Self(digest.finalize().into())
+        let mut writer = FingerprintWriter::default();
+        writer.write_bytes(b"open\0");
+        writer.write_text(token);
+        writer.write_optional_u64(expected_document_id);
+        writer.write_optional_u64(expected_revision);
+        Self(writer.finish())
     }
 
     pub(crate) fn close(document_id: u64, revision: u64) -> Self {
-        let mut digest = Sha256::new();
-        digest.update(b"close\0");
-        digest.update(document_id.to_le_bytes());
-        digest.update(revision.to_le_bytes());
-        Self(digest.finalize().into())
+        let mut writer = FingerprintWriter::default();
+        writer.write_bytes(b"close\0");
+        writer.write_u64(document_id);
+        writer.write_u64(revision);
+        Self(writer.finish())
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct FileOperationReplayCoordinator {
     state: Arc<Mutex<FileOperationReplayState>>,
 }
 
-#[derive(Default)]
-struct FileOperationReplayState {
-    in_flight: HashMap<String, FileOperationFingerprint>,
-    terminal: HashMap<String, TerminalFileOperation>,
-    terminal_order: VecDeque<String>,
+impl Default for FileOperationReplayCoordinator {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(FileOperationReplayState::default())),
+        }
+    }
 }
 
-#[derive(Clone)]
-struct TerminalFileOperation {
-    fingerprint: FileOperationFingerprint,
-    result: TerminalFileOperationResult,
+struct FileOperationReplayState {
+    in_flight: HashMap<String, FileOperationFingerprint>,
+    terminal: TerminalCache<String, TerminalFileOperationResult>,
+}
+
+impl Default for FileOperationReplayState {
+    fn default() -> Self {
+        Self {
+            in_flight: HashMap::new(),
+            terminal: TerminalCache::new(
+                MAX_TERMINAL_FILE_OPERATIONS,
+                MAX_TERMINAL_FILE_OPERATION_BYTES,
+            ),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -82,9 +94,9 @@ impl FileOperationReplayCoordinator {
     ) -> Result<FileOperationAdmission, AppError> {
         validate_operation_id(operation_id)?;
         let mut state = self.lock();
-        if let Some(terminal) = state.terminal.get(operation_id) {
+        if let Some(terminal) = state.terminal.find(|key| key == operation_id) {
             ensure_same_fingerprint(terminal.fingerprint, fingerprint)?;
-            return Ok(match &terminal.result {
+            return Ok(match &terminal.value {
                 TerminalFileOperationResult::Completed => FileOperationAdmission::Completed,
                 TerminalFileOperationResult::Failed(error) => {
                     FileOperationAdmission::Failed(error.clone())
@@ -92,7 +104,7 @@ impl FileOperationReplayCoordinator {
             });
         }
         if let Some(in_flight) = state.in_flight.get(operation_id) {
-            ensure_same_fingerprint(*in_flight, fingerprint)?;
+            ensure_same_fingerprint(in_flight.0, fingerprint)?;
             return Ok(FileOperationAdmission::Pending);
         }
         if state.in_flight.len() >= MAX_IN_FLIGHT_FILE_OPERATIONS {
@@ -132,21 +144,23 @@ impl FileOperationReservation {
     fn store_terminal(&mut self, result: TerminalFileOperationResult) {
         let mut state = self.coordinator.lock();
         state.in_flight.remove(&self.operation_id);
-        while state.terminal_order.len() >= MAX_TERMINAL_FILE_OPERATIONS {
-            if let Some(expired) = state.terminal_order.pop_front() {
-                state.terminal.remove(&expired);
-            }
-        }
-        state.terminal_order.push_back(self.operation_id.clone());
-        state.terminal.insert(
-            self.operation_id.clone(),
-            TerminalFileOperation {
-                fingerprint: self.fingerprint,
-                result,
-            },
-        );
+        let bytes = terminal_entry_bytes(&self.operation_id, &result);
+        state
+            .terminal
+            .insert(self.operation_id.clone(), self.fingerprint.0, result, bytes);
         self.finished = true;
     }
+}
+
+fn terminal_entry_bytes(operation_id: &str, result: &TerminalFileOperationResult) -> usize {
+    let payload_bytes = match result {
+        TerminalFileOperationResult::Completed => 0,
+        TerminalFileOperationResult::Failed(error) => error.to_string().len(),
+    };
+    operation_id
+        .len()
+        .saturating_add(payload_bytes)
+        .saturating_add(entry_overhead::<String, TerminalFileOperationResult>())
 }
 
 impl Drop for FileOperationReservation {
@@ -191,30 +205,15 @@ fn validate_operation_id(operation_id: &str) -> Result<(), AppError> {
 }
 
 fn ensure_same_fingerprint(
-    current: FileOperationFingerprint,
+    current: Fingerprint,
     requested: FileOperationFingerprint,
 ) -> Result<(), AppError> {
-    if current == requested {
+    if current == requested.0 {
         return Ok(());
     }
     Err(AppError::DocumentStateInvalid(
         "file operationId was reused with a different payload".to_string(),
     ))
-}
-
-fn hash_text(digest: &mut Sha256, value: &str) {
-    digest.update((value.len() as u64).to_le_bytes());
-    digest.update(value.as_bytes());
-}
-
-fn hash_optional_u64(digest: &mut Sha256, value: Option<u64>) {
-    match value {
-        Some(value) => {
-            digest.update([1]);
-            digest.update(value.to_le_bytes());
-        }
-        None => digest.update([0]),
-    }
 }
 
 #[cfg(test)]
