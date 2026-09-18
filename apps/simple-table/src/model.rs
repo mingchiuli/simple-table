@@ -13,7 +13,7 @@ use crate::ports::file::FilePort;
 use crate::ports::recovery::RecoveryPort;
 use crate::ports::update::UpdatePort;
 use crate::ports::window::WindowPort;
-#[cfg(not(feature = "mobile"))]
+#[cfg(feature = "web")]
 use crate::ports::workspace::LocalWorkspacePort;
 
 pub use region_cache::{DocumentRevision, RegionCache, RegionTileKey};
@@ -1191,7 +1191,7 @@ pub struct AppPorts {
     pub files: Rc<dyn FilePort>,
     pub update: Rc<dyn UpdatePort>,
     pub window: Rc<dyn WindowPort>,
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(feature = "web")]
     pub workspace: Rc<dyn LocalWorkspacePort>,
     #[cfg(feature = "mobile")]
     pub recovery: Rc<dyn RecoveryPort>,
@@ -1206,7 +1206,7 @@ impl Clone for AppPorts {
             files: Rc::clone(&self.files),
             update: Rc::clone(&self.update),
             window: Rc::clone(&self.window),
-            #[cfg(not(feature = "mobile"))]
+            #[cfg(feature = "web")]
             workspace: Rc::clone(&self.workspace),
             #[cfg(feature = "mobile")]
             recovery: Rc::clone(&self.recovery),

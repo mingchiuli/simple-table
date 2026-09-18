@@ -1,3 +1,9 @@
+//! Browser-side local workspace port.
+//!
+//! The commands exchanged here are the Web Worker / IndexedDB workspace
+//! protocol, so this module is compiled for the `web` target only. Desktop and
+//! mobile store documents through `ports::file` and `ports::recovery` instead.
+
 use std::rc::Rc;
 
 use simple_table_web_protocol::{WebWorkspaceReply, WebWorkspaceRequest};
@@ -13,15 +19,12 @@ pub trait LocalWorkspacePort {
     ) -> PortFuture<Result<WebWorkspaceReply, AppErrorDto>>;
 }
 
-#[cfg(feature = "web")]
 pub(crate) fn failed_workspace_port(error: AppErrorDto) -> Rc<dyn LocalWorkspacePort> {
     Rc::new(FailedWorkspacePort(error))
 }
 
-#[cfg(feature = "web")]
 struct FailedWorkspacePort(AppErrorDto);
 
-#[cfg(feature = "web")]
 impl LocalWorkspacePort for FailedWorkspacePort {
     fn execute(
         &self,
@@ -32,40 +35,14 @@ impl LocalWorkspacePort for FailedWorkspacePort {
     }
 }
 
-#[cfg(feature = "web")]
 pub(crate) fn worker_workspace_port(
     client: Rc<super::worker::WorkerClient>,
 ) -> Rc<dyn LocalWorkspacePort> {
     Rc::new(WebWorkspacePort(client))
 }
 
-#[cfg(not(feature = "web"))]
-pub fn platform_workspace_port() -> Rc<dyn LocalWorkspacePort> {
-    Rc::new(UnavailableWorkspacePort)
-}
-
-#[cfg(not(feature = "web"))]
-struct UnavailableWorkspacePort;
-
-#[cfg(not(feature = "web"))]
-impl LocalWorkspacePort for UnavailableWorkspacePort {
-    fn execute(
-        &self,
-        _request: WebWorkspaceRequest,
-    ) -> PortFuture<Result<WebWorkspaceReply, AppErrorDto>> {
-        Box::pin(async {
-            Err(AppErrorDto {
-                code: "workspace_unavailable".to_string(),
-                message: "Local workspace storage is unavailable on this platform".to_string(),
-            })
-        })
-    }
-}
-
-#[cfg(feature = "web")]
 struct WebWorkspacePort(Rc<super::worker::WorkerClient>);
 
-#[cfg(feature = "web")]
 impl LocalWorkspacePort for WebWorkspacePort {
     fn execute(
         &self,

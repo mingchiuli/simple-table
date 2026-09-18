@@ -44,17 +44,17 @@ enum Route {
 pub fn app() -> Element {
     let store = use_editor_store();
     let ports = use_hook(|| {
-        #[cfg(not(feature = "mobile"))]
+        #[cfg(feature = "web")]
         let (editor, workspace) = ports::platform_editor_and_workspace_ports();
-        #[cfg(feature = "mobile")]
-        let editor = ports::editor::platform_editor_port();
+        #[cfg(not(feature = "web"))]
+        let editor = ports::platform_editor_port();
         Rc::new(AppPorts {
             regions: actions::RegionLoader::new(Rc::clone(&editor)),
             editor,
             files: ports::file::platform_file_port(),
             update: ports::update::platform_update_port(),
             window: ports::window::platform_window_port(),
-            #[cfg(not(feature = "mobile"))]
+            #[cfg(feature = "web")]
             workspace,
             #[cfg(feature = "mobile")]
             recovery: ports::recovery::platform_recovery_port(),

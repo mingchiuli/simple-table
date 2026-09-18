@@ -3,7 +3,7 @@ use std::rc::Rc;
 #[cfg(feature = "mobile")]
 use dioxus::prelude::ReadableExt;
 use dioxus::prelude::WritableExt;
-#[cfg(not(feature = "mobile"))]
+#[cfg(feature = "web")]
 use simple_table_web_protocol::{WebWorkspaceReply, WebWorkspaceRequest};
 
 use super::images::refresh_images;
@@ -109,7 +109,7 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
         ))
     };
 
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(feature = "web")]
     let response = ports
         .workspace
         .execute(WebWorkspaceRequest::OpenLocalDocument {
@@ -121,6 +121,15 @@ pub async fn open_local(store: EditorStore, ports: Rc<AppPorts>, document_key: S
             WebWorkspaceReply::Document(value) => Ok(EditorReply::Document { value: Some(value) }),
             _ => Err(unexpected_reply("open local document")),
         });
+
+    #[cfg(all(not(feature = "web"), not(feature = "mobile")))]
+    let response: Result<EditorReply, crate::protocol::AppErrorDto> = {
+        let _ = document_key;
+        Err(action_error(
+            "workspace_unavailable",
+            "This platform does not keep a local workbook list",
+        ))
+    };
 
     match response {
         Ok(reply) => {
@@ -199,7 +208,7 @@ pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, docu
         ))
     };
 
-    #[cfg(not(feature = "mobile"))]
+    #[cfg(feature = "web")]
     let response = ports
         .workspace
         .execute(WebWorkspaceRequest::DeleteLocalDocument {
@@ -210,6 +219,15 @@ pub async fn delete_local_document(store: EditorStore, ports: Rc<AppPorts>, docu
             WebWorkspaceReply::Empty => Ok(EditorReply::Empty),
             _ => Err(unexpected_reply("delete local document")),
         });
+
+    #[cfg(all(not(feature = "web"), not(feature = "mobile")))]
+    let response: Result<EditorReply, crate::protocol::AppErrorDto> = {
+        let _ = document_key;
+        Err(action_error(
+            "workspace_unavailable",
+            "This platform does not keep a local workbook list",
+        ))
+    };
 
     match response {
         Ok(EditorReply::Empty) => {
@@ -610,7 +628,7 @@ fn path_for_prepared_name(selected_path: String, prepared_name: &str) -> String 
     path.to_string_lossy().into_owned()
 }
 
-#[cfg(feature = "mobile")]
+#[cfg(not(feature = "web"))]
 fn action_error(code: &str, message: &str) -> crate::protocol::AppErrorDto {
     crate::protocol::AppErrorDto {
         code: code.to_string(),
@@ -805,7 +823,6 @@ mod tests {
             }),
             update: crate::ports::update::platform_update_port(),
             window: crate::ports::window::platform_window_port(),
-            workspace: crate::ports::workspace::platform_workspace_port(),
             operations: Rc::new(futures::lock::Mutex::new(())),
         });
 

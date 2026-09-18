@@ -145,13 +145,17 @@ mod tests {
     }
 
     fn test_ports(update: Rc<dyn UpdatePort>, window: Rc<dyn WindowPort>) -> Rc<AppPorts> {
+        #[cfg(feature = "web")]
         let (editor, workspace) = crate::ports::platform_editor_and_workspace_ports();
+        #[cfg(not(feature = "web"))]
+        let editor = crate::ports::platform_editor_port();
         Rc::new(AppPorts {
             regions: crate::actions::RegionLoader::new(Rc::clone(&editor)),
             editor,
             files: crate::ports::file::platform_file_port(),
             update,
             window,
+            #[cfg(feature = "web")]
             workspace,
             operations: Rc::new(futures::lock::Mutex::new(())),
         })
