@@ -288,6 +288,64 @@ pub struct AppErrorDto {
     pub message: String,
 }
 
+/// Error codes that may cross a protocol boundary.
+///
+/// Engine, worker, platform, and application error codes are all presented
+/// through this list. Adding a new error code means registering it here, adding
+/// a presentation in `apps/simple-table/src/model/notices.rs`, and keeping the
+/// engine's `AppError` coverage test green.
+pub const KNOWN_ERROR_CODES: &[&str] = &[
+    "android_file_error",
+    "browser_error",
+    "cannot_delete_last_sheet",
+    "client_not_hydrated",
+    "document_changed",
+    "document_closed",
+    "document_state_invalid",
+    "editor_task_failed",
+    "file_not_found",
+    "file_target_unavailable",
+    "indexed_db_error",
+    "indexed_db_serialization_error",
+    "internal",
+    "invalid_cell_position",
+    "invalid_request",
+    "invalid_sheet_index",
+    "memory_store_error",
+    "mobile_file_error",
+    "mobile_recovery_error",
+    "mobile_recovery_missing",
+    "no_document",
+    "no_file_loaded",
+    "not_found",
+    "nothing_to_redo",
+    "nothing_to_undo",
+    "prepared_document_conflict",
+    "protocol_error",
+    "read_error",
+    "region_loader_stopped",
+    "region_response_too_large",
+    "region_split_limit",
+    "resource_limit_exceeded",
+    "row_not_found",
+    "stale_mutation_response",
+    "stale_region_response",
+    "storage_error",
+    "transaction_rollback_failed",
+    "unexpected_reply",
+    "unsupported_attachment",
+    "unsupported_format",
+    "unsupported_workbook_structure",
+    "update_error",
+    "workbook_patch_failed",
+    "worker_disconnected",
+    "worker_failed",
+    "worker_protocol_error",
+    "worker_start_failed",
+    "workspace_unavailable",
+    "write_error",
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorCommand {
     pub request: EditorRequest,
@@ -438,5 +496,23 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn known_error_codes_are_unique_snake_case_identifiers() {
+        let mut sorted = KNOWN_ERROR_CODES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), KNOWN_ERROR_CODES.len());
+
+        for code in KNOWN_ERROR_CODES {
+            assert!(!code.is_empty());
+            assert!(
+                code.chars().all(|value| value.is_ascii_lowercase()
+                    || value.is_ascii_digit()
+                    || value == '_'),
+                "{code} must be a snake_case identifier"
+            );
+        }
     }
 }

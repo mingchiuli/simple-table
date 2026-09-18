@@ -8,68 +8,9 @@ pub use home::HomeView;
 
 use dioxus::prelude::*;
 use simple_table_components::{ToastOptions, use_toast};
-use std::time::Duration;
 
 use crate::model::EditorStore;
-
-const TRANSIENT_NOTICE_DURATION: Duration = Duration::from_secs(8);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ErrorToastPresentation {
-    title: &'static str,
-    permanent: bool,
-}
-
-fn error_toast_presentation(code: &str) -> ErrorToastPresentation {
-    let (title, permanent) = match code {
-        "write_error" | "file_target_unavailable" => ("Could not save file", true),
-        "read_error" => ("Could not read file", false),
-        "file_not_found" | "not_found" | "mobile_recovery_missing" => ("File unavailable", false),
-        "unsupported_format" | "unsupported_attachment" => ("Unsupported file", false),
-        "resource_limit_exceeded" => ("Resource limit reached", false),
-        "browser_error" | "mobile_file_error" | "android_file_error" => {
-            ("File operation failed", false)
-        }
-        "indexed_db_error"
-        | "indexed_db_serialization_error"
-        | "memory_store_error"
-        | "mobile_recovery_error"
-        | "storage_error" => ("Local storage unavailable", true),
-        "worker_failed"
-        | "worker_disconnected"
-        | "worker_start_failed"
-        | "worker_protocol_error"
-        | "editor_task_failed"
-        | "workspace_unavailable" => ("Editor unavailable", true),
-        "transaction_rollback_failed" | "document_state_invalid" => {
-            ("Workbook state unavailable", true)
-        }
-        "workbook_patch_failed"
-        | "document_changed"
-        | "document_closed"
-        | "stale_mutation_response" => ("Could not apply changes", false),
-        "region_loader_stopped"
-        | "region_response_too_large"
-        | "region_split_limit"
-        | "stale_region_response" => ("Could not load sheet", false),
-        "nothing_to_undo"
-        | "nothing_to_redo"
-        | "cannot_delete_last_sheet"
-        | "invalid_sheet_index"
-        | "invalid_cell_position"
-        | "row_not_found"
-        | "no_document"
-        | "no_file_loaded"
-        | "prepared_document_conflict"
-        | "unsupported_workbook_structure" => ("Action unavailable", false),
-        "update_error" => ("Update check failed", false),
-        "internal" | "invalid_request" | "protocol_error" | "unexpected_reply" => {
-            ("Unexpected error", true)
-        }
-        _ => ("Action failed", false),
-    };
-    ErrorToastPresentation { title, permanent }
-}
+use crate::model::notices::{TRANSIENT_NOTICE_DURATION, error_toast_presentation};
 
 #[component]
 pub fn ToastBridge() -> Element {
@@ -151,31 +92,6 @@ mod tests {
             ToastProvider { max_toasts: 3usize,
                 ToastBurst {}
             }
-        }
-    }
-
-    #[test]
-    fn error_codes_map_to_user_facing_presentations() {
-        for (code, title, permanent) in [
-            ("write_error", "Could not save file", true),
-            ("read_error", "Could not read file", false),
-            ("unsupported_format", "Unsupported file", false),
-            ("resource_limit_exceeded", "Resource limit reached", false),
-            ("indexed_db_error", "Local storage unavailable", true),
-            ("worker_disconnected", "Editor unavailable", true),
-            ("document_state_invalid", "Workbook state unavailable", true),
-            ("document_changed", "Could not apply changes", false),
-            ("region_split_limit", "Could not load sheet", false),
-            ("nothing_to_undo", "Action unavailable", false),
-            ("update_error", "Update check failed", false),
-            ("protocol_error", "Unexpected error", true),
-            ("future_error", "Action failed", false),
-        ] {
-            assert_eq!(
-                error_toast_presentation(code),
-                ErrorToastPresentation { title, permanent },
-                "unexpected presentation for {code}",
-            );
         }
     }
 

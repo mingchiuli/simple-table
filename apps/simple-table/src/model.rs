@@ -1,3 +1,4 @@
+pub(crate) mod notices;
 pub(crate) mod region_cache;
 
 use std::collections::HashMap;

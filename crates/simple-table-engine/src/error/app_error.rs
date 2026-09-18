@@ -105,7 +105,78 @@ impl AppError {
 #[cfg(test)]
 mod tests {
     use super::AppError;
+    use crate::protocol::KNOWN_ERROR_CODES;
     use serde_json::json;
+
+    fn every_variant() -> [AppError; 19] {
+        [
+            AppError::ReadError(String::new()),
+            AppError::WriteError(String::new()),
+            AppError::FileNotFound(String::new()),
+            AppError::UnsupportedFormat,
+            AppError::ResourceLimitExceeded(String::new()),
+            AppError::RegionResponseTooLarge {
+                wire_bytes: 0,
+                maximum_bytes: 0,
+            },
+            AppError::PreparedDocumentConflict,
+            AppError::NoFileLoaded,
+            AppError::InvalidSheetIndex(0),
+            AppError::InvalidCellPosition { row: 0, col: 0 },
+            AppError::RowNotFound(0),
+            AppError::NothingToUndo,
+            AppError::NothingToRedo,
+            AppError::CannotDeleteLastSheet,
+            AppError::WorkbookPatchFailed(String::new()),
+            AppError::TransactionRollbackFailed {
+                operation_error: String::new(),
+                rollback_error: String::new(),
+            },
+            AppError::DocumentStateInvalid(String::new()),
+            AppError::UnsupportedWorkbookStructure(String::new()),
+            AppError::Internal(String::new()),
+        ]
+    }
+
+    #[test]
+    fn every_error_code_is_registered_in_the_protocol_contract() {
+        for error in every_variant() {
+            assert!(
+                KNOWN_ERROR_CODES.contains(&error.code()),
+                "{} must be registered in KNOWN_ERROR_CODES",
+                error.code()
+            );
+        }
+    }
+
+    #[test]
+    fn the_registered_variant_list_covers_every_app_error() {
+        // Exhaustive matches break compilation when a variant is added, which
+        // forces the coverage test above to be updated as well.
+        for error in every_variant() {
+            match error {
+                AppError::ReadError(_)
+                | AppError::WriteError(_)
+                | AppError::FileNotFound(_)
+                | AppError::UnsupportedFormat
+                | AppError::ResourceLimitExceeded(_)
+                | AppError::RegionResponseTooLarge { .. }
+                | AppError::PreparedDocumentConflict
+                | AppError::NoFileLoaded
+                | AppError::InvalidSheetIndex(_)
+                | AppError::InvalidCellPosition { .. }
+                | AppError::RowNotFound(_)
+                | AppError::NothingToUndo
+                | AppError::NothingToRedo
+                | AppError::CannotDeleteLastSheet
+                | AppError::WorkbookPatchFailed(_)
+                | AppError::TransactionRollbackFailed { .. }
+                | AppError::DocumentStateInvalid(_)
+                | AppError::UnsupportedWorkbookStructure(_)
+                | AppError::Internal(_) => {}
+            }
+        }
+    }
 
     #[test]
     fn serializes_stable_error_code_and_human_message() {
