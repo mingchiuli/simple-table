@@ -11,7 +11,7 @@ use crate::application::prepared_source_port::{
 };
 use crate::application::search_ports::SearchIndexMaintenancePort;
 use crate::error::AppError;
-use crate::projection_model::{FileOperationKind, FileOperationReceipt};
+use crate::snapshot::{FileOperationKind, FileOperationReceipt};
 use crate::state::ActiveDocumentRepository;
 
 #[derive(Clone)]

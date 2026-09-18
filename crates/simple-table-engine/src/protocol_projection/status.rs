@@ -4,7 +4,7 @@ use crate::state::history_store::HistoryStatus as StateHistoryStatus;
 use crate::types;
 
 pub(crate) fn editor_session(
-    value: crate::projection_model::EditorSessionSnapshot,
+    value: crate::snapshot::EditorSessionSnapshot,
 ) -> types::EditorSessionInfo {
     types::EditorSessionInfo {
         document_id: value.document_id,
@@ -159,9 +159,7 @@ fn history_status(value: StateHistoryStatus) -> types::HistoryStatus {
     }
 }
 
-pub(super) fn editor_state(
-    value: crate::projection_model::EditorStateSnapshot,
-) -> types::EditorStateInfo {
+pub(super) fn editor_state(value: crate::snapshot::EditorStateSnapshot) -> types::EditorStateInfo {
     types::EditorStateInfo {
         can_undo: value.can_undo,
         can_redo: value.can_redo,

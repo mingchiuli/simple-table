@@ -4,7 +4,7 @@ use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::patch_projector::editor_state_snapshot;
 use crate::ops::patch_projector::restore_mutation_outcome;
 #[cfg(test)]
-use crate::projection_model::EditorSessionSnapshot;
+use crate::snapshot::EditorSessionSnapshot;
 use crate::state::ActiveDocumentRepository;
 
 /// 获取编辑器状态（包含能否撤销/重做）

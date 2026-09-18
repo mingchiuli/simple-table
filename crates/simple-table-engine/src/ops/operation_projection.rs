@@ -1,7 +1,7 @@
 use crate::document_data::DocumentData;
 use crate::document_data::SheetImage;
 use crate::domain::{AppliedOperation, CellValue, OperationPatchProjector};
-use crate::projection_model::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
+use crate::snapshot::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
 
 #[derive(Clone, Debug)]
 pub enum ProjectedOperation {

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::document_data::{SheetExtent, SheetImage};
-use crate::projection_model::{EditorSessionSnapshot, ProjectedCellChange, SheetManifestSnapshot};
+use crate::snapshot::{EditorSessionSnapshot, ProjectedCellChange, SheetManifestSnapshot};
 
 #[derive(Clone, Debug)]
 pub(crate) enum MutationPatch {

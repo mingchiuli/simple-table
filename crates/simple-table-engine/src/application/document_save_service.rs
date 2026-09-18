@@ -4,13 +4,13 @@ use crate::application::document_codec_port::{DocumentCodecPort, SavedDocumentDe
 use crate::application::document_encode_port::DocumentEncodePort;
 use crate::application::document_work_budget_port::{DocumentWorkBudgetPort, DocumentWorkLease};
 use crate::application::search_ports::SearchIndexMaintenancePort;
-use crate::application::{document_format_policy, document_projection};
+use crate::application::{document_format_policy, document_snapshot};
 use crate::document_format::{default_spreadsheet_extension, extension_of, is_excel_extension};
 use crate::error::AppError;
-use crate::projection_model::SavedDocumentOutcome;
 use crate::resource_limits::{
     MAX_GENERATED_FILE_BYTES, validate_document_identity, validate_prepared_document_bytes,
 };
+use crate::snapshot::SavedDocumentOutcome;
 use crate::state::{
     ActiveDocumentRepository, DocumentHandle,
     editor_state::{EditorState, SaveCommitLease},
@@ -276,7 +276,7 @@ where
 
     let projected = match (|| {
         let editor_state = handle.read()?;
-        let response = document_projection::saved_document_outcome_with_reparse(
+        let response = document_snapshot::saved_document_outcome_with_reparse(
             &editor_state,
             &document,
             clear_history,
@@ -351,7 +351,7 @@ where
 
     let projected = match (|| {
         let editor_state = handle.read()?;
-        let response = document_projection::saved_document_outcome_without_reparse(
+        let response = document_snapshot::saved_document_outcome_without_reparse(
             &editor_state,
             path.clone(),
             output_name.clone(),

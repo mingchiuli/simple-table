@@ -1,8 +1,8 @@
 use crate::error::AppError;
-use crate::projection_model::{
+use crate::resource_limits::{MAX_DOCUMENT_RESPONSE_BYTES, MAX_SHEET_REGION_RESPONSE_BYTES};
+use crate::snapshot::{
     DocumentManifestSnapshot, OpenDocumentSnapshot, SavedDocumentOutcome, SheetRegionSnapshot,
 };
-use crate::resource_limits::{MAX_DOCUMENT_RESPONSE_BYTES, MAX_SHEET_REGION_RESPONSE_BYTES};
 use crate::types;
 
 use super::cell::{projected_cell_change, region_metadata, sheet_manifest, sheet_region};
@@ -148,7 +148,7 @@ fn document_manifest(value: DocumentManifestSnapshot) -> types::DocumentManifest
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::document_projection;
+    use crate::application::document_snapshot;
     use crate::document_data::{DocumentData, DocumentSheet};
     use crate::state::editor_state::EditorState;
 
@@ -163,7 +163,7 @@ mod tests {
             }],
         });
         let response =
-            project_open_document_response(document_projection::open_document_snapshot(&state));
+            project_open_document_response(document_snapshot::open_document_snapshot(&state));
         assert!(response.initial_region.is_some());
         let mut manifest_only = response.clone();
         manifest_only.initial_region = None;

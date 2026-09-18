@@ -1,5 +1,5 @@
 use crate::domain::SearchIndexWork;
-use crate::projection_model::MutationOutcome;
+use crate::snapshot::MutationOutcome;
 
 #[derive(Debug)]
 pub struct MutationExecution {

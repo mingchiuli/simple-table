@@ -1,5 +1,5 @@
-use crate::projection_model::{MutationOutcome, MutationPatch};
 use crate::resource_limits::MAX_MUTATION_RESPONSE_BYTES;
+use crate::snapshot::{MutationOutcome, MutationPatch};
 use crate::types;
 
 use super::cell::{projected_cell_change, sheet_extent, sheet_manifest};

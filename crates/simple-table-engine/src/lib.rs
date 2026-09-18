@@ -13,10 +13,10 @@ mod facade;
 pub(crate) mod formula;
 pub(crate) mod io;
 pub(crate) mod ops;
-pub(crate) mod projection_model;
 pub(crate) mod protocol_projection;
 pub(crate) mod resource_limits;
 pub(crate) mod runtime;
+pub(crate) mod snapshot;
 pub(crate) mod state;
 pub(crate) mod types;
 

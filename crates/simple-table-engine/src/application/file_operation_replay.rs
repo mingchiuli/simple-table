@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
-use crate::projection_model::{FileOperationKind, FileOperationReceipt};
+use crate::snapshot::{FileOperationKind, FileOperationReceipt};
 
 const MAX_TERMINAL_FILE_OPERATIONS: usize = 128;
 const MAX_IN_FLIGHT_FILE_OPERATIONS: usize = 16;

@@ -2,12 +2,12 @@ use crate::document::document_model::SpreadsheetDocument;
 use crate::document::region_metadata_index::DocumentRegion;
 use crate::document_data::{DocumentSheet, MergeRange, SheetExtent};
 use crate::error::AppError;
-use crate::projection_model::{
+use crate::resource_limits::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
+use crate::snapshot::{
     DocumentManifestSnapshot, EditorSessionSnapshot, EditorStateSnapshot, OpenDocumentSnapshot,
     ProjectedCellChange, SavedDocumentIdentity, SavedDocumentOutcome, SheetLayoutSnapshot,
     SheetManifestSnapshot, SheetRegionSnapshot,
 };
-use crate::resource_limits::{SHEET_REGION_TILE_COLUMNS, SHEET_REGION_TILE_ROWS};
 use crate::state::editor_state::EditorState;
 
 const MAX_REGION_CELLS: usize = 65_536;

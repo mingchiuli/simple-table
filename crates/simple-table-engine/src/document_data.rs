@@ -1,3 +1,10 @@
+//! Canonical in-memory projection of a workbook.
+//!
+//! [`DocumentData`] is the projection that [`crate::document::document_model::SpreadsheetDocument`]
+//! exposes for editing, formula calculation, search, dirty hashing, and protocol
+//! snapshots. The physical workbook backing is preserved separately and synced
+//! against this projection.
+
 use std::collections::HashMap;
 
 use crate::domain::{CellValue, format_cell_display, format_cell_search};

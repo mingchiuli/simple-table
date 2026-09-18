@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
 use crate::document_data::{CellFormat, CellStyle, SheetExtent};
 use crate::domain::CellValue;
-use crate::projection_model::EditorSessionSnapshot;
+use crate::snapshot::EditorSessionSnapshot;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SheetLayoutSnapshot {

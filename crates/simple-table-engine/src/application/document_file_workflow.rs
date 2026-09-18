@@ -4,7 +4,7 @@ use crate::application::prepared_document_repository::{
     PrepareReservationResult, PreparedDocumentFingerprint,
 };
 use crate::error::AppError;
-use crate::projection_model::PreparedOpenDocument;
+use crate::snapshot::PreparedOpenDocument;
 
 pub(crate) trait DocumentOpenSourcePort: Send {
     fn read(self: Box<Self>) -> Result<OpenDocumentSource, AppError>;

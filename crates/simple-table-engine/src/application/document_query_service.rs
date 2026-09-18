@@ -1,11 +1,11 @@
-use crate::application::document_projection;
+use crate::application::document_snapshot;
 use crate::document::region_metadata_index::DocumentRegion;
 use crate::error::AppError;
-use crate::projection_model::{OpenDocumentSnapshot, SheetRegionSnapshot};
+use crate::snapshot::{OpenDocumentSnapshot, SheetRegionSnapshot};
 use crate::state::{ActiveDocumentRepository, DocumentHandle};
 
 #[cfg(test)]
-use crate::application::document_projection::{
+use crate::application::document_snapshot::{
     MAX_REGION_ROWS, open_document_snapshot, project_merge_anchor_cells, project_region_cells,
     snapshot_sheet_region, validate_sheet_region,
 };
@@ -35,12 +35,12 @@ pub fn active_document_response(
     handle
         .map(|handle| {
             let editor_state = handle.read()?;
-            Ok(document_projection::open_document_snapshot(&editor_state))
+            Ok(document_snapshot::open_document_snapshot(&editor_state))
         })
         .transpose()
 }
 
-pub fn current_document_projection_for_command(
+pub fn current_document_snapshot_for_command(
     service: &DocumentQueryService,
     document_id: u64,
     base_revision: u64,
@@ -49,7 +49,7 @@ pub fn current_document_projection_for_command(
     let handle = document_handle_for_read(service.documents(), document_id)?;
     let response = {
         let editor_state = handle.read_for_command(document_id, base_revision)?;
-        document_projection::open_document_snapshot_for_sheet(&editor_state, preferred_sheet_index)
+        document_snapshot::open_document_snapshot_for_sheet(&editor_state, preferred_sheet_index)
     };
     Ok(response)
 }
@@ -60,7 +60,7 @@ pub fn sheet_region_projection_for_command(
     base_revision: u64,
     region: DocumentRegion,
 ) -> Result<SheetRegionSnapshot, AppError> {
-    document_projection::validate_sheet_region(&region)?;
+    document_snapshot::validate_sheet_region(&region)?;
     sheet_region_snapshot_for_command(service, document_id, base_revision, region)
 }
 
@@ -73,10 +73,10 @@ pub fn sheet_rows_region_projection_for_command(
     col_start: usize,
     col_end: usize,
 ) -> Result<Vec<SheetRegionSnapshot>, AppError> {
-    if rows.is_empty() || rows.len() > document_projection::MAX_REGION_ROWS {
+    if rows.is_empty() || rows.len() > document_snapshot::MAX_REGION_ROWS {
         return Err(AppError::ResourceLimitExceeded(format!(
             "rows_region accepts between 1 and {} physical rows",
-            document_projection::MAX_REGION_ROWS
+            document_snapshot::MAX_REGION_ROWS
         )));
     }
     if rows.windows(2).any(|pair| pair[0] >= pair[1]) {
@@ -95,13 +95,13 @@ pub fn sheet_rows_region_projection_for_command(
         })
         .collect::<Vec<_>>();
     for region in &regions {
-        document_projection::validate_sheet_region(region)?;
+        document_snapshot::validate_sheet_region(region)?;
     }
     let handle = document_handle_for_read(service.documents(), document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
     regions
         .into_iter()
-        .map(|region| document_projection::snapshot_sheet_region(&editor_state, region))
+        .map(|region| document_snapshot::snapshot_sheet_region(&editor_state, region))
         .collect()
 }
 
@@ -122,7 +122,7 @@ fn sheet_region_snapshot_from_registry(
 ) -> Result<SheetRegionSnapshot, AppError> {
     let handle = document_handle_for_read(registry, document_id)?;
     let editor_state = handle.read_for_command(document_id, base_revision)?;
-    document_projection::snapshot_sheet_region(&editor_state, region)
+    document_snapshot::snapshot_sheet_region(&editor_state, region)
 }
 
 pub fn sheet_images_for_command(
@@ -281,7 +281,7 @@ mod tests {
             col_end: 1,
         };
 
-        let snapshot = document_projection::snapshot_sheet_region(&state, region)
+        let snapshot = document_snapshot::snapshot_sheet_region(&state, region)
             .expect("an empty sheet keeps one editable cell");
 
         assert_eq!(snapshot.region, region);

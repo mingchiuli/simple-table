@@ -8,7 +8,7 @@ use crate::domain::EditorCommand;
 use crate::error::AppError;
 use crate::ops::mutation_execution::MutationExecution;
 use crate::ops::{cell_ops, editor_ops};
-use crate::projection_model::MutationOutcome;
+use crate::snapshot::MutationOutcome;
 use crate::state::ActiveDocumentRepository;
 
 #[derive(Clone)]

@@ -1,6 +1,6 @@
 use crate::document::region_metadata_index::{DocumentRegion, DocumentRegionMetadata};
 use crate::document_data::{CellFormat, CellStyle, MergeRange, SheetExtent};
-use crate::projection_model::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
+use crate::snapshot::{ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot};
 use crate::types;
 
 pub(super) fn region_metadata(value: DocumentRegionMetadata) -> types::SheetRegionMetadata {

@@ -9,11 +9,11 @@ use crate::application::prepared_document_repository::{
 };
 use crate::document_format::default_spreadsheet_extension;
 use crate::error::AppError;
-use crate::projection_model::PreparedOpenDocument;
 use crate::resource_limits::{
     ResourceLedger, validate_active_and_prepared_document_bytes, validate_file_data,
     validate_prepared_document_bytes,
 };
+use crate::snapshot::PreparedOpenDocument;
 use crate::state::ActiveDocumentRepository;
 use crate::state::editor_state::EditorState;
 

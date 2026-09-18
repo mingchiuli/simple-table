@@ -9,7 +9,7 @@ use crate::ops::patch_projector::{
     cell_delta_mutation_outcome, complete_cell_changes, layout_mutation_outcome,
     resync_required_mutation_outcome, status_mutation_outcome, structural_delta_mutation_outcome,
 };
-use crate::projection_model::{MutationPatch, ProjectedCellChange};
+use crate::snapshot::{MutationPatch, ProjectedCellChange};
 use crate::state::ActiveDocumentRepository;
 use std::collections::HashMap;
 
@@ -444,7 +444,7 @@ mod tests {
     use super::*;
     use crate::document_data::{CellFormat, DocumentData, DocumentSheet, RichMetadata};
     use crate::domain::{CellNumber, CellValue};
-    use crate::projection_model::MutationPatch;
+    use crate::snapshot::MutationPatch;
     use crate::state::ActiveDocumentRepository;
     use crate::state::editor_state::EditorState;
     use std::collections::HashMap;

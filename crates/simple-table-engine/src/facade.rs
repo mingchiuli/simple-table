@@ -587,7 +587,7 @@ impl CoreFacade {
         revision: u64,
         preferred_sheet_index: usize,
     ) -> Result<EditorReply, AppError> {
-        let snapshot = document_query_service::current_document_projection_for_command(
+        let snapshot = document_query_service::current_document_snapshot_for_command(
             self.runtime.document_queries(),
             document_id,
             revision,
@@ -649,7 +649,7 @@ impl CoreFacade {
 
     fn mutation_reply(
         &self,
-        outcome: std::sync::Arc<crate::projection_model::MutationOutcome>,
+        outcome: std::sync::Arc<crate::snapshot::MutationOutcome>,
     ) -> Result<EditorReply, AppError> {
         let response = crate::protocol_projection::mutation_response(&outcome);
         Ok(EditorReply::Mutation { value: response })

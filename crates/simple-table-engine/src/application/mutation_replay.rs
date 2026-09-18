@@ -4,8 +4,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::application::mutation_intent::{MutationFingerprint, MutationIntent};
 use crate::error::AppError;
 #[cfg(test)]
-use crate::projection_model::MutationLookup;
-use crate::projection_model::{MutationOutcome, prepare_mutation_replay_payload};
+use crate::snapshot::MutationLookup;
+use crate::snapshot::{MutationOutcome, prepare_mutation_replay_payload};
 
 const MAX_REPLAY_ENTRIES: usize = 128;
 const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
@@ -386,7 +386,7 @@ mod tests {
     use crate::document_data::DocumentData;
     use crate::domain::{CellEditInput, EditorCommand};
     use crate::ops::patch_projector::status_mutation_outcome;
-    use crate::projection_model::MutationLookupStatus;
+    use crate::snapshot::MutationLookupStatus;
     use crate::state::editor_state::EditorState;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn first_and_replayed_results_share_the_same_replay_budget_projection() {
-        use crate::projection_model::{MutationPatch, SheetLayoutSnapshot, SheetManifestSnapshot};
+        use crate::snapshot::{MutationPatch, SheetLayoutSnapshot, SheetManifestSnapshot};
 
         let coordinator = Arc::new(MutationReplayCoordinator::default());
         let calls = AtomicUsize::new(0);

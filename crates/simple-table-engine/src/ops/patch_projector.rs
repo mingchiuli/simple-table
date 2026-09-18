@@ -4,7 +4,7 @@ use crate::document::document_restore::{DocumentRestoreChange, DocumentRestoreRe
 use crate::document_data::{DocumentData, SheetExtent};
 use crate::domain::{CellValue, DocumentCellChange};
 use crate::ops::operation_projection::ProjectedOperation;
-use crate::projection_model::{
+use crate::snapshot::{
     EditorSessionSnapshot, EditorStateSnapshot, MutationOutcome, MutationPatch,
     ProjectedCellChange, SheetLayoutSnapshot, SheetManifestSnapshot,
 };
