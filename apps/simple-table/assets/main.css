@@ -189,14 +189,18 @@ button:disabled,
   font-size: 12px;
 }
 
-.platform-badge,
-.recovery-label {
+:root .app-root [data-app="platform-badge"],
+:root .app-root [data-app="recovery-label"] {
+  height: auto;
+  min-height: 22px;
   border: 1px solid var(--border);
   border-radius: 999px;
+  padding: 2px 10px;
   color: var(--text-muted);
   background: var(--surface);
-  padding: 5px 9px;
+  box-shadow: none;
   font-size: 11px;
+  line-height: 16px;
 }
 
 .home-actions {
@@ -340,7 +344,7 @@ button:disabled,
   color: var(--accent);
 }
 
-.recovery-label {
+:root .app-root [data-app="recovery-label"] {
   color: var(--warning);
   border-color: #e8ca8a;
   background: var(--warning-soft);
@@ -546,6 +550,13 @@ button:disabled,
   color: var(--text);
   background: var(--surface);
   box-shadow: 0 12px 32px rgba(23, 32, 28, 0.16);
+}
+
+/* The popover primitive caps its width against the trigger box, which collapses the
+   filter panel on narrow viewports. Size it against the viewport instead. */
+.app-root .table-data-popover[data-side] {
+  width: min(320px, calc(100vw - 16px));
+  max-width: none;
 }
 
 .table-data-popover[data-state="closed"] {
@@ -1038,6 +1049,8 @@ button:disabled,
 }
 
 .search-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   overflow: hidden;
   border-left: 1px solid var(--border);
@@ -1046,6 +1059,7 @@ button:disabled,
 
 .search-panel > header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   height: 42px;
@@ -1060,6 +1074,7 @@ button:disabled,
 
 .search-form {
   display: grid;
+  flex: 0 0 auto;
   gap: 10px;
   border-bottom: 1px solid var(--border);
   padding: 12px;
@@ -1120,7 +1135,8 @@ button:disabled,
 }
 
 .search-results {
-  height: calc(100% - 174px);
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
 }
 
@@ -1169,15 +1185,19 @@ button:disabled,
   background: var(--surface-muted);
 }
 
-.sheet-tabs,
-.sheet-tab-list {
+.sheet-strip .sheet-tabs,
+.sheet-strip .sheet-tab-list {
   display: flex;
+  width: auto;
   min-width: 0;
   overflow-x: auto;
 }
 
-.sheet-tab-list {
+/* The tabs primitive pads its list; that padding makes the strip taller than its
+   grid row and clips the tabs against the bottom of the window. */
+.sheet-strip .sheet-tab-list {
   gap: 2px;
+  padding: 0;
   scrollbar-width: none;
 }
 
@@ -1185,7 +1205,7 @@ button:disabled,
   display: none;
 }
 
-.sheet-tab {
+.sheet-strip .sheet-tab {
   height: 29px;
   max-width: 180px;
   overflow: hidden;
@@ -1530,13 +1550,13 @@ button:disabled,
       calc(16px + var(--safe-area-left));
   }
 
-  .platform-badge {
+  :root .app-root [data-app="platform-badge"] {
     display: none;
   }
 
   .home-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
   .home-actions .primary-command,
@@ -1603,7 +1623,7 @@ button:disabled,
     flex-basis: 36px;
   }
 
-  .sheet-tab,
+  .sheet-strip .sheet-tab,
   .formula-status .formula-status-trigger {
     height: 34px;
   }
@@ -1629,10 +1649,6 @@ button:disabled,
     box-shadow: 0 -10px 30px rgba(27, 43, 35, 0.14);
   }
 
-  .search-results {
-    height: calc(100% - 174px);
-  }
-
   .formula-status-popover {
     position: fixed;
     right: calc(8px + var(--safe-area-right));
@@ -1648,6 +1664,48 @@ button:disabled,
     );
   }
 
+}
+
+/* Touch and narrow viewports cannot place an anchored popover without pushing it
+   past the grid edge, so the column tools become a full-width panel instead. */
+@media (max-width: 1024px), (pointer: coarse) {
+  .app-root .table-data-tools.column-data-tools
+    .table-data-popover[data-side][data-align] {
+    position: fixed;
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    width: auto;
+    max-width: min(480px, 100%);
+    min-width: 0;
+    margin-block: 0;
+    margin-inline: auto;
+    transform: none;
+  }
+
+  .app-root .table-data-tools:not(.column-data-tools)
+    .table-data-popover[data-side][data-align] {
+    position: fixed;
+    top: auto;
+    right: 8px;
+    bottom: calc(54px + var(--safe-area-bottom));
+    left: 8px;
+    width: auto;
+    max-width: min(480px, 100%);
+    min-width: 0;
+    margin-block: 0;
+    margin-inline: auto;
+    transform: none;
+  }
+}
+
+/* The toolbar only needs to scroll on narrow viewports; keeping the scroll clip on
+   wide ones would hide the column tools popover that opens below the bar. */
+@media (min-width: 1025px) {
+  .editor-toolbar.editor-toolbar {
+    overflow: visible;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

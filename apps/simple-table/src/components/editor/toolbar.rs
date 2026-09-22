@@ -6,7 +6,7 @@ use simple_table_components::icons::{
     Columns3, Download, FilePlus, FolderOpen, Redo2, Rows3, Save, Search, Trash2, Undo2,
 };
 #[cfg(not(feature = "mobile"))]
-use simple_table_components::{ContentSide, Label, Tooltip, TooltipContent, TooltipTrigger};
+use simple_table_components::{ContentSide, Tooltip, TooltipContent, TooltipTrigger};
 use simple_table_components::{Toolbar, ToolbarSeparator};
 
 use super::image_tools::{ImageTools, InsertImageTool};
@@ -351,9 +351,9 @@ fn OpenDocumentTool() -> Element {
     rsx! {
         Tooltip { disabled: store.busy(),
             TooltipTrigger {
-                Label {
+                label {
                     class: "tool-button file-tool",
-                    html_for: "editor-open-workbook",
+                    r#for: "editor-open-workbook",
                     aria_label: "Open workbook",
                     FolderOpen { size: 18 }
                     input {

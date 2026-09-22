@@ -70,9 +70,9 @@ pub(super) fn InsertImageTool(props: InsertImageToolProps) -> Element {
     rsx! {
         Tooltip { disabled: cfg!(feature = "mobile"),
             TooltipTrigger {
-                Label {
+                label {
                     class: "tool-button file-tool",
-                    html_for: "insert-workbook-image",
+                    r#for: "insert-workbook-image",
                     aria_label: "Insert image",
                     title: props.blocked_reason.as_deref().unwrap_or("Insert image"),
                     ImagePlus { size: 18 }

@@ -1,8 +1,6 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-#[cfg(not(feature = "mobile"))]
-use simple_table_components::Label;
 use simple_table_components::icons::{
     FilePlus, FolderOpen, Grid2x2Plus, HardDriveDownload, Trash2,
 };
@@ -45,7 +43,11 @@ pub fn HomeView() -> Element {
                         p { "Spreadsheet editor" }
                     }
                 }
-                Badge { class: "platform-badge", variant: BadgeVariant::Outline, "Rust / Dioxus" }
+                Badge {
+                    "data-app": "platform-badge",
+                    variant: BadgeVariant::Outline,
+                    "Rust / Dioxus"
+                }
             }
 
             section { class: "home-actions", aria_label: "Create or open a spreadsheet",
@@ -116,7 +118,11 @@ pub fn HomeView() -> Element {
                                         },
                                         ItemTitle { class: "document-name", "{document.name}" }
                                         if document.has_recovery {
-                                            Badge { class: "recovery-label", variant: BadgeVariant::Secondary, "Recovered" }
+                                            Badge {
+                                                "data-app": "recovery-label",
+                                                variant: BadgeVariant::Secondary,
+                                                "Recovered"
+                                            }
                                         }
                                     }
                                     }
@@ -227,9 +233,9 @@ fn OpenDocumentControl() -> Element {
 
     #[cfg(not(feature = "mobile"))]
     rsx! {
-        Label {
+        label {
             class: if busy { "secondary-command disabled" } else { "secondary-command" },
-            html_for: "home-open-workbook",
+            r#for: "home-open-workbook",
             FolderOpen { size: 19 }
             span { "Open file" }
             input {
