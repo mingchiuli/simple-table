@@ -2312,7 +2312,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2498,7 +2498,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2668,18 +2668,18 @@ dependencies = [
 
 [[package]]
 name = "formualizer-common"
-version = "3.1.2"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbadf259bc87f6052459556f625bf1a4c758714513019b198f3ffd7d11fc4fae"
+checksum = "c8e4fb074654b2a369140077df5d5cfe019655a077a4e73f55526a7ef7f930f6"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "formualizer-eval"
-version = "0.9.3"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe4be1693b4fde2ee0f69890409fe7d8b5c6e605864c66dc9b2f6da565463b1"
+checksum = "e38fd0325d5c8baded213cec2f92123a3ace775c073a799a57ccb2b1df552f98"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2706,9 +2706,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-macros"
-version = "0.9.3"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32fba9b8952de9fc2a55b45aa455f7f70122f08a1c288d8fd499cb4e0db53033"
+checksum = "03ab7549bdc7c19a2cc3fd436e354ea3de5bc8a82879b618e69d0de119970dad"
 dependencies = [
  "formualizer-common",
  "proc-macro2",
@@ -2718,9 +2718,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-parse"
-version = "3.1.2"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c7cebdea0c3da7467fe6d75f1ffb5953da59a8c4a52b373e193e2bb253fa6e1"
+checksum = "8600009bbc095512374688d04cc5b667dc6d64913bb50bbc3f225e8400c83b81"
 dependencies = [
  "formualizer-common",
  "once_cell",
@@ -2729,9 +2729,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-workbook"
-version = "0.9.3"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8628952700dab665d57c0fb102d6fb017aeb329a7d64d34f7e7bd790317a0a30"
+checksum = "7c31f93d1664e6c56939525dccad77ee20c94b7c21f58bff6c10b54077fcc473"
 dependencies = [
  "chrono",
  "formualizer-common",
@@ -4653,7 +4653,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5626,7 +5626,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6149,7 +6149,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6207,7 +6207,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6750,7 +6750,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7159,10 +7159,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8250,7 +8250,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
