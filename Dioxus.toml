@@ -10,7 +10,7 @@ title = "Simple Table"
 [web.resource.dev]
 
 [bundle]
-identifier = "com.mingchiu.simpletable"
+identifier = "wiki.chiu.simpletable"
 publisher = "Chiu"
 icon = [
     "assets/icons/32x32.png",
