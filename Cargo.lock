@@ -2668,9 +2668,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-common"
-version = "3.1.4"
+version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8e4fb074654b2a369140077df5d5cfe019655a077a4e73f55526a7ef7f930f6"
+checksum = "66f8d8fdfb53ee75a27f465dd325414da47f86922e23105e112a714193f3c1f7"
 dependencies = [
  "chrono",
 ]
@@ -2718,9 +2718,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-parse"
-version = "3.1.4"
+version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8600009bbc095512374688d04cc5b667dc6d64913bb50bbc3f225e8400c83b81"
+checksum = "6b8019c818950dfe12ef97bd14fdb8df667cb3e0df1a6453be1632c3e80002a2"
 dependencies = [
  "formualizer-common",
  "once_cell",
@@ -7159,7 +7159,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.52.0",
@@ -7810,9 +7810,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -7823,9 +7823,9 @@ dependencies = [
 
 [[package]]
 name = "uuid-rng-internal"
-version = "1.26.1"
+version = "1.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c994a501354f95311ecd159c7e13fede645ce5d184dd576b7569a7478981383"
+checksum = "1e1d7ccff5e453092983b2a5ec27ebdd52745f40bef229e92051a054a37c662b"
 dependencies = [
  "getrandom 0.4.3",
 ]
