@@ -5,9 +5,25 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      # Routine minor and patch bumps arrive as a single pull request per week
+      # instead of one per dependency. Major bumps stay ungrouped so each gets
+      # its own review and CI run.
+      cargo-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      # Action pins move in major steps (v4 to v5), so a single group keeps the
+      # weekly update to one pull request that CI validates as a whole.
+      github-actions:
+        patterns:
+          - "*"
