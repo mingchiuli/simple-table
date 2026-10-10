@@ -2668,9 +2668,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-eval"
-version = "0.10.1"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e38fd0325d5c8baded213cec2f92123a3ace775c073a799a57ccb2b1df552f98"
+checksum = "9c6c817dab1f47c7cdbef24ab8458d6d5557d9114b3c16598528d24f0f41e33f"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2697,9 +2697,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-macros"
-version = "0.10.1"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03ab7549bdc7c19a2cc3fd436e354ea3de5bc8a82879b618e69d0de119970dad"
+checksum = "42309e53a7cf0e363a59014a00995cc216bec839416ce45410fcb2a1f0f45e12"
 dependencies = [
  "formualizer-common",
  "proc-macro2",
@@ -2720,9 +2720,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-workbook"
-version = "0.10.1"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c31f93d1664e6c56939525dccad77ee20c94b7c21f58bff6c10b54077fcc473"
+checksum = "72100b3911f8296d64f506148866fccb0b8e8390a5902c6ad4290ce0eac45874"
 dependencies = [
  "chrono",
  "formualizer-common",
