@@ -72,6 +72,18 @@ pub fn app() -> Element {
     } else {
         "app-root"
     };
+    use_effect(|| {
+        let _ = dioxus::document::eval(
+            r#"document.documentElement.lang = "en";
+            const viewport = document.querySelector('meta[name="viewport"]');
+            if (viewport) {
+                viewport.setAttribute(
+                    "content",
+                    "width=device-width, initial-scale=1, viewport-fit=cover",
+                );
+            }"#,
+        );
+    });
 
     rsx! {
         dioxus::document::Stylesheet { href: simple_table_components::DX_COMPONENTS_THEME }

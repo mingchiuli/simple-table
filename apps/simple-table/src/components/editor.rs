@@ -93,7 +93,11 @@ pub fn EditorView() -> Element {
             EditorToolbar {}
             FormulaBar {}
             div { id: "spreadsheet-panel", class: "editor-workspace",
-                SpreadsheetGrid { key: "{document_id}" }
+                {
+                    rsx! {
+                        SpreadsheetGrid { key: "{document_id}" }
+                    }
+                }
                 SearchPanel {}
             }
             SheetStrip {}
@@ -228,6 +232,17 @@ mod tests {
             },
             initial_region: None,
         }
+    }
+
+    #[test]
+    fn spreadsheet_grid_key_tracks_document_identity() {
+        let document_id = 7u64;
+        let grid = rsx! {
+            SpreadsheetGrid { key: "{document_id}" }
+        }
+        .expect("grid element");
+
+        assert_eq!(grid.key.as_deref(), Some("7"));
     }
 
     #[test]
