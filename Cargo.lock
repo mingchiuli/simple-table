@@ -2659,15 +2659,6 @@ dependencies = [
 
 [[package]]
 name = "formualizer-common"
-version = "3.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66f8d8fdfb53ee75a27f465dd325414da47f86922e23105e112a714193f3c1f7"
-dependencies = [
- "chrono",
-]
-
-[[package]]
-name = "formualizer-common"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b936fa2da86cf6ecdd051105865836d6d0cfb5cdf496d48e4ed72592c2f0810d"
@@ -2677,9 +2668,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-eval"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c6c817dab1f47c7cdbef24ab8458d6d5557d9114b3c16598528d24f0f41e33f"
+checksum = "656c99439c34ce834956f7e235182f70a887638e3fd527023aa44497e24e1928"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2691,9 +2682,9 @@ dependencies = [
  "bumpalo",
  "chrono",
  "dashmap",
- "formualizer-common 3.2.0",
+ "formualizer-common",
  "formualizer-macros",
- "formualizer-parse 3.2.0",
+ "formualizer-parse",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "once_cell",
@@ -2706,25 +2697,14 @@ dependencies = [
 
 [[package]]
 name = "formualizer-macros"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42309e53a7cf0e363a59014a00995cc216bec839416ce45410fcb2a1f0f45e12"
+checksum = "3839e2176fb6133b1e651982c35f04e1837c9a287b5eda66a43741e342b5377c"
 dependencies = [
- "formualizer-common 3.2.0",
+ "formualizer-common",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "formualizer-parse"
-version = "3.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b8019c818950dfe12ef97bd14fdb8df667cb3e0df1a6453be1632c3e80002a2"
-dependencies = [
- "formualizer-common 3.2.0",
- "once_cell",
- "smallvec",
 ]
 
 [[package]]
@@ -2733,21 +2713,21 @@ version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02cd605562630c0ddbb85ef86868a9b9b0ddad188a14666dd1796d3fcad91f8c"
 dependencies = [
- "formualizer-common 4.0.0",
+ "formualizer-common",
  "once_cell",
  "smallvec",
 ]
 
 [[package]]
 name = "formualizer-workbook"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72100b3911f8296d64f506148866fccb0b8e8390a5902c6ad4290ce0eac45874"
+checksum = "190770a98c94914e370709b98192a4f85038db2c4b5545c9435c88e73e33f213"
 dependencies = [
  "chrono",
- "formualizer-common 3.2.0",
+ "formualizer-common",
  "formualizer-eval",
- "formualizer-parse 3.2.0",
+ "formualizer-parse",
  "getrandom 0.4.3",
  "once_cell",
  "parking_lot",
@@ -6618,7 +6598,7 @@ name = "simple-table-engine"
 version = "0.14.3"
 dependencies = [
  "csv",
- "formualizer-parse 4.0.0",
+ "formualizer-parse",
  "formualizer-workbook",
  "getrandom 0.4.3",
  "image",
