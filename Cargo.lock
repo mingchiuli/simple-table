@@ -2681,18 +2681,18 @@ dependencies = [
 
 [[package]]
 name = "formualizer-common"
-version = "4.1.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59c4964d9d527263ca099a447aa7a0519945c1535a05b2c33254dae8ce538f7c"
+checksum = "893fbc84536f522b3e3106f92e47a91d8d2ebaf88c71b461d30f5a6b14fd0406"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "formualizer-eval"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dfb1ac9617f08c7dd099fe3b56d1ca4220d90c43b105311a8fb97a60b96ec63"
+checksum = "6c4d03b3831090bd90660db6a73a140e81caa93c4ffbdcd573f5679c2a12f12b"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2712,6 +2712,7 @@ dependencies = [
  "once_cell",
  "rand 0.8.7",
  "rayon",
+ "regex-syntax",
  "rustc-hash 1.1.0",
  "smallvec",
  "web-time",
@@ -2719,9 +2720,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-macros"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb063a7dd5b9d742d3d3151eea8aab3891601815799e4b9d0f977f42b97fd443"
+checksum = "834d4819a5b8591cd567429dedaf49c0da8c200a52f433b92cbec44e9ef44ba7"
 dependencies = [
  "formualizer-common",
  "proc-macro2",
@@ -2731,9 +2732,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-parse"
-version = "4.1.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3385b80d3b1be2244f62cf90a7dc8059409854e4220a61c69fcbbff3a25ec8e"
+checksum = "46bf2e67dbddfd4bdfe9406fdf410aec457eef8a41441075479493018ab587b1"
 dependencies = [
  "formualizer-common",
  "once_cell",
@@ -2742,9 +2743,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-workbook"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef984f1bf4f0797f40806476d32e98f061216c1bd402af0142166ebbef805371"
+checksum = "e167829d5ae58793e212eeb5dc1fe8a335f293099721cbdd1d8ef15e2bcea78a"
 dependencies = [
  "atoi_simd",
  "chrono",
